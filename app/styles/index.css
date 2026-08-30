@@ -1,0 +1,74 @@
+/*
+ * The stylesheet's single entry point.
+ *
+ * `app/layout.tsx` imports this file and nothing else, so adding a stylesheet
+ * is a one-line edit here rather than a change to a React component, and the
+ * cascade order the layer depends on is written in CSS, where the cascade
+ * actually lives, instead of being implied by JavaScript import order or by
+ * the bundler's chunking.
+ *
+ * The order below is the contract, and it reads outward from what cannot be
+ * overridden to what always wins:
+ *
+ *   1. tokens          -- names only; no rule, so nothing to override
+ *   2. base            -- the reset and the element defaults every page gets
+ *   3. primitives      -- one implementation each of button, table, form,
+ *                         modal, status and layout, in that order, so the
+ *                         chrome in `layout.css` can lean on the five above it
+ *   4. features        -- one file per surface, each colocated with the code
+ *                         that renders it, free to override any primitive
+ *   5. interaction     -- the coarse-pointer and reduced-motion contracts,
+ *                         last because they have to outrank every feature
+ *
+ * A feature rule and a primitive rule regularly have the same specificity --
+ * `.reports-table-wrap` against `.table-wrap` -- and the feature is the one
+ * meant to win, which is why the whole feature block sits below the
+ * primitives. The five files that were CSS modules until this phase relied on
+ * the same order, by way of the bundler happening to emit them after
+ * `globals.css`; the order was real and load-bearing, and nothing wrote it
+ * down. Now it is written down.
+ *
+ * The token layer owns every theme value. A sheet below it may declare a
+ * custom property only as a component-scoped knob -- a name its own container
+ * sets to size a child it deliberately does not select into, such as the
+ * `--chart-*` interface `operations-dashboard.css` hands the shared line chart
+ * -- and `scripts/style-invariants.test.mjs` fails the build if a token file
+ * grows a rule, or if a sheet grows a name that is not on that file's ledger of
+ * knobs. A colour, a space step or a radius declared out here is unreachable
+ * from a retheme, which is the whole point of the layer.
+ *
+ * Each file also carries its own responsive rules rather than deferring them to
+ * a document-wide section, so a feature and the way it folds are one edit. Two
+ * shapes are in use for where inside the file they sit -- a `Responsive`
+ * appendix at the foot, or a block per section -- and neither has been chosen:
+ * follow the shape of the file you are editing. See docs/theming.md.
+ *
+ * `@import` is resolved at build time by the bundler's CSS pipeline, so this
+ * indirection costs no extra request.
+ */
+@import url("./tokens-color.css");
+@import url("./tokens-scale.css");
+@import url("./base.css");
+@import url("./primitives/button.css");
+@import url("./primitives/table.css");
+@import url("./primitives/form.css");
+@import url("./primitives/modal.css");
+@import url("./primitives/status.css");
+@import url("./primitives/layout.css");
+@import url("../search-workspace/search-editor.css");
+@import url("../search-workspace/search-job.css");
+@import url("../search-workspace/search-fields.css");
+@import url("../search-workspace/search-results.css");
+@import url("../admin/admin.css");
+@import url("../activity/activity.css");
+@import url("../datasets/datasets.css");
+@import url("../signin/signin.css");
+@import url("../home.css");
+@import url("../_components/backend-resource-state.css");
+@import url("../dashboards/dashboards.css");
+@import url("../analytics/analytics.css");
+@import url("../dashboards/operations-dashboard.css");
+@import url("../reports/reports.css");
+@import url("../search-workspace/components/workspace-dialogs.css");
+@import url("../search-workspace/panels/visualization-panel.css");
+@import url("./interaction.css");

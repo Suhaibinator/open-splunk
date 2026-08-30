@@ -1,0 +1,188 @@
+{
+  "//": "Every literal the token sweep left behind, and nothing else.\n\nThis is a ratchet, not an exemption list. scripts/style-invariants.test.mjs\ncompares it against the tree with a set equality, so a literal that is not\nrecorded here fails the build and a recorded literal that has been migrated\nfails it too. Adding a row is therefore a deliberate act with a reviewer,\nwhich is the only property that makes a debt list shrink instead of drift.\n\nRows are grouped by file and property and hold the declaration value, not a\nline number: two rules that paint the same literal share one row, and\nediting anything above a rule does not churn the ledger.\n\nThe colour half is empty. Phase 5 gave the last 245 colour literals a role:\nthe four --status-*-edge borders, --status-progress, the six --syntax-*\ninks, --accent-inverse, --fg-inverse-muted and the two --chrome-fg-* steps\nabsorbed the opaque ones, and every translucent one became a color-mix()\nover a tier-2 token, which is what an alpha needs and what no primitive\ncould hold. `npm run lint:css` now fails on a hex or an rgb() outside\napp/styles/tokens-*.css, so this half of the ledger cannot refill quietly.\n\nWhat is left of the scale half is the set docs/theming.md says stays\nliteral, and the lint agrees with it declaration for declaration:\n`border-radius: 50%` means a circle rather than a step; a box-shadow's\noffsets and blur are a geometry the size ladder makes no claim about, and\nthe sweep records each length and ink of a composed ring separately; and a\nsingle-digit z-index orders an element inside a stacking context its parent\nalready opened, which is not a page layer.",
+  "colour": {},
+  "scale": {
+    "app/_components/backend-resource-state.css": {
+      "border-radius": [
+        "50%"
+      ]
+    },
+    "app/activity/activity.css": {
+      "border-radius": [
+        "50%"
+      ],
+      "box-shadow": [
+        "1px",
+        "3px",
+        "color-mix(in srgb, var(--accent-bright) 12%, transparent)",
+        "color-mix(in srgb, var(--status-info) 12%, transparent)"
+      ]
+    },
+    "app/admin/admin.css": {
+      "border-radius": [
+        "50%"
+      ],
+      "box-shadow": [
+        "3px",
+        "color-mix(in srgb, var(--focus-ring) 23%, transparent)"
+      ]
+    },
+    "app/analytics/analytics.css": {
+      "border-radius": [
+        "50%"
+      ],
+      "box-shadow": [
+        "1px",
+        "2px",
+        "4px",
+        "color-mix(in srgb, var(--bg-surface) 90%, transparent)"
+      ],
+      "z-index": [
+        "1",
+        "8"
+      ]
+    },
+    "app/dashboards/dashboards.css": {
+      "border-radius": [
+        "50%"
+      ]
+    },
+    "app/dashboards/operations-dashboard.css": {
+      "box-shadow": [
+        "2px",
+        "color-mix(in srgb, var(--focus-ring) 45%, transparent)"
+      ],
+      "z-index": [
+        "3",
+        "5"
+      ]
+    },
+    "app/home.css": {
+      "border-radius": [
+        "50%"
+      ]
+    },
+    "app/reports/reports.css": {
+      "border-radius": [
+        "50%"
+      ],
+      "box-shadow": [
+        "1px"
+      ],
+      "z-index": [
+        "1"
+      ]
+    },
+    "app/search-workspace/panels/visualization-panel.css": {
+      "box-shadow": [
+        "1px",
+        "2px",
+        "color-mix(in srgb, var(--fg-strong) 8%, transparent)",
+        "color-mix(in srgb, var(--focus-ring) 38%, transparent)"
+      ],
+      "z-index": [
+        "1",
+        "3",
+        "4",
+        "8"
+      ]
+    },
+    "app/search-workspace/search-editor.css": {
+      "border-radius": [
+        "50%"
+      ],
+      "box-shadow": [
+        "1px",
+        "2px",
+        "color-mix(in srgb, var(--focus-ring) 13%, transparent)"
+      ],
+      "z-index": [
+        "2",
+        "3",
+        "4"
+      ]
+    },
+    "app/search-workspace/search-fields.css": {
+      "border-radius": [
+        "50%"
+      ],
+      "box-shadow": [
+        "-8px",
+        "1px",
+        "7px"
+      ],
+      "z-index": [
+        "2",
+        "3",
+        "4"
+      ]
+    },
+    "app/search-workspace/search-job.css": {
+      "border-radius": [
+        "50%"
+      ],
+      "box-shadow": [
+        "1px",
+        "2px",
+        "color-mix(in srgb, var(--focus-ring) 38%, transparent)"
+      ],
+      "z-index": [
+        "2",
+        "3"
+      ]
+    },
+    "app/search-workspace/search-results.css": {
+      "border-radius": [
+        "50%"
+      ],
+      "box-shadow": [
+        "1px",
+        "2px",
+        "color-mix(in srgb, var(--bg-surface) 72%, transparent)",
+        "color-mix(in srgb, var(--focus-ring) 38%, transparent)"
+      ],
+      "z-index": [
+        "1",
+        "2",
+        "3",
+        "4"
+      ]
+    },
+    "app/signin/signin.css": {
+      "border-radius": [
+        "50%"
+      ],
+      "box-shadow": [
+        "1px",
+        "color-mix(in srgb, var(--status-error) 24%, transparent)"
+      ],
+      "z-index": [
+        "2"
+      ]
+    },
+    "app/styles/base.css": {
+      "box-shadow": [
+        "4px",
+        "color-mix(in srgb, var(--focus-ring) 30%, transparent)"
+      ]
+    },
+    "app/styles/primitives/layout.css": {
+      "border-radius": [
+        "50%"
+      ],
+      "box-shadow": [
+        "2px",
+        "3px",
+        "color-mix(in srgb, var(--focus-ring) 35%, transparent)"
+      ],
+      "z-index": [
+        "2"
+      ]
+    },
+    "app/styles/primitives/status.css": {
+      "border-radius": [
+        "50%"
+      ]
+    }
+  }
+}

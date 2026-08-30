@@ -34,7 +34,7 @@ export function PatternsPanel({
       <header className="result-view-header">
         <div><h2>Event patterns</h2><p>Similar raw events grouped into recurring signatures.</p></div>
         <div className="header-menu-wrap result-menu-wrap">
-          <button className="button secondary compact" type="button" aria-haspopup="menu" aria-expanded={menu === "pattern-sensitivity"} onClick={() => onMenuChange(menu === "pattern-sensitivity" ? null : "pattern-sensitivity")}>Sensitivity: {patternSensitivity} <AppIcon name="chevron-down" size="xs" /></button>
+          <button className="button button--secondary button--compact" type="button" aria-haspopup="menu" aria-expanded={menu === "pattern-sensitivity"} onClick={() => onMenuChange(menu === "pattern-sensitivity" ? null : "pattern-sensitivity")}>Sensitivity: {patternSensitivity} <AppIcon name="chevron-down" size="xs" /></button>
           {menu === "pattern-sensitivity" ? (
             <div className="floating-menu result-control-menu" role="menu" aria-label="Pattern sensitivity">
               {(["Precise", "Balanced", "Broad"] as const).map((sensitivity) => (

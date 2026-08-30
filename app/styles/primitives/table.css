@@ -1,0 +1,145 @@
+/* Tables
+   One table family for the whole product: `.table-wrap` scrolls, `.table`
+   paints, and the modifiers say fixed columns or dialog density. A page that
+   needs a column plan states the widths and inherits the paint from here,
+   which is why the modules that used to carry a table of their own now carry
+   a `:nth-child` list and nothing else. */
+
+.table-wrap {
+  contain: inline-size;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  width: 100%;
+}
+
+.table {
+  border-collapse: collapse;
+  font-size: var(--type-xs);
+  width: 100%;
+}
+
+.table th {
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  font-weight: 600;
+  padding: var(--space-2) 10px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.table td {
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--fg-secondary);
+  height: 45px;
+  padding: 7px 10px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.table tbody tr:last-child td { border-bottom: 0; }
+.table tbody tr:hover td { background: var(--bg-raised); }
+.table a { color: var(--fg-link); text-decoration: none; }
+.table code { color: var(--fg-muted); font-size: var(--type-xs); }
+
+/* Column widths declared once on the header reach the body too. */
+.table--fixed { table-layout: fixed; }
+
+/* Dialog density: a row is a line of text rather than a record. */
+.table--compact td { height: 36px; padding: 5px 10px; }
+
+.numeric-data { font-variant-numeric: tabular-nums; }
+.table-secondary { color: var(--fg-muted); display: block; font-size: var(--type-xs); margin-top: 3px; max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
+.table-action { font-weight: 600; }
+.row-overflow { background: transparent; border: 0; color: var(--fg-muted); font-weight: 700; min-height: 28px; min-width: 30px; }
+
+/* Responsive
+   The breakpoint overrides for the rules above. They live in the file that
+   owns their base selectors rather than in one document-wide section, so a
+   feature and the way it folds are one edit rather than two thousand lines
+   apart. docs/theming.md documents the step canon; each step appears once
+   here, holding what the two responsive sections used to state twice. */
+
+@media (max-width: 760px) {
+  /* Card mode. Below the compact breakpoint a table row becomes a card and
+     every labelled cell prints its column name above its value; the first and
+     last labelled cells span the card as its title and its action row. One
+     implementation, shared by every table that opts in with .table--cards and
+     by the knowledge-manager rows, which are a table in everything but
+     markup.
+
+     The class is doubled throughout so the mode outranks what a table declares
+     for the desktop: a module's own `.table { min-width: 970px }` and the
+     per-table `:nth-child` column widths are both one class, and a card that
+     lost to either would keep a horizontal scroll or a 30% column. */
+  .table--cards.table--cards {
+    display: block;
+    min-width: 0;
+    table-layout: auto;
+    width: 100%;
+  }
+  .table--cards.table--cards thead {
+    clip-path: inset(50%);
+    height: 1px;
+    overflow: hidden;
+    position: absolute;
+    white-space: nowrap;
+    width: 1px;
+  }
+  .table--cards.table--cards tbody {
+    display: grid;
+    gap: var(--space-2);
+    min-width: 0;
+    padding: var(--space-2);
+    width: 100%;
+  }
+  .table--cards.table--cards tr {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 9px;
+  }
+  .table--cards.table--cards td,
+  .table--cards.table--cards td:nth-child(n) {
+    border: 0;
+    display: flex;
+    gap: var(--space-1);
+    height: auto;
+    min-width: 0;
+    padding: 7px;
+    white-space: normal;
+    width: auto;
+  }
+
+  /* Only a labelled cell stacks: the column name sits above the value. A cell
+     with no data-label carries a single element -- a favourite toggle, an
+     action row, a colspan empty state -- and keeps the default row flow. */
+  .table--cards.table--cards td[data-label] { flex-direction: column; }
+  .table--cards.table--cards tbody tr:hover td { background: transparent; }
+  .table--cards td[data-label]::before,
+  .knowledge-manager__row > span[data-label]::before {
+    color: var(--fg-muted);
+    content: attr(data-label);
+    font-size: var(--type-xxs);
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .table--cards.table--cards td[colspan],
+  .table--cards.table--cards td[data-label]:first-child,
+  .table--cards.table--cards td[data-label]:last-child { grid-column: 1 / -1; }
+  .table--cards.table--cards td[data-label]:first-child { border-bottom: 1px solid var(--border-subtle); padding-bottom: 10px; }
+  .table--cards.table--cards td[data-label]:last-child { border-top: 1px solid var(--border-subtle); padding-top: 10px; }
+
+  /* A card table is as wide as its wrap, so the wrap drops the scroll-hint
+     gradient and the clip it hints at. Keying this off the table rather than
+     off a per-page wrapper class is what lets one rule cover every card table;
+     it replaces `.live-jobs-table-wrap` and `.mobileCardTableWrap`, which each
+     stated the same two declarations for one page. */
+  .table-wrap:has(> .table--cards) { background: none; overflow: visible; }
+
+  .table-wrap { background: linear-gradient(to right, transparent calc(100% - 16px), color-mix(in srgb, var(--focus-ring) 9%, transparent)); }
+}

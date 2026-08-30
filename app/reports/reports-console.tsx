@@ -7,9 +7,9 @@ import type { SearchDataMode } from "@/lib/search/backend-data";
 import { searchLaunchHref } from "@/lib/search/launch-url";
 
 import { AppIcon } from "../_components/app-icon";
+import { StatusLabel } from "../_components/status";
 import { PageHeading } from "../_components/product-shell";
 import { BackendReportsConsole } from "./backend-reports-console";
-import styles from "./reports.module.css";
 
 type ReportScope = "all" | "mine" | "scheduled" | "favorites";
 type ReportType = "all" | "chart" | "statistics" | "events";
@@ -210,16 +210,16 @@ function DemoReportsConsole() {
   }
 
   return (
-    <div className={`suite-page ${styles.page}`}>
+    <div className="suite-page reports-page">
       <PageHeading
         eyebrow="SEARCH & REPORTING"
         title="Reports"
         description="Curated searches for recurring operational questions and scheduled delivery."
         actions={(
           <>
-            <Link className="suite-button" href="/search/">Open Search</Link>
+            <Link className="button" href="/search/">Open Search</Link>
             <Link
-              className="suite-button suite-button--primary"
+              className="button button--primary"
               href={searchLaunchHref("index=gradethis | stats count by service", { run: false })}
               title="Open a report-shaped SPL draft. Report creation is not connected in this preview."
             >
@@ -229,14 +229,14 @@ function DemoReportsConsole() {
         )}
       />
 
-      <section className={styles.summary} aria-label="Report summary">
-        <article><span className={styles.metricIcon} aria-hidden="true">▤</span><div><strong>{REPORTS.length}</strong><small>Total reports</small></div></article>
-        <article><span className={styles.metricIcon} aria-hidden="true">◷</span><div><strong>{counts.scheduled}</strong><small>Active schedules</small></div></article>
-        <article><span className={`${styles.metricIcon} ${styles.metricIconWarning}`} aria-hidden="true">!</span><div><strong>1</strong><small>Run needs attention</small></div></article>
+      <section className="reports-summary" aria-label="Report summary">
+        <article><span className="reports-metric-icon" aria-hidden="true">▤</span><div><strong>{REPORTS.length}</strong><small>Total reports</small></div></article>
+        <article><span className="reports-metric-icon" aria-hidden="true">◷</span><div><strong>{counts.scheduled}</strong><small>Active schedules</small></div></article>
+        <article><span className="reports-metric-icon reports-metric-icon--warning" aria-hidden="true">!</span><div><strong>1</strong><small>Run needs attention</small></div></article>
       </section>
 
-      <section className={`suite-card ${styles.library}`} aria-labelledby="report-library-title">
-        <header className={styles.libraryHeader}>
+      <section className="suite-card reports-library" aria-labelledby="report-library-title">
+        <header className="reports-library-header">
           <div>
             <h2 id="report-library-title">Report library</h2>
             <p>Search, open, and manage your working set.</p>
@@ -244,10 +244,10 @@ function DemoReportsConsole() {
           <span><strong>{visibleReports.length}</strong> {visibleReports.length === 1 ? "report" : "reports"}</span>
         </header>
 
-        <div className={styles.scopeBar} aria-label="Report scope">
+        <div className="reports-scope-bar" aria-label="Report scope">
           {SCOPE_LABELS.map((item) => (
             <button
-              className={scope === item.id ? styles.scopeActive : undefined}
+              className={scope === item.id ? "reports-scope-active" : undefined}
               type="button"
               aria-pressed={scope === item.id}
               onClick={() => setScope(item.id)}
@@ -258,8 +258,8 @@ function DemoReportsConsole() {
           ))}
         </div>
 
-        <div className={styles.toolbar}>
-          <label className={styles.searchField}>
+        <div className="reports-toolbar">
+          <label className="reports-search-field">
             <span className="sr-only">Filter reports</span>
             <i aria-hidden="true"><AppIcon name="search" size="sm" /></i>
             <input
@@ -269,7 +269,7 @@ function DemoReportsConsole() {
               placeholder="Find by name, SPL, or owner"
             />
           </label>
-          <label className={styles.selectField}>
+          <label className="reports-select-field">
             <span>Type</span>
             <select value={type} onChange={(event) => setType(event.target.value as ReportType)}>
               <option value="all">All types</option>
@@ -278,7 +278,7 @@ function DemoReportsConsole() {
               <option value="events">Event lists</option>
             </select>
           </label>
-          <label className={styles.selectField}>
+          <label className="reports-select-field">
             <span>Status</span>
             <select value={status} onChange={(event) => setStatus(event.target.value as "all" | ReportStatus)}>
               <option value="all">All statuses</option>
@@ -287,7 +287,7 @@ function DemoReportsConsole() {
               <option value="Paused">Paused</option>
             </select>
           </label>
-          <label className={styles.selectField}>
+          <label className="reports-select-field">
             <span>Sort</span>
             <select value={sort} onChange={(event) => setSort(event.target.value as SortOrder)}>
               <option value="modified">Recently modified</option>
@@ -298,15 +298,15 @@ function DemoReportsConsole() {
         </div>
 
         {visibleReports.length === 0 ? (
-          <div className={styles.empty}>
+          <div className="reports-empty">
             <span aria-hidden="true"><AppIcon name="search" size="lg" /></span>
             <strong>No matching reports</strong>
             <p>Try another phrase or broaden the report filters.</p>
             <button type="button" onClick={resetFilters}>Clear all filters</button>
           </div>
         ) : (
-          <div className={styles.tableWrap}>
-            <table className={styles.table}>
+          <div className="table-wrap reports-table-wrap">
+            <table className="table table--fixed table--cards reports-table">
               <thead>
                 <tr>
                   <th scope="col"><span className="sr-only">Favorite</span></th>
@@ -323,9 +323,9 @@ function DemoReportsConsole() {
                   const isFavorite = favorites.has(report.id);
                   return (
                     <tr key={report.id}>
-                      <td className={styles.favoriteCell}>
+                      <td className="reports-favorite-cell">
                         <button
-                          className={isFavorite ? styles.favoriteActive : undefined}
+                          className={isFavorite ? "reports-favorite-active" : undefined}
                           type="button"
                           aria-label={`${isFavorite ? "Remove" : "Add"} ${report.name} ${isFavorite ? "from" : "to"} favorites`}
                           aria-pressed={isFavorite}
@@ -334,10 +334,10 @@ function DemoReportsConsole() {
                           {isFavorite ? "★" : "☆"}
                         </button>
                       </td>
-                      <td className={styles.reportColumn} aria-labelledby={`report-name-${report.id}`}>
-                        <div className={styles.reportCell}>
+                      <td className="reports-report-column" aria-labelledby={`report-name-${report.id}`}>
+                        <div className="reports-report-cell">
                           <span
-                            className={`${styles.reportIcon} ${report.type === "statistics" ? styles.reportIconStatistics : report.type === "events" ? styles.reportIconEvents : ""}`}
+                            className={`reports-report-icon ${report.type === "statistics" ? "reports-report-icon--statistics" : report.type === "events" ? "reports-report-icon--events" : ""}`}
                             aria-hidden="true"
                           >
                             {reportIcon(report.type)}
@@ -350,21 +350,24 @@ function DemoReportsConsole() {
                         </div>
                       </td>
                       <td data-label="Owner">
-                        <span className={styles.owner}><i>{report.owner === "Administrator" ? "A" : report.owner[0]}</i>{report.owner}</span>
+                        <span className="reports-owner"><i>{report.owner === "Administrator" ? "A" : report.owner[0]}</i>{report.owner}</span>
                       </td>
                       <td data-label="Schedule">
-                        <span className={`${styles.status} ${styles[`status${report.status}`]}`}><i />{report.status}</span>
-                        <small className={styles.cellSecondary}>{report.cadence}</small>
+                        <StatusLabel tone={report.status === "Scheduled" ? "success" : report.status === "Paused" ? "warning" : "neutral"}>{report.status}</StatusLabel>
+                        <small className="reports-cell-secondary">{report.cadence}</small>
                       </td>
                       <td data-label="Last run">
-                        <span className={`${styles.runStatus} ${report.lastRun === "Failed" ? styles.runFailed : report.lastRun === "Succeeded" ? styles.runSucceeded : ""}`}>
-                          <i />{report.lastRun}
-                        </span>
+                        <StatusLabel
+                          className={report.lastRun === "Failed" ? "reports-run-failed" : undefined}
+                          tone={report.lastRun === "Failed" ? "error" : report.lastRun === "Succeeded" ? "success" : "neutral"}
+                        >
+                          {report.lastRun}
+                        </StatusLabel>
                       </td>
                       <td data-label="Modified">
-                        <span className={styles.modified}>{report.updated}</span>
+                        <span className="reports-modified">{report.updated}</span>
                       </td>
-                      <td className={styles.openCell}>
+                      <td className="reports-open-cell">
                         <Link href={searchLaunchHref(report.query)} aria-label={`Open ${report.name} in Search`}>Open in Search <AppIcon name="chevron-right" size="xs" /></Link>
                       </td>
                     </tr>

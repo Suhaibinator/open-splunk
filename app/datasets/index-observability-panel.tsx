@@ -192,7 +192,7 @@ export function IndexObservabilityPanel({ client, index }: IndexObservabilityPan
         <label><span>Earliest</span><input value={earliest} aria-invalid={validationError !== null || undefined} aria-describedby="index-observability-range-error" onChange={(event) => { setEarliest(event.target.value); setValidationError(null); }} placeholder="-24h" /></label>
         <label><span>Latest</span><input value={latest} aria-invalid={validationError !== null || undefined} aria-describedby="index-observability-range-error" onChange={(event) => { setLatest(event.target.value); setValidationError(null); }} placeholder="now" /></label>
         <label><span>Field name contains</span><input value={nameFilter} onChange={(event) => setNameFilter(event.target.value)} placeholder="Optional, case-sensitive" /></label>
-        <button className="suite-button suite-button--primary" type="submit">Apply</button>
+        <button className="button button--primary" type="submit">Apply</button>
       </form>
       {validationError === null ? null : <div id="index-observability-range-error" className="backend-inline-error" role="alert">{validationError}</div>}
 
@@ -221,8 +221,8 @@ export function IndexObservabilityPanel({ client, index }: IndexObservabilityPan
         <BackendResourceState kind="empty" title="No fields observed" message="No field profiles matched this index, time range, and name filter." />
       ) : null}
       {fieldsState === "available" && fieldSnapshot !== null && fieldSnapshot.fields.length > 0 ? (
-        <div className="responsive-table-wrap">
-          <table className="product-table index-field-table">
+        <div className="table-wrap">
+          <table className="table index-field-table">
             <caption className="sr-only">Observed fields for index {index.name}</caption>
             <thead><tr><th scope="col">Field</th><th scope="col">Type</th><th scope="col">Events</th><th scope="col">Null</th><th scope="col">Missing</th><th scope="col">Profile</th></tr></thead>
             <tbody>{fieldSnapshot.fields.map((field) => (
@@ -239,7 +239,7 @@ export function IndexObservabilityPanel({ client, index }: IndexObservabilityPan
         </div>
       ) : null}
       {fieldsError !== null && fieldsState === "available" ? <div className="backend-inline-error" role="alert">{fieldsError}</div> : null}
-      {fieldSnapshot?.nextPageToken ? <div className="index-field-footer"><button className="suite-button" type="button" disabled={loadingMore} onClick={() => void loadMore()}>{loadingMore ? "Loading…" : "Load more fields"}</button></div> : null}
+      {fieldSnapshot?.nextPageToken ? <div className="index-field-footer"><button className="button" type="button" disabled={loadingMore} onClick={() => void loadMore()}>{loadingMore ? "Loading…" : "Load more fields"}</button></div> : null}
     </section>
   );
 }

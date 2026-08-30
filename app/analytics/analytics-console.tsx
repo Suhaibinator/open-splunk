@@ -45,7 +45,6 @@ import {
   type AnalyticsHistorySnapshot,
   type AnalyticsWorkload,
 } from "./analytics-data";
-import styles from "./analytics.module.css";
 import { AnalyticsSampleStatus } from "./analytics-sample-status";
 
 type RangeKey = "1h" | "24h" | "7d";
@@ -227,25 +226,27 @@ function PerformanceTrend({ values, labels }: { values: Array<number | null>; la
   }
 
   return (
-    <figure className={styles.trendFigure}>
-      <div className={styles.trendPlot}>
+    <figure className="analytics-trend-figure">
+      <div className="analytics-trend-plot">
         <svg aria-hidden="true" preserveAspectRatio="none" viewBox={`0 0 ${width} ${height}`}>
           <defs>
             <linearGradient id="analytics-trend-fill" x1="0" x2="0" y1="0" y2="1">
-              <stop offset="0%" stopColor="#5e963c" stopOpacity="0.24" />
-              <stop offset="100%" stopColor="#5e963c" stopOpacity="0.02" />
+              {/* `stop-color` as an attribute is not a CSS declaration, so the
+                  token has to come through `style` for `var()` to resolve. */}
+              <stop offset="0%" style={{ stopColor: "var(--chart-series-1)", stopOpacity: 0.24 }} />
+              <stop offset="100%" style={{ stopColor: "var(--chart-series-1)", stopOpacity: 0.02 }} />
             </linearGradient>
           </defs>
           {[0.25, 0.5, 0.75, 1].map((position) => (
-            <line className={styles.gridLine} key={position} x1={left} x2={width - right} y1={top + plotHeight * position} y2={top + plotHeight * position} />
+            <line className="analytics-grid-line" key={position} x1={left} x2={width - right} y1={top + plotHeight * position} y2={top + plotHeight * position} />
           ))}
           {areaPoints === null ? null : <polygon fill="url(#analytics-trend-fill)" points={areaPoints} />}
           {lineSegments.map(({ previous, point }) => (
-            <line className={styles.trendLine} key={`${previous.valueIndex}-${point.valueIndex}`} x1={previous.x} x2={point.x} y1={previous.y} y2={point.y} />
+            <line className="analytics-trend-line" key={`${previous.valueIndex}-${point.valueIndex}`} x1={previous.x} x2={point.x} y1={previous.y} y2={point.y} />
           ))}
         </svg>
         <div
-          className={styles.trendPoints}
+          className="analytics-trend-points"
           aria-label="p95 search runtime trend"
           onPointerDown={activateNearestPoint}
           onPointerMove={activateNearestPoint}
@@ -255,11 +256,11 @@ function PerformanceTrend({ values, labels }: { values: Array<number | null>; la
         >
           {points.map((coordinate, index) => {
             const isActive = activeIndex === index;
-            const edge = coordinate.valueIndex < 3 ? styles.tooltipStart : coordinate.valueIndex > values.length - 4 ? styles.tooltipEnd : "";
+            const edge = coordinate.valueIndex < 3 ? "analytics-trend-tooltip--start" : coordinate.valueIndex > values.length - 4 ? "analytics-trend-tooltip--end" : "";
             return (
               <button
                 aria-label={`${labels[coordinate.valueIndex]}: ${coordinate.value.toFixed(2)} seconds p95 runtime`}
-                className={`${styles.trendPoint} ${isActive ? styles.trendPointActive : ""}`}
+                className={`analytics-trend-point ${isActive ? "analytics-trend-point--active" : ""}`}
                 key={`${labels[coordinate.valueIndex]}-${coordinate.valueIndex}`}
                 onBlur={() => setActiveIndex(null)}
                 onFocus={() => handleFocus(index)}
@@ -272,9 +273,9 @@ function PerformanceTrend({ values, labels }: { values: Array<number | null>; la
                 tabIndex={focusIndex === index ? 0 : -1}
                 type="button"
               >
-                <span className={styles.pointMarker} />
+                <span className="analytics-point-marker" />
                 {isActive ? (
-                  <span className={`${styles.trendTooltip} ${edge}`} role="tooltip">
+                  <span className={`analytics-trend-tooltip ${edge}`} role="tooltip">
                     <strong>{coordinate.value.toFixed(2)} s</strong>
                     <small>{labels[coordinate.valueIndex]}</small>
                   </span>
@@ -283,9 +284,9 @@ function PerformanceTrend({ values, labels }: { values: Array<number | null>; la
             );
           })}
         </div>
-        <span className={`${styles.axisLabel} ${styles.axisStart}`} aria-hidden="true">{labels[0]}</span>
-        <span className={`${styles.axisLabel} ${styles.axisMiddle}`} aria-hidden="true">{labels[Math.floor(labels.length / 2)]}</span>
-        <span className={`${styles.axisLabel} ${styles.axisEnd}`} aria-hidden="true">{labels.at(-1)}</span>
+        <span className="analytics-axis-label analytics-axis-label--start" aria-hidden="true">{labels[0]}</span>
+        <span className="analytics-axis-label analytics-axis-label--middle" aria-hidden="true">{labels[Math.floor(labels.length / 2)]}</span>
+        <span className="analytics-axis-label analytics-axis-label--end" aria-hidden="true">{labels.at(-1)}</span>
       </div>
       <figcaption>Hover, tap, or focus a point for its value. Use arrow keys to move between buckets.</figcaption>
     </figure>
@@ -364,22 +365,22 @@ function DemoAnalyticsConsole() {
   }
 
   return (
-    <div className={`suite-page ${styles.page}`}>
+    <div className="suite-page analytics-page">
       <PageHeading
         eyebrow="SEARCH & REPORTING"
         title="Analytics"
         description="Explore preview search-performance fixtures, query cost, and field coverage."
         actions={(
           <>
-            <span className={styles.previewBadge} data-testid="analytics-updated">Preview data</span>
-            <Link className="suite-button suite-button--primary" href={fixtureSearchHref(`index=gradethis${environmentSPL}`)}>Open Search</Link>
+            <span className="badge badge--outline" data-testid="analytics-updated">Preview data</span>
+            <Link className="button button--primary" href={fixtureSearchHref(`index=gradethis${environmentSPL}`)}>Open Search</Link>
           </>
         )}
       />
 
-      <section className={styles.contextBar} aria-label="Analytics context">
+      <section className="analytics-context-bar" aria-label="Analytics context">
         <div>
-          <span className={styles.contextIcon} aria-hidden="true">⌁</span>
+          <span className="analytics-context-icon" aria-hidden="true">⌁</span>
           <div><strong>Search workload</strong><small>Filters update summary, trend, and sample-count fixtures; insight lists remain illustrative.</small></div>
         </div>
         <label>
@@ -396,7 +397,7 @@ function DemoAnalyticsConsole() {
         </label>
       </section>
 
-      <section className={styles.metricGrid} aria-label="Search analytics summary">
+      <section className="analytics-metric-grid" aria-label="Search analytics summary">
         <Link title="Open a representative grouped search" href={fixtureSearchHref(`index=gradethis${environmentSPL} | stats count by service | sort -count`)}>
           <span>Searches run</span><strong>{NUMBER_FORMAT.format(searchCount)}</strong><small>↑ 8.4% from prior period</small><i aria-hidden="true">↗</i>
         </Link>
@@ -411,14 +412,14 @@ function DemoAnalyticsConsole() {
         </Link>
       </section>
 
-      <div className={styles.primaryGrid}>
-        <section className={`suite-card ${styles.performancePanel}`} aria-labelledby="performance-title">
-          <header className={styles.panelHeader}>
+      <div className="analytics-primary-grid">
+        <section className="suite-card analytics-performance-panel" aria-labelledby="performance-title">
+          <header className="analytics-panel-header">
             <div><h2 id="performance-title">Search performance</h2><p>p95 runtime in {range.bucket} buckets</p></div>
-            <div className={styles.legend}><span /><span>p95 runtime</span><b>seconds</b></div>
+            <div className="analytics-legend"><span /><span>p95 runtime</span><b>seconds</b></div>
           </header>
           <PerformanceTrend values={trendValues} labels={trendLabels} />
-          <footer className={styles.performanceFooter}>
+          <footer className="analytics-performance-footer">
             <div><span>Fastest</span><strong>{Math.min(...trendValues).toFixed(2)} s</strong></div>
             <div><span>Typical p95</span><strong>{(trendValues.reduce((sum, value) => sum + value, 0) / trendValues.length).toFixed(2)} s</strong></div>
             <div><span>Slowest</span><strong>{Math.max(...trendValues).toFixed(2)} s</strong></div>
@@ -426,16 +427,16 @@ function DemoAnalyticsConsole() {
           </footer>
         </section>
 
-        <aside className={`suite-card ${styles.insightsPanel}`} aria-labelledby="insights-title">
-          <header className={styles.panelHeader}>
+        <aside className="suite-card analytics-insights-panel" aria-labelledby="insights-title">
+          <header className="analytics-panel-header">
             <div><h2 id="insights-title">Query insights</h2><p>Highest-value optimization opportunities</p></div>
-            <span className={styles.insightCount}>{QUERY_INSIGHTS.length}</span>
+            <span className="analytics-insight-count">{QUERY_INSIGHTS.length}</span>
           </header>
-          <ol className={styles.insightList}>
+          <ol className="analytics-insight-list">
             {QUERY_INSIGHTS.map((insight) => (
               <li key={insight.title}>
-                <div className={styles.insightTopline}>
-                  <span className={`${styles.severity} ${styles[`severity${insight.severity}`]}`}>{insight.severity}</span>
+                <div className="analytics-insight-topline">
+                  <span className={`analytics-severity analytics-severity--${insight.severity}`}>{insight.severity}</span>
                   <small>{insight.signal}</small>
                 </div>
                 <h3>{insight.title}</h3>
@@ -447,14 +448,14 @@ function DemoAnalyticsConsole() {
         </aside>
       </div>
 
-      <div className={styles.secondaryGrid}>
-        <section className={`suite-card ${styles.fieldsPanel}`} aria-labelledby="fields-title">
-          <header className={styles.panelHeader}>
+      <div className="analytics-secondary-grid">
+        <section className="suite-card analytics-fields-panel" aria-labelledby="fields-title">
+          <header className="analytics-panel-header">
             <div><h2 id="fields-title">Field coverage</h2><p>Presence and cardinality across {NUMBER_FORMAT.format(Math.round(12_846 * scale))} sampled events</p></div>
-            <span className={styles.resultCount}><strong>{visibleFields.length}</strong> {visibleFields.length === 1 ? "field" : "fields"}</span>
+            <span className="analytics-result-count"><strong>{visibleFields.length}</strong> {visibleFields.length === 1 ? "field" : "fields"}</span>
           </header>
-          <div className={styles.fieldToolbar}>
-            <label className={styles.fieldSearch}>
+          <div className="analytics-field-toolbar">
+            <label className="analytics-field-search">
               <span className="sr-only">Filter fields</span><i aria-hidden="true"><AppIcon name="search" size="sm" /></i>
               <input data-testid="analytics-field-filter" type="search" placeholder="Filter fields or values" value={fieldQuery} onChange={(event) => setFieldQuery(event.target.value)} />
             </label>
@@ -478,22 +479,22 @@ function DemoAnalyticsConsole() {
           </div>
 
           {visibleFields.length === 0 ? (
-            <div className={styles.emptyFields}>
+            <div className="analytics-empty-fields">
               <span aria-hidden="true"><AppIcon name="search" size="lg" /></span><strong>No fields match these filters</strong><p>Clear the filters to return to the complete field profile.</p>
-              <button className="suite-button" onClick={clearFieldFilters} type="button">Clear filters</button>
+              <button className="button" onClick={clearFieldFilters} type="button">Clear filters</button>
             </div>
           ) : (
-            <div className={styles.fieldList}>
-              <div className={styles.fieldListHeader} aria-hidden="true"><span>Field</span><span>Coverage</span><span>Distinct</span><span>Example</span><span /></div>
+            <div className="analytics-field-list">
+              <div className="analytics-field-list-header" aria-hidden="true"><span>Field</span><span>Coverage</span><span>Distinct</span><span>Example</span><span /></div>
               <ul>
                 {visibleFields.map((field) => (
                   <li key={field.name}>
-                    <div className={styles.fieldIdentity}><code>{field.name}</code><span className={styles.fieldType}>{field.type}</span></div>
-                    <div className={styles.coverageCell}>
+                    <div className="analytics-field-identity"><code>{field.name}</code><span className="analytics-field-type">{field.type}</span></div>
+                    <div className="analytics-coverage-cell">
                       <span><i style={{ width: `${field.coverage}%` }} /></span><strong>{field.coverage.toFixed(field.coverage % 1 === 0 ? 0 : 1)}%</strong>
                     </div>
-                    <span className={styles.cardinality}>{formatCardinality(field.cardinality)}</span>
-                    <code className={styles.example}>{field.example}</code>
+                    <span className="analytics-cardinality">{formatCardinality(field.cardinality)}</span>
+                    <code className="analytics-example">{field.example}</code>
                     <Link aria-label={`Analyze ${field.name} in Search`} href={fixtureSearchHref(`index=gradethis${environmentSPL} ${field.name}=* | stats count by ${field.name} | sort -count`)}>Analyze <AppIcon name="chevron-right" size="xs" /></Link>
                   </li>
                 ))}
@@ -502,24 +503,24 @@ function DemoAnalyticsConsole() {
           )}
         </section>
 
-        <section className={`suite-card ${styles.slowestPanel}`} aria-labelledby="slowest-title">
-          <header className={styles.panelHeader}>
+        <section className="suite-card analytics-slowest-panel" aria-labelledby="slowest-title">
+          <header className="analytics-panel-header">
             <div><h2 id="slowest-title">Slowest recurring searches</h2><p>Average completed runtime for this period</p></div>
           </header>
-          <ol className={styles.slowestList}>
+          <ol className="analytics-slowest-list">
             {SLOW_SEARCHES.map((search, index) => (
               <li key={search.name}>
-                <span className={styles.rank}>{index + 1}</span>
-                <div className={styles.searchDetail}>
+                <span className="analytics-rank">{index + 1}</span>
+                <div className="analytics-search-detail">
                   <Link href={fixtureSearchHref(search.query)}>{search.name}</Link>
                   <small>{search.owner} · {search.scan} scanned</small>
-                  <span className={styles.durationTrack}><i style={{ width: `${(search.duration / SLOW_SEARCHES[0].duration) * 100}%` }} /></span>
+                  <span className="analytics-duration-track"><i style={{ width: `${(search.duration / SLOW_SEARCHES[0].duration) * 100}%` }} /></span>
                 </div>
                 <strong>{search.duration.toFixed(2)} s</strong>
               </li>
             ))}
           </ol>
-          <footer className={styles.slowestFooter}>
+          <footer className="analytics-slowest-footer">
             <span>Ordered by average runtime</span>
             <Link href={fixtureSearchHref(`index=gradethis${environmentSPL} duration_ms=* | stats p95(duration_ms) as p95_ms count by service | sort -p95_ms`)}>View complete workload <AppIcon name="chevron-right" size="xs" /></Link>
           </footer>
@@ -848,32 +849,32 @@ function BackendAnalyticsConsole({ apiBaseUrl }: { apiBaseUrl: string }) {
   const slowestMaximum = workload?.slowest[0]?.durationMs ?? null;
 
   return (
-    <div className={`suite-page ${styles.page}`}>
+    <div className="suite-page analytics-page">
       <PageHeading
         eyebrow="SEARCH & REPORTING"
         title="Analytics"
         description="Inspect bounded search-history workload metrics and available index field snapshots from the connected backend."
         actions={(
           <>
-            {historySnapshot === null ? <span className={styles.liveBadge}>{bootstrapState === "loading" ? "Connecting backend" : bootstrapState === "error" ? "Backend unavailable" : "Connected backend"}</span> : (
+            {historySnapshot === null ? <span className="badge badge--success badge--outline">{bootstrapState === "loading" ? "Connecting backend" : bootstrapState === "error" ? "Backend unavailable" : "Connected backend"}</span> : (
               <AnalyticsSampleStatus
-                className={historySnapshot.complete ? styles.liveBadge : styles.partialBadge}
+                className={`badge badge--outline ${historySnapshot.complete ? "badge--success" : "badge--warning"}`}
                 complete={historySnapshot.complete}
                 loaded={historySnapshot.entries.length}
                 totalSize={historySnapshot.totalSize}
                 totalSizeExact={historySnapshot.totalSizeExact}
               />
             )}
-            <button className="suite-button suite-button--primary" disabled={bootstrapState === "loading"} onClick={refresh} type="button">
+            <button className="button button--primary" disabled={bootstrapState === "loading"} onClick={refresh} type="button">
               {bootstrapState === "loading" ? "Refreshing…" : "Refresh"}
             </button>
           </>
         )}
       />
 
-      <section className={styles.contextBar} aria-label="Analytics context">
+      <section className="analytics-context-bar" aria-label="Analytics context">
         <div>
-          <span className={styles.contextIcon} aria-hidden="true">⌁</span>
+          <span className="analytics-context-icon" aria-hidden="true">⌁</span>
           <div><strong>Persisted search workload</strong><small>Terminal search metadata only; bounded to eight backend pages per refresh.</small></div>
         </div>
         <label>
@@ -903,29 +904,29 @@ function BackendAnalyticsConsole({ apiBaseUrl }: { apiBaseUrl: string }) {
       {historyState === "available" && historySnapshot !== null && workload !== null && workload.searchCount > 0 ? (
         <>
           {historySnapshot.complete ? null : (
-            <output className={styles.partialNotice}>
+            <output className="analytics-partial-notice">
               Metrics below describe the {historySnapshot.entries.length.toLocaleString()} loaded entries. Further paging stopped at the browser safety limit, so totals and percentiles are a partial sample.
             </output>
           )}
-          <section className={styles.metricGrid} aria-label="Search analytics summary">
+          <section className="analytics-metric-grid" aria-label="Search analytics summary">
             <article><span>Searches observed</span><strong>{NUMBER_FORMAT.format(workload.searchCount)}</strong><small>{workload.completedCount.toLocaleString()} completed in the loaded {historySnapshot.complete ? "range" : "sample"}</small></article>
             <article><span>Failed searches</span><strong>{NUMBER_FORMAT.format(workload.failedCount)}</strong><small>{workload.canceledCount.toLocaleString()} canceled · {workload.expiredCount.toLocaleString()} expired</small></article>
             <article><span>Median runtime</span><strong>{formatRuntime(workload.medianRuntimeMs)}</strong><small>{workload.p95RuntimeMs === null ? "No p95 duration reported" : `p95 ${formatRuntime(workload.p95RuntimeMs)}`}</small></article>
             <article><span>Rows scanned</span><strong>{formatCounter(workload.scannedRows)}</strong><small>{formatBytes(workload.scannedBytes)} read · {formatCounter(workload.producedRows)} rows produced</small></article>
           </section>
 
-          <div className={styles.primaryGrid}>
-            <section className={`suite-card ${styles.performancePanel}`} aria-labelledby="performance-title">
-              <header className={styles.panelHeader}>
+          <div className="analytics-primary-grid">
+            <section className="suite-card analytics-performance-panel" aria-labelledby="performance-title">
+              <header className="analytics-panel-header">
                 <div><h2 id="performance-title">Search performance</h2><p>Observed p95 runtime in {range.bucket} buckets; gaps mean no duration was reported</p></div>
-                <div className={styles.legend}><span /><span>p95 runtime</span><b>seconds</b></div>
+                <div className="analytics-legend"><span /><span>p95 runtime</span><b>seconds</b></div>
               </header>
               {observedTrendValues.length === 0 ? (
                 <BackendResourceState kind="empty" title="No runtime measurements" message="The matching history entries do not include duration metadata." />
               ) : (
                 <PerformanceTrend values={trendValues} labels={backendTrendLabels(workload, rangeKey)} />
               )}
-              <footer className={styles.performanceFooter}>
+              <footer className="analytics-performance-footer">
                 <div><span>Lowest bucket p95</span><strong>{observedTrendValues.length === 0 ? "Not reported" : `${Math.min(...observedTrendValues).toFixed(2)} s`}</strong></div>
                 <div><span>Median search</span><strong>{formatRuntime(workload.medianRuntimeMs)}</strong></div>
                 <div><span>Highest bucket p95</span><strong>{observedTrendValues.length === 0 ? "Not reported" : `${Math.max(...observedTrendValues).toFixed(2)} s`}</strong></div>
@@ -933,18 +934,18 @@ function BackendAnalyticsConsole({ apiBaseUrl }: { apiBaseUrl: string }) {
               </footer>
             </section>
 
-            <aside className={`suite-card ${styles.insightsPanel}`} aria-labelledby="failures-title">
-              <header className={styles.panelHeader}>
+            <aside className="suite-card analytics-insights-panel" aria-labelledby="failures-title">
+              <header className="analytics-panel-header">
                 <div><h2 id="failures-title">Recent failures</h2><p>Retained backend failure details in this sample</p></div>
-                <span className={styles.insightCount}>{workload.failedCount}</span>
+                <span className="analytics-insight-count">{workload.failedCount}</span>
               </header>
               {workload.failures.length === 0 ? (
                 <BackendResourceState kind="empty" title="No failed searches" message="No matching history entry finished in the failed state." />
               ) : (
-                <ol className={styles.insightList}>
+                <ol className="analytics-insight-list">
                   {workload.failures.map((entry) => (
                     <li key={entry.id}>
-                      <div className={styles.insightTopline}><span className={`${styles.severity} ${styles.severityhigh}`}>Failed</span><small>{formatRuntime(entry.durationMs)}</small></div>
+                      <div className="analytics-insight-topline"><span className="analytics-severity analytics-severity--high">Failed</span><small>{formatRuntime(entry.durationMs)}</small></div>
                       <h3>{historyTitle(entry)}</h3>
                       <p>{entry.failureMessage ?? "The backend retained no failure message for this search."}</p>
                       <footer><strong>{formatCounter(entry.scannedRows)} rows scanned</strong><Link href={contextualHref(historySearchLaunchHref(entry.id, false), entry.appId)}>Open search <AppIcon name="chevron-right" size="xs" /></Link></footer>
@@ -955,13 +956,13 @@ function BackendAnalyticsConsole({ apiBaseUrl }: { apiBaseUrl: string }) {
             </aside>
           </div>
 
-          <div className={styles.secondaryGrid}>
-            <section className={`suite-card ${styles.fieldsPanel}`} aria-labelledby="fields-title">
-              <header className={styles.panelHeader}>
+          <div className="analytics-secondary-grid">
+            <section className="suite-card analytics-fields-panel" aria-labelledby="fields-title">
+              <header className="analytics-panel-header">
                 <div><h2 id="fields-title">Field coverage</h2><p>Exact presence counters from a bounded index snapshot; distinct counts may be unavailable</p></div>
-                {fieldSnapshot === null ? null : <span className={styles.resultCount}><strong>{visibleFields.length}</strong> shown · {fieldSnapshot.sampledEvents.toLocaleString()} events</span>}
+                {fieldSnapshot === null ? null : <span className="analytics-result-count"><strong>{visibleFields.length}</strong> shown · {fieldSnapshot.sampledEvents.toLocaleString()} events</span>}
               </header>
-              <div className={`${styles.fieldToolbar} ${styles.backendFieldToolbar}`}>
+              <div className="analytics-field-toolbar analytics-field-toolbar--backend">
                 <label>
                   <span>Index</span>
                   <select data-testid="analytics-field-index" value={fieldIndexName} onChange={(event) => setFieldIndexName(event.target.value)}>
@@ -969,7 +970,7 @@ function BackendAnalyticsConsole({ apiBaseUrl }: { apiBaseUrl: string }) {
                     {bootstrap?.indexes.map((index) => <option key={index.id} value={index.name}>{index.displayName}</option>)}
                   </select>
                 </label>
-                <label className={styles.fieldSearch}>
+                <label className="analytics-field-search">
                   <span className="sr-only">Filter fields</span><i aria-hidden="true"><AppIcon name="search" size="sm" /></i>
                   <input data-testid="analytics-field-filter" type="search" placeholder="Filter field names or types" value={fieldQuery} onChange={(event) => setFieldQuery(event.target.value)} />
                 </label>
@@ -991,27 +992,27 @@ function BackendAnalyticsConsole({ apiBaseUrl }: { apiBaseUrl: string }) {
               {fieldState === "unavailable" ? <BackendResourceState kind="unavailable" title="Field coverage is unavailable" message="The backend does not advertise the index administration field catalog, or the route is unavailable." /> : null}
               {fieldState === "error" ? <BackendResourceState kind="error" title="Field coverage could not be loaded" message={fieldError ?? "The field-catalog request failed."} /> : null}
               {fieldState === "available" && fieldSnapshot !== null && !fieldSnapshot.complete ? (
-                <output className={styles.partialNotice}>Showing {fieldSnapshot.fields.length.toLocaleString()} loaded fields; the field snapshot reached the browser page limit.</output>
+                <output className="analytics-partial-notice">Showing {fieldSnapshot.fields.length.toLocaleString()} loaded fields; the field snapshot reached the browser page limit.</output>
               ) : null}
               {fieldState === "available" && fieldSnapshot !== null && fieldSnapshot.fields.length === 0 ? <BackendResourceState kind="empty" title="No fields observed" message="This index had no field profiles in the selected range." /> : null}
               {fieldState === "available" && fieldSnapshot !== null && fieldSnapshot.fields.length > 0 && visibleFields.length === 0 ? (
-                <div className={styles.emptyFields}><span aria-hidden="true"><AppIcon name="search" size="lg" /></span><strong>No fields match these filters</strong><p>Clear the filters to return to the loaded field profile.</p><button className="suite-button" onClick={clearFieldFilters} type="button">Clear filters</button></div>
+                <div className="analytics-empty-fields"><span aria-hidden="true"><AppIcon name="search" size="lg" /></span><strong>No fields match these filters</strong><p>Clear the filters to return to the loaded field profile.</p><button className="button" onClick={clearFieldFilters} type="button">Clear filters</button></div>
               ) : null}
               {fieldState === "available" && fieldSnapshot !== null && visibleFields.length > 0 ? (
-                <div className={styles.fieldList}>
-                  <div className={styles.fieldListHeader} aria-hidden="true"><span>Field</span><span>Coverage</span><span>Distinct</span><span>Null / missing</span><span /></div>
+                <div className="analytics-field-list">
+                  <div className="analytics-field-list-header" aria-hidden="true"><span>Field</span><span>Coverage</span><span>Distinct</span><span>Null / missing</span><span /></div>
                   <ul>
                     {visibleFields.map((field) => {
                       const original = fieldSnapshot.fields.find((candidate) => candidate.name === field.name);
                       const analysisHref = fieldAnalysisHref(fieldIndexName, field.name, range.earliest);
                       return (
                         <li key={field.name}>
-                          <div className={styles.fieldIdentity}><code>{field.name}</code><span className={styles.fieldType}>{field.type}</span></div>
-                          <div className={styles.coverageCell}><span><i style={{ width: `${field.coverage}%` }} /></span><strong>{field.coverage.toFixed(field.coverage % 1 === 0 ? 0 : 1)}%</strong></div>
-                          <span className={styles.cardinality}>{original?.cardinalityApproximate ? "≈ " : ""}{formatCardinality(field.cardinality)}</span>
-                          <code className={styles.example}>{original === undefined ? "Not reported" : `${original.nullEvents.toLocaleString()} / ${original.missingEvents.toLocaleString()}`}</code>
+                          <div className="analytics-field-identity"><code>{field.name}</code><span className="analytics-field-type">{field.type}</span></div>
+                          <div className="analytics-coverage-cell"><span><i style={{ width: `${field.coverage}%` }} /></span><strong>{field.coverage.toFixed(field.coverage % 1 === 0 ? 0 : 1)}%</strong></div>
+                          <span className="analytics-cardinality">{original?.cardinalityApproximate ? "≈ " : ""}{formatCardinality(field.cardinality)}</span>
+                          <code className="analytics-example">{original === undefined ? "Not reported" : `${original.nullEvents.toLocaleString()} / ${original.missingEvents.toLocaleString()}`}</code>
                           {analysisHref === null
-                            ? <span className={styles.unavailableAction} title="This field name cannot be represented by the current SPL grammar.">Unavailable</span>
+                            ? <span className="analytics-unavailable-action" title="This field name cannot be represented by the current SPL grammar.">Unavailable</span>
                             : <Link aria-label={`Analyze ${field.name} in Search`} href={contextualHref(analysisHref)}>Analyze <AppIcon name="chevron-right" size="xs" /></Link>}
                         </li>
                       );
@@ -1021,26 +1022,26 @@ function BackendAnalyticsConsole({ apiBaseUrl }: { apiBaseUrl: string }) {
               ) : null}
             </section>
 
-            <section className={`suite-card ${styles.slowestPanel}`} aria-labelledby="slowest-title">
-              <header className={styles.panelHeader}><div><h2 id="slowest-title">Slowest searches</h2><p>Individual retained runtimes, not inferred recurrence</p></div></header>
+            <section className="suite-card analytics-slowest-panel" aria-labelledby="slowest-title">
+              <header className="analytics-panel-header"><div><h2 id="slowest-title">Slowest searches</h2><p>Individual retained runtimes, not inferred recurrence</p></div></header>
               {workload.slowest.length === 0 ? (
                 <BackendResourceState kind="empty" title="No measured runtimes" message="The matching history entries do not retain durations." />
               ) : (
-                <ol className={styles.slowestList}>
+                <ol className="analytics-slowest-list">
                   {workload.slowest.map((entry, index) => (
                     <li key={entry.id}>
-                      <span className={styles.rank}>{index + 1}</span>
-                      <div className={styles.searchDetail}>
+                      <span className="analytics-rank">{index + 1}</span>
+                      <div className="analytics-search-detail">
                         <Link href={contextualHref(historySearchLaunchHref(entry.id, false), entry.appId)}>{historyTitle(entry)}</Link>
                         <small>{historyScopeLabel(entry)} · {formatCounter(entry.scannedRows)} rows scanned</small>
-                        <span className={styles.durationTrack}><i style={{ width: slowestMaximum === null || slowestMaximum === 0 ? "0%" : `${((entry.durationMs ?? 0) / slowestMaximum) * 100}%` }} /></span>
+                        <span className="analytics-duration-track"><i style={{ width: slowestMaximum === null || slowestMaximum === 0 ? "0%" : `${((entry.durationMs ?? 0) / slowestMaximum) * 100}%` }} /></span>
                       </div>
                       <strong>{formatRuntime(entry.durationMs)}</strong>
                     </li>
                   ))}
                 </ol>
               )}
-              <footer className={styles.slowestFooter}><span>Ordered by retained runtime</span><Link href={contextualHref("/activity/")}>View search history <AppIcon name="chevron-right" size="xs" /></Link></footer>
+              <footer className="analytics-slowest-footer"><span>Ordered by retained runtime</span><Link href={contextualHref("/activity/")}>View search history <AppIcon name="chevron-right" size="xs" /></Link></footer>
             </section>
           </div>
         </>

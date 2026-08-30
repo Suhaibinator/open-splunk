@@ -8,7 +8,7 @@ import { homeSearchFinishedAt, homeSearchStatus } from "./home-dashboard-data";
 test("home search history presents terminal backend states", () => {
   assert.deepEqual(homeSearchStatus(SearchJobState.SEARCH_JOB_STATE_COMPLETED), {
     label: "Completed",
-    tone: "complete",
+    tone: "success",
   });
   assert.deepEqual(homeSearchStatus(SearchJobState.SEARCH_JOB_STATE_CANCELED), {
     label: "Canceled",
@@ -16,11 +16,11 @@ test("home search history presents terminal backend states", () => {
   });
   assert.deepEqual(homeSearchStatus(SearchJobState.SEARCH_JOB_STATE_EXPIRED), {
     label: "Expired",
-    tone: "failed",
+    tone: "error",
   });
   assert.deepEqual(homeSearchStatus(SearchJobState.SEARCH_JOB_STATE_FAILED), {
     label: "Failed",
-    tone: "failed",
+    tone: "error",
   });
   assert.deepEqual(homeSearchStatus(SearchJobState.UNRECOGNIZED), {
     label: "Unknown",

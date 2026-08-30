@@ -25,6 +25,7 @@ export type MenuName =
   | "pattern-sensitivity"
   | "event-display"
   | "event-page-size"
+  | "event-row-actions"
   | "timeline-format";
 export type JobPhase =
   | "queued"

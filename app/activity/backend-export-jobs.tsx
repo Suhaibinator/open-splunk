@@ -24,6 +24,7 @@ import {
 } from "@/lib/search/server-exports";
 
 import { BackendResourceState } from "../_components/backend-resource-state";
+import { StatusLabel, type StatusTone } from "../_components/status";
 import { AppIcon } from "../_components/app-icon";
 import { formatDecimalBytes } from "../search-workspace/formatters";
 import {
@@ -74,9 +75,9 @@ function exportStateLabel(state: ExportJobState): string {
   return "Unknown";
 }
 
-function exportStateClass(state: ExportJobState): string {
-  if (state === ExportJobState.EXPORT_JOB_STATE_COMPLETED) return "complete";
-  if (state === ExportJobState.EXPORT_JOB_STATE_FAILED || state === ExportJobState.EXPORT_JOB_STATE_EXPIRED) return "failed";
+function exportStateTone(state: ExportJobState): StatusTone {
+  if (state === ExportJobState.EXPORT_JOB_STATE_COMPLETED) return "success";
+  if (state === ExportJobState.EXPORT_JOB_STATE_FAILED || state === ExportJobState.EXPORT_JOB_STATE_EXPIRED) return "error";
   if (state === ExportJobState.EXPORT_JOB_STATE_CANCELED) return "neutral";
   if (state === ExportJobState.EXPORT_JOB_STATE_QUEUED) return "warning";
   return "running";
@@ -281,7 +282,7 @@ export function BackendExportJobs({ apiBaseUrl, bootstrap }: BackendExportJobsPr
         <>
           <output className="live-jobs-snapshot history-snapshot">
             <span><i aria-hidden="true" />{totalSizeExact && totalSize !== null ? <><strong>{formatActivityCount(totalSize)}</strong> exact matches; </> : null}last refreshed <strong>{formatActivityTime(refreshedAt)}</strong>. Lifecycle state and expiration can change between pages.</span>
-            <button type="button" aria-busy={refreshing} aria-disabled={refreshing} onClick={() => { if (!refreshing) reload(); }}>{refreshing ? "Refreshing…" : "Refresh snapshot"}</button>
+            <button className="button button--compact" type="button" aria-busy={refreshing} aria-disabled={refreshing} onClick={() => { if (!refreshing) reload(); }}>{refreshing ? "Refreshing…" : "Refresh snapshot"}</button>
           </output>
           {notice === null ? null : <output className={`backend-action-notice backend-action-notice--${notice.kind}`}><span aria-hidden="true"><AppIcon name={notice.kind === "success" ? "check" : "warning"} size="sm" /></span><strong>{notice.message}</strong><button type="button" aria-label="Dismiss export action notification" onClick={() => setNotice(null)}><AppIcon name="close" size="md" /></button></output>}
           {error !== null && jobs.length > 0 ? <div className="backend-inline-error" role="alert">The latest refresh failed; the prior snapshot remains visible. {error}<button type="button" onClick={reload}>Retry</button></div> : null}
@@ -294,15 +295,15 @@ export function BackendExportJobs({ apiBaseUrl, bootstrap }: BackendExportJobsPr
               </fieldset>
               <form className="live-jobs-filter-row" onSubmit={(event) => { event.preventDefault(); setSearchJobIdFilter(searchJobIdInput.trim()); }}>
                 <label className="live-jobs-text-filter"><span className="sr-only">Exact search job ID filter</span><i aria-hidden="true"><AppIcon name="search" size="sm" /></i><input value={searchJobIdInput} maxLength={256} onChange={(event) => setSearchJobIdInput(event.target.value)} placeholder="Exact search job ID" /></label>
-                <button className="suite-button" type="submit">Apply</button>
-                {filtered ? <button className="suite-button suite-button--secondary" type="button" onClick={clearFilters}>Clear</button> : null}
+                <button className="button" type="submit">Apply</button>
+                {filtered ? <button className="button button--secondary" type="button" onClick={clearFilters}>Clear</button> : null}
               </form>
             </header>
             {refreshing ? <BackendResourceState kind="loading" title="Updating export jobs" message="Applying exact backend filters to a fresh snapshot. Existing rows remain visible until it completes." /> : null}
             {jobs.length === 0 && !refreshing ? <BackendResourceState kind="empty" title={filtered ? "No matching export jobs" : "No retained export jobs"} message={filtered ? "No retained export jobs match these exact state and search-job filters." : "Exports created from completed searches will appear here while their records are retained."} action={filtered ? <button type="button" onClick={clearFilters}>Clear filters</button> : undefined} /> : null}
             {jobs.length > 0 ? (
-              <div className="responsive-table-wrap" aria-busy={refreshing}>
-                <table className="product-table live-jobs-table export-jobs-table">
+              <div className="table-wrap" aria-busy={refreshing}>
+                <table className="table table--cards live-jobs-table export-jobs-table">
                   <caption className="sr-only">Retained export jobs</caption>
                   <thead><tr><th scope="col">Export</th><th scope="col">Source search</th><th scope="col">State</th><th scope="col">Progress</th><th scope="col">Artifact / failure</th><th scope="col">Created</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
                   <tbody>{jobs.map((job) => {
@@ -312,7 +313,7 @@ export function BackendExportJobs({ apiBaseUrl, bootstrap }: BackendExportJobsPr
                     return <tr key={job.exportJobId}>
                       <td data-label="Export"><strong>{exportFormatLabel(job)}</strong><code>{job.exportJobId}</code><small>Version {formatActivityCount(job.stateVersion)}</small></td>
                       <td data-label="Source search"><code>{job.definition?.searchJobId || "Not recorded"}</code><small>{job.definition?.columns.length ? `${job.definition.columns.length} selected columns` : "All result columns"}</small></td>
-                      <td data-label="State"><span className={`status-label status-label--${exportStateClass(job.state)}`}><i />{exportStateLabel(job.state)}</span>{job.finishedAt !== undefined ? <small>Finished {formatActivityDate(job.finishedAt)}</small> : null}</td>
+                      <td data-label="State"><StatusLabel tone={exportStateTone(job.state)}>{exportStateLabel(job.state)}</StatusLabel>{job.finishedAt !== undefined ? <small>Finished {formatActivityDate(job.finishedAt)}</small> : null}</td>
                       <td data-label="Progress"><div className="live-job-progress">{percent === null ? <span>{exportStateLabel(job.state)}</span> : <progress max={100} value={percent} aria-label={`${exportStateLabel(job.state)} ${Math.round(percent)} percent`} />}<small>{percent === null ? null : `${Math.round(percent)}% · `}{formatActivityDuration(durationToMilliseconds(job.progress?.elapsed))}</small><small>{formatActivityCount(job.progress?.rowsWritten ?? 0n)} rows · {formatDecimalBytes(job.progress?.bytesWritten ?? 0n)}</small></div></td>
                       <td data-label="Artifact / failure">{job.artifact !== undefined ? <><strong title={`${formatActivityCount(job.artifact.sizeBytes)} bytes`}>{job.artifact.fileName}</strong><small>{formatActivityCount(job.artifact.rowCount)} rows · {formatDecimalBytes(job.artifact.sizeBytes)}</small><small>Expires {formatActivityDate(job.artifact.expiresAt ?? null)}</small></> : job.failure !== undefined ? <><strong className="table-error-detail">{job.failure.message}</strong><small>{job.failure.retryable ? "Retryable failure" : "Terminal failure"} · code {job.failure.code}</small></> : <small>No artifact yet</small>}</td>
                       <td data-label="Created"><time dateTime={job.createdAt?.toISOString()}>{formatActivityDate(job.createdAt ?? null)}</time></td>

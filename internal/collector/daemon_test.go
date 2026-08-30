@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +22,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/collector/wal"
 	"github.com/Suhaibinator/open-splunk/internal/collectorlimits"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
+	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -31,8 +31,8 @@ import (
 // being delivered or acked.
 const deadServerAddr = "127.0.0.1:1"
 
-func discardLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
+func discardLogger() *zap.Logger {
+	return zap.NewNop()
 }
 
 // waitFor polls cond until it is true or the deadline elapses, failing the test

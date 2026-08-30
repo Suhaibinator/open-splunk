@@ -10,7 +10,7 @@ import {
   formatExactNumericText,
   formatNonNegativeIntegerQuantity,
 } from "../formatters";
-import { Modal } from "../modal";
+import { Modal } from "../../_components/modal";
 import type {
   DialogActionState,
   ExportArtifactDetails,
@@ -25,11 +25,11 @@ import type {
   TargetedDialogActionState,
   TimeRange,
 } from "../model";
-import { phaseLabel, stateClass } from "../workspace-utils";
+import { historyPhase, phaseLabel, stateTone } from "../workspace-utils";
 import { AppIcon } from "../../_components/app-icon";
+import { StatusLabel } from "../../_components/status";
 
 import { ExportArtifactStatus, ExportDownloadContent, getExportStatusTone } from "./export-presentation";
-import styles from "./workspace-dialogs.module.css";
 
 function formatExpiry(date: Date): string | null {
   if (Number.isNaN(date.valueOf())) return null;
@@ -57,14 +57,14 @@ export function KnowledgeInspectionSection({
 }) {
   if (knowledge.state === "absent") {
     return (
-      <section aria-label="Knowledge authority" className={styles.knowledgeInspection}>
+      <section aria-label="Knowledge authority" className="workspace-dialog-knowledge-inspection">
         <h3>Knowledge authority</h3>
         <p>Knowledge resolution was not enabled for this search.</p>
       </section>
     );
   }
   return (
-    <section aria-label="Knowledge authority" className={styles.knowledgeInspection}>
+    <section aria-label="Knowledge authority" className="workspace-dialog-knowledge-inspection">
       <h3>Knowledge authority</h3>
       <dl>
         <dt>Snapshot digest</dt>
@@ -113,14 +113,14 @@ function CapabilitySetting({
   const unavailable = !capability.supported;
   const updating = capability.update.status === "pending";
   return (
-    <label className={unavailable ? styles.unavailableSetting : undefined} htmlFor={controlId}>
+    <label className={unavailable ? "workspace-dialog-unavailable-setting" : undefined} htmlFor={controlId}>
       <span>
         <strong>{label}</strong>
         <small>{capability.detail}</small>
-        {capability.update.status === "error" ? <small className={styles.settingError} role="alert">{capability.update.error}</small> : null}
+        {capability.update.status === "error" ? <small className="workspace-dialog-setting-error" role="alert">{capability.update.error}</small> : null}
       </span>
-      <span className={styles.capabilityControl}>
-        <small className={unavailable ? styles.unavailableBadge : styles.availableBadge}>
+      <span className="workspace-dialog-capability-control">
+        <small className={`badge ${unavailable ? "badge--neutral" : "badge--success"}`}>
           {updating ? "Updating" : unavailable ? "Unavailable" : capability.configurable ? "Available" : "Read only"}
         </small>
         <input
@@ -199,6 +199,7 @@ interface WorkspaceDialogsProps {
   onRenameSavedSearch: () => void;
   onRequestRenameSavedSearch: (id: string) => void;
   onRequestDeleteSavedSearch: (id: string) => void;
+  onCopyExportPage: () => void;
   onDownloadExport: (artifact: ExportArtifactDetails) => void;
   onExportFieldToggle: (field: string) => void;
   onExportFormatChange: (format: "csv" | "jsonl") => void;
@@ -281,6 +282,7 @@ export function WorkspaceDialogs({
   onRenameSavedSearch,
   onRequestRenameSavedSearch,
   onRequestDeleteSavedSearch,
+  onCopyExportPage,
   onDownloadExport,
   onExportFieldToggle,
   onExportFormatChange,
@@ -310,10 +312,10 @@ export function WorkspaceDialogs({
           if (!saving) onModalChange(null);
         }}
         returnFocus={saveDialogReturnFocus}
-        footer={<><button className="button secondary" type="button" disabled={saving} onClick={() => onModalChange(null)}>Cancel</button><button className="button primary" type="button" aria-busy={saving} disabled={saving || saveName.trim().length === 0} onClick={onSaveSearch}>{saving ? "Saving…" : "Save"}</button></>}
+        footer={<><button className="button button--secondary" type="button" disabled={saving} onClick={() => onModalChange(null)}>Cancel</button><button className="button button--primary" type="button" aria-busy={saving} disabled={saving || saveName.trim().length === 0} onClick={onSaveSearch}>{saving ? "Saving…" : "Save"}</button></>}
       >
         <div className="form-stack" data-testid="save-search-dialog" aria-busy={saving}>
-          {saveState.status === "error" ? <p className={styles.actionError} role="alert">{saveState.error}</p> : null}
+          {saveState.status === "error" ? <p className="workspace-dialog-action-error" role="alert">{saveState.error}</p> : null}
           <label><span>Name</span><input value={saveName} disabled={saving} onChange={(event) => onSaveNameChange(event.target.value)} /></label>
           <label><span>Description <small>optional</small></span><textarea value={saveDescription} disabled={saving} onChange={(event) => onSaveDescriptionChange(event.target.value)} rows={3} /></label>
           <div className="form-summary"><span>App</span><strong>{appName}</strong><span>Time range</span><strong>{timeRange.label}</strong><span>Result view</span><strong>{activeTab[0].toUpperCase() + activeTab.slice(1)}</strong></div>
@@ -336,9 +338,9 @@ export function WorkspaceDialogs({
       <Modal title="Open a saved search" subtitle="Searches currently available in this app." wide onClose={() => onModalChange(null)}>
         <div className="library-toolbar"><label className="filter-input"><span aria-hidden="true"><AppIcon name="search" size="sm" /></span><input aria-label="Filter saved searches" placeholder="Filter saved searches" disabled={savedSearchLibraryStatus !== "available"} value={savedSearchFilter} onChange={(event) => onSavedSearchFilterChange(event.target.value)} /></label></div>
         {savedSearchDeleteState.status === "error" && savedSearchDeleteState.error
-          ? <p className={styles.actionError} role="alert">{savedSearchDeleteState.error}</p>
+          ? <p className="workspace-dialog-action-error" role="alert">{savedSearchDeleteState.error}</p>
           : savedSearchDuplicateState.status === "error" && savedSearchDuplicateState.error
-            ? <p className={styles.actionError} role="alert">{savedSearchDuplicateState.error}</p>
+            ? <p className="workspace-dialog-action-error" role="alert">{savedSearchDuplicateState.error}</p>
           : null}
         <div className="saved-list" data-testid="saved-search-list">
           {savedSearchLibraryStatus === "loading" ? <output className="empty-state"><strong>Loading saved searches…</strong><span>Reading the connected server library.</span></output> : null}
@@ -352,7 +354,7 @@ export function WorkspaceDialogs({
                 <div className="saved-row-meta">
                   <span>{saved.updatedAt}</span>
                   <button
-                    className={`icon-button ${styles.savedRowIconButton}`}
+                    className="button button--ghost button--icon workspace-dialog-saved-row-icon-button"
                     aria-label={duplicatingThisSearch ? `Duplicating ${saved.name}` : `Duplicate ${saved.name}`}
                     type="button"
                     disabled={savedSearchActionPending}
@@ -361,7 +363,7 @@ export function WorkspaceDialogs({
                     <AppIcon name={duplicatingThisSearch ? "loading" : "copy"} size="md" spin={duplicatingThisSearch} />
                   </button>
                   <button
-                    className={`icon-button ${styles.savedRowIconButton}`}
+                    className="button button--ghost button--icon workspace-dialog-saved-row-icon-button"
                     aria-label={`Rename ${saved.name}`}
                     type="button"
                     disabled={savedSearchActionPending}
@@ -370,7 +372,7 @@ export function WorkspaceDialogs({
                     <AppIcon name="edit" size="md" />
                   </button>
                   <button
-                    className={`icon-button ${styles.savedRowIconButton}`}
+                    className="button button--ghost button--icon workspace-dialog-saved-row-icon-button"
                     aria-label={deletingThisSearch ? `Deleting ${saved.name}` : `Delete ${saved.name}`}
                     type="button"
                     disabled={savedSearchActionPending}
@@ -384,9 +386,9 @@ export function WorkspaceDialogs({
           })}
           {savedSearchLibraryStatus === "available" && filtered.length === 0 ? <div className="empty-state"><strong>{savedSearches.length === 0 ? "No saved searches yet" : "No loaded saved searches match"}</strong><span>{savedSearches.length === 0 ? "Save a search to make it available here." : savedSearchHasMore ? "Load more results or try another name or SPL term." : "Try another name or SPL term."}</span></div> : null}
           {savedSearchLibraryStatus === "available" && savedSearchHasMore ? (
-            <div className={styles.loadMoreRow}>
+            <div className="workspace-dialog-load-more-row">
               <button
-                className="button secondary compact"
+                className="button button--secondary button--compact"
                 type="button"
                 aria-busy={savedSearchLoadingMore}
                 disabled={savedSearchLoadingMore || savedSearchActionPending}
@@ -414,9 +416,9 @@ export function WorkspaceDialogs({
         }}
         footer={(
           <>
-            <button className="button secondary" type="button" disabled={renaming} onClick={() => onModalChange("open")}>Cancel</button>
+            <button className="button button--secondary" type="button" disabled={renaming} onClick={() => onModalChange("open")}>Cancel</button>
             <button
-              className="button primary"
+              className="button button--primary"
               type="submit"
               form="rename-saved-search-form"
               aria-busy={renaming}
@@ -443,7 +445,7 @@ export function WorkspaceDialogs({
           }}
         >
           {savedSearchRenameState.status === "error" && savedSearchRenameState.error
-            ? <p className={styles.actionError} role="alert">{savedSearchRenameState.error}</p>
+            ? <p className="workspace-dialog-action-error" role="alert">{savedSearchRenameState.error}</p>
             : null}
           <label>
             <span>Name</span>
@@ -482,8 +484,8 @@ export function WorkspaceDialogs({
         }}
         footer={(
           <>
-            <button className="button secondary" type="button" disabled={deleting} onClick={() => onModalChange("open")}>Keep saved search</button>
-            <button className="button danger" type="button" aria-busy={deleting} disabled={deleting} onClick={() => onDeleteSavedSearch(savedSearchDeleteTarget.id)}>
+            <button className="button button--secondary" type="button" disabled={deleting} onClick={() => onModalChange("open")}>Keep saved search</button>
+            <button className="button button--danger" type="button" aria-busy={deleting} disabled={deleting} onClick={() => onDeleteSavedSearch(savedSearchDeleteTarget.id)}>
               {deleting ? "Deleting…" : "Delete saved search"}
             </button>
           </>
@@ -491,7 +493,7 @@ export function WorkspaceDialogs({
       >
         <p>This cannot be undone. Existing search history is not removed.</p>
         {savedSearchDeleteState.status === "error" && savedSearchDeleteState.error
-          ? <p className={styles.actionError} role="alert">{savedSearchDeleteState.error}</p>
+          ? <p className="workspace-dialog-action-error" role="alert">{savedSearchDeleteState.error}</p>
           : null}
       </Modal>
     );
@@ -506,14 +508,14 @@ export function WorkspaceDialogs({
     const deletingHistory = deletingHistoryEntryId !== null;
     return (
       <Modal title="Search history" subtitle="Recent completed, canceled, and failed searches." wide onClose={() => onModalChange(null)}>
-        <div className="library-toolbar"><label className="filter-input"><span aria-hidden="true"><AppIcon name="search" size="sm" /></span><input aria-label="Filter search history" placeholder="Filter by SPL" disabled={historyLibraryStatus !== "available"} value={historyFilter} onChange={(event) => onHistoryFilterChange(event.target.value)} /></label><button className="button secondary compact" type="button" disabled={historyLibraryStatus !== "available" || history.length === 0 || clearingHistory || deletingHistory || historyLoadingMore} onClick={() => onModalChange("clear-history")}>Clear history</button></div>
+        <div className="library-toolbar"><label className="filter-input"><span aria-hidden="true"><AppIcon name="search" size="sm" /></span><input aria-label="Filter search history" placeholder="Filter by SPL" disabled={historyLibraryStatus !== "available"} value={historyFilter} onChange={(event) => onHistoryFilterChange(event.target.value)} /></label><button className="button button--secondary button--compact" type="button" disabled={historyLibraryStatus !== "available" || history.length === 0 || clearingHistory || deletingHistory || historyLoadingMore} onClick={() => onModalChange("clear-history")}>Clear history</button></div>
         {historyClearState.status === "error" && historyClearState.error
-          ? <p className={styles.actionError} role="alert">{historyClearState.error}</p>
+          ? <p className="workspace-dialog-action-error" role="alert">{historyClearState.error}</p>
           : historyDeleteState.status === "error" && historyDeleteState.error
-            ? <p className={styles.actionError} role="alert">{historyDeleteState.error}</p>
+            ? <p className="workspace-dialog-action-error" role="alert">{historyDeleteState.error}</p>
             : null}
-        <div className={styles.historyTableScroll} data-testid="history-list">
-          <table className={styles.historyTable}>
+        <div className="table-wrap workspace-dialog-history-scroll" data-testid="history-list">
+          <table className="table table--compact table--fixed table--cards workspace-dialog-history-table">
             <thead>
               <tr><th scope="col">Search</th><th scope="col">Status</th><th scope="col">Results</th><th scope="col">Duration</th><th scope="col">Ran</th><th scope="col">Actions</th></tr>
             </thead>
@@ -527,17 +529,17 @@ export function WorkspaceDialogs({
                     <td data-label="Search">
                       <code title={entry.query}>{entry.query}</code>
                       {entry.sourceLabel || entry.appId || entry.resolvedTimeRange ? (
-                        <small className={styles.historyMeta} title={entry.resolvedTimeRange}>
+                        <small className="workspace-dialog-history-meta" title={entry.resolvedTimeRange}>
                           {[entry.sourceLabel, entry.appId, entry.resolvedTimeRange].filter(Boolean).join(" · ")}
                         </small>
                       ) : null}
                     </td>
                     <td data-label="Status"><span className={`history-state history-${entry.state.toLowerCase()}`}>{entry.state}</span></td>
-                    <td className={styles.numericCell} data-label="Results">{formatHistoryResultCount(entry)}</td>
+                    <td className="workspace-dialog-numeric-cell" data-label="Results">{formatHistoryResultCount(entry)}</td>
                     <td data-label="Duration">{entry.duration}</td>
                     <td data-label="Ran">{entry.ranAt}</td>
                     <td data-label="Actions">
-                      <div className={`row-actions ${styles.historyRowActions}`}>
+                      <div className="row-actions workspace-dialog-history-row-actions">
                         <button aria-label={`Open history search from ${entry.ranAt}`} type="button" disabled={clearingHistory || deletingThisEntry} onClick={() => onHistoryEntryOpen(entry, false)}>Open</button>
                         <button aria-label={`Run history search from ${entry.ranAt} again`} type="button" disabled={clearingHistory || deletingThisEntry} onClick={() => onHistoryEntryOpen(entry, true)}>Run again</button>
                         <button aria-label={`Save history search from ${entry.ranAt}`} type="button" disabled={clearingHistory || deletingThisEntry} onClick={() => onHistoryEntrySave(entry)}>Save</button>
@@ -558,9 +560,9 @@ export function WorkspaceDialogs({
           </table>
         </div>
         {historyLibraryStatus === "available" && historyHasMore ? (
-          <div className={styles.loadMoreRow}>
+          <div className="workspace-dialog-load-more-row">
             <button
-              className="button secondary compact"
+              className="button button--secondary button--compact"
               type="button"
               aria-busy={historyLoadingMore}
               disabled={historyLoadingMore || clearingHistory || deletingHistory}
@@ -586,8 +588,8 @@ export function WorkspaceDialogs({
         }}
         footer={(
           <>
-            <button className="button secondary" type="button" disabled={clearingHistory} onClick={() => onModalChange("history")}>Keep history</button>
-            <button className="button danger" type="button" aria-busy={clearingHistory} disabled={clearBlocked} onClick={onClearHistory}>
+            <button className="button button--secondary" type="button" disabled={clearingHistory} onClick={() => onModalChange("history")}>Keep history</button>
+            <button className="button button--danger" type="button" aria-busy={clearingHistory} disabled={clearBlocked} onClick={onClearHistory}>
               {clearingHistory ? "Clearing…" : historyLoadingMore ? "Wait for history load" : "Clear app history"}
             </button>
           </>
@@ -595,7 +597,7 @@ export function WorkspaceDialogs({
       >
         <p>This cannot be undone. Searches belonging to other apps are not included.</p>
         {historyClearState.status === "error" && historyClearState.error
-          ? <p className={styles.actionError} role="alert">{historyClearState.error}</p>
+          ? <p className="workspace-dialog-action-error" role="alert">{historyClearState.error}</p>
           : null}
       </Modal>
     );
@@ -635,10 +637,14 @@ export function WorkspaceDialogs({
     const exportAvailable = exportState.status === "configure" ? exportState.available : true;
     const exportRetryable = exportState.status === "error" ? exportState.retryable : true;
     const canChooseFormat = !exportPending && !exportReady;
-    const canConfigure = exportAvailable && canChooseFormat;
-    const canCreate = canConfigure
+    const canConfigure = canChooseFormat;
+    const canCreate = exportAvailable
+      && canConfigure
       && exportFields.length > 0
       && exportRetryable;
+    const canCopyPage = canChooseFormat
+      && exportFields.length > 0
+      && displayedExportRows > 0;
     const maximumRows = exportState.maximumRows === null || exportState.maximumRows === undefined
       ? "Not advertised"
       : formatNonNegativeIntegerQuantity(exportState.maximumRows);
@@ -652,9 +658,9 @@ export function WorkspaceDialogs({
       metadataValid: artifactMetadataValid,
     });
     const readySummaryToneClass = readyStatusTone === "warning"
-      ? styles.exportSummaryWarning
+      ? "workspace-dialog-export-summary--warning"
       : readyStatusTone === "error"
-        ? styles.exportSummaryError
+        ? "workspace-dialog-export-summary--error"
         : "";
     const closeExport = () => {
       if (exportState.status === "configure" || exportState.status === "error") onResetExport();
@@ -667,10 +673,13 @@ export function WorkspaceDialogs({
         subtitle={exportState.description}
         onClose={closeExport}
         footer={exportReady
-          ? <div className={styles.exportActions}>
-              <button className="button secondary" type="button" disabled={downloadPending} onClick={onResetExport}>New export</button>
+          ? <div className="workspace-dialog-export-actions">
+              <button className="button button--secondary" type="button" disabled={downloadPending} onClick={onResetExport}>New export</button>
+              <button className="button button--secondary" type="button" aria-label="Copy page to clipboard" disabled={downloadPending || displayedExportRows === 0} onClick={onCopyExportPage}>
+                <AppIcon name="copy" size="sm" /> Copy page
+              </button>
               <button
-                className="button primary"
+                className="button button--primary"
                 type="button"
                 aria-label={artifact?.fileName ? `Download ${artifact.fileName}` : `Download ${exportFormatLabel}`}
                 aria-busy={downloadPending}
@@ -681,9 +690,9 @@ export function WorkspaceDialogs({
               </button>
             </div>
           : exportPending
-            ? <div className={styles.exportActions}>
+            ? <div className="workspace-dialog-export-actions">
                 <button
-                  className="button secondary"
+                  className="button button--secondary"
                   type="button"
                   aria-busy={exportCancelPending}
                   disabled={exportCancelPending}
@@ -691,24 +700,30 @@ export function WorkspaceDialogs({
                 >
                   {exportCancelPending ? "Canceling…" : exportCancelState?.status === "error" ? "Retry cancellation" : "Cancel export"}
                 </button>
-                <button className="button secondary" type="button" disabled={exportCancelPending} onClick={closeExport}>Continue in background</button>
+                <button className="button button--secondary" type="button" disabled={exportCancelPending} onClick={closeExport}>Continue in background</button>
               </div>
-            : <div className={styles.exportActions}><button className="button secondary" type="button" onClick={closeExport}>Cancel</button><button className="button primary" type="button" disabled={!canCreate} onClick={onPrepareExport}>{exportFailed ? exportRetryable ? "Retry export" : "Export unavailable" : "Create export"}</button></div>}
+            : <div className="workspace-dialog-export-actions">
+                <button className="button button--secondary" type="button" onClick={closeExport}>Cancel</button>
+                <button className="button button--secondary" type="button" aria-label="Copy page to clipboard" disabled={!canCopyPage} onClick={onCopyExportPage}>
+                  <AppIcon name="copy" size="sm" /> Copy page
+                </button>
+                <button className="button button--primary" type="button" disabled={!canCreate} onClick={onPrepareExport}>{exportFailed ? exportRetryable ? "Retry export" : "Export unavailable" : "Create export"}</button>
+              </div>}
       >
         <div className="form-stack" data-testid="export-dialog" aria-busy={exportPending || downloadPending || exportCancelPending}>
           {exportState.status === "configure" && !exportState.available ? (
-            <aside className={styles.capabilityNotice}>
-              <strong>Export unavailable</strong>
+            <aside className="workspace-dialog-capability-notice">
+              <strong>File export unavailable</strong>
               <span>{exportState.unavailableReason || "This data source did not advertise an export capability for the selected format."}</span>
             </aside>
           ) : null}
-          {exportError === null ? null : <p className={styles.actionError} role="alert">{exportError}</p>}
-          {exportCancelState?.status === "error" ? <p className={styles.actionError} role="alert">{exportCancelState.error}</p> : null}
+          {exportError === null ? null : <p className="workspace-dialog-action-error" role="alert">{exportError}</p>}
+          {exportCancelState?.status === "error" ? <p className="workspace-dialog-action-error" role="alert">{exportCancelState.error}</p> : null}
           {downloadState?.status === "error"
-            ? <p className={styles.actionError} role="alert">{downloadState.error}</p>
+            ? <p className="workspace-dialog-action-error" role="alert">{downloadState.error}</p>
             : null}
           {exportReady && artifact !== null ? (
-            <section className={`${styles.exportSummary} ${readySummaryToneClass}`} aria-labelledby="export-summary-title">
+            <section className={`workspace-dialog-export-summary ${readySummaryToneClass}`} aria-labelledby="export-summary-title">
               <ExportArtifactStatus
                 expired={artifactExpired}
                 expiry={expiry}
@@ -716,7 +731,7 @@ export function WorkspaceDialogs({
                 titleId="export-summary-title"
               />
               <dl>
-                <div className={styles.exportFileRow}>
+                <div className="workspace-dialog-export-file-row">
                   <dt>File</dt>
                   <dd><code title={artifact.fileName}>{artifact.fileName || "Unavailable"}</code></dd>
                 </div>
@@ -726,7 +741,7 @@ export function WorkspaceDialogs({
                 <div><dt>Expires</dt><dd>{expiry ?? "No expiry advertised"}</dd></div>
                 <div><dt>Maximum rows</dt><dd>{maximumRows}</dd></div>
                 <div><dt>Byte limit</dt><dd>{maximumBytes ?? "Not advertised"}</dd></div>
-                <div className={styles.exportColumnsRow}>
+                <div className="workspace-dialog-export-columns-row">
                   <dt>Columns</dt>
                   <dd><span>{exportFields.length} selected</span><code>{exportFields.map((field) => exportFieldLabels[field] ?? field).join(", ")}</code></dd>
                 </div>
@@ -755,8 +770,9 @@ export function WorkspaceDialogs({
                   {maximumBytes === null ? null : <> · {maximumBytes} byte limit</>}
                 </small>
               </div>
+              <p className="workspace-dialog-clipboard-hint"><AppIcon name="copy" size="sm" /> Copy page uses the displayed rows and selected columns, formatted as a tab-separated table.</p>
               {exportPending ? (
-                <div className={styles.exportProgress}>
+                <div className="workspace-dialog-export-progress">
                   <progress aria-label="Server export progress" max={100} value={percentComplete ?? undefined} />
                   <span>
                     {percentComplete === null ? "Materializing results…" : `${Math.round(percentComplete)}% complete`}
@@ -779,7 +795,7 @@ export function WorkspaceDialogs({
         title="Search capabilities"
         subtitle={searchSettingsCapabilities.context}
         onClose={() => onModalChange(null)}
-        footer={<button className="button primary" type="button" onClick={() => onModalChange(null)}>Done</button>}
+        footer={<button className="button button--primary" type="button" onClick={() => onModalChange(null)}>Done</button>}
       >
         <div className="settings-list" data-testid="settings-dialog">
           <CapabilitySetting
@@ -817,9 +833,9 @@ export function WorkspaceDialogs({
         onClose={() => onModalChange(null)}
       >
         <div className="jobs-list" data-testid="jobs-dialog">
-          {jobCancelState.status === "error" ? <p className={styles.actionError} role="alert">{jobCancelState.error}</p> : null}
-          <article className="job-card active-job-card" aria-busy={cancelPending}><div className={`job-card-state ${stateClass(phase)}`}><span />{phaseLabel(phase)}</div><code>{submittedQuery.replaceAll("\n", " ")}</code><div className="job-card-stats"><span>{resultCountPrefix}{NUMBER_FORMAT.format(visibleEventCount)} {resultCountLabel}</span><span>{scannedBytes} {dataMetricLabel.toLowerCase()}</span><span>{elapsed}</span></div>{isRunning ? <button className="button danger compact" type="button" aria-busy={cancelPending} disabled={cancelPending} onClick={onCancelSearch}>{cancelPending ? "Canceling…" : "Cancel"}</button> : null}</article>
-          {history.slice(0, 4).map((entry) => <article className="job-card" key={entry.id}><div className={`job-card-state history-${entry.state.toLowerCase()}`}><span />{entry.state}</div><code>{entry.query}</code><div className="job-card-stats"><span>{formatHistoryResultCount(entry)} results</span><span>{entry.duration}</span><span>{entry.ranAt}</span></div></article>)}
+          {jobCancelState.status === "error" ? <p className="workspace-dialog-action-error" role="alert">{jobCancelState.error}</p> : null}
+          <article className="job-card active-job-card" aria-busy={cancelPending}><StatusLabel tone={stateTone(phase)}>{phaseLabel(phase)}</StatusLabel><code>{submittedQuery.replaceAll("\n", " ")}</code><div className="job-card-stats"><span>{resultCountPrefix}{NUMBER_FORMAT.format(visibleEventCount)} {resultCountLabel}</span><span>{scannedBytes} {dataMetricLabel.toLowerCase()}</span><span>{elapsed}</span></div>{isRunning ? <button className="button button--danger button--compact" type="button" aria-busy={cancelPending} disabled={cancelPending} onClick={onCancelSearch}>{cancelPending ? "Canceling…" : "Cancel"}</button> : null}</article>
+          {history.slice(0, 4).map((entry) => <article className="job-card" key={entry.id}><StatusLabel tone={stateTone(historyPhase(entry.state))}>{entry.state}</StatusLabel><code>{entry.query}</code><div className="job-card-stats"><span>{formatHistoryResultCount(entry)} results</span><span>{entry.duration}</span><span>{entry.ranAt}</span></div></article>)}
         </div>
       </Modal>
     );
@@ -827,26 +843,26 @@ export function WorkspaceDialogs({
 
   if (modal === "inspect") {
     return (
-      <Modal title="Search job inspector" subtitle="Dispatch and execution details for the displayed result." wide onClose={() => onModalChange(null)} footer={<button className="button primary" type="button" onClick={() => onModalChange(null)}>Done</button>}>
-        <div className={`job-inspector ${styles.inspectionGrid}`} data-testid="job-inspector">
-          <section><span>Status</span><strong className={`inspector-state ${stateClass(phase)}`}><i />{phaseLabel(phase)}</strong></section>
+      <Modal title="Search job inspector" subtitle="Dispatch and execution details for the displayed result." wide onClose={() => onModalChange(null)} footer={<button className="button button--primary" type="button" onClick={() => onModalChange(null)}>Done</button>}>
+        <div className="job-inspector workspace-dialog-inspection-grid" data-testid="job-inspector">
+          <section><span>Status</span><StatusLabel className="inspector-state" tone={stateTone(phase)}>{phaseLabel(phase)}</StatusLabel></section>
           <section><span>Search ID</span><code>{searchId}</code></section>
           <section><span>Search mode</span><strong>{searchMode}</strong></section>
           <section><span>Time range</span><strong>{resolvedTimeRangeLabel ?? submittedTimeRange.label}</strong></section>
           <section><span>Scanned</span><strong>{scannedRows === null ? "Unavailable" : `${scannedRowsApproximate ? "≈ " : ""}${NUMBER_FORMAT.format(scannedRows)} rows`}</strong></section>
           <section><span>{dataMetricLabel}</span><strong>{scannedBytes}</strong></section>
           <section><span>Elapsed</span><strong>{elapsed}</strong></section>
-          <div className={`inspector-query ${styles.inspectionQuery}`}><span>Dispatched SPL</span><code>{submittedQuery}</code></div>
+          <div className="inspector-query workspace-dialog-inspection-query"><span>Dispatched SPL</span><code>{submittedQuery}</code></div>
           {jobInspectorNotices === null
             ? <p>Execution warning and sequence-gap telemetry was not supplied for this job.</p>
             : jobInspectorNotices.length === 0
               ? <p>No execution warnings or sequence gaps were reported by the data source.</p>
-              : <div className={styles.inspectorNotices}><strong>Execution notices</strong><ul>{jobInspectorNotices.map((notice) => <li key={notice}>{notice}</li>)}</ul></div>}
+              : <div className="workspace-dialog-inspector-notices"><strong>Execution notices</strong><ul>{jobInspectorNotices.map((notice) => <li key={notice}>{notice}</li>)}</ul></div>}
           {jobInspection.status === "loading" ? <output>Loading the administrator inspection plan…</output> : null}
           {jobInspection.status === "error" ? <p role="alert">Inspection unavailable: {jobInspection.error}</p> : null}
           {jobInspection.status === "available" ? (
             <>
-              <div className={`${styles.inspectorNotices} ${styles.inspectionBlock}`}>
+              <div className="workspace-dialog-inspector-notices workspace-dialog-inspection-block">
                 <strong>Logical plan</strong>
                 {jobInspection.response.logicalPlan.stages.length ? (
                   <ol>{jobInspection.response.logicalPlan.stages.map((stage) => (
@@ -854,7 +870,7 @@ export function WorkspaceDialogs({
                       <code>{stage.operator}</code>
                       {stage.outputFields.length > 0 ? ` → ${stage.outputFields.join(", ")}` : ""}
                       {stage.operatorProvenance.length > 0 ? (
-                        <div className={styles.inspectionAnnotations}>
+                        <div className="workspace-dialog-inspection-annotations">
                           <span>Generated inputs: {stage.inputFields.join(", ") || "None"}</span>
                           <span>Redacted provenance: {stage.operatorProvenance.map((item) => (
                             `${item.kind} · ordinal ${NUMBER_FORMAT.format(item.ordinal)}`
@@ -871,10 +887,10 @@ export function WorkspaceDialogs({
               {jobInspection.response.knowledge === undefined
                 ? null
                 : <KnowledgeInspectionSection knowledge={jobInspection.response.knowledge} />}
-              <div className={`inspector-query ${styles.inspectionQuery}`}><span>Physical plan nodes</span><code>{jobInspection.response.physicalPlan.nodeTypes.join(" → ") || "Not returned"}</code></div>
-              <div className={`inspector-query ${styles.inspectionQuery}`}><span>Generated SQL</span><code>{jobInspection.response.generatedSql || "Not returned"}</code></div>
-              <div className={`inspector-query ${styles.inspectionQuery}`}><span>EXPLAIN output</span><code>{jobInspection.response.explainText || "Not returned"}</code></div>
-              <div className={`inspector-query ${styles.inspectionQuery}`}><span>Diagnostic query ID</span><code>{jobInspection.response.diagnosticQueryId || "Not returned"}</code></div>
+              <div className="inspector-query workspace-dialog-inspection-query"><span>Physical plan nodes</span><code>{jobInspection.response.physicalPlan.nodeTypes.join(" → ") || "Not returned"}</code></div>
+              <div className="inspector-query workspace-dialog-inspection-query"><span>Generated SQL</span><code>{jobInspection.response.generatedSql || "Not returned"}</code></div>
+              <div className="inspector-query workspace-dialog-inspection-query"><span>EXPLAIN output</span><code>{jobInspection.response.explainText || "Not returned"}</code></div>
+              <div className="inspector-query workspace-dialog-inspection-query"><span>Diagnostic query ID</span><code>{jobInspection.response.diagnosticQueryId || "Not returned"}</code></div>
             </>
           ) : null}
         </div>

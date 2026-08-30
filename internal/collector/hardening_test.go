@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +16,8 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/collector/input"
 	"github.com/Suhaibinator/open-splunk/internal/collector/sender"
 	"github.com/Suhaibinator/open-splunk/internal/collector/wal"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 // captureSink records dead-letter records in memory for assertions.
@@ -366,6 +367,14 @@ type logCapture struct {
 	buf bytes.Buffer
 }
 
+func capturedLogger(output zapcore.WriteSyncer) *zap.Logger {
+	return zap.New(zapcore.NewCore(
+		zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig()),
+		output,
+		zap.DebugLevel,
+	))
+}
+
 func (w *logCapture) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -396,7 +405,7 @@ func TestDecodeFailureLogNeverLeaksTimestampSecret(t *testing.T) {
 	}
 
 	capture := &logCapture{}
-	d := &Daemon{log: slog.New(slog.NewTextHandler(capture, &slog.HandlerOptions{Level: slog.LevelDebug}))}
+	d := &Daemon{log: capturedLogger(zapcore.AddSync(capture))}
 	d.recordDecodeFailure("app", input.SourceRef{
 		Identity:    input.FileIdentity{Device: 1, Inode: 2, Generation: 1, Fingerprint: "abc"},
 		StartOffset: 0, EndOffset: uint64(len(line)), LineNumber: 1,
@@ -418,7 +427,7 @@ func TestDaemonTightensStateDirAndWarnsPlaintext(t *testing.T) {
 	}
 	logDir := t.TempDir()
 	capture := &logCapture{}
-	logger := slog.New(slog.NewTextHandler(capture, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	logger := capturedLogger(zapcore.AddSync(capture))
 
 	cfg := newTestConfig(t, stateDir, filepath.Join(logDir, "*.log"), filepath.Join(stateDir, "token"))
 	if _, err := New(cfg, WithLogger(logger), WithCollectorID("cid"), WithInstanceID("iid")); err != nil {

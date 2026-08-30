@@ -1,0 +1,565 @@
+/* Operations dashboards.
+ *
+ * Colocated with app/dashboards/operations-dashboard.tsx and
+ * app/dashboards/backend-dashboard-manager.tsx, and loaded through
+ * app/styles/index.css. Every class is prefixed `operations-`: the prefix is
+ * the namespace that a CSS module's generated hash used to supply, and unlike
+ * the hash it is readable in the DOM and in a Playwright selector.
+ *
+ * Each section carries its own responsive overrides at the end of the section,
+ * largest breakpoint first, so a rule and the widths that change it are read
+ * together rather than at opposite ends of the file. */
+
+/* Page header and range picker.
+   The class is doubled here and in both breakpoint rules below because the
+   shared page-heading row states `display: flex` for its last child as
+   `.dashboard-title-row > div:last-child`, which is (0,2,1) -- `:last-child`
+   counts as a class -- and this header is a grid rather than a row of buttons.
+   `div.` brings the tie to (0,2,1) and this file is imported after the
+   primitive, so the later rule wins it. Every rule for the header is doubled
+   rather than only the one that needs to be, because a media query adds no
+   specificity: a doubled base and a single-class override would leave the base
+   winning at every width. */
+div.operations-header-actions.operations-header-actions {
+  display: grid;
+  grid-template-columns: auto auto;
+  place-items: flex-end end;
+}
+
+.operations-range-picker {
+  display: grid;
+  gap: 3px;
+}
+
+.operations-range-picker > span {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.operations-range-picker select {
+  appearance: none;
+  background: var(--bg-surface)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath fill='%23526068' d='M0 0h8L4 5z'/%3E%3C/svg%3E")
+    no-repeat right 9px center;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--fg-text);
+  font-family: var(--font-sans);
+  font-size: var(--type-xs);
+  font-weight: 600;
+  height: 31px;
+  line-height: 1;
+  min-width: 148px;
+  padding: 0 28px 0 10px;
+}
+
+/* One focus ring for the three keyboard targets this page adds: the range
+   select here, the service link and the notable-event links further down. */
+.operations-range-picker select:focus-visible,
+.operations-service-link:focus-visible,
+.operations-notable-list a:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.operations-update-status {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  grid-column: 1 / -1;
+  line-height: 1.3;
+}
+
+.operations-preview-badge {
+  align-self: end;
+}
+
+@media (max-width: 760px) {
+  div.operations-header-actions.operations-header-actions {
+    grid-template-columns: minmax(0, 1fr) auto;
+    justify-items: stretch;
+    width: 100%;
+  }
+
+  .operations-range-picker select {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .operations-update-status {
+    justify-self: start;
+  }
+}
+
+@media (max-width: 480px) {
+  div.operations-header-actions.operations-header-actions {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .operations-range-picker {
+    grid-column: 1 / -1;
+  }
+}
+
+/* Latency line chart.
+   The chart itself is the shared TimeSeriesLineChart. This panel resizes it by
+   setting the custom properties that component's rules read, so nothing here
+   selects into the chart's own markup. */
+.operations-line-chart {
+  --chart-height: 282px;
+  --chart-plot-min-height: 235px;
+  --chart-stroke-width: 2;
+  --chart-x-axis-height: 34px;
+
+  min-height: 320px;
+  padding: var(--space-5) var(--space-5) var(--space-2) 13px;
+  position: relative;
+}
+
+.operations-chart-unit {
+  color: var(--fg-faint);
+  font-size: var(--type-xs);
+  left: 13px;
+  position: absolute;
+  top: 8px;
+}
+
+.operations-chart-hint {
+  color: var(--fg-faint);
+  font-size: var(--type-xs);
+  line-height: 1.35;
+  margin: 3px 0 0 48px;
+}
+
+@media (max-width: 760px) {
+  .operations-line-chart {
+    --chart-height: 250px;
+    --chart-plot-min-height: 205px;
+    --chart-x-axis-height: 42px;
+    --chart-x-axis-type: var(--type-xs);
+    --chart-y-axis-width: 38px;
+
+    min-height: 285px;
+    padding-inline: var(--space-2) var(--space-3);
+  }
+
+  .operations-chart-hint {
+    margin-left: 38px;
+  }
+}
+
+/* Event volume chart */
+.operations-volume-chart {
+  padding: 13px 15px 9px;
+}
+
+.operations-volume-plot {
+  align-items: stretch;
+  border: 0;
+  border-bottom: 1px solid var(--border-strong);
+  display: grid;
+  gap: 3px;
+  grid-template-columns: repeat(24, minmax(4px, 1fr));
+  height: 215px;
+  margin: 0;
+  min-width: 0;
+  padding: 37px var(--space-1) 0;
+}
+
+.operations-volume-bar {
+  align-items: flex-end;
+  appearance: none;
+  background: transparent;
+  border: 0;
+  cursor: crosshair;
+  display: flex;
+  height: 100%;
+  justify-content: stretch;
+  min-width: 0;
+  outline: 0;
+  padding: 0;
+  position: relative;
+}
+
+.operations-volume-bar:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--focus-ring) 45%, transparent);
+  z-index: 3;
+}
+
+.operations-volume-fill {
+  background: var(--accent-bright);
+  height: var(--bar-height);
+  min-height: 5px;
+  position: relative;
+  transition: background-color 120ms ease, filter 120ms ease;
+  width: 100%;
+}
+
+.operations-volume-bar:hover .operations-volume-fill,
+.operations-volume-bar--active .operations-volume-fill {
+  background: var(--accent);
+  filter: saturate(1.1);
+}
+
+.operations-volume-tooltip {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  bottom: calc(100% + 7px);
+  box-shadow: var(--shadow-md);
+  color: var(--fg-text);
+  display: grid;
+  font-size: var(--type-xs);
+  gap: 3px;
+  left: 50%;
+  min-width: 124px;
+  padding: 6px var(--space-2);
+  pointer-events: none;
+  position: absolute;
+  text-align: left;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  z-index: 5;
+}
+
+.operations-volume-tooltip strong {
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--type-xs);
+  padding-bottom: var(--space-1);
+}
+
+.operations-volume-tooltip--start {
+  left: -3px;
+  transform: none;
+}
+
+.operations-volume-tooltip--end {
+  left: auto;
+  right: -3px;
+  transform: none;
+}
+
+.operations-volume-axis {
+  color: var(--fg-muted);
+  display: flex;
+  font-size: var(--type-xs);
+  justify-content: space-between;
+  padding-top: 7px;
+}
+
+.operations-volume-chart .operations-chart-hint {
+  margin-left: 0;
+}
+
+@media (max-width: 760px) {
+  .operations-volume-chart {
+    overflow: visible;
+    padding-inline: 10px;
+  }
+
+  .operations-volume-plot,
+  .operations-volume-axis {
+    min-width: 0;
+  }
+
+  .operations-volume-plot {
+    gap: 2px;
+    padding-inline: 1px;
+  }
+
+  .operations-volume-bar {
+    min-width: 0;
+  }
+
+  .operations-volume-chart .operations-chart-hint {
+    position: static;
+    width: auto;
+  }
+}
+
+@media (max-width: 480px) {
+  .operations-volume-plot {
+    height: 196px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .operations-volume-fill {
+    transition: none;
+  }
+}
+
+/* Service breakdown and notable events */
+.operations-donut-figure {
+  margin: 0;
+}
+
+.operations-service-link {
+  color: var(--fg-link);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.operations-notable-list a {
+  color: var(--fg-text);
+  font-size: var(--type-xs);
+  font-weight: 600;
+  overflow: hidden;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.operations-notable-list a:hover,
+.operations-service-link:hover {
+  color: var(--status-info-strong);
+  text-decoration: underline;
+}
+
+@media (max-width: 760px) {
+  .operations-notable-list a {
+    overflow: visible;
+    white-space: normal;
+  }
+}
+
+/* Backend dashboard manager */
+.operations-state-message {
+  color: var(--fg-muted);
+  margin: 0;
+  padding: 22px;
+}
+
+.operations-create-form {
+  align-items: end;
+  display: flex;
+  gap: var(--space-2);
+}
+
+.operations-create-form label,
+.operations-settings-grid label,
+.operations-panel-fields label {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.operations-create-form label > span,
+.operations-settings-grid label > span,
+.operations-panel-fields label > span {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.operations-create-form input,
+.operations-create-form select,
+.operations-settings-grid input,
+.operations-panel-fields input,
+.operations-panel-fields textarea {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--fg-text);
+  font-family: var(--font-sans);
+  font-size: var(--type-md);
+  line-height: 1.4;
+  min-height: 32px;
+  padding: 6px var(--space-2);
+}
+
+.operations-panel-fields textarea {
+  font-family: var(--font-mono);
+  resize: vertical;
+}
+
+.operations-create-form button,
+.operations-editor-actions button,
+.operations-panel-toolbar button,
+.operations-error-banner button {
+  background: var(--status-info);
+  border: 1px solid var(--status-info-strong);
+  border-radius: var(--radius-sm);
+  color: var(--fg-inverse);
+  cursor: pointer;
+  font-size: var(--type-sm);
+  font-weight: 700;
+  min-height: 32px;
+  padding: 5px var(--space-3);
+}
+
+.operations-create-form button:disabled,
+.operations-editor-actions button:disabled,
+.operations-panel-toolbar button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.operations-manager-layout {
+  align-items: start;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
+}
+
+.operations-dashboard-list {
+  overflow: hidden;
+  position: sticky;
+  top: 12px;
+}
+
+.operations-dashboard-list h2 {
+  border-bottom: 1px solid var(--border);
+  font-size: var(--type-md);
+  margin: 0;
+  padding: var(--space-3);
+}
+
+.operations-dashboard-list p {
+  color: var(--fg-muted);
+  font-size: var(--type-sm);
+  padding: 0 var(--space-3) var(--space-3);
+}
+
+.operations-dashboard-list ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.operations-dashboard-list li + li {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.operations-dashboard-list li button {
+  background: var(--bg-surface);
+  border: 0;
+  color: var(--fg-text);
+  cursor: pointer;
+  display: grid;
+  gap: 3px;
+  padding: 10px var(--space-3);
+  text-align: left;
+  width: 100%;
+}
+
+.operations-dashboard-list li button:hover,
+.operations-dashboard-list .operations-dashboard-selected {
+  background: var(--status-info-soft);
+}
+
+.operations-dashboard-list li button span {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+}
+
+.operations-dashboard-editor {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.operations-definition-editor {
+  padding-bottom: var(--space-3);
+}
+
+.operations-settings-grid,
+.operations-panel-fields {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: var(--space-3);
+}
+
+.operations-editor-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.operations-editor-actions .operations-danger-button {
+  background: var(--bg-surface);
+  border-color: var(--status-error);
+  color: var(--status-error-strong);
+}
+
+.operations-panel-toolbar {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.operations-panel-toolbar h2 {
+  font-size: var(--type-lg);
+  margin: 0;
+}
+
+.operations-live-panel {
+  min-width: 0;
+}
+
+.operations-spl-field {
+  grid-column: 1 / -1;
+}
+
+.operations-panel-result {
+  border-top: 1px solid var(--border);
+  padding: var(--space-3);
+}
+
+.operations-result-status,
+.operations-result-error {
+  color: var(--fg-muted);
+  font-size: var(--type-sm);
+  margin: 0 0 10px;
+}
+
+.operations-result-error,
+.operations-error-banner {
+  color: var(--status-error-strong);
+}
+
+.operations-error-banner,
+.operations-notice-banner {
+  align-items: center;
+  background: var(--status-error-soft);
+  border: 1px solid var(--status-error-edge);
+  display: flex;
+  font-size: var(--type-sm);
+  justify-content: space-between;
+  margin: 0 0 var(--space-3);
+  padding: var(--space-2) 10px;
+}
+
+.operations-notice-banner {
+  background: var(--status-success-soft);
+  border-color: var(--status-success-edge);
+  color: var(--accent-hover);
+}
+
+@media (max-width: 760px) {
+  .operations-manager-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .operations-dashboard-list {
+    position: static;
+  }
+
+  .operations-settings-grid,
+  .operations-panel-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .operations-spl-field {
+    grid-column: auto;
+  }
+
+  .operations-create-form {
+    align-items: stretch;
+    flex-direction: column;
+    width: 100%;
+  }
+}

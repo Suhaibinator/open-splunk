@@ -11,14 +11,20 @@ const scriptTests = [
   "build-ui-output.test.mjs",
   "check-docs.test.mjs",
   "compile-protos.test.mjs",
+  "style-invariants.test.mjs",
+  "style-guardrails.test.mjs",
+  "safety-net.test.mjs",
   "materialize-git-snapshot.test.mjs",
   "run-go-race-shard.test.mjs",
   "run-development.test.mjs",
+  "serve-static.test.mjs",
   "build-release.test.mjs",
   "build-oci.test.mjs",
 ];
 const testFiles = [
   path.join("app", "_components", "app-icon.test.tsx"),
+  path.join("app", "_components", "button.test.tsx"),
+  path.join("app", "_components", "status.test.tsx"),
   path.join("app", "home-dashboard-data.test.ts"),
   path.join("app", "analytics", "analytics-data.test.ts"),
   path.join("app", "analytics", "analytics-sample-status.test.ts"),
@@ -37,6 +43,8 @@ const testFiles = [
   path.join("app", "search-workspace", "live-preview.test.ts"),
   path.join("app", "search-workspace", "progress-revision.test.ts"),
   path.join("app", "search-workspace", "categorical-interaction.test.ts"),
+  path.join("app", "search-workspace", "clipboard-export.test.ts"),
+  path.join("app", "search-workspace", "event-page-controls.test.ts"),
   path.join("app", "search-workspace", "components", "export-presentation.test.tsx"),
   path.join("app", "search-workspace", "statistics-sparkline.test.ts"),
   path.join("app", "search-workspace", "statistics-multivalue.test.ts"),
@@ -58,6 +66,7 @@ const testFiles = [
   path.join("lib", "search", "server-timeline.test.ts"),
   path.join("lib", "search", "server-exports.test.ts"),
   path.join("lib", "search", "example-drafts.test.ts"),
+  path.join("lib", "search", "launch-url.test.ts"),
   path.join("lib", "search", "query-pivots.test.ts"),
   path.join("lib", "search", "saved-search-names.test.ts"),
   path.join("lib", "search", "spl-editor.test.ts"),
@@ -119,7 +128,11 @@ try {
   ]);
   await run(process.execPath, [
     "--test",
-    ...testFiles.map((file) => path.join(outputDirectory, file.replace(/\.ts$/, ".js"))),
+    // `.tsx` as well as `.ts`: tsc emits both as `.js`, and a pattern anchored
+    // at `.ts$` silently handed node a path that does not exist, which it skips
+    // without a word. Every component test in the list was passing by never
+    // running.
+    ...testFiles.map((file) => path.join(outputDirectory, file.replace(/\.tsx?$/u, ".js"))),
   ], {
     ...process.env,
     NODE_PATH: path.join(workspace, "node_modules"),

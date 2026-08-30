@@ -1,0 +1,259 @@
+/* Forms
+   The input, label and fieldset families every page shares: `.form-stack` and
+   its label rows, the toolbar filters, the segmented and export fieldsets and
+   the `.settings-list` checkboxes. A feature that needs a field states its
+   own grid and inherits the field itself from here.
+
+   `.settings-group` and `.settings-form-grid` are not here: they are declared
+   in shared selector lists with `.admin-form` and `.danger-zone`, and a rule
+   moves whole, so they stay in app/admin/admin.css with the rest of those
+   lists. */
+
+.form-stack,
+.settings-list,
+.jobs-list,
+.saved-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.form-stack {
+  gap: var(--space-4);
+}
+
+.form-stack > label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.form-stack > label > span,
+.segmented-fieldset legend,
+.export-fields legend {
+  color: var(--fg-secondary);
+  font-size: var(--type-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.form-stack label small,
+.segmented-fieldset small,
+.export-fields small {
+  color: var(--fg-faint);
+  font-size: var(--type-xxs);
+  font-weight: 400;
+  text-transform: none;
+}
+
+.form-stack input,
+.form-stack textarea,
+.library-toolbar input,
+.library-toolbar select {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+}
+
+.form-stack > label > input {
+  height: 34px;
+  padding: 0 9px;
+}
+
+.form-stack textarea {
+  padding: var(--space-2) 9px;
+  resize: vertical;
+}
+
+.form-summary {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  display: grid;
+  gap: var(--space-2) 18px;
+  grid-template-columns: 100px 1fr;
+  padding: var(--space-3);
+}
+
+.form-summary span {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+}
+
+.form-summary strong {
+  font-size: var(--type-xs);
+}
+
+.library-toolbar {
+  align-items: center;
+  display: flex;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.filter-input {
+  align-items: center;
+  border: 1px solid var(--border-strong);
+  display: flex;
+  flex: 1;
+  height: 34px;
+}
+
+.filter-input > span {
+  color: var(--fg-faint);
+  padding-left: 9px;
+}
+
+.library-toolbar .filter-input input {
+  border: 0;
+  height: 32px;
+  min-width: 0;
+  outline: 0;
+  padding: 0 9px;
+  width: 100%;
+}
+
+.library-toolbar select {
+  height: 34px;
+  padding: 0 28px 0 9px;
+}
+
+.segmented-fieldset,
+.export-fields {
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.segmented-fieldset {
+  display: grid;
+  gap: var(--space-2);
+  grid-template-columns: 1fr 1fr;
+}
+
+.segmented-fieldset legend,
+.export-fields legend {
+  margin-bottom: 7px;
+}
+
+.segmented-fieldset label {
+  align-items: center;
+  border: 1px solid var(--border);
+  display: flex;
+  gap: var(--space-2);
+  min-height: 54px;
+  padding: var(--space-2) 10px;
+}
+
+.segmented-fieldset input,
+.export-fields input {
+  accent-color: var(--accent);
+}
+
+.segmented-fieldset label.selected {
+  background: var(--accent-soft);
+  border-color: var(--accent-bright);
+}
+
+.segmented-fieldset label > span {
+  display: flex;
+  flex-direction: column;
+}
+
+.segmented-fieldset label strong {
+  font-size: var(--type-sm);
+}
+
+.export-fields {
+  border-top: 1px solid var(--border);
+  padding-top: 13px;
+}
+
+.export-fields label {
+  align-items: center;
+  display: inline-flex;
+  gap: 5px;
+  margin: 0 14px var(--space-2) 0;
+  min-width: 93px;
+}
+
+.export-fields code {
+  font-size: var(--type-xs);
+}
+
+.export-limit {
+  align-items: baseline;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  display: grid;
+  gap: var(--space-2);
+  grid-template-columns: 100px auto 1fr;
+  padding: 11px;
+}
+
+.export-limit span {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+}
+
+.export-limit small {
+  color: var(--fg-faint);
+  font-size: var(--type-xs);
+  text-align: right;
+}
+
+.export-progress {
+  background: var(--bg-subtle);
+  height: 6px;
+  margin: var(--space-2) 0 18px;
+  position: relative;
+}
+
+.export-progress span {
+  animation: progress-pulse 800ms ease-in-out infinite alternate;
+  background: var(--accent-bright);
+  height: 6px;
+  left: 0;
+  position: absolute;
+  top: 0;
+}
+
+@keyframes progress-pulse {
+  from { opacity: 0.72; }
+  to { opacity: 1; }
+}
+
+.export-progress strong {
+  color: var(--fg-muted);
+  font-size: var(--type-xxs);
+  left: 0;
+  position: absolute;
+  top: 11px;
+}
+
+.settings-list label {
+  align-items: center;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  justify-content: space-between;
+  min-height: 58px;
+}
+
+.settings-list label > span {
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-list strong {
+  font-size: var(--type-sm);
+}
+
+.settings-list small {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  margin-top: 3px;
+}
+
+.settings-list input[type="checkbox"] {
+  accent-color: var(--accent);
+  height: 17px;
+  width: 17px;
+}

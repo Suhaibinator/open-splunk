@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -33,6 +32,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/hechttp"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgepreview"
+	"github.com/Suhaibinator/open-splunk/internal/logging"
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
 	"github.com/Suhaibinator/open-splunk/internal/searchaudit"
@@ -43,6 +43,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/server"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
 	"github.com/Suhaibinator/open-splunk/migrations"
+	"go.uber.org/zap"
 )
 
 const (
@@ -66,6 +67,9 @@ const (
 )
 
 type options struct {
+	logger                                    *zap.Logger
+	logLevel                                  string
+	logFormat                                 string
 	verifyEmbeddedRelease                     bool
 	httpAddress                               string
 	httpAllowedHosts                          []string
@@ -109,23 +113,63 @@ func (snapshotter visibilitySnapshotter) VisibilityCutoff(ctx context.Context) (
 }
 
 func main() {
-	if err := run(); err != nil {
-		log.Fatal(err)
-	}
+	os.Exit(run())
 }
 
-func run() error {
+func run() int {
 	if handled, err := runDeploymentSubcommand(os.Args[1:]); handled {
-		return err
+		return reportProcessError(err)
 	}
 	config, err := parseFlags()
 	if err != nil {
-		return err
+		return reportProcessError(err)
 	}
-	return runWithOptions(config)
+	level, err := logging.ParseLevel(config.logLevel)
+	if err != nil {
+		return reportProcessError(fmt.Errorf("configure server logger: %w", err))
+	}
+	format, err := logging.ParseFormat(config.logFormat)
+	if err != nil {
+		return reportProcessError(fmt.Errorf("configure server logger: %w", err))
+	}
+	logger, err := logging.New(logging.Config{
+		Service: "open-splunk-server",
+		Level:   level,
+		Format:  format,
+	})
+	if err != nil {
+		return reportProcessError(fmt.Errorf("configure server logger: %w", err))
+	}
+	config.logger = logger
+	runErr := runWithOptions(config)
+	if runErr != nil {
+		logger.Error("server stopped with error", zap.Error(runErr))
+	}
+	// Flushing the process logger is best effort. The requested work has
+	// already finished by this point, so a sink that refuses to flush is
+	// reported on stderr but must not turn a successful run into a failure.
+	if syncErr := logging.Sync(logger); syncErr != nil {
+		fmt.Fprintf(os.Stderr, "sync server logger: %v\n", syncErr)
+	}
+	if runErr != nil {
+		return 1
+	}
+	return 0
+}
+
+func reportProcessError(err error) int {
+	if err == nil {
+		return 0
+	}
+	fmt.Fprintln(os.Stderr, err)
+	return 1
 }
 
 func runWithOptions(config options) error {
+	logger := config.logger
+	if logger == nil {
+		logger = zap.NewNop()
+	}
 	if err := normalizeRuntimeOptions(&config); err != nil {
 		return err
 	}
@@ -206,7 +250,7 @@ func runWithOptions(config options) error {
 	}
 	defer func() {
 		if err := serverLock.Close(); err != nil {
-			log.Printf("release server lock: %v", err)
+			logger.Warn("release server lock", zap.Error(err))
 		}
 	}()
 
@@ -219,7 +263,7 @@ func runWithOptions(config options) error {
 	}
 	defer func() {
 		if err := controlDB.Close(); err != nil {
-			log.Printf("close control plane: %v", err)
+			logger.Warn("close control plane", zap.Error(err))
 		}
 	}()
 	collectorBootEpoch, err := newCollectorBootEpoch()
@@ -254,7 +298,7 @@ func runWithOptions(config options) error {
 		ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		if err := sequencer.Shutdown(ctx); err != nil {
-			log.Printf("shutdown visibility sequencer: %v", err)
+			logger.Warn("shutdown visibility sequencer", zap.Error(err))
 		}
 	}()
 	securityStores, err := openRuntimeSecurityStoresWithSearchAttemptMaximum(
@@ -316,7 +360,7 @@ func runWithOptions(config options) error {
 		return fmt.Errorf("recover interrupted search history: %w", err)
 	}
 	if recoveredSearches != 0 {
-		log.Printf("recovered %d interrupted search attempts", recoveredSearches)
+		logger.Info("recovered interrupted search attempts", zap.Uint64("attempts", recoveredSearches))
 	}
 	startupHistoryPrune, err := pruneSearchHistoryAtStartup(
 		startupContext,
@@ -326,16 +370,13 @@ func runWithOptions(config options) error {
 		return err
 	}
 	if startupHistoryPrune.deleted != 0 {
-		log.Printf(
-			"pruned %d terminal search-history entries during startup",
-			startupHistoryPrune.deleted,
-		)
+		logger.Info("pruned terminal search-history entries during startup", zap.Int64("entries", startupHistoryPrune.deleted))
 	}
 	searchHistoryMaintenanceConfig := defaultSearchHistoryMaintenanceConfig()
 	searchHistoryMaintenanceConfig.initialCursor = startupHistoryPrune.cursor
 	searchHistoryMaintenanceConfig.runImmediately = startupHistoryPrune.more
 	searchHistoryMaintenanceConfig.onError = func(err error) {
-		log.Printf("maintain search-history retention: %v", err)
+		logger.Warn("maintain search-history retention", zap.Error(err))
 	}
 	searchHistoryMaintenance, err := newSearchHistoryMaintenance(
 		searchHistory,
@@ -348,7 +389,7 @@ func runWithOptions(config options) error {
 		ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		if err := searchHistoryMaintenance.Close(ctx); err != nil {
-			log.Printf("close search-history maintenance: %v", err)
+			logger.Warn("close search-history maintenance", zap.Error(err))
 		}
 	}()
 	if err := applyConfiguredStartupClickHouseMigrations(
@@ -383,20 +424,17 @@ func runWithOptions(config options) error {
 		}
 		if eventStore != nil {
 			if err := eventStore.Close(); err != nil {
-				log.Printf("close ClickHouse Store after failed startup: %v", err)
+				logger.Warn("close ClickHouse Store after failed startup", zap.Error(err))
 			}
 			return
 		}
 		if deletionConnection != nil {
 			if err := deletionConnection.Close(); err != nil {
-				log.Printf(
-					"close ClickHouse deletion session after failed startup: %v",
-					err,
-				)
+				logger.Warn("close ClickHouse deletion session after failed startup", zap.Error(err))
 			}
 		}
 		if err := connection.Close(); err != nil {
-			log.Printf("close ClickHouse runtime session after failed startup: %v", err)
+			logger.Warn("close ClickHouse runtime session after failed startup", zap.Error(err))
 		}
 	}()
 	if err := connection.Ping(startupContext); err != nil {
@@ -446,7 +484,7 @@ func runWithOptions(config options) error {
 		indexReads.retirement,
 		config.tenantID,
 		func(err error) {
-			log.Printf("reconcile index data deletion: %v", err)
+			logger.Warn("reconcile index data deletion", zap.Error(err))
 		},
 	)
 	if err != nil {
@@ -457,7 +495,7 @@ func runWithOptions(config options) error {
 			indexDataDeletion,
 			shutdownTimeout,
 		); err != nil {
-			log.Printf("close index data deletion runtime: %v", err)
+			logger.Warn("close index data deletion runtime", zap.Error(err))
 		}
 	}()
 	var hecTerminalCleanup *hecTerminalMaintenance
@@ -474,11 +512,11 @@ func runWithOptions(config options) error {
 			return fmt.Errorf("prune expired HEC terminal requests at startup: %w", pruneErr)
 		}
 		if startupPrune.deleted != 0 {
-			log.Printf("pruned %d expired HEC terminal requests during startup", startupPrune.deleted)
+			logger.Info("pruned expired HEC terminal requests during startup", zap.Uint64("requests", startupPrune.deleted))
 		}
 		maintenanceConfig.runImmediately = startupPrune.more
 		maintenanceConfig.onError = func(err error) {
-			log.Printf("maintain HEC terminal retention: %v", err)
+			logger.Warn("maintain HEC terminal retention", zap.Error(err))
 		}
 		hecTerminalCleanup, err = newHECTerminalMaintenance(sequencer, maintenanceConfig)
 		if err != nil {
@@ -488,7 +526,7 @@ func runWithOptions(config options) error {
 			ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 			defer cancel()
 			if err := hecTerminalCleanup.Close(ctx); err != nil {
-				log.Printf("close HEC terminal maintenance: %v", err)
+				logger.Warn("close HEC terminal maintenance", zap.Error(err))
 			}
 		}()
 	}
@@ -507,7 +545,7 @@ func runWithOptions(config options) error {
 				WriteTimeout:      collectorHeartbeatWriteTimeout,
 				MonotonicNow:      time.Now,
 				OnError: func(err error) {
-					log.Printf("persist collector heartbeat: %v", err)
+					logger.Warn("persist collector heartbeat", zap.Error(err))
 				},
 			},
 		)
@@ -522,7 +560,7 @@ func runWithOptions(config options) error {
 				collectorHeartbeats,
 				shutdownTimeout,
 			); err != nil {
-				log.Printf("close collector heartbeat runtime after failed startup: %v", err)
+				logger.Warn("close collector heartbeat runtime after failed startup", zap.Error(err))
 			}
 		}()
 		ingestConfig.Build = buildMetadata
@@ -534,7 +572,7 @@ func runWithOptions(config options) error {
 			heartbeats: collectorHeartbeats,
 		}
 		ingestConfig.SessionErrorHandler = func(err error) {
-			log.Printf("collector session cleanup: %v", err)
+			logger.Warn("collector session cleanup", zap.Error(err))
 		}
 		ingestService, err = ingest.NewService(ingestConfig, collectorAuthorizer{
 			store: tokenStore, tenantID: config.tenantID,
@@ -554,7 +592,7 @@ func runWithOptions(config options) error {
 	if collectorListener != nil {
 		defer func() {
 			if err := collectorListener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-				log.Printf("close collector listener: %v", err)
+				logger.Warn("close collector listener", zap.Error(err))
 			}
 		}()
 	}
@@ -628,10 +666,10 @@ func runWithOptions(config options) error {
 		KnowledgeResolver: knowledgeManagement.resolver,
 		LookupResolver:    knowledgeManagement.lookupResolver,
 		OnJournalError: func(err error) {
-			log.Printf("persist search-job history: %v", err)
+			logger.Warn("persist search-job history", zap.Error(err))
 		},
 		OnExecutionError: func(jobID string, code searchjobs.FailureCode, cause error) {
-			log.Print(formatSearchExecutionFailure(jobID, code, cause))
+			logger.Error("search execution failed", searchExecutionFailureFields(jobID, code, cause)...)
 		},
 		Compiler:      compiler,
 		MaxConcurrent: int(searchlimits.SupportedRange().Maximum.MaxConcurrent),
@@ -647,7 +685,7 @@ func runWithOptions(config options) error {
 	}
 	defer func() {
 		if err := jobs.Close(); err != nil {
-			log.Printf("close search jobs: %v", err)
+			logger.Warn("close search jobs", zap.Error(err))
 		}
 	}()
 	liveServerSettings := &runtimeServerSettings{
@@ -679,7 +717,7 @@ func runWithOptions(config options) error {
 	// until afterward.
 	defer func() {
 		if err := inspection.Close(); err != nil {
-			log.Printf("close search inspection services: %v", err)
+			logger.Warn("close search inspection services", zap.Error(err))
 		}
 	}()
 	exportExecutorConfig := exportSettings.queryExecutorConfig()
@@ -703,7 +741,7 @@ func runWithOptions(config options) error {
 	exports, err := exportjobs.New(exportSettings.managerConfig(
 		exportSource,
 		config.exportArtifactDir,
-		reportExportCleanupError,
+		newExportCleanupErrorReporter(logger),
 	))
 	if err != nil {
 		return fmt.Errorf("create export manager: %w", err)
@@ -712,7 +750,7 @@ func runWithOptions(config options) error {
 	// releases their search leases before the search-job manager is closed.
 	defer func() {
 		if err := exports.Close(); err != nil {
-			log.Printf("close exports: %v", err)
+			logger.Warn("close exports", zap.Error(err))
 		}
 	}()
 	analysis, err := newRuntimeSearchAnalysis(runtimeSearchAnalysisConfig{
@@ -730,7 +768,7 @@ func runWithOptions(config options) error {
 	// first.
 	defer func() {
 		if err := analysis.Close(); err != nil {
-			log.Printf("close search analysis services: %v", err)
+			logger.Warn("close search analysis services", zap.Error(err))
 		}
 	}()
 
@@ -751,7 +789,7 @@ func runWithOptions(config options) error {
 		ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		if err := searchWebSocket.Close(ctx); err != nil {
-			log.Printf("close search websocket service: %v", err)
+			logger.Warn("close search websocket service", zap.Error(err))
 		}
 	}()
 	appCatalog, appCursorKey, err := newRuntimeAuditedAppCatalog(
@@ -775,6 +813,7 @@ func runWithOptions(config options) error {
 		return err
 	}
 	httpConfig := server.Config{
+		Logger:                     logger,
 		SearchJobs:                 jobs,
 		RuntimeReadiness:           connection,
 		SearchInspections:          inspection.service,
@@ -895,22 +934,24 @@ func runWithOptions(config options) error {
 	if httpTLSConfig != nil {
 		httpTransport = "TLS"
 	}
-	log.Printf(
-		"open-splunk server listening on %s (%s)",
-		config.httpAddress,
-		httpTransport,
+	logger.Info("open-splunk server listening",
+		zap.String("address", config.httpAddress),
+		zap.String("transport", httpTransport),
 	)
 	if config.hecEnabled {
-		log.Printf("HEC enabled on the existing %s listener", httpTransport)
+		logger.Info("HEC enabled on the existing listener", zap.String("transport", httpTransport))
 	}
 	if collectorListener == nil {
-		log.Printf("collector gRPC listener disabled; configure -collector-grpc-listen-address and TLS to enable ingestion")
+		logger.Info("collector gRPC listener disabled; configure -collector-grpc-listen-address and TLS to enable ingestion")
 	} else {
 		transport := "TLS"
 		if config.collectorInsecure {
 			transport = "explicit loopback plaintext"
 		}
-		log.Printf("collector gRPC server listening on %s (%s)", collectorListener.Addr(), transport)
+		logger.Info("collector gRPC server listening",
+			zap.Stringer("address", collectorListener.Addr()),
+			zap.String("transport", transport),
+		)
 	}
 	serveErr := serveRuntime(
 		shutdownContext,

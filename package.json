@@ -13,10 +13,16 @@
   "scripts": {
     "dev": "next dev --turbopack",
     "build": "node scripts/build-ui.mjs",
-    "lint": "oxlint .",
+    "lint": "oxlint . && npm run lint:css",
+    "test:contracts": "playwright test --config=playwright.contracts.config.ts",
     "test:frontend": "node scripts/test-frontend.mjs",
+    "test:visual": "playwright test --config=playwright.visual.config.ts",
+    "//test:visual:determinism": "Renders one build twice and compares exactly. Slow enough to stay out of `make test`; run it whenever a visual spec or a page's data fixtures change.",
+    "test:visual:determinism": "node scripts/visual-determinism.mjs",
     "check:docs": "node scripts/check-docs.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "//lint:css": "Errors, and part of `npm run lint`, since Phase 5. It fails on a colour, a type size, a radius, a shadow, a stacking layer, a font stack, an off-canon breakpoint or an `!important` written anywhere but app/styles/tokens-*.css, which is what makes \"a theme is a one-file edit\" a checked claim rather than a convention. .stylelintrc.json carries the two commented allowlists it keeps: the token files, which are the one place a value belongs, and the two stylesheets whose `!important` no specificity can replace.",
+    "lint:css": "stylelint \"app/**/*.css\""
   },
   "dependencies": {
     "@bufbuild/protobuf": "^2.14.0",
@@ -32,6 +38,8 @@
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "oxlint": "^1.79.0",
+    "stylelint": "^16.26.1",
+    "stylelint-config-standard": "^39.0.1",
     "ts-proto": "^2.12.1",
     "typescript": "^7.0.2"
   }

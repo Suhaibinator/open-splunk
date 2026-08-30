@@ -212,9 +212,29 @@ docs-check:
 lint:
 	npm run lint
 
+# `npm run lint` runs `npm run lint:css` after oxlint, so this target covers both.
+# Phase 5 flipped .stylelintrc.json from warnings to errors and cleared the 282
+# findings the flip would otherwise have failed on: 245 colour literals now read
+# a tier-2 role or a color-mix() over one, 86 font-size and 12 border-radius
+# literals read their documented step, every box-shadow ink and every off-canon
+# breakpoint is gone, and `!important` is down from 25 declarations to the 14 in
+# the two files .stylelintrc.json names. The token files stay exempt from the
+# value rules through an overrides entry, because the primitive tier is the one
+# place a literal belongs.
+
+# test:contracts reads the application stylesheets back through getComputedStyle and
+# test:visual renders the exported UI and compares committed baselines. Both
+# need the pinned browser, installed once with
+# `npx --no-install playwright install chromium`. test:visual rebuilds the two
+# static exports into `.cache/visual` and resets `out/`, so run `make build-ui`
+# before building the server afterwards. Both run in CI now: test:contracts in
+# the ubuntu frontend job, and test:visual in a macos job of its own, because a
+# baseline is rasterized per platform and the committed set is darwin.
 test: docs-check lint
 	$(GO_TEST_ENV) go test ./...
 	npm run test:frontend
+	npm run test:contracts
+	npm run test:visual
 	npm run typecheck
 
 clean:

@@ -509,38 +509,23 @@ test("activity layouts preserve capability tabs and mobile job metadata", () => 
     path.join(process.cwd(), "app", "activity", "activity-console.tsx"),
     "utf8",
   );
-  const responsiveStyles = readFileSync(
-    path.join(process.cwd(), "app", "activity", "activity-console.module.css"),
-    "utf8",
-  );
-  const globalStyles = readFileSync(
-    path.join(process.cwd(), "app", "globals.css"),
-    "utf8",
-  );
-
   assert.match(backendSource, /data-tab-count=\{availableViews\.length\}/u);
   for (const label of ["Search", "Status", "Owner", "Runtime", "Events", "Started", "Actions"]) {
     assert.match(demoSource, new RegExp(`data-label="${label}"`, "u"));
   }
-  assert.match(responsiveStyles, /content:\s*attr\(data-label\)/u);
-  assert.match(responsiveStyles, /td:nth-child\(n \+ 3\)[^{]*\{[^}]*display:\s*grid/su);
-
-  const activityStylesStart = globalStyles.indexOf("/* Activity */");
-  const activityMobileStylesStart = globalStyles.indexOf(
-    ".live-jobs-table-wrap { background: none; overflow: visible; }",
-    activityStylesStart,
-  );
-  const desktopActivityStyles = globalStyles.slice(activityStylesStart, activityMobileStylesStart);
-  assert.doesNotMatch(
-    desktopActivityStyles,
-    /\.live-jobs-table td[^{}]*\{[^}]*display:\s*flex/su,
-    "desktop job cells must remain table cells so body columns align with their headers",
-  );
-  assert.match(
-    globalStyles.slice(activityMobileStylesStart),
-    /\.live-jobs-table\.live-jobs-table td:nth-child\(n\)[^{]*\{[^}]*width:\s*auto/su,
-    "mobile job cards must override the more-specific desktop column widths",
-  );
+  // The demo console used to carry a card mode of its own in
+  // `activity-console.module.css`; it now opts into the one `.table--cards`
+  // implementation the backend console beside it already used. Opting in is a
+  // fact about this component's markup, so it is asserted here.
+  assert.match(demoSource, /className="table table--cards activity-table"/u);
+  // What the card mode then *does* -- print each labelled cell's column name
+  // and outrank the per-column desktop widths -- is a fact about the cascade,
+  // not about any one file, so it is asserted against computed style in
+  // integration/visual/css-contracts.spec.ts ("activity job table contracts"),
+  // beside the `.live-jobs-table` contracts. Matching the stylesheet's
+  // characters here pinned the rule to a file: Phase 4 moved it from
+  // app/globals.css to app/styles/primitives/table.css, and Phase 5 may move it
+  // again, breaking this test on a change that renders no differently.
 });
 
 test("search-attempt requests include only exact actor and owner filters", () => {

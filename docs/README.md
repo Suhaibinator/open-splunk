@@ -15,6 +15,9 @@ a document explicitly says otherwise.
 - [SPL](spl.md) is the cumulative authored-search contract.
 - [Knowledge](knowledge.md) covers field knowledge, lookups, immutable
   snapshots, lifecycle, and security.
+- [Theming](theming.md) defines the two-tier colour token layer, the
+  non-colour scales beside it, and the rule that no literal may live
+  outside them.
 - [Ingestion](ingestion.md) covers native collectors, token constraints,
   quotas, and collector operations.
 - [Collector configuration](collector-configuration.md) enumerates the

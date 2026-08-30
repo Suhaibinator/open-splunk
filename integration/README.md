@@ -48,7 +48,8 @@ host files during cleanup.
    administrator inspection;
 12. launch Chromium against the UI embedded in that compiled server, run an SPL
    lookup search, observe its same-origin protobuf HTTP and binary WebSocket
-   traffic, and verify the expanded final event rows contain the typed lookup
+   traffic, confirm the final event rows land collapsed, expand the page from
+   the Rows menu, and verify the expanded rows contain the typed lookup
    enrichment;
 13. create and poll a JSON Lines export, redeem its one-time bearer grant over
    the raw download route, validate lookup-enriched artifact headers/content,
@@ -217,3 +218,204 @@ latency acceptance thresholds. Exact payload semantics and the maximum number
 of materialized rows remain correctness gates. Metrics and top/bottom
 screenshots are written beneath
 `test-results/browser-fixed-result-rendering/visual`.
+
+## Visual regression baselines
+
+`integration/visual` pins the appearance of the shipped CSS. It needs no Go
+server, ClickHouse, or Docker: `scripts/build-visual-exports.mjs` produces the
+static export twice, `scripts/serve-static.mjs` serves both from one
+dependency-free Node process, and `playwright.visual.config.ts` drives Chromium
+against them at 1440x900 and 760x1000.
+
+Both exports land in `.cache/visual/demo-export` and
+`.cache/visual/backend-export`, and `out/` is reset to the state Git tracks
+afterwards. Next always exports into `out/`, which is the release payload
+`webui.go` embeds, so leaving a demo-mode build there would let `go build` embed
+a UI with no `out/asset-manifest.json`. Run `make build-ui` before building the
+server after any visual run.
+
+Nearly every surface renders from the demo data mode, whose fixtures are
+compiled into the bundle. Only the bootstrap-advertised Knowledge Manager needs
+the backend-mode export, and `knowledge-manager.visual.spec.ts` supplies its
+protobuf responses through request interception.
+
+A rule whose element renders in neither export is invisible to every page
+baseline. `component-surfaces.visual.spec.ts` covers that gap by mounting the
+production markup against the real stylesheet and photographing the component
+alone; the statistics sparkline lives there because it needs a server-supplied
+multivalue column that no fixture produces.
+
+```sh
+npm ci
+npx --no-install playwright install chromium
+npm run test:visual
+```
+
+Baselines live in `integration/visual/__screenshots__/<platform>/<project>/`
+and are committed. They are platform-specific because font rasterization is:
+a machine whose platform has no directory there must generate its own set.
+
+Only a `darwin` set is committed today, so CI runs this suite in a `visual` job
+of its own on `macos-latest` rather than in the `ubuntu-latest` `frontend` job,
+which has no baselines to compare against; the job uploads `test-results/visual`
+on failure so a red run hands back the expected image, the received image and
+the diff. Committing a `linux` set generated in the runner's own container is
+the work that would fold it back into the `frontend` job.
+`npm run test:contracts` below has no such constraint and runs there already.
+
+The two projects are `desktop` (1440x900) and `mobile` (760x1000), and every
+screenshot must have a baseline under both. The exceptions — surfaces that do
+not exist at the other viewport at all — are listed in
+`scripts/visual-baseline-projects.json`, which `scripts/safety-net.test.mjs`
+reads: it fails on a screenshot with no baseline, on an entry naming a project
+that does not exist, and on an entry naming a screenshot no spec pins any more.
+A missing baseline is otherwise silent on every machine but the one running the
+suite.
+
+There is no pixel budget: `playwright.visual.config.ts` runs at
+`threshold: 0.02` with **`maxDiffPixelRatio: 0`**, so any pixel that moves fails
+the run. Normalizing a colour by one or two RGB units is a baseline to
+re-record, not noise the suite absorbs — the budget used to be 0.002, which on a
+1440x1583 page is 4,560 pixels, and
+[docs/theming.md](../docs/theming.md#guardrails-what-holds-this-in-place)
+records what went missing inside it. **A CSS refactor that is a refactor updates
+no baseline.** When a change is a deliberate restyle, regenerate them, look at
+every regenerated PNG, and say in the commit body which surfaces moved and why:
+
+```sh
+npm run test:visual -- --update-snapshots
+git add integration/visual/__screenshots__   # review the diff first
+```
+
+`--update-snapshots` writes a baseline for every screenshot it takes, including
+ones that were already correct, so run it after the change is final rather than
+while iterating. To regenerate one surface, pass the spec:
+
+```sh
+npm run test:visual -- --update-snapshots integration/visual/product-pages.visual.spec.ts
+```
+
+Failure artifacts (actual, expected, and diff images) are written beneath
+`test-results/visual`.
+
+## Global stylesheet computed-style contracts
+
+`visual/css-contracts.spec.ts` pins the behaviour of the application stylesheets that
+unit tests used to pin by matching the stylesheet's raw text. Text matching
+tied the suite to formatting — newline placement, single-line media-query
+bodies, declaration order — so any tokenising or reformatting pass broke it
+without changing a rendered pixel. The spec instead loads the stylesheets into
+Chromium against fixture markup that mirrors the production DOM and reads
+resolved values through `getComputedStyle` at the 1280, 980, 760, and 480 pixel
+breakpoints — plus 1000, 900, 500 and 450, which are inside the five bands
+Phase 4's breakpoint folds changed and which no screenshot renders.
+
+"The stylesheets", plural: `visual/application-stylesheets.ts` injects each
+file `app/styles/index.css` imports, in that file's order, because `setContent`
+cannot resolve an `@import` inside an injected `<style>` and would otherwise
+render every `var()` as its fallback and every rule as nothing at all. The list
+is read out of `index.css` rather than restated, and
+`scripts/style-invariants.test.mjs` asserts that it still is — and that every
+stylesheet under `app/` is in it. That assertion *runs* the harness's own
+`importedStylesheets` body and compares its result with `index.css`, rather than
+re-implementing the parse: re-implementing it compared `index.css` with itself,
+and a harness injecting 25 of the 26 shipped sheets kept the whole suite green. `visual/token-layer.visual.spec.ts` covers
+the other half — it navigates to the real export rather than injecting
+anything, so a token file that never reaches `app/layout.tsx` fails there even
+while every contract here is green.
+
+The colocated feature stylesheets ride along in that list. The fixtures here
+mount the shared primitives, and every feature class carries its own prefix, so
+a feature file contributes rules no fixture markup can match; injecting them
+anyway is what keeps the list derivable from `index.css` instead of hand-picked,
+and the pages that do use them are covered by the screenshots.
+
+It needs no server, no container, no backend fixtures, and no committed
+baselines, so it is platform-independent, runs in under a second, and is the one
+half of this phase's net that the CI `frontend` job enforces on every push:
+
+```sh
+npx --no-install playwright install chromium
+npm run test:contracts
+```
+
+Failure artifacts are written beneath `test-results/css-contracts`.
+
+## Screenshot determinism
+
+A committed baseline only pins appearance if the page paints the same thing
+every run. The tolerance that keeps antialiasing from turning the suite red
+also hides a surface that samples the wall clock, a random value, or an
+animation phase, and a baseline set that has quietly stopped describing a fixed
+rendering is a safety net with a hole in it.
+
+Two gates close that hole. `visual/screenshot-determinism.visual.spec.ts` runs
+with the rest of `npm run test:visual` and photographs a handful of
+representative surfaces twice — back to back, and again after a reload —
+comparing the two renderings instead of a committed file. It ignores
+per-channel differences of one or two units, because Chromium's text rasterizer
+is not bit-reproducible, and one of its cases deliberately changes the page to
+prove the comparison can still tell two renderings apart.
+
+The second gate covers the whole suite:
+
+```sh
+npm run test:visual:determinism
+```
+
+That builds the exports once, serves them once, and runs every visual spec
+twice over that single build: the first pass records each screenshot into a
+temporary directory and the second compares against it with `maxDiffPixels: 0`.
+Because both passes render one build on one machine, a surface that moves has
+nowhere to hide behind a ratio. Add `--skip-build` to reuse the exports already
+in `.cache/visual` while iterating on a spec.
+
+When it fails, pin whatever varies rather than widening a tolerance.
+
+## Stylesheet structural invariants
+
+`scripts/style-invariants.test.mjs` runs inside `npm run test:frontend` and
+holds every structural property of the styling layer that neither a screenshot
+nor the contracts above can see. It is one file of 100 tests in ten sections,
+described in full under
+[Guardrails](../docs/theming.md#guardrails-what-holds-this-in-place). In short:
+
+- **Reach.** One test asserts every walk the file depends on is populated, so
+  nothing below can pass by having nothing to look at.
+- **The token layer.** One declaration site per name, no colour literal inside
+  a semantic token, a dark block that redefines only names the light block
+  declares, and no stylesheet outside `app/styles/tokens-*.css` declaring a
+  token of its own.
+- **The naming grammar.** Every name parses under the documented grammar, a
+  step number really says how light a primitive is, a name family holds one
+  kind of value, and every mandated text pairing keeps WCAG AA.
+- **The literal sweep.** Colour and scale literals outside the token layer must
+  match `scripts/css-literal-debt.json` exactly, in both directions.
+- **The stylesheet set.** `app/styles/index.css` imports every application
+  stylesheet exactly once, `app/layout.tsx` is the only file that pulls a
+  stylesheet in, no `.module.css` or `:global()` comes back, no test file reads
+  a stylesheet's characters, and the load order is the one documented.
+- **Parity, responsive ownership, one-of-each-primitive, and reachability** —
+  every rule still has a caller, in every global stylesheet. The other
+  direction is narrower: a class the markup asks for is checked against the
+  stylesheets only when it carries one of the five colocated feature prefixes
+  (`analytics-`, `operations-`, `reports-`, `visualization-`,
+  `workspace-dialog-`), so an unstyled class outside those five is not
+  reported. `docs/theming.md` §9 says why and what it costs.
+- **The parsers underneath**, pinned against the shapes that have already
+  fooled a simpler implementation.
+
+The reading and parsing live in `scripts/style-inventory.mjs` so the test file
+itself never opens a stylesheet — which is the first invariant it asserts. A
+class that genuinely only exists at runtime belongs in
+`scripts/css-dynamic-classes.json`, with a comment naming the code that
+produces it; an entry there that stops being needed fails the suite, so the
+list cannot become a quiet home for dead CSS. The same is true of every other
+ledger the suite reads — `css-retired-classes.json`, `css-duplicate-blocks.json`,
+`css-literal-debt.json` and `css-phase3-monolith.json` — each of which is
+compared against the tree in both directions.
+
+`scripts/safety-net.test.mjs` guards the net itself: every unit test file must
+appear in the hardcoded list in `scripts/test-frontend.mjs`, and every
+screenshot a visual spec pins must have a committed baseline in every project,
+with no baseline left behind by a deleted test.

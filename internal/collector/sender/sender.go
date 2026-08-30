@@ -8,13 +8,12 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
 	"math"
 	"os"
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -74,7 +73,7 @@ type Options struct {
 
 	// Logger receives sender diagnostics. It must never be handed the bearer
 	// token. A nil Logger discards output.
-	Logger *slog.Logger
+	Logger *zap.Logger
 
 	// InputHealth is a nil-safe provider of per-input health for heartbeats. The
 	// daemon wires it after construction; a nil provider yields no input health.
@@ -152,7 +151,7 @@ type Sender struct {
 	queue      wal.Queue
 	deadLetter DeadLetterSink
 	reporter   StatsReporter
-	logger     *slog.Logger
+	logger     *zap.Logger
 
 	// Injected for determinism in tests; production defaults set in New.
 	now          func() time.Time
@@ -234,7 +233,7 @@ func New(opts Options, queue wal.Queue, deadLetter DeadLetterSink, reporter Stat
 	}
 	logger := opts.Logger
 	if logger == nil {
-		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+		logger = zap.NewNop()
 	}
 	if deadLetter == nil {
 		deadLetter = nopDeadLetterSink{}
@@ -256,9 +255,9 @@ func New(opts Options, queue wal.Queue, deadLetter DeadLetterSink, reporter Stat
 	}
 	if queueStats.QuarantinedSegments > 0 {
 		logger.Error("collector WAL recovery quarantined durable segments",
-			"segments", queueStats.QuarantinedSegments,
-			"bytes", queueStats.QuarantinedBytes,
-			"recovery_warning", queueStats.RecoveryWarning)
+			zap.Uint64("segments", queueStats.QuarantinedSegments),
+			zap.Uint64("quarantined_bytes", queueStats.QuarantinedBytes),
+			zap.String("recovery_warning", queueStats.RecoveryWarning))
 	}
 
 	// Backoff jitter uses CSPRNG output without shared mutable PRNG state.
@@ -304,7 +303,7 @@ func (s *Sender) Run(ctx context.Context) error {
 		}
 		if err != nil {
 			s.setLastError(err)
-			s.logger.Warn("collector stream disconnected", "address", s.opts.Address, "error", err.Error())
+			s.logger.Warn("collector stream disconnected", zap.String("address", s.opts.Address), zap.Error(err))
 		}
 
 		var delay time.Duration
@@ -535,7 +534,7 @@ func (s *Sender) writeDeadLetter(records []DeadLetterRecord) error {
 		return nil
 	}
 	if err := s.deadLetter.WriteRecords(records); err != nil {
-		s.logger.Error("dead-letter write failed", "error", err.Error(), "records", len(records))
+		s.logger.Error("dead-letter write failed", zap.Error(err), zap.Int("records", len(records)))
 		return fmt.Errorf("collector/sender: persist dead letter: %w", err)
 	}
 	return nil

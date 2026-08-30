@@ -1,7 +1,7 @@
 import type { PointerEvent, ReactNode } from "react";
 
 import { SearchJobState } from "@/gen/ts/open_splunk/search";
-import { DEMO_EVENTS, type DemoEvent, type DemoScalar } from "@/lib/demo/search-data";
+import { DEMO_EVENTS, type DemoEvent, type DemoHistoryEntry, type DemoScalar } from "@/lib/demo/search-data";
 import {
   isSplOffsetInQuotedValue,
   isSupportedSplPipelineCommand,
@@ -13,6 +13,7 @@ import {
   UNSUPPORTED_SPL_PIPELINE_COMMANDS,
 } from "@/lib/search/spl-syntax";
 
+import type { StatusTone } from "../_components/status";
 import type { JobPhase, ResultTab } from "./model";
 
 function escapeRegExp(value: string): string {
@@ -54,6 +55,18 @@ export function hasPipelineCommand(query: string, commands: string | readonly st
     const command = /^\s*([A-Za-z][A-Za-z0-9_-]*)\b/.exec(stage)?.[1]?.toLowerCase();
     return command !== undefined && allowed.has(command);
   });
+}
+
+function demoHeadLimit(query: string): number | null {
+  let effectiveLimit: number | null = null;
+  for (const stage of splitSplPipeline(query).slice(1)) {
+    const match = /^\s*head\s+([0-9]+)(?:\s|$)/i.exec(stage);
+    if (match === null) continue;
+    const limit = Number(match[1]);
+    const safeLimit = Number.isSafeInteger(limit) ? limit : Number.MAX_SAFE_INTEGER;
+    effectiveLimit = effectiveLimit === null ? safeLimit : Math.min(effectiveLimit, safeLimit);
+  }
+  return effectiveLimit;
 }
 
 interface DemoFieldPredicate {
@@ -172,7 +185,7 @@ export function syntaxTokens(query: string): ReactNode[] {
   });
 }
 
-export function eventCountForQuery(query: string): number {
+function unboundedEventCountForQuery(query: string): number {
   const lowered = query.toLowerCase();
   const predicates = demoFieldPredicates(query);
   const tracePredicates = predicates.filter((predicate) => predicate.field === "trace_id");
@@ -205,6 +218,12 @@ export function eventCountForQuery(query: string): number {
   return excludedTraceIds.length > 0 ? 12_828 : 12_846;
 }
 
+export function eventCountForQuery(query: string): number {
+  const count = unboundedEventCountForQuery(query);
+  const headLimit = demoHeadLimit(query);
+  return headLimit === null ? count : Math.min(count, headLimit);
+}
+
 export function filteredDemoEvents(query: string): DemoEvent[] {
   const lowered = query.toLowerCase();
   let events = DEMO_EVENTS;
@@ -226,7 +245,8 @@ export function filteredDemoEvents(query: string): DemoEvent[] {
       events = events.filter((event) => excluded.every((predicate) => !matchesDemoValue(event.fields[field], predicate.value)));
     }
   }
-  return events;
+  const headLimit = demoHeadLimit(query);
+  return headLimit === null ? events : events.slice(0, headLimit);
 }
 
 export function resultTabForQuery(query: string): ResultTab {
@@ -285,12 +305,28 @@ export function phaseLabel(phase: JobPhase): string {
   }
 }
 
-export function stateClass(phase: JobPhase): string {
-  if (phase === "completed") return "state-success";
-  if (phase === "failed") return "state-error";
-  if (phase === "expired") return "state-muted";
-  if (phase === "canceled") return "state-muted";
-  return "state-running";
+/**
+ * The recorded outcome of a finished search, as the one job vocabulary spells it.
+ *
+ * Search history stores its state capitalised for display; routing it through
+ * `JobPhase` keeps the job card and the running job reading their tone from the
+ * same table instead of growing a second colour map for the same four words.
+ */
+export function historyPhase(state: DemoHistoryEntry["state"]): JobPhase {
+  switch (state) {
+    case "Canceled": return "canceled";
+    case "Completed": return "completed";
+    case "Expired": return "expired";
+    case "Failed": return "failed";
+  }
+}
+
+export function stateTone(phase: JobPhase): StatusTone {
+  if (phase === "completed") return "success";
+  if (phase === "failed") return "error";
+  if (phase === "expired") return "neutral";
+  if (phase === "canceled") return "neutral";
+  return "running";
 }
 
 export function backendJobPhase(state: SearchJobState): JobPhase {

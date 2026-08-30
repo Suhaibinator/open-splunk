@@ -31,8 +31,6 @@ import { COMPACT_NUMBER_FORMAT, NUMBER_FORMAT } from "../constants";
 import { formatExactNumericText } from "../formatters";
 import type { ChartStyle, LegendPosition } from "../model";
 
-import styles from "./visualization-panel.module.css";
-
 interface VisualizationPanelProps {
   chartStyle: ChartStyle;
   chartTitle: string;
@@ -73,7 +71,9 @@ interface CategoricalChartProps {
   onApplyPivot: VisualizationPanelProps["onApplyPivot"];
 }
 
-const CATEGORY_COLORS = ["#5f9f3a", "#2f7fa6", "#e49a2c", "#8b67a8", "#c6534c", "#4d9a8a"] as const;
+// The first six of the categorical ramp, sliced from the one array that
+// declares it rather than retyped, so the two charts cannot drift apart.
+const CATEGORY_COLORS = TIME_SERIES_COLORS.slice(0, 6);
 const MAX_CATEGORICAL_ROWS = 12;
 const LEGACY_SERIES_KEY = "__events__";
 
@@ -84,11 +84,13 @@ function timeAxisLabels(points: TimelinePoint[]): TimelinePoint[] {
 }
 
 function categoryColor(category: string, index: number): string {
+  // The four level swatches the log data itself carries, not the outcome of a
+  // search: `--level-*`, never `--status-*`. See docs/theming.md.
   const semanticColor = {
-    info: "#5f9c3a",
-    warn: "#dda229",
-    error: "#c84f48",
-    debug: "#5290b0",
+    info: "var(--level-info)",
+    warn: "var(--level-warn)",
+    error: "var(--level-error)",
+    debug: "var(--level-debug)",
   }[category.toLowerCase()];
   return semanticColor ?? CATEGORY_COLORS[index % CATEGORY_COLORS.length];
 }
@@ -210,7 +212,7 @@ function CategoricalTooltip({
   );
   return (
     <section
-      className={styles.categoricalTooltip}
+      className="visualization-tooltip"
       id={inspectorId}
       aria-label={`Values for ${activeRow.level}`}
       data-categorical-inspector="true"
@@ -222,7 +224,7 @@ function CategoricalTooltip({
       }}
       onPointerLeave={onPointerLeave}
     >
-      <div className={styles.categoricalTooltipHeader}>
+      <div className="visualization-tooltip-header">
         <strong title={activeRow.level}>{activeRow.level}</strong>
         <button
           type="button"
@@ -246,13 +248,13 @@ function CategoricalTooltip({
         );
       })}
       {approximatePosition ? (
-        <small className={styles.categoricalTooltipPrecision}>Chart position is approximate; displayed server values are exact.</small>
+        <small className="visualization-tooltip-precision">Chart position is approximate; displayed server values are exact.</small>
       ) : null}
       {activeRow.pivotable === false ? (
-        <small className={styles.categoricalTooltipUnavailable}>Drilldown is unavailable for this typed value.</small>
+        <small className="visualization-tooltip-unavailable">Drilldown is unavailable for this typed value.</small>
       ) : (
         <button
-          className={styles.categoricalTooltipAction}
+          className="visualization-tooltip-action"
           type="button"
           onClick={() => onDrilldown(activeRow)}
         >
@@ -426,49 +428,49 @@ function CategoricalChart({
   if (horizontal) {
     const minimumRowHeight = Math.max(30, (series.length * 17) + 8);
     return (
-      <div className={`${styles.categoricalChart} ${styles.horizontalChart}`} data-testid="categorical-chart">
-        <div className={styles.horizontalScroller}>
+      <div className="visualization-chart visualization-chart--horizontal" data-testid="categorical-chart">
+        <div className="visualization-horizontal-scroller">
           <div
-            className={styles.horizontalSurface}
+            className="visualization-horizontal-surface"
             style={{
               minHeight: `max(100%, ${(rows.length * minimumRowHeight) + 39}px)`,
               minWidth: series.length > 3 ? `${560 + (series.length * 20)}px` : "520px",
             }}
           >
-            <div className={styles.horizontalGrid} aria-hidden="true">
+            <div className="visualization-horizontal-grid" aria-hidden="true">
               {scale.ticks.map((tick) => (
                 <span
                   key={tick}
-                  className={tick === 0 ? styles.zeroGridLine : undefined}
+                  className={tick === 0 ? "visualization-grid-line--zero" : undefined}
                   style={{ left: `${((tick - scale.minimum) / (scale.maximum - scale.minimum)) * 100}%` }}
                 />
               ))}
             </div>
             <div
-              className={styles.horizontalGroups}
+              className="visualization-horizontal-groups"
               style={{ gridTemplateRows: `repeat(${Math.max(1, rows.length)}, minmax(${minimumRowHeight}px, 1fr))` }}
             >
               {rows.map((row, rowIndex) => (
                 <button
                   key={row.id ?? row.level}
-                  {...categoryButtonProps(row, rowIndex, styles.horizontalGroup)}
+                  {...categoryButtonProps(row, rowIndex, "visualization-horizontal-group")}
                 >
                   <strong title={row.level}>{row.level}</strong>
-                  <span className={styles.horizontalBars} aria-hidden="true">
+                  <span className="visualization-horizontal-bars" aria-hidden="true">
                     {series.map((definition, seriesIndex) => {
                       const item = rowSeries(row, definition);
-                      if (item.value === null) return <span className={styles.horizontalSlot} key={definition.key} />;
+                      if (item.value === null) return <span className="visualization-horizontal-slot" key={definition.key} />;
                       const geometry = horizontalGeometry(item.value, scale);
                       const color = backendSeries ? seriesColor(seriesIndex) : categoryColor(row.level, rowIndex);
                       return (
-                        <span className={styles.horizontalSlot} key={definition.key}>
+                        <span className="visualization-horizontal-slot" key={definition.key}>
                           <i
-                            className={styles.horizontalBar}
+                            className="visualization-horizontal-bar"
                             style={{ backgroundColor: color, left: `${geometry.left}%`, width: `${geometry.width}%` }}
                           />
                           {showDataLabels ? (
                             <b
-                              className={styles.horizontalDataLabel}
+                              className="visualization-horizontal-data-label"
                               style={{
                                 left: item.value >= 0
                                   ? `calc(${geometry.left + geometry.width}% + 5px)`
@@ -486,7 +488,7 @@ function CategoricalChart({
                 </button>
               ))}
             </div>
-            <div className={styles.horizontalAxis} aria-hidden="true">
+            <div className="visualization-horizontal-axis" aria-hidden="true">
               {scale.ticks.toReversed().map((tick) => (
                 <span key={tick}>{approximate ? "≈" : ""}{COMPACT_NUMBER_FORMAT.format(tick)}</span>
               ))}
@@ -501,46 +503,46 @@ function CategoricalChart({
 
   const minimumGroupWidth = Math.max(72, (series.length * 24) + 24);
   return (
-    <div className={styles.categoricalChart} data-testid="categorical-chart">
-      <div className={styles.categoricalYAxis} aria-hidden="true">
+    <div className="visualization-chart" data-testid="categorical-chart">
+      <div className="visualization-vertical-y-axis" aria-hidden="true">
         {scale.ticks.map((tick) => <span key={tick}>{approximate ? "≈" : ""}{COMPACT_NUMBER_FORMAT.format(tick)}</span>)}
       </div>
-      <div className={styles.categoricalScroller}>
+      <div className="visualization-vertical-scroller">
         <div
-          className={styles.categoricalSurface}
+          className="visualization-vertical-surface"
           style={{ minWidth: `max(100%, ${rows.length * minimumGroupWidth}px)` }}
         >
-          <div className={styles.categoricalGrid} aria-hidden="true">
+          <div className="visualization-vertical-grid" aria-hidden="true">
             {scale.ticks.map((tick) => (
               <span
                 key={tick}
-                className={tick === 0 ? styles.zeroGridLine : undefined}
+                className={tick === 0 ? "visualization-grid-line--zero" : undefined}
                 style={{ top: `${((scale.maximum - tick) / (scale.maximum - scale.minimum)) * 100}%` }}
               />
             ))}
           </div>
           <div
-            className={styles.categoricalGroups}
+            className="visualization-vertical-groups"
             style={{ gridTemplateColumns: `repeat(${Math.max(1, rows.length)}, minmax(${minimumGroupWidth}px, 1fr))` }}
           >
             {rows.map((row, rowIndex) => (
               <button
                 key={row.id ?? row.level}
-                {...categoryButtonProps(row, rowIndex, styles.categoricalGroup)}
+                {...categoryButtonProps(row, rowIndex, "visualization-vertical-group")}
               >
-                <span className={styles.verticalBars} aria-hidden="true">
+                <span className="visualization-vertical-bars" aria-hidden="true">
                   {series.map((definition, seriesIndex) => {
                     const item = rowSeries(row, definition);
-                    if (item.value === null) return <span className={styles.verticalSlot} key={definition.key} />;
+                    if (item.value === null) return <span className="visualization-vertical-slot" key={definition.key} />;
                     const geometry = verticalGeometry(item.value, scale);
                     const color = backendSeries ? seriesColor(seriesIndex) : categoryColor(row.level, rowIndex);
                     const dataLabelTop = item.value >= 0
                       ? `max(2px, calc(${geometry.top}% - 17px))`
                       : `calc(${geometry.top + geometry.height}% + 3px)`;
                     return (
-                      <span className={styles.verticalSlot} key={definition.key}>
+                      <span className="visualization-vertical-slot" key={definition.key}>
                         <i
-                          className={styles.verticalBar}
+                          className="visualization-vertical-bar"
                           style={{
                             backgroundColor: color,
                             height: item.value === 0 ? "2px" : `${geometry.height}%`,
@@ -548,7 +550,7 @@ function CategoricalChart({
                           }}
                         />
                         {showDataLabels ? (
-                          <b className={styles.verticalDataLabel} style={{ top: dataLabelTop }}>
+                          <b className="visualization-vertical-data-label" style={{ top: dataLabelTop }}>
                             {item.coordinateApproximate ? "≈" : ""}{displaySeriesValue(item, true)}
                           </b>
                         ) : null}
@@ -634,7 +636,7 @@ export function VisualizationPanel({
   }
 
   return (
-    <section id="panel-visualization" role="tabpanel" aria-labelledby="tab-visualization" className={`visualization-panel${isPreview ? " visualization-panel--preview" : ""}`}>
+    <section id="panel-visualization" role="tabpanel" aria-labelledby="tab-visualization" className="visualization-panel">
       <header className="result-view-header">
         <div>
           <div className="result-title-line">
@@ -664,12 +666,12 @@ export function VisualizationPanel({
         </fieldset>
       </header>
       <div
-        className={`visualization-canvas chart-${effectiveChartStyle} legend-${legendPosition}${isLineChart ? " visualization-canvas--line" : ""}${!isTimechartResult ? ` ${styles.categoricalCanvas}` : ""}${isPreview ? " visualization-canvas--preview" : ""}`}
+        className={`visualization-canvas chart-${effectiveChartStyle} legend-${legendPosition}${isLineChart ? " visualization-canvas--line" : ""}${!isTimechartResult ? " visualization-canvas--categorical" : ""}${isPreview ? " visualization-canvas--preview" : ""}`}
         data-testid="visualization-chart"
       >
         {!hasCategoricalChart ? (
-          <output className={styles.emptyState}>
-            <span className={styles.emptyStateIcon} aria-hidden="true"><span /><span /><span /></span>
+          <output className="visualization-empty-state">
+            <span className="visualization-empty-state-icon" aria-hidden="true"><span /><span /><span /></span>
             <strong>No compatible chart for these results</strong>
             <p>{isPreview
               ? "The live preview has not produced a chart-compatible result shape yet. Statistics will update if compatible provisional rows arrive."

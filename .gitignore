@@ -29,6 +29,10 @@ npm-debug.log*
 !.env.example
 
 # Editor / OS
+# Claude Code agent worktrees. Each is a full checkout of this repo, so an
+# unignored .claude/ makes `oxlint .` discover the nested copies of
+# .oxlintrc.json and abort ("denyWarnings is only supported in the root config").
+/.claude/
 .DS_Store
 .idea/
 .vscode/*

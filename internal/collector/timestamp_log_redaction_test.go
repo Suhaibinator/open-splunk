@@ -2,11 +2,13 @@ package collector
 
 import (
 	"bytes"
-	"log/slog"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
 	"github.com/Suhaibinator/open-splunk/internal/collector/input"
 )
@@ -56,7 +58,11 @@ func TestDecodeTimestampErrorDoesNotLeakPayload(t *testing.T) {
 
 	// The daemon logs the decode failure; that log must not carry the secret.
 	buf := &redactionLogBuffer{}
-	logger := slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	logger := zap.New(zapcore.NewCore(
+		zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig()),
+		zapcore.AddSync(buf),
+		zap.DebugLevel,
+	))
 	d := &Daemon{log: logger}
 	src := input.SourceRef{
 		Identity:    input.FileIdentity{Device: 1, Inode: 2, Fingerprint: "abc"},
@@ -93,7 +99,11 @@ func TestDecodeFailureLogDoesNotIncludeAttackerControlledFieldName(t *testing.T)
 	}
 
 	buffer := &redactionLogBuffer{}
-	daemon := &Daemon{log: slog.New(slog.NewTextHandler(buffer, nil))}
+	daemon := &Daemon{log: zap.New(zapcore.NewCore(
+		zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig()),
+		zapcore.AddSync(buffer),
+		zap.InfoLevel,
+	))}
 	daemon.recordDecodeFailure("app", input.SourceRef{
 		Identity:    input.FileIdentity{Device: 1, Inode: 2, Fingerprint: "abc"},
 		StartOffset: 0,
@@ -101,7 +111,7 @@ func TestDecodeFailureLogDoesNotIncludeAttackerControlledFieldName(t *testing.T)
 		LineNumber:  1,
 	}, len(line))
 	logs := buffer.String()
-	if strings.Contains(logs, secret) || !strings.Contains(logs, "reason=decode_error") {
+	if strings.Contains(logs, secret) || !strings.Contains(logs, `"reason":"decode_error"`) {
 		t.Fatalf("decode-failure log was not value-free: %s", logs)
 	}
 }

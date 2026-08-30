@@ -6,11 +6,14 @@ import process from "node:process";
 
 const ownedMarkdownPaths = Object.freeze([
   "README.md",
+  "AGENTS.md",
+  "CLAUDE.md",
   "docs/README.md",
   "docs/architecture.md",
   "docs/api.md",
   "docs/spl.md",
   "docs/knowledge.md",
+  "docs/theming.md",
   "docs/ingestion.md",
   "docs/collector-configuration.md",
   "docs/hec.md",
@@ -32,6 +35,7 @@ const canonicalDocumentationNames = Object.freeze([
   "api.md",
   "spl.md",
   "knowledge.md",
+  "theming.md",
   "ingestion.md",
   "collector-configuration.md",
   "hec.md",

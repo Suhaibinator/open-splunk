@@ -163,6 +163,28 @@ Native collectors are documented in [Ingestion](docs/ingestion.md). HEC is
 disabled by default, shares the existing HTTP listener, and exposes only its
 exact unversioned routes; see [HEC](docs/hec.md).
 
+## Styling
+
+`app/layout.tsx` loads exactly one stylesheet, `app/styles/index.css`, and that
+file is nothing but an ordered `@import` list, so the cascade order is written
+down rather than implied by module order or by the bundler. Every rule is plain
+CSS with feature-prefixed, kebab-case class names — there are no CSS modules
+and no second way to scope a rule.
+
+Colour, spacing, radius, type, stacking, elevation and motion are named by
+tokens in `app/styles/tokens-color.css` and `app/styles/tokens-scale.css`, and
+only those two files are meant to carry a literal. **Recolouring the product is
+an edit to the token files, not a search across the rules.**
+
+Four gates keep that true, because almost none of it is visible to a compiler:
+`npm run test:frontend` runs the structural invariants in
+`scripts/style-invariants.test.mjs`, `npm run lint:css` runs stylelint over the
+stylesheets, `npm run test:contracts` reads rules back through
+`getComputedStyle` in a browser, and `npm run test:visual` compares committed
+screenshots. [Theming](docs/theming.md) is the reference: where a rule lives,
+how to restyle a given thing, what each token means, and what every gate can
+and cannot see.
+
 ## Integration gates
 
 The default Go/frontend suite is self-contained. ClickHouse, shipped-browser,
@@ -199,6 +221,8 @@ are grouped below:
   [native ingestion](docs/ingestion.md),
   [collector configuration](docs/collector-configuration.md),
   [HTTP Event Collector](docs/hec.md), and [auditing](docs/auditing.md).
+- Interface: [Theming](docs/theming.md) — the token layer, where a rule lives,
+  and the guardrails that keep both true.
 - Operations and validation: [deployment](deploy/README.md),
   [database mechanics](migrations/README.md),
   [integration testing](integration/README.md), and

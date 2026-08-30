@@ -1,0 +1,133 @@
+/* Base
+   The document reset and the element defaults every page inherits: box
+   sizing, the html/body ground, the shared defaults on button, input, select
+   and textarea, the one focus ring, the icon sizes, the two animations the
+   product shares and the two screen-reader affordances. Nothing here is a
+   component -- a component primitive lives in app/styles/primitives/ -- and
+   nothing here declares a custom property, which is the token layer's job.
+
+   This file is imported before every primitive and every feature sheet, so a
+   rule belongs here only if being overridable by all of them is correct. */
+
+* {
+  box-sizing: border-box;
+}
+
+.app-icon {
+  display: block;
+  flex: 0 0 auto;
+  pointer-events: none;
+}
+
+.app-icon--xs { height: 12px; width: 12px; }
+.app-icon--sm { height: 14px; width: 14px; }
+.app-icon--md { height: 16px; width: 16px; }
+.app-icon--lg { height: 20px; width: 20px; }
+
+:where(button, a):has(> .app-icon) {
+  align-items: center;
+  display: inline-flex;
+  gap: 5px;
+}
+
+.app-icon--spin {
+  animation: spin 900ms linear infinite;
+}
+
+/* Shared animations
+   One rotation and one attention ring for the whole product. `pulse-ring`
+   paints an optional inner ring through --pulse-ring-core so a dot that
+   already carries a solid outline keeps it while the halo breathes. */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes pulse-ring {
+  0%,
+  100% { box-shadow: var(--pulse-ring-core, 0 0 transparent), 0 0 0 0 color-mix(in srgb, var(--focus-ring) 30%, transparent); }
+  50% { box-shadow: var(--pulse-ring-core, 0 0 transparent), 0 0 0 4px transparent; }
+}
+
+html {
+  min-width: 320px;
+  min-height: 100%;
+  scroll-behavior: smooth;
+  scrollbar-gutter: stable;
+}
+
+body {
+  min-height: 100%;
+  margin: 0;
+  background: var(--bg-canvas);
+  color: var(--fg-text);
+  font-family: var(--font-sans);
+  font-size: var(--type-md);
+  text-rendering: optimizelegibility;
+}
+
+button,
+input,
+select,
+textarea {
+  color: inherit;
+  font: inherit;
+}
+
+button,
+select {
+  cursor: pointer;
+}
+
+button:disabled,
+select:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+a {
+  color: inherit;
+}
+
+.skip-link {
+  background: var(--bg-surface);
+  border: 2px solid var(--focus-ring);
+  color: var(--fg-text);
+  font-weight: 700;
+  left: 10px;
+  padding: 9px var(--space-3);
+  position: fixed;
+  top: 8px;
+  transform: translateY(-150%);
+  transition: transform 100ms ease-out;
+  z-index: var(--z-skip-link);
+}
+
+.skip-link:focus { transform: translateY(0); }
+
+code,
+pre {
+  font-family: var(--font-mono);
+}
+
+.sr-only {
+  border: 0;
+  clip-path: inset(50%);
+  height: 1px;
+  left: 0;
+  margin: -1px;
+  overflow: hidden;
+  padding: 0;
+  position: absolute;
+  top: 0;
+  white-space: nowrap;
+  width: 1px;
+}

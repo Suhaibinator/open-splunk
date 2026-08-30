@@ -24,9 +24,75 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 var testNow = time.Date(2026, 7, 22, 12, 0, 0, 123_000_000, time.UTC)
+
+func TestHandlerPassesConfiguredLoggerToSRouter(t *testing.T) {
+	t.Parallel()
+
+	core, observed := observer.New(zapcore.ErrorLevel)
+	handler := newTestHandler(t, Config{
+		Logger:     zap.New(core),
+		SearchJobs: &fakeSearchJobs{getErr: searchjobs.ErrNotFound},
+		Indexes:    fakeIndexCatalog{},
+		WebUI:      testUI(),
+	})
+	response := postProtoHeaders(
+		t,
+		handler,
+		"/api/search/jobs/get",
+		&opensplunk.GetSearchJobRequest{SearchJobId: "missing"},
+		map[string]string{"Host": "example.com"},
+	)
+
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("missing search status = %d, want %d", response.Code, http.StatusNotFound)
+	}
+	if observed.Len() == 0 {
+		t.Fatal("configured logger did not receive SRouter error")
+	}
+}
+
+// TestSRouterLoggerSamplesRepeatedErrors pins the sampling applied to SRouter's
+// child logger. SRouter logs every HTTPError at Error level, client 4xx
+// included, so an unauthenticated scanner would otherwise write one unsampled
+// ERROR line per request through the process logger's output mutex. The
+// process logger itself must stay unsampled - operational records are emitted
+// a handful of times and must never be dropped - so the budget is spent here.
+func TestSRouterLoggerSamplesRepeatedErrors(t *testing.T) {
+	t.Parallel()
+
+	core, observed := observer.New(zapcore.ErrorLevel)
+	process := zap.New(core)
+	sampled := newSRouterLogger(process)
+
+	const bursts = srouterLogSampleFirst * 4
+	for range bursts {
+		sampled.Error("route error", zap.Int("status", http.StatusNotFound))
+	}
+	if got := observed.Len(); got >= bursts {
+		t.Fatalf("SRouter logger emitted %d of %d identical errors; sampling did not apply", got, bursts)
+	}
+	if got := observed.Len(); got < srouterLogSampleFirst {
+		t.Fatalf("SRouter logger emitted %d errors, want at least the first %d", got, srouterLogSampleFirst)
+	}
+	if name := observed.All()[0].LoggerName; !strings.HasSuffix(name, "http") {
+		t.Fatalf("SRouter logger name = %q, want an \"http\" suffix", name)
+	}
+
+	// The parent must keep every record: the sampler lives only on the child.
+	before := observed.Len()
+	for range bursts {
+		process.Error("operational error")
+	}
+	if got := observed.Len() - before; got != bursts {
+		t.Fatalf("process logger emitted %d of %d records; it must not be sampled", got, bursts)
+	}
+}
 
 func futureProtobufField(value string) []byte {
 	payload := protowire.AppendTag(nil, 2_047, protowire.BytesType)

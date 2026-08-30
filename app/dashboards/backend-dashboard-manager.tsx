@@ -38,7 +38,6 @@ import {
   dashboardPanelWaitTimeoutMs,
   waitForDashboardSearchJob,
 } from "./dashboard-panel-runner";
-import styles from "./operations-dashboard.module.css";
 
 interface BackendDashboardManagerProps {
   apiBaseUrl: string;
@@ -505,70 +504,70 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
   }
 
   if (loading) {
-    return <div className="suite-page dashboard-page"><section className="suite-card"><p className={styles.stateMessage}>Loading dashboards…</p></section></div>;
+    return <div className="suite-page dashboard-page"><section className="suite-card"><p className="operations-state-message">Loading dashboards…</p></section></div>;
   }
   if (!available) {
-    return <div className="suite-page dashboard-page"><section className="suite-card"><h1>Dashboards unavailable</h1><p className={styles.stateMessage}>This backend does not advertise persisted dashboard support.</p></section></div>;
+    return <div className="suite-page dashboard-page"><section className="suite-card"><h1>Dashboards unavailable</h1><p className="operations-state-message">This backend does not advertise persisted dashboard support.</p></section></div>;
   }
 
   return (
     <div className="suite-page dashboard-page">
       <header className="dashboard-title-row">
         <div><span className="suite-eyebrow">{appName.toUpperCase()}</span><h1>Dashboards</h1><p>Build persisted panels and run their server-authoritative searches.</p></div>
-        <form className={styles.createForm} onSubmit={createDashboard}>
+        <form className="operations-create-form" onSubmit={createDashboard}>
           <label><span>App</span><select value={appID} disabled={workspaceBusy || loading} aria-busy={switchingAppID !== null} onChange={(event) => selectApp(event.target.value)}>{apps.map((app) => <option key={app.appId} value={app.appId}>{app.displayName || app.slug || app.appId}</option>)}</select></label>
           <label><span>New dashboard name</span><input value={newName} disabled={workspaceBusy} onChange={(event) => setNewName(event.target.value)} maxLength={255} placeholder="Service overview" /></label>
           <button type="submit" disabled={workspaceBusy || !newName.trim()}>Create dashboard</button>
         </form>
       </header>
 
-      {error ? <div className={styles.errorBanner} role="alert"><span>{error.message}</span>{error.retry ? <button type="button" disabled={workspaceBusy} onClick={retryDashboardLoad}>{error.retry.mode === "switch" ? "Retry app switch" : "Reload"}</button> : null}</div> : null}
-      {switchingAppID !== null ? <output className={styles.stateMessage}>Switching dashboard app…</output> : null}
-      {refreshing ? <output className={styles.stateMessage}>Reloading dashboards…</output> : null}
-      {notice ? <output className={styles.noticeBanner}>{notice}</output> : null}
+      {error ? <div className="operations-error-banner" role="alert"><span>{error.message}</span>{error.retry ? <button type="button" disabled={workspaceBusy} onClick={retryDashboardLoad}>{error.retry.mode === "switch" ? "Retry app switch" : "Reload"}</button> : null}</div> : null}
+      {switchingAppID !== null ? <output className="operations-state-message">Switching dashboard app…</output> : null}
+      {refreshing ? <output className="operations-state-message">Reloading dashboards…</output> : null}
+      {notice ? <output className="operations-notice-banner">{notice}</output> : null}
 
-      <div className={styles.managerLayout}>
-        <aside className={`suite-card ${styles.dashboardList}`} aria-label="Saved dashboards">
+      <div className="operations-manager-layout">
+        <aside className="suite-card operations-dashboard-list" aria-label="Saved dashboards">
           <h2>Saved dashboards</h2>
           {dashboards.length === 0 ? <p>No dashboards yet.</p> : (
             <ul>{dashboards.map((dashboard) => (
-              <li key={dashboard.dashboardId}><button className={dashboard.dashboardId === selectedID ? styles.selectedDashboard : ""} disabled={workspaceBusy} type="button" onClick={() => selectDashboard(dashboard.dashboardId)}><strong>{dashboard.definition?.name ?? "Untitled"}</strong><span>{dashboard.definition?.panels.length ?? 0} panels · v{dashboard.version.toString()}</span></button></li>
+              <li key={dashboard.dashboardId}><button className={dashboard.dashboardId === selectedID ? "operations-dashboard-selected" : ""} disabled={workspaceBusy} type="button" onClick={() => selectDashboard(dashboard.dashboardId)}><strong>{dashboard.definition?.name ?? "Untitled"}</strong><span>{dashboard.definition?.panels.length ?? 0} panels · v{dashboard.version.toString()}</span></button></li>
             ))}</ul>
           )}
         </aside>
 
-        <main className={styles.dashboardEditor}>
+        <main className="operations-dashboard-editor">
           {!selected || !draft ? (
-            <section className="suite-card"><h2>Select a dashboard</h2><p className={styles.stateMessage}>Choose an existing dashboard or create one to start editing.</p></section>
+            <section className="suite-card"><h2>Select a dashboard</h2><p className="operations-state-message">Choose an existing dashboard or create one to start editing.</p></section>
           ) : (
             <>
-              <section className={`suite-card ${styles.definitionEditor}`}>
-                <header className="suite-card-header"><div><h2>Dashboard settings</h2><p>Changes use optimistic versioning.</p></div><div className={styles.editorActions}><button type="button" onClick={() => void saveDashboard()} disabled={workspaceBusy || !dirty || !draft.name.trim()}>Save</button><button className={styles.dangerButton} type="button" onClick={() => void deleteDashboard()} disabled={workspaceBusy}>Delete</button></div></header>
-                <div className={styles.settingsGrid}>
+              <section className="suite-card operations-definition-editor">
+                <header className="suite-card-header"><div><h2>Dashboard settings</h2><p>Changes use optimistic versioning.</p></div><div className="operations-editor-actions"><button type="button" onClick={() => void saveDashboard()} disabled={workspaceBusy || !dirty || !draft.name.trim()}>Save</button><button className="operations-danger-button" type="button" onClick={() => void deleteDashboard()} disabled={workspaceBusy}>Delete</button></div></header>
+                <div className="operations-settings-grid">
                   <label><span>Name</span><input value={draft.name} disabled={workspaceBusy} maxLength={255} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
                   <label><span>Description</span><input value={draft.description ?? ""} disabled={workspaceBusy} maxLength={16384} onChange={(event) => setDraft({ ...draft, description: event.target.value || undefined })} /></label>
                 </div>
               </section>
 
-              <div className={styles.panelToolbar}><h2>Panels</h2><button type="button" disabled={workspaceBusy || !indexNames[0] || draft.panels.length >= MAXIMUM_DASHBOARD_PANELS} title={draft.panels.length >= MAXIMUM_DASHBOARD_PANELS ? `Dashboards support up to ${MAXIMUM_DASHBOARD_PANELS} panels.` : undefined} onClick={() => setDraft({ ...draft, panels: [...draft.panels, newPanel(appID, indexNames[0] ?? "", draft.panels.length * 4)] })}>Add panel</button></div>
-              {draft.panels.length >= MAXIMUM_DASHBOARD_PANELS ? <output className={styles.stateMessage}>This dashboard has reached the {MAXIMUM_DASHBOARD_PANELS}-panel limit.</output> : null}
-              {draft.panels.length === 0 ? <section className="suite-card"><p className={styles.stateMessage}>This dashboard has no panels. Add one after at least one searchable index is available.</p></section> : null}
+              <div className="operations-panel-toolbar"><h2>Panels</h2><button type="button" disabled={workspaceBusy || !indexNames[0] || draft.panels.length >= MAXIMUM_DASHBOARD_PANELS} title={draft.panels.length >= MAXIMUM_DASHBOARD_PANELS ? `Dashboards support up to ${MAXIMUM_DASHBOARD_PANELS} panels.` : undefined} onClick={() => setDraft({ ...draft, panels: [...draft.panels, newPanel(appID, indexNames[0] ?? "", draft.panels.length * 4)] })}>Add panel</button></div>
+              {draft.panels.length >= MAXIMUM_DASHBOARD_PANELS ? <output className="operations-state-message">This dashboard has reached the {MAXIMUM_DASHBOARD_PANELS}-panel limit.</output> : null}
+              {draft.panels.length === 0 ? <section className="suite-card"><p className="operations-state-message">This dashboard has no panels. Add one after at least one searchable index is available.</p></section> : null}
               {draft.panels.map((panel) => {
                 const result = panelResults[panel.panelId];
                 return (
-                  <section className={`suite-card dashboard-panel ${styles.livePanel}`} key={panel.panelId}>
-                    <header className="suite-card-header"><div><h2>{panel.title || "Untitled panel"}</h2><p>{panel.search?.spl || "No SPL configured"}</p></div><div className={styles.editorActions}><button type="button" onClick={() => void runPanel(panel)} disabled={workspaceBusy}>Run</button><button className={styles.dangerButton} type="button" onClick={() => removePanel(panel.panelId)} disabled={workspaceBusy}>Remove</button></div></header>
-                    <div className={styles.panelFields}>
+                  <section className="suite-card dashboard-panel operations-live-panel" key={panel.panelId}>
+                    <header className="suite-card-header"><div><h2>{panel.title || "Untitled panel"}</h2><p>{panel.search?.spl || "No SPL configured"}</p></div><div className="operations-editor-actions"><button type="button" onClick={() => void runPanel(panel)} disabled={workspaceBusy}>Run</button><button className="operations-danger-button" type="button" onClick={() => removePanel(panel.panelId)} disabled={workspaceBusy}>Remove</button></div></header>
+                    <div className="operations-panel-fields">
                       <label><span>Title</span><input value={panel.title} disabled={workspaceBusy} maxLength={255} onChange={(event) => updatePanel(panel.panelId, (current) => ({ ...current, title: event.target.value }))} /></label>
-                      <label className={styles.splField}><span>SPL</span><textarea value={panel.search?.spl ?? ""} disabled={workspaceBusy} rows={3} onChange={(event) => updatePanel(panel.panelId, (current) => ({ ...current, search: current.search ? { ...current.search, spl: event.target.value } : current.search }))} /></label>
+                      <label className="operations-spl-field"><span>SPL</span><textarea value={panel.search?.spl ?? ""} disabled={workspaceBusy} rows={3} onChange={(event) => updatePanel(panel.panelId, (current) => ({ ...current, search: current.search ? { ...current.search, spl: event.target.value } : current.search }))} /></label>
                       <label><span>Earliest</span><input value={panel.search?.timeRange?.earliest ?? ""} disabled={workspaceBusy} onChange={(event) => updatePanel(panel.panelId, (current) => ({ ...current, search: current.search ? { ...current.search, timeRange: { ...current.search.timeRange, earliest: event.target.value, latest: current.search.timeRange?.latest, timezone: current.search.timeRange?.timezone } } : current.search }))} /></label>
                       <label><span>Latest</span><input value={panel.search?.timeRange?.latest ?? ""} disabled={workspaceBusy} onChange={(event) => updatePanel(panel.panelId, (current) => ({ ...current, search: current.search ? { ...current.search, timeRange: { ...current.search.timeRange, earliest: current.search.timeRange?.earliest, latest: event.target.value, timezone: current.search.timeRange?.timezone } } : current.search }))} /></label>
                       <label><span>Indexes</span><input value={panel.search?.indexScope.join(", ") ?? ""} disabled={workspaceBusy} onChange={(event) => updatePanel(panel.panelId, (current) => ({ ...current, search: current.search ? { ...current.search, indexScope: event.target.value.split(",").map((value) => value.trim()).filter(Boolean) } : current.search }))} /></label>
                     </div>
-                    {result ? <div className={styles.panelResult}>
-                      <p className={result.error ? styles.resultError : styles.resultStatus}>{result.error ?? `Search ${stateLabel(result.state)}${result.jobId ? ` · ${result.jobId}` : ""}`}</p>
-                      {result.columns && result.columns.length > 0 ? <div className="responsive-table-wrap"><table className="product-table"><thead><tr>{result.columns.map((column) => <th key={column.key} scope="col">{column.label}</th>)}</tr></thead><tbody>{result.rows?.map((row) => <tr key={row.id}>{result.columns!.map((column, columnIndex) => <td key={column.key}>{row.cells[columnIndex] ?? ""}</td>)}</tr>)}</tbody></table></div> : null}
-                      {result.rows && result.rows.length === 0 ? <p className={styles.stateMessage}>The search completed with no rows.</p> : null}
+                    {result ? <div className="operations-panel-result">
+                      <p className={result.error ? "operations-result-error" : "operations-result-status"}>{result.error ?? `Search ${stateLabel(result.state)}${result.jobId ? ` · ${result.jobId}` : ""}`}</p>
+                      {result.columns && result.columns.length > 0 ? <div className="table-wrap"><table className="table"><thead><tr>{result.columns.map((column) => <th key={column.key} scope="col">{column.label}</th>)}</tr></thead><tbody>{result.rows?.map((row) => <tr key={row.id}>{result.columns!.map((column, columnIndex) => <td key={column.key}>{row.cells[columnIndex] ?? ""}</td>)}</tr>)}</tbody></table></div> : null}
+                      {result.rows && result.rows.length === 0 ? <p className="operations-state-message">The search completed with no rows.</p> : null}
                     </div> : null}
                   </section>
                 );

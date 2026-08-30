@@ -19,6 +19,10 @@
 # state.max_queue_bytes the daemon stops reading inputs (backpressure to the
 # source files, which persist) rather than dropping data.
 
+logging:
+  level: info
+  format: json
+
 server:
   # Set this to the server's collector gRPC listener. The loopback example
   # intentionally uses plaintext; a remote deployment must enable TLS below.

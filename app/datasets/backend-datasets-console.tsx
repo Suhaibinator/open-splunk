@@ -19,9 +19,10 @@ import {
   type SystemBootstrapModel,
 } from "@/lib/api";
 import { createErrorMessage } from "@/lib/error-message";
-import { searchLaunchHref } from "@/lib/search/launch-url";
+import { boundedIndexSearchQuery, searchLaunchHref } from "@/lib/search/launch-url";
 
 import { BackendResourceState } from "../_components/backend-resource-state";
+import { StatusLabel } from "../_components/status";
 import { AppIcon } from "../_components/app-icon";
 import { PageHeading } from "../_components/product-shell";
 import { IndexObservabilityPanel } from "./index-observability-panel";
@@ -198,7 +199,7 @@ export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsolePro
         eyebrow="DATA"
         title="Datasets"
         description="Browse the indexes authorized for this browser session."
-        actions={<><Link className="suite-button" href="/admin/?section=indexes">Manage indexes</Link><Link className="suite-button suite-button--primary" href="/search/">Search data</Link></>}
+        actions={<><Link className="button" href="/admin/?section=indexes">Manage indexes</Link><Link className="button button--primary" href="/search/">Search data</Link></>}
       />
 
       {loading ? (
@@ -236,7 +237,7 @@ export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsolePro
                     <header>
                       <span className={`dataset-icon dataset-icon--${position % 3 === 0 ? "green" : position % 3 === 1 ? "blue" : "orange"}`} aria-hidden="true">▦</span>
                       <div className="dataset-card__identity"><h2>{index.displayName}</h2><p><code>index={index.name}</code></p>{detail?.definition?.description ? <small>{detail.definition.description}</small> : null}</div>
-                      <span className={`status-label status-label--${state === "Active" ? "complete" : state === "Deleting" ? "running" : "neutral"}`}><i />{state}</span>
+                      <StatusLabel tone={state === "Active" ? "success" : state === "Deleting" ? "running" : "neutral"}>{state}</StatusLabel>
                     </header>
                     <dl>
                       <div><dt>Search</dt><dd>{accessLabel(index.searchAccess)}</dd></div>
@@ -262,7 +263,7 @@ export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsolePro
                       )}
                     </div>
                     <footer>
-                      {index.searchable ? <Link href={searchLaunchHref(`index=${index.name} | sort -_time`)} aria-label={`Search index ${index.name}`}>Search index</Link> : <span className="dataset-action-unavailable">Search unavailable</span>}
+                      {index.searchable ? <Link href={searchLaunchHref(boundedIndexSearchQuery(index.name))} aria-label={`Search index ${index.name}`}>Search index</Link> : <span className="dataset-action-unavailable">Search unavailable</span>}
                       {index.searchable ? <Link href={searchLaunchHref(`index=${index.name} | stats count by sourcetype | sort -count`)} aria-label={`Explore source types in index ${index.name}`}>Explore source types</Link> : null}
                       <button type="button" aria-pressed={observedIndexId === index.id} aria-label={`${observedIndexId === index.id ? "Hide" : "Inspect"} profile for index ${index.name}`} onClick={() => toggleObservedIndex(index.id)}>{observedIndexId === index.id ? "Hide profile" : "Inspect profile"}</button>
                     </footer>
@@ -272,13 +273,13 @@ export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsolePro
             </div>
           ) : (
             <section className="suite-card">
-              <div className="responsive-table-wrap">
-                <table className="product-table">
+              <div className="table-wrap">
+                <table className="table">
                   <caption className="sr-only">Authorized datasets</caption>
                   <thead><tr><th scope="col">Index</th><th scope="col">State</th><th scope="col">Search access</th><th scope="col">Ingestion access</th><th scope="col">Retention</th><th scope="col">Default source type</th><th scope="col"><span className="sr-only">Action</span></th></tr></thead>
                   <tbody>{visible.map((index) => {
                     const detail = definitions.get(index.id);
-                    return <tr key={index.id}><td><strong>{index.displayName}</strong><small className="table-secondary">index={index.name}</small></td><td>{stateLabel(index)}</td><td>{accessLabel(index.searchAccess)}</td><td>{accessLabel(index.ingestionAccess)}</td><td>{detail === undefined ? "Not available" : retentionLabel(detail)}</td><td>{detail === undefined ? "Not available" : detail.definition?.defaultSourcetype || "Not set"}</td><td><div className="row-actions">{index.searchable ? <Link className="table-action" href={searchLaunchHref(`index=${index.name} | sort -_time`)} aria-label={`Search index ${index.name}`}>Search <AppIcon name="chevron-right" size="xs" /></Link> : "Unavailable"}<button className="table-action" type="button" aria-pressed={observedIndexId === index.id} aria-label={`${observedIndexId === index.id ? "Hide" : "Inspect"} profile for index ${index.name}`} onClick={() => toggleObservedIndex(index.id)}>{observedIndexId === index.id ? "Hide profile" : "Profile"}</button></div></td></tr>;
+                    return <tr key={index.id}><td><strong>{index.displayName}</strong><small className="table-secondary">index={index.name}</small></td><td>{stateLabel(index)}</td><td>{accessLabel(index.searchAccess)}</td><td>{accessLabel(index.ingestionAccess)}</td><td>{detail === undefined ? "Not available" : retentionLabel(detail)}</td><td>{detail === undefined ? "Not available" : detail.definition?.defaultSourcetype || "Not set"}</td><td><div className="row-actions">{index.searchable ? <Link className="table-action" href={searchLaunchHref(boundedIndexSearchQuery(index.name))} aria-label={`Search index ${index.name}`}>Search <AppIcon name="chevron-right" size="xs" /></Link> : "Unavailable"}<button className="table-action" type="button" aria-pressed={observedIndexId === index.id} aria-label={`${observedIndexId === index.id ? "Hide" : "Inspect"} profile for index ${index.name}`} onClick={() => toggleObservedIndex(index.id)}>{observedIndexId === index.id ? "Hide profile" : "Profile"}</button></div></td></tr>;
                   })}</tbody>
                 </table>
               </div>

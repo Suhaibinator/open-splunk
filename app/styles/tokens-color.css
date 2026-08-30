@@ -1,0 +1,325 @@
+/*
+ * Colour tokens for the whole application.
+ *
+ * Two tiers, and the boundary between them is the point of the file:
+ *
+ *   Tier 1 -- primitive palette. Raw hex, named after the hue and a lightness
+ *   step. Nothing outside this file may read a primitive: they exist only so a
+ *   tier 2 token has something to point at. Their steps were derived from the
+ *   literal inventory the refactor started from, so every colour the product
+ *   actually used lands within ~24 RGB units of a step.
+ *
+ *   Tier 2 -- semantic tokens. Named after the *role* a colour plays, never
+ *   after the colour itself. These are the only names components, the
+ *   application stylesheets, and the CSS modules may use, which is what makes a
+ *   theme a one-file edit.
+ *
+ * A theme therefore restates tier 2 and leaves tier 1 alone: see the
+ * `:root[data-theme="dark"]` block at the bottom, and docs/theming.md.
+ *
+ * The pre-refactor alias block that kept names like `--surface` and `--text`
+ * alive through the migration is gone: every call site now reads a role, so the
+ * aliases had no consumers left and keeping them would have invited new ones.
+ * docs/theming.md maps each retired name onto the role that replaced it.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* Tier 1 -- primitive palette. Never referenced outside this file. */
+
+  /* Gray: the cool neutral ramp the product's chrome, text, and rules are built from. */
+  --gray-0: #ffffff; /* Paper white: the raised surface every panel and table sits on. */
+  --gray-50: #fbfbfa; /* Barely-off white. */
+  --gray-100: #f6f6f4; /* Warm page ground. */
+  --gray-150: #f2f3f3; /* Recessed strip: toolbars, table headers. */
+  --gray-200: #e6eaec; /* Lightest usable divider. */
+  --gray-250: #dee3e5; /* Divider on a white surface. */
+  --gray-300: #cfd4d7; /* Default control and panel border. */
+  --gray-400: #aeb6bb; /* Emphasised border; disabled control edge. */
+  --gray-450: #9ba8ae; /* Placeholder and disabled glyph. */
+  --gray-500: #89949b; /* Faintest legible body text. */
+  --gray-550: #748188; /* Neutral badge and icon fill. */
+  --gray-600: #64717a; /* Secondary body text. */
+  --gray-650: #52616a; /* Secondary text on a tinted ground. */
+  --gray-700: #43525a; /* Dark neutral fill. */
+  --gray-750: #34454e; /* Dark panel ground. */
+  --gray-800: #28343d; /* Primary body text. */
+  --gray-900: #19252d; /* Headings and emphasised text. */
+  --gray-950: #161b1f; /* Deepest neutral; inverted surfaces. */
+
+  /* Slate: the greyer, less blue neutral reserved for the two application bars. */
+  --slate-600: #4b535a; /* App-bar hover. */
+  --slate-700: #3f464c; /* App bar. */
+  --slate-900: #1e252b; /* Product bar. */
+
+  /* Green: the product's primary accent hue. */
+  --green-100: #e8f2e1; /* Accent wash. */
+  --green-200: #dbead2; /* Accent wash border. */
+  --green-300: #bdd5ae; /* Muted accent edge. */
+  --green-400: #88bd67; /* Light accent fill. */
+  --green-500: #69a343; /* Bright accent fill. */
+  --green-600: #5f9c3a; /* Mid accent fill; the info severity swatch. */
+  --green-700: #477f2b; /* Primary accent. */
+  --green-800: #376a20; /* Pressed and hovered accent. */
+
+  /* Blue: informational hue, links, focus, and selection. */
+  --blue-100: #e8f3f9; /* Informational wash. */
+  --blue-200: #cfe2ec; /* Informational wash border. */
+  --blue-300: #b8ceda; /* Muted informational edge. */
+  --blue-400: #5290b0; /* Light informational fill; the debug severity swatch. */
+  --blue-450: #2f8ac1; /* Saturated interaction blue: focus rings. */
+  --blue-500: #3b88ad; /* Mid informational fill. */
+  --blue-600: #2878a8; /* Primary informational colour and link text. */
+  --blue-700: #256e96; /* Pressed informational colour. */
+  --blue-800: #175d81; /* Deepest informational colour. */
+
+  /* Amber: caution and highlight hue. */
+  --amber-50: #fff8e9; /* Warning wash. */
+  --amber-100: #fff0df; /* Warmer warning wash. */
+  --amber-200: #fff1a8; /* Search-term highlight yellow. */
+  --amber-300: #e5c795; /* Warning wash border. */
+  --amber-400: #dda229; /* The warn severity swatch. */
+  --amber-500: #d2a600; /* Saturated gold. */
+  --amber-600: #a87300; /* Warning text and icon fill legible on a light ground. */
+  --amber-700: #795817; /* Deep warning text. */
+
+  /* Orange: the warmer caution hue used for in-progress and throttled states. */
+  --orange-400: #d97a23; /* Primary orange. */
+  --orange-500: #c07823; /* Pressed orange. */
+  --orange-600: #aa5f18; /* Deep orange, legible as small ink on a light ground. */
+
+  /* Red: error and destructive hue. */
+  --red-100: #fff0ee; /* Error wash. */
+  --red-200: #f8e3e1; /* Error wash border. */
+  --red-300: #dba39f; /* Muted error edge. */
+  --red-400: #c84f48; /* The error severity swatch. */
+  --red-500: #c93c37; /* Primary error colour. */
+  --red-600: #b23b36; /* Pressed error colour. */
+  --red-700: #8f2f2b; /* Deep error text. */
+
+  /* Purple: categorical only; the product assigns it no state. */
+  --purple-100: #efeaf6; /* Purple wash. */
+  --purple-500: #8b67a8; /* Mid purple. */
+  --purple-550: #a14b96; /* Magenta-leaning purple. */
+  --purple-600: #6d4b9f; /* Deep purple. */
+
+  /* Extended categorical hues: only the chart series ramp reaches these. */
+  --brown-400: #a57835; /* Categorical brown, light. */
+  --brown-500: #8a6d55; /* Categorical brown. */
+  --indigo-500: #6f7fb5; /* Categorical indigo. */
+  --olive-500: #708f37; /* Categorical olive. */
+  --pink-500: #c76594; /* Categorical pink. */
+  --teal-500: #4d9a8a; /* Categorical teal. */
+  --teal-600: #4f8f6f; /* Categorical green-teal. */
+
+  /* Tier 2 -- semantic tokens. The only names the rest of the code may read. */
+
+  /* Backgrounds. */
+  --bg-canvas: var(--gray-100); /* The page behind every panel. */
+  --bg-surface: var(--gray-0); /* Panels, cards, tables, dialogs. */
+  --bg-subtle: var(--gray-150); /* Recessed strips inside a surface: toolbars, table headers. */
+  --bg-raised: var(--gray-50); /* A surface lifted off the canvas: menus, popovers. */
+  --bg-inverse: var(--gray-950); /* Surfaces that carry inverted text. */
+
+  /* Foregrounds. */
+  --fg-text: var(--gray-800); /* Body text. */
+  --fg-strong: var(--gray-900); /* Headings and emphasised text. */
+  --fg-secondary: var(--gray-700); /* Ink one step lighter than body text: table cells, sub-headings. */
+  --fg-muted: var(--gray-600); /* Secondary text: captions, metadata, help. */
+  --fg-faint: var(--gray-500); /* Tertiary text: placeholders, disabled labels. */
+  --fg-inverse: var(--gray-0); /* Text on --bg-inverse. */
+  --fg-inverse-muted: var(--gray-400); /* Secondary text on --bg-inverse. */
+  --fg-link: var(--blue-600); /* Anchor text. */
+
+  /* Borders. */
+  --border: var(--gray-300); /* Default rule between and around surfaces. */
+  --border-subtle: var(--gray-200); /* Faint divider between rows inside one surface. */
+  --border-strong: var(--gray-400); /* Emphasised rule: active control edges, dividers under load. */
+  --border-focus: var(--blue-450); /* Edge of a control that holds keyboard focus. */
+
+  /* Accent: the product's primary action colour. */
+  --accent: var(--green-700); /* Primary buttons, active tabs, progress. */
+  --accent-hover: var(--green-800); /* Hovered and pressed accent. */
+  --accent-bright: var(--green-500); /* Saturated accent fill: progress bars, timeline columns. */
+  --accent-inverse: var(--green-400); /* The accent on --bg-inverse, one step lighter so it clears a dark ground. */
+  --accent-soft: var(--green-100); /* Accent-tinted background wash. */
+  --accent-alt: var(--purple-600); /* Second decorative accent, carrying no status meaning. */
+  --accent-alt-soft: var(--purple-100); /* Second decorative accent, as a background wash. */
+
+  /* Status: one hue per outcome, each with a background wash. */
+  --status-success: var(--green-700); /* Succeeded. */
+  --status-success-edge: var(--green-300); /* Succeeded, as the border around its own wash. */
+  --status-success-soft: var(--green-100); /* Succeeded, as a background wash. */
+  --status-success-strong: var(--green-800); /* Succeeded, as ink on its own wash. */
+  --status-info: var(--blue-600); /* Informational. */
+  --status-info-edge: var(--blue-300); /* Informational, as the border around its own wash. */
+  --status-info-soft: var(--blue-100); /* Informational, as a background wash. */
+  --status-info-strong: var(--blue-800); /* Informational, as ink on its own wash. */
+  --status-warning: var(--amber-600); /* Needs attention. */
+  --status-warning-bright: var(--amber-400); /* Needs attention, as a filled dot or glyph ground. */
+  --status-warning-edge: var(--amber-300); /* Needs attention, as the border around its own wash. */
+  --status-warning-soft: var(--amber-50); /* Needs attention, as a background wash. */
+  --status-warning-strong: var(--amber-700); /* Needs attention, as ink on its own wash. */
+  --status-error: var(--red-500); /* Failed. */
+  --status-error-edge: var(--red-300); /* Failed, as the border around its own wash. */
+  --status-error-soft: var(--red-100); /* Failed, as a background wash. */
+  --status-error-strong: var(--red-700); /* Failed, as ink on its own wash. */
+  --status-neutral: var(--gray-550); /* No outcome yet, or not applicable. */
+  --status-neutral-edge: var(--gray-400); /* No outcome yet, as the border around its own wash. */
+  --status-neutral-soft: var(--gray-150); /* No outcome yet, as a background wash. */
+  --status-progress: var(--orange-500); /* Work in flight: running, throttled, quarantined. */
+
+  /* Event severity: the four levels the log data itself carries. */
+  --level-info: var(--green-600); /* info events. */
+  --level-warn: var(--amber-400); /* warn events. */
+  --level-error: var(--red-400); /* error events. */
+  --level-debug: var(--blue-400); /* debug events. */
+
+  /* Chart series: the categorical ramp, in assignment order. Hue-ordered, not theme-dependent. */
+  --chart-series-1: var(--green-600); /* Series 1. */
+  --chart-series-2: var(--blue-600); /* Series 2. */
+  --chart-series-3: var(--amber-400); /* Series 3. */
+  --chart-series-4: var(--purple-500); /* Series 4. */
+  --chart-series-5: var(--red-400); /* Series 5. */
+  --chart-series-6: var(--teal-500); /* Series 6. */
+  --chart-series-7: var(--pink-500); /* Series 7. */
+  --chart-series-8: var(--indigo-500); /* Series 8. */
+  --chart-series-9: var(--brown-400); /* Series 9. */
+  --chart-series-10: var(--teal-600); /* Series 10. */
+  --chart-series-11: var(--brown-500); /* Series 11. */
+  --chart-series-12: var(--olive-500); /* Series 12. */
+  --chart-neutral: var(--gray-400); /* The uncategorised remainder slice of a categorical chart. */
+
+  /* SPL syntax: the categorical inks the editor paints a parsed query with.
+     Categorical like --chart-series-*, but a second family rather than a reuse
+     of it, because reordering a chart's ramp must not recolour a query. */
+  --syntax-pipe: var(--purple-550); /* The pipe between two commands. */
+  --syntax-command: var(--purple-600); /* A search command name. */
+  --syntax-function: var(--orange-600); /* An eval or stats function name. */
+  --syntax-field: var(--blue-600); /* A field name. */
+  --syntax-string: var(--green-700); /* A quoted string. */
+  --syntax-literal: var(--red-600); /* A boolean, an operator, a bare literal. */
+
+  /* Application chrome: the two persistent bars above the page. */
+  --chrome-bar: var(--slate-900); /* Product bar, the topmost strip. */
+  --chrome-appbar: var(--slate-700); /* App bar, the navigation strip below it. */
+  --chrome-hover: var(--slate-600); /* Hovered or open item in either bar. */
+  --chrome-fg: var(--gray-0); /* Text and icons on either bar. */
+  --chrome-fg-muted: var(--gray-300); /* Secondary text and icons on either bar. */
+  --chrome-fg-faint: var(--gray-400); /* Tertiary text and icons on either bar. */
+
+  /* Interaction. */
+  --highlight: var(--amber-200); /* Matched search term inside a result. */
+  --selection: var(--blue-100); /* Selected row or range. */
+  --focus-ring: var(--blue-450); /* Focus outline drawn outside a control. */
+}
+
+/*
+ * Dark theme -- a first cut, restating tier 2 only.
+ *
+ * Nothing sets `data-theme` yet, so this block cannot affect the shipped light
+ * render; it exists to prove the two-tier split holds, and to give the toggle a
+ * target when one is added. Backgrounds and foregrounds swap ends of the gray
+ * ramp; hues move one or two steps lighter so they keep contrast against a dark
+ * ground, and every "soft" wash becomes a dark tint rather than a pale one. The
+ * categorical chart ramp is deliberately not restated: those twelve hues are
+ * chosen to separate from each other, not from the background.
+ *
+ * `--fg-inverse` and `--chrome-fg` are two roles rather than one for the sake
+ * of this block: the inverse surface flips with the theme, while the two chrome
+ * bars stay dark in both. A single token would have to be light for the bars and
+ * dark for the inverse surface at the same time, and here that resolved to bar
+ * labels painted in the bar's own colour.
+ */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Backgrounds. */
+  --bg-canvas: var(--gray-950); /* The page behind every panel. */
+  --bg-surface: var(--gray-900); /* Panels, cards, tables, dialogs. */
+  --bg-subtle: var(--gray-800); /* Recessed strips inside a surface. */
+  --bg-raised: var(--gray-750); /* A surface lifted off the canvas. */
+  --bg-inverse: var(--gray-50); /* Surfaces that carry inverted text. */
+
+  /* Foregrounds. */
+  --fg-text: var(--gray-200); /* Body text. */
+  --fg-strong: var(--gray-50); /* Headings and emphasised text. */
+  --fg-secondary: var(--gray-300); /* Ink one step lighter than body text. */
+  --fg-muted: var(--gray-450); /* Secondary text. */
+  --fg-faint: var(--gray-550); /* Tertiary text. */
+  --fg-inverse: var(--gray-950); /* Text on --bg-inverse. */
+  --fg-inverse-muted: var(--gray-600); /* Secondary text on --bg-inverse. */
+  --fg-link: var(--blue-300); /* Anchor text. */
+
+  /* Borders. */
+  --border: var(--gray-700); /* Default rule. */
+  --border-subtle: var(--gray-750); /* Faint divider inside one surface. */
+  --border-strong: var(--gray-650); /* Emphasised rule. */
+  --border-focus: var(--blue-200); /* Focused control edge. */
+
+  /* Accent. */
+  --accent: var(--green-500); /* Primary action colour. */
+  --accent-hover: var(--green-400); /* Hovered and pressed accent. */
+  --accent-bright: var(--green-300); /* Saturated accent fill. */
+  --accent-inverse: var(--green-600); /* The accent on --bg-inverse, which is a light surface here. */
+  --accent-soft: var(--green-800); /* Accent-tinted background wash. */
+  --accent-alt: var(--purple-500); /* Second decorative accent. */
+  --accent-alt-soft: var(--purple-600); /* Second decorative accent, as a background wash. */
+
+  /* Status. */
+  --status-success: var(--green-500); /* Succeeded. */
+  --status-success-edge: var(--green-700); /* Succeeded, as the border around its own wash. */
+  --status-success-soft: var(--green-800); /* Succeeded, as a background wash. */
+  --status-success-strong: var(--green-200); /* Succeeded, as ink on its own wash. */
+  --status-info: var(--blue-400); /* Informational. */
+  --status-info-edge: var(--blue-600); /* Informational, as the border around its own wash. */
+  --status-info-soft: var(--blue-800); /* Informational, as a background wash. */
+  --status-info-strong: var(--blue-200); /* Informational, as ink on its own wash. */
+  --status-warning: var(--amber-400); /* Needs attention. */
+  --status-warning-bright: var(--amber-300); /* Needs attention, as a filled dot or glyph ground. */
+  --status-warning-edge: var(--amber-600); /* Needs attention, as the border around its own wash. */
+  --status-warning-soft: var(--amber-700); /* Needs attention, as a background wash. */
+  --status-warning-strong: var(--amber-200); /* Needs attention, as ink on its own wash. */
+  --status-error: var(--red-400); /* Failed. */
+  --status-error-edge: var(--red-600); /* Failed, as the border around its own wash. */
+  --status-error-soft: var(--red-700); /* Failed, as a background wash. */
+  --status-error-strong: var(--red-200); /* Failed, as ink on its own wash. */
+  --status-neutral: var(--gray-450); /* No outcome yet. */
+  --status-neutral-edge: var(--gray-650); /* No outcome yet, as the border around its own wash. */
+  --status-neutral-soft: var(--gray-700); /* No outcome yet, as a background wash. */
+  --status-progress: var(--orange-400); /* Work in flight: running, throttled, quarantined. */
+
+  /* Event severity: the four swatches move up to the -300 tier together, so a
+     level reads as the same hue it does in the light theme without sinking
+     into the dark ground. */
+  --level-info: var(--green-300); /* info events. */
+  --level-warn: var(--amber-300); /* warn events. */
+  --level-error: var(--red-300); /* error events. */
+  --level-debug: var(--blue-300); /* debug events. */
+
+  /* SPL syntax: the ramp lightens by one step so a query keeps its hues
+     against a dark editor without any of them dropping out of it. */
+  --syntax-pipe: var(--pink-500); /* The pipe between two commands. */
+  --syntax-command: var(--purple-500); /* A search command name. */
+  --syntax-function: var(--orange-400); /* An eval or stats function name. */
+  --syntax-field: var(--blue-400); /* A field name. */
+  --syntax-string: var(--green-500); /* A quoted string. */
+  --syntax-literal: var(--red-400); /* A boolean, an operator, a bare literal. */
+
+  /* Application chrome. */
+  --chrome-bar: var(--gray-950); /* Product bar. */
+  --chrome-appbar: var(--gray-900); /* App bar. */
+  --chrome-hover: var(--gray-800); /* Hovered or open bar item. */
+  --chrome-fg: var(--gray-200); /* Text and icons on either bar. */
+  --chrome-fg-muted: var(--gray-450); /* Secondary text and icons on either bar. */
+  --chrome-fg-faint: var(--gray-550); /* Tertiary text and icons on either bar. */
+
+  /* Interaction. */
+  --highlight: var(--amber-600); /* Matched search term inside a result. */
+  --selection: var(--blue-800); /* Selected row or range. */
+  --focus-ring: var(--blue-200); /* Focus outline. */
+
+  /* The uncategorised chart slice is a neutral, so unlike the ramp it moves. */
+  --chart-neutral: var(--gray-600); /* The uncategorised remainder slice. */
+}

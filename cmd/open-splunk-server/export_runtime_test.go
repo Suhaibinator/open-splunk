@@ -3,11 +3,13 @@ package main
 import (
 	"bytes"
 	"errors"
-	"log"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 func TestDefaultExportRuntimeSettingsKeepAllBoundariesAligned(t *testing.T) {
@@ -67,7 +69,13 @@ func TestExportRuntimeCarriesCleanupReporterAndUsesPathFreeLogMessage(t *testing
 		t.Fatal("configured cleanup reporter was not invoked")
 	}
 	var output bytes.Buffer
-	newExportCleanupErrorReporter(log.New(&output, "", 0))(cleanupFailure)
+	encoderConfig := zap.NewProductionEncoderConfig()
+	logger := zap.New(zapcore.NewCore(
+		zapcore.NewJSONEncoder(encoderConfig),
+		zapcore.AddSync(&output),
+		zap.DebugLevel,
+	))
+	newExportCleanupErrorReporter(logger)(cleanupFailure)
 	logged := output.String()
 	if logged == "" || strings.Contains(logged, "secret") || strings.Contains(logged, "/private") ||
 		strings.Count(logged, "\n") != 1 {

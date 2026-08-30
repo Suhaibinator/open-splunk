@@ -1,0 +1,429 @@
+/* Search-workspace dialogs.
+ *
+ * Colocated with app/search-workspace/components/workspace-dialogs.tsx and
+ * loaded through app/styles/index.css. Every class is prefixed
+ * `workspace-dialog-`, which is what replaces the scoping a CSS module used to
+ * supply: the prefix is the namespace, and it is visible in the DOM instead of
+ * being a build-time hash.
+ *
+ * Each section carries its own responsive overrides at the end of the section,
+ * largest breakpoint first, so a rule and the widths that change it are read
+ * together rather than at opposite ends of the file. */
+
+/* Dialog notices */
+.workspace-dialog-action-error {
+  background: var(--status-error-soft);
+  border: 1px solid var(--status-error-edge);
+  color: var(--status-error-strong);
+  font-size: var(--type-sm);
+  line-height: 1.45;
+  margin: 0 0 var(--space-3);
+  padding: 9px 11px;
+}
+
+.workspace-dialog-inspector-notices {
+  background: var(--status-warning-soft);
+  border: 1px solid var(--status-warning-edge);
+  color: var(--status-warning-strong);
+  font-size: var(--type-xs);
+  padding: 10px var(--space-3);
+}
+
+.workspace-dialog-inspector-notices ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+/* Export dialog */
+.workspace-dialog-export-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.workspace-dialog-export-progress progress {
+  accent-color: var(--accent);
+  height: 7px;
+  width: 100%;
+}
+
+.workspace-dialog-export-progress span {
+  color: var(--fg-muted);
+  font-size: var(--type-sm);
+}
+
+.workspace-dialog-export-progress small {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  line-height: 1.4;
+}
+
+.workspace-dialog-export-actions {
+  align-items: center;
+  display: flex;
+  gap: var(--space-2);
+  justify-content: flex-end;
+  width: 100%;
+}
+
+.workspace-dialog-export-actions button {
+  align-items: center;
+  display: inline-flex;
+  gap: 7px;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+.workspace-dialog-clipboard-hint {
+  align-items: center;
+  color: var(--fg-muted);
+  display: flex;
+  font-size: var(--type-xs);
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.workspace-dialog-export-summary {
+  background: var(--bg-canvas);
+  border: 1px solid var(--status-success-edge);
+  border-left: 4px solid var(--accent);
+}
+
+.workspace-dialog-export-summary--warning {
+  background: var(--status-warning-soft);
+  border-color: var(--status-warning-edge);
+  border-left-color: var(--status-warning);
+}
+
+.workspace-dialog-export-summary--error {
+  background: var(--status-error-soft);
+  border-color: var(--status-error-edge);
+  border-left-color: var(--status-error);
+}
+
+.workspace-dialog-export-summary > header {
+  align-items: flex-start;
+  display: flex;
+  gap: 10px;
+  padding: var(--space-3);
+}
+
+.workspace-dialog-export-summary h3 {
+  color: var(--accent-hover);
+  font-size: var(--type-md);
+  margin: 1px 0 3px;
+}
+
+.workspace-dialog-export-summary--warning h3 { color: var(--status-warning-strong); }
+.workspace-dialog-export-summary--error h3 { color: var(--status-error-strong); }
+
+.workspace-dialog-export-summary p {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  line-height: 1.45;
+  margin: 0;
+}
+
+.workspace-dialog-export-summary dl {
+  border-top: 1px solid var(--border);
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+}
+
+.workspace-dialog-export-summary dl > div {
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: 10px var(--space-3);
+}
+
+.workspace-dialog-export-summary dl > div:nth-child(3n),
+.workspace-dialog-export-summary dl > div:last-child {
+  border-right: 0;
+}
+
+.workspace-dialog-export-summary dt {
+  color: var(--fg-muted);
+  font-size: var(--type-xxs);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.workspace-dialog-export-summary dd {
+  color: var(--fg-text);
+  font-size: var(--type-sm);
+  font-weight: 600;
+  margin: 0;
+  min-width: 0;
+}
+
+.workspace-dialog-export-summary .workspace-dialog-export-file-row,
+.workspace-dialog-export-summary .workspace-dialog-export-columns-row {
+  border-right: 0;
+  grid-column: 1 / -1;
+}
+
+.workspace-dialog-export-file-row code,
+.workspace-dialog-export-columns-row code {
+  font-size: var(--type-xs);
+  font-weight: 400;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.workspace-dialog-export-columns-row dd {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+@media (max-width: 480px) {
+  .workspace-dialog-export-actions {
+    align-items: stretch;
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .workspace-dialog-export-actions button { min-height: 44px; width: 100%; }
+
+  .workspace-dialog-export-summary dl { grid-template-columns: 1fr; }
+  .workspace-dialog-export-summary dl > div { border-right: 0; }
+}
+
+/* Capability-gated settings rows */
+.workspace-dialog-capability-notice {
+  background: var(--bg-canvas);
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: 11px var(--space-3);
+}
+
+.workspace-dialog-capability-notice strong {
+  color: var(--fg-secondary);
+  font-size: var(--type-sm);
+}
+
+.workspace-dialog-capability-notice span {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  line-height: 1.45;
+}
+
+/* `.settings-list` is the shared settings primitive this control sits inside.
+   Naming it directly is a plain descendant selector now that both stylesheets
+   live in one namespace; it used to need a `:global()` escape hatch. */
+.settings-list label > .workspace-dialog-capability-control {
+  align-items: flex-end;
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: row;
+  gap: 9px;
+}
+
+.workspace-dialog-capability-control small {
+  margin: 0;
+}
+
+.workspace-dialog-unavailable-setting {
+  background: var(--bg-raised);
+}
+
+.workspace-dialog-unavailable-setting > span:first-child {
+  opacity: 0.78;
+}
+
+.settings-list .workspace-dialog-setting-error {
+  color: var(--status-error-strong);
+  font-size: var(--type-xs);
+}
+
+@media (max-width: 480px) {
+  .settings-list label > .workspace-dialog-capability-control {
+    align-items: center;
+  }
+}
+
+/* Search history table */
+.workspace-dialog-history-scroll {
+  border: 1px solid var(--border);
+}
+
+/* The table, its header, its hover and its card mode are the global .table
+   family; this file carries only the column plan. */
+.workspace-dialog-history-table {
+  min-width: 860px;
+}
+
+.workspace-dialog-history-table th:nth-child(1) { width: 34%; }
+.workspace-dialog-history-table th:nth-child(2) { width: 10%; }
+.workspace-dialog-history-table th:nth-child(3) { width: 9%; }
+.workspace-dialog-history-table th:nth-child(4) { width: 9%; }
+.workspace-dialog-history-table th:nth-child(5) { width: 12%; }
+.workspace-dialog-history-table th:nth-child(6) { width: 26%; }
+
+.workspace-dialog-history-table td code {
+  display: block;
+  font-size: var(--type-xs);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-dialog-history-meta {
+  color: var(--fg-faint);
+  display: block;
+  font-size: var(--type-xxs);
+  line-height: 1.35;
+  margin-top: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-dialog-numeric-cell {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.workspace-dialog-history-row-actions {
+  width: 100%;
+}
+
+.workspace-dialog-load-more-row {
+  display: flex;
+  justify-content: center;
+  padding: var(--space-3) 0 2px;
+}
+
+@media (max-width: 760px) {
+  .workspace-dialog-history-scroll {
+    border: 0;
+    overflow: visible;
+  }
+
+  /* Card cells read as a label above a value, so the numeric column stops
+     hugging the right edge. */
+  .workspace-dialog-numeric-cell {
+    text-align: left;
+  }
+
+  .workspace-dialog-history-table td code,
+  .workspace-dialog-history-meta {
+    overflow: visible;
+    overflow-wrap: anywhere;
+    text-overflow: clip;
+    white-space: normal;
+  }
+
+  .workspace-dialog-history-row-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .workspace-dialog-history-row-actions > button {
+    min-height: 44px;
+  }
+}
+
+@media (pointer: coarse) {
+  .workspace-dialog-saved-row-icon-button {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
+/* Job and knowledge inspection */
+.workspace-dialog-inspection-block {
+  grid-column: 1 / -1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.workspace-dialog-inspection-grid {
+  max-width: 100%;
+  min-width: 0;
+  width: 100%;
+}
+
+.workspace-dialog-inspection-grid > * {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.workspace-dialog-inspection-block li {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.workspace-dialog-inspection-query,
+.workspace-dialog-inspection-query code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.workspace-dialog-inspection-annotations {
+  display: grid;
+  font-size: var(--type-xxs);
+  gap: 2px;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+}
+
+.workspace-dialog-knowledge-inspection {
+  background: var(--bg-canvas);
+  border-bottom: 1px solid var(--border);
+  grid-column: 1 / -1;
+  padding: 11px var(--space-3);
+}
+
+.workspace-dialog-knowledge-inspection h3 {
+  font-size: var(--type-sm);
+  margin: 0 0 7px;
+}
+
+.workspace-dialog-knowledge-inspection p {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  margin: 6px 0 0;
+}
+
+.workspace-dialog-knowledge-inspection dl {
+  display: grid;
+  font-size: var(--type-xs);
+  gap: var(--space-1) 10px;
+  grid-template-columns: max-content minmax(0, 1fr);
+  margin: 0;
+}
+
+.workspace-dialog-knowledge-inspection dt {
+  color: var(--fg-muted);
+  font-weight: 700;
+}
+
+.workspace-dialog-knowledge-inspection dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.workspace-dialog-knowledge-inspection ol {
+  font-size: var(--type-xs);
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-5);
+}
+
+@media (max-width: 480px) {
+  .workspace-dialog-knowledge-inspection dl {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace-dialog-knowledge-inspection dd {
+    margin-bottom: 3px;
+  }
+}

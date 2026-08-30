@@ -3,8 +3,7 @@
 //
 // # Subcommands
 //
-//	open-splunk-collector [run] [-config PATH] [-log-level LEVEL]
-//	                                                 start the collector (default)
+//	open-splunk-collector [run] [-config PATH]  start the collector (default)
 //	open-splunk-collector validate [-config PATH]  check the config and exit
 //	open-splunk-collector identity [-config PATH]  initialize and print the stable ID
 //	open-splunk-collector version                  print the compiled build identity
@@ -33,16 +32,16 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 
 	"github.com/Suhaibinator/open-splunk/internal/buildinfo"
 	"github.com/Suhaibinator/open-splunk/internal/collector"
 	"github.com/Suhaibinator/open-splunk/internal/collector/config"
+	"github.com/Suhaibinator/open-splunk/internal/logging"
+	"go.uber.org/zap"
 )
 
 // defaultConfigPath is used when -config is not supplied.
@@ -138,7 +137,6 @@ func writeBuildIdentity(output io.Writer) error {
 func runCollector(args []string) int {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	path := fs.String("config", defaultConfigPath, "path to the collector configuration file")
-	logLevelText := fs.String("log-level", "info", "log level: debug, info, warn, or error")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -147,22 +145,42 @@ func runCollector(args []string) int {
 		return 2
 	}
 
-	logLevel, err := parseLogLevel(*logLevelText)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 2
-	}
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel}))
-
 	cfg, err := config.Load(*path)
 	if err != nil {
-		logger.Error("load config", "error", err.Error())
+		fmt.Fprintf(os.Stderr, "load configuration: %v\n", err)
 		return 1
 	}
+	logLevel, err := logging.ParseLevel(cfg.Logging.Level)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "configure logging: %v\n", err)
+		return 1
+	}
+	logFormat, err := logging.ParseFormat(cfg.Logging.Format)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "configure logging: %v\n", err)
+		return 1
+	}
+	logger, err := logging.New(logging.Config{
+		Service: "open-splunk-collector",
+		Level:   logLevel,
+		Format:  logFormat,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "configure logging: %v\n", err)
+		return 1
+	}
+	// Flushing the process logger is best effort. A sink that refuses to
+	// flush is reported on stderr but must not turn a clean collector run
+	// into a failure.
+	defer func() {
+		if err := logging.Sync(logger); err != nil {
+			fmt.Fprintf(os.Stderr, "sync logger: %v\n", err)
+		}
+	}()
 
 	daemon, err := collector.New(cfg, collector.WithLogger(logger))
 	if err != nil {
-		logger.Error("build collector", "error", err.Error())
+		logger.Error("build collector", zap.Error(err))
 		return 1
 	}
 
@@ -176,28 +194,13 @@ func runCollector(args []string) int {
 		stop()
 	}()
 
-	logger.Info("collector starting", "config", *path, "inputs", len(cfg.Inputs))
+	logger.Info("collector starting", zap.String("config", *path), zap.Int("inputs", len(cfg.Inputs)))
 	if err := daemon.Run(ctx); err != nil {
-		logger.Error("collector stopped with error", "error", err.Error())
+		logger.Error("collector stopped with error", zap.Error(err))
 		return 1
 	}
 	logger.Info("collector stopped cleanly")
 	return 0
-}
-
-func parseLogLevel(value string) (slog.Level, error) {
-	switch strings.ToLower(value) {
-	case "debug":
-		return slog.LevelDebug, nil
-	case "info":
-		return slog.LevelInfo, nil
-	case "warn":
-		return slog.LevelWarn, nil
-	case "error":
-		return slog.LevelError, nil
-	default:
-		return 0, fmt.Errorf("invalid log level %q: choose debug, info, warn, or error", value)
-	}
 }
 
 // validateConfig loads and validates the config, printing a redacted summary and
@@ -263,14 +266,12 @@ func usage(w io.Writer) {
 	fmt.Fprint(w, `open-splunk-collector: tail local logs and forward them to the Open Splunk server.
 
 usage:
-  open-splunk-collector [run] [-config PATH] [-log-level LEVEL]
-                                                   start the collector (default)
+  open-splunk-collector [run] [-config PATH]       start the collector (default)
   open-splunk-collector validate [-config PATH]    validate configuration and exit
   open-splunk-collector identity [-config PATH]    initialize and print stable ID
   open-splunk-collector version                    print the compiled build identity
 
 flags:
   -config PATH       configuration file (default `+defaultConfigPath+`)
-  -log-level LEVEL   run log level: debug, info, warn, or error (default info)
 `)
 }

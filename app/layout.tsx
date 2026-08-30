@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 
 import { OPEN_SPLUNK_SOURCE_REVISION } from "@/lib/build-identity";
 
-import "./globals.css";
+import "./styles/index.css";
 
 export const metadata: Metadata = {
   title: {
@@ -17,6 +17,9 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
+  // The browser paints its own chrome from this before any stylesheet loads, so
+  // it cannot read a custom property: this literal is the one place `--chrome-bar`
+  // (app/styles/tokens-color.css) has to be restated. Change both together.
   themeColor: "#1e252b",
 };
 

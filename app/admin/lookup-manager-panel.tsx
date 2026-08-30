@@ -24,9 +24,10 @@ import { isOptionalRouteUnavailable } from "@/lib/api";
 import { createErrorMessage } from "@/lib/error-message";
 
 import { BackendResourceState } from "../_components/backend-resource-state";
+import { StatusLabel } from "../_components/status";
 import { AppIcon } from "../_components/app-icon";
 import { formatMediumDateTime } from "../_components/date-format";
-import { Modal } from "../search-workspace/modal";
+import { Modal } from "../_components/modal";
 import { joinedPatterns, lines } from "./knowledge-lookup-text";
 import type { KnowledgeManagerAppOption } from "./knowledge-manager-feature";
 import {
@@ -560,7 +561,7 @@ export function LookupManagerPanel({
           <p>Publish bounded immutable CSV versions for exact SPL and automatic enrichment.</p>
         </div>
         <button
-          className="suite-button suite-button--primary"
+          className="button button--primary"
           type="button"
           disabled={state !== "available" || apps.length === 0 || busy}
           aria-describedby={state === "available" && apps.length === 0 ? "lookup-create-unavailable-reason" : undefined}
@@ -700,9 +701,9 @@ export function LookupManagerPanel({
           onClose={closeModal}
           footer={(
             <>
-              <button className="button secondary" type="button" disabled={busy} onClick={closeModal}>Cancel</button>
+              <button className="button button--secondary" type="button" disabled={busy} onClick={closeModal}>Cancel</button>
               <button
-                className="button danger"
+                className="button button--danger"
                 type="submit"
                 form="delete-lookup-form"
                 disabled={busy || confirmation !== target.definition.name}
@@ -741,8 +742,8 @@ export function LookupManagerTable({
 }) {
   return (
     <div className="suite-card resource-table-card lookup-manager__table-card">
-      <div className="responsive-table-wrap">
-        <table className="product-table admin-resource-table lookup-manager__table">
+      <div className="table-wrap">
+        <table className="table admin-resource-table lookup-manager__table">
           <caption className="sr-only">Lookup tables</caption>
           <thead><tr><th scope="col">Lookup</th><th scope="col">Shape</th><th scope="col">Matching</th><th scope="col">State</th><th scope="col">Updated</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
           <tbody>{lookups.map((lookup) => {
@@ -758,7 +759,7 @@ export function LookupManagerTable({
                 </td>
                 <td>{lookup.rowCount.toLocaleString()} rows<small className="table-secondary">{lookup.columns.length.toLocaleString()} columns · {formatBytes(lookup.canonicalSizeBytes)}</small></td>
                 <td>{definition?.automatic ? "Automatic + explicit" : "Explicit only"}<small className="table-secondary">{definition?.keyMappings.length ?? 0} key · {definition?.outputMappings.length ?? 0} output</small></td>
-                <td><span className={`status-label status-label--${stateLabel === "Active" ? "complete" : "neutral"}`}><i />{stateLabel}</span></td>
+                <td><StatusLabel tone={stateLabel === "Active" ? "success" : "neutral"}>{stateLabel}</StatusLabel></td>
                 <td>{formatDate(lookup.updatedAt)}</td>
                 <td><div className="row-actions">
                   <button className="table-action" type="button" aria-label={`Replace lookup ${lookupName}`} disabled={busy || lookup.state === LookupState.LOOKUP_STATE_DELETED} onClick={() => onReplace(lookup)}>Replace</button>
@@ -903,7 +904,7 @@ function LookupEditor({
 
       <div className="lookup-manager__editor-actions">
         <p>{currentLookup === null ? "Create publishes version 1 only after the complete definition and CSV validate." : "Replace uses the current version as optimistic concurrency authority."}</p>
-        <button className="button primary" type="submit" disabled={busy || previewBusy || (preview !== null && preview.violations.length !== 0) || (currentLookup === null && csvData === undefined)}>{busy ? "Publishing…" : currentLookup === null ? "Create lookup" : "Publish replacement"}</button>
+        <button className="button button--primary" type="submit" disabled={busy || previewBusy || (preview !== null && preview.violations.length !== 0) || (currentLookup === null && csvData === undefined)}>{busy ? "Publishing…" : currentLookup === null ? "Create lookup" : "Publish replacement"}</button>
       </div>
     </form>
   );
@@ -927,8 +928,8 @@ export function LookupPreviewTable({ preview }: { preview: SafeLookupPreview }) 
         </ul>
       )}
       {preview.violations.length > 0 ? null : preview.rows.length === 0 ? <p className="lookup-manager__empty-preview">The CSV contains a header and no data rows.</p> : (
-        <div className="responsive-table-wrap">
-          <table className="product-table"><caption className="sr-only">Validated lookup CSV preview</caption><thead><tr>{preview.columns.map((column) => <th key={column} scope="col">{column}</th>)}</tr></thead><tbody>{keyedRows.map(({ key, value: row }) => <tr key={key}>{row.map((value, columnIndex) => <td key={preview.columns[columnIndex]}>{value === "" ? <i aria-label="empty string">empty</i> : value}</td>)}</tr>)}</tbody></table>
+        <div className="table-wrap">
+          <table className="table"><caption className="sr-only">Validated lookup CSV preview</caption><thead><tr>{preview.columns.map((column) => <th key={column} scope="col">{column}</th>)}</tr></thead><tbody>{keyedRows.map(({ key, value: row }) => <tr key={key}>{row.map((value, columnIndex) => <td key={preview.columns[columnIndex]}>{value === "" ? <i aria-label="empty string">empty</i> : value}</td>)}</tr>)}</tbody></table>
         </div>
       )}
     </section>

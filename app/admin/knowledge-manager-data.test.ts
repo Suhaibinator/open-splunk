@@ -1,6 +1,4 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import path from "node:path";
 import test from "node:test";
 
 import { createElement } from "react";
@@ -1343,29 +1341,6 @@ test("every knowledge mutation client response is streaming-bounded before decod
 function jsonWithoutBigInt(value: unknown): string {
   return JSON.stringify(value, (_key, item: unknown) =>
     typeof item === "bigint" ? item.toString() : item);
-}
-
-function mediaRuleBodies(css: string, condition: string): string[] {
-  const marker = `@media (${condition})`;
-  const bodies: string[] = [];
-  let cursor = 0;
-  while (cursor < css.length) {
-    const ruleStart = css.indexOf(marker, cursor);
-    if (ruleStart < 0) break;
-    const bodyStart = css.indexOf("{", ruleStart + marker.length);
-    assert.notEqual(bodyStart, -1, `missing body for ${marker}`);
-    let depth = 1;
-    let bodyEnd = bodyStart + 1;
-    while (bodyEnd < css.length && depth > 0) {
-      if (css[bodyEnd] === "{") depth += 1;
-      else if (css[bodyEnd] === "}") depth -= 1;
-      bodyEnd += 1;
-    }
-    assert.equal(depth, 0, `unterminated body for ${marker}`);
-    bodies.push(css.slice(bodyStart + 1, bodyEnd - 1));
-    cursor = bodyEnd;
-  }
-  return bodies;
 }
 
 test("feature-absent navigation is unchanged and invokes no knowledge chunk importer", async () => {
@@ -2791,45 +2766,4 @@ test("the available list and detail presentation expose no mutation control", ()
   assert.match(markup, /id="knowledge-object-detail-title"/);
   assert.match(markup, /aria-label="Close knowledge object details"/);
   assert.doesNotMatch(markup, />Create<|>Edit<|>Delete<|>Enable<|>Disable<|>Save</);
-});
-
-test("responsive and focus-visible styles cover filters and list/detail collapse", () => {
-  const css = readFileSync(path.join(process.cwd(), "app", "globals.css"), "utf8");
-  const compactBodies = mediaRuleBodies(css, "max-width: 980px");
-  const mobileBodies = mediaRuleBodies(css, "max-width: 760px");
-  const narrowBodies = mediaRuleBodies(css, "max-width: 480px");
-  assert.match(css, /\.knowledge-manager__filters \{[^}]*grid-template-columns: minmax\(170px, 1\.35fr\) repeat\(3, minmax\(125px, 1fr\)\);/);
-  assert.match(css, /\.knowledge-manager__advanced-filter-grid \{[^}]*grid-template-columns: repeat\(4, minmax\(125px, 1fr\)\);/);
-  assert.match(css, /\.knowledge-manager__filters label,\n\.knowledge-manager__advanced-filter-grid label \{/);
-  assert.match(css, /\.knowledge-manager__filters label > span,\n\.knowledge-manager__advanced-filter-grid label > span \{/);
-  assert.match(css, /\.knowledge-manager__filters select,\n\.knowledge-manager__advanced-filter-grid input,\n\.knowledge-manager__advanced-filter-grid select \{/);
-  assert.ok(compactBodies.some((body) => (
-    /\.knowledge-manager__filters \{ grid-template-columns: repeat\(2, minmax\(0, 1fr\)\); \}/.test(body)
-    && /\.knowledge-manager__advanced-filter-grid \{ grid-template-columns: repeat\(2, minmax\(0, 1fr\)\); \}/.test(body)
-    && /\.knowledge-manager__mutation-grid--selectors \{ grid-template-columns: repeat\(2, minmax\(0, 1fr\)\); \}/.test(body)
-    && /\.knowledge-manager__workspace--detail \{ grid-template-columns: 1fr; \}/.test(body)
-  )));
-  assert.ok(mobileBodies.some((body) => (
-    /\.knowledge-manager__row \{[^}]*grid-template-columns: minmax\(0, 1fr\) auto;/.test(body)
-    && /\.knowledge-manager__toolbar select,[\s\S]*?\.knowledge-manager__delete-confirmation input \{ font-size: 16px; height: 44px; \}/.test(body)
-    && /\.knowledge-manager__mutation-grid \{ grid-template-columns: 1fr; \}/.test(body)
-  )));
-  assert.ok(narrowBodies.some((body) => (
-    /\.knowledge-manager__filters \{ grid-template-columns: 1fr; \}/.test(body)
-    && /\.knowledge-manager__advanced-filter-grid \{ grid-template-columns: 1fr; \}/.test(body)
-    && /\.knowledge-manager__mutation-grid--selectors \{ grid-template-columns: 1fr; \}/.test(body)
-  )));
-  assert.match(css, /\.knowledge-manager button:focus-visible/);
-  assert.match(css, /\.knowledge-manager input:focus-visible/);
-  assert.match(css, /\.knowledge-manager select:focus-visible/);
-  assert.match(css, /\.knowledge-manager textarea:focus-visible/);
-  assert.match(css, /\.knowledge-manager__detail:focus-visible/);
-  assert.match(css, /\.knowledge-manager__relationship-list li \{[^}]*grid-template-columns: minmax\(0, 1fr\) auto auto;/);
-  assert.match(css, /\.knowledge-manager__related-inspector \{[^}]*display: grid;/);
-  assert.match(css, /\.knowledge-manager__related-object dl \{[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/);
-  assert.ok(mobileBodies.some((body) => (
-    /\.knowledge-manager__relationship-pagination,\s*\.knowledge-manager__related-status \{ align-items: stretch; flex-direction: column; \}/.test(body)
-    && /\.knowledge-manager__relationship-inspect,\s*\.knowledge-manager__related-status button \{ min-height: 42px; width: 100%; \}/.test(body)
-    && /\.knowledge-manager__related-object dl \{ grid-template-columns: 1fr; \}/.test(body)
-  )));
 });

@@ -13,7 +13,7 @@ test("renders a valid export artifact with a text-backed success treatment", () 
     metadataValid: true,
     titleId: "status-title",
   }));
-  assert.match(markup, /status-icon--success/);
+  assert.match(markup, /status status--icon status--success/);
   assert.match(markup, /Export ready/);
   assert.match(markup, /finished materializing/);
 });
@@ -25,7 +25,7 @@ test("renders an expired artifact with a warning and its expiry", () => {
     metadataValid: true,
     titleId: "status-title",
   }));
-  assert.match(markup, /status-icon--warning/);
+  assert.match(markup, /status status--icon status--warning/);
   assert.match(markup, /Export artifact expired/);
   assert.match(markup, /Aug 29, 2026, 12:03:22 AM PDT/);
 });
@@ -37,7 +37,7 @@ test("renders invalid artifact metadata as an error", () => {
     metadataValid: false,
     titleId: "status-title",
   }));
-  assert.match(markup, /status-icon--error/);
+  assert.match(markup, /status status--icon status--error/);
   assert.match(markup, /Export artifact unavailable/);
   assert.match(markup, /incomplete artifact metadata/);
 });

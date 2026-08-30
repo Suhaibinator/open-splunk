@@ -56,7 +56,7 @@ func TestRuntimeOptionRegistryIsCompleteAndUnique(t *testing.T) {
 	if err := validateRuntimeOptionRegistry(flags, runtimeOptionBindings); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := len(runtimeOptionBindings), 31; got != want {
+	if got, want := len(runtimeOptionBindings), 33; got != want {
 		t.Fatalf("runtime option binding count = %d, want %d", got, want)
 	}
 
@@ -133,13 +133,16 @@ func TestParseRuntimeOptionsPrecedenceAndTypes(t *testing.T) {
 		}
 		if config.httpAddress != "127.0.0.1:8080" ||
 			config.tenantID != "default" || config.hecEnabled ||
-			config.masterKeyPath != "open-splunk.db.key" {
+			config.masterKeyPath != "open-splunk.db.key" ||
+			config.logLevel != "info" || config.logFormat != "json" {
 			t.Fatalf("default runtime configuration = %#v", config)
 		}
 	})
 
 	t.Run("environment", func(t *testing.T) {
 		config, _, err := parseRuntimeOptionsForTest(t, nil, map[string]string{
+			"OPEN_SPLUNK_SERVER_LOG_LEVEL":                                      "DEBUG",
+			"OPEN_SPLUNK_SERVER_LOG_FORMAT":                                     "CONSOLE",
 			"OPEN_SPLUNK_SERVER_HTTP_LISTEN_ADDRESS":                            "0.0.0.0:8081",
 			"OPEN_SPLUNK_SERVER_HTTP_TRUST_X_FORWARDED_PROTO":                   "true",
 			"OPEN_SPLUNK_SERVER_CONTROL_DATABASE_FILE":                          "/state/control.db",
@@ -150,7 +153,8 @@ func TestParseRuntimeOptionsPrecedenceAndTypes(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if config.httpAddress != "0.0.0.0:8081" || !config.trustForwardedProto ||
+		if config.logLevel != "DEBUG" || config.logFormat != "CONSOLE" ||
+			config.httpAddress != "0.0.0.0:8081" || !config.trustForwardedProto ||
 			config.controlDBPath != "/state/control.db" ||
 			config.masterKeyPath != "/state/control.db.key" ||
 			config.searchHistoryMaximumAge != 6*time.Hour ||
@@ -174,11 +178,15 @@ func TestParseRuntimeOptionsPrecedenceAndTypes(t *testing.T) {
 
 	t.Run("explicit CLI wins including zero values", func(t *testing.T) {
 		config, _, err := parseRuntimeOptionsForTest(t, []string{
+			"-log-level=error",
+			"-log-format=json",
 			"-tenant-id=",
 			"-http-trust-x-forwarded-proto=false",
 			"-search-history-maximum-age=0s",
 			"-search-history-maximum-entries-per-owner=0",
 		}, map[string]string{
+			"OPEN_SPLUNK_SERVER_LOG_LEVEL":                                "debug",
+			"OPEN_SPLUNK_SERVER_LOG_FORMAT":                               "console",
 			"OPEN_SPLUNK_SERVER_TENANT_ID":                                "environment-tenant",
 			"OPEN_SPLUNK_SERVER_HTTP_TRUST_X_FORWARDED_PROTO":             "true",
 			"OPEN_SPLUNK_SERVER_SEARCH_HISTORY_MAXIMUM_AGE":               "6h",
@@ -187,7 +195,8 @@ func TestParseRuntimeOptionsPrecedenceAndTypes(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if config.tenantID != "" || config.trustForwardedProto ||
+		if config.logLevel != "error" || config.logFormat != "json" ||
+			config.tenantID != "" || config.trustForwardedProto ||
 			config.searchHistoryMaximumAge != 0 ||
 			config.searchHistoryMaximumEntriesPerOwner != 0 {
 			t.Fatalf("CLI-overridden runtime configuration = %#v", config)
@@ -201,6 +210,21 @@ func TestParseRuntimeOptionsRejectsInvalidEnvironmentValue(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "OPEN_SPLUNK_SERVER_HTTP_TRUST_X_FORWARDED_PROTO") {
 		t.Fatalf("invalid environment error = %v", err)
+	}
+}
+
+func TestParseRuntimeOptionsRejectsInvalidLoggingValues(t *testing.T) {
+	t.Parallel()
+	for name, environment := range map[string]map[string]string{
+		"level":  {"OPEN_SPLUNK_SERVER_LOG_LEVEL": "trace"},
+		"format": {"OPEN_SPLUNK_SERVER_LOG_FORMAT": "text"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if _, _, err := parseRuntimeOptionsForTest(t, nil, environment); err == nil {
+				t.Fatal("parseRuntimeOptions() succeeded")
+			}
+		})
 	}
 }
 

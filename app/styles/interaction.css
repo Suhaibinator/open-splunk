@@ -1,0 +1,92 @@
+/* Interaction floors
+   The whole-product contracts that answer "how is this page being driven?"
+   rather than "how wide is it?": the 44px tap target every control grows on a
+   coarse pointer, the 16px input floor that stops a phone browser zooming the
+   page on focus, and the motion cut under `prefers-reduced-motion`.
+
+   All three are cross-cutting -- one rule lists selectors from every feature --
+   and all three have to outrank what those features declare, so this is the
+   last file app/styles/index.css imports. Moving it earlier would let a
+   feature's own `min-height` or `font-size` win back a tap target or an input,
+   on a device no desktop screenshot covers. */
+
+@media (max-width: 760px) {
+  .splunk-shell input,
+  .splunk-shell select,
+  .splunk-shell textarea { font-size: var(--type-xl); }
+}
+
+@media (pointer: coarse) {
+  .button,
+  .drawer-trigger,
+  .mobile-search-actions > button,
+  .suite-primary-nav a,
+  .table .row-overflow,
+  .result-tabs button,
+  .chart-toggle button,
+  .visualization-settings input,
+  .visualization-settings select,
+  .timeline-toolbar button,
+  .event-toolbar button,
+  .event-chips button,
+  .event-expander,
+  .event-time,
+  .admin-summary-grid button,
+  .suite-card-header > a,
+  .suite-card-header > button,
+  .setup-checklist a,
+  .signin-password-field button,
+  .backend-resource-state > a,
+  .backend-resource-state > button,
+  .resource-action-menu > a,
+  .resource-action-menu > button,
+  .token-reveal button,
+  .dataset-view-toggle button,
+  .activity-filter-button,
+  .activity-view-tabs > button,
+  .live-job-actions > a,
+  .live-job-actions > button,
+  .history-row-actions > a,
+  .history-row-actions > button,
+  .backend-action-notice > button,
+  .history-action-notice button,
+  .table-action,
+  .dataset-card footer a,
+  .dataset-card footer button,
+  .signin-card > footer a,
+  .field-actions button,
+  .event-field-actions button,
+  .pagination button {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  .knowledge-manager button,
+  .knowledge-manager select { min-height: 44px; }
+  .time-series-chart__inspect { touch-action: pan-y; }
+}
+
+@media (pointer: coarse) and (min-width: 761px) {
+  .suite-product-bar,
+  .wordmark,
+  .suite-app-switcher,
+  .suite-utilities > a,
+  .suite-utilities > button,
+  .suite-utilities > .suite-menu-anchor > button { height: 44px; }
+  .suite-app-switcher,
+  .suite-utilities > a,
+  .suite-utilities > button,
+  .suite-utilities > .suite-menu-anchor > button { min-height: 44px; min-width: 44px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-icon--spin { animation: none !important; }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}

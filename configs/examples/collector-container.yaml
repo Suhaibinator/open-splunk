@@ -23,6 +23,10 @@
 # when that transition is explicitly supported. Never share one state directory
 # between collector instances.
 
+logging:
+  level: info
+  format: json
+
 server:
   address: "${OPEN_SPLUNK_COLLECTOR_SERVER_ADDRESS}"
   transport: grpc

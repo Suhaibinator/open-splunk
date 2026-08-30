@@ -1,0 +1,1071 @@
+/* Search analytics.
+ *
+ * Colocated with app/analytics/analytics-console.tsx and loaded through
+ * app/styles/index.css. Every class is prefixed `analytics-`: the prefix is the
+ * namespace that a CSS module's generated hash used to supply, and unlike the
+ * hash it is readable in the DOM and in a Playwright selector.
+ *
+ * Each section carries its own responsive overrides at the end of the section,
+ * largest breakpoint first, so a rule and the widths that change it are read
+ * together rather than at opposite ends of the file. The 650px query is the one
+ * off-canon step left: docs/theming.md records why folding it onto 760px is a
+ * deliberate restyle rather than a rename. */
+
+/* Page shell and analytics context bar */
+.analytics-page {
+  max-width: 1540px;
+}
+
+.analytics-partial-notice {
+  background: var(--status-warning-soft);
+  border: 1px solid var(--status-warning-edge);
+  color: var(--status-warning-strong);
+  display: block;
+  font-size: var(--type-xs);
+  line-height: 1.45;
+  margin-bottom: 10px;
+  padding: var(--space-2) 10px;
+}
+
+.analytics-context-bar {
+  align-items: center;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(220px, 1fr) 178px 178px;
+  margin-bottom: 10px;
+  min-height: 58px;
+  padding: var(--space-2) 10px var(--space-2) 13px;
+}
+
+.analytics-context-bar > div {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+}
+
+.analytics-context-bar > div > div {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.analytics-context-bar strong {
+  color: var(--fg-text);
+  font-size: var(--type-sm);
+}
+
+.analytics-context-bar small {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  margin-top: 2px;
+}
+
+.analytics-context-icon {
+  align-items: center;
+  background: var(--accent-soft);
+  color: var(--accent);
+  display: flex;
+  flex: 0 0 auto;
+  font-size: var(--type-xl);
+  height: 34px;
+  justify-content: center;
+  width: 34px;
+}
+
+/* The context bar and the field toolbar dress their labelled controls the same
+   way, so the two selector lists below are the one implementation of that
+   pairing rather than a copy per panel. */
+.analytics-context-bar label,
+.analytics-field-toolbar > label:not(.analytics-field-search) {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.analytics-context-bar label > span,
+.analytics-field-toolbar > label > span {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  font-weight: 700;
+  letter-spacing: 0.025em;
+  text-transform: uppercase;
+}
+
+.analytics-context-bar select,
+.analytics-field-toolbar select {
+  appearance: none;
+  background: var(--bg-surface) linear-gradient(45deg, transparent 50%, var(--fg-muted) 50%) calc(100% - 11px) 13px / 4px 4px no-repeat;
+  border: 1px solid var(--border-strong);
+  border-radius: 0;
+  color: var(--fg-text);
+  font-size: var(--type-xs);
+  height: 31px;
+  padding: 0 26px 0 var(--space-2);
+  width: 100%;
+}
+
+.analytics-context-bar select:focus-visible,
+.analytics-field-toolbar select:focus-visible {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 1px var(--border-focus);
+  outline: 0;
+}
+
+@media (max-width: 760px) {
+  .analytics-context-bar {
+    grid-template-columns: 1fr 1fr;
+    padding: 10px;
+  }
+
+  .analytics-context-bar > div {
+    grid-column: 1 / -1;
+  }
+
+  .analytics-context-bar select,
+  .analytics-field-toolbar select {
+    font-size: var(--type-xl);
+    height: 44px;
+  }
+}
+
+@media (max-width: 480px) {
+  .analytics-context-bar {
+    grid-template-columns: 1fr;
+  }
+
+  .analytics-context-bar > div,
+  .analytics-context-bar label {
+    grid-column: 1;
+  }
+}
+
+/* Summary metric grid */
+.analytics-metric-grid {
+  display: grid;
+  gap: var(--space-2);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: 10px;
+}
+
+.analytics-metric-grid > a,
+.analytics-metric-grid > article {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  color: inherit;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  min-height: 85px;
+  padding: 11px var(--space-3) 10px;
+  position: relative;
+  text-decoration: none;
+}
+
+.analytics-metric-grid > a:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-sm);
+}
+
+.analytics-metric-grid > a:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.analytics-metric-grid span {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  font-weight: 700;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+.analytics-metric-grid strong {
+  color: var(--fg-text);
+  font-size: var(--type-xxl);
+  font-weight: 400;
+  grid-column: 1;
+  line-height: 1.2;
+  margin-top: 5px;
+}
+
+.analytics-metric-grid small {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  grid-column: 1;
+  margin-top: 3px;
+}
+
+.analytics-metric-grid > a:first-child small,
+.analytics-metric-grid > a:nth-child(3) small {
+  color: var(--accent);
+}
+
+.analytics-metric-grid i {
+  align-self: start;
+  color: var(--status-info);
+  font-size: var(--type-md);
+  font-style: normal;
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+
+@media (max-width: 980px) {
+  .analytics-metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .analytics-metric-grid > a {
+    min-height: 94px;
+    padding: var(--space-3);
+  }
+}
+
+@media (max-width: 480px) {
+  .analytics-metric-grid {
+    gap: 7px;
+  }
+
+  .analytics-metric-grid strong {
+    font-size: var(--type-xl);
+  }
+
+  .analytics-metric-grid small {
+    line-height: 1.25;
+  }
+}
+
+/* Panel frames */
+.analytics-primary-grid,
+.analytics-secondary-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1.75fr) minmax(310px, 0.8fr);
+  margin-bottom: 10px;
+}
+
+.analytics-secondary-grid {
+  grid-template-columns: minmax(0, 1.55fr) minmax(350px, 0.85fr);
+  margin-bottom: 0;
+}
+
+.analytics-performance-panel,
+.analytics-insights-panel,
+.analytics-fields-panel,
+.analytics-slowest-panel {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.analytics-panel-header {
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  min-height: 55px;
+  padding: 9px 13px;
+}
+
+.analytics-panel-header h2 {
+  color: var(--fg-text);
+  font-size: var(--type-md);
+  margin: 0 0 3px;
+}
+
+.analytics-panel-header p {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  margin: 0;
+}
+
+.analytics-legend {
+  align-items: center;
+  color: var(--fg-muted);
+  display: flex;
+  font-size: var(--type-xs);
+  gap: 5px;
+}
+
+.analytics-legend > span:first-child {
+  background: var(--chart-series-1);
+  height: 2px;
+  width: 14px;
+}
+
+.analytics-legend b {
+  background: var(--bg-subtle);
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  margin-left: var(--space-1);
+  padding: 3px 5px;
+  text-transform: uppercase;
+}
+
+@media (max-width: 980px) {
+  .analytics-primary-grid,
+  .analytics-secondary-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .analytics-primary-grid,
+  .analytics-secondary-grid {
+    gap: var(--space-2);
+  }
+}
+
+@media (max-width: 480px) {
+  .analytics-panel-header {
+    align-items: flex-start;
+    gap: var(--space-2);
+  }
+
+  .analytics-legend b {
+    display: none;
+  }
+}
+
+/* Runtime trend chart and its footer */
+.analytics-trend-figure {
+  margin: 0;
+  padding: var(--space-3) 14px var(--space-1);
+}
+
+.analytics-trend-plot {
+  height: 214px;
+  position: relative;
+  width: 100%;
+}
+
+.analytics-trend-plot svg {
+  display: block;
+  height: 184px;
+  overflow: visible;
+  width: 100%;
+}
+
+.analytics-grid-line {
+  stroke: var(--border-subtle);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+/* The same stroke geometry the workspace time-series line draws, down to the
+   `--chart-stroke-width` knob a host panel turns. The two are still two rules
+   -- charts have never been consolidated into a primitive -- and
+   scripts/css-duplicate-blocks.json records that. */
+.analytics-trend-line {
+  fill: none;
+  stroke: var(--chart-series-1);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: var(--chart-stroke-width, 2.25);
+  vector-effect: non-scaling-stroke;
+}
+
+.analytics-trend-points {
+  height: 184px;
+  inset: 0 0 auto;
+  position: absolute;
+}
+
+.analytics-trend-point {
+  background: transparent;
+  border: 0;
+  height: 26px;
+  left: var(--point-x);
+  padding: 0;
+  position: absolute;
+  top: var(--point-y);
+  transform: translate(-50%, -50%);
+  width: 26px;
+  z-index: 1;
+}
+
+.analytics-point-marker {
+  background: var(--bg-surface);
+  border: 2px solid transparent;
+  border-radius: 50%;
+  height: 8px;
+  left: 50%;
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  transition: border-color var(--dur-fast), box-shadow var(--dur-fast), height var(--dur-fast), width var(--dur-fast);
+  width: 8px;
+}
+
+.analytics-trend-point:hover .analytics-point-marker,
+.analytics-trend-point:focus-visible .analytics-point-marker,
+.analytics-trend-point--active .analytics-point-marker {
+  border-color: var(--chart-series-1);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--bg-surface) 90%, transparent);
+  height: 10px;
+  width: 10px;
+}
+
+.analytics-trend-point:focus-visible {
+  outline: 0;
+}
+
+.analytics-trend-point:focus-visible .analytics-point-marker {
+  box-shadow: 0 0 0 2px var(--bg-surface), 0 0 0 4px var(--focus-ring);
+}
+
+.analytics-trend-tooltip {
+  align-items: flex-start;
+  background: var(--bg-inverse);
+  border-radius: var(--radius-sm);
+  bottom: calc(100% + 1px);
+  box-shadow: var(--shadow-md);
+  color: var(--fg-inverse);
+  display: flex;
+  flex-direction: column;
+  left: 50%;
+  min-width: 90px;
+  padding: 6px 7px;
+  pointer-events: none;
+  position: absolute;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  z-index: 8;
+}
+
+.analytics-trend-tooltip strong {
+  font-size: var(--type-xs);
+}
+
+.analytics-trend-tooltip small {
+  color: var(--fg-inverse-muted);
+  font-size: var(--type-xs);
+  margin-top: 2px;
+}
+
+.analytics-trend-tooltip.analytics-trend-tooltip--start {
+  left: 3px;
+  transform: none;
+}
+
+.analytics-trend-tooltip.analytics-trend-tooltip--end {
+  left: auto;
+  right: 3px;
+  transform: none;
+}
+
+.analytics-axis-label {
+  bottom: 3px;
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  position: absolute;
+}
+
+.analytics-axis-label--start { left: 1px; }
+.analytics-axis-label--middle { left: 50%; transform: translateX(-50%); }
+.analytics-axis-label--end { right: 1px; }
+
+.analytics-trend-figure figcaption {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  margin-top: 1px;
+}
+
+.analytics-performance-footer {
+  align-items: stretch;
+  background: var(--bg-canvas);
+  border-top: 1px solid var(--border);
+  display: grid;
+  grid-template-columns: repeat(3, minmax(80px, 1fr)) auto;
+  min-height: 53px;
+}
+
+.analytics-performance-footer > div {
+  border-right: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 7px var(--space-3);
+}
+
+.analytics-performance-footer span {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  text-transform: uppercase;
+}
+
+.analytics-performance-footer strong {
+  color: var(--fg-text);
+  font-size: var(--type-sm);
+  margin-top: 3px;
+}
+
+.analytics-performance-footer > a {
+  align-items: center;
+  color: var(--fg-link);
+  display: flex;
+  font-size: var(--type-xs);
+  font-weight: 600;
+  justify-content: center;
+  padding: 0 13px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+/* Every panel's "go to the full view" link underlines on hover; the four panels
+   share one rule rather than four identical ones. */
+.analytics-performance-footer > a:hover,
+.analytics-insight-list a:hover,
+.analytics-field-list a:hover,
+.analytics-slowest-list a:hover,
+.analytics-slowest-footer a:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 760px) {
+  .analytics-trend-figure {
+    overflow: visible;
+    padding-inline: var(--space-2);
+  }
+
+  .analytics-trend-plot {
+    height: 194px;
+    min-width: 0;
+  }
+
+  .analytics-trend-plot svg,
+  .analytics-trend-points {
+    height: 164px;
+  }
+
+  .analytics-trend-point {
+    height: 44px;
+    width: 44px;
+  }
+
+  .analytics-trend-figure figcaption {
+    line-height: 1.4;
+    position: static;
+    width: auto;
+  }
+
+  .analytics-performance-footer {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .analytics-performance-footer > a {
+    border-top: 1px solid var(--border);
+    grid-column: 1 / -1;
+    min-height: 42px;
+  }
+}
+
+@media (max-width: 480px) {
+  .analytics-axis-label--middle {
+    display: none;
+  }
+
+  .analytics-trend-tooltip {
+    min-width: 80px;
+  }
+
+  .analytics-performance-footer > div {
+    padding-inline: var(--space-2);
+  }
+
+  .analytics-performance-footer strong {
+    font-size: var(--type-xs);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .analytics-point-marker {
+    transition: none;
+  }
+}
+
+/* Insights panel */
+.analytics-insight-count {
+  align-items: center;
+  background: var(--bg-subtle);
+  border-radius: 50%;
+  color: var(--fg-muted);
+  display: flex;
+  font-size: var(--type-xs);
+  height: 24px;
+  justify-content: center;
+  width: 24px;
+}
+
+.analytics-insight-list,
+.analytics-field-list ul,
+.analytics-slowest-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.analytics-insight-list > li {
+  border-bottom: 1px solid var(--border-subtle);
+  padding: 11px var(--space-3) 10px;
+}
+
+.analytics-insight-list > li:last-child {
+  border-bottom: 0;
+}
+
+.analytics-insight-topline,
+.analytics-insight-list footer {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.analytics-severity {
+  border-radius: var(--radius-md);
+  font-size: var(--type-xs);
+  font-weight: 700;
+  letter-spacing: 0.035em;
+  padding: 2px 6px;
+  text-transform: uppercase;
+}
+
+.analytics-severity--high {
+  background: var(--status-error-soft);
+  color: var(--status-error);
+}
+
+.analytics-severity--medium {
+  background: var(--status-warning-soft);
+  color: var(--status-warning);
+}
+
+.analytics-severity--low {
+  background: var(--status-info-soft);
+  color: var(--status-info);
+}
+
+.analytics-insight-topline small {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+}
+
+.analytics-insight-list h3 {
+  color: var(--fg-text);
+  font-size: var(--type-xs);
+  margin: 7px 0 var(--space-1);
+}
+
+.analytics-insight-list p {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  line-height: 1.45;
+  margin: 0 0 9px;
+}
+
+.analytics-insight-list footer strong {
+  color: var(--accent);
+  font-size: var(--type-xs);
+  font-weight: 600;
+}
+
+/* The same link treatment as the performance footer's, shared by the three
+   list panels. */
+.analytics-insight-list footer a,
+.analytics-field-list a,
+.analytics-slowest-list a,
+.analytics-slowest-footer a {
+  color: var(--fg-link);
+  font-size: var(--type-xs);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+@media (max-width: 980px) {
+  .analytics-insight-list {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .analytics-insight-list > li {
+    border-bottom: 0;
+    border-right: 1px solid var(--border-subtle);
+  }
+
+  .analytics-insight-list > li:last-child {
+    border-right: 0;
+  }
+}
+
+@media (max-width: 760px) {
+  .analytics-insight-list {
+    display: block;
+  }
+
+  .analytics-insight-list > li {
+    border-bottom: 1px solid var(--border-subtle);
+    border-right: 0;
+    padding-block: 13px;
+  }
+}
+
+/* Fields panel */
+.analytics-result-count {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+}
+
+.analytics-result-count strong {
+  color: var(--fg-text);
+  font-size: var(--type-xs);
+}
+
+.analytics-field-toolbar {
+  align-items: end;
+  background: var(--bg-canvas);
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  gap: 7px;
+  grid-template-columns: minmax(190px, 1fr) 138px 128px;
+  padding: var(--space-2) 9px;
+}
+
+.analytics-field-toolbar--backend {
+  grid-template-columns: 150px minmax(180px, 1fr) 138px 128px;
+}
+
+.analytics-field-search {
+  align-items: center;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  display: flex;
+  height: 31px;
+}
+
+.analytics-field-search:focus-within {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 1px var(--border-focus);
+}
+
+.analytics-field-search i {
+  color: var(--fg-muted);
+  font-size: var(--type-md);
+  font-style: normal;
+  margin-left: var(--space-2);
+}
+
+.analytics-field-search input {
+  background: transparent;
+  border: 0;
+  font-size: var(--type-xs);
+  height: 29px;
+  min-width: 0;
+  outline: 0;
+  padding: 0 var(--space-2);
+  width: 100%;
+}
+
+.analytics-field-list-header,
+.analytics-field-list li {
+  align-items: center;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(130px, 1.1fr) minmax(140px, 1fr) 64px minmax(150px, 1fr) 60px;
+}
+
+.analytics-field-list-header {
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  font-weight: 700;
+  min-height: 29px;
+  padding: 0 10px;
+}
+
+.analytics-field-list li {
+  border-bottom: 1px solid var(--border-subtle);
+  min-height: 47px;
+  padding: 7px 10px;
+}
+
+.analytics-field-list li:last-child {
+  border-bottom: 0;
+}
+
+.analytics-field-list li:hover {
+  background: var(--bg-raised);
+}
+
+.analytics-field-identity {
+  align-items: center;
+  display: flex;
+  gap: 7px;
+  min-width: 0;
+}
+
+.analytics-field-identity > code {
+  color: var(--status-info);
+  font-size: var(--type-xs);
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.analytics-field-type {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  padding: 2px var(--space-1);
+}
+
+.analytics-coverage-cell {
+  align-items: center;
+  display: grid;
+  gap: var(--space-2);
+  grid-template-columns: minmax(65px, 1fr) 38px;
+}
+
+/* The coverage meter and the slowest-search duration meter are one bar drawn
+   twice, so both read the same three rules. */
+.analytics-coverage-cell > span,
+.analytics-duration-track {
+  background: var(--bg-subtle);
+  height: 5px;
+  overflow: hidden;
+}
+
+.analytics-coverage-cell > span > i,
+.analytics-duration-track > i {
+  background: var(--accent-bright);
+  display: block;
+  height: 100%;
+}
+
+.analytics-coverage-cell strong,
+.analytics-cardinality {
+  color: var(--fg-secondary);
+  font-size: var(--type-xs);
+  font-weight: 600;
+}
+
+.analytics-example {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.analytics-field-list a {
+  text-align: right;
+}
+
+.analytics-unavailable-action {
+  color: var(--fg-faint);
+  font-size: var(--type-xs);
+  text-align: right;
+}
+
+.analytics-empty-fields {
+  align-items: center;
+  color: var(--fg-muted);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 270px;
+  padding: 28px;
+  text-align: center;
+}
+
+.analytics-empty-fields > span {
+  align-items: center;
+  background: var(--bg-subtle);
+  border-radius: 50%;
+  display: flex;
+  font-size: var(--type-xxl);
+  height: 38px;
+  justify-content: center;
+  margin-bottom: 9px;
+  width: 38px;
+}
+
+.analytics-empty-fields strong {
+  color: var(--fg-text);
+  font-size: var(--type-sm);
+}
+
+.analytics-empty-fields p {
+  font-size: var(--type-xs);
+  margin: var(--space-1) 0 var(--space-3);
+}
+
+@media (max-width: 980px) {
+  .analytics-field-list-header,
+  .analytics-field-list li {
+    grid-template-columns: minmax(120px, 1fr) minmax(125px, 0.9fr) 56px 58px;
+  }
+
+  .analytics-field-list-header span:nth-child(4),
+  .analytics-field-list li > .analytics-example {
+    display: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .analytics-field-toolbar {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .analytics-field-search {
+    grid-column: 1 / -1;
+    height: 44px;
+  }
+
+  .analytics-field-search input {
+    font-size: var(--type-xl);
+    height: 42px;
+  }
+
+  .analytics-field-list-header {
+    display: none;
+  }
+
+  .analytics-field-list li {
+    gap: 9px var(--space-3);
+    grid-template-columns: minmax(0, 1fr) auto;
+    min-height: 76px;
+    padding: 10px;
+  }
+
+  .analytics-field-identity {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .analytics-coverage-cell {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .analytics-cardinality {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .analytics-cardinality::before {
+    color: var(--fg-faint);
+    content: "distinct ";
+    font-size: var(--type-xs);
+    font-weight: 400;
+  }
+
+  .analytics-field-list li > .analytics-example {
+    display: none;
+  }
+
+  .analytics-field-list a {
+    align-self: center;
+    grid-column: 2;
+    grid-row: 2;
+    min-height: 44px;
+    padding-top: 10px;
+  }
+}
+
+/* Slowest searches panel */
+.analytics-slowest-list > li {
+  align-items: center;
+  border-bottom: 1px solid var(--border-subtle);
+  display: grid;
+  gap: 9px;
+  grid-template-columns: 22px minmax(0, 1fr) 50px;
+  min-height: 64px;
+  padding: var(--space-2) 11px;
+}
+
+.analytics-rank {
+  align-items: center;
+  background: var(--bg-subtle);
+  border-radius: 50%;
+  color: var(--fg-muted);
+  display: flex;
+  font-size: var(--type-xs);
+  height: 22px;
+  justify-content: center;
+  width: 22px;
+}
+
+.analytics-search-detail {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.analytics-search-detail > a {
+  font-size: var(--type-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.analytics-search-detail small {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  margin: 3px 0 6px;
+}
+
+.analytics-duration-track {
+  width: 100%;
+}
+
+.analytics-duration-track > i {
+  background: var(--accent-bright);
+}
+
+.analytics-slowest-list > li > strong {
+  color: var(--fg-secondary);
+  font-size: var(--type-xs);
+  text-align: right;
+}
+
+.analytics-slowest-footer {
+  align-items: center;
+  background: var(--bg-canvas);
+  display: flex;
+  justify-content: space-between;
+  min-height: 41px;
+  padding: 7px 11px;
+}
+
+.analytics-slowest-footer span {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+}
+
+@media (max-width: 480px) {
+  .analytics-slowest-footer {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: var(--space-1);
+    padding-block: 9px;
+  }
+}
+
+/* Touch affordances.
+   One rule for every link a finger reaches on this page: splitting it per panel
+   would be five copies of one declaration, so it stays cross-cutting and last,
+   where nothing it names can be re-declared after it. */
+@media (pointer: coarse) {
+  .analytics-metric-grid > a,
+  .analytics-insight-list a,
+  .analytics-field-list a,
+  .analytics-slowest-list a,
+  .analytics-slowest-footer a {
+    -webkit-tap-highlight-color: transparent;
+  }
+}

@@ -1,0 +1,532 @@
+/* Modals
+   The dialog shell -- layer, backdrop, card, header, body, footer -- and the
+   content families that only ever appear inside one: the time picker, the
+   saved-search list, the history table, the job cards and the job inspector.
+   The shell animates in with `modal-in`; the surfaces it opens over are the
+   `--z-*` steps app/styles/tokens-scale.css documents. */
+
+.modal-layer {
+  align-items: flex-start;
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  overflow: auto;
+  padding: 70px var(--space-5) 30px;
+  position: fixed;
+  z-index: var(--z-modal);
+}
+
+.modal-backdrop {
+  background: color-mix(in srgb, var(--bg-inverse) 48%, transparent);
+  border: 0;
+  inset: 0;
+  position: fixed;
+}
+
+.modal-card {
+  animation: modal-in 140ms ease-out;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-xl);
+  max-width: 100%;
+  margin: 0;
+  position: relative;
+  width: 540px;
+  z-index: var(--z-base);
+}
+
+.modal-card-wide {
+  width: 870px;
+}
+
+@keyframes modal-in {
+  from { opacity: 0; transform: translateY(-8px) scale(0.992); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.modal-header {
+  align-items: center;
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  min-height: 64px;
+  padding: 10px 14px 10px 18px;
+}
+
+.modal-header h2 {
+  color: var(--fg-strong);
+  font-size: var(--type-xxl);
+  font-weight: 400;
+  margin: 0;
+}
+
+.modal-header p {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  margin: var(--space-1) 0 0;
+}
+
+.modal-body {
+  max-height: calc(100vh - 235px);
+  overflow: auto;
+  padding: 18px;
+}
+
+.modal-footer {
+  align-items: center;
+  background: var(--bg-canvas);
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: var(--space-2);
+  justify-content: flex-end;
+  min-height: 57px;
+  padding: 10px var(--space-4);
+}
+
+.time-picker-layout {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  margin: -18px;
+  min-height: 360px;
+}
+
+.time-picker-nav {
+  background: var(--bg-subtle);
+  border-right: 1px solid var(--border);
+  padding: 10px 0;
+}
+
+.time-picker-nav button {
+  background: transparent;
+  border: 0;
+  border-left: 3px solid transparent;
+  color: var(--fg-muted);
+  height: 39px;
+  padding: 0 var(--space-4);
+  text-align: left;
+  width: 100%;
+}
+
+.time-picker-nav button:hover,
+.time-picker-nav button.active {
+  background: var(--bg-surface);
+  border-left-color: var(--accent);
+  color: var(--fg-text);
+  font-weight: 700;
+}
+
+.time-picker-content {
+  padding: var(--space-5) var(--space-6);
+}
+
+.time-picker-content h3 {
+  color: var(--fg-secondary);
+  font-size: var(--type-sm);
+  margin: 0 0 10px;
+  text-transform: uppercase;
+}
+
+.preset-grid {
+  border: 1px solid var(--border);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.preset-grid button {
+  align-items: center;
+  background: var(--bg-surface);
+  border: 0;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--fg-secondary);
+  display: flex;
+  height: 40px;
+  justify-content: space-between;
+  padding: 0 var(--space-3);
+  text-align: left;
+}
+
+.preset-grid button:nth-child(odd) {
+  border-right: 1px solid var(--border-subtle);
+}
+
+.preset-grid button:hover,
+.preset-grid button.selected {
+  background: var(--accent-soft);
+}
+
+.preset-grid button.selected {
+  color: var(--accent-hover);
+  font-weight: 700;
+}
+
+.range-preview {
+  background: var(--bg-canvas);
+  border: 1px solid var(--border);
+  display: grid;
+  gap: 15px;
+  grid-template-columns: 1fr 1fr;
+  margin-top: var(--space-4);
+  padding: 13px;
+}
+
+.range-preview span {
+  color: var(--fg-muted);
+  display: flex;
+  flex-direction: column;
+  font-size: var(--type-xxs);
+  gap: var(--space-1);
+  text-transform: uppercase;
+}
+
+.range-preview code {
+  color: var(--fg-text);
+  font-size: var(--type-md);
+  text-transform: none;
+}
+
+.saved-list {
+  border: 1px solid var(--border);
+  max-height: 430px;
+  overflow: auto;
+}
+
+.saved-row {
+  align-items: stretch;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  min-height: 92px;
+}
+
+.saved-row:last-child {
+  border-bottom: 0;
+}
+
+.saved-row:hover {
+  background: var(--bg-raised);
+}
+
+.saved-row-main {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  display: grid;
+  flex: 1;
+  gap: var(--space-3);
+  grid-template-columns: 32px minmax(0, 1fr);
+  min-width: 0;
+  padding: 10px var(--space-3);
+  text-align: left;
+}
+
+.saved-icon {
+  align-items: center;
+  background: var(--accent-soft);
+  color: var(--accent-hover);
+  display: inline-flex;
+  font-size: var(--type-xxl);
+  height: 32px;
+  justify-content: center;
+  width: 32px;
+}
+
+.saved-row-main > span:last-child {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.saved-row-main strong {
+  color: var(--fg-text);
+  font-size: var(--type-md);
+}
+
+.saved-row-main small {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  margin-top: 3px;
+}
+
+.saved-row-main code {
+  color: var(--fg-muted);
+  font-size: var(--type-xxs);
+  margin-top: 7px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.saved-row-meta {
+  align-items: flex-end;
+  color: var(--fg-muted);
+  display: flex;
+  flex: 0 0 125px;
+  flex-direction: column;
+  font-size: var(--type-xxs);
+  justify-content: space-between;
+  padding: var(--space-3);
+}
+
+.history-table {
+  border: 1px solid var(--border);
+}
+
+.history-head,
+.history-row {
+  align-items: center;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(300px, 1.7fr) 78px 70px 68px 95px 194px;
+  padding: 0 10px;
+}
+
+.history-head {
+  background: var(--bg-subtle);
+  color: var(--fg-muted);
+  font-size: var(--type-xxs);
+  font-weight: 700;
+  height: 34px;
+  text-transform: uppercase;
+}
+
+.history-row {
+  border-top: 1px solid var(--border-subtle);
+  min-height: 49px;
+}
+
+.history-row:hover {
+  background: var(--bg-raised);
+}
+
+.history-row > code {
+  font-size: var(--type-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-row > span:not(.history-state) {
+  color: var(--fg-muted);
+  font-size: var(--type-xxs);
+}
+
+.history-state {
+  align-items: center;
+  display: flex;
+  font-size: var(--type-xxs);
+  font-weight: 700;
+  gap: 5px;
+}
+
+.history-completed { color: var(--status-success); }
+.history-failed { color: var(--status-error); }
+.history-canceled { color: var(--status-neutral); }
+
+.row-actions {
+  justify-content: flex-end;
+}
+
+.row-actions button {
+  background: transparent;
+  border: 0;
+  color: var(--fg-link);
+  font-size: var(--type-xs);
+  min-height: 28px;
+  padding: var(--space-1) 7px;
+}
+
+.row-actions button:hover {
+  background: var(--selection);
+}
+
+.jobs-list {
+  gap: var(--space-2);
+}
+
+.job-card {
+  align-items: center;
+  border: 1px solid var(--border);
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: 105px minmax(240px, 1fr) auto auto;
+  min-height: 54px;
+  padding: var(--space-2) 11px;
+}
+
+.job-card:hover {
+  background: var(--bg-raised);
+}
+
+.active-job-card {
+  border-left: 3px solid var(--accent);
+}
+
+.job-inspector {
+  border: 1px solid var(--border);
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.job-inspector > section,
+.inspector-query {
+  border-bottom: 1px solid var(--border-subtle);
+  border-right: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-height: 66px;
+  padding: 11px var(--space-3);
+}
+
+.job-inspector > section:nth-child(3n) {
+  border-right: 0;
+}
+
+.job-inspector section > span,
+.inspector-query > span {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.job-inspector section > strong,
+.job-inspector section > code {
+  font-size: var(--type-sm);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inspector-state {
+  font-size: var(--type-sm);
+  gap: 6px;
+}
+
+.inspector-query {
+  border-right: 0;
+  grid-column: 1 / -1;
+}
+
+.inspector-query code {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  font-size: var(--type-sm);
+  line-height: 1.5;
+  padding: 9px;
+  white-space: pre-wrap;
+}
+
+.job-inspector > p {
+  color: var(--fg-muted);
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 11px var(--space-3);
+}
+
+.job-card code {
+  font-size: var(--type-xxs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.job-card-stats {
+  color: var(--fg-muted);
+  display: flex;
+  font-size: var(--type-xxs);
+  gap: var(--space-3);
+  white-space: nowrap;
+}
+
+/* Responsive
+   The breakpoint overrides for the rules above. They live in the file that
+   owns their base selectors rather than in one document-wide section, so a
+   feature and the way it folds are one edit rather than two thousand lines
+   apart. docs/theming.md documents the step canon; each step appears once
+   here, holding what the two responsive sections used to state twice. */
+
+@media (max-width: 980px) {
+  .history-head,
+  .history-row {
+    grid-template-columns: minmax(190px, 1fr) 70px 55px 55px 160px;
+  }
+
+  .history-head span:nth-child(5),
+  .history-row > span:nth-child(5) {
+    display: none;
+  }
+
+  .job-card {
+    grid-template-columns: 95px minmax(220px, 1fr) auto;
+  }
+
+  .job-card > .button {
+    display: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .time-picker-nav button {
+    font-size: var(--type-xs);
+    min-height: 42px;
+    padding-inline: 9px;
+  }
+
+  .time-picker-layout {
+    grid-template-columns: 120px 1fr;
+  }
+
+  .preset-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .preset-grid button:nth-child(odd) {
+    border-right: 0;
+  }
+
+  .history-head,
+  .history-row {
+    grid-template-columns: minmax(180px, 1fr) 72px 145px;
+  }
+
+  .history-head > :nth-child(3),
+  .history-head > :nth-child(4),
+  .history-head > :nth-child(5),
+  .history-row > :nth-child(3),
+  .history-row > :nth-child(4),
+  .history-row > :nth-child(5) {
+    display: none;
+  }
+
+  .job-card {
+    align-items: start;
+    grid-template-columns: 90px minmax(0, 1fr);
+  }
+
+  .job-card-stats {
+    grid-column: 1 / -1;
+  }
+
+  .job-inspector {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .job-inspector > section:nth-child(3n) {
+    border-right: 1px solid var(--border-subtle);
+  }
+
+  .job-inspector > section:nth-child(2n) {
+    border-right: 0;
+  }
+
+  .modal-layer { align-items: stretch; padding: 0; }
+  .modal-card,
+  .modal-card.modal-card-wide { border: 0; border-radius: 0; display: flex; flex-direction: column; height: 100dvh; max-height: none; width: 100%; }
+  .modal-header { flex: 0 0 auto; min-height: 62px; padding-top: max(12px, env(safe-area-inset-top)); }
+  .modal-header .button--icon { min-height: 44px; min-width: 44px; }
+  .modal-body { flex: 1; max-height: none; overflow-y: auto; }
+  .modal-footer { flex: 0 0 auto; padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+}

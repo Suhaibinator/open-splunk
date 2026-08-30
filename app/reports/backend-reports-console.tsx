@@ -28,11 +28,11 @@ import {
 } from "@/lib/search/server-objects";
 
 import { BackendResourceState } from "../_components/backend-resource-state";
+import { StatusLabel } from "../_components/status";
 import { AppIcon } from "../_components/app-icon";
 import { formatMediumDateTime } from "../_components/date-format";
 import { PageHeading } from "../_components/product-shell";
-import { Modal } from "../search-workspace/modal";
-import styles from "./reports.module.css";
+import { Modal } from "../_components/modal";
 
 type SavedSearchScope = "all" | "private" | "app" | "global";
 type SortOrder = "updated" | "name";
@@ -403,12 +403,12 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
   }
 
   return (
-    <div className={`suite-page ${styles.page}`}>
+    <div className="suite-page reports-page">
       <PageHeading
         eyebrow="SEARCH & REPORTING"
         title="Saved searches"
         description="Open reusable search definitions persisted by the connected server."
-        actions={<><Link className="suite-button" href="/search/">Open Search</Link><button className="suite-button suite-button--primary" type="button" aria-busy={refreshPending} aria-disabled={controlsPending} onClick={() => { if (!controlsPending) reload(); }}>{refreshing ? "Refreshing…" : state === "loading" ? "Loading…" : "Refresh"}</button></>}
+        actions={<><Link className="button" href="/search/">Open Search</Link><button className="button button--primary" type="button" aria-busy={refreshPending} aria-disabled={controlsPending} onClick={() => { if (!controlsPending) reload(); }}>{refreshing ? "Refreshing…" : state === "loading" ? "Loading…" : "Refresh"}</button></>}
       />
 
       {state === "loading" ? <BackendResourceState kind="loading" title="Loading saved searches" message="Reading persisted definitions from the server…" /> : null}
@@ -419,11 +419,11 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
         <>
           {refreshing ? <output className="backend-list-notice">Refreshing saved searches. Existing definitions remain visible until the request completes.</output> : null}
           {error === null ? null : <div className="backend-inline-error" role="alert">The latest refresh failed; the previous saved-search snapshot remains visible. {error}</div>}
-          {actionNotice === null ? null : <output className={styles.actionNotice}><span>{actionNotice}</span><button type="button" aria-label="Dismiss saved-search action message" onClick={() => setActionNotice(null)}><AppIcon name="close" size="md" /></button></output>}
-          <section className={styles.summary} aria-label="Saved search summary">
-            <article><span className={styles.metricIcon} aria-hidden="true">▤</span><div><strong>{displayedTotal}</strong><small>{totalSizeExact ? "Matching saved searches" : "Matching definitions loaded"}</small></div></article>
-            <article><span className={styles.metricIcon} aria-hidden="true">♙</span><div><strong>{savedSearches.length.toLocaleString()}</strong><small>Definitions loaded</small></div></article>
-            <article><span className={styles.metricIcon} aria-hidden="true">◎</span><div><strong>{selectedScopeLabel(scope)}</strong><small>Server-side sharing scope</small></div></article>
+          {actionNotice === null ? null : <output className="reports-action-notice"><span>{actionNotice}</span><button type="button" aria-label="Dismiss saved-search action message" onClick={() => setActionNotice(null)}><AppIcon name="close" size="md" /></button></output>}
+          <section className="reports-summary" aria-label="Saved search summary">
+            <article><span className="reports-metric-icon" aria-hidden="true">▤</span><div><strong>{displayedTotal}</strong><small>{totalSizeExact ? "Matching saved searches" : "Matching definitions loaded"}</small></div></article>
+            <article><span className="reports-metric-icon" aria-hidden="true">♙</span><div><strong>{savedSearches.length.toLocaleString()}</strong><small>Definitions loaded</small></div></article>
+            <article><span className="reports-metric-icon" aria-hidden="true">◎</span><div><strong>{selectedScopeLabel(scope)}</strong><small>Server-side sharing scope</small></div></article>
           </section>
           {!complete ? (
             <output className="backend-list-notice backend-list-notice--action">
@@ -435,39 +435,39 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
           ) : null}
           {loadMoreError === null ? null : <div className="backend-inline-error" role="alert">{loadMoreError} {nextPageToken === null ? null : <button type="button" onClick={() => void loadMore()}>Retry</button>}</div>}
 
-          <section className={`suite-card ${styles.library}`} aria-labelledby="saved-search-library-title" aria-busy={refreshing}>
-            <header className={styles.libraryHeader}>
+          <section className="suite-card reports-library" aria-labelledby="saved-search-library-title" aria-busy={refreshing}>
+            <header className="reports-library-header">
               <div><h2 id="saved-search-library-title">Saved search library</h2><p>These are reusable definitions, not scheduled reports.</p></div>
               <span><strong>{visible.length}</strong> {visible.length === 1 ? "saved search" : "saved searches"}{complete ? "" : " loaded"}</span>
             </header>
 
-            <div className={styles.scopeBar} aria-label="Server-side saved search sharing scope">
+            <div className="reports-scope-bar" aria-label="Server-side saved search sharing scope">
               {([
                 ["all", "All saved searches"],
                 ["private", "Private"],
                 ["app", "App"],
                 ["global", "Global"],
               ] as const).map(([id, label]) => (
-                <button className={scope === id ? styles.scopeActive : undefined} type="button" aria-pressed={scope === id} onClick={() => setScope(id)} key={id}>
+                <button className={scope === id ? "reports-scope-active" : undefined} type="button" aria-pressed={scope === id} onClick={() => setScope(id)} key={id}>
                   {label}<span>{scope === id ? displayedTotal : null}</span>
                 </button>
               ))}
             </div>
-            {complete ? null : <p className={styles.loadedOnlyNote}>Scope, text, and ordering are applied by the server. Load more to continue this result set.</p>}
+            {complete ? null : <p className="reports-loaded-only-note">Scope, text, and ordering are applied by the server. Load more to continue this result set.</p>}
 
-            <div className={`${styles.toolbar} ${styles.backendToolbar}`}>
-              <label className={styles.searchField}>
+            <div className="reports-toolbar reports-toolbar--backend">
+              <label className="reports-search-field">
                 <span className="sr-only">Filter saved searches</span><i aria-hidden="true"><AppIcon name="search" size="sm" /></i>
                 <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find by name, SPL, app, or owner" />
               </label>
-              <label className={styles.selectField}>
+              <label className="reports-select-field">
                 <span>App</span>
                 <select value={appFilter} onChange={(event) => setAppFilter(event.target.value)}>
                   <option value="all">All apps</option>
                   {Object.entries(appNames).toSorted((left, right) => left[1].localeCompare(right[1])).map(([appId, appName]) => <option value={appId} key={appId}>{appName}</option>)}
                 </select>
               </label>
-              <label className={styles.selectField}>
+              <label className="reports-select-field">
                 <span>Sort</span>
                 <select value={sort} onChange={(event) => setSort(event.target.value as SortOrder)}>
                   <option value="updated">Recently modified</option>
@@ -477,38 +477,38 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
             </div>
 
             {visible.length === 0 ? (
-              <div className={styles.empty}>
+              <div className="reports-empty">
                 <span aria-hidden="true"><AppIcon name="search" size="lg" /></span>
                 <strong>{savedSearches.length === 0 ? "No saved searches" : "No matching saved searches"}</strong>
                 <p>{savedSearches.length === 0 && effectiveQuery.length === 0 && scope === "all" ? "Save a search from the Search workspace to add its reusable definition here." : "Try another phrase or sharing scope."}</p>
                 {savedSearches.length > 0 ? <button type="button" onClick={() => { setQuery(""); setScope("all"); }}>Clear filters</button> : <Link href="/search/">Open Search</Link>}
               </div>
             ) : (
-              <div className={styles.tableWrap}>
-                <table className={`${styles.table} ${styles.backendTable}`}>
+              <div className="table-wrap reports-table-wrap">
+                <table className="table table--fixed table--cards reports-table reports-table--backend">
                   <thead><tr><th scope="col">Saved search</th><th scope="col">App</th><th scope="col">Sharing</th><th scope="col">Owner</th><th scope="col">Time range</th><th scope="col">Modified</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
                   <tbody>{visible.map((savedSearch) => {
                     const display = savedSearchForDisplay(savedSearch, formatDate);
                     return (
                       <tr key={savedSearch.id}>
-                        <td className={styles.reportColumn} aria-label={`Saved search ${savedSearch.name}`}>
-                          <div className={styles.reportCell}>
-                            <span className={`${styles.reportIcon} ${styles.reportIconStatistics}`} aria-hidden="true">⌕</span>
+                        <td className="reports-report-column" aria-label={`Saved search ${savedSearch.name}`}>
+                          <div className="reports-report-cell">
+                            <span className="reports-report-icon reports-report-icon--statistics" aria-hidden="true">⌕</span>
                             <div><Link href={launchHref(savedSearch)}>{savedSearch.name}</Link>{savedSearch.description ? <small>{savedSearch.description}</small> : null}<code>{savedSearch.search.spl}</code></div>
                           </div>
                         </td>
                         <td data-label="App">{savedSearch.search.appId === undefined
                           ? "No app"
                           : appNames[savedSearch.search.appId] ?? savedSearch.search.appId}</td>
-                        <td data-label="Sharing"><span className={styles.status}><i />{scopeLabel(savedSearch.sharingScope)}</span></td>
+                        <td data-label="Sharing"><StatusLabel tone="neutral">{scopeLabel(savedSearch.sharingScope)}</StatusLabel></td>
                         <td data-label="Owner">{savedSearch.ownerId || "Current user"}</td>
                         <td data-label="Time range"><code>{savedSearch.search.timeRange?.earliest ?? "Server default"} → {savedSearch.search.timeRange?.latest ?? "Server default"}</code></td>
                         <td data-label="Modified">{display.updatedAt}</td>
-                        <td className={`${styles.openCell} ${styles.actionCell}`}>
+                        <td className="reports-open-cell reports-action-cell">
                           <Link href={launchHref(savedSearch)} aria-label={`Open ${savedSearch.name} in Search`}>Open <AppIcon name="chevron-right" size="xs" /></Link>
                           <button type="button" disabled={controlsPending} onClick={() => openAction("rename", savedSearch)} aria-label={`Rename ${savedSearch.name}`}>Rename</button>
                           <button type="button" disabled={controlsPending} onClick={() => openAction("duplicate", savedSearch)} aria-label={`Duplicate ${savedSearch.name}`}>Duplicate</button>
-                          <button className={styles.deleteAction} type="button" disabled={controlsPending} onClick={() => openAction("delete", savedSearch)} aria-label={`Delete ${savedSearch.name}`}>Delete</button>
+                          <button className="reports-delete-action" type="button" disabled={controlsPending} onClick={() => openAction("delete", savedSearch)} aria-label={`Delete ${savedSearch.name}`}>Delete</button>
                         </td>
                       </tr>
                     );
@@ -534,9 +534,9 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
           onClose={closeAction}
           footer={(
             <>
-              <button className="button secondary" type="button" disabled={actionPending !== null} onClick={closeAction}>Cancel</button>
+              <button className="button button--secondary" type="button" disabled={actionPending !== null} onClick={closeAction}>Cancel</button>
               <button
-                className="button primary"
+                className="button button--primary"
                 type="submit"
                 form="reports-rename-saved-search"
                 disabled={actionPending !== null || actionNameError !== null || actionName.trim() === modal.target.name}
@@ -548,7 +548,7 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
           )}
         >
           <form className="form-stack" id="reports-rename-saved-search" onSubmit={(event) => { event.preventDefault(); void renameSavedSearch(); }}>
-            {actionError === null && actionNameError === null ? null : <p className={styles.actionError} id="reports-rename-name-error" role="alert">{actionError ?? actionNameError}</p>}
+            {actionError === null && actionNameError === null ? null : <p className="reports-action-error" id="reports-rename-name-error" role="alert">{actionError ?? actionNameError}</p>}
             <label><span>Name</span><input id="reports-saved-search-name" value={actionName} disabled={actionPending !== null} maxLength={255} autoComplete="off" aria-invalid={actionNameError !== null} aria-describedby={actionError === null && actionNameError === null ? undefined : "reports-rename-name-error"} onChange={(event) => { setActionName(event.target.value); setActionError(null); }} /></label>
           </form>
         </Modal>
@@ -563,17 +563,17 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
           onClose={closeAction}
           footer={(
             <>
-              <button className="button secondary" type="button" disabled={actionPending !== null} onClick={closeAction}>Cancel</button>
-              <button className="button primary" type="submit" form="reports-duplicate-saved-search" disabled={actionPending !== null || actionNameError !== null} aria-busy={actionPending === "duplicate"}>
+              <button className="button button--secondary" type="button" disabled={actionPending !== null} onClick={closeAction}>Cancel</button>
+              <button className="button button--primary" type="submit" form="reports-duplicate-saved-search" disabled={actionPending !== null || actionNameError !== null} aria-busy={actionPending === "duplicate"}>
                 {actionPending === "duplicate" ? "Duplicating…" : "Duplicate"}
               </button>
             </>
           )}
         >
           <form className="form-stack" id="reports-duplicate-saved-search" onSubmit={(event) => { event.preventDefault(); void duplicateSavedSearch(); }}>
-            {actionError === null && actionNameError === null ? null : <p className={styles.actionError} id="reports-duplicate-name-error" role="alert">{actionError ?? actionNameError}</p>}
+            {actionError === null && actionNameError === null ? null : <p className="reports-action-error" id="reports-duplicate-name-error" role="alert">{actionError ?? actionNameError}</p>}
             <label><span>Copy name</span><input id="reports-duplicate-saved-search-name" value={actionName} disabled={actionPending !== null} maxLength={255} autoComplete="off" aria-invalid={actionNameError !== null} aria-describedby={actionError === null && actionNameError === null ? undefined : "reports-duplicate-name-error"} onChange={(event) => { setActionName(event.target.value); setActionError(null); }} /></label>
-            <p className={styles.actionHint}>The copy keeps the current SPL, time range, result preferences, sharing scope, and app. Future edits do not affect the original.</p>
+            <p className="reports-action-hint">The copy keeps the current SPL, time range, result preferences, sharing scope, and app. Future edits do not affect the original.</p>
           </form>
         </Modal>
       ) : null}
@@ -586,15 +586,15 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
           onClose={closeAction}
           footer={(
             <>
-              <button className="button secondary" type="button" disabled={actionPending !== null} onClick={closeAction}>Keep saved search</button>
-              <button className="button danger" type="button" disabled={actionPending !== null} aria-busy={actionPending === "delete"} onClick={() => void deleteSavedSearch()}>
+              <button className="button button--secondary" type="button" disabled={actionPending !== null} onClick={closeAction}>Keep saved search</button>
+              <button className="button button--danger" type="button" disabled={actionPending !== null} aria-busy={actionPending === "delete"} onClick={() => void deleteSavedSearch()}>
                 {actionPending === "delete" ? "Deleting…" : "Delete saved search"}
               </button>
             </>
           )}
         >
           <p>This cannot be undone. Existing search-history entries and their terminal metadata are not removed.</p>
-          {actionError === null ? null : <p className={styles.actionError} role="alert">{actionError}</p>}
+          {actionError === null ? null : <p className="reports-action-error" role="alert">{actionError}</p>}
         </Modal>
       ) : null}
     </div>

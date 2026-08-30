@@ -47,6 +47,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
+import { statusClassName, type StatusTone } from "./status";
+
 const ICONS = {
   activity: Activity,
   alert: Bell,
@@ -116,7 +118,14 @@ export function AppIcon({ className, name, size = "sm", spin = false, ...props }
   );
 }
 
-export type StatusIconTone = "success" | "info" | "warning" | "error" | "neutral";
+/**
+ * The tone a status icon may carry.
+ *
+ * A narrowing of `StatusTone`: an icon is a snapshot, so it has no `running`
+ * spelling of its own -- a job that is still going renders `info` with a
+ * spinning glyph, which is motion the caller already asks for through `spin`.
+ */
+export type StatusIconTone = Exclude<StatusTone, "running">;
 
 export interface StatusIconProps {
   icon: AppIconName;
@@ -124,9 +133,10 @@ export interface StatusIconProps {
   spin?: boolean;
 }
 
+/** A tone-filled disc carrying one glyph, from the shared `.status` family. */
 export function StatusIcon({ icon, spin = false, tone }: StatusIconProps) {
   return (
-    <span className={`status-icon status-icon--${tone}`} aria-hidden="true">
+    <span className={statusClassName("icon", tone)} aria-hidden="true">
       <AppIcon name={icon} size="xs" spin={spin} />
     </span>
   );

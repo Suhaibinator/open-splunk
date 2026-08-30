@@ -1,0 +1,5 @@
+{
+  "//": "Global classes that reach the DOM without ever appearing as a literal or an interpolation base in application code. Every entry needs the comment to say which code produces it; an entry that stops being needed fails scripts/style-invariants.test.mjs, so this list can never quietly become a list of dead CSS nobody deleted.",
+  "classes": [],
+  "prefixes": []
+}

@@ -4,7 +4,14 @@ import { isValidElement, type ReactNode } from "react";
 
 import { SPL_PIPELINE_COMMANDS } from "@/lib/search/spl-syntax";
 
-import { eventFieldValueWhiteSpace, syntaxTokens } from "./workspace-utils";
+import {
+  eventCountForQuery,
+  eventFieldValueWhiteSpace,
+  filteredDemoEvents,
+  historyPhase,
+  stateTone,
+  syntaxTokens,
+} from "./workspace-utils";
 
 interface SyntaxTokenProps {
   children?: ReactNode;
@@ -16,6 +23,14 @@ test("event field presentation preserves adapted nomv newlines", () => {
   assert.equal(eventFieldValueWhiteSpace(7), "nowrap");
   assert.equal(eventFieldValueWhiteSpace("alpha\nbeta"), "pre-wrap");
   assert.equal(eventFieldValueWhiteSpace("alpha\rbeta"), "pre-wrap");
+});
+
+test("numeric head limits clamp demo rows and result counts", () => {
+  assert.equal(eventCountForQuery("index=gradethis | head 3"), 3);
+  assert.equal(eventCountForQuery("index=gradethis | HEAD 0"), 0);
+  assert.equal(eventCountForQuery("index=gradethis | head 100 | HEAD 3"), 3);
+  assert.equal(filteredDemoEvents("index=gradethis | head 3").length, 3);
+  assert.equal(eventCountForQuery("index=gradethis | head invalid"), 12_846);
 });
 
 function classifiedTokens(query: string): Array<{ className: string; text: string }> {
@@ -426,4 +441,21 @@ test("count eval predicates highlight nested fields and operators", () => {
     ["IN", "/", ">", "=="],
   );
   assert.equal(tokens.map((token) => token.text).join(""), query);
+});
+
+test("a recorded history outcome reads its tone from the one job vocabulary", () => {
+  // The Jobs dialog paints the running job and the four cards beside it from
+  // the same table. When they were two tables, one of them was migrated to
+  // `StatusLabel` and the other kept asking for a class whose rules had been
+  // deleted -- rendering four cards with no layout and an invisible swatch,
+  // which no baseline opens and no CSS-to-markup check can see.
+  assert.equal(historyPhase("Completed"), "completed");
+  assert.equal(historyPhase("Failed"), "failed");
+  assert.equal(historyPhase("Canceled"), "canceled");
+  assert.equal(historyPhase("Expired"), "expired");
+
+  assert.equal(stateTone(historyPhase("Completed")), "success");
+  assert.equal(stateTone(historyPhase("Failed")), "error");
+  assert.equal(stateTone(historyPhase("Canceled")), "neutral");
+  assert.equal(stateTone(historyPhase("Expired")), "neutral");
 });

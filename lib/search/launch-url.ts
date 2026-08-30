@@ -8,6 +8,17 @@ interface SearchLaunchOptions {
   timezone?: string;
 }
 
+export const DEFAULT_SEARCH_HEAD_LIMIT = 10;
+
+export function boundedIndexSearchQuery(indexName: string): string {
+  const normalizedIndex = indexName.trim();
+  if (normalizedIndex.length === 0) throw new TypeError("An index name is required.");
+  const indexSelector = /^[A-Za-z0-9_.-]+$/u.test(normalizedIndex)
+    ? normalizedIndex
+    : formatSplValue(normalizedIndex);
+  return `index=${indexSelector}\n| head ${DEFAULT_SEARCH_HEAD_LIMIT}`;
+}
+
 export function searchLaunchHref(query: string, options: SearchLaunchOptions = {}): string {
   const parameters = new URLSearchParams({
     q: query,

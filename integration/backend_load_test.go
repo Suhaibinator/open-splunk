@@ -4,6 +4,7 @@ package integration_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -208,17 +209,35 @@ func TestBackendLoadPlanRejectsWrappedCountsAndInexactDistinctCounts(t *testing.
 func TestBackendLoadDurableWALAppendedEvents(t *testing.T) {
 	t.Parallel()
 	logs := strings.Join([]string{
-		`time=now level=INFO msg="collector starting"`,
-		`time=now level=DEBUG msg="collector: batch appended" batch_sequence=11 events=250 bytes=1000`,
-		`time=now level=DEBUG msg="collector: batch appended" batch_sequence=12 events=500 bytes=2000`,
+		`{"level":"info","msg":"collector starting"}`,
+		`{"level":"debug","msg":"batch appended","batch_sequence":11,"events":250,"batch_bytes":1000}`,
+		`{"level":"debug","msg":"batch appended","batch_sequence":12,"events":500,"batch_bytes":2000}`,
 	}, "\n")
 	if got, err := backendLoadDurableWALAppendedEvents(logs); err != nil || got != 750 {
 		t.Fatalf("backendLoadDurableWALAppendedEvents() = %d, %v; want 750", got, err)
 	}
 	if _, err := backendLoadDurableWALAppendedEvents(
-		`level=DEBUG msg="collector: batch appended" batch_sequence=11 bytes=1000`,
+		`{"level":"debug","msg":"batch appended","batch_sequence":11,"batch_bytes":1000}`,
 	); err == nil {
 		t.Fatal("WAL append log without an event count unexpectedly parsed")
+	}
+	for _, invalid := range []string{
+		`{"msg":"batch appended","events":"250"}`,
+		`{"msg":"batch appended","events":-1}`,
+		`{"msg":"batch appended","events":1.5}`,
+		`{"msg":"batch appended","events":null}`,
+		`{"msg":"batch appended","events":18446744073709551616}`,
+	} {
+		if _, err := backendLoadDurableWALAppendedEvents(invalid); err == nil {
+			t.Fatalf("WAL append log with invalid event count unexpectedly parsed: %s", invalid)
+		}
+	}
+	overflow := strings.Join([]string{
+		`{"msg":"batch appended","events":18446744073709551615}`,
+		`{"msg":"batch appended","events":1}`,
+	}, "\n")
+	if _, err := backendLoadDurableWALAppendedEvents(overflow); err == nil {
+		t.Fatal("overflowing WAL append event total unexpectedly parsed")
 	}
 }
 
@@ -369,7 +388,6 @@ func runBackendSustainedLoad(t *testing.T, plan backendLoadPlan) {
 		collectorBinary,
 		"run",
 		"-config", collectorConfig,
-		"-log-level", "debug",
 	}
 	var collectorProcesses []*managedProcess
 	startCollector := func() *managedProcess {
@@ -903,23 +921,26 @@ func waitForBackendLoadDurableWALQueuedEvents(
 }
 
 func backendLoadDurableWALAppendedEvents(logs string) (uint64, error) {
-	const (
-		message = `level=DEBUG msg="collector: batch appended"`
-		marker  = " events="
-	)
+	const message = "batch appended"
+	type logRecord struct {
+		Message string          `json:"msg"`
+		Events  json.RawMessage `json:"events"`
+	}
 	var total uint64
 	for line := range strings.SplitSeq(logs, "\n") {
-		if !strings.Contains(line, message) {
+		var record logRecord
+		if err := json.Unmarshal([]byte(line), &record); err != nil || record.Message != message {
 			continue
 		}
-		_, value, found := strings.Cut(line, marker)
-		if !found {
+		if len(record.Events) == 0 {
 			return 0, fmt.Errorf("backend load WAL append log lacks events: %q", line)
 		}
-		value, _, _ = strings.Cut(value, " ")
-		events, err := strconv.ParseUint(value, 10, 64)
-		if err != nil {
-			return 0, fmt.Errorf("parse backend load WAL append events %q: %w", value, err)
+		var events uint64
+		if record.Events[0] < '0' || record.Events[0] > '9' {
+			return 0, fmt.Errorf("backend load WAL append events must be an unsigned integer: %s", record.Events)
+		}
+		if err := json.Unmarshal(record.Events, &events); err != nil {
+			return 0, fmt.Errorf("parse backend load WAL append events %s: %w", record.Events, err)
 		}
 		if total > ^uint64(0)-events {
 			return 0, errors.New("backend load WAL appended event count overflow")

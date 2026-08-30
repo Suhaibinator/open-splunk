@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
 	"math"
 	"os"
 	"path/filepath"
@@ -20,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
@@ -97,7 +96,7 @@ const (
 // later event from the same file is durably appended, or it is re-read (and
 // re-skipped, idempotently) after a restart.
 type Daemon struct {
-	log *slog.Logger
+	log *zap.Logger
 	now func() time.Time
 
 	collectorID string
@@ -153,14 +152,14 @@ type Option func(*daemonOptions)
 
 // daemonOptions holds resolved construction options.
 type daemonOptions struct {
-	logger      *slog.Logger
+	logger      *zap.Logger
 	collectorID string
 	instanceID  string
 }
 
 // WithLogger sets the structured logger used for daemon diagnostics. The logger
 // is also handed to the sender; it must never be given the bearer token.
-func WithLogger(logger *slog.Logger) Option {
+func WithLogger(logger *zap.Logger) Option {
 	return func(o *daemonOptions) { o.logger = logger }
 }
 
@@ -202,7 +201,7 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 	}
 	logger := o.logger
 	if logger == nil {
-		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+		logger = zap.NewNop()
 	}
 
 	// Clean once before any inspection or mutation. In particular, Lstat on a
@@ -220,8 +219,8 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 	// Plaintext transport sends the bearer token in cleartext; warn whenever TLS
 	// is disabled, even for loopback (config.Validate gates non-loopback use).
 	if !cfg.Server.TLS.Enabled {
-		logger.Warn("collector: TLS is disabled; the bearer token is sent to the server in cleartext",
-			"address", cfg.Server.Address)
+		logger.Warn("TLS is disabled; the bearer token is sent to the server in cleartext",
+			zap.String("address", cfg.Server.Address))
 	}
 	stateLock, err := acquireStateDirectoryLock(stateDir)
 	if err != nil {
@@ -266,10 +265,10 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 	}
 	queueStats := queue.Stats()
 	if queueStats.QuarantinedSegments != 0 || queueStats.RecoveryWarning != "" {
-		logger.Warn("collector: WAL recovery retained quarantined data; operator inspection is required",
-			"segments", queueStats.QuarantinedSegments,
-			"bytes", queueStats.QuarantinedBytes,
-			"recovery_warning", queueStats.RecoveryWarning,
+		logger.Warn("WAL recovery retained quarantined data; operator inspection is required",
+			zap.Uint64("segments", queueStats.QuarantinedSegments),
+			zap.Uint64("quarantined_bytes", queueStats.QuarantinedBytes),
+			zap.String("recovery_warning", queueStats.RecoveryWarning),
 		)
 	}
 
@@ -294,9 +293,9 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 	if herr != nil || strings.TrimSpace(hostname) == "" ||
 		!validCollectorBoundaryText(hostname, collectorlimits.MaximumHostnameBytes, false) {
 		if herr != nil {
-			logger.Warn("collector: operating-system hostname is unavailable; using fallback")
+			logger.Warn("operating-system hostname is unavailable; using fallback")
 		} else {
-			logger.Warn("collector: operating-system hostname is invalid for the wire protocol; using fallback")
+			logger.Warn("operating-system hostname is invalid for the wire protocol; using fallback")
 		}
 		hostname = "unknown-host"
 	}
@@ -440,7 +439,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		go func(m input.Manager) {
 			defer inputWG.Done()
 			if err := m.Run(pipeCtx); err != nil {
-				d.log.Error("collector: input manager stopped", "error", err.Error())
+				d.log.Error("input manager stopped", zap.Error(err))
 			}
 		}(ir.manager)
 	}
@@ -475,13 +474,13 @@ func (d *Daemon) Run(ctx context.Context) error {
 		batcherDone = true
 		if isRealError(err) {
 			runErr = err
-			d.log.Error("collector: batcher terminated", "error", err.Error())
+			d.log.Error("batcher terminated", zap.Error(err))
 		}
 	case err := <-senderErrCh:
 		senderDone = true
 		if isRealError(err) {
 			runErr = err
-			d.log.Error("collector: sender terminated", "error", err.Error())
+			d.log.Error("sender terminated", zap.Error(err))
 		}
 	}
 

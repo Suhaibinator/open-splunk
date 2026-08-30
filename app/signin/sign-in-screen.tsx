@@ -13,6 +13,7 @@ import {
 } from "@/lib/api";
 
 import { AppIcon } from "../_components/app-icon";
+import { Wordmark } from "../_components/wordmark";
 
 interface SignInScreenProps {
   dataMode: "backend" | "demo";
@@ -54,7 +55,7 @@ export function SignInScreen({ dataMode }: SignInScreenProps) {
   return (
     <main className="signin-page">
       <section className="signin-story" aria-label="Open Splunk product introduction">
-        <Link className="signin-wordmark" href="/" aria-label="Open Splunk home"><span>open</span><b>&gt;</b><span>splunk</span></Link>
+        <Wordmark href="/" size="hero" />
         <div className="signin-story-copy">
           <span className="signin-kicker">{localSession ? "LOCAL SERVER" : "FRONTEND PREVIEW"}</span>
           <h1>{localSession ? "Open your local Splunk workspace." : "Explore the Open Splunk workspace."}</h1>
@@ -84,7 +85,7 @@ export function SignInScreen({ dataMode }: SignInScreenProps) {
 
       <section className="signin-panel">
         <div className="signin-card">
-          <Link className="signin-mobile-brand" href="/" aria-label="Open Splunk home"><span>open</span><b>&gt;</b><span>splunk</span></Link>
+          <Wordmark className="signin-mobile-brand" href="/" size="hero" />
           <header><span className="signin-lock" aria-hidden="true">↳</span><h1>{localSession ? "Administrator session" : "Frontend preview"}</h1><p>{localSession ? "Use the bearer token configured for this local server." : "Authentication is not connected in this build."}</p></header>
           {localSession ? (
             administratorSessionActive ? (

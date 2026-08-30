@@ -213,8 +213,8 @@ export function SearchLimitsSettings({
         </section>
       ))}
       <div className="settings-actions">
-        <button className="button secondary" type="button" disabled={state === "saving" || atDefaults} onClick={() => { setForm(defaultsForm); setExactBase(response.defaults); }}>Reset to defaults</button>
-        <button className="button primary" type="submit" disabled={state === "saving" || !dirty || !valid}>{state === "saving" ? "Applying…" : "Apply"}</button>
+        <button className="button button--secondary" type="button" disabled={state === "saving" || atDefaults} onClick={() => { setForm(defaultsForm); setExactBase(response.defaults); }}>Reset to defaults</button>
+        <button className="button button--primary" type="submit" disabled={state === "saving" || !dirty || !valid}>{state === "saving" ? "Applying…" : "Apply"}</button>
       </div>
     </form>
   );

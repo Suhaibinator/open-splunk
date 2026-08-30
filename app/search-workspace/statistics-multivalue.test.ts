@@ -58,14 +58,8 @@ test("multiline stats presentation stays inside the fixed virtual row", () => {
     value: "alpha,beta",
   })), "alpha,beta");
 
-  const css = readFileSync(path.join(process.cwd(), "app", "globals.css"), "utf8");
-  const rule = /\.statistics-multivalue-lines\s*\{([^}]*)\}/u.exec(css)?.[1];
-  assert.ok(rule);
-  assert.match(rule, /display:\s*block/u);
-  assert.match(rule, /max-height:\s*calc\(var\(--statistics-row-height, 42px\) - 8px\)/u);
-  assert.match(rule, /overflow:\s*hidden/u);
-  assert.match(rule, /white-space:\s*pre-wrap/u);
-
+  // The `.statistics-multivalue-lines` clamp is asserted against computed style
+  // in integration/visual/css-contracts.spec.ts.
   const panel = readFileSync(
     path.join(process.cwd(), "app", "search-workspace", "panels", "statistics-panel.tsx"),
     "utf8",

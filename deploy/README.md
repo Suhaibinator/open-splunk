@@ -36,6 +36,8 @@ options may subsequently apply a documented derived-default rule.
 | Environment variable | CLI flag | Built-in default | Purpose | Accepted values and constraints |
 | --- | --- | --- | --- | --- |
 | `OPEN_SPLUNK_SERVER_VERIFY_EMBEDDED_RELEASE` | `-verify-embedded-release` | `false` | Verify the embedded release payload and exit without opening runtime storage or listeners. | Boolean. |
+| `OPEN_SPLUNK_SERVER_LOG_LEVEL` | `-log-level` | `info` | Set the minimum server and router log level. | Case-insensitive `debug`, `info`, `warn`, or `error`. |
+| `OPEN_SPLUNK_SERVER_LOG_FORMAT` | `-log-format` | `json` | Select the server and router log encoding written to standard error. | Case-insensitive `json` or `console`; `json` is recommended for deployed services. |
 | `OPEN_SPLUNK_SERVER_TENANT_ID` | `-tenant-id` | `default` | Set the single-node tenant identity persisted with tenant-scoped data. | Non-empty UTF-8 after trimming, no control characters, at most 255 bytes. Changing an established identity creates a different tenant scope. |
 | `OPEN_SPLUNK_SERVER_HTTP_LISTEN_ADDRESS` | `-http-listen-address` | `127.0.0.1:8080` | Select the browser API, UI, and HEC listen address. | `host:port`. A wildcard host such as `0.0.0.0` or `[::]` requires an explicit allowed-host list. |
 | `OPEN_SPLUNK_SERVER_HTTP_ALLOWED_HOSTS` | `-http-allowed-hosts` | Derived from the listen host | Admit browser/API `Host` values before origin and authentication checks. | Comma-separated DNS names or IP literals, without schemes, paths, or ports; at most 32 entries. Every browser-facing name must be listed. |
@@ -66,6 +68,11 @@ options may subsequently apply a documented derived-default rule.
 | `OPEN_SPLUNK_SERVER_SEARCH_HISTORY_MAXIMUM_AGE` | `-search-history-maximum-age` | `720h` (30 days) | Bound the age of terminal search-history entries. | Go duration from zero through 10 years; zero selects the 30-day default. |
 | `OPEN_SPLUNK_SERVER_SEARCH_HISTORY_MAXIMUM_ENTRIES_PER_OWNER` | `-search-history-maximum-entries-per-owner` | `10000` | Bound terminal search-history entries per owner; pending attempts are capped independently at the same value. | Integer from zero through `1000000`; zero selects `10000`. |
 | `OPEN_SPLUNK_SERVER_SEARCH_ATTEMPT_AUDIT_MAXIMUM_RETAINED_ATTEMPTS` | `-search-attempt-audit-maximum-retained-attempts` | `100000` | Bound the rolling payload-free search-attempt audit journal per tenant. | Integer zero or from `1` through `100000`; zero selects `100000`. |
+
+The default JSON logger writes one record per line to standard error with an
+ISO-8601 timestamp, level, `open-splunk-server` logger name, caller, message,
+and typed context fields. The console encoder exposes the same information in a
+human-readable form. The selected logger is also used by the embedded router.
 
 For administrator and ClickHouse credentials, select either the raw value or
 the file at one configuration tier. Supplying both forms at the same tier is
