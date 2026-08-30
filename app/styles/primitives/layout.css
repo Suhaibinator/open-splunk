@@ -26,7 +26,7 @@
   align-items: baseline;
   display: flex;
   flex: 0 0 auto;
-  font-size: 17px;
+  font-size: var(--type-xl);
   font-weight: 700;
   height: 38px;
   letter-spacing: -0.04em;
@@ -36,19 +36,19 @@
 }
 
 .wordmark b {
-  color: #79b84a;
-  font-size: 19px;
+  color: var(--accent-bright);
+  font-size: var(--type-xxl);
   line-height: 0;
   margin: 0 1px;
 }
 
 .wordmark span:first-child {
-  color: #aeb9bf;
+  color: var(--chrome-fg-faint);
   font-weight: 400;
 }
 
 .wordmark--hero {
-  font-size: 22px;
+  font-size: var(--type-xxl);
   height: auto;
   letter-spacing: -0.05em;
   padding: 0;
@@ -56,18 +56,18 @@
 }
 
 .wordmark--hero b {
-  font-size: 25px;
+  font-size: var(--type-xxl);
   line-height: normal;
   margin: 0 2px;
 }
 
 .suite-utilities .health-indicator {
-  color: #c7d1d6;
+  color: var(--chrome-fg-muted);
 }
 
 .health-indicator > span {
-  background: #74ae49;
-  border: 2px solid #38442f;
+  background: var(--accent-bright);
+  border: 2px solid var(--chrome-appbar);
   border-radius: 50%;
   display: inline-block;
   height: 9px;
@@ -189,11 +189,11 @@
 
 .app-glyph {
   align-items: center;
-  background: #5d9637;
+  background: var(--accent-bright);
   color: var(--chrome-fg);
   display: inline-flex;
-  flex: 0 0 auto !important;
-  font-size: 15px;
+  flex: 0 0 auto;
+  font-size: var(--type-lg);
   font-weight: 700;
   height: 28px;
   justify-content: center;
@@ -264,10 +264,10 @@
 .toast {
   align-items: center;
   animation: toast-in 180ms ease-out;
-  background: #26333b;
-  border-left: 4px solid #4a8eb4;
+  background: var(--bg-inverse);
+  border-left: 4px solid var(--status-info);
   bottom: 20px;
-  box-shadow: 0 8px 28px rgb(12 22 28 / 28%);
+  box-shadow: var(--shadow-toast);
   color: var(--fg-inverse);
   display: flex;
   gap: 9px;
@@ -286,7 +286,7 @@
 
 .toast > span {
   align-items: center;
-  background: #4a8eb4;
+  background: var(--status-info);
   border-radius: 50%;
   display: inline-flex;
   font-size: var(--type-xs);
@@ -304,14 +304,14 @@
   background: transparent;
   border: 0;
   color: var(--fg-inverse);
-  font-size: 18px;
+  font-size: var(--type-xxl);
   height: 28px;
   width: 28px;
 }
 
-.toast-success { border-left-color: #72a84c; }
-.toast-success > span { background: #72a84c; }
-.toast-warning { border-left-color: #d99d2a; }
+.toast-success { border-left-color: var(--accent-bright); }
+.toast-success > span { background: var(--accent-bright); }
+.toast-warning { border-left-color: var(--status-warning-bright); }
 .toast-warning > span { background: var(--status-warning-bright); }
 
 /* Multi-page product shell */
@@ -368,8 +368,8 @@
 }
 
 .suite-app-switcher {
-  border-left: 1px solid rgb(255 255 255 / 8%);
-  border-right: 1px solid rgb(255 255 255 / 8%);
+  border-left: 1px solid color-mix(in srgb, var(--chrome-fg) 9%, transparent);
+  border-right: 1px solid color-mix(in srgb, var(--chrome-fg) 9%, transparent);
   gap: 3px;
 }
 
@@ -379,7 +379,7 @@
 .suite-utilities > button:hover,
 .suite-utilities > .suite-menu-anchor > button:hover,
 .suite-utilities > .suite-menu-anchor > button[aria-expanded="true"] {
-  background: rgb(255 255 255 / 8%);
+  background: color-mix(in srgb, var(--chrome-fg) 9%, transparent);
 }
 
 .suite-utilities {
@@ -390,14 +390,14 @@
 }
 
 .suite-utilities .suite-context {
-  color: #c8d3d8;
+  color: var(--chrome-fg-muted);
 }
 
 .suite-find {
   align-items: center;
   align-self: center;
   background: var(--bg-inverse);
-  border: 1px solid #4a555c;
+  border: 1px solid var(--chrome-hover);
   display: flex;
   height: 25px;
   margin: 0 var(--space-2);
@@ -405,8 +405,8 @@
 }
 
 .suite-find:focus-within {
-  border-color: #8fc5e0;
-  box-shadow: 0 0 0 2px rgb(47 138 193 / 35%);
+  border-color: var(--status-info-edge);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--focus-ring) 35%, transparent);
 }
 
 .suite-find input {
@@ -430,7 +430,7 @@
 .suite-find button {
   background: transparent;
   border: 0;
-  color: #a7b2b8;
+  color: var(--chrome-fg-faint);
   height: 23px;
   padding: 0 6px;
 }
@@ -441,7 +441,7 @@
 
 .suite-user-button > span {
   align-items: center;
-  background: #6da442;
+  background: var(--accent-bright);
   border-radius: 50%;
   display: inline-flex;
   font-size: var(--type-xs);
@@ -569,7 +569,7 @@
 }
 
 .suite-app-icon--grade { background: var(--status-info); }
-.suite-app-icon--muted { background: #7d8990; }
+.suite-app-icon--muted { background: var(--status-neutral); }
 
 .suite-user-summary {
   align-items: center;
@@ -582,7 +582,7 @@
 
 .suite-user-summary > span {
   align-items: center;
-  background: #679d40;
+  background: var(--accent-bright);
   border-radius: 50%;
   color: var(--fg-inverse);
   display: inline-flex;
@@ -626,11 +626,11 @@
 }
 
 .suite-primary-nav a:hover { background: var(--chrome-hover); }
-.suite-primary-nav a.active { background: #384047; border-bottom-color: #79b84a; }
+.suite-primary-nav a.active { background: var(--chrome-appbar); border-bottom-color: var(--accent-bright); }
 
 .suite-app-identity {
   align-items: center;
-  border-left: 1px solid rgb(255 255 255 / 11%);
+  border-left: 1px solid color-mix(in srgb, var(--chrome-fg) 9%, transparent);
   display: flex;
   font-size: var(--type-xs);
   gap: 7px;
@@ -642,7 +642,7 @@
   align-items: center;
   background: var(--accent);
   display: inline-flex;
-  font-size: 15px;
+  font-size: var(--type-lg);
   height: 22px;
   justify-content: center;
   width: 22px;
@@ -670,8 +670,8 @@
   padding: 5px var(--space-6);
 }
 
-.suite-data-disclosure strong { color: #40515a; font-size: var(--type-xs); }
-.suite-data-disclosure--demo strong { color: #86620d; }
+.suite-data-disclosure strong { color: var(--fg-secondary); font-size: var(--type-xs); }
+.suite-data-disclosure--demo strong { color: var(--status-warning-strong); }
 .suite-data-disclosure--backend strong { color: var(--accent); }
 
 /* The drawer, its scrim and its trigger exist only below the compact
@@ -704,7 +704,7 @@
 .dashboard-title-row h1,
 .home-hero h1 {
   color: var(--fg-text);
-  font-size: 23px;
+  font-size: var(--type-xxl);
   font-weight: 400;
   letter-spacing: -0.02em;
   margin: 3px 0 var(--space-1);
@@ -752,7 +752,7 @@
 .suite-card-header h2,
 .suite-card-header h3 {
   color: var(--fg-text);
-  font-size: 13px;
+  font-size: var(--type-md);
   font-weight: 600;
   margin: 0 0 3px;
 }
@@ -782,7 +782,7 @@
    back, so a sheet imported later would win at the compact steps. */
 
 .home-hero { align-items: center; margin-bottom: var(--space-4); }
-.home-hero h1 { font-size: 25px; }
+.home-hero h1 { font-size: var(--type-xxl); }
 
 .dashboard-title-row { align-items: center; }
 
@@ -838,6 +838,7 @@
     width: 44px;
   }
   .drawer-trigger span { background: var(--chrome-fg); display: block; height: 1px; width: 17px; }
+
   /*
    * Only the shell's OWN catalog anchor folds away here, because the drawer
    * lists the same apps underneath it. A page that supplies its own switcher
@@ -856,7 +857,12 @@
     text-overflow: ellipsis;
   }
   .suite-utilities { margin-left: auto; }
-  .suite-user-button { height: 45px !important; padding: 0 13px !important; }
+
+  /* The bar's own control rule, `.suite-utilities > .suite-menu-anchor >
+     button`, is (0,2,1) and sets the 38px desktop height, so the mobile
+     override has to name the same path to reach it. It said `!important`
+     until Phase 5 made that an error. */
+  .suite-utilities > .suite-menu-anchor > .suite-user-button { height: 45px; padding: 0 13px; }
   .suite-user-button > span { height: 24px; width: 24px; }
   .suite-user-button > b,
   .suite-user-button > i { display: none; }
@@ -864,7 +870,7 @@
   .suite-main { min-height: calc(100dvh - 45px - env(safe-area-inset-top)); }
   .suite-data-disclosure { align-items: flex-start; flex-direction: column; gap: 1px; padding: 5px 10px; }
   .drawer-backdrop {
-    background: rgb(14 21 25 / 48%);
+    background: color-mix(in srgb, var(--bg-inverse) 48%, transparent);
     border: 0;
     display: block;
     inset: 0;
@@ -874,7 +880,7 @@
   .drawer {
     background: var(--bg-raised);
     border: 0;
-    box-shadow: 8px 0 30px rgb(18 29 36 / 24%);
+    box-shadow: var(--shadow-drawer);
     color: var(--fg-text);
     display: flex;
     flex-direction: column;
@@ -891,15 +897,15 @@
   .drawer > header { align-items: center; background: var(--chrome-bar); color: var(--chrome-fg); display: flex; justify-content: space-between; min-height: calc(69px + env(safe-area-inset-top)); padding: calc(10px + env(safe-area-inset-top)) 11px 10px 15px; position: sticky; top: 0; z-index: 2; }
   .drawer > header > div { align-items: center; display: flex; gap: 9px; }
   .drawer > header > div > span:last-child { display: flex; flex-direction: column; gap: 2px; }
-  .drawer > header small { color: #aeb9bf; font-size: var(--type-xs); }
+  .drawer > header small { color: var(--chrome-fg-faint); font-size: var(--type-xs); }
 .suite-user-avatar { align-items: center; background: var(--accent); border-radius: 50%; display: flex; height: 34px; justify-content: center; width: 34px; }
-  .drawer > header button { background: transparent; border: 0; color: #e6ecef; font-size: 24px; height: 44px; width: 44px; }
+  .drawer > header button { background: transparent; border: 0; color: var(--chrome-fg-muted); font-size: var(--type-xxl); height: 44px; width: 44px; }
   .drawer-label { color: var(--fg-muted); font-size: var(--type-xs); font-weight: 700; letter-spacing: 0.1em; padding: 15px var(--space-4) 6px; }
   .drawer > a { align-items: center; border-left: 3px solid transparent; display: flex; font-size: var(--type-sm); gap: var(--space-3); min-height: 47px; padding: 0 var(--space-4); text-decoration: none; }
   .drawer > a:hover { background: var(--bg-subtle); }
   .drawer > a.active { background: var(--accent-soft); border-left-color: var(--accent); font-weight: 700; }
-  .drawer > a.selected-app { background: var(--accent-soft); border-left-color: #7da768; }
-  .drawer > a > span { align-items: center; color: var(--fg-muted); display: flex; font-size: 15px; justify-content: center; width: 22px; }
+  .drawer > a.selected-app { background: var(--accent-soft); border-left-color: var(--accent-bright); }
+  .drawer > a > span { align-items: center; color: var(--fg-muted); display: flex; font-size: var(--type-lg); justify-content: center; width: 22px; }
   .drawer > a > b { margin-left: auto; }
   .drawer-app-state,
   .drawer-app-retry { color: var(--fg-muted); display: block; font-size: var(--type-xs); margin: var(--space-1) var(--space-4) var(--space-2); padding: 10px; }
@@ -929,5 +935,5 @@
   .suite-product-bar > .suite-menu-anchor > .suite-app-switcher { max-width: calc(100vw - 142px); }
   .suite-page-heading h1,
   .dashboard-title-row h1,
-  .home-hero h1 { font-size: 21px; }
+  .home-hero h1 { font-size: var(--type-xl); }
 }

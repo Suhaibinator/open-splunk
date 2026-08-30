@@ -102,6 +102,13 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      # `npm run lint` already ends with `npm run lint:css`. It is named again
+      # here so a stylesheet failure is its own red step rather than the tail of
+      # a step whose name says oxlint, and so removing it from the npm script
+      # cannot quietly take the CSS gate out of CI with it.
+      - name: Lint stylesheets
+        run: npm run lint:css
+
       - name: Type-check
         run: npm run typecheck
 
@@ -110,10 +117,11 @@ jobs:
 
       # The computed-style contracts read the application stylesheets back through a real
       # browser and need no export, no baseline, and no backend, so they are
-      # platform-independent and run here. `npm run test:visual` cannot: its
-      # baselines are rasterized per platform and only a darwin set is
-      # committed. Generating a linux set in this runner's image is the
-      # follow-up that puts the screenshot half of the net under CI too.
+      # platform-independent and run here. `npm run test:visual` cannot share
+      # this job: a Playwright baseline is rasterized per platform, the
+      # committed set is darwin, and a linux runner would compare this build
+      # against nothing. It runs in the `visual` job below instead, on the
+      # platform its baselines were recorded on.
       - name: Install Chromium for the stylesheet contracts
         run: npx --no-install playwright install --with-deps chromium
 
@@ -122,6 +130,56 @@ jobs:
 
       - name: Build static UI
         run: npm run build
+
+  visual:
+    # The screenshot half of the CSS safety net. It is a job of its own, on
+    # macos-latest, because `integration/visual/__screenshots__` holds one
+    # directory per platform and only `darwin` is committed: the same page
+    # rasterizes differently on linux, and `playwright.visual.config.ts` runs at
+    # `threshold: 0.02` with `maxDiffPixelRatio: 0`, which is tight enough that
+    # a font-rendering difference between operating systems is a failure rather
+    # than noise. Committing a linux set beside the darwin one would make this a
+    # step in the frontend job; until then, matching the runner to the baselines
+    # is what makes the gate mean anything.
+    name: Visual regression
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Chromium for the visual suite
+        run: npx --no-install playwright install --with-deps chromium
+
+      # The config's `webServer` builds both static exports before it serves
+      # them, so a stale export can never be screenshotted and there is no
+      # separate build step here.
+      - name: Test visual baselines
+        run: npm run test:visual
+
+      # Every failure writes the expected image, the received image and the diff
+      # into `test-results/visual`. Without them a red run says only that some
+      # pixels moved; with them the reviewer can see which.
+      - name: Upload visual diffs
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: visual-diffs
+          path: test-results/visual
+          retention-days: 14
+          if-no-files-found: ignore
 
   go-lint:
     name: Go lint
@@ -1023,6 +1081,10 @@ jobs:
       - protobuf
       - release-oci
       - spl-pipeline-clickhouse
+      # The screenshot half of the CSS net gates a build as much as the lint
+      # half does: a release that ships a stylesheet nobody looked at is exactly
+      # what the baselines exist to stop.
+      - visual
     strategy:
       fail-fast: false
       matrix:

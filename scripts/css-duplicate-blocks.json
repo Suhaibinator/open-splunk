@@ -86,8 +86,8 @@
       "declarations": [
         "background: transparent",
         "border: 0",
-        "color: #557149",
-        "font-size: 17px",
+        "color: var(--status-success-strong)",
+        "font-size: var(--type-xl)",
         "height: 28px",
         "width: 28px"
       ],
@@ -173,6 +173,20 @@
     },
     {
       "declarations": [
+        "color: var(--accent)",
+        "font-size: var(--type-xxs)",
+        "font-weight: 700",
+        "letter-spacing: 0.06em",
+        "text-transform: uppercase"
+      ],
+      "sites": [
+        "app/admin/admin.css :: .knowledge-manager__detail-body > header > span",
+        "app/admin/admin.css :: .knowledge-manager__related-inspector > header span"
+      ],
+      "why": "Knowledge-manager eyebrow, stated twice inside one file. The two rules read the same since Phase 5 put the related-inspector eyebrow's 8px on --type-xxs; before that they differed by one pixel of type and by nothing else, which is what kept the duplication out of this file. Same unclaimed eyebrow primitive as the `.knowledge-manager__eyebrow` rule beside them."
+    },
+    {
+      "declarations": [
         "color: var(--fg-muted)",
         "font-size: var(--type-xxs)",
         "font-weight: 700",
@@ -200,9 +214,9 @@
         "app/admin/admin.css :: .knowledge-manager__filters select, .knowledge-manager__advanced-filter-grid input, .knowledge-manager__advanced-filter-grid select",
         "app/admin/admin.css :: .knowledge-manager__mutation-grid input, .knowledge-manager__mutation-grid select, .knowledge-manager__delete-confirmation input",
         "app/admin/admin.css :: .knowledge-preview input",
-        "app/admin/admin.css :: .lookup-manager__toolbar input, .lookup-manager__toolbar select, .lookup-manager__editor input:not([type=\"checkbox\"]):not([type=\"file\"]), .lookup-manager__editor select"
+        "app/admin/admin.css :: .lookup-manager__toolbar input, .lookup-manager__toolbar select, .lookup-manager__editor input:not([type=\"checkbox\"], [type=\"file\"]), .lookup-manager__editor select"
       ],
-      "why": "Text input and select inside the knowledge and lookup managers -- four copies of the same control. The single largest entry in this file and the clearest candidate for the next consolidation phase."
+      "why": "Text input and select inside the knowledge and lookup managers -- four copies of the same control. The single largest entry in this file and the clearest candidate for the next consolidation phase. The fourth site's selector was respelled in Phase 5 from two chained `:not()` calls to one selector list, which matches the same elements and is the notation `selector-not-notation` asks for."
     },
     {
       "declarations": [
@@ -219,7 +233,7 @@
     },
     {
       "declarations": [
-        "color: #43545d",
+        "color: var(--fg-secondary)",
         "font-size: var(--type-xs)",
         "font-weight: 700",
         "padding: 0 5px"
@@ -317,6 +331,23 @@
         "app/datasets/datasets.css :: .dataset-view-toggle button"
       ],
       "why": "Bare `button` descendant rule -- a bordered toolbar button. Same remaining debt as group 13."
+    },
+    {
+      "declarations": [
+        "align-items: center",
+        "background: var(--accent-soft)",
+        "color: var(--accent)",
+        "display: flex",
+        "font-size: var(--type-xl)",
+        "height: 35px",
+        "justify-content: center",
+        "width: 35px"
+      ],
+      "sites": [
+        "app/admin/admin.css :: .summary-icon",
+        "app/datasets/datasets.css :: .dataset-icon"
+      ],
+      "why": "Tinted square icon tile. `.dataset-icon` and `.summary-icon` have been the same tile since Phase 2 gave both the accent wash; Phase 5 put the summary tile's 17px on --type-xl and the last difference between them went. Both want the unclaimed icon-tile primitive `.metric-symbol` and `.app-launch-icon` also copy."
     },
     {
       "declarations": [

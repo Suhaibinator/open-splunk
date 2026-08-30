@@ -81,7 +81,6 @@
     width: 100%;
   }
   .table--cards.table--cards thead {
-    clip: rect(0 0 0 0);
     clip-path: inset(50%);
     height: 1px;
     overflow: hidden;
@@ -142,5 +141,5 @@
      stated the same two declarations for one page. */
   .table-wrap:has(> .table--cards) { background: none; overflow: visible; }
 
-  .table-wrap { background: linear-gradient(to right, transparent calc(100% - 16px), rgb(39 116 155 / 9%)); }
+  .table-wrap { background: linear-gradient(to right, transparent calc(100% - 16px), color-mix(in srgb, var(--focus-ring) 9%, transparent)); }
 }

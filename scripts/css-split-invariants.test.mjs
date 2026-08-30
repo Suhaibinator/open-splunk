@@ -274,7 +274,9 @@ test("the monolith ledger records no edit the split set no longer makes", async 
   const live = new Set((await collectSplitRules(workspace, ledger.excluded)).map((rule) => rule.signature));
   const stale = [];
   for (const entry of ledger.substitutions) {
-    if (!stated.has(entry.before)) stale.push(`no monolith rule reads ${entry.before}`);
+    for (const before of Array.isArray(entry.before) ? entry.before : [entry.before]) {
+      if (!stated.has(before)) stale.push(`no monolith rule reads ${before}`);
+    }
     if (!live.has(entry.after)) stale.push(`no rule in the split set reads ${entry.after}`);
   }
   const imported = new Set((await listIndexImports(workspace)).map((entry) => entry.file));
@@ -480,6 +482,20 @@ test("applySubstitutions rewrites only the rules the ledger names", () => {
   assert.deepEqual(rewritten, [
     " || .fixture-a || width: var(--fixture-width, 48px)",
     " || .fixture-b || width: 48px",
+  ]);
+});
+
+test("applySubstitutions folds a list of rules into the one that replaced them", () => {
+  const rewritten = applySubstitutions(
+    [" || .fixture-a || width: 48px", " || .fixture-b || width: 8px", " || .fixture-a || height: 20px"],
+    [{
+      after: " || .fixture-a || height: 20px; width: 48px",
+      before: [" || .fixture-a || width: 48px", " || .fixture-a || height: 20px"],
+    }],
+  );
+  assert.deepEqual(rewritten, [
+    " || .fixture-a || height: 20px; width: 48px",
+    " || .fixture-b || width: 8px",
   ]);
 });
 

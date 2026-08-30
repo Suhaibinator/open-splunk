@@ -13,7 +13,7 @@
   "scripts": {
     "dev": "next dev --turbopack",
     "build": "node scripts/build-ui.mjs",
-    "lint": "oxlint .",
+    "lint": "oxlint . && npm run lint:css",
     "test:contracts": "playwright test --config=playwright.contracts.config.ts",
     "test:frontend": "node scripts/test-frontend.mjs",
     "test:visual": "playwright test --config=playwright.visual.config.ts",
@@ -21,7 +21,7 @@
     "test:visual:determinism": "node scripts/visual-determinism.mjs",
     "check:docs": "node scripts/check-docs.mjs",
     "typecheck": "tsc --noEmit",
-    "//lint:css": "Warning-only until Phase 5: 282 warnings, of which 251 are the hex/rgb/media-feature token debt that phase exists to clear — 196 color-no-hex, 49 rgb() disallow-list, 6 media-feature. docs/theming.md's \"Role gaps\" section groups the remaining hex by the tier-2 role that would absorb it. app/styles/tokens-*.css is exempt from color-no-hex and the rgb() disallow-list through an overrides entry in .stylelintrc.json, because the primitive tier is where a literal is supposed to live. Phase 5 flips the remaining severities to errors and gates the build on this script.",
+    "//lint:css": "Errors, and part of `npm run lint`, since Phase 5. It fails on a colour, a type size, a radius, a shadow, a stacking layer, a font stack, an off-canon breakpoint or an `!important` written anywhere but app/styles/tokens-*.css, which is what makes \"a theme is a one-file edit\" a checked claim rather than a convention. .stylelintrc.json carries the two commented allowlists it keeps: the token files, which are the one place a value belongs, and the two stylesheets whose `!important` no specificity can replace.",
     "lint:css": "stylelint \"app/**/*.css\""
   },
   "dependencies": {

@@ -49,8 +49,20 @@ async function expectKeyboardFocusRing(page: Page, selector: string): Promise<vo
   await page.keyboard.press("Tab");
   await expect(control).toHaveCSS("outline-width", "3px");
   await expect(control).toHaveCSS("outline-style", "solid");
-  await expect(control).toHaveCSS("outline-color", "rgba(42, 120, 158, 0.28)");
+  // `--focus-ring` at 28%, which Phase 5 rewrote from the literal
+  // `rgb(42 120 158 / 28%)` to `color-mix(in srgb, var(--focus-ring) 28%,
+  // transparent)`: no tier-2 token can carry an alpha, so the mix is how a ring
+  // stays translucent and still moves with the theme. Chromium serializes a
+  // `color-mix()` result in the `color(srgb …)` form rather than as `rgba()`,
+  // which is why the expected string changed shape as well as value.
+  await expect(control).toHaveCSS("outline-color", FOCUS_RING_28);
 }
+
+/** `--focus-ring` (`--blue-450`, #2f8ac1) at 28% alpha, as Chromium serializes it. */
+const FOCUS_RING_28 = "color(srgb 0.184314 0.541176 0.756863 / 0.28)";
+
+/** The same ring at 23%, which the knowledge-manager detail panel draws as a glow. */
+const FOCUS_RING_23 = "color(srgb 0.184314 0.541176 0.756863 / 0.23)";
 
 function expectEqualTracks(tracks: number[], count: number): void {
   expect(tracks).toHaveLength(count);
@@ -276,7 +288,7 @@ test.describe("knowledge manager layout contracts", () => {
     const detail = page.locator(".knowledge-manager__detail");
     await page.keyboard.press("Tab");
     await detail.evaluate((element: HTMLElement) => element.focus());
-    await expect(detail).toHaveCSS("box-shadow", "rgba(49, 126, 165, 0.23) 0px 0px 0px 3px");
+    await expect(detail).toHaveCSS("box-shadow", `${FOCUS_RING_23} 0px 0px 0px 3px`);
   });
 });
 
@@ -866,13 +878,17 @@ test.describe("folded breakpoint contracts", () => {
   test("the context bar and the metric numerals fold at 480px, not at 420px", async ({ page }) => {
     await mount(page, `${analyticsContextMarkup}${analyticsMetricsMarkup}`, INSIDE_430_FOLD);
     expect(await gridTracks(page, ".analytics-context-bar")).toHaveLength(1);
-    await expect(page.locator(".analytics-metric-grid strong").first()).toHaveCSS("font-size", "18px");
+    // 18px and 21px until Phase 5, which put every font-size on a --type-* step
+    // and landed both of them on --type-xxl -- one step, so the fold stopped
+    // folding. The narrow numeral now reads --type-xl, which is the step below
+    // it: the assertion is the same one, against the ramp the layer has.
+    await expect(page.locator(".analytics-metric-grid strong").first()).toHaveCSS("font-size", "16px");
 
     // Just above the canon step the two-up context bar and the full numeral
     // survive: 421px-480px is the whole band this fold changed.
     await mount(page, `${analyticsContextMarkup}${analyticsMetricsMarkup}`, INSIDE_520_FOLD);
     expect(await gridTracks(page, ".analytics-context-bar")).toHaveLength(2);
-    await expect(page.locator(".analytics-metric-grid strong").first()).toHaveCSS("font-size", "21px");
+    await expect(page.locator(".analytics-metric-grid strong").first()).toHaveCSS("font-size", "20px");
   });
 
   test("the operations header actions and volume plot fold at 480px, not at 430px", async ({ page }) => {

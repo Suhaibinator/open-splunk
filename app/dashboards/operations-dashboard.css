@@ -10,12 +10,20 @@
  * largest breakpoint first, so a rule and the widths that change it are read
  * together rather than at opposite ends of the file. */
 
-/* Page header and range picker */
-.operations-header-actions {
-  align-items: flex-end !important;
-  display: grid !important;
+/* Page header and range picker.
+   The class is doubled here and in both breakpoint rules below because the
+   shared page-heading row states `display: flex` for its last child as
+   `.dashboard-title-row > div:last-child`, which is (0,2,1) -- `:last-child`
+   counts as a class -- and this header is a grid rather than a row of buttons.
+   `div.` brings the tie to (0,2,1) and this file is imported after the
+   primitive, so the later rule wins it. Every rule for the header is doubled
+   rather than only the one that needs to be, because a media query adds no
+   specificity: a doubled base and a single-class override would leave the base
+   winning at every width. */
+div.operations-header-actions.operations-header-actions {
+  display: grid;
   grid-template-columns: auto auto;
-  justify-items: end;
+  place-items: flex-end end;
 }
 
 .operations-range-picker {
@@ -66,7 +74,7 @@
 }
 
 @media (max-width: 760px) {
-  .operations-header-actions {
+  div.operations-header-actions.operations-header-actions {
     grid-template-columns: minmax(0, 1fr) auto;
     justify-items: stretch;
     width: 100%;
@@ -83,7 +91,7 @@
 }
 
 @media (max-width: 480px) {
-  .operations-header-actions {
+  div.operations-header-actions.operations-header-actions {
     grid-template-columns: 1fr 1fr;
   }
 
@@ -173,7 +181,7 @@
 }
 
 .operations-volume-bar:focus-visible {
-  box-shadow: 0 0 0 2px rgb(47 120 158 / 45%);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--focus-ring) 45%, transparent);
   z-index: 3;
 }
 
@@ -359,7 +367,7 @@
 }
 
 .operations-panel-fields textarea {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-family: var(--font-mono);
   resize: vertical;
 }
 
@@ -368,7 +376,7 @@
 .operations-panel-toolbar button,
 .operations-error-banner button {
   background: var(--status-info);
-  border: 1px solid #226687;
+  border: 1px solid var(--status-info-strong);
   border-radius: var(--radius-sm);
   color: var(--fg-inverse);
   cursor: pointer;
@@ -400,7 +408,7 @@
 
 .operations-dashboard-list h2 {
   border-bottom: 1px solid var(--border);
-  font-size: 13px;
+  font-size: var(--type-md);
   margin: 0;
   padding: var(--space-3);
 }
@@ -468,8 +476,8 @@
 
 .operations-editor-actions .operations-danger-button {
   background: var(--bg-surface);
-  border-color: #b55252;
-  color: #9c3535;
+  border-color: var(--status-error);
+  color: var(--status-error-strong);
 }
 
 .operations-panel-toolbar {
@@ -505,14 +513,14 @@
 
 .operations-result-error,
 .operations-error-banner {
-  color: #8e2f2f;
+  color: var(--status-error-strong);
 }
 
 .operations-error-banner,
 .operations-notice-banner {
   align-items: center;
   background: var(--status-error-soft);
-  border: 1px solid #dfb8b8;
+  border: 1px solid var(--status-error-edge);
   display: flex;
   font-size: var(--type-sm);
   justify-content: space-between;
@@ -522,7 +530,7 @@
 
 .operations-notice-banner {
   background: var(--status-success-soft);
-  border-color: #b9d6b2;
+  border-color: var(--status-success-edge);
   color: var(--accent-hover);
 }
 

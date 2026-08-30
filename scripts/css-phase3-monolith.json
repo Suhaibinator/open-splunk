@@ -1,5 +1,5 @@
 {
-  "//": "The rule set of `app/globals.css` immediately before Phase 4 split it, frozen so the split can be checked as a move rather than believed as one.\n\nThe source is `app/globals.css` at commit 6bc7d42, the last commit that had one. Each row is `<enclosing at-rules> || <selector list> || <declarations>` with whitespace collapsed; `@media`, `@supports` and `@keyframes` blocks appear only as the at-rule context of the rules inside them, because a container declares nothing itself.\n\n`scripts/css-split-invariants.test.mjs` rebuilds the same inventory from the stylesheets `app/styles/index.css` imports and compares the two as multisets, so a rule that was dropped, duplicated, or edited on its way out of the monolith fails the build with its own text. Order is deliberately not compared: the phase moved responsive rules to the file that owns their base rules, which reorders them on purpose. The order that decides a tie is checked separately, per repeated selector.\n\n`excluded` names the stylesheets that were never part of the monolith and so cannot be compared against it. `substitutions` records the only rules the phase did not move verbatim; each is matched by selector, so a fifth edited rule cannot hide behind them.\n\nThis ledger is a one-phase provenance proof, not a standing budget. It has nothing left to say once a later phase deliberately rewrites the rules it pins, and should be deleted with the test that reads it rather than regenerated to make that phase pass.",
+  "//": "The rule set of `app/globals.css` immediately before Phase 4 split it, frozen so the split can be checked as a move rather than believed as one.\n\nThe source is `app/globals.css` at commit 6bc7d42, the last commit that had one. Each row is `<enclosing at-rules> || <selector list> || <declarations>` with whitespace collapsed; `@media`, `@supports` and `@keyframes` blocks appear only as the at-rule context of the rules inside them, because a container declares nothing itself.\n\n`scripts/css-split-invariants.test.mjs` rebuilds the same inventory from the stylesheets `app/styles/index.css` imports and compares the two as multisets, so a rule that was dropped, duplicated, or edited on its way out of the monolith fails the build with its own text. Order is deliberately not compared: the phase moved responsive rules to the file that owns their base rules, which reorders them on purpose. The order that decides a tie is checked separately, per repeated selector.\n\n`excluded` names the stylesheets that were never part of the monolith and so cannot be compared against it. `substitutions` records the rules a phase did not move verbatim; each is matched by selector, so an unrecorded edit cannot hide behind them. An entry's `before` is one rule, or the list of rules a phase folded into one where two of them shared a selector under the same at-rules.\n\nPhase 5 added 245 of them, against 4 from Phase 4, and that is the whole shape of what it did: it turned `npm run lint:css` into an error gate, and a rule that wrote a colour, a type size, a radius, a shadow or a stacking layer as a literal had to read the token instead. Each row names which of those it was. `rules` is untouched, which is the point -- the 1,869 rows still say what the monolith said, and the 245 edits are readable one at a time against them rather than reflowed into the baseline where nobody could see them.\n\nThis ledger is a provenance proof, not a standing budget, and the ratio above is how to tell when it has stopped being one. A phase that rewrites most of what it pins has nothing left to check against the frozen text, and should delete this file and the parity test with it rather than regenerate either to pass.",
   "excluded": [
     {
       "files": [
@@ -21,9 +21,985 @@
   ],
   "substitutions": [
     {
+      "after": " || .access-mode-notice || align-items: flex-start; background: var(--status-info-soft); border: 1px solid var(--status-info-edge); border-left: 3px solid var(--border-focus); display: flex; gap: 9px; padding: 11px",
+      "before": " || .access-mode-notice || align-items: flex-start; background: var(--status-info-soft); border: 1px solid #b8ceda; border-left: 3px solid var(--border-focus); display: flex; gap: 9px; padding: 11px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .action-menu > button > span:first-child || align-items: center; color: var(--accent-hover); display: inline-flex; flex: 0 0 24px; font-size: var(--type-xl); justify-content: center",
+      "before": " || .action-menu > button > span:first-child || align-items: center; color: var(--accent-hover); display: inline-flex; flex: 0 0 24px; font-size: 17px; justify-content: center",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .activity-filter-button span || background: var(--bg-subtle); border-radius: var(--radius-md); font-size: var(--type-xs); margin-left: var(--space-1); padding: 2px 5px",
+      "before": " || .activity-filter-button span || background: var(--bg-subtle); border-radius: 9px; font-size: var(--type-xs); margin-left: var(--space-1); padding: 2px 5px",
+      "why": "Phase 5 put the rule's border-radius on its documented --radius-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .activity-summary strong || font-size: var(--type-xxl); font-weight: 400",
+      "before": " || .activity-summary strong || font-size: 18px; font-weight: 400",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "before": " || .admin-checkbox || align-items: center; display: flex !important; flex-direction: row !important; gap: var(--space-2) !important",
+      "after": " || .admin-checkbox.admin-checkbox || align-items: center; display: flex; flex-direction: row; gap: var(--space-2)",
+      "why": "`declaration-no-important` is an error from Phase 5 on, and this rule only needed `!important` to outrank `.admin-form fieldset` (0,1,1), which sets `display: grid` and its own gap on the same element. Doubling the class makes the checkbox rule (0,2,0), which wins on class count instead. Same three values, same element, no `!important` left."
+    },
+    {
+      "after": " || .admin-section-header h2 || color: var(--fg-text); font-size: var(--type-lg); font-weight: 500; margin: 0 0 var(--space-1)",
+      "before": " || .admin-section-header h2 || color: var(--fg-text); font-size: 15px; font-weight: 500; margin: 0 0 var(--space-1)",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .admin-sidebar > button > b || color: var(--fg-muted); font-size: var(--type-lg); font-weight: 400",
+      "before": " || .admin-sidebar > button > b || color: var(--fg-muted); font-size: 15px; font-weight: 400",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .admin-sidebar > button.active || background: var(--accent-soft); border-left-color: var(--accent-bright)",
+      "before": " || .admin-sidebar > button.active || background: var(--accent-soft); border-left-color: #5d9836",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .admin-summary-grid strong || font-size: var(--type-xxl); font-weight: 400",
+      "before": " || .admin-summary-grid strong || font-size: 19px; font-weight: 400",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .admin-toolbar > button[type=\"submit\"] || background: var(--accent-soft); border-color: var(--status-success-edge); color: var(--accent-hover)",
+      "before": " || .admin-toolbar > button[type=\"submit\"] || background: var(--accent-soft); border-color: #a9c59a; color: var(--accent-hover)",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .app-glyph || align-items: center; background: var(--accent-bright); color: var(--chrome-fg); display: inline-flex; flex: 0 0 auto; font-size: var(--type-lg); font-weight: 700; height: 28px; justify-content: center; width: 28px",
+      "before": " || .app-glyph || align-items: center; background: #5d9637; color: var(--chrome-fg); display: inline-flex; flex: 0 0 auto !important; font-size: 15px; font-weight: 700; height: 28px; justify-content: center; width: 28px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role, and put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried. The declaration list also changed shape -- a longhand set collapsed onto the shorthand `stylelint-config-standard` asks for, a deprecated property or keyword replaced by the one that supersedes it, or a value respelled in the case the linter wants. Each keeps the computed value identical."
+    },
+    {
+      "after": " || .app-launch-icon || align-items: center; background: var(--accent); color: var(--fg-inverse); display: flex; font-size: var(--type-xxl); height: 45px; justify-content: center; width: 45px",
+      "before": " || .app-launch-icon || align-items: center; background: var(--accent); color: var(--fg-inverse); display: flex; font-size: 24px; height: 45px; justify-content: center; width: 45px",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .app-launch-icon--data || background: var(--status-neutral)",
+      "before": " || .app-launch-icon--data || background: #68767e",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .audit-filter-grid small || color: var(--fg-muted); font-size: var(--type-xxs)",
+      "before": " || .audit-filter-grid small || color: var(--fg-muted); font-size: 8px",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .backend-action-notice > button || background: transparent; border: 0; color: currentcolor; font-size: var(--type-xl); height: 28px; width: 28px",
+      "before": " || .backend-action-notice > button || background: transparent; border: 0; color: currentColor; font-size: 17px; height: 28px; width: 28px",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried. The declaration list also changed shape -- a longhand set collapsed onto the shorthand `stylelint-config-standard` asks for, a deprecated property or keyword replaced by the one that supersedes it, or a value respelled in the case the linter wants. Each keeps the computed value identical."
+    },
+    {
+      "after": " || .backend-action-notice || align-items: center; background: var(--status-success-soft); border: 1px solid var(--status-success-edge); color: var(--accent-hover); display: grid; font-size: var(--type-xs); gap: var(--space-2); grid-template-columns: auto 1fr auto; min-height: 38px; padding: 6px var(--space-2) 6px 11px",
+      "before": " || .backend-action-notice || align-items: center; background: var(--status-success-soft); border: 1px solid #bdd6ad; color: var(--accent-hover); display: grid; font-size: var(--type-xs); gap: var(--space-2); grid-template-columns: auto 1fr auto; min-height: 38px; padding: 6px var(--space-2) 6px 11px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .backend-action-notice--error || background: var(--status-error-soft); border-color: var(--status-error-edge); color: var(--status-error-strong)",
+      "before": " || .backend-action-notice--error || background: var(--status-error-soft); border-color: #dca7a3; color: #983b35",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .backend-inline-error || align-items: center; background: var(--status-error-soft); border: 1px solid var(--status-error-edge); color: var(--status-error-strong); display: flex; font-size: var(--type-xs); gap: 10px; justify-content: space-between; margin: 0 0 10px; padding: var(--space-2) 11px",
+      "before": " || .backend-inline-error || align-items: center; background: var(--status-error-soft); border: 1px solid #dba39f; color: var(--status-error-strong); display: flex; font-size: var(--type-xs); gap: 10px; justify-content: space-between; margin: 0 0 10px; padding: var(--space-2) 11px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .backend-list-notice || background: var(--status-warning-soft); border: 1px solid var(--status-warning-edge); color: var(--status-warning-strong); font-size: var(--type-xs); margin-bottom: 10px; padding: var(--space-2) 11px",
+      "before": " || .backend-list-notice || background: var(--status-warning-soft); border: 1px solid #ead29d; color: #6f5a2f; font-size: var(--type-xs); margin-bottom: 10px; padding: var(--space-2) 11px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .backend-preview-status || align-items: center; background: var(--status-info-soft); border-bottom: 1px solid var(--border); color: var(--fg-secondary); display: flex; font-size: var(--type-xs); gap: var(--space-2); min-height: 34px; padding: 6px 18px",
+      "before": " || .backend-preview-status || align-items: center; background: var(--status-info-soft); border-bottom: 1px solid var(--border); color: #3f5968; display: flex; font-size: var(--type-xs); gap: var(--space-2); min-height: 34px; padding: 6px 18px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .backend-preview-status b || background: var(--status-info-soft); border-radius: var(--radius-md); color: var(--status-info-strong); font-size: var(--type-xxs); font-weight: 700; margin-left: auto; padding: 2px 7px; white-space: nowrap",
+      "before": " || .backend-preview-status b || background: var(--status-info-soft); border-radius: var(--radius-md); color: #37677d; font-size: var(--type-xxs); font-weight: 700; margin-left: auto; padding: 2px 7px; white-space: nowrap",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .backend-preview-status__pulse || --pulse-ring-core: 0 0 0 1px var(--status-info); background: var(--status-info); border: 2px solid var(--status-info-edge); border-radius: 50%; box-shadow: var(--pulse-ring-core); flex: 0 0 auto; height: 6px; width: 6px",
+      "before": " || .backend-preview-status__pulse || --pulse-ring-core: 0 0 0 1px var(--status-info); background: var(--status-info); border: 2px solid #d4e9f3; border-radius: 50%; box-shadow: var(--pulse-ring-core); flex: 0 0 auto; height: 6px; width: 6px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .backend-preview-status.is-warning .backend-preview-status__pulse, .backend-preview-status.status-finalization-error .backend-preview-status__pulse, .backend-preview-status[data-state=\"finalization-error\"] .backend-preview-status__pulse, .backend-preview-status[data-status=\"finalization-error\"] .backend-preview-status__pulse || background: var(--status-progress); border-color: var(--status-warning-edge); box-shadow: 0 0 0 1px var(--status-progress)",
+      "before": " || .backend-preview-status.is-warning .backend-preview-status__pulse, .backend-preview-status.status-finalization-error .backend-preview-status__pulse, .backend-preview-status[data-state=\"finalization-error\"] .backend-preview-status__pulse, .backend-preview-status[data-status=\"finalization-error\"] .backend-preview-status__pulse || background: #bf8122; border-color: #f7e3bb; box-shadow: 0 0 0 1px #bf8122",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .backend-preview-status.is-warning, .backend-preview-status.status-finalization-error, .backend-preview-status[data-state=\"finalization-error\"], .backend-preview-status[data-status=\"finalization-error\"] || background: var(--status-warning-soft); border-bottom-color: var(--status-warning-edge); color: var(--status-warning-strong)",
+      "before": " || .backend-preview-status.is-warning, .backend-preview-status.status-finalization-error, .backend-preview-status[data-state=\"finalization-error\"], .backend-preview-status[data-status=\"finalization-error\"] || background: var(--status-warning-soft); border-bottom-color: #e9d2a8; color: #6c5531",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .backend-resource-state > span || align-items: center; background: var(--status-neutral-soft); border-radius: 50%; color: var(--fg-secondary); display: flex; font-size: var(--type-md); font-weight: 700; height: 31px; justify-content: center; width: 31px",
+      "before": " || .backend-resource-state > span || align-items: center; background: var(--status-neutral-soft); border-radius: 50%; color: var(--fg-secondary); display: flex; font-size: 13px; font-weight: 700; height: 31px; justify-content: center; width: 31px",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .backend-resource-state strong || color: var(--fg-text); font-size: var(--type-md)",
+      "before": " || .backend-resource-state strong || color: #2f3e46; font-size: var(--type-md)",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .backend-resource-state--empty || border-left: 4px solid var(--status-neutral)",
+      "before": " || .backend-resource-state--empty || border-left: 4px solid #829097",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .backend-resource-state--loading > span || animation: spin 1.1s linear infinite; background: var(--status-info-soft); color: var(--status-info-strong)",
+      "before": [
+        " || .backend-resource-state--loading > span || animation: spin 1.1s linear infinite",
+        " || .backend-resource-state--loading > span || background: var(--status-info-soft); color: var(--status-info-strong)"
+      ],
+      "why": "Two rules with this selector under the same at-rules stated it, which `no-duplicate-selectors` reports as an error from Phase 5 on; they are folded into one and the later rule's values are kept, which is what the cascade was already resolving to. The declaration list also changed shape -- a longhand set collapsed onto the shorthand `stylelint-config-standard` asks for, a deprecated property or keyword replaced by the one that supersedes it, or a value respelled in the case the linter wants. Each keeps the computed value identical."
+    },
+    {
+      "after": " || .backend-resource-state--unavailable || border-left: 4px solid var(--status-warning-bright)",
+      "before": " || .backend-resource-state--unavailable || border-left: 4px solid #d79a2e",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .chart-toggle button.active, .chart-toggle button:hover || background: var(--selection); color: var(--status-info-strong)",
+      "before": " || .chart-toggle button.active, .chart-toggle button:hover || background: var(--selection); color: #1f657f",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .collector-host-icon || align-items: center; background: var(--status-info-soft); color: var(--status-info); display: flex; font-size: var(--type-lg); height: 33px; justify-content: center; width: 33px",
+      "before": " || .collector-host-icon || align-items: center; background: var(--status-info-soft); color: var(--status-info); display: flex; font-size: 15px; height: 33px; justify-content: center; width: 33px",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .completion-menu code || color: var(--accent-alt); font-size: var(--type-md); font-weight: 700",
+      "before": " || .completion-menu code || color: #63449a; font-size: var(--type-md); font-weight: 700",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .dashboard-metrics strong || font-size: var(--type-xxl); font-weight: 300",
+      "before": " || .dashboard-metrics strong || font-size: 22px; font-weight: 300",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .dataset-card .dataset-definition-meta dd || color: var(--fg-secondary); font-size: var(--type-xxs); font-weight: 600; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap",
+      "before": " || .dataset-card .dataset-definition-meta dd || color: #3f4f57; font-size: var(--type-xxs); font-weight: 600; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .dataset-icon--orange || background: var(--status-warning-soft); color: var(--status-progress)",
+      "before": " || .dataset-icon--orange || background: var(--status-warning-soft); color: #c4792c",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .diagnostic-strip || align-items: center; background: var(--status-error-soft); border-bottom: 1px solid var(--status-error-edge); border-top: 1px solid var(--status-error-edge); color: var(--status-error-strong); display: flex; gap: 10px; margin: 0 18px 7px; min-height: 46px; padding: 7px 10px",
+      "before": " || .diagnostic-strip || align-items: center; background: var(--status-error-soft); border-bottom: 1px solid #e6bbb7; border-top: 1px solid #e6bbb7; color: #86302c; display: flex; gap: 10px; margin: 0 18px 7px; min-height: 46px; padding: 7px 10px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .diagnostic-strip button || background: transparent; border: 0; color: var(--status-error-strong); font-weight: 700",
+      "before": " || .diagnostic-strip button || background: transparent; border: 0; color: #8c332f; font-weight: 700",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .diagnostic-strip small || color: var(--status-error-strong); font-size: var(--type-xs); margin-top: 2px",
+      "before": " || .diagnostic-strip small || color: #9c504b; font-size: var(--type-xs); margin-top: 2px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .donut-chart strong || font-size: var(--type-xxl); font-weight: 400",
+      "before": " || .donut-chart strong || font-size: 18px; font-weight: 400",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .editor-highlight, .spl-editor textarea || border: 0; font-family: var(--font-mono); font-size: var(--type-md); font-variant-ligatures: none; height: 60px; inset: 0; letter-spacing: -0.01em; line-height: 22px; margin: 0; overflow: auto; overflow-wrap: break-word; padding: var(--space-2) 94px var(--space-2) var(--space-8); position: absolute; tab-size: 2; white-space: pre-wrap",
+      "before": " || .editor-highlight, .spl-editor textarea || border: 0; font-family: var(--font-mono); font-size: 13px; font-variant-ligatures: none; height: 60px; inset: 0; letter-spacing: -0.01em; line-height: 22px; margin: 0; overflow: auto; padding: var(--space-2) 94px var(--space-2) var(--space-8); position: absolute; tab-size: 2; white-space: pre-wrap; word-break: break-word",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried. The declaration list also changed shape -- a longhand set collapsed onto the shorthand `stylelint-config-standard` asks for, a deprecated property or keyword replaced by the one that supersedes it, or a value respelled in the case the linter wants. Each keeps the computed value identical."
+    },
+    {
+      "after": " || .event-content mark || background: var(--highlight); border-radius: var(--radius-sm); color: inherit; padding: 0 1px",
+      "before": " || .event-content mark || background: var(--highlight); border-radius: 1px; color: inherit; padding: 0 1px",
+      "why": "Phase 5 put the rule's border-radius on its documented --radius-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .event-expander || align-self: start; background: transparent; border: 0; color: var(--fg-muted); font-size: var(--type-xxl); height: 36px; padding: 0 0 0 var(--space-1)",
+      "before": " || .event-expander || align-self: start; background: transparent; border: 0; color: var(--fg-muted); font-size: 18px; height: 36px; padding: 0 0 0 var(--space-1)",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .event-field-actions button || background: var(--bg-surface); border: 1px solid var(--border); color: var(--status-info); font-size: var(--type-xs); height: 21px; margin-left: -1px; width: 23px",
+      "before": " || .event-field-actions button || background: var(--bg-surface); border: 1px solid var(--border); color: #3e718a; font-size: var(--type-xs); height: 21px; margin-left: -1px; width: 23px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .event-row--preview .event-expander[aria-disabled=\"true\"] || color: var(--fg-faint)",
+      "before": " || .event-row--preview .event-expander[aria-disabled=\"true\"] || color: #a3adb2",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .event-row::before || background: var(--border-strong); content: \"\"; inset: 0 auto 0 0; position: absolute; width: 3px",
+      "before": " || .event-row::before || background: #b6c0c5; content: \"\"; inset: 0 auto 0 0; position: absolute; width: 3px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .event-time || align-items: flex-start; background: transparent; border: 0; border-right: 1px solid var(--border-subtle); color: var(--fg-secondary); display: flex; flex-direction: column; font-size: var(--type-xs); line-height: 1.35; padding: 11px var(--space-3) var(--space-2) 2px; text-align: left",
+      "before": " || .event-time || align-items: flex-start; background: transparent; border: 0; border-right: 1px solid #edf0f1; color: var(--fg-secondary); display: flex; flex-direction: column; font-size: var(--type-xs); line-height: 1.35; padding: 11px var(--space-3) var(--space-2) 2px; text-align: left",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .export-progress span || animation: progress-pulse 800ms ease-in-out infinite alternate; background: var(--accent-bright); height: 6px; left: 0; position: absolute; top: 0",
+      "before": " || .export-progress span || animation: progress-pulse 800ms ease-in-out infinite alternate; background: #5a9a34; height: 6px; left: 0; position: absolute; top: 0",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .field-catalog-grid b || color: var(--fg-faint); font-size: var(--type-lg); font-weight: 400",
+      "before": " || .field-catalog-grid b || color: var(--fg-faint); font-size: 15px; font-weight: 400",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .field-group h2 span || background: var(--bg-subtle); border-radius: var(--radius-md); color: var(--fg-muted); font-size: var(--type-xxs); margin-left: 6px; padding: 2px 5px",
+      "before": " || .field-group h2 span || background: var(--bg-subtle); border-radius: var(--radius-md); color: var(--fg-muted); font-size: 8px; margin-left: 6px; padding: 2px 5px",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .field-inspector || animation: field-pop 120ms ease-out; background: var(--bg-surface); border: 1px solid var(--border-strong); box-shadow: var(--shadow-lg); left: calc(100% - 5px); min-height: 280px; position: absolute; top: 68px; width: 344px; z-index: 4",
+      "before": " || .field-inspector || animation: field-pop 120ms ease-out; background: var(--bg-surface); border: 1px solid var(--border-strong); box-shadow: var(--shadow-lg); left: calc(100% - 5px); min-height: 280px; position: absolute; top: 68px; width: 344px; z-index: 40",
+      "why": "Phase 5 put the rule's z-index on the stacking ladder: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .field-list > button:hover, .field-list > button.active || background: var(--selection); color: var(--status-info-strong)",
+      "before": " || .field-list > button:hover, .field-list > button.active || background: var(--selection); color: #1f667f",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .field-type || align-items: center; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); color: var(--fg-muted); display: inline-flex; font-family: var(--font-serif); font-size: var(--type-xxs); height: 15px; justify-content: center; width: 15px",
+      "before": " || .field-type || align-items: center; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); color: var(--fg-muted); display: inline-flex; font-family: Georgia, serif; font-size: var(--type-xxs); height: 15px; justify-content: center; width: 15px",
+      "why": "Phase 5 put the rule's font-family on a --font-* stack: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .field-type.type-number || color: var(--status-warning-strong); font-family: var(--font-sans)",
+      "before": " || .field-type.type-number || color: #8f642c; font-family: var(--font-sans)",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .form-stack > label > span, .segmented-fieldset legend, .export-fields legend || color: var(--fg-secondary); font-size: var(--type-xs); font-weight: 700; text-transform: uppercase",
+      "before": " || .form-stack > label > span, .segmented-fieldset legend, .export-fields legend || color: #495861; font-size: var(--type-xs); font-weight: 700; text-transform: uppercase",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .form-stack input, .form-stack textarea, .library-toolbar input, .library-toolbar select || background: var(--bg-surface); border: 1px solid var(--border-strong); border-radius: var(--radius-sm)",
+      "before": " || .form-stack input, .form-stack textarea, .library-toolbar input, .library-toolbar select || background: var(--bg-surface); border: 1px solid var(--border-strong); border-radius: 1px",
+      "why": "Phase 5 put the rule's border-radius on its documented --radius-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .getting-started-card .suite-card-header > span || background: var(--accent-soft); border-radius: var(--radius-lg); color: var(--accent); font-size: var(--type-xs); font-weight: 700; padding: var(--space-1) var(--space-2)",
+      "before": " || .getting-started-card .suite-card-header > span || background: var(--accent-soft); border-radius: 10px; color: var(--accent); font-size: var(--type-xs); font-weight: 700; padding: var(--space-1) var(--space-2)",
+      "why": "Phase 5 put the rule's border-radius on its documented --radius-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .health-indicator > span || background: var(--accent-bright); border: 2px solid var(--chrome-appbar); border-radius: 50%; display: inline-block; height: 9px; margin-right: var(--space-1); vertical-align: -1px; width: 9px",
+      "before": " || .health-indicator > span || background: #74ae49; border: 2px solid #38442f; border-radius: 50%; display: inline-block; height: 9px; margin-right: var(--space-1); vertical-align: -1px; width: 9px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .history-action-error || background: var(--status-error-soft); border: 1px solid var(--status-error-edge); color: var(--status-error-strong); font-size: var(--type-xs); line-height: 1.5; margin: var(--space-3) 0 0; padding: 9px 10px",
+      "before": " || .history-action-error || background: var(--status-error-soft); border: 1px solid #dba39f; color: var(--status-error-strong); font-size: var(--type-xs); line-height: 1.5; margin: var(--space-3) 0 0; padding: 9px 10px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .history-action-notice || align-items: center; background: var(--status-success-soft); border: 1px solid var(--status-success-edge); color: var(--status-success-strong); display: flex; font-size: var(--type-xs); justify-content: space-between; min-height: 36px; padding: 7px var(--space-2) 7px 11px",
+      "before": " || .history-action-notice || align-items: center; background: var(--status-success-soft); border: 1px solid #bdd4ae; color: var(--status-success-strong); display: flex; font-size: var(--type-xs); justify-content: space-between; min-height: 36px; padding: 7px var(--space-2) 7px 11px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .history-action-notice button || background: transparent; border: 0; color: var(--status-success-strong); font-size: var(--type-xl); height: 28px; width: 28px",
+      "before": " || .history-action-notice button || background: transparent; border: 0; color: #557149; font-size: 17px; height: 28px; width: 28px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role, and put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .history-row-actions > button || color: var(--status-error-strong)",
+      "before": " || .history-row-actions > button || color: #a4433d",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .history-snapshot i || background: var(--status-info); box-shadow: 0 0 0 3px color-mix(in srgb, var(--status-info) 12%, transparent)",
+      "before": " || .history-snapshot i || background: var(--status-info); box-shadow: 0 0 0 3px rgb(63 134 169 / 12%)",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .home-hero h1 || font-size: var(--type-xxl)",
+      "before": " || .home-hero h1 || font-size: 25px",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .index-observability-controls input || border: 1px solid var(--border-strong); font-size: var(--type-xs); height: 31px; padding: 0 var(--space-2)",
+      "before": " || .index-observability-controls input || border: 1px solid #b9c3c8; font-size: var(--type-xs); height: 31px; padding: 0 var(--space-2)",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .job-empty-results > span || align-items: center; background: var(--status-info-soft); border: 1px solid var(--border); border-radius: 50%; color: var(--fg-link); display: flex; font-size: var(--type-xxl); font-weight: 700; height: 38px; justify-content: center; width: 38px",
+      "before": " || .job-empty-results > span || align-items: center; background: var(--status-info-soft); border: 1px solid var(--border); border-radius: 50%; color: var(--fg-link); display: flex; font-size: 19px; font-weight: 700; height: 38px; justify-content: center; width: 38px",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .job-empty-results strong || color: var(--fg-strong); font-size: var(--type-lg)",
+      "before": " || .job-empty-results strong || color: var(--fg-strong); font-size: 15px",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .job-empty-results--error > span || animation: none; background: var(--status-error-soft); border-color: var(--status-error-edge); color: var(--status-error)",
+      "before": " || .job-empty-results--error > span || animation: none; background: var(--status-error-soft); border-color: #e2b8b4; color: var(--status-error)",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .job-empty-results--warning > span || animation: none; background: var(--status-warning-soft); border-color: var(--status-warning-edge); color: var(--status-warning-strong)",
+      "before": " || .job-empty-results--warning > span || animation: none; background: var(--status-warning-soft); border-color: #e4c582; color: #8a590c",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .job-metrics small || color: var(--fg-faint); font-size: var(--type-xxs); text-transform: uppercase",
+      "before": " || .job-metrics small || color: var(--fg-faint); font-size: 8px; text-transform: uppercase",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .job-progress-bar || background: var(--status-info); bottom: -1px; height: 2px; left: 0; position: absolute; transition: width 300ms ease",
+      "before": " || .job-progress-bar || background: #4e93bb; bottom: -1px; height: 2px; left: 0; position: absolute; transition: width 300ms ease",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .knowledge-definition-status--opaque, .knowledge-definition-status--withheld || background: var(--bg-subtle); border-left-color: var(--status-warning); color: var(--status-warning-strong)",
+      "before": " || .knowledge-definition-status--opaque, .knowledge-definition-status--withheld || background: var(--bg-subtle); border-left-color: #a68744; color: #765e2d",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .knowledge-manager button:focus-visible, .knowledge-manager input:focus-visible, .knowledge-manager select:focus-visible, .knowledge-manager textarea:focus-visible || outline: 3px solid color-mix(in srgb, var(--focus-ring) 28%, transparent); outline-offset: 1px",
+      "before": " || .knowledge-manager button:focus-visible, .knowledge-manager input:focus-visible, .knowledge-manager select:focus-visible, .knowledge-manager textarea:focus-visible || outline: 3px solid rgb(42 120 158 / 28%); outline-offset: 1px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .knowledge-manager__advanced-filter-actions output[role=\"alert\"] || color: var(--status-error-strong)",
+      "before": " || .knowledge-manager__advanced-filter-actions output[role=\"alert\"] || color: #93443f",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .knowledge-manager__advanced-filter-grid [aria-invalid=\"true\"] || border-color: var(--status-error)",
+      "before": " || .knowledge-manager__advanced-filter-grid [aria-invalid=\"true\"] || border-color: #a34f49",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .knowledge-manager__advanced-filters legend || color: var(--fg-secondary); font-size: var(--type-xs); font-weight: 700; margin-bottom: var(--space-2); padding: 0",
+      "before": " || .knowledge-manager__advanced-filters legend || color: #43545d; font-size: var(--type-xs); font-weight: 700; margin-bottom: var(--space-2); padding: 0",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .knowledge-manager__delete-confirmation || background: var(--status-warning-soft); border: 1px solid var(--status-warning-edge); display: grid; gap: 9px; padding: 10px",
+      "before": " || .knowledge-manager__delete-confirmation || background: var(--status-warning-soft); border: 1px solid #dec58f; display: grid; gap: 9px; padding: 10px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .knowledge-manager__delete-confirmation p || color: var(--status-warning-strong); font-size: var(--type-xxs); line-height: 1.45; margin: 0; overflow-wrap: anywhere",
+      "before": " || .knowledge-manager__delete-confirmation p || color: #715d34; font-size: var(--type-xxs); line-height: 1.45; margin: 0; overflow-wrap: anywhere",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .knowledge-manager__detail-body > header small || color: var(--status-warning-strong); font-size: var(--type-xxs)",
+      "before": " || .knowledge-manager__detail-body > header small || color: #8a6b2a; font-size: var(--type-xxs)",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .knowledge-manager__detail-body h3 || color: var(--fg-text); font-size: var(--type-xl); font-weight: 500; margin: var(--space-1) 0; overflow-wrap: anywhere",
+      "before": " || .knowledge-manager__detail-body h3 || color: var(--fg-text); font-size: 17px; font-weight: 500; margin: var(--space-1) 0; overflow-wrap: anywhere",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .knowledge-manager__detail-close || background: transparent; border: 0; color: var(--fg-muted); float: right; font-size: var(--type-xxl); height: 32px; width: 32px",
+      "before": " || .knowledge-manager__detail-close || background: transparent; border: 0; color: var(--fg-muted); float: right; font-size: 21px; height: 32px; width: 32px",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .knowledge-manager__detail:focus-visible || box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus-ring) 23%, transparent)",
+      "before": " || .knowledge-manager__detail:focus-visible || box-shadow: 0 0 0 3px rgb(49 126 165 / 23%)",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .knowledge-manager__eyebrow || color: var(--status-success-strong); font-size: var(--type-xxs); font-weight: 700; letter-spacing: 0.12em",
+      "before": " || .knowledge-manager__eyebrow || color: #688159; font-size: var(--type-xxs); font-weight: 700; letter-spacing: 0.12em",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .knowledge-manager__mutation-form legend || color: var(--fg-secondary); font-size: var(--type-xs); font-weight: 700; padding: 0 5px",
+      "before": " || .knowledge-manager__mutation-form legend || color: #43545d; font-size: var(--type-xs); font-weight: 700; padding: 0 5px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .knowledge-manager__mutation-form legend small || color: var(--fg-muted); font-size: var(--type-xxs); font-weight: 400",
+      "before": " || .knowledge-manager__mutation-form legend small || color: var(--fg-muted); font-size: 8px; font-weight: 400",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .knowledge-manager__mutation-result--invalid, .knowledge-manager__mutation-error || background: var(--status-warning-soft); border-left: 3px solid var(--status-progress); color: var(--status-warning-strong); font-size: var(--type-xxs); padding: 9px",
+      "before": " || .knowledge-manager__mutation-result--invalid, .knowledge-manager__mutation-error || background: var(--status-warning-soft); border-left: 3px solid #c07823; color: var(--status-warning-strong); font-size: var(--type-xxs); padding: 9px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .knowledge-manager__readonly || background: var(--accent-soft); border: 1px solid var(--status-success-edge); border-radius: var(--radius-lg); color: var(--accent); font-size: var(--type-xxs); font-weight: 700; letter-spacing: 0.04em; padding: 5px 9px; text-transform: uppercase",
+      "before": " || .knowledge-manager__readonly || background: var(--accent-soft); border: 1px solid #b6cda9; border-radius: var(--radius-lg); color: var(--accent); font-size: var(--type-xxs); font-weight: 700; letter-spacing: 0.04em; padding: 5px 9px; text-transform: uppercase",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .knowledge-manager__related-inspector > header span || color: var(--accent); font-size: var(--type-xxs); font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase",
+      "before": " || .knowledge-manager__related-inspector > header span || color: var(--accent); font-size: 8px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .knowledge-manager__related-inspector || background: var(--bg-surface); border: 1px solid var(--border); border-left: 3px solid var(--status-info); display: grid; gap: var(--space-2); min-width: 0; padding: 9px",
+      "before": " || .knowledge-manager__related-inspector || background: var(--bg-surface); border: 1px solid var(--border); border-left: 3px solid #4f88a3; display: grid; gap: var(--space-2); min-width: 0; padding: 9px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .knowledge-manager__related-object > small || color: var(--status-warning-strong); font-size: var(--type-xxs)",
+      "before": " || .knowledge-manager__related-object > small || color: #8a6b2a; font-size: 8px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role, and put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .knowledge-manager__related-object dt || color: var(--fg-muted); font-size: var(--type-xxs)",
+      "before": " || .knowledge-manager__related-object dt || color: var(--fg-muted); font-size: 8px",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "before": " || .knowledge-manager__row--selected || background: var(--accent-soft) !important; box-shadow: inset 3px 0 var(--accent)",
+      "after": " || .knowledge-manager__row.knowledge-manager__row--selected, button.knowledge-manager__row.knowledge-manager__row--selected:hover || background: var(--accent-soft); box-shadow: inset 3px 0 var(--accent)",
+      "why": "The same `declaration-no-important` fix. The selected row was fighting `button.knowledge-manager__row:hover` (0,2,1), so the base state now states both classes (0,2,0) and the hovered state states them with `:hover` (0,3,1); each outranks the rule it was losing to and neither needs `!important`."
+    },
+    {
+      "after": " || .knowledge-manager__stale || background: var(--status-warning-soft); border-top-color: var(--status-warning-edge)",
+      "before": " || .knowledge-manager__stale || background: var(--status-warning-soft); border-top-color: #dec58f",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .knowledge-manager__status--unavailable > span:first-child || background: var(--status-warning-bright); color: var(--status-warning-strong)",
+      "before": " || .knowledge-manager__status--unavailable > span:first-child || background: #e5b553; color: #4f3a12",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .knowledge-manager__status--unavailable || background: var(--status-warning-soft); border-color: var(--status-warning-edge)",
+      "before": " || .knowledge-manager__status--unavailable || background: var(--status-warning-soft); border-color: #ddc998",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .knowledge-preview [role=\"alert\"] || background: var(--status-warning-soft); border-left: 3px solid var(--status-progress); color: var(--status-warning-strong); line-height: 1.5; padding: 9px 10px",
+      "before": " || .knowledge-preview [role=\"alert\"] || background: var(--status-warning-soft); border-left: 3px solid #c07823; color: #715516; line-height: 1.5; padding: 9px 10px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .knowledge-preview button[type=\"submit\"], .knowledge-preview__submit || background: var(--status-info); border-color: var(--status-info-strong); color: var(--fg-inverse)",
+      "before": " || .knowledge-preview button[type=\"submit\"], .knowledge-preview__submit || background: var(--status-info); border-color: #326d89; color: var(--fg-inverse)",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .knowledge-preview__table th small, .knowledge-preview__table-scroll th small || color: var(--fg-muted); font-size: var(--type-xxs); font-weight: 400; margin-top: 3px; white-space: normal",
+      "before": " || .knowledge-preview__table th small, .knowledge-preview__table-scroll th small || color: var(--fg-muted); font-size: 8px; font-weight: 400; margin-top: 3px; white-space: normal",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .knowledge-state--quarantined || background: var(--status-progress)",
+      "before": " || .knowledge-state--quarantined || background: #c07823",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .live-job-actions > button:last-child || color: var(--status-error-strong)",
+      "before": " || .live-job-actions > button:last-child || color: #a4433d",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .live-job-progress progress || accent-color: var(--accent-bright); height: 6px; width: 100%",
+      "before": " || .live-job-progress progress || accent-color: #5c9837; height: 6px; width: 100%",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .live-jobs-snapshot || align-items: center; background: var(--accent-soft); border: 1px solid var(--status-success-edge); color: var(--status-success-strong); display: flex; font-size: var(--type-xs); justify-content: space-between; min-height: 39px; padding: 6px 9px 6px 11px",
+      "before": " || .live-jobs-snapshot || align-items: center; background: var(--accent-soft); border: 1px solid #c7d8bb; color: #52634a; display: flex; font-size: var(--type-xs); justify-content: space-between; min-height: 39px; padding: 6px 9px 6px 11px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .live-jobs-snapshot i || background: var(--accent-bright); border-radius: 50%; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-bright) 12%, transparent); display: inline-block; height: 7px; width: 7px",
+      "before": " || .live-jobs-snapshot i || background: #65a33e; border-radius: 50%; box-shadow: 0 0 0 3px rgb(101 163 62 / 12%); display: inline-block; height: 7px; width: 7px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .lookup-manager button:focus-visible, .lookup-manager input:focus-visible, .lookup-manager select:focus-visible, .lookup-manager textarea:focus-visible || outline: 3px solid color-mix(in srgb, var(--focus-ring) 28%, transparent); outline-offset: 1px",
+      "before": " || .lookup-manager button:focus-visible, .lookup-manager input:focus-visible, .lookup-manager select:focus-visible, .lookup-manager textarea:focus-visible || outline: 3px solid rgb(42 120 158 / 28%); outline-offset: 1px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .lookup-manager__contract > span || align-items: center; background: var(--status-info); border-radius: 50%; color: var(--fg-inverse); display: flex; font-size: var(--type-xs); font-weight: 700; height: 24px; justify-content: center; width: 24px",
+      "before": " || .lookup-manager__contract > span || align-items: center; background: #4e839d; border-radius: 50%; color: var(--fg-inverse); display: flex; font-size: var(--type-xs); font-weight: 700; height: 24px; justify-content: center; width: 24px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .lookup-manager__contract strong || color: var(--fg-secondary)",
+      "before": " || .lookup-manager__contract strong || color: #355260",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .lookup-manager__editor legend || color: var(--fg-secondary); font-size: var(--type-xs); font-weight: 700; padding: 0 5px",
+      "before": " || .lookup-manager__editor legend || color: #43545d; font-size: var(--type-xs); font-weight: 700; padding: 0 5px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .lookup-manager__editor legend small || color: var(--fg-muted); font-size: var(--type-xxs); font-weight: 400",
+      "before": " || .lookup-manager__editor legend small || color: var(--fg-muted); font-size: 8px; font-weight: 400",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .lookup-manager__editor textarea || background: var(--bg-surface); border: 1px solid var(--border-strong); font-family: var(--font-mono); font-size: var(--type-xs); line-height: 1.5; min-height: 88px; padding: 7px 9px; resize: vertical; width: 100%",
+      "before": " || .lookup-manager__editor textarea || background: var(--bg-surface); border: 1px solid var(--border-strong); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--type-xs); line-height: 1.5; min-height: 88px; padding: 7px 9px; resize: vertical; width: 100%",
+      "why": "Phase 5 put the rule's font-family on a --font-* stack: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "before": " || .lookup-manager__toolbar input, .lookup-manager__toolbar select, .lookup-manager__editor input:not([type=\"checkbox\"]):not([type=\"file\"]), .lookup-manager__editor select || background: var(--bg-surface); border: 1px solid var(--border-strong); font-size: var(--type-xs); height: 34px; min-width: 0; padding: 0 9px; width: 100%",
+      "after": " || .lookup-manager__toolbar input, .lookup-manager__toolbar select, .lookup-manager__editor input:not([type=\"checkbox\"], [type=\"file\"]), .lookup-manager__editor select || background: var(--bg-surface); border: 1px solid var(--border-strong); font-size: var(--type-xs); height: 34px; min-width: 0; padding: 0 9px; width: 100%",
+      "why": "`selector-not-notation` is an error from Phase 5 on. Two chained `:not()` calls and one `:not()` over a selector list match exactly the same elements and carry the same specificity; the list is the notation the rule asks for. No declaration changed."
+    },
+    {
+      "before": " || .metric-negative || color: var(--status-error) !important",
+      "after": " || .home-metrics .metric-negative || color: var(--status-error)",
+      "why": "The negative half of the same `declaration-no-important` fix."
+    },
+    {
+      "before": " || .metric-positive || color: var(--accent) !important",
+      "after": " || .home-metrics .metric-positive || color: var(--accent)",
+      "why": "The same `declaration-no-important` fix. The modifier was fighting `.home-metrics article > div > span` (0,1,3); qualifying it with the grid it lives in makes it (0,2,0), which wins on class count. Same ink on the same element."
+    },
+    {
+      "after": " || .metric-symbol || align-items: center; background: var(--accent-soft); color: var(--accent); display: flex; font-size: var(--type-xxl); height: 42px; justify-content: center; width: 42px",
+      "before": " || .metric-symbol || align-items: center; background: var(--accent-soft); color: var(--accent); display: flex; font-size: 19px; height: 42px; justify-content: center; width: 42px",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .metric-symbol--orange || background: var(--status-warning-soft); color: var(--status-progress)",
+      "before": " || .metric-symbol--orange || background: var(--status-warning-soft); color: #c6782b",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .modal-backdrop || background: color-mix(in srgb, var(--bg-inverse) 48%, transparent); border: 0; inset: 0; position: fixed",
+      "before": " || .modal-backdrop || background: rgb(18 25 30 / 48%); border: 0; inset: 0; position: fixed",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .modal-card || animation: modal-in 140ms ease-out; background: var(--bg-surface); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); box-shadow: var(--shadow-xl); max-width: 100%; margin: 0; position: relative; width: 540px; z-index: var(--z-base)",
+      "before": " || .modal-card || animation: modal-in 140ms ease-out; background: var(--bg-surface); border: 1px solid #89969d; border-radius: var(--radius-sm); box-shadow: 0 18px 55px rgb(10 20 26 / 28%); max-width: 100%; margin: 0; position: relative; width: 540px; z-index: var(--z-base)",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .modal-header h2 || color: var(--fg-strong); font-size: var(--type-xxl); font-weight: 400; margin: 0",
+      "before": " || .modal-header h2 || color: var(--fg-strong); font-size: 18px; font-weight: 400; margin: 0",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .mode-menu .radio-mark || color: var(--accent-hover); display: inline-flex; flex: 0 0 15px; font-size: var(--type-lg)",
+      "before": " || .mode-menu .radio-mark || color: var(--accent-hover); display: inline-flex; flex: 0 0 15px !important; font-size: 15px",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried. The declaration list also changed shape -- a longhand set collapsed onto the shorthand `stylelint-config-standard` asks for, a deprecated property or keyword replaced by the one that supersedes it, or a value respelled in the case the linter wants. Each keeps the computed value identical."
+    },
+    {
+      "after": " || .pattern-action || align-items: center; display: inline-flex; gap: 5px; justify-content: flex-start; min-height: 28px; padding: 0 var(--space-2); white-space: nowrap",
+      "before": " || .pattern-action || align-items: center; display: inline-flex; gap: 5px; justify-content: flex-start; min-height: 28px; padding: 0 var(--space-2) !important; white-space: nowrap",
+      "why": "The declaration list also changed shape -- a longhand set collapsed onto the shorthand `stylelint-config-standard` asks for, a deprecated property or keyword replaced by the one that supersedes it, or a value respelled in the case the linter wants. Each keeps the computed value identical."
+    },
+    {
+      "after": " || .pattern-head, .pattern-table article || align-items: center; display: grid; gap: var(--space-3) 22px; grid-template-columns: minmax(260px, 1fr) 90px minmax(190px, 250px) 105px; min-height: 48px; padding: 0 var(--space-3)",
+      "before": [
+        " || .pattern-head, .pattern-table article || align-items: center; display: grid; gap: var(--space-3); grid-template-columns: minmax(280px, 1fr) 90px 220px 95px; min-height: 48px; padding: 0 var(--space-3)",
+        " || .pattern-head, .pattern-table article || column-gap: 22px; grid-template-columns: minmax(260px, 1fr) 90px minmax(190px, 250px) 105px"
+      ],
+      "why": "Two rules with this selector under the same at-rules stated it, which `no-duplicate-selectors` reports as an error from Phase 5 on; they are folded into one and the later rule's values are kept, which is what the cascade was already resolving to. The declaration list also changed shape -- a longhand set collapsed onto the shorthand `stylelint-config-standard` asks for, a deprecated property or keyword replaced by the one that supersedes it, or a value respelled in the case the linter wants. Each keeps the computed value identical."
+    },
+    {
+      "after": " || .pattern-table article > div span || background: var(--accent-bright); height: 8px; left: 0; position: absolute; top: 0",
+      "before": " || .pattern-table article > div span || background: #79aa56; height: 8px; left: 0; position: absolute; top: 0",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .preview-context-badge || align-items: center; background: var(--status-info-soft); border: 1px solid var(--border); border-radius: var(--radius-md); color: var(--status-info); display: inline-flex; flex: 0 0 auto; font-size: var(--type-xxs); font-weight: 700; gap: 5px; line-height: 16px; padding: 0 7px; white-space: nowrap",
+      "before": " || .preview-context-badge || align-items: center; background: var(--status-info-soft); border: 1px solid var(--border); border-radius: 9px; color: #3a6f86; display: inline-flex; flex: 0 0 auto; font-size: var(--type-xxs); font-weight: 700; gap: 5px; line-height: 16px; padding: 0 7px; white-space: nowrap",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role, and put the rule's border-radius on its documented --radius-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .preview-context-badge i, .event-preview-count > i || background: var(--status-info); border-radius: 50%; display: inline-block; height: 5px; width: 5px",
+      "before": " || .preview-context-badge i, .event-preview-count > i || background: #428eb2; border-radius: 50%; display: inline-block; height: 5px; width: 5px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .preview-fields-placeholder strong || color: var(--fg-secondary); font-size: var(--type-xs)",
+      "before": " || .preview-fields-placeholder strong || color: #445760; font-size: var(--type-xs)",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .preview-fields-placeholder__icon || align-items: center; background: var(--status-info-soft); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--status-info); display: inline-flex; font-family: var(--font-mono); font-size: var(--type-lg); height: 29px; justify-content: center; width: 29px",
+      "before": " || .preview-fields-placeholder__icon || align-items: center; background: var(--status-info-soft); border: 1px solid var(--border); border-radius: var(--radius-sm); color: #4c7d93; display: inline-flex; font-family: var(--font-mono); font-size: var(--type-lg); height: 29px; justify-content: center; width: 29px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .preview-metadata-placeholder strong || color: var(--fg-secondary); font-size: var(--type-sm)",
+      "before": " || .preview-metadata-placeholder strong || color: #3d4f59; font-size: var(--type-sm)",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .preview-placeholder-icon i || background: var(--status-info-edge); display: block; width: 5px",
+      "before": " || .preview-placeholder-icon i || background: #9bbdce; display: block; width: 5px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .product-empty-state > span || color: var(--fg-faint); font-size: var(--type-xxl)",
+      "before": " || .product-empty-state > span || color: var(--fg-faint); font-size: 24px",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .relative-time-row label > span, .absolute-time-row label > span || color: var(--fg-secondary); font-size: var(--type-xxs); font-weight: 700; text-transform: uppercase",
+      "before": " || .relative-time-row label > span, .absolute-time-row label > span || color: #4a5962; font-size: var(--type-xxs); font-weight: 700; text-transform: uppercase",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .resource-action-menu || background: var(--bg-surface); border: 1px solid var(--border-strong); box-shadow: var(--shadow-md); display: flex; min-width: 215px; padding: var(--space-1) 0; position: absolute; right: calc(100% + 4px); top: 50%; transform: translateY(-50%); z-index: var(--z-dropdown)",
+      "before": " || .resource-action-menu || background: var(--bg-surface); border: 1px solid var(--border-strong); box-shadow: 0 7px 18px rgb(18 29 36 / 18%); display: flex; min-width: 215px; padding: var(--space-1) 0; position: absolute; right: calc(100% + 4px); top: 50%; transform: translateY(-50%); z-index: var(--z-dropdown)",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .result-tabs button || align-items: center; align-self: stretch; background: transparent; border: 0; border-bottom: 3px solid transparent; color: var(--fg-secondary); display: inline-flex; font-size: var(--type-md); gap: 6px; padding: 0 17px",
+      "before": " || .result-tabs button || align-items: center; align-self: stretch; background: transparent; border: 0; border-bottom: 3px solid transparent; color: #4e5c65; display: inline-flex; font-size: var(--type-md); gap: 6px; padding: 0 17px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .result-tabs button.active || border-bottom-color: var(--accent-bright); color: var(--fg-text); font-weight: 700",
+      "before": " || .result-tabs button.active || border-bottom-color: #5f9937; color: var(--fg-text); font-weight: 700",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .result-view-header h2 || color: var(--fg-strong); font-size: var(--type-xxl); font-weight: 400; margin: 0 0 3px",
+      "before": " || .result-view-header h2 || color: var(--fg-strong); font-size: 18px; font-weight: 400; margin: 0 0 3px",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .run-button > span || font-size: var(--type-xxl); line-height: 18px",
+      "before": " || .run-button > span || font-size: 19px; line-height: 18px",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .saved-icon || align-items: center; background: var(--accent-soft); color: var(--accent-hover); display: inline-flex; font-size: var(--type-xxl); height: 32px; justify-content: center; width: 32px",
+      "before": " || .saved-icon || align-items: center; background: var(--accent-soft); color: var(--accent-hover); display: inline-flex; font-size: 21px; height: 32px; justify-content: center; width: 32px",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .search-title h1 || color: var(--fg-text); font-size: var(--type-xxl); font-weight: 400; margin: 0; max-width: 460px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap",
+      "before": " || .search-title h1 || color: var(--fg-text); font-size: 21px; font-weight: 400; margin: 0; max-width: 460px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .segmented-fieldset label.selected || background: var(--accent-soft); border-color: var(--accent-bright)",
+      "before": " || .segmented-fieldset label.selected || background: var(--accent-soft); border-color: #6d9e4c",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .setup-checklist .is-complete > span || background: var(--accent-bright); border-color: var(--accent-bright); color: var(--fg-inverse)",
+      "before": " || .setup-checklist .is-complete > span || background: #67a441; border-color: #67a441; color: var(--fg-inverse)",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .setup-checklist li || align-items: center; border-bottom: 1px solid var(--border-subtle); display: grid; gap: 9px; grid-template-columns: auto 1fr auto; min-height: 51px",
+      "before": " || .setup-checklist li || align-items: center; border-bottom: 1px solid #edf0f1; display: grid; gap: 9px; grid-template-columns: auto 1fr auto; min-height: 51px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .signin-capabilities > span || border-left: 2px solid var(--accent-bright); display: grid; gap: var(--space-1); grid-template-columns: auto 1fr; padding: 2px 0 2px 10px",
+      "before": " || .signin-capabilities > span || border-left: 2px solid #6ba442; display: grid; gap: var(--space-1); grid-template-columns: auto 1fr; padding: 2px 0 2px 10px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .signin-capabilities i || color: var(--accent-inverse); font-size: var(--type-xl); font-style: normal; grid-row: 1 / 3; padding-right: var(--space-1)",
+      "before": " || .signin-capabilities i || color: #84b762; font-size: 17px; font-style: normal; grid-row: 1 / 3; padding-right: var(--space-1)",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role, and put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .signin-card h1 || color: var(--fg-text); font-size: var(--type-xxl); font-weight: 400; margin: 0 0 6px",
+      "before": " || .signin-card h1 || color: var(--fg-text); font-size: 25px; font-weight: 400; margin: 0 0 6px",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .signin-error || align-items: center; background: var(--status-error-soft); border: 1px solid var(--status-error-edge); color: var(--status-error-strong); display: flex; font-size: var(--type-xs); gap: 7px; margin-top: 10px; padding: var(--space-2)",
+      "before": " || .signin-error || align-items: center; background: var(--status-error-soft); border: 1px solid #e3aaa6; color: #99413c; display: flex; font-size: var(--type-xs); gap: 7px; margin-top: 10px; padding: var(--space-2)",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .signin-help-notice || align-items: center; background: var(--status-info-soft); border: 1px solid var(--status-info-edge); color: var(--fg-secondary); display: flex; font-size: var(--type-xs); gap: 7px; margin-top: 10px; padding: var(--space-2)",
+      "before": " || .signin-help-notice || align-items: center; background: var(--status-info-soft); border: 1px solid #b4cedb; color: var(--fg-secondary); display: flex; font-size: var(--type-xs); gap: 7px; margin-top: 10px; padding: var(--space-2)",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .signin-kicker || color: var(--accent-inverse); font-size: var(--type-xs); font-weight: 700; letter-spacing: 0.18em",
+      "before": " || .signin-kicker || color: #8fbe6f; font-size: var(--type-xs); font-weight: 700; letter-spacing: 0.18em",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .signin-password-field[data-invalid=\"true\"] || border-color: var(--status-error); box-shadow: 0 0 0 1px color-mix(in srgb, var(--status-error) 24%, transparent)",
+      "before": " || .signin-password-field[data-invalid=\"true\"] || border-color: var(--status-error); box-shadow: 0 0 0 1px rgb(196 74 67 / 24%)",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .signin-signal span || background: linear-gradient(to top, transparent, var(--accent-inverse)); height: var(--signal-height); width: 8%",
+      "before": " || .signin-signal span || background: linear-gradient(to top, transparent, #88bd67); height: var(--signal-height); width: 8%",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .signin-story || background: radial-gradient(circle at 78% 18%, color-mix(in srgb, var(--accent-bright) 20%, transparent), transparent 31%), linear-gradient(145deg, var(--bg-inverse) 0%, var(--chrome-appbar) 58%, var(--bg-inverse) 100%); color: var(--fg-inverse); display: flex; flex-direction: column; min-height: 100dvh; overflow: hidden; padding: 28px 42px var(--space-6); position: relative",
+      "before": " || .signin-story || background: radial-gradient(circle at 78% 18%, rgb(96 151 57 / 20%), transparent 31%), linear-gradient(145deg, var(--bg-inverse) 0%, #27343b 58%, var(--bg-inverse) 100%); color: var(--fg-inverse); display: flex; flex-direction: column; min-height: 100dvh; overflow: hidden; padding: 28px 42px var(--space-6); position: relative",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .signin-story-copy > p || color: var(--fg-inverse-muted); font-size: var(--type-md); line-height: 1.65; margin: 0 0 35px; max-width: 540px",
+      "before": " || .signin-story-copy > p || color: #b8c3c9; font-size: 13px; line-height: 1.65; margin: 0 0 35px; max-width: 540px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role, and put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .signin-story-copy h1 || font-size: var(--type-display); font-weight: 300; letter-spacing: -0.035em; line-height: 1.05; margin: var(--space-4) 0 var(--space-5); max-width: 530px",
+      "before": " || .signin-story-copy h1 || font-size: clamp(32px, 4vw, 55px); font-weight: 300; letter-spacing: -0.035em; line-height: 1.05; margin: var(--space-4) 0 var(--space-5); max-width: 530px",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .signin-submit i || animation: spin 700ms linear infinite; border: 2px solid color-mix(in srgb, var(--fg-inverse) 35%, transparent); border-radius: 50%; border-top-color: var(--fg-inverse); height: 14px; width: 14px",
+      "before": " || .signin-submit i || animation: spin 700ms linear infinite; border: 2px solid rgb(255 255 255 / 35%); border-radius: 50%; border-top-color: var(--fg-inverse); height: 14px; width: 14px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .skip-link || background: var(--bg-surface); border: 2px solid var(--focus-ring); color: var(--fg-text); font-weight: 700; left: 10px; padding: 9px var(--space-3); position: fixed; top: 8px; transform: translateY(-150%); transition: transform 100ms ease-out; z-index: var(--z-skip-link)",
+      "before": " || .skip-link || background: var(--bg-surface); border: 2px solid var(--focus-ring); color: var(--fg-text); font-weight: 700; left: 10px; padding: 9px var(--space-3); position: fixed; top: 8px; transform: translateY(-150%); transition: transform 100ms ease-out; z-index: 1000",
+      "why": "Phase 5 put the rule's z-index on the stacking ladder: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .sparkline-warn || color: var(--status-warning-bright); font-family: var(--font-mono); font-size: var(--type-lg); letter-spacing: -2px",
+      "before": " || .sparkline-warn || color: #d68a24; font-family: var(--font-mono); font-size: var(--type-lg); letter-spacing: -2px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .spl-boolean || color: var(--syntax-literal); font-weight: 700",
+      "before": " || .spl-boolean || color: #b04c38; font-weight: 700",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .spl-command || color: var(--syntax-command); font-weight: 700",
+      "before": " || .spl-command || color: #734ba3; font-weight: 700",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .spl-editor textarea::selection || background: color-mix(in srgb, var(--focus-ring) 25%, transparent)",
+      "before": " || .spl-editor textarea::selection || background: rgb(55 140 191 / 25%)",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .spl-editor.focused || border-color: var(--focus-ring); box-shadow: inset 0 0 0 1px var(--focus-ring), 0 0 0 2px color-mix(in srgb, var(--focus-ring) 13%, transparent); z-index: 2",
+      "before": " || .spl-editor.focused || border-color: var(--focus-ring); box-shadow: inset 0 0 0 1px var(--focus-ring), 0 0 0 2px rgb(58 136 181 / 13%); z-index: 2",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .spl-editor.has-error || border-color: var(--status-error)",
+      "before": " || .spl-editor.has-error || border-color: #d15b51",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .spl-field || color: var(--syntax-field)",
+      "before": " || .spl-field || color: #146ca1",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .spl-function || color: var(--syntax-function)",
+      "before": " || .spl-function || color: #aa5f18",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .spl-operator || color: var(--syntax-literal); font-weight: 650",
+      "before": " || .spl-operator || color: #b04c38; font-weight: 650",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .spl-pipe || color: var(--syntax-pipe); font-weight: 700",
+      "before": " || .spl-pipe || color: #a14b96; font-weight: 700",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .spl-string || color: var(--syntax-string)",
+      "before": " || .spl-string || color: #2e7d45",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .sr-only || border: 0; clip-path: inset(50%); height: 1px; left: 0; margin: -1px; overflow: hidden; padding: 0; position: absolute; top: 0; white-space: nowrap; width: 1px",
+      "before": " || .sr-only || border: 0; clip: rect(0, 0, 0, 0); clip-path: inset(50%); height: 1px; left: 0; margin: -1px; overflow: hidden; padding: 0; position: absolute; top: 0; white-space: nowrap; width: 1px",
+      "why": "The declaration list also changed shape -- a longhand set collapsed onto the shorthand `stylelint-config-standard` asks for, a deprecated property or keyword replaced by the one that supersedes it, or a value respelled in the case the linter wants. Each keeps the computed value identical."
+    },
+    {
+      "after": " || .statistics-sparkline circle || fill: currentcolor",
+      "before": " || .statistics-sparkline circle || fill: currentColor",
+      "why": "The declaration list also changed shape -- a longhand set collapsed onto the shorthand `stylelint-config-standard` asks for, a deprecated property or keyword replaced by the one that supersedes it, or a value respelled in the case the linter wants. Each keeps the computed value identical."
+    },
+    {
+      "after": " || .statistics-sparkline polyline || fill: none; stroke: currentcolor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.75; vector-effect: non-scaling-stroke",
+      "before": " || .statistics-sparkline polyline || fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.75; vector-effect: non-scaling-stroke",
+      "why": "The declaration list also changed shape -- a longhand set collapsed onto the shorthand `stylelint-config-standard` asks for, a deprecated property or keyword replaced by the one that supersedes it, or a value respelled in the case the linter wants. Each keeps the computed value identical."
+    },
+    {
+      "after": " || .statistics-table th > button:hover || color: var(--status-info-strong)",
+      "before": " || .statistics-table th > button:hover || color: #1f647f",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .statistics-table th || background: var(--bg-subtle); border-bottom: 1px solid var(--border); color: var(--fg-secondary); font-size: var(--type-sm); font-weight: 700; height: var(--statistics-header-height, 37px); text-align: left",
+      "before": " || .statistics-table th || background: var(--bg-subtle); border-bottom: 1px solid var(--border); color: #4a5962; font-size: var(--type-sm); font-weight: 700; height: var(--statistics-header-height, 37px); text-align: left",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .statistics-value-link:hover || color: var(--status-info-strong); text-decoration: underline",
+      "before": " || .statistics-value-link:hover || color: #155a7b; text-decoration: underline",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .suite-app-icon--muted || background: var(--status-neutral)",
+      "before": " || .suite-app-icon--muted || background: #7d8990",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .suite-app-identity > span || align-items: center; background: var(--accent); display: inline-flex; font-size: var(--type-lg); height: 22px; justify-content: center; width: 22px",
+      "before": " || .suite-app-identity > span || align-items: center; background: var(--accent); display: inline-flex; font-size: 15px; height: 22px; justify-content: center; width: 22px",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .suite-app-identity || align-items: center; border-left: 1px solid color-mix(in srgb, var(--chrome-fg) 9%, transparent); display: flex; font-size: var(--type-xs); gap: 7px; min-width: 190px; padding: 0 13px",
+      "before": " || .suite-app-identity || align-items: center; border-left: 1px solid rgb(255 255 255 / 11%); display: flex; font-size: var(--type-xs); gap: 7px; min-width: 190px; padding: 0 13px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .suite-app-switcher || border-left: 1px solid color-mix(in srgb, var(--chrome-fg) 9%, transparent); border-right: 1px solid color-mix(in srgb, var(--chrome-fg) 9%, transparent); gap: 3px",
+      "before": " || .suite-app-switcher || border-left: 1px solid rgb(255 255 255 / 8%); border-right: 1px solid rgb(255 255 255 / 8%); gap: 3px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .suite-app-switcher:hover, .suite-app-switcher[aria-expanded=\"true\"], .suite-utilities > a:hover, .suite-utilities > button:hover, .suite-utilities > .suite-menu-anchor > button:hover, .suite-utilities > .suite-menu-anchor > button[aria-expanded=\"true\"] || background: color-mix(in srgb, var(--chrome-fg) 9%, transparent)",
+      "before": " || .suite-app-switcher:hover, .suite-app-switcher[aria-expanded=\"true\"], .suite-utilities > a:hover, .suite-utilities > button:hover, .suite-utilities > .suite-menu-anchor > button:hover, .suite-utilities > .suite-menu-anchor > button[aria-expanded=\"true\"] || background: rgb(255 255 255 / 8%)",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .suite-card-header h2, .suite-card-header h3 || color: var(--fg-text); font-size: var(--type-md); font-weight: 600; margin: 0 0 3px",
+      "before": " || .suite-card-header h2, .suite-card-header h3 || color: var(--fg-text); font-size: 13px; font-weight: 600; margin: 0 0 3px",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .suite-data-disclosure strong || color: var(--fg-secondary); font-size: var(--type-xs)",
+      "before": " || .suite-data-disclosure strong || color: #40515a; font-size: var(--type-xs)",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .suite-data-disclosure--demo strong || color: var(--status-warning-strong)",
+      "before": " || .suite-data-disclosure--demo strong || color: #86620d",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .suite-find || align-items: center; align-self: center; background: var(--bg-inverse); border: 1px solid var(--chrome-hover); display: flex; height: 25px; margin: 0 var(--space-2); width: 198px",
+      "before": " || .suite-find || align-items: center; align-self: center; background: var(--bg-inverse); border: 1px solid #4a555c; display: flex; height: 25px; margin: 0 var(--space-2); width: 198px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .suite-find button || background: transparent; border: 0; color: var(--chrome-fg-faint); height: 23px; padding: 0 6px",
+      "before": " || .suite-find button || background: transparent; border: 0; color: #a7b2b8; height: 23px; padding: 0 6px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .suite-find:focus-within || border-color: var(--status-info-edge); box-shadow: 0 0 0 2px color-mix(in srgb, var(--focus-ring) 35%, transparent)",
+      "before": " || .suite-find:focus-within || border-color: #8fc5e0; box-shadow: 0 0 0 2px rgb(47 138 193 / 35%)",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .suite-page-heading h1, .dashboard-title-row h1, .home-hero h1 || color: var(--fg-text); font-size: var(--type-xxl); font-weight: 400; letter-spacing: -0.02em; margin: 3px 0 var(--space-1)",
+      "before": " || .suite-page-heading h1, .dashboard-title-row h1, .home-hero h1 || color: var(--fg-text); font-size: 23px; font-weight: 400; letter-spacing: -0.02em; margin: 3px 0 var(--space-1)",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .suite-primary-nav a.active || background: var(--chrome-appbar); border-bottom-color: var(--accent-bright)",
+      "before": " || .suite-primary-nav a.active || background: #384047; border-bottom-color: #79b84a",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .suite-user-button > span || align-items: center; background: var(--accent-bright); border-radius: 50%; display: inline-flex; font-size: var(--type-xs); height: 17px; justify-content: center; width: 17px",
+      "before": " || .suite-user-button > span || align-items: center; background: #6da442; border-radius: 50%; display: inline-flex; font-size: var(--type-xs); height: 17px; justify-content: center; width: 17px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .suite-user-summary > span || align-items: center; background: var(--accent-bright); border-radius: 50%; color: var(--fg-inverse); display: inline-flex; height: 32px; justify-content: center; width: 32px",
+      "before": " || .suite-user-summary > span || align-items: center; background: #679d40; border-radius: 50%; color: var(--fg-inverse); display: inline-flex; height: 32px; justify-content: center; width: 32px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .suite-utilities .health-indicator || color: var(--chrome-fg-muted)",
+      "before": " || .suite-utilities .health-indicator || color: #c7d1d6",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .suite-utilities .suite-context || color: var(--chrome-fg-muted)",
+      "before": " || .suite-utilities .suite-context || color: #c8d3d8",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .summary-icon || align-items: center; background: var(--accent-soft); color: var(--accent); display: flex; font-size: var(--type-xl); height: 35px; justify-content: center; width: 35px",
+      "before": " || .summary-icon || align-items: center; background: var(--accent-soft); color: var(--accent); display: flex; font-size: 17px; height: 35px; justify-content: center; width: 35px",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .summary-icon--orange || background: var(--status-warning-soft); color: var(--status-progress)",
+      "before": " || .summary-icon--orange || background: var(--status-warning-soft); color: #c6782b",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .system-notice || align-items: center; background: var(--status-success-soft); border: 1px solid var(--status-success-edge); border-left: 4px solid var(--accent-bright); display: grid; gap: 10px; grid-template-columns: auto 1fr auto auto; min-height: 49px; padding: var(--space-2) var(--space-3)",
+      "before": " || .system-notice || align-items: center; background: var(--status-success-soft); border: 1px solid #bdd2ad; border-left: 4px solid #65a33e; display: grid; gap: 10px; grid-template-columns: auto 1fr auto auto; min-height: 49px; padding: var(--space-2) var(--space-3)",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .system-notice__icon || align-items: center; background: var(--accent-bright); border-radius: 50%; color: var(--fg-inverse); display: flex; font-size: var(--type-xs); height: 18px; justify-content: center; width: 18px",
+      "before": " || .system-notice__icon || align-items: center; background: #65a33e; border-radius: 50%; color: var(--fg-inverse); display: flex; font-size: var(--type-xs); height: 18px; justify-content: center; width: 18px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .table-error-detail || color: var(--status-error-strong); display: block; font-size: var(--type-xs); overflow-wrap: anywhere; white-space: normal",
+      "before": " || .table-error-detail || color: #aa3f39; display: block; font-size: var(--type-xs); overflow-wrap: anywhere; white-space: normal",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .time-picker-content h3 || color: var(--fg-secondary); font-size: var(--type-sm); margin: 0 0 10px; text-transform: uppercase",
+      "before": " || .time-picker-content h3 || color: #485761; font-size: var(--type-sm); margin: 0 0 10px; text-transform: uppercase",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .time-range-button > span:first-child || color: var(--fg-muted); font-size: var(--type-xxl)",
+      "before": " || .time-range-button > span:first-child || color: var(--fg-muted); font-size: 19px",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
       "before": " || .time-series-chart || display: grid; grid-column: 1; grid-row: 1; grid-template-columns: 48px minmax(0, 1fr); grid-template-rows: minmax(300px, 1fr) 38px; height: 100%; min-width: 0",
       "after": " || .time-series-chart || display: grid; grid-column: 1; grid-row: 1; grid-template-columns: var(--chart-y-axis-width, 48px) minmax(0, 1fr); grid-template-rows: minmax(var(--chart-plot-min-height, 300px), 1fr) var(--chart-x-axis-height, 38px); height: var(--chart-height, 100%); min-width: 0",
       "why": "The panel that used to size this chart through `:global()` now sets a custom property on its own container, so the rule reads the value it used to be handed and keeps the shipped number as the `var()` fallback. Same paint everywhere the panel is absent."
+    },
+    {
+      "after": " || .time-series-chart__crosshair || border-left: 1px dashed var(--status-neutral); bottom: 0; pointer-events: none; position: absolute; top: 0; transform: translateX(-0.5px); z-index: 2",
+      "before": " || .time-series-chart__crosshair || border-left: 1px dashed #77858c; bottom: 0; pointer-events: none; position: absolute; top: 0; transform: translateX(-0.5px); z-index: 2",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .time-series-chart__inspect:focus-visible || box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--focus-ring) 38%, transparent)",
+      "before": " || .time-series-chart__inspect:focus-visible || box-shadow: inset 0 0 0 2px rgb(47 120 158 / 38%)",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
     },
     {
       "before": " || .time-series-chart__line || fill: none; stroke: var(--chart-series-1); stroke-linecap: round; stroke-linejoin: round; stroke-width: 2.25; vector-effect: non-scaling-stroke",
@@ -31,9 +1007,279 @@
       "why": "The panel that used to size this chart through `:global()` now sets a custom property on its own container, so the rule reads the value it used to be handed and keeps the shipped number as the `var()` fallback. Same paint everywhere the panel is absent."
     },
     {
+      "after": " || .time-series-chart__marker || background: var(--bg-surface); border: 2px solid var(--chart-series-1); border-radius: 50%; box-shadow: 0 0 0 1px color-mix(in srgb, var(--bg-surface) 72%, transparent); height: 10px; pointer-events: none; position: absolute; transform: translate(-50%, -50%); width: 10px; z-index: 3",
+      "before": " || .time-series-chart__marker || background: var(--bg-surface); border: 2px solid var(--chart-series-1); border-radius: 50%; box-shadow: 0 0 0 1px rgb(255 255 255 / 72%); height: 10px; pointer-events: none; position: absolute; transform: translate(-50%, -50%); width: 10px; z-index: 3",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
       "before": " || .time-series-chart__x-axis || color: var(--fg-muted); display: flex; font-size: var(--type-xxs); grid-column: 2; grid-row: 2; justify-content: space-between; line-height: 1.25; padding-top: 9px",
       "after": " || .time-series-chart__x-axis || color: var(--fg-muted); display: flex; font-size: var(--chart-x-axis-type, var(--type-xxs)); grid-column: 2; grid-row: 2; justify-content: space-between; line-height: 1.25; padding-top: 9px",
       "why": "The panel that used to size this chart through `:global()` now sets a custom property on its own container, so the rule reads the value it used to be handed and keeps the shipped number as the `var()` fallback. Same paint everywhere the panel is absent."
+    },
+    {
+      "after": " || .timechart-column-bars > button > b || background: color-mix(in srgb, var(--bg-surface) 90%, transparent); color: var(--fg-secondary); font-size: var(--type-xxs); left: 50%; padding: 1px 3px; position: absolute; top: 3px; transform: translateX(-50%); z-index: 2",
+      "before": " || .timechart-column-bars > button > b || background: rgb(255 255 255 / 90%); color: var(--fg-secondary); font-size: var(--type-xxs); left: 50%; padding: 1px 3px; position: absolute; top: 3px; transform: translateX(-50%); z-index: 2",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .timeline-bars > span || background: var(--accent-bright); border: 0; border-radius: var(--radius-sm) var(--radius-sm) 0 0; flex: 1 1 0; min-width: 2px; opacity: 0.92; padding: 0; position: relative; z-index: 2",
+      "before": " || .timeline-bars > span || background: var(--accent-bright); border: 0; border-radius: 1px 1px 0 0; flex: 1 1 0; min-width: 2px; opacity: 0.92; padding: 0; position: relative; z-index: 2",
+      "why": "Phase 5 put the rule's border-radius on its documented --radius-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .timeline-chart:has(.timeline-keyboard-control:focus-visible) || box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--focus-ring) 38%, transparent); outline: 0",
+      "before": " || .timeline-chart:has(.timeline-keyboard-control:focus-visible) || box-shadow: inset 0 0 0 2px rgb(47 134 179 / 38%); outline: 0",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .timeline-grid-lines span || border-top: 1px solid var(--border-subtle); width: 100%",
+      "before": " || .timeline-grid-lines span || border-top: 1px solid #edf0f1; width: 100%",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .timeline-selection || background: color-mix(in srgb, var(--focus-ring) 13%, transparent); border-left: 1px solid var(--status-info); border-right: 1px solid var(--status-info); inset-block: 0; pointer-events: none; position: absolute; z-index: 3",
+      "before": " || .timeline-selection || background: rgb(68 128 166 / 13%); border-left: 1px solid #3d87b3; border-right: 1px solid #3d87b3; inset-block: 0; pointer-events: none; position: absolute; z-index: 3",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .toast > span || align-items: center; background: var(--status-info); border-radius: 50%; display: inline-flex; font-size: var(--type-xs); height: 20px; justify-content: center; width: 20px",
+      "before": " || .toast > span || align-items: center; background: #4a8eb4; border-radius: 50%; display: inline-flex; font-size: var(--type-xs); height: 20px; justify-content: center; width: 20px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .toast || align-items: center; animation: toast-in 180ms ease-out; background: var(--bg-inverse); border-left: 4px solid var(--status-info); bottom: 20px; box-shadow: var(--shadow-toast); color: var(--fg-inverse); display: flex; gap: 9px; min-height: 45px; min-width: 330px; padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3); position: fixed; right: 20px; z-index: var(--z-toast)",
+      "before": " || .toast || align-items: center; animation: toast-in 180ms ease-out; background: #26333b; border-left: 4px solid #4a8eb4; bottom: 20px; box-shadow: 0 8px 28px rgb(12 22 28 / 28%); color: var(--fg-inverse); display: flex; gap: 9px; min-height: 45px; min-width: 330px; padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3); position: fixed; right: 20px; z-index: var(--z-toast)",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .toast button || background: transparent; border: 0; color: var(--fg-inverse); font-size: var(--type-xxl); height: 28px; width: 28px",
+      "before": " || .toast button || background: transparent; border: 0; color: var(--fg-inverse); font-size: 18px; height: 28px; width: 28px",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .toast-success > span || background: var(--accent-bright)",
+      "before": " || .toast-success > span || background: #72a84c",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .toast-success || border-left-color: var(--accent-bright)",
+      "before": " || .toast-success || border-left-color: #72a84c",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .toast-warning || border-left-color: var(--status-warning-bright)",
+      "before": " || .toast-warning || border-left-color: #d99d2a",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .token-create-disabled-reason, .lookup-manager__create-reason || background: var(--status-warning-soft); border-left: 3px solid var(--status-progress); color: var(--status-warning-strong); font-size: var(--type-xs); line-height: 1.45; margin: 0; padding: var(--space-2) 10px",
+      "before": " || .token-create-disabled-reason, .lookup-manager__create-reason || background: var(--status-warning-soft); border-left: 3px solid #c07823; color: #715516; font-size: var(--type-xs); line-height: 1.45; margin: 0; padding: var(--space-2) 10px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .token-reveal button || background: var(--fg-secondary); border: 1px solid var(--status-neutral); color: var(--fg-inverse); font-size: var(--type-xs); height: 28px",
+      "before": " || .token-reveal button || background: #3d4a51; border: 1px solid #66737a; color: var(--fg-inverse); font-size: var(--type-xs); height: 28px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .top-value-type || border: 1px solid var(--border); border-radius: var(--radius-md); color: var(--fg-muted); font-size: var(--type-xxs); font-weight: 700; letter-spacing: 0.02em; margin-left: 5px; padding: 1px var(--space-1); text-transform: uppercase",
+      "before": " || .top-value-type || border: 1px solid var(--border); border-radius: 7px; color: var(--fg-muted); font-size: 7px; font-weight: 700; letter-spacing: 0.02em; margin-left: 5px; padding: 1px var(--space-1); text-transform: uppercase",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step, and put the rule's border-radius on its documented --radius-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .unsaved-dot, .search-draft-hint, .demo-badge || align-items: center; border-radius: var(--radius-lg); display: inline-flex; font-size: var(--type-xs); height: 21px; white-space: nowrap",
+      "before": " || .unsaved-dot, .search-draft-hint, .demo-badge || align-items: center; border-radius: 10px; display: inline-flex; font-size: var(--type-xs); height: 21px; white-space: nowrap",
+      "why": "Phase 5 put the rule's border-radius on its documented --radius-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .user-avatar-large || align-items: center; background: var(--accent-bright); border-radius: 50%; color: var(--fg-inverse); display: flex; height: 34px; justify-content: center; width: 34px",
+      "before": " || .user-avatar-large || align-items: center; background: #67a041; border-radius: 50%; color: var(--fg-inverse); display: flex; height: 34px; justify-content: center; width: 34px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .value-bar || background: var(--status-success-edge); bottom: 4px; height: 5px; left: 2px; max-width: calc(100% - 64px); position: absolute",
+      "before": " || .value-bar || background: #c7dfb6; bottom: 4px; height: 5px; left: 2px; max-width: calc(100% - 64px); position: absolute",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .value-boolean || border-color: var(--status-success-edge); color: var(--accent)",
+      "before": " || .value-boolean || border-color: #bed5ae; color: var(--accent)",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .value-number || border-color: var(--status-warning-edge); color: var(--status-warning-strong)",
+      "before": " || .value-number || border-color: #dbc7a8; color: #8d642a",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .value-type || border: 1px solid var(--border); border-radius: var(--radius-md); color: var(--fg-faint); font-size: var(--type-xxs); padding: 1px var(--space-1); text-align: center",
+      "before": " || .value-type || border: 1px solid var(--border); border-radius: 7px; color: var(--fg-faint); font-size: 7px; padding: 1px var(--space-1); text-align: center",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step, and put the rule's border-radius on its documented --radius-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .wordmark || align-items: baseline; display: flex; flex: 0 0 auto; font-size: var(--type-xl); font-weight: 700; height: 38px; letter-spacing: -0.04em; padding: 9px 15px var(--space-2) 17px; text-decoration: none; white-space: nowrap",
+      "before": " || .wordmark || align-items: baseline; display: flex; flex: 0 0 auto; font-size: 17px; font-weight: 700; height: 38px; letter-spacing: -0.04em; padding: 9px 15px var(--space-2) 17px; text-decoration: none; white-space: nowrap",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .wordmark b || color: var(--accent-bright); font-size: var(--type-xxl); line-height: 0; margin: 0 1px",
+      "before": " || .wordmark b || color: #79b84a; font-size: 19px; line-height: 0; margin: 0 1px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role, and put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .wordmark span:first-child || color: var(--chrome-fg-faint); font-weight: 400",
+      "before": " || .wordmark span:first-child || color: #aeb9bf; font-weight: 400",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .wordmark--hero || font-size: var(--type-xxl); height: auto; letter-spacing: -0.05em; padding: 0; width: max-content",
+      "before": " || .wordmark--hero || font-size: 22px; height: auto; letter-spacing: -0.05em; padding: 0; width: max-content",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .wordmark--hero b || font-size: var(--type-xxl); line-height: normal; margin: 0 2px",
+      "before": " || .wordmark--hero b || font-size: 25px; line-height: normal; margin: 0 2px",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || body || min-height: 100%; margin: 0; background: var(--bg-canvas); color: var(--fg-text); font-family: var(--font-sans); font-size: var(--type-md); text-rendering: optimizelegibility",
+      "before": " || body || min-height: 100%; margin: 0; background: var(--bg-canvas); color: var(--fg-text); font-family: var(--font-sans); font-size: 13px; text-rendering: optimizeLegibility",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried. The declaration list also changed shape -- a longhand set collapsed onto the shorthand `stylelint-config-standard` asks for, a deprecated property or keyword replaced by the one that supersedes it, or a value respelled in the case the linter wants. Each keeps the computed value identical."
+    },
+    {
+      "after": "@keyframes pulse-ring || 0%, 100% || box-shadow: var(--pulse-ring-core, 0 0 transparent), 0 0 0 0 color-mix(in srgb, var(--focus-ring) 30%, transparent)",
+      "before": "@keyframes pulse-ring || 0%, 100% || box-shadow: var(--pulse-ring-core, 0 0 #0000), 0 0 0 0 rgb(46 135 183 / 30%)",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": "@keyframes pulse-ring || 50% || box-shadow: var(--pulse-ring-core, 0 0 transparent), 0 0 0 4px transparent",
+      "before": "@keyframes pulse-ring || 50% || box-shadow: var(--pulse-ring-core, 0 0 #0000), 0 0 0 4px rgb(46 135 183 / 0%)",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": "@media (max-width: 480px) || .suite-page-heading h1, .dashboard-title-row h1, .home-hero h1 || font-size: var(--type-xl)",
+      "before": "@media (max-width: 480px) || .suite-page-heading h1, .dashboard-title-row h1, .home-hero h1 || font-size: 21px",
+      "why": "Phase 5 put this rule's font-size on the documented --type-* step: `npm run lint:css` fails on a font-size literal outside app/styles/tokens-*.css, so the rule reads the token the layer already carried. The step is --type-xl rather than the --type-xxl the 21px would have rounded to, because the base rule for the same three headings rounded to --type-xxl as well: rounding both ends of a fold onto one step leaves the narrow rule restating the rule it exists to override. The heading still shrinks at 480px, on the ramp this layer has. See the Type table in docs/theming.md."
+    },
+    {
+      "after": "@media (max-width: 760px) || .drawer > a > span || align-items: center; color: var(--fg-muted); display: flex; font-size: var(--type-lg); justify-content: center; width: 22px",
+      "before": "@media (max-width: 760px) || .drawer > a > span || align-items: center; color: var(--fg-muted); display: flex; font-size: 15px; justify-content: center; width: 22px",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": "@media (max-width: 760px) || .drawer > a.selected-app || background: var(--accent-soft); border-left-color: var(--accent-bright)",
+      "before": "@media (max-width: 760px) || .drawer > a.selected-app || background: var(--accent-soft); border-left-color: #7da768",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": "@media (max-width: 760px) || .drawer > header button || background: transparent; border: 0; color: var(--chrome-fg-muted); font-size: var(--type-xxl); height: 44px; width: 44px",
+      "before": "@media (max-width: 760px) || .drawer > header button || background: transparent; border: 0; color: #e6ecef; font-size: 24px; height: 44px; width: 44px",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role, and put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": "@media (max-width: 760px) || .drawer > header small || color: var(--chrome-fg-faint); font-size: var(--type-xs)",
+      "before": "@media (max-width: 760px) || .drawer > header small || color: #aeb9bf; font-size: var(--type-xs)",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": "@media (max-width: 760px) || .drawer || background: var(--bg-raised); border: 0; box-shadow: var(--shadow-drawer); color: var(--fg-text); display: flex; flex-direction: column; inset: 0 auto 0 0; margin: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 0 max(12px, env(safe-area-inset-bottom)); position: fixed; width: min(330px, calc(100vw - 42px)); z-index: var(--z-drawer)",
+      "before": "@media (max-width: 760px) || .drawer || background: var(--bg-raised); border: 0; box-shadow: 8px 0 30px rgb(18 29 36 / 24%); color: var(--fg-text); display: flex; flex-direction: column; inset: 0 auto 0 0; margin: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 0 max(12px, env(safe-area-inset-bottom)); position: fixed; width: min(330px, calc(100vw - 42px)); z-index: var(--z-drawer)",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": "@media (max-width: 760px) || .drawer-backdrop || background: color-mix(in srgb, var(--bg-inverse) 48%, transparent); border: 0; display: block; inset: 0; position: fixed; z-index: var(--z-drawer-scrim)",
+      "before": "@media (max-width: 760px) || .drawer-backdrop || background: rgb(14 21 25 / 48%); border: 0; display: block; inset: 0; position: fixed; z-index: var(--z-drawer-scrim)",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": "@media (max-width: 760px) || .event-field-actions || background: var(--bg-surface); box-shadow: -8px 0 7px var(--bg-surface); opacity: 1; position: absolute; right: 3px",
+      "before": [
+        "@media (max-width: 760px) || .event-field-actions || background: var(--bg-surface); box-shadow: -8px 0 7px var(--bg-surface); position: absolute; right: 3px",
+        "@media (max-width: 760px) || .event-field-actions || opacity: 1"
+      ],
+      "why": "Two rules with this selector under the same at-rules stated it, which `no-duplicate-selectors` reports as an error from Phase 5 on; they are folded into one and the later rule's values are kept, which is what the cascade was already resolving to. The declaration list also changed shape -- a longhand set collapsed onto the shorthand `stylelint-config-standard` asks for, a deprecated property or keyword replaced by the one that supersedes it, or a value respelled in the case the linter wants. Each keeps the computed value identical."
+    },
+    {
+      "after": "@media (max-width: 760px) || .fields-mobile-dismiss || background: color-mix(in srgb, var(--bg-inverse) 24%, transparent); border: 0; display: block; inset: 0; position: fixed; z-index: var(--z-dropdown-scrim)",
+      "before": "@media (max-width: 760px) || .fields-mobile-dismiss || background: rgb(17 25 31 / 24%); border: 0; display: block; inset: 0; position: fixed; z-index: var(--z-dropdown-scrim)",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": "@media (max-width: 760px) || .home-metrics strong || font-size: var(--type-xl)",
+      "before": "@media (max-width: 760px) || .home-metrics strong || font-size: 17px",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "before": "@media (max-width: 760px) || .lookup-manager__toolbar input, .lookup-manager__toolbar select, .lookup-manager__editor input:not([type=\"checkbox\"]):not([type=\"file\"]), .lookup-manager__editor select || font-size: var(--type-xl); height: 44px",
+      "after": "@media (max-width: 760px) || .lookup-manager__toolbar input, .lookup-manager__toolbar select, .lookup-manager__editor input:not([type=\"checkbox\"], [type=\"file\"]), .lookup-manager__editor select || font-size: var(--type-xl); height: 44px",
+      "why": "The mobile half of the same `selector-not-notation` respelling. No declaration changed."
+    },
+    {
+      "after": "@media (max-width: 760px) || .result-tabs || overflow-x: auto; padding-left: 5px; scroll-padding: 0 28px; scroll-snap-type: x proximity",
+      "before": [
+        "@media (max-width: 760px) || .result-tabs || overflow-x: auto; padding-left: 5px",
+        "@media (max-width: 760px) || .result-tabs || scroll-padding: 0 28px; scroll-snap-type: x proximity"
+      ],
+      "why": "Two rules with this selector under the same at-rules stated it, which `no-duplicate-selectors` reports as an error from Phase 5 on; they are folded into one and the later rule's values are kept, which is what the cascade was already resolving to. The declaration list also changed shape -- a longhand set collapsed onto the shorthand `stylelint-config-standard` asks for, a deprecated property or keyword replaced by the one that supersedes it, or a value respelled in the case the linter wants. Each keeps the computed value identical."
+    },
+    {
+      "after": "@media (max-width: 760px) || .result-tabs button || flex: 0 0 auto; padding-inline: var(--space-3); scroll-snap-align: center",
+      "before": [
+        "@media (max-width: 760px) || .result-tabs button || flex: 0 0 auto; padding-inline: var(--space-3)",
+        "@media (max-width: 760px) || .result-tabs button || scroll-snap-align: center"
+      ],
+      "why": "Two rules with this selector under the same at-rules stated it, which `no-duplicate-selectors` reports as an error from Phase 5 on; they are folded into one and the later rule's values are kept, which is what the cascade was already resolving to. The declaration list also changed shape -- a longhand set collapsed onto the shorthand `stylelint-config-standard` asks for, a deprecated property or keyword replaced by the one that supersedes it, or a value respelled in the case the linter wants. Each keeps the computed value identical."
+    },
+    {
+      "after": "@media (max-width: 760px) || .run-button > span || font-size: var(--type-lg)",
+      "before": "@media (max-width: 760px) || .run-button > span || font-size: 15px",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": "@media (max-width: 760px) || .statistics-scroll-hint || align-items: center; align-self: flex-end; background: color-mix(in srgb, var(--bg-surface) 94%, transparent); border: 1px solid var(--border-strong); border-radius: var(--radius-lg); box-shadow: var(--shadow-md); color: var(--fg-secondary); display: flex; font-size: var(--type-xs); gap: 5px; height: 24px; margin-bottom: 6px; order: -1; padding: 0 var(--space-2); pointer-events: none; position: static; transition: opacity 140ms var(--ease); z-index: 3",
+      "before": "@media (max-width: 760px) || .statistics-scroll-hint || align-items: center; align-self: flex-end; background: rgb(255 255 255 / 94%); border: 1px solid var(--border-strong); border-radius: var(--radius-lg); box-shadow: 0 2px 7px rgb(20 35 44 / 16%); color: #456675; display: flex; font-size: var(--type-xs); gap: 5px; height: 24px; margin-bottom: 6px; order: -1; padding: 0 var(--space-2); pointer-events: none; position: static; transition: opacity 140ms var(--ease); z-index: 3",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": "@media (max-width: 760px) || .statistics-scroll-hint b || color: var(--status-info); font-size: var(--type-md)",
+      "before": "@media (max-width: 760px) || .statistics-scroll-hint b || color: var(--status-info); font-size: 13px",
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": "@media (max-width: 760px) || .statistics-table-shell || background: linear-gradient(to right, transparent calc(100% - 18px), color-mix(in srgb, var(--focus-ring) 10%, transparent))",
+      "before": "@media (max-width: 760px) || .statistics-table-shell || background: linear-gradient(to right, transparent calc(100% - 18px), rgb(47 120 158 / 10%))",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": "@media (max-width: 760px) || .suite-utilities > .suite-menu-anchor > .suite-user-button || height: 45px; padding: 0 13px",
+      "before": "@media (max-width: 760px) || .suite-user-button || height: 45px !important; padding: 0 13px !important",
+      "why": "`declaration-no-important` is an error from Phase 5 on. This rule was losing to the bar's own control rule, `.suite-app-switcher, .suite-utilities > a, .suite-utilities > button, .suite-utilities > .suite-menu-anchor > button`, which is (0,2,1) and sets the 38px desktop height and 11px padding; naming the same path brings the mobile override to (0,3,1) and it wins on specificity instead. This is the one of the eleven removals that was load-bearing: taking the `!important` off without raising the selector moved seventeen mobile baselines, which is how it was found."
+    },
+    {
+      "after": "@media (max-width: 760px) || .table--cards.table--cards thead || clip-path: inset(50%); height: 1px; overflow: hidden; position: absolute; white-space: nowrap; width: 1px",
+      "before": "@media (max-width: 760px) || .table--cards.table--cards thead || clip: rect(0 0 0 0); clip-path: inset(50%); height: 1px; overflow: hidden; position: absolute; white-space: nowrap; width: 1px",
+      "why": "The declaration list also changed shape -- a longhand set collapsed onto the shorthand `stylelint-config-standard` asks for, a deprecated property or keyword replaced by the one that supersedes it, or a value respelled in the case the linter wants. Each keeps the computed value identical."
+    },
+    {
+      "after": "@media (max-width: 760px) || .table-wrap || background: linear-gradient(to right, transparent calc(100% - 16px), color-mix(in srgb, var(--focus-ring) 9%, transparent))",
+      "before": "@media (max-width: 760px) || .table-wrap || background: linear-gradient(to right, transparent calc(100% - 16px), rgb(39 116 155 / 9%))",
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "before": [
+        "@media (max-width: 760px) || .time-popover .time-picker-layout || flex: 1; grid-template-columns: 96px minmax(0, 1fr); min-height: 0; overflow: hidden",
+        "@media (max-width: 760px) || .time-popover .time-picker-layout || min-height: 0"
+      ],
+      "after": "@media (max-width: 760px) || .time-popover .time-picker-layout || flex: 1; grid-template-columns: 96px minmax(0, 1fr); min-height: 0; overflow: hidden",
+      "why": "`no-duplicate-selectors` is an error from Phase 5 on. The second rule restated the `min-height: 0` the first already set, under the same at-rule and the same selector, so folding it away leaves every declared value exactly where it was."
+    },
+    {
+      "after": "@media (max-width: 760px) || .time-popover || border: 0; box-shadow: var(--shadow-sheet); display: flex; flex-direction: column; inset: auto 0 0; max-height: 82dvh; position: fixed; width: 100vw; z-index: var(--z-drawer)",
+      "before": [
+        "@media (max-width: 760px) || .time-popover || border: 0; bottom: 0; box-shadow: 0 -12px 36px rgb(18 29 36 / 24%); left: 0; max-height: 82dvh; position: fixed; right: 0; top: auto; width: 100vw; z-index: var(--z-drawer)",
+        "@media (max-width: 760px) || .time-popover || display: flex; flex-direction: column; max-height: max(320px, calc(100dvh - 304px)); right: -82px; width: calc(100vw - 20px)"
+      ],
+      "why": "Two rules with this selector under the same at-rules stated it, which `no-duplicate-selectors` reports as an error from Phase 5 on; they are folded into one and the later rule's values are kept, which is what the cascade was already resolving to. The declaration list also changed shape -- a longhand set collapsed onto the shorthand `stylelint-config-standard` asks for, a deprecated property or keyword replaced by the one that supersedes it, or a value respelled in the case the linter wants. Each keeps the computed value identical."
     },
     {
       "before": "@media (max-width: 760px) || .time-series-chart || grid-template-columns: 40px minmax(0, 1fr); grid-template-rows: minmax(250px, 1fr) 38px",
