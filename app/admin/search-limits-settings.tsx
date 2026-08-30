@@ -9,61 +9,24 @@ import type {
 } from "@/gen/ts/open_splunk/server_settings_api";
 import { isHttpStatus, type OpenSplunkApiClient } from "@/lib/api";
 import { createErrorMessage } from "@/lib/error-message";
+import { FieldNote, fieldControlProps } from "../_components/field-validation";
 import {
-  parsePositiveInteger,
+  SEARCH_LIMIT_FIELDS,
+  SEARCH_LIMIT_GROUPS,
+  SEARCH_LIMIT_KEYS,
   sameSearchLimits,
+  searchLimitErrors,
+  searchLimitFieldHint,
   searchLimitsFromForm,
   searchLimitsToForm,
   type SearchLimitForm,
 } from "./search-limits-form";
 
-const fields = {
-  runtimeSeconds: { label: "Maximum runtime", unit: "seconds", group: "Execution" },
-  memoryMiB: { label: "Per-query memory", unit: "MiB", group: "Execution" },
-  rowsRead: { label: "Rows read", unit: "rows", group: "Execution" },
-  bytesReadMiB: { label: "Bytes read", unit: "MiB", group: "Execution" },
-  groupedRows: { label: "Grouped rows", unit: "rows", group: "Execution" },
-  threads: { label: "ClickHouse threads", unit: "threads", group: "Execution" },
-  resultRows: { label: "Retained rows per job", unit: "rows", group: "Results and retention" },
-  resultBytesMiB: { label: "Retained bytes per job", unit: "MiB", group: "Results and retention" },
-  totalResultBytesMiB: { label: "Total retained result bytes", unit: "MiB", group: "Results and retention" },
-  retentionMinutes: { label: "Result retention", unit: "minutes", group: "Results and retention" },
-  concurrency: { label: "Concurrent searches", unit: "searches", group: "Scheduling" },
-} as const;
-
-const groups = ["Execution", "Results and retention", "Scheduling"] as const;
-const mebibyteFields = new Set<keyof SearchLimitForm>([
-  "memoryMiB",
-  "bytesReadMiB",
-  "resultBytesMiB",
-  "totalResultBytesMiB",
-]);
-
-function gibibyteHint(value: string): string {
-  const mebibytes = parsePositiveInteger(value);
-  if (mebibytes === null || mebibytes < 1024n) return "";
-  const whole = mebibytes / 1024n;
-  const remainder = mebibytes % 1024n;
-  return remainder === 0n
-    ? ` (${whole.toLocaleString()} GiB)`
-    : ` (${whole.toLocaleString()} GiB + ${remainder.toLocaleString()} MiB)`;
-}
-
-function compareFormValue(
-  key: keyof SearchLimitForm,
-  form: SearchLimitForm,
-  minimums: SearchLimitForm,
-  maximums: SearchLimitForm,
-): string | null {
-  const value = parsePositiveInteger(form[key]);
-  const minimum = parsePositiveInteger(minimums[key]);
-  const maximum = parsePositiveInteger(maximums[key]);
-  if (value === null || minimum === null || maximum === null) return "Enter a whole number greater than zero.";
-  if (value < minimum || value > maximum) {
-    return `Enter ${minimum.toLocaleString()}–${maximum.toLocaleString()} ${fields[key].unit}.`;
-  }
-  return null;
-}
+const GROUP_DESCRIPTIONS: Record<typeof SEARCH_LIMIT_GROUPS[number], string> = {
+  Execution: "Controls ClickHouse work allowed for each new query.",
+  "Results and retention": "Controls result memory and how long completed jobs remain available.",
+  Scheduling: "Controls how many queued jobs may execute at once.",
+};
 
 type CompleteSettingsEnvelope = GetServerSettingsResponse & {
   current: NonNullable<GetServerSettingsResponse["current"]> & { limits: SearchLimits };
@@ -145,21 +108,12 @@ export function SearchLimitsSettings({
   }
   if (!completeEnvelope(response)) return null;
 
-  const minimums = searchLimitsToForm(response.minimums);
-  const maximums = searchLimitsToForm(response.maximums);
   const defaultsForm = searchLimitsToForm(response.defaults);
-  const errors = Object.fromEntries(
-    (Object.keys(fields) as (keyof SearchLimitForm)[]).map((key) => [
-      key,
-      compareFormValue(key, form, minimums, maximums),
-    ]),
-  ) as Record<keyof SearchLimitForm, string | null>;
+  const errors = searchLimitErrors(form, response.minimums, response.maximums);
   const parsed = searchLimitsFromForm(form, exactBase ?? undefined);
   const atDefaults = parsed !== null && sameSearchLimits(parsed, response.defaults);
-  if (parsed !== null && parsed.maximumResultBytes > parsed.maximumTotalResultBytes) {
-    errors.totalResultBytesMiB = "Total retained bytes must be at least the per-job limit.";
-  }
-  const valid = parsed !== null && Object.values(errors).every((item) => item === null);
+  const invalid = SEARCH_LIMIT_KEYS.filter((key) => errors[key] !== null);
+  const valid = parsed !== null && invalid.length === 0;
 
   const save = async (event: FormEvent) => {
     event.preventDefault();
@@ -190,29 +144,44 @@ export function SearchLimitsSettings({
   };
 
   return (
-    <form className="admin-section-stack" onSubmit={(event) => void save(event)}>
+    <form className="admin-section-stack" onSubmit={(event) => void save(event)} noValidate>
       <div className="access-mode-notice" role="note"><span>i</span><div><strong>Applies to newly admitted searches</strong><p>Running and queued jobs keep their captured execution, result, and retention limits. Scheduling concurrency changes immediately. Command-specific safety limits and export re-execution limits remain fixed.</p></div></div>
-      {groups.map((group) => (
+      {SEARCH_LIMIT_GROUPS.map((group) => (
         <section className="suite-card settings-group" key={group}>
-          <header><h3>{group}</h3><p>{group === "Execution" ? "Controls ClickHouse work allowed for each new query." : group === "Scheduling" ? "Controls how many queued jobs may execute at once." : "Controls result memory and how long completed jobs remain available."}</p></header>
+          <header><h3>{group}</h3><p>{GROUP_DESCRIPTIONS[group]}</p></header>
           <div className="settings-form-grid">
-            {(Object.keys(fields) as (keyof SearchLimitForm)[]).filter((key) => fields[key].group === group).map((key) => (
-              <label key={key}>
-                <span>{fields[key].label}</span>
-                <input
-                  inputMode="numeric"
-                  value={form[key]}
-                  aria-invalid={errors[key] !== null}
-                  disabled={state === "saving"}
-                  onChange={(event) => setForm((current) => current === null ? current : { ...current, [key]: event.target.value })}
-                />
-                <small>{errors[key] ?? `${minimums[key]}–${maximums[key]} ${fields[key].unit}${mebibyteFields.has(key) ? gibibyteHint(maximums[key]) : ""}; default ${defaultsForm[key]}${mebibyteFields.has(key) ? gibibyteHint(defaultsForm[key]) : ""}.`}</small>
-              </label>
-            ))}
+            {SEARCH_LIMIT_KEYS.filter((key) => SEARCH_LIMIT_FIELDS[key].group === group).map((key) => {
+              const fieldId = `search-limit-${key}`;
+              return (
+                <label key={key} htmlFor={fieldId}>
+                  <span>{SEARCH_LIMIT_FIELDS[key].label}</span>
+                  <input
+                    autoComplete="off"
+                    disabled={state === "saving"}
+                    id={fieldId}
+                    inputMode={SEARCH_LIMIT_FIELDS[key].kind === "bytes" ? "text" : "numeric"}
+                    onChange={(event) => setForm((current) => current === null ? current : { ...current, [key]: event.target.value })}
+                    spellCheck={false}
+                    value={form[key]}
+                    {...fieldControlProps(fieldId, errors[key])}
+                  />
+                  <FieldNote error={errors[key]} fieldId={fieldId}>
+                    {searchLimitFieldHint(key, form, response.defaults, response.minimums, response.maximums)}
+                  </FieldNote>
+                </label>
+              );
+            })}
           </div>
         </section>
       ))}
       <div className="settings-actions">
+        {invalid.length === 0 ? null : (
+          <output className="settings-invalid-summary">
+            {invalid.length === 1
+              ? `${SEARCH_LIMIT_FIELDS[invalid[0]].label} needs attention.`
+              : `${invalid.length.toString()} fields need attention: ${invalid.map((key) => SEARCH_LIMIT_FIELDS[key].label).join(", ")}.`}
+          </output>
+        )}
         <button className="button button--secondary" type="button" disabled={state === "saving" || atDefaults} onClick={() => { setForm(defaultsForm); setExactBase(response.defaults); }}>Reset to defaults</button>
         <button className="button button--primary" type="submit" disabled={state === "saving" || !dirty || !valid}>{state === "saving" ? "Applying…" : "Apply"}</button>
       </div>

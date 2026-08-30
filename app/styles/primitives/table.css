@@ -53,7 +53,7 @@
 .numeric-data { font-variant-numeric: tabular-nums; }
 .table-secondary { color: var(--fg-muted); display: block; font-size: var(--type-xs); margin-top: 3px; max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
 .table-action { font-weight: 600; }
-.row-overflow { background: transparent; border: 0; color: var(--fg-muted); font-weight: 700; min-height: 28px; min-width: 30px; }
+.row-overflow { background: transparent; border: 0; color: var(--fg-muted); font-weight: 700; justify-content: center; min-height: 28px; min-width: 30px; }
 
 /* Responsive
    The breakpoint overrides for the rules above. They live in the file that

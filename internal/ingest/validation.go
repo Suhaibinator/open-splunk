@@ -50,12 +50,11 @@ type Validator struct {
 	replacementByName map[string]redactionMatch
 	ordered           []*Validator
 	orderedOnChange   bool
-	mandatory         bool
 	exact             bool
 }
 
 func NewValidator(limits Limits, policy RedactionPolicy) (*Validator, error) {
-	return newValidator(limits, policy, true, false)
+	return newValidator(limits, policy, false)
 }
 
 // withLimits returns a detached validator view which shares only immutable
@@ -68,15 +67,13 @@ func (v *Validator) withLimits(limits Limits) Validator {
 }
 
 // NewSupplementalRedactor constructs an exact-name redactor for only the
-// supplied deployment-specific fields. It deliberately omits the mandatory
-// built-ins and must be composed with a normal Validator at a trust boundary.
-// The collector uses this to preserve each ordered config rule's matching and
-// replacement semantics while one shared mandatory validator is authoritative.
+// supplied deployment-specific fields. The collector uses this to preserve
+// each ordered config rule's matching and replacement semantics.
 func NewSupplementalRedactor(limits Limits, policy RedactionPolicy) (*Validator, error) {
-	if len(policy.AdditionalSensitiveFields) == 0 {
+	if len(policy.SensitiveFields) == 0 {
 		return nil, errors.New("supplemental redaction requires at least one field")
 	}
-	return newValidator(limits, policy, false, true)
+	return newValidator(limits, policy, true)
 }
 
 // NewCompositeSupplementalRedactor constructs one exact-name redactor for an
@@ -160,7 +157,7 @@ func compositeReplacementIsOpaque(replacement string) bool {
 	return !strings.ContainsAny(replacement, "=:;'\"\\{},\r\n\t")
 }
 
-func newValidator(limits Limits, policy RedactionPolicy, mandatory, exact bool) (*Validator, error) {
+func newValidator(limits Limits, policy RedactionPolicy, exact bool) (*Validator, error) {
 	if err := limits.validate(); err != nil {
 		return nil, fmt.Errorf("invalid ingestion limits: %w", err)
 	}
@@ -171,7 +168,7 @@ func newValidator(limits Limits, policy RedactionPolicy, mandatory, exact bool) 
 	if !utf8.ValidString(replacement) {
 		return nil, fmt.Errorf("redaction replacement is not valid UTF-8")
 	}
-	sensitive := sensitiveFieldSet(policy.AdditionalSensitiveFields, mandatory, exact)
+	sensitive := sensitiveFieldSet(policy.SensitiveFields, exact)
 	var replacements map[string]redactionMatch
 	if exact {
 		replacements = make(map[string]redactionMatch, len(sensitive))
@@ -189,16 +186,15 @@ func newValidator(limits Limits, policy RedactionPolicy, mandatory, exact bool) 
 		depthReplacement:  replacement,
 		sensitive:         sensitive,
 		replacementByName: replacements,
-		mandatory:         mandatory,
 		exact:             exact,
 	}, nil
 }
 
-// RedactEvent returns an independent clone with the validator's mandatory and
-// deployment-specific redaction policy applied to structured fields, raw
-// bytes, and the canonical message. It performs no validation and preserves
-// event identity and provenance. Use it when aliases may exist; collectors can
-// use RedactEventInPlace for exclusively owned decoded events.
+// RedactEvent returns an independent clone with the validator's explicit
+// redaction policy applied to structured fields, raw bytes, and the canonical
+// message. It performs no validation and preserves event identity and
+// provenance. Use it when aliases may exist; collectors can use
+// RedactEventInPlace for exclusively owned decoded events.
 func (v *Validator) RedactEvent(event *opensplunk.LogEvent) *opensplunk.LogEvent {
 	if event == nil {
 		return nil
@@ -307,8 +303,8 @@ func RedactTopLevelAliasesInPlace(
 				fields = append(fields, field)
 			}
 			textPolicies[index] = RedactionPolicy{
-				AdditionalSensitiveFields: fields,
-				Replacement:               group.replacement,
+				SensitiveFields: fields,
+				Replacement:     group.replacement,
 			}
 			requiresLiteralReplacement = requiresLiteralReplacement || group.replacement == ""
 		}
@@ -483,7 +479,7 @@ func (v *Validator) validateAndNormalizeEventWithSize(event *opensplunk.LogEvent
 	if !sizeOK || size > v.limits.MaxEventBytes {
 		return nil, eventFailure(
 			opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_EVENT_TOO_LARGE,
-			"event exceeds the maximum encoded size after mandatory redaction", "event", "event_too_large_after_redaction",
+			"event exceeds the maximum encoded size after redaction", "event", "event_too_large_after_redaction",
 		)
 	}
 	source := ctx.Source

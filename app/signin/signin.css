@@ -48,7 +48,6 @@
 .signin-card form > input,
 .signin-password-field { background: var(--bg-surface); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); height: 40px; width: 100%; }
 .signin-card form > input { padding: 0 10px; }
-.signin-card input[aria-invalid="true"] { border-color: var(--status-error); }
 .signin-password-field { align-items: center; display: flex; }
 .signin-password-field[data-invalid="true"] { border-color: var(--status-error); box-shadow: 0 0 0 1px color-mix(in srgb, var(--status-error) 24%, transparent); }
 .signin-password-field:focus-within { border-color: var(--border-focus); box-shadow: 0 0 0 1px var(--border-focus); }

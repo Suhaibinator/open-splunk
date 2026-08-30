@@ -35,6 +35,30 @@ import {
 import { createErrorMessage } from "@/lib/error-message";
 import { boundedIndexSearchQuery, searchLaunchHref } from "@/lib/search/launch-url";
 
+import { FieldNote, fieldControlProps } from "../_components/field-validation";
+import {
+  INDEX_POLICY_FIELDS,
+  INDEX_POLICY_KEYS,
+  INGESTION_MAX_BYTES_PER_SECOND,
+  INGESTION_MAX_EVENTS_PER_SECOND,
+  TOKEN_POLICY_FIELDS,
+  TOKEN_POLICY_KEYS,
+  indexPolicyErrors,
+  indexPolicyFieldHint,
+  indexPolicyFormFromDefinition,
+  indexPolicyFromForm,
+  indexPolicyIsValid,
+  normalizeTokenPatterns,
+  policyFieldInputMode,
+  tokenPolicyErrors,
+  tokenPolicyFieldHint,
+  tokenPolicyFormFromToken,
+  tokenPolicyFromForm,
+  tokenPolicyIsValid,
+  type IndexPolicyForm,
+  type PolicyFieldKind,
+  type TokenPolicyForm,
+} from "./ingestion-policy-form";
 import { BackendResourceState } from "../_components/backend-resource-state";
 import { StatusDot, StatusLabel, type StatusTone } from "../_components/status";
 import { AppIcon, type AppIconName } from "../_components/app-icon";
@@ -107,24 +131,6 @@ interface PageLoadResult<T> {
 interface AdminToast {
   message: string;
   kind: "success" | "warning";
-}
-
-interface IndexPolicyForm {
-  defaultSourcetype: string;
-  maxEventBytes: string;
-  maxFieldCount: string;
-  maxNestingDepth: string;
-  maximumFutureSkewSeconds: string;
-  maximumEventAgeSeconds: string;
-  maxEventsPerSecond: string;
-  maxUncompressedBytesPerSecond: string;
-}
-
-interface TokenPolicyForm {
-  allowedHostRegexes: string;
-  allowedSourceRegexes: string;
-  maxEventsPerSecond: string;
-  maxUncompressedBytesPerSecond: string;
 }
 
 interface TokenIndexScopeOption {
@@ -697,173 +703,6 @@ function hasSameStrings(left: Iterable<string>, right: Iterable<string>): boolea
     && leftValues.every((value, index) => value === rightValues[index]);
 }
 
-const INDEX_MAX_EVENT_BYTES = 1_048_576n;
-const INDEX_MAX_FIELD_COUNT = 1_024;
-const INDEX_MAX_NESTING_DEPTH = 16;
-const INDEX_MAX_FUTURE_SKEW_SECONDS = 300n;
-const INDEX_MAX_EVENT_AGE_SECONDS = 31_536_000n;
-const INGESTION_MAX_EVENTS_PER_SECOND = 1_000_000n;
-const INGESTION_MAX_BYTES_PER_SECOND = 1_099_511_627_776n;
-
-function optionalUnsignedBigInt(
-  value: string,
-  label: string,
-  maximum: bigint,
-): bigint | undefined {
-  const normalized = value.trim();
-  if (normalized.length === 0 || normalized === "0") return undefined;
-  if (!/^[0-9]+$/.test(normalized)) throw new Error(`${label} must be a whole non-negative number.`);
-  if (normalized.length > maximum.toString().length) {
-    throw new Error(`${label} cannot exceed ${maximum.toLocaleString()}.`);
-  }
-  const parsed = BigInt(normalized);
-  if (parsed > maximum) throw new Error(`${label} cannot exceed ${maximum.toLocaleString()}.`);
-  return parsed;
-}
-
-function optionalUnsignedNumber(
-  value: string,
-  label: string,
-  maximum: number,
-): number | undefined {
-  const parsed = optionalUnsignedBigInt(value, label, BigInt(maximum));
-  return parsed === undefined ? undefined : Number(parsed);
-}
-
-function durationFormValue(duration: { seconds: bigint; nanos: number } | undefined): string {
-  if (duration === undefined || (duration.seconds === 0n && duration.nanos === 0)) return "";
-  if (duration.nanos === 0) return duration.seconds.toString();
-  return `${duration.seconds}.${duration.nanos.toString().padStart(9, "0").replace(/0+$/, "")}`;
-}
-
-function optionalDurationFromSeconds(
-  value: string,
-  label: string,
-  maximumSeconds: bigint,
-): { seconds: bigint; nanos: number } | undefined {
-  const normalized = value.trim();
-  if (normalized.length === 0 || /^0(?:\.0+)?$/.test(normalized)) return undefined;
-  const match = /^(\d+)(?:\.(\d{1,3}))?$/.exec(normalized);
-  if (match === null) throw new Error(`${label} must be non-negative seconds with at most three decimal places.`);
-  if (match[1].length > maximumSeconds.toString().length) {
-    throw new Error(`${label} cannot exceed ${maximumSeconds.toLocaleString()} seconds.`);
-  }
-  const seconds = BigInt(match[1]);
-  const nanos = Number((match[2] ?? "").padEnd(9, "0"));
-  if (seconds > maximumSeconds || (seconds === maximumSeconds && nanos > 0)) {
-    throw new Error(`${label} cannot exceed ${maximumSeconds.toLocaleString()} seconds.`);
-  }
-  return { seconds, nanos };
-}
-
-function optionalFormValue(value: bigint | number | undefined): string {
-  return value === undefined || value === 0 || value === 0n ? "" : value.toString();
-}
-
-function indexPolicyFormFromDefinition(definition?: Index["definition"]): IndexPolicyForm {
-  return {
-    defaultSourcetype: definition?.defaultSourcetype ?? "",
-    maxEventBytes: optionalFormValue(definition?.limits?.maxEventBytes),
-    maxFieldCount: optionalFormValue(definition?.limits?.maxFieldCount),
-    maxNestingDepth: optionalFormValue(definition?.limits?.maxNestingDepth),
-    maximumFutureSkewSeconds: durationFormValue(definition?.limits?.maximumFutureSkew),
-    maximumEventAgeSeconds: durationFormValue(definition?.limits?.maximumEventAge),
-    maxEventsPerSecond: optionalFormValue(definition?.ingestionRateLimits?.maxEventsPerSecond),
-    maxUncompressedBytesPerSecond: optionalFormValue(
-      definition?.ingestionRateLimits?.maxUncompressedBytesPerSecond,
-    ),
-  };
-}
-
-function indexPolicyFromForm(form: IndexPolicyForm) {
-  const defaultSourcetype = form.defaultSourcetype.trim() || undefined;
-  const limits = {
-    maxEventBytes: optionalUnsignedBigInt(form.maxEventBytes, "Maximum event bytes", INDEX_MAX_EVENT_BYTES),
-    maxFieldCount: optionalUnsignedNumber(form.maxFieldCount, "Maximum field count", INDEX_MAX_FIELD_COUNT),
-    maxNestingDepth: optionalUnsignedNumber(
-      form.maxNestingDepth,
-      "Maximum nesting depth",
-      INDEX_MAX_NESTING_DEPTH,
-    ),
-    maximumFutureSkew: optionalDurationFromSeconds(
-      form.maximumFutureSkewSeconds,
-      "Maximum future skew",
-      INDEX_MAX_FUTURE_SKEW_SECONDS,
-    ),
-    maximumEventAge: optionalDurationFromSeconds(
-      form.maximumEventAgeSeconds,
-      "Maximum event age",
-      INDEX_MAX_EVENT_AGE_SECONDS,
-    ),
-  };
-  const ingestionRateLimits = {
-    maxEventsPerSecond: optionalUnsignedBigInt(
-      form.maxEventsPerSecond,
-      "Maximum events per second",
-      INGESTION_MAX_EVENTS_PER_SECOND,
-    ),
-    maxUncompressedBytesPerSecond: optionalUnsignedBigInt(
-      form.maxUncompressedBytesPerSecond,
-      "Maximum uncompressed bytes per second",
-      INGESTION_MAX_BYTES_PER_SECOND,
-    ),
-  };
-  return { defaultSourcetype, limits, ingestionRateLimits };
-}
-
-function normalizeTokenPatterns(patterns: Iterable<string>, label: string): string[] {
-  const unique = new Set(patterns);
-  if (unique.size > 16) throw new Error(`${label} accepts at most 16 unique patterns.`);
-  const encoder = new TextEncoder();
-  let totalBytes = 0;
-  for (const pattern of unique) {
-    if (pattern.length === 0) throw new Error(`${label} patterns cannot be empty.`);
-    const bytes = encoder.encode(pattern).byteLength;
-    if (bytes > 512) throw new Error(`${label} patterns cannot exceed 512 UTF-8 bytes each.`);
-    if (pattern.includes("\0")) throw new Error(`${label} patterns cannot contain NUL characters.`);
-    totalBytes += bytes;
-  }
-  if (totalBytes > 4_096) throw new Error(`${label} patterns cannot exceed 4,096 UTF-8 bytes in total.`);
-  return [...unique].toSorted();
-}
-
-export function tokenPatternsFromForm(value: string, label: string): string[] {
-  return normalizeTokenPatterns(
-    value.split(/\r?\n/).filter((pattern) => pattern.length > 0),
-    label,
-  );
-}
-
-function tokenPolicyFormFromToken(token?: IngestionToken): TokenPolicyForm {
-  return {
-    allowedHostRegexes: token?.constraints?.allowedHostRegexes.join("\n") ?? "",
-    allowedSourceRegexes: token?.constraints?.allowedSourceRegexes.join("\n") ?? "",
-    maxEventsPerSecond: optionalFormValue(token?.ingestionRateLimits?.maxEventsPerSecond),
-    maxUncompressedBytesPerSecond: optionalFormValue(
-      token?.ingestionRateLimits?.maxUncompressedBytesPerSecond,
-    ),
-  };
-}
-
-function tokenPolicyFromForm(form: TokenPolicyForm) {
-  return {
-    allowedHostRegexes: tokenPatternsFromForm(form.allowedHostRegexes, "Allowed host"),
-    allowedSourceRegexes: tokenPatternsFromForm(form.allowedSourceRegexes, "Allowed source"),
-    ingestionRateLimits: {
-      maxEventsPerSecond: optionalUnsignedBigInt(
-        form.maxEventsPerSecond,
-        "Maximum token events per second",
-        INGESTION_MAX_EVENTS_PER_SECOND,
-      ),
-      maxUncompressedBytesPerSecond: optionalUnsignedBigInt(
-        form.maxUncompressedBytesPerSecond,
-        "Maximum token uncompressed bytes per second",
-        INGESTION_MAX_BYTES_PER_SECOND,
-      ),
-    },
-  };
-}
-
 function indexStateLabel(state: IndexState): string {
   if (state === IndexState.INDEX_STATE_ACTIVE) return "Active";
   if (state === IndexState.INDEX_STATE_ARCHIVED) return "Archived";
@@ -1208,6 +1047,15 @@ async function listTokensForCreateSafety(
   }
   return tokens;
 }
+
+/**
+ * Why a collector ID is not acceptable, stated once.
+ *
+ * It used to be a block-level `.access-mode-notice` under the field, which said
+ * the same thing at the width of the dialog and left the field itself carrying
+ * an `aria-invalid` nothing painted.
+ */
+const COLLECTOR_ID_ERROR = "Use 1–128 ASCII characters: start with a letter or number, then use letters, numbers, dot, underscore, colon, or hyphen.";
 
 export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
   const client = useMemo(() => createOpenSplunkApiClient({ baseUrl: apiBaseUrl }), [apiBaseUrl]);
@@ -3969,6 +3817,19 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     || (creatingHECToken && tokenHECProfileInvalid)
     || tokenCreationBlockReason !== null;
   const indexDefinition = indexEditTarget?.definition;
+  // The index name rule the server enforces, stated once so the field, the
+  // submit button and `createIndex` cannot disagree about it. It used to live
+  // only inside `createIndex`, which meant Create stayed enabled for a name the
+  // handler was about to reject with a toast.
+  const indexNameError = indexName.trim().length === 0
+    ? null
+    : !/^[a-z0-9][a-z0-9_-]*$/.test(indexName.trim().toLowerCase())
+      ? "Use lowercase letters, numbers, hyphens, and underscores, starting with a letter or number."
+      : indexName.trim().toLowerCase().includes("kvstore")
+        ? "“kvstore” is reserved and cannot appear in an index name."
+        : null;
+  const indexPolicyValid = indexPolicyIsValid(indexPolicyForm);
+  const tokenPolicyValid = tokenPolicyIsValid(tokenPolicyForm);
   const currentIndexPolicyForm = indexPolicyFormFromDefinition(indexDefinition);
   const indexHasChanges = indexDefinition !== undefined && (
     (indexDisplayName.trim() || indexDefinition.name) !== indexDefinition.displayName
@@ -4288,10 +4149,14 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
           title="Create index"
           subtitle="Create a searchable and ingestible index on the connected server."
           onClose={() => busy === null && setModal(null)}
-          footer={<><button className="button button--secondary" type="button" onClick={() => setModal(null)} disabled={busy !== null}>Cancel</button><button className="button button--primary" type="submit" form="create-index-form" disabled={busy !== null || indexName.trim().length === 0}>{busy === "create-index" ? "Creating…" : "Create index"}</button></>}
+          footer={<><button className="button button--secondary" type="button" onClick={() => setModal(null)} disabled={busy !== null}>Cancel</button><button className="button button--primary" type="submit" form="create-index-form" disabled={busy !== null || indexName.trim().length === 0 || indexNameError !== null || !indexPolicyValid}>{busy === "create-index" ? "Creating…" : "Create index"}</button></>}
         >
           <form className="admin-form" id="create-index-form" onSubmit={(event) => void createIndex(event)}>
-            <label htmlFor="new-index-name"><span>Index name</span><input id="new-index-name" value={indexName} onChange={(event) => setIndexName(event.target.value)} placeholder="application-logs" autoComplete="off" /><small>Lowercase letters, numbers, hyphens, and underscores; “kvstore” is reserved. The name cannot be changed later.</small></label>
+            <label htmlFor="new-index-name">
+              <span>Index name</span>
+              <input autoComplete="off" id="new-index-name" onChange={(event) => setIndexName(event.target.value)} placeholder="application-logs" spellCheck={false} value={indexName} {...fieldControlProps("new-index-name", indexNameError)} />
+              <FieldNote error={indexNameError} fieldId="new-index-name">Lowercase letters, numbers, hyphens, and underscores; “kvstore” is reserved. The name cannot be changed later.</FieldNote>
+            </label>
             <label htmlFor="new-index-display-name"><span>Display name <small>(optional)</small></span><input id="new-index-display-name" value={indexDisplayName} onChange={(event) => setIndexDisplayName(event.target.value)} placeholder="Application logs" /><small>Shown to administrators. Defaults to the immutable index name.</small></label>
             <label htmlFor="new-index-description"><span>Description <small>(optional)</small></span><input id="new-index-description" value={indexDescription} onChange={(event) => setIndexDescription(event.target.value)} placeholder="Application and request logs" /></label>
             <label htmlFor="new-index-retention"><span>Retention</span><select id="new-index-retention" value={retention} onChange={(event) => setRetention(event.target.value)}><option value="7">7 days</option><option value="14">14 days</option><option value="30">30 days</option><option value="90">90 days</option><option value="forever">Forever</option></select><small>The server applies this period to stored events.</small></label>
@@ -4313,7 +4178,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
             setIndexEditTarget(null);
             setModal(null);
           }}
-          footer={<><button className="button button--secondary" type="button" onClick={() => { setIndexEditTarget(null); setModal(null); }} disabled={busy !== null}>Cancel</button><button className="button button--primary" type="submit" form="edit-index-form" disabled={busy !== null || !indexHasChanges}>{busy === `update-index-${indexEditTarget.indexId}` ? "Saving…" : "Save changes"}</button></>}
+          footer={<><button className="button button--secondary" type="button" onClick={() => { setIndexEditTarget(null); setModal(null); }} disabled={busy !== null}>Cancel</button><button className="button button--primary" type="submit" form="edit-index-form" disabled={busy !== null || !indexHasChanges || !indexPolicyValid}>{busy === `update-index-${indexEditTarget.indexId}` ? "Saving…" : "Save changes"}</button></>}
         >
           <form className="admin-form" id="edit-index-form" onSubmit={(event) => void updateIndex(event)}>
             <label htmlFor="edit-index-name"><span>Index name</span><input id="edit-index-name" value={indexEditTarget.definition.name} disabled /><small>Index names are immutable because searches and collectors reference them directly.</small></label>
@@ -4411,7 +4276,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
               </>
             )
             : !tokenRevealOpen
-            ? <><button className="button button--secondary" type="button" onClick={() => setModal(null)} disabled={busy !== null}>Cancel</button><button className="button button--primary" type="submit" form="create-token-form" disabled={busy !== null || tokenName.trim().length === 0 || tokenCreateScopeInvalid}>{busy === "create-token" ? "Generating…" : "Generate token"}</button></>
+            ? <><button className="button button--secondary" type="button" onClick={() => setModal(null)} disabled={busy !== null}>Cancel</button><button className="button button--primary" type="submit" form="create-token-form" disabled={busy !== null || tokenName.trim().length === 0 || tokenCreateScopeInvalid || !tokenPolicyValid}>{busy === "create-token" ? "Generating…" : "Generate token"}</button></>
             : (
               <>
                 <button id="revoke-issued-token" className="button button--danger" type="button" disabled={busy !== null || tokenRecoveryOwnership !== "owned" || !tokenCanBeRevoked(issuedToken)} onClick={() => void revokeIssuedToken()}>
@@ -4526,8 +4391,11 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
               <label htmlFor="new-token-purpose"><span>Purpose</span><select id="new-token-purpose" value={tokenPurpose} onChange={(event) => { const next = Number(event.target.value) as IngestionTokenPurpose; setTokenPurpose(next); if (tokenUsesHEC(next)) setTokenCollectorId(""); }}><option value={IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR}>Native collector</option><option value={IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_HEC} disabled={!hecEnabled}>HTTP Event Collector (HEC){hecEnabled ? "" : " — disabled on server"}</option></select><small>Purpose is an immutable transport boundary. HEC credentials can only be created while the server advertises HEC ingestion.</small></label>
               {creatingHECToken ? null : (
                 <>
-                  <label htmlFor="new-token-collector-id"><span>Collector ID</span><input id="new-token-collector-id" value={tokenCollectorId} onChange={(event) => setTokenCollectorId(event.target.value)} placeholder="Paste the collector’s stable ID" autoComplete="off" aria-invalid={tokenCollectorIdInvalid} /><small>Run <code>open-splunk-collector identity -config PATH</code> against the collector’s final state directory, then paste the printed ID. The binding cannot be changed after creation.</small></label>
-                  {tokenCollectorIdInvalid ? <div className="access-mode-notice" role="alert"><span>!</span><div><strong>Collector ID is invalid</strong><p>Use 1–128 ASCII characters: start with a letter or number, then use letters, numbers, dot, underscore, colon, or hyphen.</p></div></div> : null}
+                  <label htmlFor="new-token-collector-id">
+                    <span>Collector ID</span>
+                    <input autoComplete="off" id="new-token-collector-id" onChange={(event) => setTokenCollectorId(event.target.value)} placeholder="Paste the collector’s stable ID" spellCheck={false} value={tokenCollectorId} {...fieldControlProps("new-token-collector-id", tokenCollectorIdInvalid ? COLLECTOR_ID_ERROR : null)} />
+                    <FieldNote error={tokenCollectorIdInvalid ? COLLECTOR_ID_ERROR : null} fieldId="new-token-collector-id">Run <code>open-splunk-collector identity -config PATH</code> against the collector’s final state directory, then paste the printed ID. The binding cannot be changed after creation.</FieldNote>
+                  </label>
                 </>
               )}
               <TokenScopePicker idPrefix="new-token" options={tokenScopeOptions} selected={tokenIndexes} onChange={setTokenIndexes} disabled={tokenScopeSource === "unavailable"} />
@@ -4602,13 +4470,13 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
             setTokenEditTarget(null);
             setModal(null);
           }}
-          footer={<><button className="button button--secondary" type="button" onClick={() => { setTokenEditTarget(null); setModal(null); }} disabled={busy !== null}>Cancel</button><button className="button button--primary" type="submit" form="edit-token-form" disabled={busy !== null || !tokenHasChanges || tokenName.trim().length === 0 || tokenIndexes.size === 0 || tokenScopeInvalid || (editingHECToken ? tokenHECProfileInvalid : editingNativeToken ? tokenCollectorId.length > 0 && tokenCollectorIdInvalid : true)}>{busy === `update-token-${tokenEditTarget.ingestionTokenId}` ? "Saving…" : "Save changes"}</button></>}
+          footer={<><button className="button button--secondary" type="button" onClick={() => { setTokenEditTarget(null); setModal(null); }} disabled={busy !== null}>Cancel</button><button className="button button--primary" type="submit" form="edit-token-form" disabled={busy !== null || !tokenHasChanges || !tokenPolicyValid || tokenName.trim().length === 0 || tokenIndexes.size === 0 || tokenScopeInvalid || (editingHECToken ? tokenHECProfileInvalid : editingNativeToken ? tokenCollectorId.length > 0 && tokenCollectorIdInvalid : true)}>{busy === `update-token-${tokenEditTarget.ingestionTokenId}` ? "Saving…" : "Save changes"}</button></>}
         >
           <form className="admin-form" id="edit-token-form" onSubmit={(event) => void updateToken(event)}>
             <label htmlFor="edit-token-name"><span>Token name</span><input id="edit-token-name" value={tokenName} onChange={(event) => setTokenName(event.target.value)} autoComplete="off" /></label>
             <label htmlFor="edit-token-description"><span>Description <small>(optional)</small></span><input id="edit-token-description" value={tokenDescription} onChange={(event) => setTokenDescription(event.target.value)} placeholder="Production collector credential" /></label>
             <div className="access-mode-notice" role="note"><span>i</span><div><strong>{tokenPurposeLabel(tokenEditTarget.purpose)} purpose</strong><p>The token purpose is immutable. {editingHECToken ? "Indexer acknowledgment mode is also fixed at creation." : editingNativeToken ? "This credential can authorize only the native collector transport." : "The server returned an unknown purpose, so transport-specific settings are unavailable."}</p></div></div>
-            {editingNativeToken ? <label htmlFor="edit-token-collector-id"><span>Collector ID</span><input id="edit-token-collector-id" value={tokenCollectorId} onChange={(event) => setTokenCollectorId(event.target.value)} readOnly={tokenEditTarget.constraints?.boundCollectorId !== undefined} placeholder="Bind this legacy token once" autoComplete="off" aria-invalid={tokenCollectorId.length > 0 && tokenCollectorIdInvalid} /><small>{tokenEditTarget.constraints?.boundCollectorId === undefined ? "This upgraded legacy token cannot use native gRPC until it is bound. Binding is one-way." : "This security binding is immutable. Rotate the token to use a different collector ID."}</small></label> : null}
+            {editingNativeToken ? <label htmlFor="edit-token-collector-id"><span>Collector ID</span><input id="edit-token-collector-id" value={tokenCollectorId} onChange={(event) => setTokenCollectorId(event.target.value)} readOnly={tokenEditTarget.constraints?.boundCollectorId !== undefined} placeholder="Bind this legacy token once" autoComplete="off" spellCheck={false} {...fieldControlProps("edit-token-collector-id", tokenCollectorId.length > 0 && tokenCollectorIdInvalid ? COLLECTOR_ID_ERROR : null)} /><FieldNote error={tokenCollectorId.length > 0 && tokenCollectorIdInvalid ? COLLECTOR_ID_ERROR : null} fieldId="edit-token-collector-id">{tokenEditTarget.constraints?.boundCollectorId === undefined ? "This upgraded legacy token cannot use native gRPC until it is bound. Binding is one-way." : "This security binding is immutable. Rotate the token to use a different collector ID."}</FieldNote></label> : null}
             <TokenScopePicker idPrefix="edit-token" options={tokenScopeOptions} selected={tokenIndexes} onChange={setTokenIndexes} disabled={tokenScopeSource === "unavailable"} />
             <TokenPolicyFields
               idPrefix="edit-token"
@@ -4658,6 +4526,52 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
   );
 }
 
+/**
+ * The numeric policy fields, one shape for the index form and the token form.
+ *
+ * The field id is derived from the form key, so the control and its note cannot
+ * be given different names -- that pairing is what lets `fieldControlProps`
+ * point `aria-describedby` at the message the field is showing.
+ */
+function PolicyNumberField({
+  error,
+  field,
+  fieldKey,
+  hint,
+  idPrefix,
+  onChange,
+  value,
+}: {
+  error: string | null;
+  field: { kind: PolicyFieldKind; label: string; placeholder: string };
+  fieldKey: string;
+  hint: string;
+  idPrefix: string;
+  onChange: (value: string) => void;
+  value: string;
+}) {
+  const fieldId = `${idPrefix}-${fieldKey.replaceAll(/(?<=[a-z])(?=[A-Z])/gu, "-").toLowerCase()}`;
+  return (
+    <label htmlFor={fieldId}>
+      <span>{field.label}</span>
+      <input
+        autoComplete="off"
+        id={fieldId}
+        // A quantity carries its own unit, so it is a text field: `type="number"`
+        // would refuse "512 KiB" by silently keeping the control empty, and a
+        // silent rejection is what the visible validation here exists to replace.
+        inputMode={policyFieldInputMode(field.kind)}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={field.placeholder}
+        spellCheck={false}
+        value={value}
+        {...fieldControlProps(fieldId, error)}
+      />
+      <FieldNote error={error} fieldId={fieldId}>{hint}</FieldNote>
+    </label>
+  );
+}
+
 function IndexPolicyFields({
   idPrefix,
   value,
@@ -4667,18 +4581,29 @@ function IndexPolicyFields({
   value: IndexPolicyForm;
   onChange: (value: Partial<IndexPolicyForm>) => void;
 }) {
+  const errors = indexPolicyErrors(value);
+  const sourcetypeId = `${idPrefix}-default-sourcetype`;
   return (
     <fieldset>
       <legend>Ingestion policy <small>(optional)</small></legend>
       <div className="admin-policy-grid">
-        <label htmlFor={`${idPrefix}-default-sourcetype`}><span>Default sourcetype</span><input id={`${idPrefix}-default-sourcetype`} value={value.defaultSourcetype} onChange={(event) => onChange({ defaultSourcetype: event.target.value })} maxLength={255} placeholder="_json" /><small>Applied when an admitted event does not provide a sourcetype.</small></label>
-        <label htmlFor={`${idPrefix}-max-event-bytes`}><span>Maximum event bytes</span><input id={`${idPrefix}-max-event-bytes`} type="number" min="0" max={INDEX_MAX_EVENT_BYTES.toString()} step="1" value={value.maxEventBytes} onChange={(event) => onChange({ maxEventBytes: event.target.value })} placeholder="Inherit server limit" /><small>Zero or blank inherits the server limit; maximum 1 MiB.</small></label>
-        <label htmlFor={`${idPrefix}-max-field-count`}><span>Maximum field count</span><input id={`${idPrefix}-max-field-count`} type="number" min="0" max={INDEX_MAX_FIELD_COUNT} step="1" value={value.maxFieldCount} onChange={(event) => onChange({ maxFieldCount: event.target.value })} placeholder="Inherit server limit" /><small>Zero or blank inherits; maximum {INDEX_MAX_FIELD_COUNT.toLocaleString()} fields.</small></label>
-        <label htmlFor={`${idPrefix}-max-nesting-depth`}><span>Maximum nesting depth</span><input id={`${idPrefix}-max-nesting-depth`} type="number" min="0" max={INDEX_MAX_NESTING_DEPTH} step="1" value={value.maxNestingDepth} onChange={(event) => onChange({ maxNestingDepth: event.target.value })} placeholder="Inherit server limit" /><small>Zero or blank inherits; maximum {INDEX_MAX_NESTING_DEPTH} path segments.</small></label>
-        <label htmlFor={`${idPrefix}-future-skew`}><span>Maximum future skew (seconds)</span><input id={`${idPrefix}-future-skew`} inputMode="decimal" value={value.maximumFutureSkewSeconds} onChange={(event) => onChange({ maximumFutureSkewSeconds: event.target.value })} placeholder="Inherit server limit" /><small>Zero or blank inherits; maximum 300 seconds.</small></label>
-        <label htmlFor={`${idPrefix}-event-age`}><span>Maximum event age (seconds)</span><input id={`${idPrefix}-event-age`} inputMode="decimal" value={value.maximumEventAgeSeconds} onChange={(event) => onChange({ maximumEventAgeSeconds: event.target.value })} placeholder="Inherit server limit" /><small>Zero or blank inherits; maximum 31,536,000 seconds (365 days).</small></label>
-        <label htmlFor={`${idPrefix}-events-rate`}><span>Maximum events per second</span><input id={`${idPrefix}-events-rate`} type="number" min="0" max={INGESTION_MAX_EVENTS_PER_SECOND.toString()} step="1" value={value.maxEventsPerSecond} onChange={(event) => onChange({ maxEventsPerSecond: event.target.value })} placeholder="Unlimited" /><small>Zero or blank is unlimited; maximum 1,000,000.</small></label>
-        <label htmlFor={`${idPrefix}-bytes-rate`}><span>Maximum bytes per second</span><input id={`${idPrefix}-bytes-rate`} type="number" min="0" max={INGESTION_MAX_BYTES_PER_SECOND.toString()} step="1" value={value.maxUncompressedBytesPerSecond} onChange={(event) => onChange({ maxUncompressedBytesPerSecond: event.target.value })} placeholder="Unlimited" /><small>Uncompressed event bytes; zero or blank is unlimited, maximum 1 TiB/s.</small></label>
+        <label htmlFor={sourcetypeId}>
+          <span>Default sourcetype</span>
+          <input aria-describedby={`${sourcetypeId}-note`} id={sourcetypeId} maxLength={255} onChange={(event) => onChange({ defaultSourcetype: event.target.value })} placeholder="_json" value={value.defaultSourcetype} />
+          <small id={`${sourcetypeId}-note`}>Applied when an admitted event does not provide a sourcetype.</small>
+        </label>
+        {INDEX_POLICY_KEYS.map((key) => (
+          <PolicyNumberField
+            error={errors[key]}
+            field={INDEX_POLICY_FIELDS[key]}
+            fieldKey={key}
+            hint={indexPolicyFieldHint(key, value)}
+            idPrefix={idPrefix}
+            key={key}
+            onChange={(next) => onChange({ [key]: next })}
+            value={value[key]}
+          />
+        ))}
       </div>
     </fieldset>
   );
@@ -4693,14 +4618,58 @@ function TokenPolicyFields({
   value: TokenPolicyForm;
   onChange: (value: Partial<TokenPolicyForm>) => void;
 }) {
+  const errors = tokenPolicyErrors(value);
+  const patternFields = [
+    {
+      error: errors.allowedHostRegexes,
+      hint: "One complete-value Go/RE2 pattern per line. Empty means any host.",
+      id: `${idPrefix}-host-patterns`,
+      label: "Allowed host patterns",
+      onChange: (next: string) => onChange({ allowedHostRegexes: next }),
+      placeholder: "api-[0-9]+\nworker-[0-9]+",
+      value: value.allowedHostRegexes,
+    },
+    {
+      error: errors.allowedSourceRegexes,
+      hint: "One complete-value Go/RE2 pattern per line. Empty means any source.",
+      id: `${idPrefix}-source-patterns`,
+      label: "Allowed source patterns",
+      onChange: (next: string) => onChange({ allowedSourceRegexes: next }),
+      placeholder: "/var/log/application\\.log",
+      value: value.allowedSourceRegexes,
+    },
+  ];
   return (
     <fieldset>
       <legend>Admission policy <small>(optional)</small></legend>
       <div className="admin-policy-grid">
-        <label htmlFor={`${idPrefix}-host-patterns`}><span>Allowed host patterns</span><textarea id={`${idPrefix}-host-patterns`} value={value.allowedHostRegexes} onChange={(event) => onChange({ allowedHostRegexes: event.target.value })} rows={3} spellCheck={false} placeholder={"api-[0-9]+\nworker-[0-9]+"} /><small>One complete-value Go/RE2 pattern per line. Empty means any host.</small></label>
-        <label htmlFor={`${idPrefix}-source-patterns`}><span>Allowed source patterns</span><textarea id={`${idPrefix}-source-patterns`} value={value.allowedSourceRegexes} onChange={(event) => onChange({ allowedSourceRegexes: event.target.value })} rows={3} spellCheck={false} placeholder={"/var/log/application\\.log"} /><small>One complete-value Go/RE2 pattern per line. Empty means any source.</small></label>
-        <label htmlFor={`${idPrefix}-events-rate`}><span>Maximum events per second</span><input id={`${idPrefix}-events-rate`} type="number" min="0" max={INGESTION_MAX_EVENTS_PER_SECOND.toString()} step="1" value={value.maxEventsPerSecond} onChange={(event) => onChange({ maxEventsPerSecond: event.target.value })} placeholder="Unlimited" /><small>Zero or blank is unlimited; maximum 1,000,000.</small></label>
-        <label htmlFor={`${idPrefix}-bytes-rate`}><span>Maximum bytes per second</span><input id={`${idPrefix}-bytes-rate`} type="number" min="0" max={INGESTION_MAX_BYTES_PER_SECOND.toString()} step="1" value={value.maxUncompressedBytesPerSecond} onChange={(event) => onChange({ maxUncompressedBytesPerSecond: event.target.value })} placeholder="Unlimited" /><small>Uncompressed event bytes; zero or blank is unlimited, maximum 1 TiB/s.</small></label>
+        {patternFields.map((field) => (
+          <label htmlFor={field.id} key={field.id}>
+            <span>{field.label}</span>
+            <textarea
+              id={field.id}
+              onChange={(event) => field.onChange(event.target.value)}
+              placeholder={field.placeholder}
+              rows={3}
+              spellCheck={false}
+              value={field.value}
+              {...fieldControlProps(field.id, field.error)}
+            />
+            <FieldNote error={field.error} fieldId={field.id}>{field.hint}</FieldNote>
+          </label>
+        ))}
+        {TOKEN_POLICY_KEYS.map((key) => (
+          <PolicyNumberField
+            error={errors[key]}
+            field={TOKEN_POLICY_FIELDS[key]}
+            fieldKey={key}
+            hint={tokenPolicyFieldHint(key, value)}
+            idPrefix={idPrefix}
+            key={key}
+            onChange={(next) => onChange({ [key]: next })}
+            value={value[key]}
+          />
+        ))}
       </div>
     </fieldset>
   );

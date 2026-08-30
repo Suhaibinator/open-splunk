@@ -80,9 +80,8 @@ inputs:
 # by a durability sanitizer before that chain. The sanitizer covers
 # raw/message/structured data and follows only top-level rename paths that
 # actually execute for an event before WAL append, so processor order cannot
-# rename around a configured confidentiality policy. The ingestion server
-# independently reapplies its mandatory policy before acknowledgment and
-# storage.
+# rename around a configured confidentiality policy. There is no implicit
+# sensitive-field list; add every field that this deployment must redact.
 processors:
   - type: redact
     fields:

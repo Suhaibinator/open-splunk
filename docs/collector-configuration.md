@@ -230,8 +230,9 @@ control characters, and identifies a field name rather than a dotted path.
 Only the fields meaningful to a processor type should be set.
 
 Static input metadata is established independently of the dynamic processor
-chain. The ingestion server reapplies its mandatory validation and redaction
-policy before acknowledgment and storage.
+chain. Redaction is opt-in: there is no implicit sensitive-field list, and an
+empty processor list stores event content as received. Configure every field
+that must be redacted before the collector writes its local WAL.
 
 ## Fixed runtime behavior
 

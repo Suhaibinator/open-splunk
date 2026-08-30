@@ -554,14 +554,13 @@ func tokenLoader(path string) func() (string, error) {
 	return func() (string, error) { return config.LoadToken(path) }
 }
 
-// durableRedactor owns the collector's last confidentiality boundary. Direct
-// mandatory/configured policies sanitize recursively, while lineage mirrors
-// the ordered top-level allow/deny/rename operations and identifies only the
-// original fields whose values actually reach a sensitive name. Configured
-// redact names are confidentiality policies across the chain: processor order
-// cannot be used to rename a value around its pre-WAL sanitizer.
+// durableRedactor owns the collector's last confidentiality boundary. Explicit
+// redact policies sanitize recursively, while lineage mirrors the ordered
+// top-level allow/deny/rename operations and identifies only the original fields
+// whose values actually reach a configured sensitive name. Configured redact
+// names are confidentiality policies across the chain: processor order cannot
+// be used to rename a value around its pre-WAL sanitizer.
 type durableRedactor struct {
-	mandatory             *ingest.Validator
 	configured            []*ingest.Validator
 	configuredReplacement map[string]string
 	lineage               []Processor
@@ -582,7 +581,6 @@ func (redactor *durableRedactor) beforePipeline(
 		return event
 	}
 	aliases := redactor.activeAliases(event, constantNames)
-	event = redactor.mandatory.RedactEventInPlace(event)
 	for _, configured := range redactor.configured {
 		event = configured.RedactEventInPlace(event)
 	}
@@ -591,7 +589,7 @@ func (redactor *durableRedactor) beforePipeline(
 
 // activeAliases simulates only the field-name effects of the ordered processor
 // chain. An alias is activated when a present top-level value actually moves
-// into a mandatory or configured sensitive name. Removed fields retain an
+// into a configured sensitive name. Removed fields retain an
 // already-recorded alias because their original raw/message bytes still cross
 // the WAL boundary.
 func (redactor *durableRedactor) activeAliases(
@@ -687,9 +685,6 @@ func (redactor *durableRedactor) sensitiveReplacement(name string) (string, bool
 	if configured {
 		return replacement, true
 	}
-	if redactor.mandatory.IsSensitiveField(name) {
-		return ingest.DefaultRedactionReplacement, true
-	}
 	return "", false
 }
 
@@ -698,12 +693,7 @@ func (redactor *durableRedactor) sensitiveReplacement(name string) (string, bool
 // concrete processor maps and order keeps the pre-WAL confidentiality boundary
 // aligned with pipeline matching, collision, and replacement semantics.
 func buildDurableRedactor(pipeline *Pipeline) (*durableRedactor, error) {
-	mandatory, err := ingest.NewValidator(ingest.DefaultLimits(), ingest.RedactionPolicy{})
-	if err != nil {
-		return nil, fmt.Errorf("mandatory policy: %w", err)
-	}
 	result := &durableRedactor{
-		mandatory:             mandatory,
 		configuredReplacement: make(map[string]string),
 	}
 	type configuredFieldPolicy struct {
@@ -765,10 +755,6 @@ func buildDurableRedactor(pipeline *Pipeline) (*durableRedactor, error) {
 			if policy.processorIndex != processorIndex {
 				continue
 			}
-			if policy.replacement == ingest.DefaultRedactionReplacement &&
-				mandatory.IsSensitiveField(field) {
-				continue
-			}
 			groupIndex, exists := groupIndexes[policy.replacement]
 			if !exists {
 				groupIndex = len(groups)
@@ -782,8 +768,8 @@ func buildDurableRedactor(pipeline *Pipeline) (*durableRedactor, error) {
 		policies := make([]ingest.RedactionPolicy, len(groups))
 		for groupIndex, group := range groups {
 			policies[groupIndex] = ingest.RedactionPolicy{
-				AdditionalSensitiveFields: group.fields,
-				Replacement:               group.replacement,
+				SensitiveFields: group.fields,
+				Replacement:     group.replacement,
 			}
 		}
 		configured, buildErr := ingest.NewCompositeSupplementalRedactor(

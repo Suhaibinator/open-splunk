@@ -95,7 +95,7 @@ const knowledgeManagerMarkup = `
           <button class="knowledge-manager__row" type="button">
             <span data-label="Object"><strong>saved_search</strong><small>search · v3</small></span>
             <span data-label="Type">Saved search</span>
-            <span data-label="State"><i class="knowledge-state knowledge-state--active"></i>Active</span>
+            <span data-label="State"><span class="status status--label"><i class="status status--dot status--success"></i>Active</span></span>
             <span data-label="Scope">App</span>
           </button>
         </li>
@@ -907,5 +907,73 @@ test.describe("folded breakpoint contracts", () => {
 
     await mount(page, knowledgeInspectionMarkup, NARROW_WIDTH);
     expect(await gridTracks(page, ".workspace-dialog-knowledge-inspection dl")).toHaveLength(1);
+  });
+});
+
+// A field in each of the two grids that state their own borders, valid and
+// invalid, plus the sign-in card and the knowledge-manager filter grid, whose
+// private invalid rules folded into the primitive. Every one of these is a
+// place a feature rule loads after the primitive and could paint over it.
+const fieldValidationMarkup = `
+<div class="settings-form-grid">
+  <label for="valid-limit">
+    <span>Per-query memory</span>
+    <input id="valid-limit" value="1 GiB" aria-describedby="valid-limit-note">
+    <small id="valid-limit-note">1 MiB–64 GiB; default 1 GiB.</small>
+  </label>
+  <label for="invalid-limit">
+    <span>Data read per query</span>
+    <input id="invalid-limit" value="3 bytes" aria-invalid="true" aria-describedby="invalid-limit-note">
+    <small class="field-error" id="invalid-limit-note">Enter 1 MiB–64 GiB.</small>
+  </label>
+</div>
+<div class="admin-policy-grid">
+  <label for="invalid-policy">
+    <span>Maximum event size</span>
+    <input id="invalid-policy" value="2 MiB" aria-invalid="true" aria-describedby="invalid-policy-note">
+    <small class="field-error" id="invalid-policy-note">Enter 1 MiB or less.</small>
+  </label>
+  <label for="invalid-patterns">
+    <span>Allowed host patterns</span>
+    <textarea id="invalid-patterns" aria-invalid="true" aria-describedby="invalid-patterns-note"></textarea>
+    <small class="field-error" id="invalid-patterns-note">Enter at most 16 unique patterns.</small>
+  </label>
+</div>
+<div class="signin-card"><form><input aria-invalid="true" value="bad"></form></div>
+<div class="knowledge-manager__advanced-filter-grid">
+  <label><span>Owner ID</span><input aria-invalid="true" value="bad"></label>
+</div>`;
+
+test.describe("field validation contracts", () => {
+  test("every invalid control is painted, whichever grid states its own border", async ({ page }) => {
+    // The defect this pins: `aria-invalid` was set by five forms and painted by
+    // two, so three of them marked the field for a screen reader and rendered
+    // it identically to a field the form would accept.
+    await mount(page, fieldValidationMarkup, DESKTOP_WIDTH);
+    const [error, strong] = await resolveTokens(page, ["--status-error", "--border-strong"]);
+
+    await Promise.all([
+      "#invalid-limit",
+      "#invalid-policy",
+      "#invalid-patterns",
+      ".signin-card input",
+      ".knowledge-manager__advanced-filter-grid input",
+    ].map((selector) => expect(page.locator(selector), selector).toHaveCSS("border-top-color", error!)));
+    // The valid field in the same grid keeps the ordinary border, so the rule
+    // above is reaching the attribute rather than the grid.
+    await expect(page.locator("#valid-limit")).toHaveCSS("border-top-color", strong!);
+  });
+
+  test("the note that says why is not the same ink as the hint it replaced", async ({ page }) => {
+    // Both rendered in `--fg-muted` before: the message a form showed to explain
+    // a disabled button was styled exactly like the advice beside every other
+    // field.
+    await mount(page, fieldValidationMarkup, DESKTOP_WIDTH);
+    const [error, muted] = await resolveTokens(page, ["--status-error", "--fg-muted"]);
+
+    await expect(page.locator("#invalid-limit-note")).toHaveCSS("color", error!);
+    await expect(page.locator("#invalid-policy-note")).toHaveCSS("color", error!);
+    await expect(page.locator("#valid-limit-note")).toHaveCSS("color", muted!);
+    expect(error).not.toEqual(muted);
   });
 });

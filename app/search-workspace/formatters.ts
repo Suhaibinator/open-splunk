@@ -10,12 +10,6 @@ const DECIMAL_BYTE_UNITS = [
   ["MB", 1_000_000n],
   ["KB", 1_000n],
 ] as const;
-const BINARY_BYTE_UNITS = [
-  ["TB", 1_099_511_627_776n],
-  ["GB", 1_073_741_824n],
-  ["MB", 1_048_576n],
-  ["KB", 1_024n],
-] as const;
 const WHOLE_BYTE_FORMAT = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 const FRACTIONAL_BYTE_FORMAT = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 });
 
@@ -61,6 +55,26 @@ export function formatNonNegativeIntegerQuantity(
   return !Number.isSafeInteger(value) || value < 0 ? invalidLabel : NUMBER_FORMAT.format(value);
 }
 
+/**
+ * A downloadable artifact's size, in decimal units.
+ *
+ * The one byte formatter outside `lib/byte-quantity.ts`, and deliberately so:
+ * every caller is an export -- the artifact a user downloads, the bytes written
+ * toward it, and the ceiling the server advertises for it -- and a file's size
+ * is quoted in decimal units by the operating systems that will show it next.
+ * `KB` here is 1,000, which is what the suffix means and what
+ * `parseByteQuantity` reads it as.
+ *
+ * A byte count that is *not* a file uses `summarizeByteQuantity`: index storage,
+ * queue depth, scanned bytes and a job's result size are magnitudes inside this
+ * product, and they render in the binary units the rest of the console states
+ * limits in. A search job's `resultBytes` was the one field caught on both sides
+ * of that line -- binary in the search workspace, decimal in the activity job
+ * list -- and it is binary in both now.
+ *
+ * `invalidLabel` is also a validity predicate: the export dialog reads it back
+ * to decide whether an artifact's metadata is complete enough to offer.
+ */
 export function formatDecimalBytes(
   value: IntegerQuantity,
   invalidLabel = "Unavailable",
@@ -87,15 +101,3 @@ export function formatDecimalBytes(
   return `${formatter.format(amount)} ${units[unitIndex]}`;
 }
 
-export function formatBinaryBytes(value: bigint): string {
-  if (value <= 0n) return "0 B";
-  const unit = BINARY_BYTE_UNITS.find(([, threshold]) => value >= threshold);
-  if (unit === undefined) return `${value} B`;
-  const [label, threshold] = unit;
-  const fractionDigits = value < threshold * 10n ? 1 : 0;
-  const scale = fractionDigits === 0 ? 1n : 10n;
-  const rounded = (value * scale * 2n + threshold) / (threshold * 2n);
-  const whole = rounded / scale;
-  if (fractionDigits === 0) return `${whole} ${label}`;
-  return `${whole}.${rounded % scale} ${label}`;
-}

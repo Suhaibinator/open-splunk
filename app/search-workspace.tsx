@@ -205,7 +205,7 @@ import {
   type ProgressRevisionState,
   type SearchProgressSource,
 } from "./search-workspace/progress-revision";
-import { formatBinaryBytes } from "./search-workspace/formatters";
+import { summarizeByteQuantity } from "@/lib/byte-quantity";
 import { EventsPanel } from "./search-workspace/panels/events-panel";
 import { PatternsPanel } from "./search-workspace/panels/patterns-panel";
 import { StatisticsPanel } from "./search-workspace/panels/statistics-panel";
@@ -2549,7 +2549,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       ? Number.MAX_SAFE_INTEGER
       : Number(reportedScannedRows));
     setScannedRowsApproximate(jobProgress.countersAreEstimates || scannedRowsOverflow);
-    setScannedBytes(formatBinaryBytes(jobProgress.resultBytes));
+    setScannedBytes(summarizeByteQuantity(jobProgress.resultBytes));
     const matchedEvents = jobProgress.matchedEvents;
     const count = matchedEvents || jobProgress.producedRows;
     const job = backendJobRef.current;

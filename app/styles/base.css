@@ -24,6 +24,10 @@
 .app-icon--md { height: 16px; width: 16px; }
 .app-icon--lg { height: 20px; width: 20px; }
 
+/* Centres an icon on the cross axis only. `justify-content` is left alone so
+   icon+label rows stay left-aligned, which means a fixed-width icon-only
+   button must state `justify-content: center` (and reset the UA padding)
+   itself, or use `.button--icon`, which already does. */
 :where(button, a):has(> .app-icon) {
   align-items: center;
   display: inline-flex;

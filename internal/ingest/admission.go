@@ -211,7 +211,7 @@ func (preparer *AdmissionPreparer) Prepare(request AdmissionRequest) (StoreBatch
 		}
 		// Match native ingestion quota semantics exactly: charge the
 		// server-computed protobuf size as received, before normalization or
-		// mandatory redaction. The detached decoder observation is never an
+		// configured redaction. The detached decoder observation is never an
 		// accounting authority.
 		sourceSize, sizeOK := protobufSizeUint64(candidate.Event)
 		if !sizeOK || sourceSize == 0 {

@@ -156,12 +156,12 @@
       "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
     },
     {
-      "after": " || .backend-resource-state--loading > span || animation: spin 1.1s linear infinite; background: var(--status-info-soft); color: var(--status-info-strong)",
+      "after": " || .backend-resource-state--loading > span || background: var(--status-info-soft); color: var(--status-info-strong)",
       "before": [
         " || .backend-resource-state--loading > span || animation: spin 1.1s linear infinite",
         " || .backend-resource-state--loading > span || background: var(--status-info-soft); color: var(--status-info-strong)"
       ],
-      "why": "Two rules with this selector under the same at-rules stated it, which `no-duplicate-selectors` reports as an error from Phase 5 on; they are folded into one and the later rule's values are kept, which is what the cascade was already resolving to. The declaration list also changed shape -- a longhand set collapsed onto the shorthand `stylelint-config-standard` asks for, a deprecated property or keyword replaced by the one that supersedes it, or a value respelled in the case the linter wants. Each keeps the computed value identical."
+      "why": "Two rules with this selector under the same at-rules stated it, which `no-duplicate-selectors` reports as an error from Phase 5 on; they are folded into one and the later rule's values are kept, which is what the cascade was already resolving to. The declaration list also changed shape -- a longhand set collapsed onto the shorthand `stylelint-config-standard` asks for, a deprecated property or keyword replaced by the one that supersedes it, or a value respelled in the case the linter wants. Each keeps the computed value identical. The disc's own `spin` is gone: the component already passes `spin` to its `StatusIcon`, so the glyph inherited both rotations and turned at roughly twice the intended rate. The disc is a plain tinted circle and has nothing of its own to rotate."
     },
     {
       "after": " || .backend-resource-state--unavailable || border-left: 4px solid var(--status-warning-bright)",
@@ -234,9 +234,9 @@
       "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
     },
     {
-      "after": " || .event-field-actions button || background: var(--bg-surface); border: 1px solid var(--border); color: var(--status-info); font-size: var(--type-xs); height: 21px; margin-left: -1px; width: 23px",
+      "after": " || .event-field-actions button || background: var(--bg-surface); border: 1px solid var(--border); color: var(--status-info); font-size: var(--type-xs); height: 21px; justify-content: center; margin-left: -1px; padding: 0; width: 23px",
       "before": " || .event-field-actions button || background: var(--bg-surface); border: 1px solid var(--border); color: #3e718a; font-size: var(--type-xs); height: 21px; margin-left: -1px; width: 23px",
-      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried. The icon it holds was off-centre: base.css gives an icon-carrying button `display: inline-flex` and `align-items: center` but no `justify-content`, and nothing resets the UA `padding: 1px 6px`, so a fixed-width box centres the glyph only by coincidence. The rule now states `justify-content: center` (and drops the UA padding where the box is narrower than icon plus padding) so the glyph sits where the box says it does."
     },
     {
       "after": " || .event-row--preview .event-expander[aria-disabled=\"true\"] || color: var(--fg-faint)",
@@ -262,6 +262,11 @@
       "after": " || .field-catalog-grid b || color: var(--fg-faint); font-size: var(--type-lg); font-weight: 400",
       "before": " || .field-catalog-grid b || color: var(--fg-faint); font-size: 15px; font-weight: 400",
       "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .field-error.field-error || align-items: center; color: var(--status-error); display: flex; font-size: var(--type-xs); gap: var(--space-1)",
+      "before": [],
+      "why": "New in Phase 5's field-validation primitive: the note under a form field, in its error form. There was no rule to move -- every form that showed a per-field message rendered it in the same muted grey as the hint it replaced, so the message read as more advice rather than as the reason the submit button was disabled. The class is doubled for the reason app/styles/primitives/form.css states at the rule: a feature's own `label > small` colour is (0,1,2) and loads after the primitive. It carries a warning glyph beside the colour, because colour alone does not distinguish an error for a reader who cannot see the hue."
     },
     {
       "after": " || .field-group h2 span || background: var(--bg-subtle); border-radius: var(--radius-md); color: var(--fg-muted); font-size: var(--type-xxs); margin-left: 6px; padding: 2px 5px",
@@ -389,11 +394,6 @@
       "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
     },
     {
-      "after": " || .knowledge-manager__advanced-filter-grid [aria-invalid=\"true\"] || border-color: var(--status-error)",
-      "before": " || .knowledge-manager__advanced-filter-grid [aria-invalid=\"true\"] || border-color: #a34f49",
-      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
-    },
-    {
       "after": " || .knowledge-manager__advanced-filters legend || color: var(--fg-secondary); font-size: var(--type-xs); font-weight: 700; margin-bottom: var(--space-2); padding: 0",
       "before": " || .knowledge-manager__advanced-filters legend || color: #43545d; font-size: var(--type-xs); font-weight: 700; margin-bottom: var(--space-2); padding: 0",
       "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
@@ -419,9 +419,9 @@
       "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
     },
     {
-      "after": " || .knowledge-manager__detail-close || background: transparent; border: 0; color: var(--fg-muted); float: right; font-size: var(--type-xxl); height: 32px; width: 32px",
+      "after": " || .knowledge-manager__detail-close || background: transparent; border: 0; color: var(--fg-muted); float: right; font-size: var(--type-xxl); height: 32px; justify-content: center; width: 32px",
       "before": " || .knowledge-manager__detail-close || background: transparent; border: 0; color: var(--fg-muted); float: right; font-size: 21px; height: 32px; width: 32px",
-      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+      "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried. The icon it holds was off-centre: base.css gives an icon-carrying button `display: inline-flex` and `align-items: center` but no `justify-content`, and nothing resets the UA `padding: 1px 6px`, so a fixed-width box centres the glyph only by coincidence. The rule now states `justify-content: center` (and drops the UA padding where the box is narrower than icon plus padding) so the glyph sits where the box says it does."
     },
     {
       "after": " || .knowledge-manager__detail:focus-visible || box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus-ring) 23%, transparent)",
@@ -509,9 +509,17 @@
       "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
     },
     {
-      "after": " || .knowledge-state--quarantined || background: var(--status-progress)",
-      "before": " || .knowledge-state--quarantined || background: #c07823",
-      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+      "after": " || .status--progress || background: var(--status-progress)",
+      "before": [
+        " || .knowledge-state--quarantined || background: #c07823",
+        " || .knowledge-manager__row > span:nth-child(3) || align-items: center; display: flex; gap: 6px",
+        " || .knowledge-state || background: var(--status-neutral); border-radius: 50%; display: inline-block; height: 7px; width: 7px",
+        " || .knowledge-state--active || background: var(--status-success)",
+        " || .knowledge-state--draft || background: var(--status-info)",
+        " || .knowledge-state--disabled || background: var(--status-neutral)",
+        " || .knowledge-state--deleted || background: var(--status-error)"
+      ],
+      "why": "`.knowledge-state` was a byte-for-byte fork of `.status--dot` with its own five tones, which AGENTS.md rule 3 forbids, and it carried a layout defect: the State cell held two children (the dot and a bare text node), so the 760px `span[data-label] { display: grid }` rule -- same (0,2,1) specificity as the cell's flex rule, and later in the sheet -- stacked the dot on its own row above its label. The cell now renders one `StatusLabel`, like every other cell holds one value. Four of the five tones already existed on `.status`; `--status-progress` is the token the theme documents for quarantined, so the primitive gained a `--progress` tone rather than the row losing its colour."
     },
     {
       "after": " || .live-job-actions > button:last-child || color: var(--status-error-strong)",
@@ -667,9 +675,9 @@
       "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
     },
     {
-      "after": " || .resource-action-menu || background: var(--bg-surface); border: 1px solid var(--border-strong); box-shadow: var(--shadow-md); display: flex; min-width: 215px; padding: var(--space-1) 0; position: absolute; right: calc(100% + 4px); top: 50%; transform: translateY(-50%); z-index: var(--z-dropdown)",
+      "after": " || .resource-action-menu || background: var(--bg-surface); border: 1px solid var(--border-strong); box-shadow: var(--shadow-md); display: flex; flex-direction: column; min-width: 215px; padding: var(--space-1) 0; position: absolute; right: calc(100% + 4px); top: 50%; transform: translateY(-50%); z-index: var(--z-dropdown)",
       "before": " || .resource-action-menu || background: var(--bg-surface); border: 1px solid var(--border-strong); box-shadow: 0 7px 18px rgb(18 29 36 / 18%); display: flex; min-width: 215px; padding: var(--space-1) 0; position: absolute; right: calc(100% + 4px); top: 50%; transform: translateY(-50%); z-index: var(--z-dropdown)",
-      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried. The menu was `display: flex` with no direction, so its two items rendered side by side as a strip while every other declaration (`min-width`, vertical-only padding, `text-align: left`, `white-space: nowrap`) described a column. It now says `flex-direction: column`, which is what the two sibling menu families already are."
     },
     {
       "after": " || .result-tabs button || align-items: center; align-self: stretch; background: transparent; border: 0; border-bottom: 3px solid transparent; color: var(--fg-secondary); display: inline-flex; font-size: var(--type-md); gap: 6px; padding: 0 17px",
@@ -705,6 +713,11 @@
       "after": " || .segmented-fieldset label.selected || background: var(--accent-soft); border-color: var(--accent-bright)",
       "before": " || .segmented-fieldset label.selected || background: var(--accent-soft); border-color: #6d9e4c",
       "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .settings-invalid-summary || color: var(--status-error); font-size: var(--type-xs); margin-right: auto",
+      "before": [],
+      "why": "New in Phase 5's field-validation work: the line beside the search-limits Apply button naming the fields holding it disabled. There was no rule to move, because there was no such line -- a form that could not be submitted said so only by greying out the button, which named nothing. `margin-right: auto` is what keeps it at the left of the `.settings-actions` row while the buttons stay flush right."
     },
     {
       "after": " || .setup-checklist .is-complete > span || background: var(--accent-bright); border-color: var(--accent-bright); color: var(--fg-inverse)",
@@ -1142,6 +1155,14 @@
       "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
     },
     {
+      "after": " || [aria-invalid=\"true\"][aria-invalid=\"true\"] || border-color: var(--status-error)",
+      "before": [
+        " || .knowledge-manager__advanced-filter-grid [aria-invalid=\"true\"] || border-color: #a34f49",
+        " || .signin-card input[aria-invalid=\"true\"] || border-color: var(--status-error)"
+      ],
+      "why": "Two features painted an invalid field for themselves and the rest of the product did not paint one at all: search limits, the reports rename dialog and the index-observability range each set `aria-invalid` on a control that no rule anywhere selected, so a value the form could not accept looked exactly like one it could and the only signal was a submit button greyed out without naming a field. Both rules fold into one doubled attribute selector in app/styles/primitives/form.css, which reaches every form that marks a control the way a screen reader needs it marked. The knowledge-manager half also carried Phase 5's colour-literal substitution, which is why its `before` is the hex spelling -- the rule replacing it reads the same tier-2 role, so nothing about the painted colour changes."
+    },
+    {
       "after": " || body || min-height: 100%; margin: 0; background: var(--bg-canvas); color: var(--fg-text); font-family: var(--font-sans); font-size: var(--type-md); text-rendering: optimizelegibility",
       "before": " || body || min-height: 100%; margin: 0; background: var(--bg-canvas); color: var(--fg-text); font-family: var(--font-sans); font-size: 13px; text-rendering: optimizeLegibility",
       "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried. The declaration list also changed shape -- a longhand set collapsed onto the shorthand `stylelint-config-standard` asks for, a deprecated property or keyword replaced by the one that supersedes it, or a value respelled in the case the linter wants. Each keeps the computed value identical."
@@ -1172,9 +1193,9 @@
       "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
     },
     {
-      "after": "@media (max-width: 760px) || .drawer > header button || background: transparent; border: 0; color: var(--chrome-fg-muted); font-size: var(--type-xxl); height: 44px; width: 44px",
+      "after": "@media (max-width: 760px) || .drawer > header button || background: transparent; border: 0; color: var(--chrome-fg-muted); font-size: var(--type-xxl); height: 44px; justify-content: center; padding: 0; width: 44px",
       "before": "@media (max-width: 760px) || .drawer > header button || background: transparent; border: 0; color: #e6ecef; font-size: 24px; height: 44px; width: 44px",
-      "why": "Phase 5 gave the rule's colour literals a tier-2 role, and put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+      "why": "Phase 5 gave the rule's colour literals a tier-2 role, and put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried. The icon it holds was off-centre: base.css gives an icon-carrying button `display: inline-flex` and `align-items: center` but no `justify-content`, and nothing resets the UA `padding: 1px 6px`, so a fixed-width box centres the glyph only by coincidence. The rule now states `justify-content: center` (and drops the UA padding where the box is narrower than icon plus padding) so the glyph sits where the box says it does."
     },
     {
       "after": "@media (max-width: 760px) || .drawer > header small || color: var(--chrome-fg-faint); font-size: var(--type-xs)",
@@ -1285,6 +1306,26 @@
       "before": "@media (max-width: 760px) || .time-series-chart || grid-template-columns: 40px minmax(0, 1fr); grid-template-rows: minmax(250px, 1fr) 38px",
       "after": "@media (max-width: 760px) || .time-series-chart || grid-template-columns: var(--chart-y-axis-width, 40px) minmax(0, 1fr); grid-template-rows: minmax(var(--chart-plot-min-height, 250px), 1fr) var(--chart-x-axis-height, 38px)",
       "why": "The panel that used to size this chart through `:global()` now sets a custom property on its own container, so the rule reads the value it used to be handed and keeps the shipped number as the `var()` fallback. Same paint everywhere the panel is absent."
+    },
+    {
+      "after": " || .resource-action-menu > a, .resource-action-menu > button || align-items: center; background: transparent; border: 0; color: var(--fg-text); display: flex; font-size: var(--type-xs); min-height: 34px; padding: var(--space-2) 11px; text-align: left; text-decoration: none; white-space: nowrap",
+      "before": " || .resource-action-menu > a, .resource-action-menu > button || align-items: center; background: transparent; border: 0; color: var(--fg-text); display: flex; flex: 1; font-size: var(--type-xs); min-height: 34px; padding: var(--space-2) 11px; text-align: left; text-decoration: none; white-space: nowrap",
+      "why": "`flex: 1` made the two items share the menu's width as a row; once the menu is a column each item is full-width by being a block-level flex item, so the declaration is a no-op and is gone."
+    },
+    {
+      "after": " || .row-overflow || background: transparent; border: 0; color: var(--fg-muted); font-weight: 700; justify-content: center; min-height: 28px; min-width: 30px",
+      "before": " || .row-overflow || background: transparent; border: 0; color: var(--fg-muted); font-weight: 700; min-height: 28px; min-width: 30px",
+      "why": "The overflow glyph sat 8px left of centre once a coarse pointer grew the box to 44px. The icon it holds was off-centre: base.css gives an icon-carrying button `display: inline-flex` and `align-items: center` but no `justify-content`, and nothing resets the UA `padding: 1px 6px`, so a fixed-width box centres the glyph only by coincidence. The rule now states `justify-content: center` (and drops the UA padding where the box is narrower than icon plus padding) so the glyph sits where the box says it does."
+    },
+    {
+      "after": " || .time-popover-header > button || background: transparent; border: 0; color: var(--fg-muted); font-size: var(--type-xxl); height: 30px; justify-content: center; padding: 0; width: 30px",
+      "before": " || .time-popover-header > button || background: transparent; border: 0; color: var(--fg-muted); font-size: var(--type-xxl); height: 30px; width: 30px",
+      "why": "The close glyph sat 1px right of centre. The icon it holds was off-centre: base.css gives an icon-carrying button `display: inline-flex` and `align-items: center` but no `justify-content`, and nothing resets the UA `padding: 1px 6px`, so a fixed-width box centres the glyph only by coincidence. The rule now states `justify-content: center` (and drops the UA padding where the box is narrower than icon plus padding) so the glyph sits where the box says it does."
+    },
+    {
+      "after": " || .top-value > div button || background: var(--bg-subtle); border: 1px solid var(--border); color: var(--fg-muted); height: 22px; justify-content: center; padding: 0; width: 24px",
+      "before": " || .top-value > div button || background: var(--bg-subtle); border: 1px solid var(--border); color: var(--fg-muted); height: 22px; width: 24px",
+      "why": "The include and exclude glyphs sat 2px right of centre. The icon it holds was off-centre: base.css gives an icon-carrying button `display: inline-flex` and `align-items: center` but no `justify-content`, and nothing resets the UA `padding: 1px 6px`, so a fixed-width box centres the glyph only by coincidence. The rule now states `justify-content: center` (and drops the UA padding where the box is narrower than icon plus padding) so the glyph sits where the box says it does."
     }
   ],
   "rules": [

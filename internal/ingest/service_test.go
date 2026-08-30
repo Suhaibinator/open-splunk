@@ -392,7 +392,7 @@ func TestCollectPartiallyRejectsEventsAndStoresOnlyNormalizedAuthorizedEvents(t 
 	_ = recvResponse(t, stream)
 
 	accepted := validTestEvent("event-accepted", "main")
-	accepted.Fields = object(stringField("password", "must-not-reach-store"))
+	accepted.Fields = object(stringField("password", "stored-as-received"))
 	unauthorized := validTestEvent("event-unauthorized", "forbidden")
 	invalid := validTestEvent("event-invalid", "main")
 	invalid.Fields = object(stringField("_raw", "forged"))
@@ -418,8 +418,8 @@ func TestCollectPartiallyRejectsEventsAndStoresOnlyNormalizedAuthorizedEvents(t 
 	if stored.SourceBatchSHA256 != wireIdentity.contentHash {
 		t.Fatal("store batch did not retain the original collector payload hash")
 	}
-	if stored.Events[0].Event.Fields.Fields[0].Value.GetStringValue() != DefaultRedactionReplacement {
-		t.Fatalf("stored secret = %q", stored.Events[0].Event.Fields.Fields[0].Value.GetStringValue())
+	if stored.Events[0].Event.Fields.Fields[0].Value.GetStringValue() != "stored-as-received" {
+		t.Fatalf("unconfigured field value = %q", stored.Events[0].Event.Fields.Fields[0].Value.GetStringValue())
 	}
 	if got := ack.GetRejectedEvents()[0]; got.GetCode() != opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_INDEX || got.GetEventIndex() != 1 {
 		t.Fatalf("first rejection = %#v", got)
@@ -1493,6 +1493,7 @@ func TestProcessBatchTerminallyRejectsExpandedDurableOutbox(t *testing.T) {
 	// with fewer matches preserves that boundary without making race/coverage
 	// instrumentation perform hundreds of thousands of replacement operations.
 	config.Redaction.Replacement = strings.Repeat("r", 8_192)
+	config.Redaction.SensitiveFields = []string{"token"}
 	config = withTestSessionManager(config, staticTestAuthorizer())
 	store := &recoverableTestStore{}
 	service, err := NewService(config, staticTestAuthorizer(), store)

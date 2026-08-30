@@ -16,11 +16,11 @@ import { BackendResourceState } from "../_components/backend-resource-state";
 import { formatMediumDateTime } from "../_components/date-format";
 import {
   fieldCountLabel,
-  formatStorageBytes,
   mergeIndexFieldPage,
   normalizeIndexObservationQuery,
   type IndexFieldSnapshot,
 } from "./index-observability-data";
+import { summarizeByteQuantity } from "@/lib/byte-quantity";
 
 interface IndexObservabilityPanelProps {
   client: OpenSplunkApiClient;
@@ -202,7 +202,7 @@ export function IndexObservabilityPanel({ client, index }: IndexObservabilityPan
       {statsState === "available" && stats !== null ? (
         <dl className="index-stats-grid">
           <div><dt>Events</dt><dd>{stats.eventCount.toLocaleString()}</dd></div>
-          <div><dt>Storage</dt><dd>{formatStorageBytes(stats.storageBytes)}</dd></div>
+          <div><dt>Storage</dt><dd>{summarizeByteQuantity(stats.storageBytes)}</dd></div>
           <div><dt>Earliest event</dt><dd>{dateLabel(stats.earliestEventTime)}</dd></div>
           <div><dt>Latest event</dt><dd>{dateLabel(stats.latestEventTime)}</dd></div>
           <div><dt>Measured</dt><dd>{dateLabel(stats.measuredAt)}</dd></div>

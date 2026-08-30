@@ -46,6 +46,7 @@ import {
   type AnalyticsWorkload,
 } from "./analytics-data";
 import { AnalyticsSampleStatus } from "./analytics-sample-status";
+import { summarizeByteQuantity } from "@/lib/byte-quantity";
 
 type RangeKey = "1h" | "24h" | "7d";
 type EnvironmentKey = "all" | "production" | "staging";
@@ -546,19 +547,6 @@ function formatCounter(value: bigint): string {
   return COMPACT_FORMAT.format(value);
 }
 
-function formatBytes(value: bigint): string {
-  const units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
-  let unitIndex = 0;
-  let divisor = 1n;
-  while (unitIndex < units.length - 1 && value / divisor >= 1_024n) {
-    divisor *= 1_024n;
-    unitIndex += 1;
-  }
-  if (unitIndex === 0) return `${value.toLocaleString()} B`;
-  const tenths = (value * 10n + divisor / 2n) / divisor;
-  return `${Number(tenths) / 10} ${units[unitIndex]}`;
-}
-
 function formatRuntime(milliseconds: number | null): string {
   if (milliseconds === null) return "Not reported";
   if (milliseconds < 1_000) return `${Math.round(milliseconds)} ms`;
@@ -912,7 +900,7 @@ function BackendAnalyticsConsole({ apiBaseUrl }: { apiBaseUrl: string }) {
             <article><span>Searches observed</span><strong>{NUMBER_FORMAT.format(workload.searchCount)}</strong><small>{workload.completedCount.toLocaleString()} completed in the loaded {historySnapshot.complete ? "range" : "sample"}</small></article>
             <article><span>Failed searches</span><strong>{NUMBER_FORMAT.format(workload.failedCount)}</strong><small>{workload.canceledCount.toLocaleString()} canceled · {workload.expiredCount.toLocaleString()} expired</small></article>
             <article><span>Median runtime</span><strong>{formatRuntime(workload.medianRuntimeMs)}</strong><small>{workload.p95RuntimeMs === null ? "No p95 duration reported" : `p95 ${formatRuntime(workload.p95RuntimeMs)}`}</small></article>
-            <article><span>Rows scanned</span><strong>{formatCounter(workload.scannedRows)}</strong><small>{formatBytes(workload.scannedBytes)} read · {formatCounter(workload.producedRows)} rows produced</small></article>
+            <article><span>Rows scanned</span><strong>{formatCounter(workload.scannedRows)}</strong><small>{summarizeByteQuantity(workload.scannedBytes)} read · {formatCounter(workload.producedRows)} rows produced</small></article>
           </section>
 
           <div className="analytics-primary-grid">

@@ -975,6 +975,56 @@ not chips at all, so folding it needs those two untangled first. Recorded here
 rather than fixed because it is a fourth surface's worth of work, and an
 undocumented exception is how a primitive quietly acquires a tenth copy.
 
+### Field validation
+
+One appearance for a form field the product cannot accept, in
+`app/styles/primitives/form.css`, and one pairing that produces it, in
+`app/_components/field-validation.tsx`.
+
+There was no primitive here before, and the result was a defect rather than
+merely a duplication. Five forms marked an invalid control with `aria-invalid`
+— search limits, the reports rename and duplicate dialogs, the
+index-observability range, the sign-in token field and the knowledge-manager
+advanced filters — and exactly two of them painted it: `.signin-card` and
+`.knowledge-manager__advanced-filter-grid` each carried a private
+`border-color: var(--status-error)`. In the other three the attribute was set
+and nothing anywhere selected it, so a value the form would refuse rendered
+identically to one it would accept, and the only signal was a submit button
+greyed out without naming a field. The search-limits form even computed a
+per-field message and rendered it in `--fg-muted`, the same ink as the hint it
+replaced.
+
+| Part | What it is |
+| --- | --- |
+| `[aria-invalid="true"]` | the invalid field's `--status-error` edge |
+| `.field-error` | the note under it: `--status-error`, with a warning glyph |
+| `fieldControlProps(id, error)` | `aria-invalid` and `aria-describedby` for the control |
+| `FieldNote` | the `<small>` the control points at: hint, or error |
+
+**Both selectors are doubled**, and this is the one place in the layer besides
+`.table--cards` where that is the right tool. `.settings-form-grid input` is
+(0,1,1) and states a `border` shorthand; `.settings-form-grid label > small` is
+(0,1,2) and states a muted colour; every feature stylesheet loads after the
+primitives. A single-attribute or single-class rule here would be set and then
+painted over by the very rules it exists to override.
+
+**Keying on the attribute, not on a class**, is deliberate: a form earns the
+appearance by marking the field the way a screen reader needs it marked, so the
+two cannot come apart. `integration/style-contracts/css-contracts.spec.ts` pins
+both halves against the four grids that state their own field borders.
+
+**The note is not a live region.** These fields validate on every keystroke, and
+`role="alert"` would interrupt a screen reader with a half-typed value's
+complaint on every character. A form that needs to announce something on submit
+keeps its own status region — the knowledge-manager filters and the token
+dialogs each have one — and the per-field pairing stays quiet until focus.
+
+**Not folded in: the block-level error.** `.reports-action-error` and
+`.backend-inline-error` are a red wash across the width of a dialog, not a note
+under one field, and one of them covers two fields at once. They are a second
+shape rather than a second implementation, and both now sit above fields the
+primitive paints.
+
 ### Pixels this deliberately moved
 
 Unifying three implementations means at most one of them keeps its pixels. Each

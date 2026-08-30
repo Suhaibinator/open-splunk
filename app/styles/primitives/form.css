@@ -257,3 +257,33 @@
   height: 17px;
   width: 17px;
 }
+
+/* Field validation
+   One appearance for a field the form cannot accept, and one for the note that
+   says why. Both were previously per-feature: `.signin-card` and the
+   knowledge-manager filter grid each painted their own invalid border, and the
+   three other forms that set `aria-invalid` -- search limits, the reports rename
+   dialog and the index-observability range -- set an attribute nothing anywhere
+   painted, so their only visible signal was a disabled submit button. Keying on
+   the attribute rather than on a class means a form gets the appearance by
+   marking the field correctly for a screen reader, which is the pairing
+   `app/_components/field-validation.tsx` hands out.
+
+   Both selectors are doubled to outrank the field rules features state for
+   themselves. `.settings-form-grid input` (0,1,1) sets a `border` shorthand and
+   `.settings-form-grid label > small` (0,1,2) sets a muted colour; every feature
+   stylesheet loads after this file, so a single-attribute or single-class rule
+   here would be set and then painted over by the very rules it exists to
+   override. This is the same tool, for the same reason, as `.table--cards` being
+   doubled in the table primitive. */
+[aria-invalid="true"][aria-invalid="true"] {
+  border-color: var(--status-error);
+}
+
+.field-error.field-error {
+  align-items: center;
+  color: var(--status-error);
+  display: flex;
+  font-size: var(--type-xs);
+  gap: var(--space-1);
+}
