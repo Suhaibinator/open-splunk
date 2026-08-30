@@ -44,8 +44,8 @@
 
 @keyframes pulse-ring {
   0%,
-  100% { box-shadow: var(--pulse-ring-core, 0 0 #0000), 0 0 0 0 rgb(46 135 183 / 30%); }
-  50% { box-shadow: var(--pulse-ring-core, 0 0 #0000), 0 0 0 4px rgb(46 135 183 / 0%); }
+  100% { box-shadow: var(--pulse-ring-core, 0 0 transparent), 0 0 0 0 color-mix(in srgb, var(--focus-ring) 30%, transparent); }
+  50% { box-shadow: var(--pulse-ring-core, 0 0 transparent), 0 0 0 4px transparent; }
 }
 
 html {
@@ -61,8 +61,8 @@ body {
   background: var(--bg-canvas);
   color: var(--fg-text);
   font-family: var(--font-sans);
-  font-size: 13px;
-  text-rendering: optimizeLegibility;
+  font-size: var(--type-md);
+  text-rendering: optimizelegibility;
 }
 
 button,
@@ -108,7 +108,7 @@ a {
   top: 8px;
   transform: translateY(-150%);
   transition: transform 100ms ease-out;
-  z-index: 1000;
+  z-index: var(--z-skip-link);
 }
 
 .skip-link:focus { transform: translateY(0); }
@@ -120,7 +120,6 @@ pre {
 
 .sr-only {
   border: 0;
-  clip: rect(0, 0, 0, 0);
   clip-path: inset(50%);
   height: 1px;
   left: 0;

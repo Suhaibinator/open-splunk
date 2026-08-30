@@ -231,10 +231,34 @@ export function diffRuleSets(recorded, live) {
   return { extra: extra.toSorted(), missing: missing.toSorted() };
 }
 
-/** Applies the ledger's recorded edits so only unrecorded drift survives. */
+/**
+ * Applies the ledger's recorded edits so only unrecorded drift survives.
+ *
+ * An entry's `before` is one rule, or the list of rules a later phase folded
+ * into one. The list form exists because two rules with the same selector under
+ * the same at-rules are a `no-duplicate-selectors` finding whose only fix is to
+ * state them once: the later rule's declarations already win, so the fold keeps
+ * every value the cascade was resolving to and there is nothing left for a
+ * one-for-one rewrite to name. The rules are replaced in place at the first
+ * member's position and the rest drop out, which is where the fold put them.
+ */
 export function applySubstitutions(rules, substitutions) {
-  const replacements = new Map(substitutions.map((entry) => [entry.before, entry.after]));
-  return rules.map((rule) => replacements.get(rule) ?? rule);
+  const replacements = new Map();
+  const folded = new Set();
+  for (const entry of substitutions) {
+    const before = Array.isArray(entry.before) ? entry.before : [entry.before];
+    replacements.set(before[0], entry.after);
+    for (const rule of before.slice(1)) folded.add(rule);
+  }
+  const remaining = new Map();
+  for (const rule of folded) remaining.set(rule, rules.filter((one) => one === rule).length);
+  return rules.flatMap((rule) => {
+    if (folded.has(rule) && remaining.get(rule) > 0) {
+      remaining.set(rule, remaining.get(rule) - 1);
+      return [];
+    }
+    return [replacements.get(rule) ?? rule];
+  });
 }
 
 /**

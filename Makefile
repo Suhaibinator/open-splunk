@@ -212,24 +212,24 @@ docs-check:
 lint:
 	npm run lint
 
-# `npm run lint:css` reports CSS-token debt as warnings only and is deliberately
-# not part of this target yet. Phase 5 of the CSS cleanup flips .stylelintrc.json
-# to errors and adds it here once the application stylesheets no longer trip it. The report
-# is 282 warnings: 251 of them are the token debt that phase exists to clear
-# (196 hex colors, 49 literal rgb()/font-family values, 6 off-scale media
-# features) and 31 are small correctness items. The token files themselves are
-# exempt from the hex and rgb() rules through an overrides entry, because the
-# primitive tier is the one place a colour literal belongs. The stylistic rules
-# from stylelint-config-standard that this repository does not follow are turned
-# off in .stylelintrc.json, so the flip needs no disable comments.
+# `npm run lint` runs `npm run lint:css` after oxlint, so this target covers both.
+# Phase 5 flipped .stylelintrc.json from warnings to errors and cleared the 282
+# findings the flip would otherwise have failed on: 245 colour literals now read
+# a tier-2 role or a color-mix() over one, 86 font-size and 12 border-radius
+# literals read their documented step, every box-shadow ink and every off-canon
+# breakpoint is gone, and `!important` is down from 25 declarations to the 14 in
+# the two files .stylelintrc.json names. The token files stay exempt from the
+# value rules through an overrides entry, because the primitive tier is the one
+# place a literal belongs.
 
 # test:contracts reads the application stylesheets back through getComputedStyle and
 # test:visual renders the exported UI and compares committed baselines. Both
 # need the pinned browser, installed once with
 # `npx --no-install playwright install chromium`. test:visual rebuilds the two
 # static exports into `.cache/visual` and resets `out/`, so run `make build-ui`
-# before building the server afterwards. Only test:contracts runs in CI; the
-# screenshot baselines are darwin-only.
+# before building the server afterwards. Both run in CI now: test:contracts in
+# the ubuntu frontend job, and test:visual in a macos job of its own, because a
+# baseline is rasterized per platform and the committed set is darwin.
 test: docs-check lint
 	$(GO_TEST_ENV) go test ./...
 	npm run test:frontend

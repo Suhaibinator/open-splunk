@@ -60,7 +60,7 @@
   background: var(--status-info-soft);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  color: #4c7d93;
+  color: var(--status-info);
   display: inline-flex;
   font-family: var(--font-mono);
   font-size: var(--type-lg);
@@ -70,7 +70,7 @@
 }
 
 .preview-fields-placeholder strong {
-  color: #445760;
+  color: var(--fg-secondary);
   font-size: var(--type-xs);
 }
 
@@ -137,7 +137,7 @@
   background: var(--bg-subtle);
   border-radius: var(--radius-md);
   color: var(--fg-muted);
-  font-size: 8px;
+  font-size: var(--type-xxs);
   margin-left: 6px;
   padding: 2px 5px;
 }
@@ -172,7 +172,7 @@
 .field-list > button:hover,
 .field-list > button.active {
   background: var(--selection);
-  color: #1f667f;
+  color: var(--status-info-strong);
 }
 
 .field-list > button > span:nth-child(2) {
@@ -193,7 +193,7 @@
   border-radius: var(--radius-sm);
   color: var(--fg-muted);
   display: inline-flex;
-  font-family: Georgia, serif;
+  font-family: var(--font-serif);
   font-size: var(--type-xxs);
   height: 15px;
   justify-content: center;
@@ -201,7 +201,7 @@
 }
 
 .field-type.type-number {
-  color: #8f642c;
+  color: var(--status-warning-strong);
   font-family: var(--font-sans);
 }
 
@@ -224,7 +224,7 @@
   position: absolute;
   top: 68px;
   width: 344px;
-  z-index: 40;
+  z-index: 4;
 }
 
 @keyframes field-pop {
@@ -316,9 +316,9 @@
 
 .top-value-type {
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--radius-md);
   color: var(--fg-muted);
-  font-size: 7px;
+  font-size: var(--type-xxs);
   font-weight: 700;
   letter-spacing: 0.02em;
   margin-left: 5px;
@@ -333,7 +333,7 @@
 }
 
 .value-bar {
-  background: #c7dfb6;
+  background: var(--status-success-edge);
   bottom: 4px;
   height: 5px;
   left: 2px;
@@ -495,7 +495,7 @@
 }
 
 .event-row::before {
-  background: #b6c0c5;
+  background: var(--border-strong);
   content: "";
   inset: 0 auto 0 0;
   position: absolute;
@@ -553,7 +553,7 @@
 }
 
 .event-row--preview .event-expander[aria-disabled="true"] {
-  color: #a3adb2;
+  color: var(--fg-faint);
 }
 
 .event-row--preview .event-time[aria-disabled="true"] {
@@ -574,7 +574,7 @@
   background: transparent;
   border: 0;
   color: var(--fg-muted);
-  font-size: 18px;
+  font-size: var(--type-xxl);
   height: 36px;
   padding: 0 0 0 var(--space-1);
 }
@@ -583,7 +583,7 @@
   align-items: flex-start;
   background: transparent;
   border: 0;
-  border-right: 1px solid #edf0f1;
+  border-right: 1px solid var(--border-subtle);
   color: var(--fg-secondary);
   display: flex;
   flex-direction: column;
@@ -643,7 +643,7 @@
 
 .event-content mark {
   background: var(--highlight);
-  border-radius: 1px;
+  border-radius: var(--radius-sm);
   color: inherit;
   padding: 0 1px;
 }
@@ -741,20 +741,20 @@
 
 .value-type {
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--radius-md);
   color: var(--fg-faint);
-  font-size: 7px;
+  font-size: var(--type-xxs);
   padding: 1px var(--space-1);
   text-align: center;
 }
 
 .value-number {
-  border-color: #dbc7a8;
-  color: #8d642a;
+  border-color: var(--status-warning-edge);
+  color: var(--status-warning-strong);
 }
 
 .value-boolean {
-  border-color: #bed5ae;
+  border-color: var(--status-success-edge);
   color: var(--accent);
 }
 
@@ -782,7 +782,7 @@
 .event-field-actions button {
   background: var(--bg-surface);
   border: 1px solid var(--border);
-  color: #3e718a;
+  color: var(--status-info);
   font-size: var(--type-xs);
   height: 21px;
   margin-left: -1px;
@@ -834,7 +834,7 @@
   border-radius: 50%;
   color: var(--fg-link);
   display: flex;
-  font-size: 19px;
+  font-size: var(--type-xxl);
   font-weight: 700;
   height: 38px;
   justify-content: center;
@@ -852,20 +852,20 @@
 .job-empty-results--warning > span {
   animation: none;
   background: var(--status-warning-soft);
-  border-color: #e4c582;
-  color: #8a590c;
+  border-color: var(--status-warning-edge);
+  color: var(--status-warning-strong);
 }
 
 .job-empty-results--error > span {
   animation: none;
   background: var(--status-error-soft);
-  border-color: #e2b8b4;
+  border-color: var(--status-error-edge);
   color: var(--status-error);
 }
 
 .job-empty-results strong {
   color: var(--fg-strong);
-  font-size: 15px;
+  font-size: var(--type-lg);
 }
 
 .job-empty-results p {
@@ -943,7 +943,7 @@
   }
 
   .fields-mobile-dismiss {
-    background: rgb(17 25 31 / 24%);
+    background: color-mix(in srgb, var(--bg-inverse) 24%, transparent);
     border: 0;
     display: block;
     inset: 0;
@@ -1016,6 +1016,7 @@
   .event-field-actions {
     background: var(--bg-surface);
     box-shadow: -8px 0 7px var(--bg-surface);
+    opacity: 1;
     position: absolute;
     right: 3px;
   }
@@ -1026,7 +1027,6 @@
 
   .event-preview-count b { display: none; }
 
-  .event-field-actions { opacity: 1; }
 }
 
 @media (max-width: 480px) {

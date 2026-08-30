@@ -27,6 +27,7 @@
      stylesheet used to carry. */
   --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
   --font-sans: Arial, Helvetica, sans-serif;
+  --font-serif: Georgia, serif; /* The field-type glyph, and nothing else yet. */
 
   /* Corner radius. --radius-sm is Splunk's near-square 2px, already the most
      common literal (24 declarations). A circle is `border-radius: 50%`, which
@@ -39,10 +40,24 @@
   /* Elevation. --shadow-lg is byte-identical to the outgoing --shadow, so the
      six rules that already read a token do not move. The colours are still
      literals: tier 2 has no shadow ink yet, and inventing one here would make
-     this file depend on a name tokens-color.css does not define. */
+     this file depend on a name tokens-color.css does not define.
+
+     Phase 5's lint allows no box-shadow ink outside this file, so the four
+     drops that stayed literal because no step matched their geometry are steps
+     now. An elevation is an offset, a blur and an ink, and the three that
+     travel sideways or upwards are named for the surface that needs that
+     direction rather than for a rung of the size ladder: --shadow-xl is the
+     modal-scale drop the ladder was missing, and a drawer, a phone sheet and a
+     toast each carry a shadow whose shape no size can stand in for. Two rules
+     did collapse onto the ladder rather than earning a name -- see the
+     Elevation table in docs/theming.md for both, and for what each moved. */
+  --shadow-drawer: 8px 0 30px rgb(18 29 36 / 24%);
   --shadow-lg: 0 10px 30px rgb(18 29 36 / 18%), 0 2px 7px rgb(18 29 36 / 12%);
   --shadow-md: 0 3px 9px rgb(21 35 43 / 24%);
+  --shadow-sheet: 0 -12px 36px rgb(18 29 36 / 24%);
   --shadow-sm: 0 1px 4px rgb(21 36 45 / 9%);
+  --shadow-toast: 0 8px 28px rgb(12 22 28 / 28%);
+  --shadow-xl: 0 18px 55px rgb(10 20 26 / 28%);
 
   /* Spacing, on a 4px base. Today's padding, gap and margin literals run
      unbroken from 1px to 94px; each rounds to its nearest step, ties down. */
@@ -58,7 +73,14 @@
   /* Type scale. This product's body size is 10px, so the ramp is deliberately
      bottom-heavy and --type-xs, not --type-md, is the default UI size. The
      family is --type-* rather than --text-* because --text and --text-strong
-     are colours: one prefix cannot mean both a length and an ink. */
+     are colours: one prefix cannot mean both a length and an ink.
+
+     --type-display is the sign-in headline and the one fluid size in the file.
+     It is a step of the ramp only in the sense that every other font-size is:
+     it is here because Phase 5's lint allows no font-size literal outside this
+     file, and a headline that resizes with the viewport is exactly the kind of
+     value a retheme should be able to reach. */
+  --type-display: clamp(32px, 4vw, 55px);
   --type-lg: 14px;
   --type-md: 12px;
   --type-sm: 11px;
@@ -67,15 +89,28 @@
   --type-xxl: 20px;
   --type-xxs: 9px;
 
-  /* Stacking. Nine layers, ordered base < sticky < bar < dropdown-scrim <
-     dropdown < modal < drawer-scrim < drawer < toast, which is the order
-     the application stylesheets ship today everywhere but one pair (.menu-dismiss moves
-     above .suite-product-bar). Every overlay that a dismiss scrim backs gets
-     the step above that scrim: sharing one step with it would leave the
-     ordering to DOM order, and in four of the six pairs the scrim is the later
-     sibling and would swallow its own surface. The gap of 100 leaves room for a
-     component's own local stacking without borrowing the next layer's number.
-     docs/theming.md maps every such declaration onto a step. */
+  /* Stacking. Ten layers, ordered base < sticky < bar < dropdown-scrim <
+     dropdown < modal < drawer-scrim < drawer < toast < skip-link, which is the
+     order the application stylesheets ship today everywhere but one pair
+     (.menu-dismiss moves above .suite-product-bar). Every overlay that a
+     dismiss scrim backs gets the step above that scrim: sharing one step with
+     it would leave the ordering to DOM order, and in four of the six pairs the
+     scrim is the later sibling and would swallow its own surface. The gap of
+     100 leaves room for a component's own local stacking without borrowing the
+     next layer's number. docs/theming.md maps every such declaration onto a
+     step.
+
+     --z-skip-link is the top rung and keeps the 1000 the skip link already
+     shipped: it has to clear a toast, and it is the one page layer with no
+     surface above it. It was the ladder's documented literal exception until
+     the Phase 5 lint stopped allowing a z-index literal to be a page layer, at
+     which point "above every step" was easier to state as a step than as a
+     comment.
+
+     A z-index that orders an element against its own siblings inside a
+     stacking context its parent already opened is not a page layer, and the
+     lint leaves those alone: `declaration-property-value-allowed-list` permits
+     a single digit for exactly that, and nothing wider. */
   --z-bar: 200;
   --z-base: 1;
   --z-drawer: 700;
@@ -83,6 +118,7 @@
   --z-dropdown: 400;
   --z-dropdown-scrim: 300;
   --z-modal: 500;
+  --z-skip-link: 1000;
   --z-sticky: 100;
   --z-toast: 800;
 }

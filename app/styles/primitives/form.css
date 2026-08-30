@@ -30,7 +30,7 @@
 .form-stack > label > span,
 .segmented-fieldset legend,
 .export-fields legend {
-  color: #495861;
+  color: var(--fg-secondary);
   font-size: var(--type-xs);
   font-weight: 700;
   text-transform: uppercase;
@@ -51,7 +51,7 @@
 .library-toolbar select {
   background: var(--bg-surface);
   border: 1px solid var(--border-strong);
-  border-radius: 1px;
+  border-radius: var(--radius-sm);
 }
 
 .form-stack > label > input {
@@ -150,7 +150,7 @@
 
 .segmented-fieldset label.selected {
   background: var(--accent-soft);
-  border-color: #6d9e4c;
+  border-color: var(--accent-bright);
 }
 
 .segmented-fieldset label > span {
@@ -209,7 +209,7 @@
 
 .export-progress span {
   animation: progress-pulse 800ms ease-in-out infinite alternate;
-  background: #5a9a34;
+  background: var(--accent-bright);
   height: 6px;
   left: 0;
   position: absolute;

@@ -13,7 +13,7 @@
 /* Dialog notices */
 .workspace-dialog-action-error {
   background: var(--status-error-soft);
-  border: 1px solid #dba39f;
+  border: 1px solid var(--status-error-edge);
   color: var(--status-error-strong);
   font-size: var(--type-sm);
   line-height: 1.45;
@@ -23,8 +23,8 @@
 
 .workspace-dialog-inspector-notices {
   background: var(--status-warning-soft);
-  border: 1px solid #dfc98b;
-  color: #5d4a1d;
+  border: 1px solid var(--status-warning-edge);
+  color: var(--status-warning-strong);
   font-size: var(--type-xs);
   padding: 10px var(--space-3);
 }
@@ -85,19 +85,19 @@
 
 .workspace-dialog-export-summary {
   background: var(--bg-canvas);
-  border: 1px solid #b8c9ae;
+  border: 1px solid var(--status-success-edge);
   border-left: 4px solid var(--accent);
 }
 
 .workspace-dialog-export-summary--warning {
   background: var(--status-warning-soft);
-  border-color: #dcc889;
+  border-color: var(--status-warning-edge);
   border-left-color: var(--status-warning);
 }
 
 .workspace-dialog-export-summary--error {
   background: var(--status-error-soft);
-  border-color: #d6aaa7;
+  border-color: var(--status-error-edge);
   border-left-color: var(--status-error);
 }
 
@@ -110,11 +110,11 @@
 
 .workspace-dialog-export-summary h3 {
   color: var(--accent-hover);
-  font-size: 13px;
+  font-size: var(--type-md);
   margin: 1px 0 3px;
 }
 
-.workspace-dialog-export-summary--warning h3 { color: #735100; }
+.workspace-dialog-export-summary--warning h3 { color: var(--status-warning-strong); }
 .workspace-dialog-export-summary--error h3 { color: var(--status-error-strong); }
 
 .workspace-dialog-export-summary p {
@@ -204,7 +204,7 @@
 }
 
 .workspace-dialog-capability-notice strong {
-  color: #3e4d55;
+  color: var(--fg-secondary);
   font-size: var(--type-sm);
 }
 
@@ -237,9 +237,9 @@
   opacity: 0.78;
 }
 
-.workspace-dialog-setting-error {
-  color: #9b3530 !important;
-  font-size: var(--type-xs) !important;
+.settings-list .workspace-dialog-setting-error {
+  color: var(--status-error-strong);
+  font-size: var(--type-xs);
 }
 
 @media (max-width: 480px) {

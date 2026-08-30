@@ -19,7 +19,7 @@
   align-items: center;
   align-self: stretch;
   background: linear-gradient(180deg, var(--bg-raised) 0%, var(--bg-canvas) 100%);
-  border: 1px dashed #bac5ca;
+  border: 1px dashed var(--border-strong);
   display: flex;
   flex-direction: column;
   grid-column: 1 / -1;
@@ -39,7 +39,7 @@
 }
 
 .visualization-empty-state-icon span {
-  background: #9ca9af;
+  background: var(--status-neutral);
   display: block;
   width: 7px;
 }
@@ -159,8 +159,7 @@
   border-left: 1px solid var(--border-strong);
   min-height: 0;
   min-width: 0;
-  overflow-x: auto;
-  overflow-y: hidden;
+  overflow: auto hidden;
   overscroll-behavior-inline: contain;
   scrollbar-color: var(--border-strong) transparent;
   scrollbar-width: thin;
@@ -190,12 +189,9 @@
 }
 
 .visualization-vertical-groups {
-  bottom: 0;
   display: grid;
-  left: 0;
+  inset: 0;
   position: absolute;
-  right: 0;
-  top: 0;
 }
 
 .visualization-vertical-group {
@@ -211,22 +207,19 @@
 
 .visualization-vertical-group::after {
   background: transparent;
-  bottom: 38px;
   content: "";
-  left: 3px;
+  inset: 0 3px 38px;
   position: absolute;
-  right: 3px;
-  top: 0;
   transition: background-color var(--dur-fast) var(--ease);
 }
 
 .visualization-vertical-group:hover::after,
 .visualization-vertical-group:focus-visible::after {
-  background: rgb(47 127 166 / 5%);
+  background: color-mix(in srgb, var(--focus-ring) 5%, transparent);
 }
 
 .visualization-vertical-group:focus-visible {
-  box-shadow: inset 0 0 0 2px rgb(47 120 158 / 38%);
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--focus-ring) 38%, transparent);
   outline: 0;
   z-index: 4;
 }
@@ -255,13 +248,10 @@
 
 .visualization-vertical-bars {
   align-items: stretch;
-  bottom: 38px;
   display: flex;
   gap: 2px;
-  left: 9px;
+  inset: 0 9px 38px;
   position: absolute;
-  right: 9px;
-  top: 0;
   z-index: 1;
 }
 
@@ -272,8 +262,8 @@
 }
 
 .visualization-vertical-bar {
-  border-radius: 1px 1px 0 0;
-  box-shadow: inset 0 0 0 1px rgb(39 57 65 / 8%);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg-strong) 8%, transparent);
   left: 8%;
   min-height: 1px;
   position: absolute;
@@ -282,7 +272,7 @@
 }
 
 .visualization-vertical-data-label {
-  background: rgb(255 255 255 / 88%);
+  background: color-mix(in srgb, var(--bg-surface) 88%, transparent);
   color: var(--fg-text);
   font-size: var(--type-xxs);
   font-variant-numeric: tabular-nums;
@@ -345,12 +335,9 @@
 }
 
 .visualization-horizontal-grid {
-  bottom: 30px;
-  left: 118px;
+  inset: 0 55px 30px 118px;
   pointer-events: none;
   position: absolute;
-  right: 55px;
-  top: 0;
 }
 
 .visualization-horizontal-grid > span {
@@ -365,13 +352,10 @@
 }
 
 .visualization-horizontal-groups {
-  bottom: 31px;
   display: grid;
   gap: 5px;
-  left: 0;
+  inset: 8px 55px 31px 0;
   position: absolute;
-  right: 55px;
-  top: 8px;
   z-index: 1;
 }
 
@@ -392,11 +376,11 @@
 
 .visualization-horizontal-group:hover,
 .visualization-horizontal-group:focus-visible {
-  background: rgb(47 127 166 / 5%);
+  background: color-mix(in srgb, var(--focus-ring) 5%, transparent);
 }
 
 .visualization-horizontal-group:focus-visible {
-  box-shadow: inset 0 0 0 2px rgb(47 120 158 / 38%);
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--focus-ring) 38%, transparent);
   outline: 0;
 }
 
@@ -426,8 +410,8 @@
 }
 
 .visualization-horizontal-bar {
-  border-radius: 0 1px 1px 0;
-  box-shadow: inset 0 0 0 1px rgb(39 57 65 / 8%);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg-strong) 8%, transparent);
   height: 10px;
   min-width: 1px;
   position: absolute;
@@ -547,7 +531,7 @@
   color: var(--fg-muted);
   display: inline-flex;
   flex: 0 0 auto;
-  font-size: 15px;
+  font-size: var(--type-lg);
   height: 22px;
   justify-content: center;
   margin: -5px -6px -2px 0;
@@ -607,7 +591,7 @@
 .visualization-tooltip-action {
   align-items: center;
   background: var(--bg-canvas);
-  border: 1px solid #b8c7ce;
+  border: 1px solid var(--border-strong);
   color: var(--fg-link);
   display: flex;
   font-size: var(--type-xxs);
@@ -622,11 +606,11 @@
 
 .visualization-tooltip-action:hover {
   background: var(--status-info-soft);
-  border-color: #8eabb9;
+  border-color: var(--status-info-edge);
 }
 
 .visualization-tooltip-action span {
-  font-size: 13px;
+  font-size: var(--type-md);
 }
 
 @media (max-width: 760px) {

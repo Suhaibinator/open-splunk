@@ -20,7 +20,7 @@
 }
 .dataset-icon { align-items: center; background: var(--accent-soft); color: var(--accent); display: flex; font-size: var(--type-xl); height: 35px; justify-content: center; width: 35px; }
 .dataset-icon--blue { background: var(--status-info-soft); color: var(--status-info); }
-.dataset-icon--orange { background: var(--status-warning-soft); color: #c4792c; }
+.dataset-icon--orange { background: var(--status-warning-soft); color: var(--status-progress); }
 .dataset-card h2 { font-size: var(--type-md); margin: 2px 0 3px; }
 .dataset-card header p { color: var(--fg-muted); font-size: var(--type-xs); line-height: 1.4; margin: 0; }
 .dataset-card dl { border-bottom: 1px solid var(--border-subtle); border-top: 1px solid var(--border-subtle); display: grid; grid-template-columns: repeat(4, 1fr); margin: 0 13px; padding: var(--space-3) 0; }
@@ -51,7 +51,7 @@
 .dataset-card .dataset-definition-meta > div:last-child { border-right: 0; padding-right: 0; }
 .dataset-card .dataset-definition-meta dt { color: var(--fg-muted); font-size: var(--type-xxs); }
 .dataset-card .dataset-definition-meta dd {
-  color: #3f4f57;
+  color: var(--fg-secondary);
   font-size: var(--type-xxs);
   font-weight: 600;
   margin: 0;
@@ -96,7 +96,7 @@
 .field-catalog-grid > a > div { display: flex; flex-direction: column; gap: 3px; }
 .field-catalog-grid strong { font-size: var(--type-xs); }
 .field-catalog-grid small { color: var(--fg-muted); font-size: var(--type-xs); }
-.field-catalog-grid b { color: var(--fg-faint); font-size: 15px; font-weight: 400; }
+.field-catalog-grid b { color: var(--fg-faint); font-size: var(--type-lg); font-weight: 400; }
 
 /* Responsive
    The breakpoint overrides for the rules above. They live in the file that

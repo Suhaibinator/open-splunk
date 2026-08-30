@@ -12,18 +12,25 @@ floors.
 Only the token files are meant to carry a literal. A retheme should be an edit
 to `app/styles/tokens-*.css`, not a search across the rules.
 
-That is most of the state now.
+That is the state now.
 [`app/styles/tokens-color.css`](../app/styles/tokens-color.css) declares every
 colour role the product has, `tokens-scale.css` the non-colour scales described
-under [Scales](#scales) below, and the sweep that rewrote the call sites has
-landed: `npm run lint:css` reports 196 hex literals, down from 1,496, and 163 of
-those are outside `app/styles`. The pre-refactor alias block is gone, so there is one name per
-role. Recolouring the product is close to a one-file edit. What is left is not
-scattered misses but a short list of roles tier 2 does not name, which
-[Role gaps](#role-gaps) records; a literal is kept wherever the nearest token
-would be the wrong role rather than merely a nearby colour, and
-`scripts/css-literal-debt.json` records every one of them so a new literal
-cannot slip in beside them.
+under [Scales](#scales) below, and **no rule outside those two files writes a
+colour, a type size, a radius, a shadow, a stacking layer or a font stack as a
+literal.** `npm run lint:css` fails on one. It runs inside `npm run lint`, so
+`make lint`, `make test` and CI's frontend job all carry it, and CI names it
+again as a step of its own.
+
+That went from 1,496 hex literals to none in four phases; the last 245 of them
+went in Phase 5, along with 86 font sizes, 12 radii, eight box shadows and the
+six off-canon breakpoints. The colour half of `scripts/css-literal-debt.json` is
+empty as a result, and the scale half holds only the values a scale cannot
+express — a circle, a shadow's geometry, a stacking order local to one
+component. The pre-refactor alias block is gone, so there is one name per role.
+Recolouring the product is a one-file edit, and it is a checked claim rather
+than an aspiration: `integration/visual/token-sweep.visual.spec.ts` walks every
+element of every exported route, applies `data-theme="dark"`, and fails on any
+ground or ink that does not move.
 
 ## Where a rule lives
 
@@ -135,7 +142,7 @@ file.
   that needs it. Five sheets do this — `analytics`, `operations-dashboard`,
   `reports`, `workspace-dialogs` and `visualization-panel`, the five that were
   CSS modules until Phase 4 — and they pay for it in restated preludes:
-  `analytics.css` opens `(max-width: 650px)` six times and `(max-width: 480px)`
+  `analytics.css` opens `(max-width: 760px)` six times and `(max-width: 480px)`
   five times.
 
 The appendix is easier to audit (one place per file lists every width that file
@@ -299,14 +306,35 @@ The roles are grouped as:
 | Group | Tokens |
 | --- | --- |
 | Backgrounds | `--bg-canvas`, `--bg-surface`, `--bg-subtle`, `--bg-raised`, `--bg-inverse` |
-| Foregrounds | `--fg-text`, `--fg-strong`, `--fg-muted`, `--fg-faint`, `--fg-inverse`, `--fg-link` |
-| Borders | `--border`, `--border-strong`, `--border-focus` |
-| Accent | `--accent`, `--accent-hover`, `--accent-soft` |
-| Status | `--status-success`, `--status-info`, `--status-warning`, `--status-error`, `--status-neutral`, each with a `-soft` background wash |
+| Foregrounds | `--fg-text`, `--fg-strong`, `--fg-secondary`, `--fg-muted`, `--fg-faint`, `--fg-inverse`, `--fg-inverse-muted`, `--fg-link` |
+| Borders | `--border`, `--border-subtle`, `--border-strong`, `--border-focus` |
+| Accent | `--accent`, `--accent-hover`, `--accent-bright`, `--accent-inverse`, `--accent-soft`, `--accent-alt`, `--accent-alt-soft` |
+| Status | `--status-success`, `--status-info`, `--status-warning`, `--status-error`, `--status-neutral`, `--status-progress`, each with a `-soft` background wash and, except `--status-progress`, an `-edge` border and a `-strong` ink |
 | Event severity | `--level-info`, `--level-warn`, `--level-error`, `--level-debug` |
-| Charts | `--chart-series-1` through `--chart-series-12` |
-| Chrome | `--chrome-bar`, `--chrome-appbar`, `--chrome-hover`, `--chrome-fg` |
+| Charts | `--chart-series-1` through `--chart-series-12`, `--chart-neutral` |
+| SPL syntax | `--syntax-pipe`, `--syntax-command`, `--syntax-function`, `--syntax-field`, `--syntax-string`, `--syntax-literal` |
+| Chrome | `--chrome-bar`, `--chrome-appbar`, `--chrome-hover`, `--chrome-fg`, `--chrome-fg-muted`, `--chrome-fg-faint` |
 | Interaction | `--highlight`, `--selection`, `--focus-ring` |
+
+Phase 5 added the last six groups' newest members, and each one closed a row of
+the [Role gaps](#role-gaps) table rather than being invented: `--status-*-edge`
+is the mid-tone border between a wash and its solid, which 30 declarations were
+spelling by hand; `--status-progress` is the orange the product uses for work
+in flight, which tier 1 had two steps of and tier 2 no name for;
+`--syntax-*` is the SPL editor's categorical ramp, kept separate from
+`--chart-series-*` so that reordering a chart cannot recolour a query;
+`--accent-inverse`, `--fg-inverse-muted` and the two `--chrome-fg-*` steps are
+the inks that sit on a permanently dark ground.
+
+**Alpha is not a token, it is a `color-mix()`.** A scrim, a focus halo, a
+hairline on a chrome bar and a translucent overlay are all a tier-2 colour seen
+through what is behind it, and the 53 literals they used to be were the two
+grounds mixed by hand. They are now written at the call site as
+`color-mix(in srgb, var(--role) N%, transparent)` — `--scrim` and its family
+never existed. A token cannot carry the alpha instead: an `rgb(… / n%)` in
+tier 2 is a literal, which `scripts/token-layer.test.mjs` forbids, and one in
+tier 1 would be a primitive with no lightness step for the ladder to order. The
+mix keeps the theme in charge of the hue, which a literal never did.
 
 Status tokens describe the outcome of an operation the product performed — a
 job that succeeded, a token that is throttled. Event severity tokens describe
@@ -330,7 +358,20 @@ themes.
 That means no `#rrggbb`, no `rgb()`, `rgba()`, `hsl()`, or `color()`, and no
 named CSS colour, anywhere in an application stylesheet, an inline
 `style` attribute, or a TypeScript constant that feeds one. `npm run lint:css`
-reports the remaining violations.
+**fails** on one, and is part of `npm run lint`, `make lint` and two steps of
+CI's frontend job. The colour half of `scripts/css-literal-debt.json` is empty:
+there are no remaining violations to report, which is what turns the sentence
+above from an aspiration into a gate.
+
+The same rule now covers five more kinds of value, for the same reason and by
+the same mechanism — `font-family`, `font-size`, `border-radius`, `box-shadow`
+and `z-index` must each read a token from `app/styles/tokens-scale.css`. Three
+literals are allowed inside those, and each says something a scale cannot:
+`border-radius: 0` and `border-radius: 50%` mean "no corner" and "a circle",
+which depend on the box rather than on a step, and a single-digit `z-index`
+orders an element inside a stacking context its parent already opened, which is
+not a page layer. `!important` is a sixth: it is an error everywhere except the
+two files `.stylelintrc.json` names, each with the reason written beside it.
 
 Two smaller rules follow from it:
 
@@ -404,6 +445,14 @@ A theme restates tier 2 and leaves tier 1 alone.
 5. Nothing in the product sets `data-theme` yet. The dark block ships as a
    proof that the split holds and as the target for a toggle when one lands;
    until then it changes no pixel.
+
+A theme does not have to restate anything translucent, and cannot. Every scrim,
+halo, hairline and overlay in the product is written at its call site as
+`color-mix(in srgb, var(--role) N%, transparent)`, so it follows whichever
+value the theme gives `--role` and there is nothing for the block to say about
+it. That is the reason the alpha family does not exist: a stored
+`rgb(16 23 28 / 48%)` would be a fourth thing every theme had to keep in step,
+and the mix already has the answer.
 
 ## Retired aliases
 
@@ -487,8 +536,15 @@ alone appears 170 times and moves to 12px. Migrate it surface by surface behind
 | `--radius-lg` | 12px | 10px, 12px |
 | `--radius-pill` | 999px | capsules and fully rounded ends |
 
-`border-radius: 50%` stays a literal. It means "circle", and its rendered
-radius depends on the box rather than on this scale, so it is not a step.
+`border-radius: 50%` stays a literal, and so does `0`. One means "circle" and
+the other "no corner"; both depend on the box rather than on this scale, so
+neither is a step. `.stylelintrc.json` allows exactly those two beside a
+`var(--radius-*)`, in any corner position, so `var(--radius-sm) var(--radius-sm)
+0 0` is a legal top-rounded box and `1px 1px 0 0` is not.
+
+Phase 5 migrated the twelve declarations that were still off the scale: the
+seven at 1px, the two at 7px, the two at 9px and the one at 10px, plus the two
+corner lists that spelled 1px twice. Every one moved by at most 2px.
 
 ### Type
 
@@ -514,8 +570,23 @@ moment someone reached for `--text-` again.
 | `--type-xl` | 16px | 16px, 17px | 34 |
 | `--type-xxl` | 20px | 18px through 25px, 28px | 38 |
 
-The one `clamp(32px, 4vw, 55px)` on the sign-in headline stays literal: it is a
-fluid display size, not a step on a UI ramp.
+The one `clamp(32px, 4vw, 55px)` on the sign-in headline is `--type-display`.
+It is not a step on this ramp — it is a fluid size, and its own token for that
+reason — but Phase 5's lint allows no `font-size` literal outside the token
+layer, and a headline that resizes with the viewport is exactly the kind of
+value a retheme should be able to reach. `scripts/token-grammar.test.mjs` reads
+a `clamp()` over lengths as a length, so the `--type-*` family still holds one
+kind of value.
+
+Phase 5 migrated the 86 declarations that were still off the ramp. Two folds
+lost their point in the process and were re-aimed rather than left: the
+analytics metric numeral was 21px falling to 18px at 480px and the page heading
+23px falling to 21px, and both ends of both rounded to `--type-xxl`, so each
+narrow-viewport rule became a restatement of the rule it was overriding. They
+now step to `--type-xl`, which keeps the fold the fold this ramp can express.
+`integration/visual/css-contracts.spec.ts` asserts the analytics one at 450px
+and at 500px; neither width is screenshotted, which is why it is a contract
+rather than a baseline.
 
 ### Stacking
 
@@ -551,8 +622,11 @@ steps, and two with different numbers can land on the same one.
 | `--z-drawer` | 700 | mobile drawers | `.suite-mobile-drawer` (320), `.search-mobile-drawer` (320), mobile `.time-popover` (320) |
 | `--z-toast` | 800 | transient notifications | `.toast` (500) |
 
-`.skip-link` (1000) is the one documented exception. It has to be reachable
-above every layer including a toast, so it keeps a literal above the ladder.
+`.skip-link` is `--z-skip-link`, the tenth rung, and keeps the 1000 it shipped.
+It has to be reachable above every layer including a toast, and it was the
+ladder's documented literal exception until Phase 5's lint stopped allowing a
+`z-index` literal to be a page layer — at which point "above every step" was
+easier to state as a step than as a comment.
 
 #### Values that stay literal
 
@@ -574,16 +648,22 @@ make. These keep their literals:
   `.signin-story-copy` (2), `.signin-story > footer` (2),
   `.statistics-scroll-hint` (3), `.fields-topbar` (3), the sticky footer inside
   `.time-popover` (2), and the two mobile drawer headers (2);
-- `.field-inspector` (40 desktop, 110 mobile). It is rendered inside
-  `.fields-rail`, which opens a stacking context in both forms, so neither
-  number reaches the page: both mean "above the rail's own contents". This is
-  the one place the two forms really are redundant, and the mobile `z-index`
-  can be deleted rather than retokenised — the rest of that mobile rule, which
-  repositions the panel, stays.
+- `.field-inspector`. It is rendered inside `.fields-rail`, which opens a
+  stacking context, so its number never reaches the page: it means "above the
+  rail's own contents", and the highest of those is `.fields-topbar` at 3. It
+  read 40 on the desktop and 110 on mobile; the mobile one was deleted as
+  redundant, and Phase 5 brought the desktop one to 4, which says the same
+  thing inside the same context and is what `.stylelintrc.json` allows a local
+  lift to be.
 
 The five sheets that were CSS modules until Phase 4 declare ten more, all
 between 1 and 8 and all inside their own component's stacking context. They stay
 literal for the same reason.
+
+The lint draws the line at a single digit: `.stylelintrc.json` allows `z-index`
+to be `var(--z-*)` or `0`-`9` and nothing else. A local order inside one
+component has never needed more than four steps, and a number wider than a digit
+is a claim about the page — which is what the ladder is for.
 
 `.fields-rail` itself is the opposite case and its mobile override must be
 kept: on the desktop it is in-flow furniture (10, `--z-sticky`), and on mobile
@@ -651,9 +731,13 @@ paints over a menu fails a test rather than shipping.
 
 | Token | Value | Replaces |
 | --- | --- | --- |
-| `--shadow-sm` | `0 1px 4px rgb(21 36 45 / 9%)` | the 1–2px ambient shadows on cards and rows |
-| `--shadow-md` | `0 3px 9px rgb(21 35 43 / 24%)` | the 3–7px lift on menus and popovers |
+| `--shadow-sm` | `0 1px 4px rgb(21 36 45 / 9%)` | the 1–2px ambient shadows on cards and rows, and the statistics scroll hint's `0 2px 7px rgb(20 35 44 / 16%)` |
+| `--shadow-md` | `0 3px 9px rgb(21 35 43 / 24%)` | the 3–7px lift on menus and popovers, the analytics tooltip's `0 3px 9px rgb(18 29 35 / 25%)`, and the resource menu's `0 7px 18px rgb(18 29 36 / 18%)` |
 | `--shadow-lg` | `0 10px 30px rgb(18 29 36 / 18%), 0 2px 7px rgb(18 29 36 / 12%)` | the retired `--shadow`, and nothing else |
+| `--shadow-xl` | `0 18px 55px rgb(10 20 26 / 28%)` | `.modal-card` |
+| `--shadow-toast` | `0 8px 28px rgb(12 22 28 / 28%)` | `.toast` |
+| `--shadow-drawer` | `8px 0 30px rgb(18 29 36 / 24%)` | `.drawer` |
+| `--shadow-sheet` | `0 -12px 36px rgb(18 29 36 / 24%)` | the time-range popover, as a phone sheet |
 
 `--shadow-lg` is byte-identical to the `--shadow` it replaced, so the seven
 rules that read the outgoing name did not move when it was retired.
@@ -670,12 +754,32 @@ during Phase 2 and moved back:
 | `.modal-card` | `0 18px 55px rgb(10 20 26 / 28%)` | y 18px → 10px, blur 55px → 30px, alpha 28% → 18%, plus a second stop |
 | `.toast` | `0 8px 28px rgb(12 22 28 / 28%)` | y 8px → 10px, blur 28px → 30px, alpha 28% → 18%, plus a second stop |
 
-Both keep their literals and are recorded in `scripts/css-literal-debt.json`.
-They are the **`--shadow-xl` role gap**: a modal-scale drop the three-step scale
-does not carry, along with the seven other literal drops the stylesheets still
-ship (`0 7px 18px`, `8px 0 30px`, `0 -12px 36px`, `-8px 0 7px`, `0 2px 7px`).
-Naming that step is a design decision about how deep a modal sits, so it belongs
-to whoever owns the elevation scale, not to a substitution pass.
+Phase 5 closed that gap, because its lint allows no box-shadow ink outside the
+token layer and a literal drop had nowhere left to live. Four of the eight got a
+name of their own — `--shadow-xl` for the modal, and `--shadow-toast`,
+`--shadow-drawer` and `--shadow-sheet` for the three whose shadow travels
+sideways or upwards, which no rung of a size ladder can stand in for. Two
+collapsed onto the ladder, and both are geometry changes rather than hue ones,
+so they are listed here rather than assumed:
+
+| Rule | Was | Now | Effect |
+| --- | --- | --- | --- |
+| `.resource-action-menu` | `0 7px 18px rgb(18 29 36 / 18%)` | `--shadow-md` | y 7px → 3px, blur 18px → 9px, alpha 18% → 24%: a tighter, slightly darker lift, and the same one every other menu in the product draws |
+| `.statistics-scroll-hint` | `0 2px 7px rgb(20 35 44 / 16%)` | `--shadow-sm` | y 2px → 1px, blur 7px → 4px, alpha 16% → 9%: the ambient shadow every other row-level surface draws |
+
+The eighth, `.event-field-actions`' `-8px 0 7px var(--bg-surface)`, was never a
+shadow: it is the surface colour painted sideways to fade a row under a sticky
+action column, its ink is already a token, and it keeps its geometry.
+
+The shadow inks are still literals in `tokens-scale.css`, and that is the one
+piece of this debt Phase 5 did not pay. A shadow's ink is a colour and its
+geometry is a scale; splitting the two would put `--shadow-*` in one file and
+`--shadow-ink-*` in another, and `scripts/token-grammar.test.mjs` requires a
+semantic token to point at a tier-1 primitive, which an `rgb(… / n%)` cannot be
+— a primitive is `--<hue>-<step>` and there is no lightness step for an alpha.
+Every other translucent value in the product went to `color-mix()` for that
+reason; a `box-shadow` cannot, because the mix would have to appear inside a
+value the scale layer owns.
 
 ### Focus
 
@@ -687,8 +791,14 @@ already uses, so nothing shifts today.
 The focus blues are down to one. `#317fa6`, `#3b88b5`, `#3b83a6` and
 `rgb(47 120 158)` no longer appear on any focus state; every one of them now
 reads `--focus-ring` or `--border-focus`. The alpha outline
-`rgb(42 120 158 / 28%)` is the exception and stays literal in two rules,
-because no token carries alpha — see [Known debt](#known-debt-in-the-token-layer).
+`rgb(42 120 158 / 28%)` was the exception until Phase 5 and is now
+`color-mix(in srgb, var(--focus-ring) 28%, transparent)`, along with the other
+sixteen translucent blues the product drew as rings, glows, selections and
+scroll fades. They ran from 5% to 45% and from `rgb(39 116 155)` to
+`rgb(58 136 181)`; they are three steps now — 38%, 26% and 10% — over one hue
+that a theme can move. `integration/visual/css-contracts.spec.ts` pins the
+outline's computed colour, which Chromium serializes as
+`color(srgb 0.184314 0.541176 0.756863 / 0.28)`.
 
 ### Motion
 
@@ -729,10 +839,11 @@ cannot be expressed with `max-width`; `761px` is the exclusive complement of
 `760px` and is the only `min-width` the lint allows.
 
 `.stylelintrc.json` pins `max-width` and `min-width` to those values, so an
-off-canon breakpoint is reported by `npm run lint:css`. Six off-canon widths
-survived Phase 3 — 1120px, 800px, 650px, 520px, 430px and 420px, plus one
+off-canon breakpoint **fails** `npm run lint:css`. Six off-canon widths survived
+Phase 3 — 1120px, 800px, 650px, 520px, 430px and 420px, plus one
 `max-height: 650px`. Phase 4 folded five of them onto the canon, taking care
-that each fold left the 1440px and 760px baselines untouched:
+that each fold left the 1440px and 760px baselines untouched; Phase 5 folded the
+sixth, which could not leave a baseline untouched and did not try to:
 
 | Was | Now | Effect |
 | --- | --- | --- |
@@ -755,23 +866,27 @@ Each mounts the named surface at a width inside the folded band and asserts the
 promised layout, plus one width outside it where the fold must have changed
 nothing. Reverting any of the five steps to its pre-fold value turns those red.
 
-`650px` is kept. It is the analytics console's mobile step, and the honest fold
-is onto `760px` — which is exactly the width the mobile baselines are recorded
-at, so the fold is a deliberate restyle with new screenshots rather than a
-rename. `analytics.css` states it six times because each section carries its own
-responsive rules, so `npm run lint:css` still reports six
-`media-feature-name-value-allowed-list` warnings; they are six occurrences of one
-off-canon step rather than six different steps.
+`650px` is folded onto `760px`, which finishes the canon. It was the analytics
+console's mobile step, and 760px is exactly the width the mobile baselines are
+recorded at, so the fold is a deliberate restyle with new screenshots rather
+than a rename: every analytics mobile baseline in
+`integration/visual/__screenshots__/darwin/mobile` was re-recorded for it, and
+the console adapts from 760px down where it used to adapt from 650px down.
+`analytics.css` stated the step six times because each section carries its own
+responsive rules, so this is six edits of one breakpoint rather than six
+different ones.
 
-The one `max-height: 650px` compound is untouched but is now stated **twice**:
-the monolith held a single `(max-height: 650px) and (max-width: 760px)` block
+The one `max-height: 650px` compound is untouched and is stated **twice**: the
+monolith held a single `(max-height: 650px) and (max-width: 760px)` block
 covering the time-range popover and the sign-in card, and those belong to two
 different features, so the split gave each its own copy — `app/signin/signin.css`
-and `app/search-workspace/search-editor.css`. `media-feature-name-allowed-list`
-therefore reports 2 warnings where Phase 3 reported 1, and Phase 5 has two sites
-to budget for rather than one. The two guards can only be folded back together
-if the sign-in card and the popover can share one step, which is a design
-question rather than a rename.
+and `app/search-workspace/search-editor.css`. Phase 5 put `max-height` on the
+allowed feature list and pinned its one value, because it is not a width step
+and cannot fold onto the canon: it asks whether the viewport is short enough
+that a sheet has to give height back, which no `max-width` expresses. Pinning
+the value is what keeps it from becoming a second ladder. The two guards can
+still only be folded into one if the sign-in card and the popover can share a
+step, which is a design question rather than a rename.
 
 ## Primitives
 
@@ -1151,22 +1266,91 @@ viewport, on a page that owns the app catalog and on the one that does not.
 Merging two drawers into one moved an identity block, a label and two aria
 labels, and nothing in the suite had ever opened one.
 
+## What the lint enforces
+
+Everything above is a decision. This section is the list of decisions a machine
+now keeps, so that none of them depends on a reviewer remembering this file.
+
+`npm run lint:css` runs stylelint over `app/**/*.css` at **error** severity. It
+is the tail of `npm run lint`, which `make lint`, `make test` and CI's frontend
+job all run, and CI names it again as its own step so a stylesheet failure is a
+red line that says "stylesheets" rather than the end of a step that says
+"oxlint".
+
+| Rule | What it stops |
+| --- | --- |
+| `color-no-hex`, `declaration-property-value-disallowed-list` | A hex, `rgb()`, `rgba()`, `hsl()` or `hsla()` anywhere but the token files. A translucent value is a `color-mix()` over a tier-2 token; an opaque one is the token. |
+| `declaration-property-value-allowed-list` | A literal `font-family`, `font-size`, `border-radius`, `box-shadow` or `z-index`. Each must read a token, with three documented exceptions: `border-radius: 0` and `50%`, and a single-digit `z-index` for a local stacking order. |
+| `media-feature-name-allowed-list`, `media-feature-name-value-allowed-list` | A breakpoint off the four-width canon, the one `min-width: 761px` touch guard and the one `max-height: 650px` short-viewport guard. |
+| `declaration-no-important` | An `!important` outside the two files the config names, each with the reason written beside it. |
+| `selector-max-specificity` (`0,4,2`) | A selector deeper than the shared table primitive's deliberately doubled card-mode rules, which are the ceiling the layer needs. |
+| `selector-class-pattern`, `selector-pseudo-class-no-unknown` | A class outside kebab-case or BEM with a feature prefix, and the CSS-module scoping escapes that are silent no-ops in a plain stylesheet. |
+| `stylelint-config-standard` | Unknown properties, duplicate selectors, deprecated properties and keywords, redundant longhands. |
+
+Two `overrides` entries carry the exemptions, and both are scoped to named
+files with the reason in the entry: `app/styles/tokens-*.css` is exempt from the
+value rules because the token layer is where a value belongs, and
+`app/styles/interaction.css` and `app/reports/reports.css` are exempt from
+`declaration-no-important`. There are no `stylelint-disable` comments anywhere
+in the tree, and adding one would be the wrong shape of fix: an exemption that
+travels with a line is an exemption nobody reviews.
+
+The lint is one of five checks over the same layer, and it is the cheapest
+rather than the strongest:
+
+- `npm run lint:css` — no literal outside the token layer.
+- `npm run test:frontend` — the structural invariants:
+  `scripts/token-grammar.test.mjs` and `token-layer.test.mjs` on what a token
+  may be named and point at, `css-token-sweep.test.mjs` on the literal ledger,
+  `css-primitives.test.mjs` on one implementation per primitive,
+  `css-split-invariants.test.mjs` on rule parity with the pre-split monolith.
+- `npm run test:contracts` — computed style read back through a real browser,
+  for the folds and focus states no screenshot covers.
+- `npm run test:visual` — 46 baselines at two viewports, at `threshold: 0.02`
+  and a zero pixel budget, plus the dark-theme sweep that fails on any ink that
+  does not move.
+- `npm run test:visual:determinism` — two renders of one build, byte-identical,
+  which is what makes a tolerance that tight safe to run.
+
+CI runs the first three in the ubuntu `frontend` job and the fourth in a macos
+`visual` job of its own, because a Playwright baseline is rasterized per
+platform and the committed set is `darwin`. That job uploads
+`test-results/visual` on failure, so a red run hands the reviewer the expected
+image, the received image and the diff rather than a pixel count.
+
 ## Known debt in the token layer
 
 `.stylelintrc.json` carries an `overrides` entry exempting
-`app/styles/tokens-*.css` from `color-no-hex` and the `rgb()` disallow-list:
-those rules exist to push every literal into the primitive tier, so firing them
-there would ask the palette to point at itself, and Phase 5 could never flip
-them to errors. The exemption is scoped to the two token files and to those two
-rules — a `font-family` literal in a token file is still reported — which is
-what makes "no literal outside `app/styles/tokens-*.css`" a machine-checkable
-rule rather than a convention.
+`app/styles/tokens-*.css` from `color-no-hex`, the `rgb()` disallow-list and the
+five value allow-lists: those rules exist to push every literal into the token
+layer, so firing them there would ask the palette to point at itself and the
+rules Phase 5 flipped to errors could never be satisfied. The exemption is
+scoped to the two token files and to the rules that name a value — everything
+else still applies there, and `scripts/token-grammar.test.mjs` and
+`scripts/token-layer.test.mjs` police what a token file may contain far more
+closely than a stylesheet linter can. That scoping is what makes "no literal
+outside `app/styles/tokens-*.css`" a machine-checkable rule rather than a
+convention.
+
+A second `overrides` entry names the two files that may still carry
+`!important` — `app/styles/interaction.css` and `app/reports/reports.css` — and
+says why beside each. The reduced-motion block has to beat every animation any
+rule declares, including ones added later by a file it has never heard of, and
+`*` is the lowest specificity there is. The reports card-mode overrides fight
+`.table--cards.table--cards td[data-label]:first-child`, which is (0,4,1)
+because the shared table primitive doubles its class on purpose; a report cell
+would have to restate five class-level selectors to reach it, and raising the
+feature that far would make the primitive impossible to change without changing
+every feature that shadows it. Phase 5 took the other eleven declarations off
+`!important` — 25 down to 14 — by raising a selector where one was genuinely
+losing and by deleting the rest, which were fighting nothing.
 
 The shadow tokens in `tokens-scale.css` are the same tension seen from the
-scale side: their geometry is a scale but their ink is a colour, and they will
-move onto a tier-1 colour primitive once the palette names one. Until then they
-hold the literals the stylesheets ship today, because a shadow that changes
-colour changes every elevated surface.
+scale side: their geometry is a scale but their ink is a colour. Phase 5 tried
+to split them and could not — see [Elevation](#elevation) for why an alpha
+cannot be a tier-1 primitive — so they still hold the literals the stylesheets
+ship today, and a shadow that changes colour still changes every elevated
+surface at once.
 
 Three text pairings are short of WCAG AA (4.5:1) and are inherited rather than
 introduced: `--fg-faint` on `--bg-surface` is 3.10:1 in the light theme and
@@ -1189,12 +1373,16 @@ computed grounds, so the next sweep cannot repeat it. The remaining ink moves of
 `--fg-faint` problem one step up the ramp and is recorded here rather than
 fixed, because it is the same palette decision.
 
-The four uncollapsed focus blues are gone; only the alpha outline
-`rgb(42 120 158 / 28%)` is still a literal, and it has no primitive at all — it
-will need `color-mix()` or an alpha token. That is the shape of the remaining
-colour debt generally: alpha. No tier-2 token carries any, so every
-`rgb(r g b / n%)` in the stylesheets — the two shadow stops, the mobile scrims,
-the white bar hovers, the selection wash — is still a literal.
+The four uncollapsed focus blues are gone, and so is the alpha outline
+`rgb(42 120 158 / 28%)` that outlived them. Alpha was the shape of the whole
+remaining colour debt — 53 of the 245 literals Phase 5 cleared were an
+`rgb(r g b / n%)`: the mobile scrims, the white bar hairlines, the selection
+wash, the focus halos, the translucent overlays. The answer was `color-mix()`
+at the call site rather than a token, and it is a better answer than a token
+would have been: `color-mix(in srgb, var(--bg-inverse) 48%, transparent)` says
+what a scrim *is*, and a theme that moves `--bg-inverse` moves the scrim with
+it, which a stored `rgb(16 23 28 / 48%)` never could. Only the shadow inks are
+left, for the reason above.
 
 **The alias block is deleted**, along with the `--shadow` declaration in
 `app/globals.css`; see [Retired aliases](#retired-aliases) for the mapping and
@@ -1334,38 +1522,37 @@ here rather than made quietly.
 
 ## Role gaps
 
-The sweep leaves 196 hex literals, down from 1,496 before it and 261 at the end
-of its first pass. They are not a residue to grind down one by one: they cluster
-into roles that tier 2 does not name, and the fix for each is a token, after
-which its call sites collapse together.
+**The table this section held is empty, and the section is kept for the shape
+of the argument rather than for the rows.** The sweep left 196 hex literals and
+49 `rgb()` calls — down from 1,496 before it — and they were never a residue to
+grind down one by one: they clustered into roles that tier 2 did not name, and
+the fix for each was a token, after which its call sites collapsed together.
+Phase 5 named the last of them, and the colour half of
+`scripts/css-literal-debt.json` is now `{}`.
 
-**Seven of the gaps this table used to record are now filled**, because the
-dark-theme audit in `integration/visual/token-sweep.visual.spec.ts` turned each
-of them from a tidiness argument into a rendered defect — a literal that does
-not move under `data-theme="dark"` is a white patch or an unreadable line, not
-an inconsistency. The new roles are `--fg-secondary` (`--gray-700`),
-`--border-subtle` (`--gray-200`), `--accent-bright` (`--green-500`),
-`--accent-alt` and `--accent-alt-soft` (the decorative violet, `--purple-600`
-and `--purple-100`), `--status-warning-bright` (`--amber-400`, the filled
-indicator dots), `--chart-neutral` (`--gray-400`, the uncategorised slice), and
-the four `--status-*-strong` inks. Each is restated in the dark block, so the
-surfaces they paint move with the theme.
+What each gap became:
 
-What is left, largest first:
-
-| Missing role | Rough count | What is there today |
+| Was missing | Count | What closed it |
 | --- | --- | --- |
-| Alpha of any kind | 53 | needs `color-mix()` or an alpha token; no tier-2 token carries alpha, so every scrim, ring and translucent hover is a literal |
-| `--status-*-edge` | ~30 | the wash and the solid exist, the mid border does not; tier 1 already names `--red-300`, `--amber-300`, `--blue-300`, `--green-300` for it |
-| Ink and surface for dark grounds | ~14 | `--fg-faint` and `--bg-inverse` are 27+ from the bar and sign-in inks |
-| Orange | ~8 | tier 1 has `--orange-400`/`--orange-500`; tier 2 names no role, and the two of them are unreferenced |
-| A `--syntax-*` family | 7 | the SPL inks are categorical, and the only categorical family is `--chart-series-*` |
-| `--shadow-xl` | 9 | a modal-scale drop the three-step elevation scale does not carry; see [Elevation](#elevation) |
-| A second neutral ink step | ~6 | `--fg-secondary` is `--gray-700`; a cluster around `--gray-650` still keeps its literals and lands on `--fg-muted` instead |
+| Alpha of any kind | 53 | `color-mix(in srgb, var(--role) N%, transparent)` at the call site. No token carries alpha and none should: a tier-2 token holding an `rgb(… / n%)` is a literal, and a tier-1 one would be a primitive with no lightness step for the ladder to order. The mix keeps the hue themeable, which is what the gap was really about. |
+| `--status-*-edge` | ~30 | The four `-edge` roles, pointing at `--red-300`, `--amber-300`, `--blue-300` and `--green-300`, which tier 1 already named. `--status-neutral-edge` joined them for symmetry. |
+| Ink and surface for dark grounds | ~14 | `--fg-inverse-muted`, `--accent-inverse`, and `--chrome-fg-muted` / `--chrome-fg-faint`. The bars and the sign-in story panel are dark in both themes and the inverse surface flips, so these are two families rather than one, for the same reason `--chrome-fg` and `--fg-inverse` are. |
+| Orange | ~8 | `--status-progress`, the warmer caution the product uses for work in flight — running, throttled, quarantined. Tier 1 had `--orange-400` and `--orange-500` and gained `--orange-600` for the one ink that needed a darker step. |
+| A `--syntax-*` family | 7 | Six roles named after what the parser found: `--syntax-pipe`, `--syntax-command`, `--syntax-function`, `--syntax-field`, `--syntax-string`, `--syntax-literal`. Deliberately not `--chart-series-*`: reordering a chart's ramp must not recolour a query. |
+| `--shadow-xl` | 9 | `--shadow-xl` plus `--shadow-toast`, `--shadow-drawer` and `--shadow-sheet` for the three drops whose direction no size step can express, and two collapses onto `--shadow-md` and `--shadow-sm`. See [Elevation](#elevation). |
+| A second neutral ink step | ~6 | `--fg-secondary` absorbed the cluster. The literals around `--gray-650` were 3 to 14 units from `--gray-700`, close enough that a second step would have been a distinction nothing rendered. |
 
-Two literals cannot be reached by a token at all and need a different fix:
-`app/dashboards/operations-dashboard.css` carries `fill='%23526068'`
-inside a `data:` URI select arrow, where no `var()` resolves and no grep for
-`#` finds it — it wants a mask or an inline SVG; and `app/layout.tsx` keeps its
-`themeColor` literal deliberately, because the browser paints from it before
-any stylesheet loads.
+**Two literals cannot be reached by a token at all and are still there.**
+`app/dashboards/operations-dashboard.css` carries `fill='%23526068'` inside a
+`data:` URI select arrow, where no `var()` resolves and no grep for `#` finds
+it — it wants a mask or an inline SVG. `app/layout.tsx` keeps its `themeColor`
+literal deliberately, because the browser paints from it before any stylesheet
+loads; `scripts/css-token-sweep.test.mjs` allows exactly that one string and
+fails on any other TypeScript colour.
+
+**What replaced the table is the lint.** A role gap used to be discovered by
+reading this document; it is now discovered by `npm run lint:css` failing on
+the literal somebody wrote because no role fitted. The gap is the same, the
+report is immediate, and the fix has not changed: add a tier-2 token with a
+role name and a one-line comment, restate it in the dark block, and point it at
+a primitive.

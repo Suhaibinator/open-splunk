@@ -89,7 +89,7 @@ const PRE_REFACTOR_VALUES = {
 const LEGACY_ALIASES = new Set([]);
 
 /** Group prefixes the semantic tier is allowed to use, from docs/theming.md. */
-const SEMANTIC_GROUPS = ["accent", "bg", "border", "chart", "chrome", "fg", "level", "status"];
+const SEMANTIC_GROUPS = ["accent", "bg", "border", "chart", "chrome", "fg", "level", "status", "syntax"];
 
 /** The three interaction tokens the documented grammar leaves ungrouped. */
 const INTERACTION_TOKENS = new Set(["--focus-ring", "--highlight", "--selection"]);
@@ -144,6 +144,7 @@ const ROLE_GROUPS = {
   "severity level": /^--level-/u,
   status: /^--status-(?!.*-soft$)/u,
   "status wash": /^--status-.*-soft$/u,
+  syntax: /^--syntax-/u,
 };
 
 function describeList(items) {
@@ -217,6 +218,10 @@ function valueKind(value) {
   if (value === undefined) return "undefined";
   if (/^#[0-9a-f]{3,8}$/iu.test(value) || /^(?:rgba?|hsla?|oklch|color)\(/iu.test(value)) return "colour";
   if (/^-?[\d.]+(?:px|rem|em|%)$/u.test(value)) return "length";
+  // A clamp(), min() or max() over lengths is a length: CSS accepts one
+  // wherever it accepts a `px`, and reading it as a keyword would split the
+  // --type-* family in two over a fluid step that is a font-size like the rest.
+  if (/^(?:clamp|min|max)\((?:\s*-?[\d.]+(?:px|rem|em|%|vw|vh|dvw|dvh)\s*,?)+\)$/u.test(value)) return "length";
   if (/^-?[\d.]+m?s$/u.test(value)) return "duration";
   if (/^-?\d+$/u.test(value)) return "number";
   if (/\brgba?\(/u.test(value)) return "shadow";

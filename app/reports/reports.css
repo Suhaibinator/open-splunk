@@ -39,7 +39,7 @@
 
 .reports-summary strong {
   color: var(--fg-text);
-  font-size: 18px;
+  font-size: var(--type-xxl);
   font-weight: 400;
   line-height: 1.1;
 }
@@ -56,7 +56,7 @@
   background: var(--accent-soft);
   color: var(--accent);
   display: flex;
-  font-size: 15px;
+  font-size: var(--type-lg);
   height: 34px;
   justify-content: center;
   width: 34px;
@@ -64,7 +64,7 @@
 
 .reports-metric-icon--warning {
   background: var(--status-warning-soft);
-  color: #b87921;
+  color: var(--status-progress);
   font-weight: 700;
 }
 
@@ -117,7 +117,7 @@
 
 .reports-library-header h2 {
   color: var(--fg-text);
-  font-size: 13px;
+  font-size: var(--type-md);
   margin: 0 0 3px;
 }
 
@@ -174,7 +174,7 @@
 
 .reports-scope-bar button span {
   background: var(--bg-subtle);
-  border-radius: 9px;
+  border-radius: var(--radius-md);
   color: var(--fg-muted);
   font-size: var(--type-xs);
   margin-left: 5px;
@@ -415,7 +415,7 @@
   }
 
   .reports-table td[data-label] {
-    border-bottom: 1px solid #edf0f1;
+    border-bottom: 1px solid var(--border-subtle);
   }
 }
 
@@ -438,7 +438,7 @@
 .reports-favorite-cell button:hover,
 .reports-favorite-cell button:focus-visible,
 .reports-favorite-cell button.reports-favorite-active {
-  color: #d28d1c;
+  color: var(--status-warning-bright);
 }
 
 .reports-favorite-cell button:focus-visible {
@@ -485,7 +485,7 @@
 .reports-report-cell code {
   color: var(--fg-muted);
   display: block;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--type-xs);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -498,7 +498,7 @@
   color: var(--status-info);
   display: flex;
   flex: 0 0 auto;
-  font-size: 13px;
+  font-size: var(--type-md);
   height: 32px;
   justify-content: center;
   margin-top: 1px;
@@ -597,7 +597,7 @@
 }
 
 .reports-action-cell .reports-delete-action {
-  color: #a4433d;
+  color: var(--status-error-strong);
 }
 
 @media (max-width: 760px) {
@@ -680,7 +680,7 @@
 .reports-action-notice {
   align-items: center;
   background: var(--status-success-soft);
-  border: 1px solid #bdd4ae;
+  border: 1px solid var(--status-success-edge);
   color: var(--status-success-strong);
   display: flex;
   font-size: var(--type-xs);
@@ -693,15 +693,15 @@
 .reports-action-notice button {
   background: transparent;
   border: 0;
-  color: #557149;
-  font-size: 17px;
+  color: var(--status-success-strong);
+  font-size: var(--type-xl);
   height: 28px;
   width: 28px;
 }
 
 .reports-action-error {
   background: var(--status-error-soft);
-  border: 1px solid #dba39f;
+  border: 1px solid var(--status-error-edge);
   color: var(--status-error-strong);
   font-size: var(--type-xs);
   line-height: 1.5;
@@ -727,7 +727,7 @@
 
 .reports-empty > span {
   color: var(--fg-faint);
-  font-size: 28px;
+  font-size: var(--type-xxl);
   margin-bottom: 9px;
 }
 
