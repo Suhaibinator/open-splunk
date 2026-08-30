@@ -46,8 +46,9 @@ evidence, not a timing gate.
 in one file of ten sections: the token layer and its naming grammar, the literal
 ledger, one entry point and one cascade order, parity with the stylesheet the
 split replaced, where a responsive rule lives, one implementation of each
-primitive, class reachability in both directions, and pins on the parsers
-underneath. None of it is visible to a compiler, a lint count or a screenshot.
+primitive, class reachability (total from rule to markup, and from markup back
+to rule only for the five colocated feature prefixes `FEATURE_PREFIXES` lists),
+and pins on the parsers underneath. None of it is visible to a compiler, a lint count or a screenshot.
 [Theming](../docs/theming.md#guardrails-what-holds-this-in-place) describes each
 section and what it can see.
 

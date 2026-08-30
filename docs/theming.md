@@ -363,9 +363,10 @@ CI's frontend job. The colour half of `scripts/css-literal-debt.json` is empty:
 there are no remaining violations to report, which is what turns the sentence
 above from an aspiration into a gate.
 
-The same rule now covers five more kinds of value, for the same reason and by
-the same mechanism — `font-family`, `font-size`, `border-radius`, `box-shadow`
-and `z-index` must each read a token from `app/styles/tokens-scale.css`. Three
+The same rule now covers six more kinds of value, for the same reason and by
+the same mechanism — `font-family`, `font-size`, `font`, `border-radius`,
+`box-shadow` and `z-index` must each read a token from
+`app/styles/tokens-scale.css`. Three
 literals are allowed inside those, and each says something a scale cannot:
 `border-radius: 0` and `border-radius: 50%` mean "no corner" and "a circle",
 which depend on the box rather than on a step, and a single-digit `z-index`
@@ -1225,7 +1226,7 @@ and muted body copy (four).
 
 The same file walks the other direction — from every call site back to the
 styling layer, which is the direction a deletion gets wrong.
-`scripts/css-retired-classes.json` lists the sixty-six global classes Phase 3
+`scripts/css-retired-classes.json` lists the sixty-seven global classes Phase 3
 deleted and the primitive that replaced each, and nothing in the repository may
 write one into a `className` or build one from an interpolation base. The same
 file pins the class-coupled selectors in
@@ -1303,8 +1304,8 @@ red line that says "stylesheets" rather than the end of a step that says
 
 | Rule | What it stops |
 | --- | --- |
-| `color-no-hex`, `declaration-property-value-disallowed-list` | A hex, `rgb()`, `rgba()`, `hsl()` or `hsla()` anywhere but the token files. A translucent value is a `color-mix()` over a tier-2 token; an opaque one is the token. |
-| `declaration-property-value-allowed-list` | A literal `font-family`, `font-size`, `border-radius`, `box-shadow` or `z-index`. Each must read a token, with three documented exceptions: `border-radius: 0` and `50%`, and a single-digit `z-index` for a local stacking order. |
+| `color-no-hex`, `color-named`, `declaration-property-value-disallowed-list` | A hex, `rgb()`, `rgba()`, `hsl()` or `hsla()` anywhere but the token files; a named colour such as `white` or `red`, at the top level or inside a `linear-gradient()`; and a system-colour keyword such as `Highlight` or `ButtonFace`. A translucent value is a `color-mix()` over a tier-2 token; an opaque one is the token. |
+| `declaration-property-value-allowed-list` | A literal `font-family`, `font-size`, `border-radius` (the shorthand and the four `border-*-radius` longhands), `box-shadow` or `z-index`. Each must read a token, with three documented exceptions: `border-radius: 0` and `50%`, and a single-digit `z-index` for a local stacking order. The `font` shorthand is pinned to `inherit`, because a rule keyed on `font-size` and `font-family` never sees the size and face that `font: 12px/1.4 system-ui` states; longhands are the only way to write either. `box-shadow`'s whole-value `var()` must name the `--shadow-` or `--pulse-ring-` family, so an ink token cannot stand where a shadow belongs. |
 | `media-feature-name-allowed-list`, `media-feature-name-value-allowed-list` | A breakpoint off the four-width canon, the one `min-width: 761px` touch guard and the one `max-height: 650px` short-viewport guard. |
 | `declaration-no-important` | An `!important` outside the two files the config names, each with the reason written beside it. |
 | `selector-max-specificity` (`0,4,2`) | A selector deeper than the shared table primitive's deliberately doubled card-mode rules, which are the ceiling the layer needs. |
@@ -1322,7 +1323,7 @@ travels with a line is an exemption nobody reviews.
 ### The invariant suite
 
 `scripts/style-invariants.test.mjs` is the whole of the first gate: one file,
-one hundred tests, run by `npm run test:frontend`. It replaced seven files that
+a hundred and two tests, run by `npm run test:frontend`. It replaced seven files that
 asked overlapping questions through three parsing libraries — two of which
 exported a function of the same name meaning different things. All the reading
 and parsing now lives in `scripts/style-inventory.mjs`, so the test file never
@@ -1366,14 +1367,50 @@ The sections, in the order they appear in the file:
    single application stylesheet stated at the commit before it was split. Every
    rule is still stated once by the split set, unchanged, and every repeated
    selector keeps the order that decides its value.
+
+   This is a ratchet on about twenty stylesheets, so **how to write a new rule
+   in one of them is part of the gate**, not a way around it. The ledger's
+   `substitutions` array records every rule the split set states that the
+   monolith did not state verbatim, and it has three forms:
+
+   | `before` | Means |
+   | --- | --- |
+   | one rule | that rule was edited into `after` |
+   | a list of rules | those rules were folded into the single `after` |
+   | `[]` | `after` is a rule nobody wrote before |
+
+   The empty list is the addition form: write the rule, run
+   `npm run test:frontend`, and the failure prints the rule's signature
+   verbatim — `<at-rules> \|\| <selector list> \|\| <declarations>` — which is
+   what goes in `after`. An addition is compared as the last declaration of its
+   selector, so if it ties on specificity with a rule already there and the
+   cascade does not in fact reach it last, the tie-break check fails too; that
+   is a real finding about the rule, not about the ledger.
+
+   Do not delete the parity test to land a rule. The ledger is a provenance
+   proof rather than a standing budget, and its own header says when to retire
+   it: when a phase has rewritten so much of the frozen text that there is
+   nothing left to check against, delete the file and the test together, on
+   purpose, rather than regenerating either to pass.
 7. **Where a responsive rule lives.** No `@media` block overrides base rules
    that live in another file, `interaction.css` still earns its exemption from
    that check, and every run of media queries follows the documented order.
 8. **One implementation of each primitive**, plus the shared animations and the
    duplicate-declaration check described under
    [What keeps one primitive from becoming two again](#what-keeps-one-primitive-from-becoming-two-again).
-9. **Reachability, in both directions.** Every rule still has a caller, and
-   every class the markup asks for still has a rule.
+9. **Reachability, in both directions — but not symmetrically.** Rule to
+   markup is total: every class rule in every global stylesheet must be
+   produced by some literal `className`, interpolation base or selector, or be
+   recorded in `scripts/css-dynamic-classes.json`. Markup to rule is scoped to
+   the five namespaces the colocated feature stylesheets own — `analytics-`,
+   `operations-`, `reports-`, `visualization-` and `workspace-dialog-` — which
+   is the whole of `FEATURE_PREFIXES` in `scripts/style-invariants.test.mjs`.
+   A class outside those five that no rule defines is **not** reported: the
+   scan cannot tell an unstyled `home-page` from a word that was never meant to
+   be a class, and guessing in either direction would make it useless. So an
+   unstyled `search-…`, `home-…`, `admin-…`, `activity-…` or `suite-…` class
+   renders unstyled with nothing to say so, and adding a sixth colocated
+   stylesheet means adding its prefix to that list by hand.
 10. **The parsers underneath**, pinned against the shapes that have already
     fooled a simpler implementation — an escaped quote, a nested template, a
     commented-out rule, a value carrying its own commas and colons, a path
@@ -1389,7 +1426,7 @@ fails the suite just as loudly as an unrecorded violation.
 | File | Records |
 | --- | --- |
 | `scripts/css-literal-debt.json` | every colour and scale literal left outside the token layer |
-| `scripts/css-retired-classes.json` | the sixty-six classes the consolidation deleted, each with its replacement |
+| `scripts/css-retired-classes.json` | the sixty-seven classes the consolidation deleted, each with its replacement |
 | `scripts/css-duplicate-blocks.json` | the restatements left in place, each with the primitive that would otherwise own it |
 | `scripts/css-dynamic-classes.json` | classes that only ever reach the DOM at runtime |
 | `scripts/css-phase3-monolith.json` | the frozen pre-split rule set, and the edits the split and the lint gate did not make verbatim |
@@ -1400,8 +1437,8 @@ paying one off is a deletion the suite demands rather than one nobody notices.
 ## Known debt in the token layer
 
 `.stylelintrc.json` carries an `overrides` entry exempting
-`app/styles/tokens-*.css` from `color-no-hex`, the `rgb()` disallow-list and the
-five value allow-lists: those rules exist to push every literal into the token
+`app/styles/tokens-*.css` from `color-no-hex`, `color-named`, the `rgb()`
+disallow-list and the six value allow-lists: those rules exist to push every literal into the token
 layer, so firing them there would ask the palette to point at itself and the
 rules Phase 5 flipped to errors could never be satisfied. The exemption is
 scoped to the two token files and to the rules that name a value — everything

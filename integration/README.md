@@ -272,11 +272,15 @@ that does not exist, and on an entry naming a screenshot no spec pins any more.
 A missing baseline is otherwise silent on every machine but the one running the
 suite.
 
-The suite fails on a layout change but tolerates
-`maxDiffPixelRatio: 0.002`, so normalizing a color by one or two RGB units
-still passes. **A CSS refactor that is a refactor updates no baseline.** When a
-change is a deliberate restyle, regenerate them, look at every regenerated PNG,
-and say in the commit body which surfaces moved and why:
+There is no pixel budget: `playwright.visual.config.ts` runs at
+`threshold: 0.02` with **`maxDiffPixelRatio: 0`**, so any pixel that moves fails
+the run. Normalizing a colour by one or two RGB units is a baseline to
+re-record, not noise the suite absorbs — the budget used to be 0.002, which on a
+1440x1583 page is 4,560 pixels, and
+[docs/theming.md](../docs/theming.md#guardrails-what-holds-this-in-place)
+records what went missing inside it. **A CSS refactor that is a refactor updates
+no baseline.** When a change is a deliberate restyle, regenerate them, look at
+every regenerated PNG, and say in the commit body which surfaces moved and why:
 
 ```sh
 npm run test:visual -- --update-snapshots
@@ -391,9 +395,13 @@ described in full under
   stylesheet exactly once, `app/layout.tsx` is the only file that pulls a
   stylesheet in, no `.module.css` or `:global()` comes back, no test file reads
   a stylesheet's characters, and the load order is the one documented.
-- **Parity, responsive ownership, one-of-each-primitive, and reachability in
-  both directions** — every rule still has a caller, and every class the markup
-  asks for still has a rule.
+- **Parity, responsive ownership, one-of-each-primitive, and reachability** —
+  every rule still has a caller, in every global stylesheet. The other
+  direction is narrower: a class the markup asks for is checked against the
+  stylesheets only when it carries one of the five colocated feature prefixes
+  (`analytics-`, `operations-`, `reports-`, `visualization-`,
+  `workspace-dialog-`), so an unstyled class outside those five is not
+  reported. `docs/theming.md` §9 says why and what it costs.
 - **The parsers underneath**, pinned against the shapes that have already
   fooled a simpler implementation.
 

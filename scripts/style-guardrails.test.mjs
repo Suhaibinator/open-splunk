@@ -105,6 +105,7 @@ test("no guardrail rule is switched off at the top level of .stylelintrc.json", 
       + "exists to catch.",
   );
   const required = [
+    "color-named",
     "color-no-hex",
     "declaration-no-important",
     "declaration-property-value-allowed-list",
@@ -125,9 +126,12 @@ test("no guardrail rule is switched off at the top level of .stylelintrc.json", 
   const properties = config.rules["declaration-property-value-allowed-list"];
   assert.deepEqual(
     Object.keys(properties).toSorted(),
-    ["border-radius", "box-shadow", "font-family", "font-size", "z-index"],
-    "The allow-list no longer keys the same five properties. Each one is a scale a retheme has to be able\n"
-      + "to move; dropping a key stops that scale being checked anywhere.",
+    ["/^border-(?:[a-z]+-){0,2}radius$/", "box-shadow", "font", "font-family", "font-size", "z-index"],
+    "The allow-list no longer keys the same six properties. Each one is a scale a retheme has to be able\n"
+      + "to move; dropping a key stops that scale being checked anywhere. Two of the keys are shaped rather\n"
+      + "than literal and that shape is the check: the radius key is a pattern so the four `border-*-radius`\n"
+      + "longhands are held to the same token list as the shorthand, and `font` is keyed at all so the\n"
+      + "shorthand cannot state a size or a face past the `font-size` and `font-family` entries.",
   );
   assert.deepEqual(
     config.rules["media-feature-name-value-allowed-list"]["max-width"],
@@ -149,6 +153,13 @@ test("the two stylelint exemptions name exactly the files they document", async 
       {
         files: ["app/styles/tokens-*.css"],
         rules: [
+          // `color-named` is deliberately absent, and adding it here would be a
+          // real loss rather than a formality: the palette writes every
+          // primitive as a six-digit hex because style-invariants.test.mjs
+          // parses those digits to compare lightness, so `--fg-text: white` is
+          // a spelling the invariants cannot read. The rule fires inside the
+          // token layer -- verified by writing one there -- and that is the
+          // only value rule that does.
           "color-no-hex",
           "declaration-property-value-allowed-list",
           "declaration-property-value-disallowed-list",

@@ -1410,8 +1410,11 @@ test("every rule the monolith stated is stated once by the split set, unchanged"
     extra,
     [],
     `These rules are in the split set and were never in ${RETIRED_MONOLITH}. A rule that was copied rather\n`
-      + "than moved is now stated twice, and the two copies drift apart with nothing to report it; a rule\n"
-      + `that was written fresh belongs to a later phase than this one:\n${describeList(extra)}`,
+      + "than moved is now stated twice, and the two copies drift apart with nothing to report it: state it\n"
+      + "once and let the cascade reach it. A rule that is genuinely new is recorded, not forbidden -- add\n"
+      + `an entry to ${MONOLITH_LEDGER} whose "after" is the rule verbatim and whose "before" is the empty\n`
+      + "list, which is the ledger's addition form and is pinned by \"applySubstitutions records a rule\n"
+      + `that is new as an addition":\n${describeList(extra)}`,
   );
 });
 
@@ -2223,6 +2226,32 @@ test("applySubstitutions folds a list of rules into the one that replaced them",
     " || .fixture-a || height: 20px; width: 48px",
     " || .fixture-b || width: 8px",
   ]);
+});
+
+test("applySubstitutions records a rule that is new as an addition", () => {
+  // The one way past parity for a rule the monolith never stated. `before: []`
+  // has to append `after`, because the alternative a developer reaches for --
+  // deleting the assertion -- retires the whole provenance proof to land one
+  // rule. Pinned here so the ledger's documented escape hatch cannot rot into
+  // the no-op it was before Phase 5's review: `before[0]` on an empty list is
+  // `undefined`, which matches no rule and silently records nothing.
+  const rewritten = applySubstitutions(
+    [" || .fixture-a || width: 48px"],
+    [{ after: " || .fixture-new || color: var(--fg-text)", before: [] }],
+  );
+  assert.deepEqual(rewritten, [
+    " || .fixture-a || width: 48px",
+    " || .fixture-new || color: var(--fg-text)",
+  ]);
+  assert.deepEqual(
+    diffRuleSets(rewritten, [
+      { file: "app/fixture.css", signature: " || .fixture-a || width: 48px" },
+      { file: "app/fixture.css", signature: " || .fixture-new || color: var(--fg-text)" },
+    ]),
+    { extra: [], missing: [] },
+    "a recorded addition must clear parity; if it does not, the ledger documents a path that does"
+      + " not exist and the next new rule deletes the test instead",
+  );
 });
 
 test("collectTieBreakOrder splits selector lists and keeps declaration order", () => {

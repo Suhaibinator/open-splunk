@@ -157,6 +157,18 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
 
+      # The same cache the frontend job keeps, for the same reason and doubly
+      # so here: this job's `webServer` builds both static exports before it
+      # serves them, and it does that on the most expensive runner class in the
+      # workflow. Without this step every push rebuilds both from cold.
+      - name: Cache Next.js
+        uses: actions/cache@v6
+        with:
+          path: .next/cache
+          key: ${{ runner.os }}-next-${{ hashFiles('.node-version', 'package-lock.json') }}-${{ hashFiles('app/**', 'next.config.ts', 'tsconfig.json') }}
+          restore-keys: |
+            ${{ runner.os }}-next-${{ hashFiles('.node-version', 'package-lock.json') }}-
+
       - name: Install dependencies
         run: npm ci
 
@@ -1081,10 +1093,19 @@ jobs:
       - protobuf
       - release-oci
       - spl-pipeline-clickhouse
-      # The screenshot half of the CSS net gates a build as much as the lint
-      # half does: a release that ships a stylesheet nobody looked at is exactly
-      # what the baselines exist to stop.
-      - visual
+      # `visual` is deliberately NOT here yet. The screenshot half of the CSS
+      # net should gate a build as much as the lint half does, but the job has
+      # never been observed running: every committed baseline under
+      # `integration/visual/__screenshots__/darwin` was rasterized on a
+      # developer's Mac, and `playwright.visual.config.ts` compares at
+      # `maxDiffPixelRatio: 0`, so a font-rasterization difference between that
+      # machine and whichever macOS image `macos-latest` currently points at
+      # fails the job -- and with it every release -- for a reason that has
+      # nothing to do with the change under test. The job runs on push and pull
+      # request today, which is what makes the first green run observable. Add
+      # `- visual` back the moment one is: either it passes as recorded, or the
+      # baselines are re-recorded on the runner image and committed, and then
+      # the dependency is a gate rather than a coin flip.
     strategy:
       fail-fast: false
       matrix:

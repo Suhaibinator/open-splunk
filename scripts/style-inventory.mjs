@@ -1325,31 +1325,51 @@ export function diffRuleSets(recorded, live) {
 /**
  * Applies the ledger's recorded edits so only unrecorded drift survives.
  *
- * An entry's `before` is one rule, or the list of rules a later phase folded
- * into one. The list form exists because two rules with the same selector under
- * the same at-rules are a `no-duplicate-selectors` finding whose only fix is to
- * state them once: the later rule's declarations already win, so the fold keeps
- * every value the cascade was resolving to and there is nothing left for a
- * one-for-one rewrite to name. The rules are replaced in place at the first
- * member's position and the rest drop out, which is where the fold put them.
+ * An entry's `before` is one rule, the list of rules a later phase folded into
+ * one, or the empty list. The list form exists because two rules with the same
+ * selector under the same at-rules are a `no-duplicate-selectors` finding whose
+ * only fix is to state them once: the later rule's declarations already win, so
+ * the fold keeps every value the cascade was resolving to and there is nothing
+ * left for a one-for-one rewrite to name. The rules are replaced in place at
+ * the first member's position and the rest drop out, which is where the fold
+ * put them.
+ *
+ * The empty list is how a rule that is genuinely new is recorded. Parity holds
+ * the split set to the monolith's text in both directions, so a rule nobody
+ * wrote before is reported as `extra` exactly as a rule copied into a second
+ * file is, and until this form existed the only ways past it were to delete the
+ * test or to forge a `before` -- which is why the empty case is spelled out
+ * here rather than left to `before[0]` being `undefined` and quietly matching
+ * nothing. An addition is appended after every recorded rule, sorted, because
+ * the monolith holds no position for it: that makes it the last declaration of
+ * its selector, so if it contests a selector an existing rule also states and
+ * the live tree does not put it last, "every repeated selector keeps the order
+ * that decides its value" fails -- which is the right answer, since a new rule
+ * that ties on specificity is deciding a value by where it was typed.
  */
 export function applySubstitutions(rules, substitutions) {
   const replacements = new Map();
   const folded = new Set();
+  const added = [];
   for (const entry of substitutions) {
     const before = Array.isArray(entry.before) ? entry.before : [entry.before];
+    if (before.length === 0) {
+      added.push(entry.after);
+      continue;
+    }
     replacements.set(before[0], entry.after);
     for (const rule of before.slice(1)) folded.add(rule);
   }
   const remaining = new Map();
   for (const rule of folded) remaining.set(rule, rules.filter((one) => one === rule).length);
-  return rules.flatMap((rule) => {
+  const rewritten = rules.flatMap((rule) => {
     if (folded.has(rule) && remaining.get(rule) > 0) {
       remaining.set(rule, remaining.get(rule) - 1);
       return [];
     }
     return [replacements.get(rule) ?? rule];
   });
+  return rewritten.concat(added.toSorted());
 }
 
 /**
@@ -1672,8 +1692,14 @@ const NAMED_COLOURS = new Set([
 const SPACING_PROPERTY =
   /^(?:padding|margin|gap|row-gap|column-gap)(?:-(?:top|bottom|left|right|block|inline|block-start|block-end|inline-start|inline-end))?$/u;
 
-/** The four scale families the phase bar names explicitly, beside spacing. */
-const SCALE_PROPERTY = /^(?:font-size|z-index|border-radius|box-shadow)$/u;
+/**
+ * The four scale families the phase bar names explicitly, beside spacing.
+ *
+ * `font` is listed with them because the shorthand states a size, and the
+ * radius key matches the longhands because `border-top-left-radius` is a
+ * radius; both are spellings the sweep read past until Phase 5's review.
+ */
+const SCALE_PROPERTY = /^(?:font|font-size|z-index|border-(?:[a-z]+-){0,2}radius|box-shadow)$/u;
 
 /**
  * Which token families a property is allowed to name.
@@ -2255,7 +2281,10 @@ const LENGTH_LITERAL = /^-?[\d.]+(?:px|rem|em|ex|ch|pt|pc|in|cm|mm|q|vw|vh|vmin|
  * `font: 12px/1.4 system-ui, sans-serif` sets exactly what
  * `declaration-property-value-allowed-list` guards under `font-size` and
  * `font-family`, and neither rule fires, because stylelint keys those lists on
- * the property that is written. `SCALE_PROPERTY` misses it for the same reason.
+ * the property that is written. `.stylelintrc.json` now refuses the shorthand
+ * outright and `SCALE_PROPERTY` lists `font`, so this collector is the third
+ * reading rather than the only one -- and it is the one that names the size and
+ * the face separately, which is what a fix has to know.
  * A shorthand that names its size and its face through `var()` is fine and is
  * not reported; so is a whole-value keyword like `font: inherit`, which states
  * no size at all. The line-height and weight slots are left alone: neither is

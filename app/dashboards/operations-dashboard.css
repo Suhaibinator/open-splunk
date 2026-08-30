@@ -47,8 +47,11 @@ div.operations-header-actions.operations-header-actions {
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   color: var(--fg-text);
-  font: 600 10px/1 system-ui, sans-serif;
+  font-family: var(--font-sans);
+  font-size: var(--type-xs);
+  font-weight: 600;
   height: 31px;
+  line-height: 1;
   min-width: 148px;
   padding: 0 28px 0 10px;
 }
@@ -361,7 +364,9 @@ div.operations-header-actions.operations-header-actions {
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   color: var(--fg-text);
-  font: 12px/1.4 system-ui, sans-serif;
+  font-family: var(--font-sans);
+  font-size: var(--type-md);
+  line-height: 1.4;
   min-height: 32px;
   padding: 6px var(--space-2);
 }
