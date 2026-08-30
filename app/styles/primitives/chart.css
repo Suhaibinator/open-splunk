@@ -1,0 +1,28 @@
+/* Charts
+   Shared SVG stroke geometry and plot grid furniture. Feature stylesheets own
+   each chart's dimensions, axes and interaction states. */
+
+.analytics-trend-line,
+.time-series-chart__line {
+  fill: none;
+  stroke: var(--chart-series-1);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: var(--chart-stroke-width, 2.25);
+  vector-effect: non-scaling-stroke;
+}
+
+.timeline-grid-lines,
+.chart-grid {
+  display: flex;
+  flex-direction: column;
+  inset: 0;
+  justify-content: space-around;
+  pointer-events: none;
+  position: absolute;
+}
+
+.timeline-grid-lines span,
+.chart-grid span {
+  border-top: 1px solid var(--border-subtle);
+}

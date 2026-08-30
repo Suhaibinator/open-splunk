@@ -297,10 +297,11 @@ itself never opens a stylesheet — which is the first invariant it asserts. A
 class that genuinely only exists at runtime belongs in
 `scripts/css-dynamic-classes.json`, with a comment naming the code that
 produces it; an entry there that stops being needed fails the suite, so the
-list cannot become a quiet home for dead CSS. The same is true of every other
-ledger the suite reads — `css-retired-classes.json`, `css-duplicate-blocks.json`
-and `css-literal-debt.json` — each of which is compared against the tree in both
-directions.
+list cannot become a quiet home for dead CSS. The same is true of the other
+ledgers the suite reads — `css-retired-classes.json` and
+`css-literal-debt.json` — each of which is compared against the tree in both
+directions. Repeated declaration blocks have no ledger: the suite requires
+them to be consolidated.
 
 `scripts/safety-net.test.mjs` guards the net itself: every unit test file must
 appear in the hardcoded list in `scripts/test-frontend.mjs`, and every listed

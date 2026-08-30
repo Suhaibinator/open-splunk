@@ -435,17 +435,7 @@
   height: 108px;
 }
 
-.timeline-grid-lines {
-  display: flex;
-  flex-direction: column;
-  inset: 0;
-  justify-content: space-around;
-  pointer-events: none;
-  position: absolute;
-}
-
 .timeline-grid-lines span {
-  border-top: 1px solid var(--border-subtle);
   width: 100%;
 }
 

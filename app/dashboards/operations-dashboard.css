@@ -31,7 +31,10 @@ div.operations-header-actions.operations-header-actions {
   gap: 3px;
 }
 
-.operations-range-picker > span {
+.operations-range-picker > span,
+.operations-create-form label > span,
+.operations-settings-grid label > span,
+.operations-panel-fields label > span {
   color: var(--fg-muted);
   font-size: var(--type-xs);
   font-weight: 700;
@@ -345,15 +348,6 @@ div.operations-header-actions.operations-header-actions {
   gap: var(--space-1);
 }
 
-.operations-create-form label > span,
-.operations-settings-grid label > span,
-.operations-panel-fields label > span {
-  color: var(--fg-muted);
-  font-size: var(--type-xs);
-  font-weight: 700;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-}
 
 .operations-create-form input,
 .operations-create-form select,

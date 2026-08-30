@@ -27,7 +27,6 @@
 .system-notice > div { display: flex; flex-direction: column; gap: 2px; }
 .system-notice strong { font-size: var(--type-xs); }
 .system-notice small { color: var(--fg-muted); font-size: var(--type-xs); }
-.system-notice > a { color: var(--fg-link); font-size: var(--type-xs); font-weight: 600; text-decoration: none; }
 
 .home-metrics {
   display: grid;
@@ -94,7 +93,6 @@
 .app-launch-icon--grade { background: var(--status-info); }
 .app-launch-icon--data { background: var(--status-neutral); }
 .app-launch-card strong { color: var(--fg-text); display: block; font-size: var(--type-sm); margin: 3px 0 5px; }
-.app-launch-card p { color: var(--fg-muted); font-size: var(--type-xs); line-height: 1.45; margin: 0 0 9px; }
 .app-launch-card small { color: var(--fg-muted); font-size: var(--type-xs); text-transform: uppercase; }
 .app-launch-card > b { color: var(--fg-link); font-size: var(--type-xxl); font-weight: 400; }
 
@@ -107,7 +105,6 @@
 .setup-checklist li > div { display: flex; flex-direction: column; gap: 2px; }
 .setup-checklist strong { font-size: var(--type-xs); }
 .setup-checklist small { color: var(--fg-muted); font-size: var(--type-xs); }
-.setup-checklist a { color: var(--fg-link); font-size: var(--type-xs); font-weight: 600; text-decoration: none; }
 
 .recent-searches-table td:first-child { max-width: 650px; width: 55%; }
 .recent-searches-table td:first-child a { display: flex; flex-direction: column; gap: var(--space-1); }

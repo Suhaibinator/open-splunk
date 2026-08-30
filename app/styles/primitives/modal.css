@@ -299,12 +299,7 @@
   background: var(--bg-raised);
 }
 
-.history-row > code {
-  font-size: var(--type-xs);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+.history-row > code { font-size: var(--type-xs); }
 
 .history-row > span:not(.history-state) {
   color: var(--fg-muted);
@@ -383,13 +378,6 @@
   border-right: 0;
 }
 
-.job-inspector section > span,
-.inspector-query > span {
-  color: var(--fg-muted);
-  font-size: var(--type-xs);
-  font-weight: 700;
-  text-transform: uppercase;
-}
 
 .job-inspector section > strong,
 .job-inspector section > code {
@@ -426,12 +414,7 @@
   padding: 11px var(--space-3);
 }
 
-.job-card code {
-  font-size: var(--type-xxs);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+.job-card code { font-size: var(--type-xxs); }
 
 .job-card-stats {
   color: var(--fg-muted);

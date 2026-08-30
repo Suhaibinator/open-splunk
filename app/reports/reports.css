@@ -246,13 +246,6 @@
   grid-template-columns: minmax(260px, 1fr) 145px 174px;
 }
 
-.reports-search-field {
-  align-items: center;
-  background: var(--bg-surface);
-  border: 1px solid var(--border-strong);
-  display: flex;
-  height: 32px;
-}
 
 .reports-search-field:focus-within {
   border-color: var(--border-focus);
@@ -714,14 +707,6 @@
   padding: 7px var(--space-2) 7px 11px;
 }
 
-.reports-action-notice button {
-  background: transparent;
-  border: 0;
-  color: var(--status-success-strong);
-  font-size: var(--type-xl);
-  height: 28px;
-  width: 28px;
-}
 
 .reports-action-error {
   background: var(--status-error-soft);

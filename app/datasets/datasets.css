@@ -2,7 +2,6 @@
 .dataset-toolbar { align-items: center; display: flex; justify-content: space-between; margin-bottom: var(--space-3); }
 .dataset-toolbar > label { min-width: 340px; }
 .dataset-view-toggle { border: 0; display: flex; margin: 0; padding: 0; }
-.dataset-view-toggle button { background: var(--bg-surface); border: 1px solid var(--border-strong); font-size: var(--type-xs); height: 32px; padding: 0 10px; }
 .dataset-view-toggle button + button { border-left: 0; }
 .dataset-view-toggle button.active { background: var(--bg-subtle); color: var(--fg-link); font-weight: 700; }
 .dataset-grid { display: grid; gap: var(--space-3); grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: var(--space-3); }
@@ -18,7 +17,6 @@
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
-.dataset-icon { align-items: center; background: var(--accent-soft); color: var(--accent); display: flex; font-size: var(--type-xl); height: 35px; justify-content: center; width: 35px; }
 .dataset-icon--blue { background: var(--status-info-soft); color: var(--status-info); }
 .dataset-icon--orange { background: var(--status-warning-soft); color: var(--status-progress); }
 .dataset-card h2 { font-size: var(--type-md); margin: 2px 0 3px; }

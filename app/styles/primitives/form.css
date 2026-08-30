@@ -258,6 +258,88 @@
   width: 17px;
 }
 
+/* Shared field and supporting-copy vocabulary. Feature files keep the grids
+   and state modifiers; these rules own the repeated control paint. */
+.backend-resource-state p,
+.knowledge-preview > p,
+.knowledge-preview__intro {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  line-height: 1.5;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.index-observability-controls label > span,
+.workspace-dialog-export-summary dt {
+  color: var(--fg-muted);
+  font-size: var(--type-xxs);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.live-jobs-text-filter input,
+.admin-toolbar input,
+.admin-toolbar select,
+.resource-toolbar input,
+.activity-tabs-row input,
+.dataset-toolbar input {
+  background: transparent;
+  border: 0;
+  font-size: var(--type-xs);
+  height: 30px;
+  min-width: 0;
+  outline: 0;
+  padding: 0 var(--space-2);
+  width: 100%;
+}
+
+.live-jobs-text-filter,
+.live-jobs-app-filter,
+.reports-search-field {
+  align-items: center;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  display: flex;
+  height: 32px;
+}
+
+.history-clear-scope dd,
+.knowledge-manager__metadata dd,
+.knowledge-manager__definition dd {
+  color: var(--fg-text);
+  font-size: var(--type-xs);
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.lookup-manager__contract p,
+.token-recovery-summary p,
+.token-reveal p,
+.workspace-dialog-export-summary p {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  line-height: 1.45;
+  margin: 0;
+}
+
+.analytics-insight-list p,
+.app-launch-card p {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  line-height: 1.45;
+  margin: 0 0 9px;
+}
+
+.admin-mobile-section-picker label,
+.job-inspector section > span,
+.inspector-query > span {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
 /* Field validation
    One appearance for a field the form cannot accept, and one for the note that
    says why. Both were previously per-feature: `.signin-card` and the

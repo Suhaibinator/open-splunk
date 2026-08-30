@@ -48,23 +48,24 @@ the way it folds are one edit.
 | 7 | `app/styles/primitives/modal.css` | the dialog shell and the surfaces that only open inside one |
 | 8 | `app/styles/primitives/status.css` | `.status` and `.badge` |
 | 9 | `app/styles/primitives/layout.css` | the product bar, the app shell, the drawer, the toasts, `.suite-page` / `.suite-card` |
-| 10 | `app/search-workspace/search-editor.css` | the search title row, the SPL editor, the time-range popover |
-| 11 | `app/search-workspace/search-job.css` | the job strip, the result tabs, the timeline |
-| 12 | `app/search-workspace/search-fields.css` | the fields rail and the event list |
-| 13 | `app/search-workspace/search-results.css` | patterns, statistics, visualization, the dense result grids |
-| 14 | `app/admin/admin.css` | the admin console, Knowledge Manager, Knowledge Preview, Lookup Manager |
-| 15 | `app/activity/activity.css` | the activity console |
-| 16 | `app/datasets/datasets.css` | the dataset cards and field catalog |
-| 17 | `app/signin/signin.css` | the sign-in page |
-| 18 | `app/home.css` | the landing page |
-| 19 | `app/_components/backend-resource-state.css` | the connected-backend empty and error surfaces |
-| 20 | `app/dashboards/dashboards.css` | the operations dashboard's page rules |
-| 21 | `app/analytics/analytics.css` | the search-analytics console, prefix `analytics-` |
-| 22 | `app/dashboards/operations-dashboard.css` | the operations dashboard and the backend dashboard manager, prefix `operations-` |
-| 23 | `app/reports/reports.css` | the reports library and the saved-search console, prefix `reports-` |
-| 24 | `app/search-workspace/components/workspace-dialogs.css` | the workspace's dialogs, prefix `workspace-dialog-` |
-| 25 | `app/search-workspace/panels/visualization-panel.css` | the column and bar charts, prefix `visualization-` |
-| 26 | `app/styles/interaction.css` | the coarse-pointer tap target, the 16px input floor, the reduced-motion cut |
+| 10 | `app/styles/primitives/chart.css` | shared SVG stroke geometry and plot-grid furniture |
+| 11 | `app/search-workspace/search-editor.css` | the search title row, the SPL editor, the time-range popover |
+| 12 | `app/search-workspace/search-job.css` | the job strip, the result tabs, the timeline |
+| 13 | `app/search-workspace/search-fields.css` | the fields rail and the event list |
+| 14 | `app/search-workspace/search-results.css` | patterns, statistics, visualization, the dense result grids |
+| 15 | `app/admin/admin.css` | the admin console, Knowledge Manager, Knowledge Preview, Lookup Manager |
+| 16 | `app/activity/activity.css` | the activity console |
+| 17 | `app/datasets/datasets.css` | the dataset cards and field catalog |
+| 18 | `app/signin/signin.css` | the sign-in page |
+| 19 | `app/home.css` | the landing page |
+| 20 | `app/_components/backend-resource-state.css` | the connected-backend empty and error surfaces |
+| 21 | `app/dashboards/dashboards.css` | the operations dashboard's page rules |
+| 22 | `app/analytics/analytics.css` | the search-analytics console, prefix `analytics-` |
+| 23 | `app/dashboards/operations-dashboard.css` | the operations dashboard and the backend dashboard manager, prefix `operations-` |
+| 24 | `app/reports/reports.css` | the reports library and the saved-search console, prefix `reports-` |
+| 25 | `app/search-workspace/components/workspace-dialogs.css` | the workspace's dialogs, prefix `workspace-dialog-` |
+| 26 | `app/search-workspace/panels/visualization-panel.css` | the column and bar charts, prefix `visualization-` |
+| 27 | `app/styles/interaction.css` | the coarse-pointer tap target, the 16px input floor, the reduced-motion cut |
 
 The primitives come before the features on purpose. A feature rule and a
 primitive rule regularly have the same specificity — `.reports-table-wrap`
@@ -1185,15 +1186,11 @@ and `pulse-ring` are each declared once, that the six keyframe blocks they
 replaced stay gone, and that every `animation` names a block that exists — a
 dangling animation name renders as no animation at all, in silence.
 
-It also asserts that no two rules state the same four or more declarations.
-`scripts/css-duplicate-blocks.json` records the restatements this phase
-deliberately left, each with the primitive that would otherwise own it. An
-entry is keyed by both the declarations and the exact set of rules stating
-them, so it goes stale — and the test fails — the moment either side moves.
-That is what stops the record drifting into a blanket exemption. The largest
-entries name the next consolidation: the knowledge- and lookup-manager form
-controls (four copies of one input rule), the uppercase field label (three),
-and muted body copy (four).
+It also asserts that no two rules in the same at-rule context state the same
+four or more declarations. There is no exemption ledger: a repeated block must
+be folded into a primitive, a modifier or a shared selector list. At-rule
+contexts are compared separately because a responsive or accessibility
+override is not interchangeable with an unconditional base rule.
 
 The same file walks the other direction — from every call site back to the
 styling layer, which is the direction a deletion gets wrong.
@@ -1303,7 +1300,7 @@ The sections, in the order they appear in the file:
    stylesheet in; the entry point declares no rule of its own; no `.module.css`,
    `:global()`, `:local()`, `composes` or `styles.x` read comes back; no test
    file reads a stylesheet's characters, however the path is composed; and the
-   load order is tokens, base, the six primitives, the features, then
+   load order is tokens, base, the seven primitives, the features, then
    `interaction.css` last.
 6. **Where a responsive rule lives.** No `@media` block overrides base rules
    that live in another file, `interaction.css` still earns its exemption from
@@ -1331,7 +1328,7 @@ The sections, in the order they appear in the file:
 
 ### The ledgers
 
-Four JSON files record what the invariants deliberately allow. Each is compared
+Three JSON files record what the invariants deliberately allow. Each is compared
 against the tree in **both** directions, which is the property that makes them
 ratchets rather than exemption lists: an entry whose subject has been fixed
 fails the suite just as loudly as an unrecorded violation.
@@ -1340,7 +1337,6 @@ fails the suite just as loudly as an unrecorded violation.
 | --- | --- |
 | `scripts/css-literal-debt.json` | every colour and scale literal left outside the token layer |
 | `scripts/css-retired-classes.json` | the sixty-seven classes the consolidation deleted, each with its replacement |
-| `scripts/css-duplicate-blocks.json` | the restatements left in place, each with the primitive that would otherwise own it |
 | `scripts/css-dynamic-classes.json` | classes that only ever reach the DOM at runtime |
 
 Adding a row is therefore a deliberate act with a reviewer reading it, and

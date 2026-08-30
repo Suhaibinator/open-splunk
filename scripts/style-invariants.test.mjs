@@ -1186,8 +1186,8 @@ test("app/styles/index.css loads tokens, base, the primitives, the features, the
   const imports = await listIndexImports(workspace);
   const loaded = imports.map((entry) => entry.file);
   // The head is pinned name by name because the band check below leaves the
-  // sequence inside the primitive band free, and layout.css is written to lean
-  // on the five primitives above it.
+  // sequence inside the primitive band free, and the later primitives are
+  // written to lean on the foundational ones above them.
   const head = [
     ...(await listTokenStylesheets(workspace)).map((file) => relativePosix(workspace, file)),
     "app/styles/base.css",
@@ -1197,11 +1197,12 @@ test("app/styles/index.css loads tokens, base, the primitives, the features, the
     "app/styles/primitives/modal.css",
     "app/styles/primitives/status.css",
     "app/styles/primitives/layout.css",
+    "app/styles/primitives/chart.css",
   ];
   assert.deepEqual(
     loaded.slice(0, head.length),
     head,
-    "The tokens, the base sheet and the six primitives are no longer the first imports, in that\n"
+    "The tokens, the base sheet and the seven primitives are no longer the first imports, in that\n"
       + "order. Tokens first because a rule that reads a name declared after it paints the fallback;\n"
       + "primitives before every feature because `.reports-table-wrap` and `.table-wrap` are both one\n"
       + `class and the feature is the one meant to win.\n${describeList(loaded.slice(0, head.length))}`,
@@ -1338,8 +1339,6 @@ test("every run of media queries follows the documented order", async () => {
 
 /* == 7. One implementation of each primitive =================================== */
 
-const duplicateAllowlistPath = path.join(workspace, "scripts", "css-duplicate-blocks.json");
-
 /**
  * The primitives Phase 3 consolidated, and what each one replaced.
  *
@@ -1378,21 +1377,12 @@ const RETIRED_KEYFRAMES = [
 /** Two rules stating this many declarations identically is a restatement, not a coincidence. */
 const DUPLICATE_DECLARATION_THRESHOLD = 4;
 
-/** Reads the justified record of duplication this phase deliberately left. */
-async function readDuplicateAllowlist() {
-  const parsed = JSON.parse(await readFile(duplicateAllowlistPath, "utf8"));
-  return new Map((parsed.groups ?? []).map((group) => [
-    JSON.stringify({ declarations: group.declarations, sites: group.sites }),
-    group.why,
-  ]));
-}
-
-/** Groups every rule of at least `minimum` declarations by what it declares. */
+/** Groups rules in the same at-rule context by what they declare. */
 async function duplicateDeclarationGroups(root, minimum) {
   const groups = new Map();
   for (const block of await collectDeclarationBlocks(root, minimum)) {
     const declarations = declarationSignature(block.declarations);
-    const key = declarations.join("; ");
+    const key = JSON.stringify({ ancestors: block.ancestors, declarations });
     const group = groups.get(key) ?? { declarations, sites: [] };
     group.sites.push(describeRuleSite(block));
     groups.set(key, group);
@@ -1467,44 +1457,16 @@ test("every animation a rule plays names a keyframe block that exists", async ()
 });
 
 test("no two rules state the same four or more declarations", async () => {
-  const allowlist = await readDuplicateAllowlist();
-  const unjustified = (await duplicateDeclarationGroups(workspace, DUPLICATE_DECLARATION_THRESHOLD))
-    .filter((group) => !allowlist.has(JSON.stringify(group)))
+  const duplicates = (await duplicateDeclarationGroups(workspace, DUPLICATE_DECLARATION_THRESHOLD))
     .map((group) => `${group.declarations.length} declarations restated by:\n`
       + group.sites.map((site) => `      ${site}`).join("\n")
       + `\n      { ${group.declarations.join("; ")} }`);
   assert.deepEqual(
-    unjustified,
+    duplicates,
     [],
     "Two rules describe the same thing in the same words. Either one of them should be using the\n"
-      + "other -- a primitive, a modifier, a shared selector list -- or the duplication is deliberate\n"
-      + "and belongs in scripts/css-duplicate-blocks.json with the reason and the primitive that\n"
-      + `would otherwise own it:\n${describeList(unjustified)}`,
-  );
-});
-
-test("the duplicate-block allowlist carries no stale entries", async () => {
-  const allowlist = await readDuplicateAllowlist();
-  const live = new Set(
-    (await duplicateDeclarationGroups(workspace, DUPLICATE_DECLARATION_THRESHOLD))
-      .map((group) => JSON.stringify(group)),
-  );
-  const stale = [];
-  for (const [key, why] of allowlist) {
-    if (live.has(key)) {
-      if (typeof why === "string" && why.trim().length > 0) continue;
-      stale.push(`an entry for ${JSON.parse(key).sites[0]} carries no justification`);
-      continue;
-    }
-    const { sites } = JSON.parse(key);
-    stale.push(`${sites[0]} no longer restates the same declarations as ${sites.slice(1).join(", ")}`);
-  }
-  assert.deepEqual(
-    stale.toSorted(),
-    [],
-    "scripts/css-duplicate-blocks.json describes duplication that has changed or been paid off.\n"
-      + "Delete the entry when the duplication is gone; rewrite it -- declarations, sites and reason\n"
-      + `-- when it has moved, so the record can never drift into a blanket exemption:\n${describeList(stale.toSorted())}`,
+      + "other -- a primitive, a modifier or a shared selector list. The detector is strict: there is\n"
+      + `no duplicate-block exemption ledger:\n${describeList(duplicates)}`,
   );
 });
 

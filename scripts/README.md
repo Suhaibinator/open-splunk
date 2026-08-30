@@ -58,7 +58,7 @@ size or a face inside the `font` shorthand, a step inside an `@container` query,
 a colour keyword inside another function's parentheses, and a colour in an
 inline `style`, which is the one place that outranks the whole stylesheet layer.
 
-Four JSON ledgers record what the suite deliberately allows, each compared
+Three JSON ledgers record what the suite deliberately allows, each compared
 against the tree in both directions so that paying a row off fails as loudly as
 adding an unrecorded one:
 
@@ -67,10 +67,10 @@ adding an unrecorded one:
 - `css-retired-classes.json` — the classes the consolidation deleted and the
   primitive that replaced each. Nothing in the toolchain reports an unmatched
   class, so this is the only place a deletion that outran its markup shows up.
-- `css-duplicate-blocks.json` — the restatements deliberately left, each with
-  the primitive that would otherwise own it; an entry goes stale the moment
-  either side of the duplication changes.
 - `css-dynamic-classes.json` — global classes that only ever exist at runtime.
+
+Repeated declaration blocks have no ledger or exemption: four or more
+identical declarations in the same at-rule context must be consolidated.
 
 `safety-net.test.mjs` checks that the frontend safety net cannot stop running
 unnoticed: every unit test file is named in this directory's hardcoded runner

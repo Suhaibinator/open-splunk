@@ -117,12 +117,6 @@
 .workspace-dialog-export-summary--warning h3 { color: var(--status-warning-strong); }
 .workspace-dialog-export-summary--error h3 { color: var(--status-error-strong); }
 
-.workspace-dialog-export-summary p {
-  color: var(--fg-muted);
-  font-size: var(--type-xs);
-  line-height: 1.45;
-  margin: 0;
-}
 
 .workspace-dialog-export-summary dl {
   border-top: 1px solid var(--border);
@@ -145,12 +139,6 @@
   border-right: 0;
 }
 
-.workspace-dialog-export-summary dt {
-  color: var(--fg-muted);
-  font-size: var(--type-xxs);
-  font-weight: 700;
-  text-transform: uppercase;
-}
 
 .workspace-dialog-export-summary dd {
   color: var(--fg-text);

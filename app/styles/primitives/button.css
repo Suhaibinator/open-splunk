@@ -77,6 +77,36 @@
   width: 100%;
 }
 
+/* Shared feature actions that have not yet adopted the class-based button
+   modifiers. Keeping each visual role here gives it one declaration site. */
+.history-action-notice button,
+.reports-action-notice button {
+  background: transparent;
+  border: 0;
+  color: var(--status-success-strong);
+  font-size: var(--type-xl);
+  height: 28px;
+  width: 28px;
+}
+
+.collector-card footer button,
+.field-inspector > footer button,
+.pattern-table article > button {
+  background: transparent;
+  border: 0;
+  color: var(--fg-link);
+  font-size: var(--type-xs);
+}
+
+.resource-toolbar > button,
+.dataset-view-toggle button {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  font-size: var(--type-xs);
+  height: 32px;
+  padding: 0 10px;
+}
+
 .button[aria-disabled="true"] {
   cursor: wait;
   opacity: 0.68;
