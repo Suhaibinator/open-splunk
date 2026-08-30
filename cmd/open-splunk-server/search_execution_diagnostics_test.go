@@ -10,6 +10,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -74,7 +75,7 @@ func TestClassifySearchExecutionCauseUsesStableSecretFreeClasses(t *testing.T) {
 	}
 }
 
-func TestSearchExecutionFailureFieldsOmitPrivateCauseDetails(t *testing.T) {
+func TestSearchFailureLogIncludesOperationalFieldsAndOmitsPrivateDetails(t *testing.T) {
 	t.Parallel()
 
 	cause := &clickhousedriver.Exception{
@@ -89,14 +90,24 @@ func TestSearchExecutionFailureFieldsOmitPrivateCauseDetails(t *testing.T) {
 		zapcore.AddSync(&output),
 		zap.DebugLevel,
 	))
-	logger.Error(
-		"search execution failed",
-		searchExecutionFailureFields(
-			"job\nidentifier",
-			searchjobs.FailureExecution,
-			fmt.Errorf("private wrapper: %w", cause),
-		)...,
-	)
+	logSearchFailure(logger, searchjobs.FailureNotification{Report: searchjobs.FailureReport{
+		JobID:        "job\nidentifier",
+		TenantID:     "tenant-a",
+		OwnerID:      "owner-a",
+		AppID:        "search",
+		Source:       searchjobs.JobSource{Origin: searchjobs.JobOriginSavedSearch, ObjectID: "saved-1"},
+		Phase:        searchjobs.StateRunning,
+		Code:         searchjobs.FailureExecution,
+		Message:      "search execution failed",
+		Retryable:    true,
+		MaxRuntime:   2 * time.Minute,
+		QueueWait:    1250 * time.Millisecond,
+		Elapsed:      3 * time.Second,
+		ScannedRows:  11,
+		ScannedBytes: 22,
+		ProducedRows: 3,
+		ResultBytes:  44,
+	}, CauseKind: searchjobs.FailureCauseExecution, Cause: fmt.Errorf("private wrapper: %w", cause)})
 	got := output.String()
 	for _, private := range []string{
 		"PRIVATE_NAME",
@@ -113,13 +124,104 @@ func TestSearchExecutionFailureFieldsOmitPrivateCauseDetails(t *testing.T) {
 		t.Fatalf("structured diagnostic is not one record: %q", got)
 	}
 	for _, want := range []string{
+		`"level":"error"`,
+		`"msg":"search failed"`,
 		`"job_id":"job\nidentifier"`,
+		`"tenant_id":"tenant-a"`,
+		`"owner_id":"owner-a"`,
+		`"app_id":"search"`,
+		`"search_origin":"saved_search"`,
+		`"source_object_id":"saved-1"`,
+		`"failure_phase":"running"`,
 		`"failure_code":"execution"`,
+		`"failure_message":"search execution failed"`,
+		`"retryable":true`,
 		`"cause_class":"clickhouse_exception"`,
 		`"clickhouse_code":47`,
+		`"max_runtime_ms":120000`,
+		`"queue_wait_ms":1250`,
+		`"elapsed_ms":3000`,
+		`"scanned_rows":11`,
+		`"scanned_bytes":22`,
+		`"produced_rows":3`,
+		`"result_bytes":44`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("structured diagnostic %q does not contain %q", got, want)
+		}
+	}
+}
+
+func TestSearchFailureSeverityPolicy(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		code searchjobs.FailureCode
+		warn bool
+	}{
+		{code: searchjobs.FailureInvalidSPL, warn: true},
+		{code: searchjobs.FailureUnsupportedSPL, warn: true},
+		{code: searchjobs.FailureInvalidTimeRange, warn: true},
+		{code: searchjobs.FailureIndexForbidden, warn: true},
+		{code: searchjobs.FailureResourceLimit, warn: true},
+		{code: searchjobs.FailureTimeout},
+		{code: searchjobs.FailureStorageUnavailable},
+		{code: searchjobs.FailureExecution},
+		{code: searchjobs.FailureInternal},
+	} {
+		if got := searchFailureIsWarning(test.code); got != test.warn {
+			t.Errorf("searchFailureIsWarning(%q) = %t, want %t", test.code, got, test.warn)
+		}
+	}
+}
+
+func TestSearchFailureCauseKindsHaveStableClasses(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		kind searchjobs.FailureCauseKind
+		want string
+	}{
+		{kind: searchjobs.FailureCauseParsing, want: searchCauseSPLParsing},
+		{kind: searchjobs.FailureCausePlanning, want: searchCauseSPLPlanning},
+		{kind: searchjobs.FailureCauseInvariant, want: searchCauseInvariant},
+		{kind: searchjobs.FailureCauseRecoveredPanic, want: searchCauseRecoveredPanic},
+		{kind: searchjobs.FailureCauseUnknown, want: searchCauseOther},
+	} {
+		got, code, hasCode := classifySearchFailureCause(searchjobs.FailureNotification{CauseKind: test.kind})
+		if got != test.want || code != 0 || hasCode {
+			t.Errorf("classifySearchFailureCause(%d) = (%q, %d, %t), want (%q, 0, false)", test.kind, got, code, hasCode, test.want)
+		}
+	}
+}
+
+func TestCoalescedSearchFailuresAreExplicitErrors(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	logger := zap.New(zapcore.NewCore(
+		zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig()),
+		zapcore.AddSync(&output),
+		zap.DebugLevel,
+	))
+	logSearchFailure(logger, searchjobs.FailureNotification{
+		Report: searchjobs.FailureReport{
+			JobID: "latest", TenantID: "tenant-a", OwnerID: "owner-a",
+			Source: searchjobs.JobSource{Origin: searchjobs.JobOriginAPI},
+			Phase:  searchjobs.StateRunning, Code: searchjobs.FailureInvalidSPL,
+			Message: "search SPL is invalid",
+		},
+		Coalesced: 7, CauseKind: searchjobs.FailureCauseParsing,
+	})
+	got := output.String()
+	for _, want := range []string{
+		`"level":"error"`,
+		`"msg":"search failure notifications coalesced"`,
+		`"coalesced_failures":7`,
+		`"job_id":"latest"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("coalesced diagnostic %q does not contain %q", got, want)
 		}
 	}
 }

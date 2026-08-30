@@ -668,8 +668,8 @@ func runWithOptions(config options) error {
 		OnJournalError: func(err error) {
 			logger.Warn("persist search-job history", zap.Error(err))
 		},
-		OnExecutionError: func(jobID string, code searchjobs.FailureCode, cause error) {
-			logger.Error("search execution failed", searchExecutionFailureFields(jobID, code, cause)...)
+		OnFailure: func(notification searchjobs.FailureNotification) {
+			logSearchFailure(logger, notification)
 		},
 		Compiler:      compiler,
 		MaxConcurrent: int(searchlimits.SupportedRange().Maximum.MaxConcurrent),

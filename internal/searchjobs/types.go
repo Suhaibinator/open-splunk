@@ -123,6 +123,53 @@ type Failure struct {
 	Diagnostics []Diagnostic
 }
 
+// FailureCauseKind identifies the trusted layer that supplied a failed job's
+// private cause. It lets operational reporters classify failures without
+// inspecting or publishing arbitrary error text.
+type FailureCauseKind uint8
+
+const (
+	FailureCauseUnknown FailureCauseKind = iota
+	FailureCauseParsing
+	FailureCausePlanning
+	FailureCauseExecution
+	FailureCauseInvariant
+	FailureCauseRecoveredPanic
+)
+
+// FailureReport is the bounded, allowlisted operational projection captured
+// exactly when one job enters StateFailed.
+type FailureReport struct {
+	JobID        string
+	TenantID     string
+	OwnerID      string
+	AppID        string
+	Source       JobSource
+	Phase        State
+	Code         FailureCode
+	Message      string
+	Retryable    bool
+	MaxRuntime   time.Duration
+	QueueWait    time.Duration
+	Elapsed      time.Duration
+	ScannedRows  uint64
+	ScannedBytes uint64
+	ProducedRows uint64
+	ResultBytes  uint64
+}
+
+// FailureNotification is either one exact failure report or a bounded
+// coalescing summary. Coalesced is zero for an exact notification; otherwise
+// Report is the latest failure among Coalesced reports observed while the
+// preceding callback was in flight. Cause is trusted process-private detail
+// for classification only; reporters must never serialize its text.
+type FailureNotification struct {
+	Report    FailureReport
+	Coalesced uint64
+	CauseKind FailureCauseKind
+	Cause     error
+}
+
 // JobOrigin identifies the authoritative product surface that launched a
 // search. IDs are retained separately so history can reopen the originating
 // object without trusting a client-selected tenant or owner.
@@ -136,6 +183,24 @@ const (
 	JobOriginDashboard
 	JobOriginAPI
 )
+
+// String returns the stable operational spelling of a search origin.
+func (origin JobOrigin) String() string {
+	switch origin {
+	case JobOriginAdHoc:
+		return "ad_hoc"
+	case JobOriginSavedSearch:
+		return "saved_search"
+	case JobOriginHistoryRerun:
+		return "history_rerun"
+	case JobOriginDashboard:
+		return "dashboard"
+	case JobOriginAPI:
+		return "api"
+	default:
+		return "invalid"
+	}
+}
 
 // JobSource is normalized provenance for one search attempt. ObjectID is
 // required for saved-search, history-rerun, and dashboard origins and must be

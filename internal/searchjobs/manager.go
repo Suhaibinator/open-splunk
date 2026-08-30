@@ -295,15 +295,15 @@ type Config struct {
 	// search workers or shutdown. It runs without manager or job locks, and a
 	// panic is contained.
 	OnJournalError func(error)
-	// OnExecutionError receives the trusted executor cause after a job has
-	// atomically entered StateFailed. Code is the exact public category while
-	// cause remains private. At most one asynchronous callback is in flight;
-	// further notifications are dropped while it is active so a blocked callback
-	// cannot stall search workers or shutdown. It runs without manager or job
-	// locks, is not joined by Close, and a panic is contained.
-	OnExecutionError func(jobID string, code FailureCode, cause error)
-	CursorKey        []byte
-	CursorScope      string
+	// OnFailure receives a bounded operational report after a job has atomically
+	// entered StateFailed. At most one asynchronous callback is in flight. Later
+	// failures are counted and coalesced around the latest safe report so a
+	// blocked callback cannot stall workers or silently lose observability. It
+	// runs without manager or job locks, is not joined by Close, and a panic is
+	// contained. Cause is private classification input and must not be logged.
+	OnFailure   func(FailureNotification)
+	CursorKey   []byte
+	CursorScope string
 }
 
 // Manager owns a bounded worker pool and retained in-memory result snapshots.
@@ -321,7 +321,7 @@ type Manager struct {
 	journal                  JobJournal
 	journalTimeout           time.Duration
 	onJournalError           func(error)
-	onExecutionError         func(string, FailureCode, error)
+	onFailure                func(FailureNotification)
 	compiler                 clickhouse.Compiler
 	knowledgeResolver        KnowledgeResolver
 	lookupResolver           LookupResolver
@@ -367,16 +367,19 @@ type Manager struct {
 	operationWG       sync.WaitGroup
 	closeOnce         sync.Once
 
-	budgetMu               sync.Mutex
-	retainedBytes          uint64
-	metadataBytes          uint64
-	activeResultLeases     int
-	cleanupMu              sync.Mutex
-	journalErrMu           sync.RWMutex
-	lastJournalErr         *JournalError
-	journalErrorHookGate   chan struct{}
-	executionErrorHookGate chan struct{}
-	activeExecutions       uint32
+	budgetMu             sync.Mutex
+	retainedBytes        uint64
+	metadataBytes        uint64
+	activeResultLeases   int
+	cleanupMu            sync.Mutex
+	journalErrMu         sync.RWMutex
+	lastJournalErr       *JournalError
+	journalErrorHookGate chan struct{}
+	failureReportMu      sync.Mutex
+	failureReportRunning bool
+	pendingFailure       *FailureNotification
+	coalescedFailures    uint64
+	activeExecutions     uint32
 }
 
 type jobEntry struct {
@@ -593,9 +596,8 @@ func New(config Config) (*Manager, error) {
 		journal:                  config.Journal,
 		journalTimeout:           journalTimeout,
 		onJournalError:           config.OnJournalError,
-		onExecutionError:         config.OnExecutionError,
+		onFailure:                config.OnFailure,
 		journalErrorHookGate:     make(chan struct{}, 1),
-		executionErrorHookGate:   make(chan struct{}, 1),
 		compiler:                 config.Compiler,
 		knowledgeResolver:        knowledgeResolver,
 		lookupResolver:           lookupResolver,
@@ -1800,10 +1802,13 @@ func (manager *Manager) clearQueueLocked() {
 func (manager *Manager) runSafely(entry *jobEntry) {
 	defer func() {
 		if recover() != nil {
-			manager.failOrCancel(entry, Failure{
-				Code:    FailureInternal,
-				Message: "search failed internally",
-			}, manager.nowUTC())
+			manager.failOrCancelWithCause(
+				entry,
+				Failure{Code: FailureInternal, Message: "search failed internally"},
+				FailureCauseRecoveredPanic,
+				nil,
+				manager.nowUTC(),
+			)
 		}
 	}()
 	manager.run(entry)
@@ -1822,7 +1827,13 @@ func (manager *Manager) run(entry *jobEntry) {
 		}
 		compiled, runtimeBudget, ok := entry.takePreparedExecution()
 		if !ok {
-			manager.failOrCancel(entry, Failure{Code: FailureInternal, Message: "search planning failed"}, manager.nowUTC())
+			manager.failOrCancelWithCause(
+				entry,
+				Failure{Code: FailureInternal, Message: "search planning failed"},
+				FailureCauseInvariant,
+				nil,
+				manager.nowUTC(),
+			)
 			return
 		}
 		manager.executeCompiled(entry, compiled, runtimeBudget)
@@ -1830,7 +1841,13 @@ func (manager *Manager) run(entry *jobEntry) {
 	}
 	parsed, err := parseSPLQuery(entry.ctx, entry.job.SPL)
 	if err != nil {
-		manager.failOrCancel(entry, parseFailure(err), manager.nowUTC())
+		manager.failOrCancelWithCause(
+			entry,
+			parseFailure(err),
+			FailureCauseParsing,
+			err,
+			manager.nowUTC(),
+		)
 		return
 	}
 	if !manager.advance(entry, StateParsing, StatePlanning, nil) {
@@ -1860,7 +1877,13 @@ func (manager *Manager) run(entry *jobEntry) {
 	)
 	if err != nil {
 		if _, ok := errors.AsType[*plan.Diagnostic](err); ok {
-			manager.failOrCancel(entry, planningFailure(err), manager.nowUTC())
+			manager.failOrCancelWithCause(
+				entry,
+				planningFailure(err),
+				FailureCausePlanning,
+				err,
+				manager.nowUTC(),
+			)
 		} else {
 			manager.executionFailed(entry, err)
 		}
@@ -1993,7 +2016,13 @@ func (manager *Manager) executeCompiled(
 		return
 	}
 	if !sink.schemaReceived() {
-		manager.failOrCancel(entry, Failure{Code: FailureInternal, Message: "search execution returned an invalid result"}, manager.nowUTC())
+		manager.failOrCancelWithCause(
+			entry,
+			Failure{Code: FailureInternal, Message: "search execution returned an invalid result"},
+			FailureCauseInvariant,
+			nil,
+			manager.nowUTC(),
+		)
 		return
 	}
 	manager.finishCompleted(entry, manager.nowUTC(), resultsTruncated)
@@ -2088,72 +2117,153 @@ func (manager *Manager) executionFailed(entry *jobEntry, err error) {
 	default:
 		failure = Failure{Code: FailureExecution, Message: "search execution failed"}
 	}
-	manager.failOrCancelWithHook(entry, failure, manager.nowUTC(), func(jobID string) {
-		manager.reportExecutionError(jobID, failure.Code, err)
-	})
+	manager.failOrCancelWithCause(
+		entry,
+		failure,
+		FailureCauseExecution,
+		err,
+		manager.nowUTC(),
+	)
 }
 
-func (manager *Manager) failOrCancel(entry *jobEntry, failure Failure, now time.Time) {
-	manager.failOrCancelWithHook(entry, failure, now, nil)
-}
-
-func (manager *Manager) failOrCancelWithHook(
+func (manager *Manager) failOrCancelWithCause(
 	entry *jobEntry,
 	failure Failure,
+	causeKind FailureCauseKind,
+	cause error,
 	now time.Time,
-	afterFailure func(string),
 ) {
-	var failedJobID string
+	var notification *FailureNotification
 	entry.mu.Lock()
 	if !entry.job.State.terminal() {
 		if entry.ctx.Err() != nil {
 			manager.finishCanceledLocked(entry, now)
 		} else {
+			failurePhase := entry.job.State
 			entry.job.State = StateFailed
 			incrementJobVersion(&entry.job)
 			entry.job.Failure = &failure
 			entry.job.FinishedAt = now
 			entry.job.ExpiresAt = now.Add(entry.limits.ResultRetention)
-			manager.clearResultsLocked(entry)
 			entry.history = append(entry.history, StateFailed)
-			failedJobID = strings.Clone(entry.job.ID)
+			captured := failureNotificationLocked(entry, failurePhase, causeKind, cause)
+			notification = &captured
+			manager.clearResultsLocked(entry)
 		}
 	}
 	terminal, finalize := manager.claimTerminalJournalLocked(entry)
 	entry.mu.Unlock()
-	if failedJobID != "" && afterFailure != nil {
-		afterFailure(failedJobID)
-	}
 	entry.cancel()
 	if finalize {
 		manager.finalizeJournal(terminal)
 	}
+	if notification != nil {
+		manager.reportFailure(*notification)
+	}
 }
 
-func (manager *Manager) reportExecutionError(
-	jobID string,
-	code FailureCode,
+func failureNotificationLocked(
+	entry *jobEntry,
+	phase State,
+	causeKind FailureCauseKind,
 	cause error,
-) {
-	hook := manager.onExecutionError
+) FailureNotification {
+	job := entry.job
+	queueWait := time.Duration(0)
+	if !job.StartedAt.IsZero() && job.StartedAt.After(job.CreatedAt) {
+		queueWait = job.StartedAt.Sub(job.CreatedAt)
+	}
+	elapsed := time.Duration(0)
+	if !job.StartedAt.IsZero() && job.FinishedAt.After(job.StartedAt) {
+		elapsed = job.FinishedAt.Sub(job.StartedAt)
+	}
+	return FailureNotification{
+		Report: FailureReport{
+			JobID:        strings.Clone(job.ID),
+			TenantID:     strings.Clone(job.TenantID),
+			OwnerID:      strings.Clone(job.OwnerID),
+			AppID:        strings.Clone(job.AppID),
+			Source:       JobSource{Origin: job.Source.Origin, ObjectID: strings.Clone(job.Source.ObjectID)},
+			Phase:        phase,
+			Code:         job.Failure.Code,
+			Message:      strings.Clone(job.Failure.Message),
+			Retryable:    job.Failure.Retryable,
+			MaxRuntime:   entry.limits.MaxRuntime,
+			QueueWait:    queueWait,
+			Elapsed:      elapsed,
+			ScannedRows:  job.ScannedRows,
+			ScannedBytes: job.ScannedBytes,
+			ProducedRows: job.RowCount,
+			ResultBytes:  job.ResultBytes,
+		},
+		CauseKind: causeKind,
+		Cause:     cause,
+	}
+}
+
+func cloneFailureReport(report FailureReport) FailureReport {
+	report.JobID = strings.Clone(report.JobID)
+	report.TenantID = strings.Clone(report.TenantID)
+	report.OwnerID = strings.Clone(report.OwnerID)
+	report.AppID = strings.Clone(report.AppID)
+	report.Source.ObjectID = strings.Clone(report.Source.ObjectID)
+	report.Message = strings.Clone(report.Message)
+	return report
+}
+
+func cloneFailureNotification(notification FailureNotification) FailureNotification {
+	notification.Report = cloneFailureReport(notification.Report)
+	return notification
+}
+
+func (manager *Manager) reportFailure(notification FailureNotification) {
+	hook := manager.onFailure
 	if hook == nil {
 		return
 	}
-	gate := manager.executionErrorHookGate
-	detachedJobID := strings.Clone(jobID)
-	select {
-	case gate <- struct{}{}:
-		go func() {
+	detached := cloneFailureNotification(notification)
+	manager.failureReportMu.Lock()
+	if manager.failureReportRunning {
+		if manager.coalescedFailures != ^uint64(0) {
+			manager.coalescedFailures++
+		}
+		manager.pendingFailure = &detached
+		manager.failureReportMu.Unlock()
+		return
+	}
+	manager.failureReportRunning = true
+	manager.failureReportMu.Unlock()
+	go manager.runFailureReporter(hook, detached)
+}
+
+func (manager *Manager) runFailureReporter(
+	hook func(FailureNotification),
+	notification FailureNotification,
+) {
+	for {
+		func() {
 			defer func() {
-				// Never retain the panic value: it may contain a storage secret.
+				// Never retain a callback panic: it may contain a storage secret.
 				_ = recover()
-				<-gate
 			}()
-			hook(detachedJobID, code, cause)
+			hook(notification)
 		}()
-	default:
-		// Operational notification is deliberately best-effort. A stuck hook
-		// cannot create unbounded goroutines or retain unbounded private causes.
+
+		manager.failureReportMu.Lock()
+		if manager.coalescedFailures == 0 || manager.pendingFailure == nil {
+			manager.failureReportRunning = false
+			manager.failureReportMu.Unlock()
+			return
+		}
+		notification = FailureNotification{
+			Report:    cloneFailureReport(manager.pendingFailure.Report),
+			Coalesced: manager.coalescedFailures,
+			CauseKind: manager.pendingFailure.CauseKind,
+			Cause:     manager.pendingFailure.Cause,
+		}
+		manager.pendingFailure = nil
+		manager.coalescedFailures = 0
+		manager.failureReportMu.Unlock()
 	}
 }
 
