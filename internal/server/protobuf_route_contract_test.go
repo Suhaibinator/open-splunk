@@ -1052,7 +1052,7 @@ func assertGoRequestAcceptsFutureWire(
 	if len(message.ProtoReflect().GetUnknown()) == 0 {
 		t.Fatal("future request field was not decoded as unknown")
 	}
-	if _, err := forwardCompatibleProtoSanitizer(message); err != nil {
+	if _, err := forwardCompatibleProtoSanitizer(t.Context(), message); err != nil {
 		t.Fatalf("sanitize future request: %v", err)
 	}
 	if typeName == "ValidateKnowledgeObjectRequest" ||

@@ -23,20 +23,20 @@
   },
   "dependencies": {
     "@bufbuild/protobuf": "^2.14.0",
-    "lucide-react": "^1.35.0",
-    "next": "^16.3.2",
+    "lucide-react": "^1.37.0",
+    "next": "^16.3.3",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },
   "devDependencies": {
     "@bufbuild/buf": "1.72.0",
     "@playwright/test": "1.62.1",
-    "@types/node": "^26.2.0",
+    "@types/node": "^26.4.0",
     "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.2.4",
-    "oxlint": "^1.79.0",
-    "stylelint": "^16.26.1",
-    "stylelint-config-standard": "^39.0.1",
+    "@types/react-dom": "^19.2.5",
+    "oxlint": "^1.80.0",
+    "stylelint": "^17.14.1",
+    "stylelint-config-standard": "^40.0.0",
     "ts-proto": "^2.12.1",
     "typescript": "^7.0.2"
   }

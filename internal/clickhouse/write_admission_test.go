@@ -509,10 +509,11 @@ func TestFrozenDrainFailsClosedBeyondVisibilityCapacity(t *testing.T) {
 func TestCloseCancelsAndWaitsForAdmittedStoreBeforeClosingConnection(t *testing.T) {
 	t.Parallel()
 	connection := &gatedStoreConnection{
-		entered: make(chan struct{}),
-		resume:  make(chan struct{}),
-		exited:  make(chan struct{}),
-		closed:  make(chan struct{}),
+		entered:          make(chan struct{}),
+		resume:           make(chan struct{}),
+		exited:           make(chan struct{}),
+		closed:           make(chan struct{}),
+		closedBeforeExit: make(chan struct{}),
 	}
 	store := mustTestStore(t, connection, fixedRetention(time.Hour))
 	storeDone := make(chan error, 1)
@@ -529,8 +530,6 @@ func TestCloseCancelsAndWaitsForAdmittedStoreBeforeClosingConnection(t *testing.
 	closeDone := make(chan error, 1)
 	go func() { closeDone <- store.Close() }()
 	select {
-	case <-connection.closed:
-		t.Fatal("connection closed before the admitted Store left ClickHouse")
 	case <-connection.exited:
 	case <-time.After(5 * time.Second):
 		t.Fatal("Close did not cancel the admitted Store")
@@ -542,6 +541,11 @@ func TestCloseCancelsAndWaitsForAdmittedStoreBeforeClosingConnection(t *testing.
 	case <-connection.closed:
 	case <-time.After(5 * time.Second):
 		t.Fatal("connection did not close after the Store stopped")
+	}
+	select {
+	case <-connection.closedBeforeExit:
+		t.Fatal("connection closed before the admitted Store left ClickHouse")
+	default:
 	}
 	if err := <-closeDone; err != nil {
 		t.Fatal(err)
