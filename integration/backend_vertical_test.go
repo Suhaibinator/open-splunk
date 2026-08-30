@@ -54,6 +54,7 @@ const (
 	redactionPINSentinel           = "vertical-customer-pin-must-not-survive"
 	redactionCredentialMarker      = "[CREDENTIAL-MASKED]"
 	redactionPINMarker             = "[PIN-MASKED]"
+	redactionDefaultMarker         = "[REDACTED]"
 	verticalSentinelMessage        = "typed redaction sentinel"
 	verticalSearchSPL              = " \nindex=vertical | lookup vertical_service_owners service_id AS service OUTPUTNEW owner AS service_owner | eval adjusted_duration=duration_ms+1 | where status IN (status) | dedup event_id | table _time message status duration_ms adjusted_duration service_owner api_key customer_credential customer_pin _raw\t"
 	browserVerticalSearchSPL       = "index=vertical | lookup vertical_service_owners service_id AS service OUTPUTNEW owner AS service_owner | eval adjusted_duration=duration_ms+1 | where status IN (status) | dedup event_id"
@@ -1762,11 +1763,11 @@ func assertDownloadedRedactedResults(t *testing.T, completed *opensplunk.ExportJ
 		raw, rawOK := row["_raw"].(string)
 		if !statusOK || status.String() != "201" || !durationOK || duration.String() != "12.5" ||
 			!adjustedDurationOK || adjustedDuration.String() != "13.5" ||
-			row["api_key"] != "[REDACTED]" ||
+			row["api_key"] != redactionDefaultMarker ||
 			row["customer_credential"] != redactionCredentialMarker ||
 			row["customer_pin"] != redactionPINMarker ||
 			!rawOK ||
-			strings.Count(raw, "[REDACTED]") < 3 ||
+			strings.Count(raw, redactionDefaultMarker) < 3 ||
 			!strings.Contains(raw, `"customer_credential":"`+redactionCredentialMarker+`"`) ||
 			!strings.Contains(raw, `"customer_pin":"`+redactionPINMarker+`"`) {
 			t.Fatalf("downloaded typed redaction row = %#v", row)
@@ -1961,8 +1962,14 @@ processors:
   - type: redact
     fields: [customer_pin]
     replacement: %q
+  # Redaction is opt-in: no implicit sensitive-field list exists, so every
+  # protected name is configured here. Matching is exact, so "Cookie" uses the
+  # header spelling embedded in the fixture's note text.
+  - type: redact
+    fields: [api_key, Cookie, private_key]
+    replacement: %q
 `, address, tokenPath, statePath, logPath, verticalIndexName,
-		redactionCredentialMarker, redactionPINMarker)
+		redactionCredentialMarker, redactionPINMarker, redactionDefaultMarker)
 }
 
 func historyRerunCollectorYAML(address, tokenPath, statePath, logPath string) string {
@@ -4579,7 +4586,7 @@ func assertTypedRedactedResults(t *testing.T, results *collectedVerticalSearchRe
 		t.Fatalf("adjusted_duration cell = %+v, want typed double(13.5)", adjustedDuration)
 	}
 	redacted := sentinel.GetCells()[columns["api_key"]]
-	if _, ok := redacted.GetKind().(*opensplunk.TypedValue_StringValue); !ok || redacted.GetStringValue() != "[REDACTED]" {
+	if _, ok := redacted.GetKind().(*opensplunk.TypedValue_StringValue); !ok || redacted.GetStringValue() != redactionDefaultMarker {
 		t.Fatalf("api_key cell = %+v, want redacted string", redacted)
 	}
 	credential := sentinel.GetCells()[columns["customer_credential"]]
@@ -4608,10 +4615,10 @@ func assertTypedRedactedResults(t *testing.T, results *collectedVerticalSearchRe
 			t.Fatalf("raw search-result cell leaked sentinel %q", sentinel)
 		}
 	}
-	if !strings.Contains(rawText, `"api_key":"[REDACTED]"`) {
-		t.Fatalf("raw cell was not mandatorily redacted: %q", rawText)
+	if !strings.Contains(rawText, `"api_key":"`+redactionDefaultMarker+`"`) {
+		t.Fatalf("raw cell was not redacted by the configured policy: %q", rawText)
 	}
-	if strings.Count(rawText, "[REDACTED]") < 3 {
+	if strings.Count(rawText, redactionDefaultMarker) < 3 {
 		t.Fatalf("raw cell did not redact the structured key plus embedded cookie/private-key values: %q", rawText)
 	}
 	if !strings.Contains(rawText, `"customer_credential":"`+redactionCredentialMarker+`"`) ||
