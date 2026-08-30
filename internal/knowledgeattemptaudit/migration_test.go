@@ -44,7 +44,14 @@ func TestCurrentSchemaIsExactBoundedAndRetrySafe(t *testing.T) {
 	if err := rows.Close(); err != nil {
 		t.Fatal(err)
 	}
-	wantLedger := []string{"0001_baseline.sql", "0002_server_search_settings.sql"}
+	wantLedger := []string{
+		"0001_baseline.sql",
+		"0002_server_search_settings.sql",
+		"0003_durable_search_jobs.sql",
+		"0004_saved_search_schedules.sql",
+		"0005_alerts.sql",
+		"0006_feature_operation_audit.sql",
+	}
 	if strings.Join(ledger, ",") != strings.Join(wantLedger, ",") {
 		t.Fatalf("migration ledger = %v, want %v", ledger, wantLedger)
 	}

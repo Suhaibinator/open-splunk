@@ -7,6 +7,7 @@ import test from "node:test";
 import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
 
 import * as openSplunk from "@/gen/ts/index.open_splunk";
+import { WebhookAlertAction } from "@/gen/ts/open_splunk/alert";
 import { AppSelector } from "@/gen/ts/open_splunk/app";
 import { GetAppRequest } from "@/gen/ts/open_splunk/app_api";
 import { DiagnosticSeverity, SharingScope } from "@/gen/ts/open_splunk/common";
@@ -194,6 +195,20 @@ const knowledgeManagementDependencyWireFixture = JSON.parse(
 ) as KnowledgeManagementDependencyWireFixture;
 const futureFieldTag = (routeFixture.futureFieldNumber << 3) | 2;
 
+test("webhook sample-row presence preserves explicit zero on field 2", () => {
+  const omitted = WebhookAlertAction.encode(
+    WebhookAlertAction.fromPartial({}),
+  ).finish();
+  const explicitZero = WebhookAlertAction.encode(
+    WebhookAlertAction.fromPartial({ sampleRowCount: 0 }),
+  ).finish();
+
+  assert.deepEqual(omitted, new Uint8Array());
+  assert.deepEqual(explicitZero, Uint8Array.of(0x10, 0));
+  assert.equal(WebhookAlertAction.decode(omitted).sampleRowCount, undefined);
+  assert.equal(WebhookAlertAction.decode(explicitZero).sampleRowCount, 0);
+});
+
 function assertWireHash(name: string, wire: Uint8Array, contract: SnapshotWireRecord): void {
   assert.equal(wire.length, contract.byteLength, `${name} byte length changed`);
   assert.equal(
@@ -332,8 +347,8 @@ function assertRuntimeWireContract(
 
 test("every protobuf HTTP route round-trips generated TypeScript messages against its wire fixture", () => {
   assert.equal(routeFixture.version, 1);
-  assert.equal(routeFixture.routes.length, 80);
-  assert.equal(new Set(routeFixture.routes.map((route) => route.path)).size, 80);
+  assert.equal(routeFixture.routes.length, 97);
+  assert.equal(new Set(routeFixture.routes.map((route) => route.path)).size, 97);
 
   for (const route of routeFixture.routes) {
     assertRuntimeWireContract(

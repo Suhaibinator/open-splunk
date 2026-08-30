@@ -34,12 +34,12 @@ by compiler assertions and pinned `EXPLAIN` tests. Benchmark output is
 evidence, not a timing gate.
 
 `style-invariants.test.mjs` is every structural invariant of the styling layer,
-in one file of ten sections: the token layer and its naming grammar, the literal
-ledger, one entry point and one cascade order, parity with the stylesheet the
-split replaced, where a responsive rule lives, one implementation of each
-primitive, class reachability (total from rule to markup, and from markup back
-to rule only for the five colocated feature prefixes `FEATURE_PREFIXES` lists),
-and pins on the parsers underneath. None of it is visible to a compiler, a lint count or a screenshot.
+in one file of nine sections: the token layer and its naming grammar, the
+literal ledger, one entry point and one cascade order, where a responsive rule
+lives, one implementation of each primitive, class reachability (total from
+rule to markup, and from markup back to rule only for the five colocated feature
+prefixes `FEATURE_PREFIXES` lists), and pins on the parsers underneath. None of
+it is visible to a compiler, a lint count or a screenshot.
 [Theming](../docs/theming.md#guardrails-what-holds-this-in-place) describes each
 section and what it can see.
 
@@ -58,7 +58,7 @@ size or a face inside the `font` shorthand, a step inside an `@container` query,
 a colour keyword inside another function's parentheses, and a colour in an
 inline `style`, which is the one place that outranks the whole stylesheet layer.
 
-Five JSON ledgers record what the suite deliberately allows, each compared
+Three JSON ledgers record what the suite deliberately allows, each compared
 against the tree in both directions so that paying a row off fails as loudly as
 adding an unrecorded one:
 
@@ -67,15 +67,10 @@ adding an unrecorded one:
 - `css-retired-classes.json` — the classes the consolidation deleted and the
   primitive that replaced each. Nothing in the toolchain reports an unmatched
   class, so this is the only place a deletion that outran its markup shows up.
-- `css-duplicate-blocks.json` — the restatements deliberately left, each with
-  the primitive that would otherwise own it; an entry goes stale the moment
-  either side of the duplication changes.
 - `css-dynamic-classes.json` — global classes that only ever exist at runtime.
-- `css-phase3-monolith.json` — the rule set the single application stylesheet
-  stated at the commit before it was split, so the move is checked rather than
-  believed: a rule dropped, copied or edited on its way out fails with its own
-  text. It is a one-phase provenance proof and should be deleted with the tests
-  that read it once a later phase rewrites those rules on purpose.
+
+Repeated declaration blocks have no ledger or exemption: four or more
+identical declarations in the same at-rule context must be consolidated.
 
 `safety-net.test.mjs` checks that the frontend safety net cannot stop running
 unnoticed: every unit test file is named in this directory's hardcoded runner

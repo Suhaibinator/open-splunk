@@ -34,6 +34,7 @@ export function searchJobStateLabel(state: SearchJobState): string {
   if (state === SearchJobState.SEARCH_JOB_STATE_FAILED) return "Failed";
   if (state === SearchJobState.SEARCH_JOB_STATE_CANCELED) return "Canceled";
   if (state === SearchJobState.SEARCH_JOB_STATE_EXPIRED) return "Expired";
+  if (state === SearchJobState.SEARCH_JOB_STATE_INTERRUPTED) return "Interrupted";
   return "Unknown";
 }
 
@@ -43,7 +44,10 @@ export function searchJobStateTone(state: SearchJobState): StatusTone {
     state === SearchJobState.SEARCH_JOB_STATE_FAILED
     || state === SearchJobState.SEARCH_JOB_STATE_EXPIRED
   ) return "error";
-  if (state === SearchJobState.SEARCH_JOB_STATE_CANCELED) return "neutral";
+  if (
+    state === SearchJobState.SEARCH_JOB_STATE_CANCELED
+    || state === SearchJobState.SEARCH_JOB_STATE_INTERRUPTED
+  ) return "neutral";
   if (
     state === SearchJobState.SEARCH_JOB_STATE_QUEUED
     || state === SearchJobState.SEARCH_JOB_STATE_PARSING

@@ -216,7 +216,15 @@ func normalizeSource(entry *opensplunk.SearchHistoryEntry) error {
 		entry.Source = &opensplunk.SearchJobSource{Origin: opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_AD_HOC}
 	}
 	source := entry.Source
-	if source.Origin < opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_AD_HOC || source.Origin > opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_API {
+	switch source.Origin {
+	case opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_AD_HOC,
+		opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH,
+		opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN,
+		opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_DASHBOARD,
+		opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_API,
+		opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_SCHEDULED_REPORT,
+		opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_ALERT:
+	default:
 		return invalid("search origin is invalid")
 	}
 	for _, field := range []struct {
@@ -227,6 +235,9 @@ func normalizeSource(entry *opensplunk.SearchHistoryEntry) error {
 		{name: "saved-search ID", value: source.SavedSearchId, maximumBytes: maximumSavedSearchIDBytes},
 		{name: "history search ID", value: source.HistorySearchId, maximumBytes: maximumSearchJobIDBytes},
 		{name: "dashboard ID", value: source.DashboardId, maximumBytes: maximumSavedSearchIDBytes},
+		{name: "scheduled report run ID", value: source.ScheduledReportRunId, maximumBytes: maximumSearchJobIDBytes},
+		{name: "alert ID", value: source.AlertId, maximumBytes: maximumSearchJobIDBytes},
+		{name: "alert run ID", value: source.AlertRunId, maximumBytes: maximumSearchJobIDBytes},
 	} {
 		name, value := field.name, field.value
 		if value == nil {
@@ -238,21 +249,41 @@ func normalizeSource(entry *opensplunk.SearchHistoryEntry) error {
 		}
 		*value = trimmed
 	}
+	legacyIDsAbsent := source.SavedSearchId == nil && source.HistorySearchId == nil && source.DashboardId == nil
+	scheduledIDsAbsent := source.ScheduledReportRunId == nil && source.AlertId == nil && source.AlertRunId == nil
 	switch source.Origin {
 	case opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH:
-		if source.SavedSearchId == nil || source.HistorySearchId != nil || source.DashboardId != nil {
+		if source.SavedSearchId == nil || source.HistorySearchId != nil || source.DashboardId != nil || !scheduledIDsAbsent || source.ScheduledAt != nil {
 			return invalid("saved-search origin requires a saved-search ID")
 		}
 	case opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN:
-		if source.HistorySearchId == nil || source.SavedSearchId != nil || source.DashboardId != nil {
+		if source.HistorySearchId == nil || source.SavedSearchId != nil || source.DashboardId != nil || !scheduledIDsAbsent || source.ScheduledAt != nil {
 			return invalid("history-rerun origin requires a history search ID")
 		}
 	case opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_DASHBOARD:
-		if source.DashboardId == nil || source.SavedSearchId != nil || source.HistorySearchId != nil {
+		if source.DashboardId == nil || source.SavedSearchId != nil || source.HistorySearchId != nil || !scheduledIDsAbsent || source.ScheduledAt != nil {
 			return invalid("dashboard origin requires a dashboard ID")
 		}
+	case opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_SCHEDULED_REPORT:
+		if !legacyIDsAbsent || source.ScheduledReportRunId == nil || source.AlertId != nil || source.AlertRunId != nil || source.ScheduledAt == nil {
+			return invalid("scheduled-report origin requires a run ID and scheduled time")
+		}
+		_, scheduledAt, err := normalizedTimestamp("scheduled report occurrence", source.ScheduledAt)
+		if err != nil {
+			return err
+		}
+		source.ScheduledAt = scheduledAt
+	case opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_ALERT:
+		if !legacyIDsAbsent || source.ScheduledReportRunId != nil || source.AlertId == nil || source.AlertRunId == nil || source.ScheduledAt == nil {
+			return invalid("alert origin requires alert and run IDs plus a scheduled time")
+		}
+		_, scheduledAt, err := normalizedTimestamp("alert occurrence", source.ScheduledAt)
+		if err != nil {
+			return err
+		}
+		source.ScheduledAt = scheduledAt
 	default:
-		if source.SavedSearchId != nil || source.HistorySearchId != nil || source.DashboardId != nil {
+		if !legacyIDsAbsent || !scheduledIDsAbsent || source.ScheduledAt != nil {
 			return invalid("search source IDs do not match the search origin")
 		}
 	}

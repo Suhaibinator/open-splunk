@@ -7,14 +7,134 @@
 import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
 import { Timestamp } from "../google/protobuf/timestamp";
 import { SharingScope, sharingScopeFromJSON, sharingScopeToJSON } from "./common";
-import { SearchDefinition } from "./search";
+import {
+  RetainedResultStatus,
+  retainedResultStatusFromJSON,
+  retainedResultStatusToJSON,
+  SearchDefinition,
+} from "./search";
+
+export enum ScheduledSearchOutcome {
+  SCHEDULED_SEARCH_OUTCOME_UNSPECIFIED = 0,
+  SCHEDULED_SEARCH_OUTCOME_RUNNING = 1,
+  SCHEDULED_SEARCH_OUTCOME_COMPLETED = 2,
+  SCHEDULED_SEARCH_OUTCOME_FAILED = 3,
+  SCHEDULED_SEARCH_OUTCOME_CANCELED = 4,
+  SCHEDULED_SEARCH_OUTCOME_SKIPPED_OVERLAP = 5,
+  SCHEDULED_SEARCH_OUTCOME_INTERRUPTED = 6,
+  UNRECOGNIZED = -1,
+}
+
+export function scheduledSearchOutcomeFromJSON(object: any): ScheduledSearchOutcome {
+  switch (object) {
+    case 0:
+    case "SCHEDULED_SEARCH_OUTCOME_UNSPECIFIED":
+      return ScheduledSearchOutcome.SCHEDULED_SEARCH_OUTCOME_UNSPECIFIED;
+    case 1:
+    case "SCHEDULED_SEARCH_OUTCOME_RUNNING":
+      return ScheduledSearchOutcome.SCHEDULED_SEARCH_OUTCOME_RUNNING;
+    case 2:
+    case "SCHEDULED_SEARCH_OUTCOME_COMPLETED":
+      return ScheduledSearchOutcome.SCHEDULED_SEARCH_OUTCOME_COMPLETED;
+    case 3:
+    case "SCHEDULED_SEARCH_OUTCOME_FAILED":
+      return ScheduledSearchOutcome.SCHEDULED_SEARCH_OUTCOME_FAILED;
+    case 4:
+    case "SCHEDULED_SEARCH_OUTCOME_CANCELED":
+      return ScheduledSearchOutcome.SCHEDULED_SEARCH_OUTCOME_CANCELED;
+    case 5:
+    case "SCHEDULED_SEARCH_OUTCOME_SKIPPED_OVERLAP":
+      return ScheduledSearchOutcome.SCHEDULED_SEARCH_OUTCOME_SKIPPED_OVERLAP;
+    case 6:
+    case "SCHEDULED_SEARCH_OUTCOME_INTERRUPTED":
+      return ScheduledSearchOutcome.SCHEDULED_SEARCH_OUTCOME_INTERRUPTED;
+    case -1:
+    case "UNRECOGNIZED":
+    default:
+      return ScheduledSearchOutcome.UNRECOGNIZED;
+  }
+}
+
+export function scheduledSearchOutcomeToJSON(object: ScheduledSearchOutcome): string {
+  switch (object) {
+    case ScheduledSearchOutcome.SCHEDULED_SEARCH_OUTCOME_UNSPECIFIED:
+      return "SCHEDULED_SEARCH_OUTCOME_UNSPECIFIED";
+    case ScheduledSearchOutcome.SCHEDULED_SEARCH_OUTCOME_RUNNING:
+      return "SCHEDULED_SEARCH_OUTCOME_RUNNING";
+    case ScheduledSearchOutcome.SCHEDULED_SEARCH_OUTCOME_COMPLETED:
+      return "SCHEDULED_SEARCH_OUTCOME_COMPLETED";
+    case ScheduledSearchOutcome.SCHEDULED_SEARCH_OUTCOME_FAILED:
+      return "SCHEDULED_SEARCH_OUTCOME_FAILED";
+    case ScheduledSearchOutcome.SCHEDULED_SEARCH_OUTCOME_CANCELED:
+      return "SCHEDULED_SEARCH_OUTCOME_CANCELED";
+    case ScheduledSearchOutcome.SCHEDULED_SEARCH_OUTCOME_SKIPPED_OVERLAP:
+      return "SCHEDULED_SEARCH_OUTCOME_SKIPPED_OVERLAP";
+    case ScheduledSearchOutcome.SCHEDULED_SEARCH_OUTCOME_INTERRUPTED:
+      return "SCHEDULED_SEARCH_OUTCOME_INTERRUPTED";
+    case ScheduledSearchOutcome.UNRECOGNIZED:
+    default:
+      return "UNRECOGNIZED";
+  }
+}
+
+export interface SavedSearchSchedule {
+  enabled: boolean;
+  cron: string;
+  timezone: string;
+  /** Splunk-compatible TTL expression: explicit seconds or Np periods. */
+  dispatchTtl: string;
+  /**
+   * Independent optimistic token for schedule-only mutations. Zero denotes
+   * an unscheduled saved search; persisted schedules always start at one.
+   */
+  configVersion: bigint;
+}
+
+export interface ScheduledSearchStatus {
+  nextRunAt?: Date | undefined;
+  lastRunAt?: Date | undefined;
+  lastOutcome: ScheduledSearchOutcome;
+  latestSearchJobId?: string | undefined;
+  latestResultExpiresAt?:
+    | Date
+    | undefined;
+  /**
+   * Current availability of latest_search_job_id. Pending jobs intentionally
+   * omit latest_result_expires_at until the terminal retention window begins.
+   */
+  latestRetainedResultStatus: RetainedResultStatus;
+}
+
+export interface ScheduledSearchRun {
+  scheduledSearchRunId: string;
+  savedSearchId: string;
+  scheduledAt: Date | undefined;
+  startedAt?: Date | undefined;
+  finishedAt?: Date | undefined;
+  outcome: ScheduledSearchOutcome;
+  searchJobId?: string | undefined;
+  skippedOccurrenceCount: number;
+  /**
+   * Current sliding expiry and availability of the retained result. These are
+   * joined from the durable job catalog without refreshing its lifetime.
+   */
+  searchJobExpiresAt?: Date | undefined;
+  retainedResultStatus: RetainedResultStatus;
+}
 
 export interface SavedSearchDefinition {
   name: string;
   description?: string | undefined;
   search: SearchDefinition | undefined;
   sharingScope: SharingScope;
-  ownerId?: string | undefined;
+  ownerId?:
+    | string
+    | undefined;
+  /**
+   * Output-only joined scheduling state. Mutations use
+   * SetSavedSearchScheduleRequest so config_version is checked atomically.
+   */
+  schedule?: SavedSearchSchedule | undefined;
 }
 
 /**
@@ -27,10 +147,604 @@ export interface SavedSearch {
   definition: SavedSearchDefinition | undefined;
   createdAt: Date | undefined;
   updatedAt: Date | undefined;
+  scheduleStatus?: ScheduledSearchStatus | undefined;
 }
 
+function createBaseSavedSearchSchedule(): SavedSearchSchedule {
+  return { enabled: false, cron: "", timezone: "", dispatchTtl: "", configVersion: 0n };
+}
+
+export const SavedSearchSchedule: MessageFns<SavedSearchSchedule> = {
+  encode(message: SavedSearchSchedule, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.enabled !== false) {
+      writer.uint32(8).bool(message.enabled);
+    }
+    if (message.cron !== "") {
+      writer.uint32(18).string(message.cron);
+    }
+    if (message.timezone !== "") {
+      writer.uint32(26).string(message.timezone);
+    }
+    if (message.dispatchTtl !== "") {
+      writer.uint32(34).string(message.dispatchTtl);
+    }
+    if (message.configVersion !== 0n) {
+      if (BigInt.asUintN(64, message.configVersion) !== message.configVersion) {
+        throw new globalThis.Error("value provided for field message.configVersion of type uint64 too large");
+      }
+      writer.uint32(40).uint64(message.configVersion);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SavedSearchSchedule {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseSavedSearchSchedule();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 8) {
+              break;
+            }
+
+            message.enabled = reader.bool();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.cron = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.timezone = reader.string();
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+
+            message.dispatchTtl = reader.string();
+            continue;
+          }
+          case 5: {
+            if (tag !== 40) {
+              break;
+            }
+
+            message.configVersion = reader.uint64() as bigint;
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): SavedSearchSchedule {
+    return {
+      enabled: isSet(object.enabled) ? globalThis.Boolean(object.enabled) : false,
+      cron: isSet(object.cron) ? globalThis.String(object.cron) : "",
+      timezone: isSet(object.timezone) ? globalThis.String(object.timezone) : "",
+      dispatchTtl: isSet(object.dispatchTtl)
+        ? globalThis.String(object.dispatchTtl)
+        : isSet(object.dispatch_ttl)
+        ? globalThis.String(object.dispatch_ttl)
+        : "",
+      configVersion: isSet(object.configVersion)
+        ? BigInt(object.configVersion)
+        : isSet(object.config_version)
+        ? BigInt(object.config_version)
+        : 0n,
+    };
+  },
+
+  toJSON(message: SavedSearchSchedule): unknown {
+    const obj: any = {};
+    if (message.enabled !== false) {
+      obj.enabled = message.enabled;
+    }
+    if (message.cron !== "") {
+      obj.cron = message.cron;
+    }
+    if (message.timezone !== "") {
+      obj.timezone = message.timezone;
+    }
+    if (message.dispatchTtl !== "") {
+      obj.dispatchTtl = message.dispatchTtl;
+    }
+    if (message.configVersion !== 0n) {
+      obj.configVersion = message.configVersion.toString();
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SavedSearchSchedule>, I>>(base?: I): SavedSearchSchedule {
+    return SavedSearchSchedule.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SavedSearchSchedule>, I>>(object: I): SavedSearchSchedule {
+    const message = createBaseSavedSearchSchedule();
+    message.enabled = object.enabled ?? false;
+    message.cron = object.cron ?? "";
+    message.timezone = object.timezone ?? "";
+    message.dispatchTtl = object.dispatchTtl ?? "";
+    message.configVersion = (object.configVersion !== undefined && object.configVersion !== null)
+      ? BigInt(object.configVersion)
+      : 0n;
+    return message;
+  },
+};
+
+function createBaseScheduledSearchStatus(): ScheduledSearchStatus {
+  return {
+    nextRunAt: undefined,
+    lastRunAt: undefined,
+    lastOutcome: 0,
+    latestSearchJobId: undefined,
+    latestResultExpiresAt: undefined,
+    latestRetainedResultStatus: 0,
+  };
+}
+
+export const ScheduledSearchStatus: MessageFns<ScheduledSearchStatus> = {
+  encode(message: ScheduledSearchStatus, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.nextRunAt !== undefined) {
+      Timestamp.encode(toTimestamp(message.nextRunAt), writer.uint32(10).fork()).join();
+    }
+    if (message.lastRunAt !== undefined) {
+      Timestamp.encode(toTimestamp(message.lastRunAt), writer.uint32(18).fork()).join();
+    }
+    if (message.lastOutcome !== 0) {
+      writer.uint32(24).int32(message.lastOutcome);
+    }
+    if (message.latestSearchJobId !== undefined) {
+      writer.uint32(34).string(message.latestSearchJobId);
+    }
+    if (message.latestResultExpiresAt !== undefined) {
+      Timestamp.encode(toTimestamp(message.latestResultExpiresAt), writer.uint32(42).fork()).join();
+    }
+    if (message.latestRetainedResultStatus !== 0) {
+      writer.uint32(48).int32(message.latestRetainedResultStatus);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ScheduledSearchStatus {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseScheduledSearchStatus();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.nextRunAt = fromTimestamp(Timestamp.decode(reader, reader.uint32()));
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.lastRunAt = fromTimestamp(Timestamp.decode(reader, reader.uint32()));
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.lastOutcome = reader.int32() as any;
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+
+            message.latestSearchJobId = reader.string();
+            continue;
+          }
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+
+            message.latestResultExpiresAt = fromTimestamp(Timestamp.decode(reader, reader.uint32()));
+            continue;
+          }
+          case 6: {
+            if (tag !== 48) {
+              break;
+            }
+
+            message.latestRetainedResultStatus = reader.int32() as any;
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): ScheduledSearchStatus {
+    return {
+      nextRunAt: isSet(object.nextRunAt)
+        ? fromJsonTimestamp(object.nextRunAt)
+        : isSet(object.next_run_at)
+        ? fromJsonTimestamp(object.next_run_at)
+        : undefined,
+      lastRunAt: isSet(object.lastRunAt)
+        ? fromJsonTimestamp(object.lastRunAt)
+        : isSet(object.last_run_at)
+        ? fromJsonTimestamp(object.last_run_at)
+        : undefined,
+      lastOutcome: isSet(object.lastOutcome)
+        ? scheduledSearchOutcomeFromJSON(object.lastOutcome)
+        : isSet(object.last_outcome)
+        ? scheduledSearchOutcomeFromJSON(object.last_outcome)
+        : 0,
+      latestSearchJobId: isSet(object.latestSearchJobId)
+        ? globalThis.String(object.latestSearchJobId)
+        : isSet(object.latest_search_job_id)
+        ? globalThis.String(object.latest_search_job_id)
+        : undefined,
+      latestResultExpiresAt: isSet(object.latestResultExpiresAt)
+        ? fromJsonTimestamp(object.latestResultExpiresAt)
+        : isSet(object.latest_result_expires_at)
+        ? fromJsonTimestamp(object.latest_result_expires_at)
+        : undefined,
+      latestRetainedResultStatus: isSet(object.latestRetainedResultStatus)
+        ? retainedResultStatusFromJSON(object.latestRetainedResultStatus)
+        : isSet(object.latest_retained_result_status)
+        ? retainedResultStatusFromJSON(object.latest_retained_result_status)
+        : 0,
+    };
+  },
+
+  toJSON(message: ScheduledSearchStatus): unknown {
+    const obj: any = {};
+    if (message.nextRunAt !== undefined) {
+      obj.nextRunAt = message.nextRunAt.toISOString();
+    }
+    if (message.lastRunAt !== undefined) {
+      obj.lastRunAt = message.lastRunAt.toISOString();
+    }
+    if (message.lastOutcome !== 0) {
+      obj.lastOutcome = scheduledSearchOutcomeToJSON(message.lastOutcome);
+    }
+    if (message.latestSearchJobId !== undefined) {
+      obj.latestSearchJobId = message.latestSearchJobId;
+    }
+    if (message.latestResultExpiresAt !== undefined) {
+      obj.latestResultExpiresAt = message.latestResultExpiresAt.toISOString();
+    }
+    if (message.latestRetainedResultStatus !== 0) {
+      obj.latestRetainedResultStatus = retainedResultStatusToJSON(message.latestRetainedResultStatus);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ScheduledSearchStatus>, I>>(base?: I): ScheduledSearchStatus {
+    return ScheduledSearchStatus.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ScheduledSearchStatus>, I>>(object: I): ScheduledSearchStatus {
+    const message = createBaseScheduledSearchStatus();
+    message.nextRunAt = object.nextRunAt ?? undefined;
+    message.lastRunAt = object.lastRunAt ?? undefined;
+    message.lastOutcome = object.lastOutcome ?? 0;
+    message.latestSearchJobId = object.latestSearchJobId ?? undefined;
+    message.latestResultExpiresAt = object.latestResultExpiresAt ?? undefined;
+    message.latestRetainedResultStatus = object.latestRetainedResultStatus ?? 0;
+    return message;
+  },
+};
+
+function createBaseScheduledSearchRun(): ScheduledSearchRun {
+  return {
+    scheduledSearchRunId: "",
+    savedSearchId: "",
+    scheduledAt: undefined,
+    startedAt: undefined,
+    finishedAt: undefined,
+    outcome: 0,
+    searchJobId: undefined,
+    skippedOccurrenceCount: 0,
+    searchJobExpiresAt: undefined,
+    retainedResultStatus: 0,
+  };
+}
+
+export const ScheduledSearchRun: MessageFns<ScheduledSearchRun> = {
+  encode(message: ScheduledSearchRun, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.scheduledSearchRunId !== "") {
+      writer.uint32(10).string(message.scheduledSearchRunId);
+    }
+    if (message.savedSearchId !== "") {
+      writer.uint32(18).string(message.savedSearchId);
+    }
+    if (message.scheduledAt !== undefined) {
+      Timestamp.encode(toTimestamp(message.scheduledAt), writer.uint32(26).fork()).join();
+    }
+    if (message.startedAt !== undefined) {
+      Timestamp.encode(toTimestamp(message.startedAt), writer.uint32(34).fork()).join();
+    }
+    if (message.finishedAt !== undefined) {
+      Timestamp.encode(toTimestamp(message.finishedAt), writer.uint32(42).fork()).join();
+    }
+    if (message.outcome !== 0) {
+      writer.uint32(48).int32(message.outcome);
+    }
+    if (message.searchJobId !== undefined) {
+      writer.uint32(58).string(message.searchJobId);
+    }
+    if (message.skippedOccurrenceCount !== 0) {
+      writer.uint32(64).uint32(message.skippedOccurrenceCount);
+    }
+    if (message.searchJobExpiresAt !== undefined) {
+      Timestamp.encode(toTimestamp(message.searchJobExpiresAt), writer.uint32(74).fork()).join();
+    }
+    if (message.retainedResultStatus !== 0) {
+      writer.uint32(80).int32(message.retainedResultStatus);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ScheduledSearchRun {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseScheduledSearchRun();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.scheduledSearchRunId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.savedSearchId = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.scheduledAt = fromTimestamp(Timestamp.decode(reader, reader.uint32()));
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+
+            message.startedAt = fromTimestamp(Timestamp.decode(reader, reader.uint32()));
+            continue;
+          }
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+
+            message.finishedAt = fromTimestamp(Timestamp.decode(reader, reader.uint32()));
+            continue;
+          }
+          case 6: {
+            if (tag !== 48) {
+              break;
+            }
+
+            message.outcome = reader.int32() as any;
+            continue;
+          }
+          case 7: {
+            if (tag !== 58) {
+              break;
+            }
+
+            message.searchJobId = reader.string();
+            continue;
+          }
+          case 8: {
+            if (tag !== 64) {
+              break;
+            }
+
+            message.skippedOccurrenceCount = reader.uint32();
+            continue;
+          }
+          case 9: {
+            if (tag !== 74) {
+              break;
+            }
+
+            message.searchJobExpiresAt = fromTimestamp(Timestamp.decode(reader, reader.uint32()));
+            continue;
+          }
+          case 10: {
+            if (tag !== 80) {
+              break;
+            }
+
+            message.retainedResultStatus = reader.int32() as any;
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): ScheduledSearchRun {
+    return {
+      scheduledSearchRunId: isSet(object.scheduledSearchRunId)
+        ? globalThis.String(object.scheduledSearchRunId)
+        : isSet(object.scheduled_search_run_id)
+        ? globalThis.String(object.scheduled_search_run_id)
+        : "",
+      savedSearchId: isSet(object.savedSearchId)
+        ? globalThis.String(object.savedSearchId)
+        : isSet(object.saved_search_id)
+        ? globalThis.String(object.saved_search_id)
+        : "",
+      scheduledAt: isSet(object.scheduledAt)
+        ? fromJsonTimestamp(object.scheduledAt)
+        : isSet(object.scheduled_at)
+        ? fromJsonTimestamp(object.scheduled_at)
+        : undefined,
+      startedAt: isSet(object.startedAt)
+        ? fromJsonTimestamp(object.startedAt)
+        : isSet(object.started_at)
+        ? fromJsonTimestamp(object.started_at)
+        : undefined,
+      finishedAt: isSet(object.finishedAt)
+        ? fromJsonTimestamp(object.finishedAt)
+        : isSet(object.finished_at)
+        ? fromJsonTimestamp(object.finished_at)
+        : undefined,
+      outcome: isSet(object.outcome) ? scheduledSearchOutcomeFromJSON(object.outcome) : 0,
+      searchJobId: isSet(object.searchJobId)
+        ? globalThis.String(object.searchJobId)
+        : isSet(object.search_job_id)
+        ? globalThis.String(object.search_job_id)
+        : undefined,
+      skippedOccurrenceCount: isSet(object.skippedOccurrenceCount)
+        ? globalThis.Number(object.skippedOccurrenceCount)
+        : isSet(object.skipped_occurrence_count)
+        ? globalThis.Number(object.skipped_occurrence_count)
+        : 0,
+      searchJobExpiresAt: isSet(object.searchJobExpiresAt)
+        ? fromJsonTimestamp(object.searchJobExpiresAt)
+        : isSet(object.search_job_expires_at)
+        ? fromJsonTimestamp(object.search_job_expires_at)
+        : undefined,
+      retainedResultStatus: isSet(object.retainedResultStatus)
+        ? retainedResultStatusFromJSON(object.retainedResultStatus)
+        : isSet(object.retained_result_status)
+        ? retainedResultStatusFromJSON(object.retained_result_status)
+        : 0,
+    };
+  },
+
+  toJSON(message: ScheduledSearchRun): unknown {
+    const obj: any = {};
+    if (message.scheduledSearchRunId !== "") {
+      obj.scheduledSearchRunId = message.scheduledSearchRunId;
+    }
+    if (message.savedSearchId !== "") {
+      obj.savedSearchId = message.savedSearchId;
+    }
+    if (message.scheduledAt !== undefined) {
+      obj.scheduledAt = message.scheduledAt.toISOString();
+    }
+    if (message.startedAt !== undefined) {
+      obj.startedAt = message.startedAt.toISOString();
+    }
+    if (message.finishedAt !== undefined) {
+      obj.finishedAt = message.finishedAt.toISOString();
+    }
+    if (message.outcome !== 0) {
+      obj.outcome = scheduledSearchOutcomeToJSON(message.outcome);
+    }
+    if (message.searchJobId !== undefined) {
+      obj.searchJobId = message.searchJobId;
+    }
+    if (message.skippedOccurrenceCount !== 0) {
+      obj.skippedOccurrenceCount = Math.round(message.skippedOccurrenceCount);
+    }
+    if (message.searchJobExpiresAt !== undefined) {
+      obj.searchJobExpiresAt = message.searchJobExpiresAt.toISOString();
+    }
+    if (message.retainedResultStatus !== 0) {
+      obj.retainedResultStatus = retainedResultStatusToJSON(message.retainedResultStatus);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ScheduledSearchRun>, I>>(base?: I): ScheduledSearchRun {
+    return ScheduledSearchRun.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ScheduledSearchRun>, I>>(object: I): ScheduledSearchRun {
+    const message = createBaseScheduledSearchRun();
+    message.scheduledSearchRunId = object.scheduledSearchRunId ?? "";
+    message.savedSearchId = object.savedSearchId ?? "";
+    message.scheduledAt = object.scheduledAt ?? undefined;
+    message.startedAt = object.startedAt ?? undefined;
+    message.finishedAt = object.finishedAt ?? undefined;
+    message.outcome = object.outcome ?? 0;
+    message.searchJobId = object.searchJobId ?? undefined;
+    message.skippedOccurrenceCount = object.skippedOccurrenceCount ?? 0;
+    message.searchJobExpiresAt = object.searchJobExpiresAt ?? undefined;
+    message.retainedResultStatus = object.retainedResultStatus ?? 0;
+    return message;
+  },
+};
+
 function createBaseSavedSearchDefinition(): SavedSearchDefinition {
-  return { name: "", description: undefined, search: undefined, sharingScope: 0, ownerId: undefined };
+  return {
+    name: "",
+    description: undefined,
+    search: undefined,
+    sharingScope: 0,
+    ownerId: undefined,
+    schedule: undefined,
+  };
 }
 
 export const SavedSearchDefinition: MessageFns<SavedSearchDefinition> = {
@@ -49,6 +763,9 @@ export const SavedSearchDefinition: MessageFns<SavedSearchDefinition> = {
     }
     if (message.ownerId !== undefined) {
       writer.uint32(42).string(message.ownerId);
+    }
+    if (message.schedule !== undefined) {
+      SavedSearchSchedule.encode(message.schedule, writer.uint32(50).fork()).join();
     }
     return writer;
   },
@@ -106,6 +823,14 @@ export const SavedSearchDefinition: MessageFns<SavedSearchDefinition> = {
             message.ownerId = reader.string();
             continue;
           }
+          case 6: {
+            if (tag !== 50) {
+              break;
+            }
+
+            message.schedule = SavedSearchSchedule.decode(reader, reader.uint32());
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -133,6 +858,7 @@ export const SavedSearchDefinition: MessageFns<SavedSearchDefinition> = {
         : isSet(object.owner_id)
         ? globalThis.String(object.owner_id)
         : undefined,
+      schedule: isSet(object.schedule) ? SavedSearchSchedule.fromJSON(object.schedule) : undefined,
     };
   },
 
@@ -153,6 +879,9 @@ export const SavedSearchDefinition: MessageFns<SavedSearchDefinition> = {
     if (message.ownerId !== undefined) {
       obj.ownerId = message.ownerId;
     }
+    if (message.schedule !== undefined) {
+      obj.schedule = SavedSearchSchedule.toJSON(message.schedule);
+    }
     return obj;
   },
 
@@ -168,12 +897,22 @@ export const SavedSearchDefinition: MessageFns<SavedSearchDefinition> = {
       : undefined;
     message.sharingScope = object.sharingScope ?? 0;
     message.ownerId = object.ownerId ?? undefined;
+    message.schedule = (object.schedule !== undefined && object.schedule !== null)
+      ? SavedSearchSchedule.fromPartial(object.schedule)
+      : undefined;
     return message;
   },
 };
 
 function createBaseSavedSearch(): SavedSearch {
-  return { savedSearchId: "", version: 0n, definition: undefined, createdAt: undefined, updatedAt: undefined };
+  return {
+    savedSearchId: "",
+    version: 0n,
+    definition: undefined,
+    createdAt: undefined,
+    updatedAt: undefined,
+    scheduleStatus: undefined,
+  };
 }
 
 export const SavedSearch: MessageFns<SavedSearch> = {
@@ -195,6 +934,9 @@ export const SavedSearch: MessageFns<SavedSearch> = {
     }
     if (message.updatedAt !== undefined) {
       Timestamp.encode(toTimestamp(message.updatedAt), writer.uint32(42).fork()).join();
+    }
+    if (message.scheduleStatus !== undefined) {
+      ScheduledSearchStatus.encode(message.scheduleStatus, writer.uint32(50).fork()).join();
     }
     return writer;
   },
@@ -252,6 +994,14 @@ export const SavedSearch: MessageFns<SavedSearch> = {
             message.updatedAt = fromTimestamp(Timestamp.decode(reader, reader.uint32()));
             continue;
           }
+          case 6: {
+            if (tag !== 50) {
+              break;
+            }
+
+            message.scheduleStatus = ScheduledSearchStatus.decode(reader, reader.uint32());
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -283,6 +1033,11 @@ export const SavedSearch: MessageFns<SavedSearch> = {
         : isSet(object.updated_at)
         ? fromJsonTimestamp(object.updated_at)
         : undefined,
+      scheduleStatus: isSet(object.scheduleStatus)
+        ? ScheduledSearchStatus.fromJSON(object.scheduleStatus)
+        : isSet(object.schedule_status)
+        ? ScheduledSearchStatus.fromJSON(object.schedule_status)
+        : undefined,
     };
   },
 
@@ -303,6 +1058,9 @@ export const SavedSearch: MessageFns<SavedSearch> = {
     if (message.updatedAt !== undefined) {
       obj.updatedAt = message.updatedAt.toISOString();
     }
+    if (message.scheduleStatus !== undefined) {
+      obj.scheduleStatus = ScheduledSearchStatus.toJSON(message.scheduleStatus);
+    }
     return obj;
   },
 
@@ -318,6 +1076,9 @@ export const SavedSearch: MessageFns<SavedSearch> = {
       : undefined;
     message.createdAt = object.createdAt ?? undefined;
     message.updatedAt = object.updatedAt ?? undefined;
+    message.scheduleStatus = (object.scheduleStatus !== undefined && object.scheduleStatus !== null)
+      ? ScheduledSearchStatus.fromPartial(object.scheduleStatus)
+      : undefined;
     return message;
   },
 };

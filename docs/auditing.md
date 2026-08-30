@@ -117,6 +117,21 @@ appends the next monotonically increasing sequence, and preserves a dense
 retained range. Reopening with a different effective ceiling fails instead of
 silently changing retention.
 
+Terminal search outcomes remain in the owner-scoped search-history journal,
+not this payload-free security journal. Every failed job also emits a safe
+structured process-log notification with its `job_id`, identity and source
+metadata, pre-failure phase, public failure code and message, retryability,
+configured runtime, timing, and bounded execution counters. The notification
+never includes SPL, index scope, diagnostics, generated SQL, raw driver errors,
+credentials, or stack traces. Operators can correlate the process record with
+search history by `job_id` for the durable terminal outcome.
+
+Failure logging cannot block search execution or shutdown. If the configured
+log sink stalls, concurrent failure notifications are counted around the most
+recent safe report and a `search failure notifications coalesced` error record
+is emitted when reporting resumes. Search history remains the source for each
+individual outcome during such a window.
+
 `POST /api/audit/search-attempts/list` is administrator-only and supports
 exact actor-ID and owner-ID filters. Rows are descending by sequence; pages are
 at most 200 rows and 2 MiB. Signed tokens bind caller, filters, page choices,

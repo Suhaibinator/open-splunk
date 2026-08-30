@@ -720,6 +720,323 @@ func (x *DeleteSavedSearchResponse) GetSavedSearchId() string {
 	return ""
 }
 
+// POST /api/saved-searches/schedule/set
+type SetSavedSearchScheduleRequest struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	SavedSearchId   string                 `protobuf:"bytes,1,opt,name=saved_search_id,json=savedSearchId,proto3" json:"saved_search_id,omitempty"`
+	ExpectedVersion uint64                 `protobuf:"varint,2,opt,name=expected_version,json=expectedVersion,proto3" json:"expected_version,omitempty"`
+	Schedule        *SavedSearchSchedule   `protobuf:"bytes,3,opt,name=schedule,proto3" json:"schedule,omitempty"`
+	// Zero creates the first schedule. Existing schedules require their
+	// current config_version so concurrent editors cannot overwrite each other.
+	ExpectedScheduleVersion uint64 `protobuf:"varint,4,opt,name=expected_schedule_version,json=expectedScheduleVersion,proto3" json:"expected_schedule_version,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
+}
+
+func (x *SetSavedSearchScheduleRequest) Reset() {
+	*x = SetSavedSearchScheduleRequest{}
+	mi := &file_open_splunk_saved_search_api_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetSavedSearchScheduleRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetSavedSearchScheduleRequest) ProtoMessage() {}
+
+func (x *SetSavedSearchScheduleRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_open_splunk_saved_search_api_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetSavedSearchScheduleRequest.ProtoReflect.Descriptor instead.
+func (*SetSavedSearchScheduleRequest) Descriptor() ([]byte, []int) {
+	return file_open_splunk_saved_search_api_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *SetSavedSearchScheduleRequest) GetSavedSearchId() string {
+	if x != nil {
+		return x.SavedSearchId
+	}
+	return ""
+}
+
+func (x *SetSavedSearchScheduleRequest) GetExpectedVersion() uint64 {
+	if x != nil {
+		return x.ExpectedVersion
+	}
+	return 0
+}
+
+func (x *SetSavedSearchScheduleRequest) GetSchedule() *SavedSearchSchedule {
+	if x != nil {
+		return x.Schedule
+	}
+	return nil
+}
+
+func (x *SetSavedSearchScheduleRequest) GetExpectedScheduleVersion() uint64 {
+	if x != nil {
+		return x.ExpectedScheduleVersion
+	}
+	return 0
+}
+
+type SetSavedSearchScheduleResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SavedSearch   *SavedSearch           `protobuf:"bytes,1,opt,name=saved_search,json=savedSearch,proto3" json:"saved_search,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetSavedSearchScheduleResponse) Reset() {
+	*x = SetSavedSearchScheduleResponse{}
+	mi := &file_open_splunk_saved_search_api_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetSavedSearchScheduleResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetSavedSearchScheduleResponse) ProtoMessage() {}
+
+func (x *SetSavedSearchScheduleResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_open_splunk_saved_search_api_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetSavedSearchScheduleResponse.ProtoReflect.Descriptor instead.
+func (*SetSavedSearchScheduleResponse) Descriptor() ([]byte, []int) {
+	return file_open_splunk_saved_search_api_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *SetSavedSearchScheduleResponse) GetSavedSearch() *SavedSearch {
+	if x != nil {
+		return x.SavedSearch
+	}
+	return nil
+}
+
+// POST /api/saved-searches/run
+type RunSavedSearchRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SavedSearchId string                 `protobuf:"bytes,1,opt,name=saved_search_id,json=savedSearchId,proto3" json:"saved_search_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RunSavedSearchRequest) Reset() {
+	*x = RunSavedSearchRequest{}
+	mi := &file_open_splunk_saved_search_api_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RunSavedSearchRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RunSavedSearchRequest) ProtoMessage() {}
+
+func (x *RunSavedSearchRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_open_splunk_saved_search_api_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RunSavedSearchRequest.ProtoReflect.Descriptor instead.
+func (*RunSavedSearchRequest) Descriptor() ([]byte, []int) {
+	return file_open_splunk_saved_search_api_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *RunSavedSearchRequest) GetSavedSearchId() string {
+	if x != nil {
+		return x.SavedSearchId
+	}
+	return ""
+}
+
+type RunSavedSearchResponse struct {
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	ScheduledSearchRunId string                 `protobuf:"bytes,1,opt,name=scheduled_search_run_id,json=scheduledSearchRunId,proto3" json:"scheduled_search_run_id,omitempty"`
+	SearchJobId          string                 `protobuf:"bytes,2,opt,name=search_job_id,json=searchJobId,proto3" json:"search_job_id,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *RunSavedSearchResponse) Reset() {
+	*x = RunSavedSearchResponse{}
+	mi := &file_open_splunk_saved_search_api_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RunSavedSearchResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RunSavedSearchResponse) ProtoMessage() {}
+
+func (x *RunSavedSearchResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_open_splunk_saved_search_api_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RunSavedSearchResponse.ProtoReflect.Descriptor instead.
+func (*RunSavedSearchResponse) Descriptor() ([]byte, []int) {
+	return file_open_splunk_saved_search_api_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *RunSavedSearchResponse) GetScheduledSearchRunId() string {
+	if x != nil {
+		return x.ScheduledSearchRunId
+	}
+	return ""
+}
+
+func (x *RunSavedSearchResponse) GetSearchJobId() string {
+	if x != nil {
+		return x.SearchJobId
+	}
+	return ""
+}
+
+// POST /api/saved-searches/runs/list
+type ListScheduledSearchRunsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SavedSearchId string                 `protobuf:"bytes,1,opt,name=saved_search_id,json=savedSearchId,proto3" json:"saved_search_id,omitempty"`
+	Page          *PageRequest           `protobuf:"bytes,2,opt,name=page,proto3" json:"page,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListScheduledSearchRunsRequest) Reset() {
+	*x = ListScheduledSearchRunsRequest{}
+	mi := &file_open_splunk_saved_search_api_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListScheduledSearchRunsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListScheduledSearchRunsRequest) ProtoMessage() {}
+
+func (x *ListScheduledSearchRunsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_open_splunk_saved_search_api_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListScheduledSearchRunsRequest.ProtoReflect.Descriptor instead.
+func (*ListScheduledSearchRunsRequest) Descriptor() ([]byte, []int) {
+	return file_open_splunk_saved_search_api_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *ListScheduledSearchRunsRequest) GetSavedSearchId() string {
+	if x != nil {
+		return x.SavedSearchId
+	}
+	return ""
+}
+
+func (x *ListScheduledSearchRunsRequest) GetPage() *PageRequest {
+	if x != nil {
+		return x.Page
+	}
+	return nil
+}
+
+type ListScheduledSearchRunsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Runs          []*ScheduledSearchRun  `protobuf:"bytes,1,rep,name=runs,proto3" json:"runs,omitempty"`
+	Page          *PageResponse          `protobuf:"bytes,2,opt,name=page,proto3" json:"page,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListScheduledSearchRunsResponse) Reset() {
+	*x = ListScheduledSearchRunsResponse{}
+	mi := &file_open_splunk_saved_search_api_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListScheduledSearchRunsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListScheduledSearchRunsResponse) ProtoMessage() {}
+
+func (x *ListScheduledSearchRunsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_open_splunk_saved_search_api_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListScheduledSearchRunsResponse.ProtoReflect.Descriptor instead.
+func (*ListScheduledSearchRunsResponse) Descriptor() ([]byte, []int) {
+	return file_open_splunk_saved_search_api_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *ListScheduledSearchRunsResponse) GetRuns() []*ScheduledSearchRun {
+	if x != nil {
+		return x.Runs
+	}
+	return nil
+}
+
+func (x *ListScheduledSearchRunsResponse) GetPage() *PageResponse {
+	if x != nil {
+		return x.Page
+	}
+	return nil
+}
+
 var File_open_splunk_saved_search_api_proto protoreflect.FileDescriptor
 
 const file_open_splunk_saved_search_api_proto_rawDesc = "" +
@@ -773,7 +1090,25 @@ const file_open_splunk_saved_search_api_proto_rawDesc = "" +
 	"\x0fsaved_search_id\x18\x01 \x01(\tR\rsavedSearchId\x12)\n" +
 	"\x10expected_version\x18\x02 \x01(\x04R\x0fexpectedVersion\"C\n" +
 	"\x19DeleteSavedSearchResponse\x12&\n" +
-	"\x0fsaved_search_id\x18\x01 \x01(\tR\rsavedSearchId*\xa2\x01\n" +
+	"\x0fsaved_search_id\x18\x01 \x01(\tR\rsavedSearchId\"\xec\x01\n" +
+	"\x1dSetSavedSearchScheduleRequest\x12&\n" +
+	"\x0fsaved_search_id\x18\x01 \x01(\tR\rsavedSearchId\x12)\n" +
+	"\x10expected_version\x18\x02 \x01(\x04R\x0fexpectedVersion\x12<\n" +
+	"\bschedule\x18\x03 \x01(\v2 .open_splunk.SavedSearchScheduleR\bschedule\x12:\n" +
+	"\x19expected_schedule_version\x18\x04 \x01(\x04R\x17expectedScheduleVersion\"]\n" +
+	"\x1eSetSavedSearchScheduleResponse\x12;\n" +
+	"\fsaved_search\x18\x01 \x01(\v2\x18.open_splunk.SavedSearchR\vsavedSearch\"?\n" +
+	"\x15RunSavedSearchRequest\x12&\n" +
+	"\x0fsaved_search_id\x18\x01 \x01(\tR\rsavedSearchId\"s\n" +
+	"\x16RunSavedSearchResponse\x125\n" +
+	"\x17scheduled_search_run_id\x18\x01 \x01(\tR\x14scheduledSearchRunId\x12\"\n" +
+	"\rsearch_job_id\x18\x02 \x01(\tR\vsearchJobId\"v\n" +
+	"\x1eListScheduledSearchRunsRequest\x12&\n" +
+	"\x0fsaved_search_id\x18\x01 \x01(\tR\rsavedSearchId\x12,\n" +
+	"\x04page\x18\x02 \x01(\v2\x18.open_splunk.PageRequestR\x04page\"\x85\x01\n" +
+	"\x1fListScheduledSearchRunsResponse\x123\n" +
+	"\x04runs\x18\x01 \x03(\v2\x1f.open_splunk.ScheduledSearchRunR\x04runs\x12-\n" +
+	"\x04page\x18\x02 \x01(\v2\x19.open_splunk.PageResponseR\x04page*\xa2\x01\n" +
 	"\x11SavedSearchSortBy\x12$\n" +
 	" SAVED_SEARCH_SORT_BY_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19SAVED_SEARCH_SORT_BY_NAME\x10\x01\x12#\n" +
@@ -793,48 +1128,61 @@ func file_open_splunk_saved_search_api_proto_rawDescGZIP() []byte {
 }
 
 var file_open_splunk_saved_search_api_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_open_splunk_saved_search_api_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_open_splunk_saved_search_api_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_open_splunk_saved_search_api_proto_goTypes = []any{
-	(SavedSearchSortBy)(0),               // 0: open_splunk.SavedSearchSortBy
-	(*CreateSavedSearchRequest)(nil),     // 1: open_splunk.CreateSavedSearchRequest
-	(*CreateSavedSearchResponse)(nil),    // 2: open_splunk.CreateSavedSearchResponse
-	(*GetSavedSearchRequest)(nil),        // 3: open_splunk.GetSavedSearchRequest
-	(*GetSavedSearchResponse)(nil),       // 4: open_splunk.GetSavedSearchResponse
-	(*ListSavedSearchesRequest)(nil),     // 5: open_splunk.ListSavedSearchesRequest
-	(*ListSavedSearchesResponse)(nil),    // 6: open_splunk.ListSavedSearchesResponse
-	(*UpdateSavedSearchRequest)(nil),     // 7: open_splunk.UpdateSavedSearchRequest
-	(*UpdateSavedSearchResponse)(nil),    // 8: open_splunk.UpdateSavedSearchResponse
-	(*DuplicateSavedSearchRequest)(nil),  // 9: open_splunk.DuplicateSavedSearchRequest
-	(*DuplicateSavedSearchResponse)(nil), // 10: open_splunk.DuplicateSavedSearchResponse
-	(*DeleteSavedSearchRequest)(nil),     // 11: open_splunk.DeleteSavedSearchRequest
-	(*DeleteSavedSearchResponse)(nil),    // 12: open_splunk.DeleteSavedSearchResponse
-	(*SavedSearchDefinition)(nil),        // 13: open_splunk.SavedSearchDefinition
-	(*SavedSearch)(nil),                  // 14: open_splunk.SavedSearch
-	(*PageRequest)(nil),                  // 15: open_splunk.PageRequest
-	(SharingScope)(0),                    // 16: open_splunk.SharingScope
-	(SortDirection)(0),                   // 17: open_splunk.SortDirection
-	(*PageResponse)(nil),                 // 18: open_splunk.PageResponse
-	(*fieldmaskpb.FieldMask)(nil),        // 19: google.protobuf.FieldMask
+	(SavedSearchSortBy)(0),                  // 0: open_splunk.SavedSearchSortBy
+	(*CreateSavedSearchRequest)(nil),        // 1: open_splunk.CreateSavedSearchRequest
+	(*CreateSavedSearchResponse)(nil),       // 2: open_splunk.CreateSavedSearchResponse
+	(*GetSavedSearchRequest)(nil),           // 3: open_splunk.GetSavedSearchRequest
+	(*GetSavedSearchResponse)(nil),          // 4: open_splunk.GetSavedSearchResponse
+	(*ListSavedSearchesRequest)(nil),        // 5: open_splunk.ListSavedSearchesRequest
+	(*ListSavedSearchesResponse)(nil),       // 6: open_splunk.ListSavedSearchesResponse
+	(*UpdateSavedSearchRequest)(nil),        // 7: open_splunk.UpdateSavedSearchRequest
+	(*UpdateSavedSearchResponse)(nil),       // 8: open_splunk.UpdateSavedSearchResponse
+	(*DuplicateSavedSearchRequest)(nil),     // 9: open_splunk.DuplicateSavedSearchRequest
+	(*DuplicateSavedSearchResponse)(nil),    // 10: open_splunk.DuplicateSavedSearchResponse
+	(*DeleteSavedSearchRequest)(nil),        // 11: open_splunk.DeleteSavedSearchRequest
+	(*DeleteSavedSearchResponse)(nil),       // 12: open_splunk.DeleteSavedSearchResponse
+	(*SetSavedSearchScheduleRequest)(nil),   // 13: open_splunk.SetSavedSearchScheduleRequest
+	(*SetSavedSearchScheduleResponse)(nil),  // 14: open_splunk.SetSavedSearchScheduleResponse
+	(*RunSavedSearchRequest)(nil),           // 15: open_splunk.RunSavedSearchRequest
+	(*RunSavedSearchResponse)(nil),          // 16: open_splunk.RunSavedSearchResponse
+	(*ListScheduledSearchRunsRequest)(nil),  // 17: open_splunk.ListScheduledSearchRunsRequest
+	(*ListScheduledSearchRunsResponse)(nil), // 18: open_splunk.ListScheduledSearchRunsResponse
+	(*SavedSearchDefinition)(nil),           // 19: open_splunk.SavedSearchDefinition
+	(*SavedSearch)(nil),                     // 20: open_splunk.SavedSearch
+	(*PageRequest)(nil),                     // 21: open_splunk.PageRequest
+	(SharingScope)(0),                       // 22: open_splunk.SharingScope
+	(SortDirection)(0),                      // 23: open_splunk.SortDirection
+	(*PageResponse)(nil),                    // 24: open_splunk.PageResponse
+	(*fieldmaskpb.FieldMask)(nil),           // 25: google.protobuf.FieldMask
+	(*SavedSearchSchedule)(nil),             // 26: open_splunk.SavedSearchSchedule
+	(*ScheduledSearchRun)(nil),              // 27: open_splunk.ScheduledSearchRun
 }
 var file_open_splunk_saved_search_api_proto_depIdxs = []int32{
-	13, // 0: open_splunk.CreateSavedSearchRequest.definition:type_name -> open_splunk.SavedSearchDefinition
-	14, // 1: open_splunk.CreateSavedSearchResponse.saved_search:type_name -> open_splunk.SavedSearch
-	14, // 2: open_splunk.GetSavedSearchResponse.saved_search:type_name -> open_splunk.SavedSearch
-	15, // 3: open_splunk.ListSavedSearchesRequest.page:type_name -> open_splunk.PageRequest
-	16, // 4: open_splunk.ListSavedSearchesRequest.sharing_scope_filters:type_name -> open_splunk.SharingScope
+	19, // 0: open_splunk.CreateSavedSearchRequest.definition:type_name -> open_splunk.SavedSearchDefinition
+	20, // 1: open_splunk.CreateSavedSearchResponse.saved_search:type_name -> open_splunk.SavedSearch
+	20, // 2: open_splunk.GetSavedSearchResponse.saved_search:type_name -> open_splunk.SavedSearch
+	21, // 3: open_splunk.ListSavedSearchesRequest.page:type_name -> open_splunk.PageRequest
+	22, // 4: open_splunk.ListSavedSearchesRequest.sharing_scope_filters:type_name -> open_splunk.SharingScope
 	0,  // 5: open_splunk.ListSavedSearchesRequest.sort_by:type_name -> open_splunk.SavedSearchSortBy
-	17, // 6: open_splunk.ListSavedSearchesRequest.sort_direction:type_name -> open_splunk.SortDirection
-	14, // 7: open_splunk.ListSavedSearchesResponse.saved_searches:type_name -> open_splunk.SavedSearch
-	18, // 8: open_splunk.ListSavedSearchesResponse.page:type_name -> open_splunk.PageResponse
-	13, // 9: open_splunk.UpdateSavedSearchRequest.definition:type_name -> open_splunk.SavedSearchDefinition
-	19, // 10: open_splunk.UpdateSavedSearchRequest.update_mask:type_name -> google.protobuf.FieldMask
-	14, // 11: open_splunk.UpdateSavedSearchResponse.saved_search:type_name -> open_splunk.SavedSearch
-	14, // 12: open_splunk.DuplicateSavedSearchResponse.saved_search:type_name -> open_splunk.SavedSearch
-	13, // [13:13] is the sub-list for method output_type
-	13, // [13:13] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+	23, // 6: open_splunk.ListSavedSearchesRequest.sort_direction:type_name -> open_splunk.SortDirection
+	20, // 7: open_splunk.ListSavedSearchesResponse.saved_searches:type_name -> open_splunk.SavedSearch
+	24, // 8: open_splunk.ListSavedSearchesResponse.page:type_name -> open_splunk.PageResponse
+	19, // 9: open_splunk.UpdateSavedSearchRequest.definition:type_name -> open_splunk.SavedSearchDefinition
+	25, // 10: open_splunk.UpdateSavedSearchRequest.update_mask:type_name -> google.protobuf.FieldMask
+	20, // 11: open_splunk.UpdateSavedSearchResponse.saved_search:type_name -> open_splunk.SavedSearch
+	20, // 12: open_splunk.DuplicateSavedSearchResponse.saved_search:type_name -> open_splunk.SavedSearch
+	26, // 13: open_splunk.SetSavedSearchScheduleRequest.schedule:type_name -> open_splunk.SavedSearchSchedule
+	20, // 14: open_splunk.SetSavedSearchScheduleResponse.saved_search:type_name -> open_splunk.SavedSearch
+	21, // 15: open_splunk.ListScheduledSearchRunsRequest.page:type_name -> open_splunk.PageRequest
+	27, // 16: open_splunk.ListScheduledSearchRunsResponse.runs:type_name -> open_splunk.ScheduledSearchRun
+	24, // 17: open_splunk.ListScheduledSearchRunsResponse.page:type_name -> open_splunk.PageResponse
+	18, // [18:18] is the sub-list for method output_type
+	18, // [18:18] is the sub-list for method input_type
+	18, // [18:18] is the sub-list for extension type_name
+	18, // [18:18] is the sub-list for extension extendee
+	0,  // [0:18] is the sub-list for field type_name
 }
 
 func init() { file_open_splunk_saved_search_api_proto_init() }
@@ -853,7 +1201,7 @@ func file_open_splunk_saved_search_api_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_open_splunk_saved_search_api_proto_rawDesc), len(file_open_splunk_saved_search_api_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   12,
+			NumMessages:   18,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

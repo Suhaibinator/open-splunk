@@ -18,6 +18,7 @@ const ownedMarkdownPaths = Object.freeze([
   "docs/collector-configuration.md",
   "docs/hec.md",
   "docs/auditing.md",
+  "docs/search-sharing-alerts.md",
   "docs/roadmap.md",
   "docs/releasing.md",
   "deploy/README.md",
@@ -40,6 +41,7 @@ const canonicalDocumentationNames = Object.freeze([
   "collector-configuration.md",
   "hec.md",
   "auditing.md",
+  "search-sharing-alerts.md",
   "roadmap.md",
   "releasing.md",
 ]);

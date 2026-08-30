@@ -82,3 +82,38 @@ message DeleteSavedSearchRequest {
 message DeleteSavedSearchResponse {
   string saved_search_id = 1;
 }
+
+// POST /api/saved-searches/schedule/set
+message SetSavedSearchScheduleRequest {
+  string saved_search_id = 1;
+  uint64 expected_version = 2;
+  SavedSearchSchedule schedule = 3;
+  // Zero creates the first schedule. Existing schedules require their
+  // current config_version so concurrent editors cannot overwrite each other.
+  uint64 expected_schedule_version = 4;
+}
+
+message SetSavedSearchScheduleResponse {
+  SavedSearch saved_search = 1;
+}
+
+// POST /api/saved-searches/run
+message RunSavedSearchRequest {
+  string saved_search_id = 1;
+}
+
+message RunSavedSearchResponse {
+  string scheduled_search_run_id = 1;
+  string search_job_id = 2;
+}
+
+// POST /api/saved-searches/runs/list
+message ListScheduledSearchRunsRequest {
+  string saved_search_id = 1;
+  PageRequest page = 2;
+}
+
+message ListScheduledSearchRunsResponse {
+  repeated ScheduledSearchRun runs = 1;
+  PageResponse page = 2;
+}

@@ -793,6 +793,57 @@
    apart. docs/theming.md documents the step canon; each step appears once
    here, holding what the two responsive sections used to state twice. */
 
+/* Shared feature layouts and small presentation roles. */
+.activity-summary,
+.dashboard-metrics {
+  display: grid;
+  gap: 9px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: var(--space-3);
+}
+
+.summary-icon,
+.dataset-icon {
+  align-items: center;
+  background: var(--accent-soft);
+  color: var(--accent);
+  display: flex;
+  font-size: var(--type-xl);
+  height: 35px;
+  justify-content: center;
+  width: 35px;
+}
+
+.analytics-context-bar > div,
+.search-title {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+}
+
+.analytics-insight-list footer a,
+.analytics-field-list a,
+.analytics-slowest-list a,
+.analytics-slowest-footer a,
+.setup-checklist a,
+.system-notice > a {
+  color: var(--fg-link);
+  font-size: var(--type-xs);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.analytics-search-detail > a,
+.notable-events strong,
+.history-row > code,
+.event-field code,
+.job-card code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 @media (max-width: 1240px) {
   .suite-utilities .health-indicator {
     display: none;

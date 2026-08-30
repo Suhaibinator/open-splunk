@@ -167,6 +167,7 @@ interface WorkspaceDialogsProps {
   saveDescription: string;
   saveDialogReturnFocus: HTMLElement | null;
   saveName: string;
+  savePurpose: "report" | "search";
   saveState: DialogActionState;
   savedSearchFilter: string;
   savedSearchDeleteState: TargetedDialogActionState;
@@ -250,6 +251,7 @@ export function WorkspaceDialogs({
   saveDescription,
   saveDialogReturnFocus,
   saveName,
+  savePurpose,
   saveState,
   savedSearchFilter,
   savedSearchDeleteState,
@@ -304,15 +306,18 @@ export function WorkspaceDialogs({
 }: WorkspaceDialogsProps) {
   if (modal === "save") {
     const saving = saveState.status === "pending";
+    const savingReport = savePurpose === "report";
     return (
       <Modal
-        title={activeSavedSearchId === null ? "Save search" : "Save search as"}
-        subtitle="Preserve the SPL and selected time range for reuse."
+        title={savingReport ? "Save report" : activeSavedSearchId === null ? "Save search" : "Save search as"}
+        subtitle={savingReport
+          ? "Save this search and its presentation, then configure its schedule."
+          : "Preserve the SPL and selected time range for reuse."}
         onClose={() => {
           if (!saving) onModalChange(null);
         }}
         returnFocus={saveDialogReturnFocus}
-        footer={<><button className="button button--secondary" type="button" disabled={saving} onClick={() => onModalChange(null)}>Cancel</button><button className="button button--primary" type="button" aria-busy={saving} disabled={saving || saveName.trim().length === 0} onClick={onSaveSearch}>{saving ? "Saving…" : "Save"}</button></>}
+        footer={<><button className="button button--secondary" type="button" disabled={saving} onClick={() => onModalChange(null)}>Cancel</button><button className="button button--primary" type="button" aria-busy={saving} disabled={saving || saveName.trim().length === 0} onClick={onSaveSearch}>{saving ? "Saving…" : savingReport ? "Continue to schedule" : "Save"}</button></>}
       >
         <div className="form-stack" data-testid="save-search-dialog" aria-busy={saving}>
           {saveState.status === "error" ? <p className="workspace-dialog-action-error" role="alert">{saveState.error}</p> : null}

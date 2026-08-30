@@ -1,7 +1,6 @@
 /* Dashboards */
 .dashboard-page { max-width: 1600px; }
 
-.dashboard-metrics { display: grid; gap: 9px; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: var(--space-3); }
 .dashboard-metrics article { background: var(--bg-surface); border: 1px solid var(--border); display: grid; gap: 3px; grid-template-columns: 1fr auto; min-height: 82px; padding: var(--space-3) 14px; }
 .dashboard-metrics small { color: var(--fg-muted); font-size: var(--type-xs); grid-column: 1 / -1; text-transform: uppercase; }
 .dashboard-metrics strong { font-size: var(--type-xxl); font-weight: 300; }
@@ -27,7 +26,7 @@
 .notable-events li { align-items: center; border-bottom: 1px solid var(--border-subtle); display: flex; gap: 9px; min-height: 52px; }
 .notable-events li:last-child { border-bottom: 0; }
 .notable-events li > div { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.notable-events strong { font-size: var(--type-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notable-events strong { font-size: var(--type-xs); }
 .notable-events small { color: var(--fg-faint); font-size: var(--type-xs); }
 .notable-events .badge { flex: 0 0 auto; }
 

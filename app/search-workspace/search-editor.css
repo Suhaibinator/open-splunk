@@ -12,12 +12,6 @@
   z-index: var(--z-sticky);
 }
 
-.search-title {
-  align-items: center;
-  display: flex;
-  gap: 10px;
-  min-width: 0;
-}
 
 .search-title h1 {
   color: var(--fg-text);
@@ -384,6 +378,7 @@
   border: 1px solid var(--border-strong);
   box-shadow: var(--shadow-lg);
   color: var(--fg-text);
+  left: auto;
   margin: 0;
   padding: 0;
   position: absolute;

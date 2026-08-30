@@ -39,12 +39,6 @@
   padding: var(--space-2) 10px var(--space-2) 13px;
 }
 
-.analytics-context-bar > div {
-  align-items: center;
-  display: flex;
-  gap: 10px;
-  min-width: 0;
-}
 
 .analytics-context-bar > div > div {
   display: flex;
@@ -354,19 +348,6 @@
   vector-effect: non-scaling-stroke;
 }
 
-/* The same stroke geometry the workspace time-series line draws, down to the
-   `--chart-stroke-width` knob a host panel turns. The two are still two rules
-   -- charts have never been consolidated into a primitive -- and
-   scripts/css-duplicate-blocks.json records that. */
-.analytics-trend-line {
-  fill: none;
-  stroke: var(--chart-series-1);
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: var(--chart-stroke-width, 2.25);
-  vector-effect: non-scaling-stroke;
-}
-
 .analytics-trend-points {
   height: 184px;
   inset: 0 0 auto;
@@ -658,12 +639,6 @@
   margin: 7px 0 var(--space-1);
 }
 
-.analytics-insight-list p {
-  color: var(--fg-muted);
-  font-size: var(--type-xs);
-  line-height: 1.45;
-  margin: 0 0 9px;
-}
 
 .analytics-insight-list footer strong {
   color: var(--accent);
@@ -673,15 +648,6 @@
 
 /* The same link treatment as the performance footer's, shared by the three
    list panels. */
-.analytics-insight-list footer a,
-.analytics-field-list a,
-.analytics-slowest-list a,
-.analytics-slowest-footer a {
-  color: var(--fg-link);
-  font-size: var(--type-xs);
-  font-weight: 600;
-  text-decoration: none;
-}
 
 @media (max-width: 980px) {
   .analytics-insight-list {
@@ -1006,12 +972,7 @@
   min-width: 0;
 }
 
-.analytics-search-detail > a {
-  font-size: var(--type-xs);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+.analytics-search-detail > a { font-size: var(--type-xs); }
 
 .analytics-search-detail small {
   color: var(--fg-muted);

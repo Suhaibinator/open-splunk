@@ -5,5 +5,5 @@
 
 
 export * from "./google/protobuf/timestamp";
-export * from "./google/protobuf/field_mask";
 export * from "./google/protobuf/duration";
+export * from "./google/protobuf/field_mask";

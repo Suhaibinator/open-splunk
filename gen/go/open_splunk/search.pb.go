@@ -78,12 +78,14 @@ func (SearchResultTab) EnumDescriptor() ([]byte, []int) {
 type SearchJobOrigin int32
 
 const (
-	SearchJobOrigin_SEARCH_JOB_ORIGIN_UNSPECIFIED   SearchJobOrigin = 0
-	SearchJobOrigin_SEARCH_JOB_ORIGIN_AD_HOC        SearchJobOrigin = 1
-	SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH  SearchJobOrigin = 2
-	SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN SearchJobOrigin = 3
-	SearchJobOrigin_SEARCH_JOB_ORIGIN_DASHBOARD     SearchJobOrigin = 4
-	SearchJobOrigin_SEARCH_JOB_ORIGIN_API           SearchJobOrigin = 5
+	SearchJobOrigin_SEARCH_JOB_ORIGIN_UNSPECIFIED      SearchJobOrigin = 0
+	SearchJobOrigin_SEARCH_JOB_ORIGIN_AD_HOC           SearchJobOrigin = 1
+	SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH     SearchJobOrigin = 2
+	SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN    SearchJobOrigin = 3
+	SearchJobOrigin_SEARCH_JOB_ORIGIN_DASHBOARD        SearchJobOrigin = 4
+	SearchJobOrigin_SEARCH_JOB_ORIGIN_API              SearchJobOrigin = 5
+	SearchJobOrigin_SEARCH_JOB_ORIGIN_SCHEDULED_REPORT SearchJobOrigin = 6
+	SearchJobOrigin_SEARCH_JOB_ORIGIN_ALERT            SearchJobOrigin = 7
 )
 
 // Enum value maps for SearchJobOrigin.
@@ -95,14 +97,18 @@ var (
 		3: "SEARCH_JOB_ORIGIN_HISTORY_RERUN",
 		4: "SEARCH_JOB_ORIGIN_DASHBOARD",
 		5: "SEARCH_JOB_ORIGIN_API",
+		6: "SEARCH_JOB_ORIGIN_SCHEDULED_REPORT",
+		7: "SEARCH_JOB_ORIGIN_ALERT",
 	}
 	SearchJobOrigin_value = map[string]int32{
-		"SEARCH_JOB_ORIGIN_UNSPECIFIED":   0,
-		"SEARCH_JOB_ORIGIN_AD_HOC":        1,
-		"SEARCH_JOB_ORIGIN_SAVED_SEARCH":  2,
-		"SEARCH_JOB_ORIGIN_HISTORY_RERUN": 3,
-		"SEARCH_JOB_ORIGIN_DASHBOARD":     4,
-		"SEARCH_JOB_ORIGIN_API":           5,
+		"SEARCH_JOB_ORIGIN_UNSPECIFIED":      0,
+		"SEARCH_JOB_ORIGIN_AD_HOC":           1,
+		"SEARCH_JOB_ORIGIN_SAVED_SEARCH":     2,
+		"SEARCH_JOB_ORIGIN_HISTORY_RERUN":    3,
+		"SEARCH_JOB_ORIGIN_DASHBOARD":        4,
+		"SEARCH_JOB_ORIGIN_API":              5,
+		"SEARCH_JOB_ORIGIN_SCHEDULED_REPORT": 6,
+		"SEARCH_JOB_ORIGIN_ALERT":            7,
 	}
 )
 
@@ -133,6 +139,171 @@ func (SearchJobOrigin) EnumDescriptor() ([]byte, []int) {
 	return file_open_splunk_search_proto_rawDescGZIP(), []int{1}
 }
 
+type SearchJobVisibility int32
+
+const (
+	SearchJobVisibility_SEARCH_JOB_VISIBILITY_UNSPECIFIED SearchJobVisibility = 0
+	SearchJobVisibility_SEARCH_JOB_VISIBILITY_PRIVATE     SearchJobVisibility = 1
+	SearchJobVisibility_SEARCH_JOB_VISIBILITY_EVERYONE    SearchJobVisibility = 2
+)
+
+// Enum value maps for SearchJobVisibility.
+var (
+	SearchJobVisibility_name = map[int32]string{
+		0: "SEARCH_JOB_VISIBILITY_UNSPECIFIED",
+		1: "SEARCH_JOB_VISIBILITY_PRIVATE",
+		2: "SEARCH_JOB_VISIBILITY_EVERYONE",
+	}
+	SearchJobVisibility_value = map[string]int32{
+		"SEARCH_JOB_VISIBILITY_UNSPECIFIED": 0,
+		"SEARCH_JOB_VISIBILITY_PRIVATE":     1,
+		"SEARCH_JOB_VISIBILITY_EVERYONE":    2,
+	}
+)
+
+func (x SearchJobVisibility) Enum() *SearchJobVisibility {
+	p := new(SearchJobVisibility)
+	*p = x
+	return p
+}
+
+func (x SearchJobVisibility) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (SearchJobVisibility) Descriptor() protoreflect.EnumDescriptor {
+	return file_open_splunk_search_proto_enumTypes[2].Descriptor()
+}
+
+func (SearchJobVisibility) Type() protoreflect.EnumType {
+	return &file_open_splunk_search_proto_enumTypes[2]
+}
+
+func (x SearchJobVisibility) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use SearchJobVisibility.Descriptor instead.
+func (SearchJobVisibility) EnumDescriptor() ([]byte, []int) {
+	return file_open_splunk_search_proto_rawDescGZIP(), []int{2}
+}
+
+type SearchJobRetentionClass int32
+
+const (
+	SearchJobRetentionClass_SEARCH_JOB_RETENTION_CLASS_UNSPECIFIED       SearchJobRetentionClass = 0
+	SearchJobRetentionClass_SEARCH_JOB_RETENTION_CLASS_MANUAL            SearchJobRetentionClass = 1
+	SearchJobRetentionClass_SEARCH_JOB_RETENTION_CLASS_SHARED            SearchJobRetentionClass = 2
+	SearchJobRetentionClass_SEARCH_JOB_RETENTION_CLASS_SCHEDULED_REPORT  SearchJobRetentionClass = 3
+	SearchJobRetentionClass_SEARCH_JOB_RETENTION_CLASS_SCHEDULED_ALERT   SearchJobRetentionClass = 4
+	SearchJobRetentionClass_SEARCH_JOB_RETENTION_CLASS_TRIGGERED_WEBHOOK SearchJobRetentionClass = 5
+)
+
+// Enum value maps for SearchJobRetentionClass.
+var (
+	SearchJobRetentionClass_name = map[int32]string{
+		0: "SEARCH_JOB_RETENTION_CLASS_UNSPECIFIED",
+		1: "SEARCH_JOB_RETENTION_CLASS_MANUAL",
+		2: "SEARCH_JOB_RETENTION_CLASS_SHARED",
+		3: "SEARCH_JOB_RETENTION_CLASS_SCHEDULED_REPORT",
+		4: "SEARCH_JOB_RETENTION_CLASS_SCHEDULED_ALERT",
+		5: "SEARCH_JOB_RETENTION_CLASS_TRIGGERED_WEBHOOK",
+	}
+	SearchJobRetentionClass_value = map[string]int32{
+		"SEARCH_JOB_RETENTION_CLASS_UNSPECIFIED":       0,
+		"SEARCH_JOB_RETENTION_CLASS_MANUAL":            1,
+		"SEARCH_JOB_RETENTION_CLASS_SHARED":            2,
+		"SEARCH_JOB_RETENTION_CLASS_SCHEDULED_REPORT":  3,
+		"SEARCH_JOB_RETENTION_CLASS_SCHEDULED_ALERT":   4,
+		"SEARCH_JOB_RETENTION_CLASS_TRIGGERED_WEBHOOK": 5,
+	}
+)
+
+func (x SearchJobRetentionClass) Enum() *SearchJobRetentionClass {
+	p := new(SearchJobRetentionClass)
+	*p = x
+	return p
+}
+
+func (x SearchJobRetentionClass) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (SearchJobRetentionClass) Descriptor() protoreflect.EnumDescriptor {
+	return file_open_splunk_search_proto_enumTypes[3].Descriptor()
+}
+
+func (SearchJobRetentionClass) Type() protoreflect.EnumType {
+	return &file_open_splunk_search_proto_enumTypes[3]
+}
+
+func (x SearchJobRetentionClass) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use SearchJobRetentionClass.Descriptor instead.
+func (SearchJobRetentionClass) EnumDescriptor() ([]byte, []int) {
+	return file_open_splunk_search_proto_rawDescGZIP(), []int{3}
+}
+
+type RetainedResultStatus int32
+
+const (
+	RetainedResultStatus_RETAINED_RESULT_STATUS_UNSPECIFIED RetainedResultStatus = 0
+	RetainedResultStatus_RETAINED_RESULT_STATUS_PENDING     RetainedResultStatus = 1
+	RetainedResultStatus_RETAINED_RESULT_STATUS_AVAILABLE   RetainedResultStatus = 2
+	RetainedResultStatus_RETAINED_RESULT_STATUS_EXPIRED     RetainedResultStatus = 3
+	RetainedResultStatus_RETAINED_RESULT_STATUS_MISSING     RetainedResultStatus = 4
+	RetainedResultStatus_RETAINED_RESULT_STATUS_CORRUPT     RetainedResultStatus = 5
+)
+
+// Enum value maps for RetainedResultStatus.
+var (
+	RetainedResultStatus_name = map[int32]string{
+		0: "RETAINED_RESULT_STATUS_UNSPECIFIED",
+		1: "RETAINED_RESULT_STATUS_PENDING",
+		2: "RETAINED_RESULT_STATUS_AVAILABLE",
+		3: "RETAINED_RESULT_STATUS_EXPIRED",
+		4: "RETAINED_RESULT_STATUS_MISSING",
+		5: "RETAINED_RESULT_STATUS_CORRUPT",
+	}
+	RetainedResultStatus_value = map[string]int32{
+		"RETAINED_RESULT_STATUS_UNSPECIFIED": 0,
+		"RETAINED_RESULT_STATUS_PENDING":     1,
+		"RETAINED_RESULT_STATUS_AVAILABLE":   2,
+		"RETAINED_RESULT_STATUS_EXPIRED":     3,
+		"RETAINED_RESULT_STATUS_MISSING":     4,
+		"RETAINED_RESULT_STATUS_CORRUPT":     5,
+	}
+)
+
+func (x RetainedResultStatus) Enum() *RetainedResultStatus {
+	p := new(RetainedResultStatus)
+	*p = x
+	return p
+}
+
+func (x RetainedResultStatus) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (RetainedResultStatus) Descriptor() protoreflect.EnumDescriptor {
+	return file_open_splunk_search_proto_enumTypes[4].Descriptor()
+}
+
+func (RetainedResultStatus) Type() protoreflect.EnumType {
+	return &file_open_splunk_search_proto_enumTypes[4]
+}
+
+func (x RetainedResultStatus) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use RetainedResultStatus.Descriptor instead.
+func (RetainedResultStatus) EnumDescriptor() ([]byte, []int) {
+	return file_open_splunk_search_proto_rawDescGZIP(), []int{4}
+}
+
 type SearchJobState int32
 
 const (
@@ -146,21 +317,25 @@ const (
 	SearchJobState_SEARCH_JOB_STATE_FAILED      SearchJobState = 7
 	SearchJobState_SEARCH_JOB_STATE_CANCELED    SearchJobState = 8
 	SearchJobState_SEARCH_JOB_STATE_EXPIRED     SearchJobState = 9
+	// A nonterminal durable job recovered after process restart. It is terminal
+	// and never resumes automatically.
+	SearchJobState_SEARCH_JOB_STATE_INTERRUPTED SearchJobState = 10
 )
 
 // Enum value maps for SearchJobState.
 var (
 	SearchJobState_name = map[int32]string{
-		0: "SEARCH_JOB_STATE_UNSPECIFIED",
-		1: "SEARCH_JOB_STATE_QUEUED",
-		2: "SEARCH_JOB_STATE_PARSING",
-		3: "SEARCH_JOB_STATE_PLANNING",
-		4: "SEARCH_JOB_STATE_RUNNING",
-		5: "SEARCH_JOB_STATE_FINALIZING",
-		6: "SEARCH_JOB_STATE_COMPLETED",
-		7: "SEARCH_JOB_STATE_FAILED",
-		8: "SEARCH_JOB_STATE_CANCELED",
-		9: "SEARCH_JOB_STATE_EXPIRED",
+		0:  "SEARCH_JOB_STATE_UNSPECIFIED",
+		1:  "SEARCH_JOB_STATE_QUEUED",
+		2:  "SEARCH_JOB_STATE_PARSING",
+		3:  "SEARCH_JOB_STATE_PLANNING",
+		4:  "SEARCH_JOB_STATE_RUNNING",
+		5:  "SEARCH_JOB_STATE_FINALIZING",
+		6:  "SEARCH_JOB_STATE_COMPLETED",
+		7:  "SEARCH_JOB_STATE_FAILED",
+		8:  "SEARCH_JOB_STATE_CANCELED",
+		9:  "SEARCH_JOB_STATE_EXPIRED",
+		10: "SEARCH_JOB_STATE_INTERRUPTED",
 	}
 	SearchJobState_value = map[string]int32{
 		"SEARCH_JOB_STATE_UNSPECIFIED": 0,
@@ -173,6 +348,7 @@ var (
 		"SEARCH_JOB_STATE_FAILED":      7,
 		"SEARCH_JOB_STATE_CANCELED":    8,
 		"SEARCH_JOB_STATE_EXPIRED":     9,
+		"SEARCH_JOB_STATE_INTERRUPTED": 10,
 	}
 )
 
@@ -187,11 +363,11 @@ func (x SearchJobState) String() string {
 }
 
 func (SearchJobState) Descriptor() protoreflect.EnumDescriptor {
-	return file_open_splunk_search_proto_enumTypes[2].Descriptor()
+	return file_open_splunk_search_proto_enumTypes[5].Descriptor()
 }
 
 func (SearchJobState) Type() protoreflect.EnumType {
-	return &file_open_splunk_search_proto_enumTypes[2]
+	return &file_open_splunk_search_proto_enumTypes[5]
 }
 
 func (x SearchJobState) Number() protoreflect.EnumNumber {
@@ -200,7 +376,7 @@ func (x SearchJobState) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use SearchJobState.Descriptor instead.
 func (SearchJobState) EnumDescriptor() ([]byte, []int) {
-	return file_open_splunk_search_proto_rawDescGZIP(), []int{2}
+	return file_open_splunk_search_proto_rawDescGZIP(), []int{5}
 }
 
 type SearchExecutionPhase int32
@@ -251,11 +427,11 @@ func (x SearchExecutionPhase) String() string {
 }
 
 func (SearchExecutionPhase) Descriptor() protoreflect.EnumDescriptor {
-	return file_open_splunk_search_proto_enumTypes[3].Descriptor()
+	return file_open_splunk_search_proto_enumTypes[6].Descriptor()
 }
 
 func (SearchExecutionPhase) Type() protoreflect.EnumType {
-	return &file_open_splunk_search_proto_enumTypes[3]
+	return &file_open_splunk_search_proto_enumTypes[6]
 }
 
 func (x SearchExecutionPhase) Number() protoreflect.EnumNumber {
@@ -264,7 +440,7 @@ func (x SearchExecutionPhase) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use SearchExecutionPhase.Descriptor instead.
 func (SearchExecutionPhase) EnumDescriptor() ([]byte, []int) {
-	return file_open_splunk_search_proto_rawDescGZIP(), []int{3}
+	return file_open_splunk_search_proto_rawDescGZIP(), []int{6}
 }
 
 type SearchFailureCode int32
@@ -327,11 +503,11 @@ func (x SearchFailureCode) String() string {
 }
 
 func (SearchFailureCode) Descriptor() protoreflect.EnumDescriptor {
-	return file_open_splunk_search_proto_enumTypes[4].Descriptor()
+	return file_open_splunk_search_proto_enumTypes[7].Descriptor()
 }
 
 func (SearchFailureCode) Type() protoreflect.EnumType {
-	return &file_open_splunk_search_proto_enumTypes[4]
+	return &file_open_splunk_search_proto_enumTypes[7]
 }
 
 func (x SearchFailureCode) Number() protoreflect.EnumNumber {
@@ -340,7 +516,7 @@ func (x SearchFailureCode) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use SearchFailureCode.Descriptor instead.
 func (SearchFailureCode) EnumDescriptor() ([]byte, []int) {
-	return file_open_splunk_search_proto_rawDescGZIP(), []int{4}
+	return file_open_splunk_search_proto_rawDescGZIP(), []int{7}
 }
 
 // SearchDefinition is reusable user intent. It contains SPL and relative time
@@ -438,13 +614,17 @@ func (x *SearchDefinition) GetVisualization() *VisualizationSpec {
 }
 
 type SearchJobSource struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	Origin          SearchJobOrigin        `protobuf:"varint,1,opt,name=origin,proto3,enum=open_splunk.SearchJobOrigin" json:"origin,omitempty"`
-	SavedSearchId   *string                `protobuf:"bytes,2,opt,name=saved_search_id,json=savedSearchId,proto3,oneof" json:"saved_search_id,omitempty"`
-	HistorySearchId *string                `protobuf:"bytes,3,opt,name=history_search_id,json=historySearchId,proto3,oneof" json:"history_search_id,omitempty"`
-	DashboardId     *string                `protobuf:"bytes,4,opt,name=dashboard_id,json=dashboardId,proto3,oneof" json:"dashboard_id,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	Origin               SearchJobOrigin        `protobuf:"varint,1,opt,name=origin,proto3,enum=open_splunk.SearchJobOrigin" json:"origin,omitempty"`
+	SavedSearchId        *string                `protobuf:"bytes,2,opt,name=saved_search_id,json=savedSearchId,proto3,oneof" json:"saved_search_id,omitempty"`
+	HistorySearchId      *string                `protobuf:"bytes,3,opt,name=history_search_id,json=historySearchId,proto3,oneof" json:"history_search_id,omitempty"`
+	DashboardId          *string                `protobuf:"bytes,4,opt,name=dashboard_id,json=dashboardId,proto3,oneof" json:"dashboard_id,omitempty"`
+	ScheduledReportRunId *string                `protobuf:"bytes,5,opt,name=scheduled_report_run_id,json=scheduledReportRunId,proto3,oneof" json:"scheduled_report_run_id,omitempty"`
+	AlertId              *string                `protobuf:"bytes,6,opt,name=alert_id,json=alertId,proto3,oneof" json:"alert_id,omitempty"`
+	AlertRunId           *string                `protobuf:"bytes,7,opt,name=alert_run_id,json=alertRunId,proto3,oneof" json:"alert_run_id,omitempty"`
+	ScheduledAt          *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=scheduled_at,json=scheduledAt,proto3,oneof" json:"scheduled_at,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *SearchJobSource) Reset() {
@@ -503,6 +683,34 @@ func (x *SearchJobSource) GetDashboardId() string {
 		return *x.DashboardId
 	}
 	return ""
+}
+
+func (x *SearchJobSource) GetScheduledReportRunId() string {
+	if x != nil && x.ScheduledReportRunId != nil {
+		return *x.ScheduledReportRunId
+	}
+	return ""
+}
+
+func (x *SearchJobSource) GetAlertId() string {
+	if x != nil && x.AlertId != nil {
+		return *x.AlertId
+	}
+	return ""
+}
+
+func (x *SearchJobSource) GetAlertRunId() string {
+	if x != nil && x.AlertRunId != nil {
+		return *x.AlertRunId
+	}
+	return ""
+}
+
+func (x *SearchJobSource) GetScheduledAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ScheduledAt
+	}
+	return nil
 }
 
 type SearchProgress struct {
@@ -909,7 +1117,7 @@ func (x *SearchJobOptions) GetEnableTimeline() bool {
 	return false
 }
 
-// SearchJob is a transient, immutable-snapshot execution record. state_version
+// SearchJob is a retained, immutable-snapshot execution record. state_version
 // increases whenever observable state, progress, or result metadata changes.
 type SearchJob struct {
 	state               protoimpl.MessageState `protogen:"open.v1"`
@@ -938,9 +1146,14 @@ type SearchJob struct {
 	ResultsTruncated bool `protobuf:"varint,22,opt,name=results_truncated,json=resultsTruncated,proto3" json:"results_truncated,omitempty"`
 	// Definition-free identity for the immutable knowledge authority admitted
 	// with this job. It is absent for legacy or feature-disabled attempts.
-	KnowledgeSnapshot *KnowledgeSnapshotSummary `protobuf:"bytes,23,opt,name=knowledge_snapshot,json=knowledgeSnapshot,proto3,oneof" json:"knowledge_snapshot,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	KnowledgeSnapshot    *KnowledgeSnapshotSummary `protobuf:"bytes,23,opt,name=knowledge_snapshot,json=knowledgeSnapshot,proto3,oneof" json:"knowledge_snapshot,omitempty"`
+	Visibility           SearchJobVisibility       `protobuf:"varint,24,opt,name=visibility,proto3,enum=open_splunk.SearchJobVisibility" json:"visibility,omitempty"`
+	RetentionClass       SearchJobRetentionClass   `protobuf:"varint,25,opt,name=retention_class,json=retentionClass,proto3,enum=open_splunk.SearchJobRetentionClass" json:"retention_class,omitempty"`
+	RetentionLifetime    *durationpb.Duration      `protobuf:"bytes,26,opt,name=retention_lifetime,json=retentionLifetime,proto3" json:"retention_lifetime,omitempty"`
+	LastAccessedAt       *timestamppb.Timestamp    `protobuf:"bytes,27,opt,name=last_accessed_at,json=lastAccessedAt,proto3" json:"last_accessed_at,omitempty"`
+	RetainedResultStatus RetainedResultStatus      `protobuf:"varint,28,opt,name=retained_result_status,json=retainedResultStatus,proto3,enum=open_splunk.RetainedResultStatus" json:"retained_result_status,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *SearchJob) Reset() {
@@ -1127,6 +1340,41 @@ func (x *SearchJob) GetKnowledgeSnapshot() *KnowledgeSnapshotSummary {
 	return nil
 }
 
+func (x *SearchJob) GetVisibility() SearchJobVisibility {
+	if x != nil {
+		return x.Visibility
+	}
+	return SearchJobVisibility_SEARCH_JOB_VISIBILITY_UNSPECIFIED
+}
+
+func (x *SearchJob) GetRetentionClass() SearchJobRetentionClass {
+	if x != nil {
+		return x.RetentionClass
+	}
+	return SearchJobRetentionClass_SEARCH_JOB_RETENTION_CLASS_UNSPECIFIED
+}
+
+func (x *SearchJob) GetRetentionLifetime() *durationpb.Duration {
+	if x != nil {
+		return x.RetentionLifetime
+	}
+	return nil
+}
+
+func (x *SearchJob) GetLastAccessedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.LastAccessedAt
+	}
+	return nil
+}
+
+func (x *SearchJob) GetRetainedResultStatus() RetainedResultStatus {
+	if x != nil {
+		return x.RetainedResultStatus
+	}
+	return RetainedResultStatus_RETAINED_RESULT_STATUS_UNSPECIFIED
+}
+
 var File_open_splunk_search_proto protoreflect.FileDescriptor
 
 const file_open_splunk_search_proto_rawDesc = "" +
@@ -1143,15 +1391,24 @@ const file_open_splunk_search_proto_rawDesc = "" +
 	"\x0fselected_fields\x18\x06 \x03(\tR\x0eselectedFields\x12I\n" +
 	"\rvisualization\x18\a \x01(\v2\x1e.open_splunk.VisualizationSpecH\x01R\rvisualization\x88\x01\x01B\t\n" +
 	"\a_app_idB\x10\n" +
-	"\x0e_visualization\"\x88\x02\n" +
+	"\x0e_visualization\"\x9a\x04\n" +
 	"\x0fSearchJobSource\x124\n" +
 	"\x06origin\x18\x01 \x01(\x0e2\x1c.open_splunk.SearchJobOriginR\x06origin\x12+\n" +
 	"\x0fsaved_search_id\x18\x02 \x01(\tH\x00R\rsavedSearchId\x88\x01\x01\x12/\n" +
 	"\x11history_search_id\x18\x03 \x01(\tH\x01R\x0fhistorySearchId\x88\x01\x01\x12&\n" +
-	"\fdashboard_id\x18\x04 \x01(\tH\x02R\vdashboardId\x88\x01\x01B\x12\n" +
+	"\fdashboard_id\x18\x04 \x01(\tH\x02R\vdashboardId\x88\x01\x01\x12:\n" +
+	"\x17scheduled_report_run_id\x18\x05 \x01(\tH\x03R\x14scheduledReportRunId\x88\x01\x01\x12\x1e\n" +
+	"\balert_id\x18\x06 \x01(\tH\x04R\aalertId\x88\x01\x01\x12%\n" +
+	"\falert_run_id\x18\a \x01(\tH\x05R\n" +
+	"alertRunId\x88\x01\x01\x12B\n" +
+	"\fscheduled_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampH\x06R\vscheduledAt\x88\x01\x01B\x12\n" +
 	"\x10_saved_search_idB\x14\n" +
 	"\x12_history_search_idB\x0f\n" +
-	"\r_dashboard_id\"\xca\x04\n" +
+	"\r_dashboard_idB\x1a\n" +
+	"\x18_scheduled_report_run_idB\v\n" +
+	"\t_alert_idB\x0f\n" +
+	"\r_alert_run_idB\x0f\n" +
+	"\r_scheduled_at\"\xca\x04\n" +
 	"\x0eSearchProgress\x127\n" +
 	"\x05phase\x18\x01 \x01(\x0e2!.open_splunk.SearchExecutionPhaseR\x05phase\x12!\n" +
 	"\fscanned_rows\x18\x02 \x01(\x04R\vscannedRows\x12#\n" +
@@ -1191,7 +1448,7 @@ const file_open_splunk_search_proto_rawDesc = "" +
 	"\x14_clickhouse_query_id\"\xa0\x01\n" +
 	"\x10SearchJobOptions\x124\n" +
 	"\x16enable_field_discovery\x18\x02 \x01(\bR\x14enableFieldDiscovery\x12'\n" +
-	"\x0fenable_timeline\x18\x03 \x01(\bR\x0eenableTimelineJ\x04\b\x01\x10\x02J\x04\b\x04\x10\x05R\x0eenable_previewR\x11preview_row_limit\"\x8f\v\n" +
+	"\x0fenable_timeline\x18\x03 \x01(\bR\x0eenableTimelineJ\x04\b\x01\x10\x02J\x04\b\x04\x10\x05R\x0eenable_previewR\x11preview_row_limit\"\x89\x0e\n" +
 	"\tSearchJob\x12\"\n" +
 	"\rsearch_job_id\x18\x01 \x01(\tR\vsearchJobId\x12#\n" +
 	"\rstate_version\x18\x02 \x01(\x04R\fstateVersion\x12=\n" +
@@ -1222,7 +1479,14 @@ const file_open_splunk_search_proto_rawDesc = "" +
 	"expires_at\x18\x14 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x127\n" +
 	"\x04plan\x18\x15 \x01(\v2\x1e.open_splunk.SearchPlanSummaryH\x04R\x04plan\x88\x01\x01\x12+\n" +
 	"\x11results_truncated\x18\x16 \x01(\bR\x10resultsTruncated\x12Y\n" +
-	"\x12knowledge_snapshot\x18\x17 \x01(\v2%.open_splunk.KnowledgeSnapshotSummaryH\x05R\x11knowledgeSnapshot\x88\x01\x01B\x11\n" +
+	"\x12knowledge_snapshot\x18\x17 \x01(\v2%.open_splunk.KnowledgeSnapshotSummaryH\x05R\x11knowledgeSnapshot\x88\x01\x01\x12@\n" +
+	"\n" +
+	"visibility\x18\x18 \x01(\x0e2 .open_splunk.SearchJobVisibilityR\n" +
+	"visibility\x12M\n" +
+	"\x0fretention_class\x18\x19 \x01(\x0e2$.open_splunk.SearchJobRetentionClassR\x0eretentionClass\x12H\n" +
+	"\x12retention_lifetime\x18\x1a \x01(\v2\x19.google.protobuf.DurationR\x11retentionLifetime\x12D\n" +
+	"\x10last_accessed_at\x18\x1b \x01(\v2\x1a.google.protobuf.TimestampR\x0elastAccessedAt\x12W\n" +
+	"\x16retained_result_status\x18\x1c \x01(\x0e2!.open_splunk.RetainedResultStatusR\x14retainedResultStatusB\x11\n" +
 	"\x0f_normalized_splB\x16\n" +
 	"\x14_resolved_time_rangeB\x10\n" +
 	"\x0e_result_schemaB\n" +
@@ -1234,14 +1498,34 @@ const file_open_splunk_search_proto_rawDesc = "" +
 	"\x1dSEARCH_RESULT_TAB_UNSPECIFIED\x10\x00\x12\x1c\n" +
 	"\x18SEARCH_RESULT_TAB_EVENTS\x10\x01\x12 \n" +
 	"\x1cSEARCH_RESULT_TAB_STATISTICS\x10\x02\x12#\n" +
-	"\x1fSEARCH_RESULT_TAB_VISUALIZATION\x10\x03*\xd7\x01\n" +
+	"\x1fSEARCH_RESULT_TAB_VISUALIZATION\x10\x03*\x9c\x02\n" +
 	"\x0fSearchJobOrigin\x12!\n" +
 	"\x1dSEARCH_JOB_ORIGIN_UNSPECIFIED\x10\x00\x12\x1c\n" +
 	"\x18SEARCH_JOB_ORIGIN_AD_HOC\x10\x01\x12\"\n" +
 	"\x1eSEARCH_JOB_ORIGIN_SAVED_SEARCH\x10\x02\x12#\n" +
 	"\x1fSEARCH_JOB_ORIGIN_HISTORY_RERUN\x10\x03\x12\x1f\n" +
 	"\x1bSEARCH_JOB_ORIGIN_DASHBOARD\x10\x04\x12\x19\n" +
-	"\x15SEARCH_JOB_ORIGIN_API\x10\x05*\xc5\x02\n" +
+	"\x15SEARCH_JOB_ORIGIN_API\x10\x05\x12&\n" +
+	"\"SEARCH_JOB_ORIGIN_SCHEDULED_REPORT\x10\x06\x12\x1b\n" +
+	"\x17SEARCH_JOB_ORIGIN_ALERT\x10\a*\x83\x01\n" +
+	"\x13SearchJobVisibility\x12%\n" +
+	"!SEARCH_JOB_VISIBILITY_UNSPECIFIED\x10\x00\x12!\n" +
+	"\x1dSEARCH_JOB_VISIBILITY_PRIVATE\x10\x01\x12\"\n" +
+	"\x1eSEARCH_JOB_VISIBILITY_EVERYONE\x10\x02*\xa6\x02\n" +
+	"\x17SearchJobRetentionClass\x12*\n" +
+	"&SEARCH_JOB_RETENTION_CLASS_UNSPECIFIED\x10\x00\x12%\n" +
+	"!SEARCH_JOB_RETENTION_CLASS_MANUAL\x10\x01\x12%\n" +
+	"!SEARCH_JOB_RETENTION_CLASS_SHARED\x10\x02\x12/\n" +
+	"+SEARCH_JOB_RETENTION_CLASS_SCHEDULED_REPORT\x10\x03\x12.\n" +
+	"*SEARCH_JOB_RETENTION_CLASS_SCHEDULED_ALERT\x10\x04\x120\n" +
+	",SEARCH_JOB_RETENTION_CLASS_TRIGGERED_WEBHOOK\x10\x05*\xf4\x01\n" +
+	"\x14RetainedResultStatus\x12&\n" +
+	"\"RETAINED_RESULT_STATUS_UNSPECIFIED\x10\x00\x12\"\n" +
+	"\x1eRETAINED_RESULT_STATUS_PENDING\x10\x01\x12$\n" +
+	" RETAINED_RESULT_STATUS_AVAILABLE\x10\x02\x12\"\n" +
+	"\x1eRETAINED_RESULT_STATUS_EXPIRED\x10\x03\x12\"\n" +
+	"\x1eRETAINED_RESULT_STATUS_MISSING\x10\x04\x12\"\n" +
+	"\x1eRETAINED_RESULT_STATUS_CORRUPT\x10\x05*\xe7\x02\n" +
 	"\x0eSearchJobState\x12 \n" +
 	"\x1cSEARCH_JOB_STATE_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17SEARCH_JOB_STATE_QUEUED\x10\x01\x12\x1c\n" +
@@ -1252,7 +1536,9 @@ const file_open_splunk_search_proto_rawDesc = "" +
 	"\x1aSEARCH_JOB_STATE_COMPLETED\x10\x06\x12\x1b\n" +
 	"\x17SEARCH_JOB_STATE_FAILED\x10\a\x12\x1d\n" +
 	"\x19SEARCH_JOB_STATE_CANCELED\x10\b\x12\x1c\n" +
-	"\x18SEARCH_JOB_STATE_EXPIRED\x10\t*\xe1\x02\n" +
+	"\x18SEARCH_JOB_STATE_EXPIRED\x10\t\x12 \n" +
+	"\x1cSEARCH_JOB_STATE_INTERRUPTED\x10\n" +
+	"*\xe1\x02\n" +
 	"\x14SearchExecutionPhase\x12&\n" +
 	"\"SEARCH_EXECUTION_PHASE_UNSPECIFIED\x10\x00\x12+\n" +
 	"'SEARCH_EXECUTION_PHASE_WAITING_FOR_SLOT\x10\x01\x12\"\n" +
@@ -1289,69 +1575,78 @@ func file_open_splunk_search_proto_rawDescGZIP() []byte {
 	return file_open_splunk_search_proto_rawDescData
 }
 
-var file_open_splunk_search_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
+var file_open_splunk_search_proto_enumTypes = make([]protoimpl.EnumInfo, 8)
 var file_open_splunk_search_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_open_splunk_search_proto_goTypes = []any{
 	(SearchResultTab)(0),             // 0: open_splunk.SearchResultTab
 	(SearchJobOrigin)(0),             // 1: open_splunk.SearchJobOrigin
-	(SearchJobState)(0),              // 2: open_splunk.SearchJobState
-	(SearchExecutionPhase)(0),        // 3: open_splunk.SearchExecutionPhase
-	(SearchFailureCode)(0),           // 4: open_splunk.SearchFailureCode
-	(*SearchDefinition)(nil),         // 5: open_splunk.SearchDefinition
-	(*SearchJobSource)(nil),          // 6: open_splunk.SearchJobSource
-	(*SearchProgress)(nil),           // 7: open_splunk.SearchProgress
-	(*SearchFailure)(nil),            // 8: open_splunk.SearchFailure
-	(*SearchPlanStage)(nil),          // 9: open_splunk.SearchPlanStage
-	(*SearchPlanSummary)(nil),        // 10: open_splunk.SearchPlanSummary
-	(*SearchJobOptions)(nil),         // 11: open_splunk.SearchJobOptions
-	(*SearchJob)(nil),                // 12: open_splunk.SearchJob
-	(*TimeRangeSpec)(nil),            // 13: open_splunk.TimeRangeSpec
-	(*VisualizationSpec)(nil),        // 14: open_splunk.VisualizationSpec
-	(*durationpb.Duration)(nil),      // 15: google.protobuf.Duration
-	(*timestamppb.Timestamp)(nil),    // 16: google.protobuf.Timestamp
-	(*Diagnostic)(nil),               // 17: open_splunk.Diagnostic
-	(*SourceRange)(nil),              // 18: open_splunk.SourceRange
-	(*ResolvedTimeRange)(nil),        // 19: open_splunk.ResolvedTimeRange
-	(ResultSetKind)(0),               // 20: open_splunk.ResultSetKind
-	(*ResultSchema)(nil),             // 21: open_splunk.ResultSchema
-	(*ApiWarning)(nil),               // 22: open_splunk.ApiWarning
-	(*KnowledgeSnapshotSummary)(nil), // 23: open_splunk.KnowledgeSnapshotSummary
+	(SearchJobVisibility)(0),         // 2: open_splunk.SearchJobVisibility
+	(SearchJobRetentionClass)(0),     // 3: open_splunk.SearchJobRetentionClass
+	(RetainedResultStatus)(0),        // 4: open_splunk.RetainedResultStatus
+	(SearchJobState)(0),              // 5: open_splunk.SearchJobState
+	(SearchExecutionPhase)(0),        // 6: open_splunk.SearchExecutionPhase
+	(SearchFailureCode)(0),           // 7: open_splunk.SearchFailureCode
+	(*SearchDefinition)(nil),         // 8: open_splunk.SearchDefinition
+	(*SearchJobSource)(nil),          // 9: open_splunk.SearchJobSource
+	(*SearchProgress)(nil),           // 10: open_splunk.SearchProgress
+	(*SearchFailure)(nil),            // 11: open_splunk.SearchFailure
+	(*SearchPlanStage)(nil),          // 12: open_splunk.SearchPlanStage
+	(*SearchPlanSummary)(nil),        // 13: open_splunk.SearchPlanSummary
+	(*SearchJobOptions)(nil),         // 14: open_splunk.SearchJobOptions
+	(*SearchJob)(nil),                // 15: open_splunk.SearchJob
+	(*TimeRangeSpec)(nil),            // 16: open_splunk.TimeRangeSpec
+	(*VisualizationSpec)(nil),        // 17: open_splunk.VisualizationSpec
+	(*timestamppb.Timestamp)(nil),    // 18: google.protobuf.Timestamp
+	(*durationpb.Duration)(nil),      // 19: google.protobuf.Duration
+	(*Diagnostic)(nil),               // 20: open_splunk.Diagnostic
+	(*SourceRange)(nil),              // 21: open_splunk.SourceRange
+	(*ResolvedTimeRange)(nil),        // 22: open_splunk.ResolvedTimeRange
+	(ResultSetKind)(0),               // 23: open_splunk.ResultSetKind
+	(*ResultSchema)(nil),             // 24: open_splunk.ResultSchema
+	(*ApiWarning)(nil),               // 25: open_splunk.ApiWarning
+	(*KnowledgeSnapshotSummary)(nil), // 26: open_splunk.KnowledgeSnapshotSummary
 }
 var file_open_splunk_search_proto_depIdxs = []int32{
-	13, // 0: open_splunk.SearchDefinition.time_range:type_name -> open_splunk.TimeRangeSpec
+	16, // 0: open_splunk.SearchDefinition.time_range:type_name -> open_splunk.TimeRangeSpec
 	0,  // 1: open_splunk.SearchDefinition.preferred_result_tab:type_name -> open_splunk.SearchResultTab
-	14, // 2: open_splunk.SearchDefinition.visualization:type_name -> open_splunk.VisualizationSpec
+	17, // 2: open_splunk.SearchDefinition.visualization:type_name -> open_splunk.VisualizationSpec
 	1,  // 3: open_splunk.SearchJobSource.origin:type_name -> open_splunk.SearchJobOrigin
-	3,  // 4: open_splunk.SearchProgress.phase:type_name -> open_splunk.SearchExecutionPhase
-	15, // 5: open_splunk.SearchProgress.elapsed:type_name -> google.protobuf.Duration
-	15, // 6: open_splunk.SearchProgress.queue_wait:type_name -> google.protobuf.Duration
-	16, // 7: open_splunk.SearchProgress.updated_at:type_name -> google.protobuf.Timestamp
-	4,  // 8: open_splunk.SearchFailure.code:type_name -> open_splunk.SearchFailureCode
-	17, // 9: open_splunk.SearchFailure.diagnostics:type_name -> open_splunk.Diagnostic
-	18, // 10: open_splunk.SearchPlanStage.source_range:type_name -> open_splunk.SourceRange
-	9,  // 11: open_splunk.SearchPlanSummary.stages:type_name -> open_splunk.SearchPlanStage
-	5,  // 12: open_splunk.SearchJob.definition:type_name -> open_splunk.SearchDefinition
-	6,  // 13: open_splunk.SearchJob.source:type_name -> open_splunk.SearchJobSource
-	19, // 14: open_splunk.SearchJob.resolved_time_range:type_name -> open_splunk.ResolvedTimeRange
-	16, // 15: open_splunk.SearchJob.index_time_cutoff:type_name -> google.protobuf.Timestamp
-	2,  // 16: open_splunk.SearchJob.state:type_name -> open_splunk.SearchJobState
-	20, // 17: open_splunk.SearchJob.result_kind:type_name -> open_splunk.ResultSetKind
-	21, // 18: open_splunk.SearchJob.result_schema:type_name -> open_splunk.ResultSchema
-	7,  // 19: open_splunk.SearchJob.progress:type_name -> open_splunk.SearchProgress
-	22, // 20: open_splunk.SearchJob.warnings:type_name -> open_splunk.ApiWarning
-	17, // 21: open_splunk.SearchJob.diagnostics:type_name -> open_splunk.Diagnostic
-	8,  // 22: open_splunk.SearchJob.failure:type_name -> open_splunk.SearchFailure
-	16, // 23: open_splunk.SearchJob.created_at:type_name -> google.protobuf.Timestamp
-	16, // 24: open_splunk.SearchJob.started_at:type_name -> google.protobuf.Timestamp
-	16, // 25: open_splunk.SearchJob.finished_at:type_name -> google.protobuf.Timestamp
-	16, // 26: open_splunk.SearchJob.expires_at:type_name -> google.protobuf.Timestamp
-	10, // 27: open_splunk.SearchJob.plan:type_name -> open_splunk.SearchPlanSummary
-	23, // 28: open_splunk.SearchJob.knowledge_snapshot:type_name -> open_splunk.KnowledgeSnapshotSummary
-	29, // [29:29] is the sub-list for method output_type
-	29, // [29:29] is the sub-list for method input_type
-	29, // [29:29] is the sub-list for extension type_name
-	29, // [29:29] is the sub-list for extension extendee
-	0,  // [0:29] is the sub-list for field type_name
+	18, // 4: open_splunk.SearchJobSource.scheduled_at:type_name -> google.protobuf.Timestamp
+	6,  // 5: open_splunk.SearchProgress.phase:type_name -> open_splunk.SearchExecutionPhase
+	19, // 6: open_splunk.SearchProgress.elapsed:type_name -> google.protobuf.Duration
+	19, // 7: open_splunk.SearchProgress.queue_wait:type_name -> google.protobuf.Duration
+	18, // 8: open_splunk.SearchProgress.updated_at:type_name -> google.protobuf.Timestamp
+	7,  // 9: open_splunk.SearchFailure.code:type_name -> open_splunk.SearchFailureCode
+	20, // 10: open_splunk.SearchFailure.diagnostics:type_name -> open_splunk.Diagnostic
+	21, // 11: open_splunk.SearchPlanStage.source_range:type_name -> open_splunk.SourceRange
+	12, // 12: open_splunk.SearchPlanSummary.stages:type_name -> open_splunk.SearchPlanStage
+	8,  // 13: open_splunk.SearchJob.definition:type_name -> open_splunk.SearchDefinition
+	9,  // 14: open_splunk.SearchJob.source:type_name -> open_splunk.SearchJobSource
+	22, // 15: open_splunk.SearchJob.resolved_time_range:type_name -> open_splunk.ResolvedTimeRange
+	18, // 16: open_splunk.SearchJob.index_time_cutoff:type_name -> google.protobuf.Timestamp
+	5,  // 17: open_splunk.SearchJob.state:type_name -> open_splunk.SearchJobState
+	23, // 18: open_splunk.SearchJob.result_kind:type_name -> open_splunk.ResultSetKind
+	24, // 19: open_splunk.SearchJob.result_schema:type_name -> open_splunk.ResultSchema
+	10, // 20: open_splunk.SearchJob.progress:type_name -> open_splunk.SearchProgress
+	25, // 21: open_splunk.SearchJob.warnings:type_name -> open_splunk.ApiWarning
+	20, // 22: open_splunk.SearchJob.diagnostics:type_name -> open_splunk.Diagnostic
+	11, // 23: open_splunk.SearchJob.failure:type_name -> open_splunk.SearchFailure
+	18, // 24: open_splunk.SearchJob.created_at:type_name -> google.protobuf.Timestamp
+	18, // 25: open_splunk.SearchJob.started_at:type_name -> google.protobuf.Timestamp
+	18, // 26: open_splunk.SearchJob.finished_at:type_name -> google.protobuf.Timestamp
+	18, // 27: open_splunk.SearchJob.expires_at:type_name -> google.protobuf.Timestamp
+	13, // 28: open_splunk.SearchJob.plan:type_name -> open_splunk.SearchPlanSummary
+	26, // 29: open_splunk.SearchJob.knowledge_snapshot:type_name -> open_splunk.KnowledgeSnapshotSummary
+	2,  // 30: open_splunk.SearchJob.visibility:type_name -> open_splunk.SearchJobVisibility
+	3,  // 31: open_splunk.SearchJob.retention_class:type_name -> open_splunk.SearchJobRetentionClass
+	19, // 32: open_splunk.SearchJob.retention_lifetime:type_name -> google.protobuf.Duration
+	18, // 33: open_splunk.SearchJob.last_accessed_at:type_name -> google.protobuf.Timestamp
+	4,  // 34: open_splunk.SearchJob.retained_result_status:type_name -> open_splunk.RetainedResultStatus
+	35, // [35:35] is the sub-list for method output_type
+	35, // [35:35] is the sub-list for method input_type
+	35, // [35:35] is the sub-list for extension type_name
+	35, // [35:35] is the sub-list for extension extendee
+	0,  // [0:35] is the sub-list for field type_name
 }
 
 func init() { file_open_splunk_search_proto_init() }
@@ -1373,7 +1668,7 @@ func file_open_splunk_search_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_open_splunk_search_proto_rawDesc), len(file_open_splunk_search_proto_rawDesc)),
-			NumEnums:      5,
+			NumEnums:      8,
 			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   0,

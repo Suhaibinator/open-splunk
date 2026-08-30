@@ -41,7 +41,8 @@ runs `AutoMigrate`.
 SQLite is the authority for catalogs, optimistic-concurrency revisions,
 authentication/token metadata, collectors, jobs/history/export,
 saved searches, dashboards, knowledge/lookups, visibility, quota schedules,
-ingestion request/outbox state, audit journals, cursors, and recovery metadata.
+ingestion request/outbox state, audit journals (including the identity-free
+feature-operation journal), cursors, and recovery metadata.
 
 Audited business mutations and their audit/receipt/catalog changes share one
 caller-owned transaction. The schema uses explicit foreign keys, uniqueness,

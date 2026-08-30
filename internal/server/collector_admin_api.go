@@ -44,9 +44,7 @@ func (handler *apiHandler) collectorAdministrationRoutes(
 	requestBytes int64,
 ) []protobufRouteDefinition {
 	return []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute[
-			*opensplunk.ListCollectorsRequest,
-			*serializedListCollectorsResponse](router.RouteConfig[
+		newForwardCompatibleProtoRoute(router.RouteConfig[
 			*opensplunk.ListCollectorsRequest,
 			*serializedListCollectorsResponse,
 		]{
@@ -60,9 +58,7 @@ func (handler *apiHandler) collectorAdministrationRoutes(
 				MaxBodySize: requestBytes,
 			},
 		}),
-		newForwardCompatibleProtoRoute[
-			*opensplunk.GetCollectorRequest,
-			*serializedGetCollectorResponse](router.RouteConfig[
+		newForwardCompatibleProtoRoute(router.RouteConfig[
 			*opensplunk.GetCollectorRequest,
 			*serializedGetCollectorResponse,
 		]{
@@ -76,9 +72,7 @@ func (handler *apiHandler) collectorAdministrationRoutes(
 				MaxBodySize: requestBytes,
 			},
 		}),
-		newForwardCompatibleProtoRoute[
-			*opensplunk.UpdateCollectorRequest,
-			*serializedUpdateCollectorResponse](router.RouteConfig[
+		newForwardCompatibleProtoRoute(router.RouteConfig[
 			*opensplunk.UpdateCollectorRequest,
 			*serializedUpdateCollectorResponse,
 		]{
@@ -92,9 +86,7 @@ func (handler *apiHandler) collectorAdministrationRoutes(
 				MaxBodySize: requestBytes,
 			},
 		}),
-		newForwardCompatibleProtoRoute[
-			*opensplunk.SetCollectorEnabledRequest,
-			*serializedSetCollectorEnabledResponse](router.RouteConfig[
+		newForwardCompatibleProtoRoute(router.RouteConfig[
 			*opensplunk.SetCollectorEnabledRequest,
 			*serializedSetCollectorEnabledResponse,
 		]{
@@ -1215,10 +1207,7 @@ type serializedListCollectorsCodec = boundedProtoCodec[
 ]
 
 func newSerializedListCollectorsCodec() *serializedListCollectorsCodec {
-	return newCollectorAdministrationCodec[
-		*opensplunk.ListCollectorsRequest,
-		*opensplunk.ListCollectorsResponse,
-	](
+	return newCollectorAdministrationCodec(
 		codec.NewProtoCodec[
 			*opensplunk.ListCollectorsRequest,
 			*opensplunk.ListCollectorsResponse,
@@ -1234,10 +1223,7 @@ type serializedGetCollectorCodec = boundedProtoCodec[
 ]
 
 func newSerializedGetCollectorCodec() *serializedGetCollectorCodec {
-	return newCollectorAdministrationCodec[
-		*opensplunk.GetCollectorRequest,
-		*opensplunk.GetCollectorResponse,
-	](
+	return newCollectorAdministrationCodec(
 		codec.NewProtoCodec[
 			*opensplunk.GetCollectorRequest,
 			*opensplunk.GetCollectorResponse,
@@ -1253,10 +1239,7 @@ type serializedUpdateCollectorCodec = boundedProtoCodec[
 ]
 
 func newSerializedUpdateCollectorCodec() *serializedUpdateCollectorCodec {
-	return newCollectorAdministrationCodec[
-		*opensplunk.UpdateCollectorRequest,
-		*opensplunk.UpdateCollectorResponse,
-	](
+	return newCollectorAdministrationCodec(
 		codec.NewProtoCodec[
 			*opensplunk.UpdateCollectorRequest,
 			*opensplunk.UpdateCollectorResponse,
@@ -1272,10 +1255,7 @@ type serializedSetCollectorEnabledCodec = boundedProtoCodec[
 ]
 
 func newSerializedSetCollectorEnabledCodec() *serializedSetCollectorEnabledCodec {
-	return newCollectorAdministrationCodec[
-		*opensplunk.SetCollectorEnabledRequest,
-		*opensplunk.SetCollectorEnabledResponse,
-	](
+	return newCollectorAdministrationCodec(
 		codec.NewProtoCodec[
 			*opensplunk.SetCollectorEnabledRequest,
 			*opensplunk.SetCollectorEnabledResponse,

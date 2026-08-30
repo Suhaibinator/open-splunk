@@ -26,18 +26,16 @@ went in Phase 5, along with 86 font sizes, 12 radii, eight box shadows and the
 six off-canon breakpoints. The colour half of `scripts/css-literal-debt.json` is
 empty as a result, and the scale half holds only the values a scale cannot
 express — a circle, a shadow's geometry, a stacking order local to one
-component. The pre-refactor alias block is gone, so there is one name per role.
+component. There is one name per role.
 Recolouring the product is a one-file edit: the structural invariants and
 stylesheet lint reject component-level palette primitives and colour literals.
 
 ## Where a rule lives
 
-`app/styles/index.css` is the whole load order. `app/globals.css` used to be all
-of it — 7,326 lines, with every breakpoint override for every feature collected
-into two sections at the foot of the file. Phase 4 carved it up: every rule
-moved exactly once and unchanged, each `@media` block moved into the file that
-owns its base selectors, and the five CSS modules became plain colocated
-stylesheets. A feature and the way it folds are now one edit.
+`app/styles/index.css` is the whole load order. Every rule lives either in a
+shared stylesheet under `app/styles/` or beside the feature that owns it. Each
+responsive rule lives in the same file as its base selector, so a feature and
+the way it folds are one edit.
 
 | Order | File | What it owns |
 | --- | --- | --- |
@@ -50,34 +48,34 @@ stylesheets. A feature and the way it folds are now one edit.
 | 7 | `app/styles/primitives/modal.css` | the dialog shell and the surfaces that only open inside one |
 | 8 | `app/styles/primitives/status.css` | `.status` and `.badge` |
 | 9 | `app/styles/primitives/layout.css` | the product bar, the app shell, the drawer, the toasts, `.suite-page` / `.suite-card` |
-| 10 | `app/search-workspace/search-editor.css` | the search title row, the SPL editor, the time-range popover |
-| 11 | `app/search-workspace/search-job.css` | the job strip, the result tabs, the timeline |
-| 12 | `app/search-workspace/search-fields.css` | the fields rail and the event list |
-| 13 | `app/search-workspace/search-results.css` | patterns, statistics, visualization, the dense result grids |
-| 14 | `app/admin/admin.css` | the admin console, Knowledge Manager, Knowledge Preview, Lookup Manager |
-| 15 | `app/activity/activity.css` | the activity console |
-| 16 | `app/datasets/datasets.css` | the dataset cards and field catalog |
-| 17 | `app/signin/signin.css` | the sign-in page |
-| 18 | `app/home.css` | the landing page |
-| 19 | `app/_components/backend-resource-state.css` | the connected-backend empty and error surfaces |
-| 20 | `app/dashboards/dashboards.css` | the operations dashboard's page rules |
-| 21 | `app/analytics/analytics.css` | the search-analytics console, prefix `analytics-` |
-| 22 | `app/dashboards/operations-dashboard.css` | the operations dashboard and the backend dashboard manager, prefix `operations-` |
-| 23 | `app/reports/reports.css` | the reports library and the saved-search console, prefix `reports-` |
-| 24 | `app/search-workspace/components/workspace-dialogs.css` | the workspace's dialogs, prefix `workspace-dialog-` |
-| 25 | `app/search-workspace/panels/visualization-panel.css` | the column and bar charts, prefix `visualization-` |
-| 26 | `app/styles/interaction.css` | the coarse-pointer tap target, the 16px input floor, the reduced-motion cut |
+| 10 | `app/styles/primitives/chart.css` | shared SVG stroke geometry and plot-grid furniture |
+| 11 | `app/search-workspace/search-editor.css` | the search title row, the SPL editor, the time-range popover |
+| 12 | `app/search-workspace/search-job.css` | the job strip, the result tabs, the timeline |
+| 13 | `app/search-workspace/search-fields.css` | the fields rail and the event list |
+| 14 | `app/search-workspace/search-results.css` | patterns, statistics, visualization, the dense result grids |
+| 15 | `app/admin/admin.css` | the admin console, Knowledge Manager, Knowledge Preview, Lookup Manager |
+| 16 | `app/activity/activity.css` | the activity console |
+| 17 | `app/datasets/datasets.css` | the dataset cards and field catalog |
+| 18 | `app/signin/signin.css` | the sign-in page |
+| 19 | `app/home.css` | the landing page |
+| 20 | `app/_components/backend-resource-state.css` | the connected-backend empty and error surfaces |
+| 21 | `app/dashboards/dashboards.css` | the operations dashboard's page rules |
+| 22 | `app/analytics/analytics.css` | the search-analytics console, prefix `analytics-` |
+| 23 | `app/dashboards/operations-dashboard.css` | the operations dashboard and the backend dashboard manager, prefix `operations-` |
+| 24 | `app/reports/reports.css` | the reports library and the saved-search console, prefix `reports-` |
+| 25 | `app/search-workspace/components/workspace-dialogs.css` | the workspace's dialogs, prefix `workspace-dialog-` |
+| 26 | `app/search-workspace/panels/visualization-panel.css` | the column and bar charts, prefix `visualization-` |
+| 27 | `app/styles/interaction.css` | the coarse-pointer tap target, the 16px input floor, the reduced-motion cut |
 
 The primitives come before the features on purpose. A feature rule and a
 primitive rule regularly have the same specificity — `.reports-table-wrap`
 against `.table-wrap`, both one class — and the feature is the one meant to win.
-Until Phase 4 the last five files were CSS modules, which the bundler happened
-to emit after `globals.css`: the order was real and load-bearing and nothing
-wrote it down. Adding a stylesheet is a line in `index.css`, in the position its
-rules need.
+Adding a stylesheet is a line in `index.css`, in the position its rules need;
+the application does not rely on JavaScript import timing or bundler chunk
+ordering to define the cascade.
 
 Four placements are not where the file name would suggest, and each records a
-cascade dependency the monolith hid:
+cross-feature cascade dependency:
 
 - `.search-page` sits in `layout.css` beside `.suite-main`. The search page's
   `<main>` carries both classes, and the shell's `min-height` wins only because
@@ -122,12 +120,8 @@ selector or a `styles.x` read comes back.
 
 ### Responsive rules live beside their base rules
 
-**Every `@media` block lives in the file that owns its base selectors.** That is
-the rule the layer keeps, and it is the one that mattered: the monolith
-collected every breakpoint override for every feature into two document-wide
-sections, so changing how one feature folded meant editing a file 2,000 lines
-away from the rules being folded. A feature and the way it folds are now one
-file.
+**Every `@media` block lives in the file that owns its base selectors.** A
+feature and the way it folds are one file.
 
 *Where inside that file* is not settled, and the layer ships two shapes:
 
@@ -147,9 +141,8 @@ The appendix is easier to audit (one place per file lists every width that file
 reacts to); the per-section block is easier to read while editing one component.
 Neither has been chosen, and nothing enforces one over the other: **follow the
 shape of the file you are editing rather than introducing a third.** Reconciling
-them is a pure reorder within each file, and the rule-parity check in
-`scripts/style-invariants.test.mjs` verifies exactly that, so whichever shape is
-eventually picked can be applied without a screenshot moving.
+them is a pure reorder within each file; computed-style contracts cover the
+load-bearing cascade outcomes.
 
 The order of the steps *within* a responsive section is load-bearing wherever
 they sit, and is always the same: base rules,
@@ -451,47 +444,6 @@ it. That is the reason the alpha family does not exist: a stored
 `rgb(16 23 28 / 48%)` would be a fourth thing every theme had to keep in step,
 and the mix already has the answer.
 
-## Retired aliases
-
-The pre-refactor names — `--muted`, `--surface`, `--green-strong`, and their
-peers — were declared at the bottom of the light block through Phase 1, each
-pointing at its semantic replacement so no call site broke while the layer was
-introduced. Phase 2 rewrote the last call site and **deleted the block**, along
-with the `--shadow` declaration `app/globals.css` carried. There is now exactly
-one name per role.
-
-| Retired | Now read as |
-| --- | --- |
-| `--app-bar` | `--chrome-appbar` |
-| `--app-bar-hover` | `--chrome-hover` |
-| `--black` | `--bg-inverse` |
-| `--blue` | `--status-info` |
-| `--blue-soft` | `--status-info-soft` |
-| `--border-dark` | `--border-strong` |
-| `--canvas` | `--bg-canvas` |
-| `--faint` | `--fg-faint` |
-| `--green` | `--accent` |
-| `--green-soft` | `--accent-soft` |
-| `--green-strong` | `--accent-hover` |
-| `--muted` | `--fg-muted` |
-| `--orange` | *(named no role; `--orange-400` is unreferenced tier 1)* |
-| `--product-bar` | `--chrome-bar` |
-| `--red` | `--status-error` |
-| `--red-soft` | `--status-error-soft` |
-| `--shadow` | `--shadow-lg` |
-| `--surface` | `--bg-surface` |
-| `--surface-raised` | `--bg-raised` |
-| `--surface-subtle` | `--bg-subtle` |
-| `--text` | `--fg-text` |
-| `--text-strong` | `--fg-strong` |
-| `--yellow` | *(named no role; `--amber-500` is unreferenced tier 1)* |
-
-`--border` is not in the table: it survived the refactor as a tier-2 name
-rather than as an alias. The value each retired name carried is pinned against
-the role that carries it now in `scripts/style-invariants.test.mjs` and
-`integration/style-contracts/css-contracts.spec.ts`. A separate assertion
-holds that none of the names comes back.
-
 ## Scales
 
 `app/styles/tokens-scale.css` holds the non-colour primitives. Each step was
@@ -548,13 +500,8 @@ The product's body size is 10px, so the ramp is deliberately bottom-heavy and
 `--type-xs`, not `--type-md`, is the default UI size. Seven steps cover the
 twenty distinct `font-size` literals in use.
 
-The family is `--type-*` rather than the `--text-*` these steps were first
-written as, because `--text` and `--text-strong` were colours: with both
-families in the layer, `var(--text-…)` told a reader nothing about whether they
-were writing an ink or a length. Both inks are retired now — see
-[Retired aliases](#retired-aliases) — but the scale keeps the `--type-*` name,
-because it has 588 call sites and the collision it was avoiding could recur the
-moment someone reached for `--text-` again.
+The family is `--type-*` so `var(--type-…)` unambiguously reads as a scale value
+rather than a foreground role.
 
 | Token | Value | Replaces | Declarations covered |
 | --- | --- | --- | --- |
@@ -806,9 +753,8 @@ interaction feedback and stay literal, as does the `0.01ms` that
 
 ### Fonts
 
-`--font-sans` and `--font-mono` moved out of the `:root` block in
-`app/globals.css` with their values unchanged. They live with the scales
-because neither varies by theme.
+`--font-sans` and `--font-mono` live with the scales because neither varies by
+theme.
 
 ## Breakpoints
 
@@ -862,17 +808,15 @@ rename: the console adapts from 760px down where it used to adapt from 650px dow
 responsive rules, so this is six edits of one breakpoint rather than six
 different ones.
 
-The one `max-height: 650px` compound is untouched and is stated **twice**: the
-monolith held a single `(max-height: 650px) and (max-width: 760px)` block
-covering the time-range popover and the sign-in card, and those belong to two
-different features, so the split gave each its own copy — `app/signin/signin.css`
-and `app/search-workspace/search-editor.css`. Phase 5 put `max-height` on the
-allowed feature list and pinned its one value, because it is not a width step
-and cannot fold onto the canon: it asks whether the viewport is short enough
-that a sheet has to give height back, which no `max-width` expresses. Pinning
-the value is what keeps it from becoming a second ladder. The two guards can
-still only be folded into one if the sign-in card and the popover can share a
-step, which is a design question rather than a rename.
+The one `max-height: 650px` compound is stated **twice** because the time-range
+popover and the sign-in card belong to different features:
+`app/signin/signin.css` and `app/search-workspace/search-editor.css`. The value
+is allowed and pinned because it is not a width step and cannot fold onto the
+canon: it asks whether the viewport is short enough that a sheet has to give
+height back, which no `max-width` expresses. Pinning the value is what keeps it
+from becoming a second ladder. The two guards can only be folded into one if
+the sign-in card and the popover can share a step, which is a design question
+rather than a rename.
 
 ## Primitives
 
@@ -1242,15 +1186,11 @@ and `pulse-ring` are each declared once, that the six keyframe blocks they
 replaced stay gone, and that every `animation` names a block that exists — a
 dangling animation name renders as no animation at all, in silence.
 
-It also asserts that no two rules state the same four or more declarations.
-`scripts/css-duplicate-blocks.json` records the restatements this phase
-deliberately left, each with the primitive that would otherwise own it. An
-entry is keyed by both the declarations and the exact set of rules stating
-them, so it goes stale — and the test fails — the moment either side moves.
-That is what stops the record drifting into a blanket exemption. The largest
-entries name the next consolidation: the knowledge- and lookup-manager form
-controls (four copies of one input rule), the uppercase field label (three),
-and muted body copy (four).
+It also asserts that no two rules in the same at-rule context state the same
+four or more declarations. There is no exemption ledger: a repeated block must
+be folded into a primitive, a modifier or a shared selector list. At-rule
+contexts are compared separately because a responsive or accessibility
+override is not interchangeable with an unconditional base rule.
 
 The same file walks the other direction — from every call site back to the
 styling layer, which is the direction a deletion gets wrong.
@@ -1321,8 +1261,8 @@ travels with a line is an exemption nobody reviews.
 
 ### The invariant suite
 
-`scripts/style-invariants.test.mjs` is the whole of the first gate: one file,
-a hundred and two tests, run by `npm run test:frontend`. It replaced seven files that
+`scripts/style-invariants.test.mjs` is the whole of the first gate: one file of
+structural tests, run by `npm run test:frontend`. It replaced seven files that
 asked overlapping questions through three parsing libraries — two of which
 exported a function of the same name meaning different things. All the reading
 and parsing now lives in `scripts/style-inventory.mjs`, so the test file never
@@ -1332,7 +1272,7 @@ The sections, in the order they appear in the file:
 
 1. **Reach.** One test asserts that every walk the rest of the file depends on
    is populated — the stylesheets, the test files, the token layer, the import
-   list, the frozen rule set, the call sites. Every other assertion compares one
+   list and the call sites. Every other assertion compares one
    list against another and goes quiet when either side is empty, so this is the
    test that stops the file passing by having nothing to look at.
 2. **The token layer.** One declaration site per name; every reference inside
@@ -1360,44 +1300,15 @@ The sections, in the order they appear in the file:
    stylesheet in; the entry point declares no rule of its own; no `.module.css`,
    `:global()`, `:local()`, `composes` or `styles.x` read comes back; no test
    file reads a stylesheet's characters, however the path is composed; and the
-   load order is tokens, base, the six primitives, the features, then
+   load order is tokens, base, the seven primitives, the features, then
    `interaction.css` last.
-6. **Parity.** `scripts/css-phase3-monolith.json` freezes the rule set the
-   single application stylesheet stated at the commit before it was split. Every
-   rule is still stated once by the split set, unchanged, and every repeated
-   selector keeps the order that decides its value.
-
-   This is a ratchet on about twenty stylesheets, so **how to write a new rule
-   in one of them is part of the gate**, not a way around it. The ledger's
-   `substitutions` array records every rule the split set states that the
-   monolith did not state verbatim, and it has three forms:
-
-   | `before` | Means |
-   | --- | --- |
-   | one rule | that rule was edited into `after` |
-   | a list of rules | those rules were folded into the single `after` |
-   | `[]` | `after` is a rule nobody wrote before |
-
-   The empty list is the addition form: write the rule, run
-   `npm run test:frontend`, and the failure prints the rule's signature
-   verbatim — `<at-rules> \|\| <selector list> \|\| <declarations>` — which is
-   what goes in `after`. An addition is compared as the last declaration of its
-   selector, so if it ties on specificity with a rule already there and the
-   cascade does not in fact reach it last, the tie-break check fails too; that
-   is a real finding about the rule, not about the ledger.
-
-   Do not delete the parity test to land a rule. The ledger is a provenance
-   proof rather than a standing budget, and its own header says when to retire
-   it: when a phase has rewritten so much of the frozen text that there is
-   nothing left to check against, delete the file and the test together, on
-   purpose, rather than regenerating either to pass.
-7. **Where a responsive rule lives.** No `@media` block overrides base rules
+6. **Where a responsive rule lives.** No `@media` block overrides base rules
    that live in another file, `interaction.css` still earns its exemption from
    that check, and every run of media queries follows the documented order.
-8. **One implementation of each primitive**, plus the shared animations and the
+7. **One implementation of each primitive**, plus the shared animations and the
    duplicate-declaration check described under
    [What keeps one primitive from becoming two again](#what-keeps-one-primitive-from-becoming-two-again).
-9. **Reachability, in both directions — but not symmetrically.** Rule to
+8. **Reachability, in both directions — but not symmetrically.** Rule to
    markup is total: every class rule in every global stylesheet must be
    produced by some literal `className`, interpolation base or selector, or be
    recorded in `scripts/css-dynamic-classes.json`. Markup to rule is scoped to
@@ -1410,14 +1321,14 @@ The sections, in the order they appear in the file:
    unstyled `search-…`, `home-…`, `admin-…`, `activity-…` or `suite-…` class
    renders unstyled with nothing to say so, and adding a sixth colocated
    stylesheet means adding its prefix to that list by hand.
-10. **The parsers underneath**, pinned against the shapes that have already
+9. **The parsers underneath**, pinned against the shapes that have already
     fooled a simpler implementation — an escaped quote, a nested template, a
     commented-out rule, a value carrying its own commas and colons, a path
     composed inside a `readFile` call.
 
 ### The ledgers
 
-Five JSON files record what the invariants deliberately allow. Each is compared
+Three JSON files record what the invariants deliberately allow. Each is compared
 against the tree in **both** directions, which is the property that makes them
 ratchets rather than exemption lists: an entry whose subject has been fixed
 fails the suite just as loudly as an unrecorded violation.
@@ -1426,9 +1337,7 @@ fails the suite just as loudly as an unrecorded violation.
 | --- | --- |
 | `scripts/css-literal-debt.json` | every colour and scale literal left outside the token layer |
 | `scripts/css-retired-classes.json` | the sixty-seven classes the consolidation deleted, each with its replacement |
-| `scripts/css-duplicate-blocks.json` | the restatements left in place, each with the primitive that would otherwise own it |
 | `scripts/css-dynamic-classes.json` | classes that only ever reach the DOM at runtime |
-| `scripts/css-phase3-monolith.json` | the frozen pre-split rule set, and the edits the split and the lint gate did not make verbatim |
 
 Adding a row is therefore a deliberate act with a reviewer reading it, and
 paying one off is a deletion the suite demands rather than one nobody notices.
@@ -1498,12 +1407,6 @@ would have been: `color-mix(in srgb, var(--bg-inverse) 48%, transparent)` says
 what a scrim *is*, and a theme that moves `--bg-inverse` moves the scrim with
 it, which a stored `rgb(16 23 28 / 48%)` never could. Only the shadow inks are
 left, for the reason above.
-
-**The alias block is deleted**, along with the `--shadow` declaration in
-`app/globals.css`; see [Retired aliases](#retired-aliases) for the mapping and
-for the three test tables that were retargeted at the roles rather than dropped.
-The check is worth re-running rather than trusting:
-`grep -rnE 'var\(\s*--(surface|text|muted|canvas|shadow)\s*[,)]' app lib integration`.
 
 ### Colour mappings that move a pixel
 

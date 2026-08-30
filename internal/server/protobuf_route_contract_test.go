@@ -12,6 +12,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -55,8 +56,12 @@ func TestEveryProtobufHTTPRouteHasCrossRuntimeForwardCompatibility(t *testing.T)
 	if err := json.Unmarshal(encoded, &fixture); err != nil {
 		t.Fatalf("decode route fixture: %v", err)
 	}
-	if fixture.Version != 1 || len(fixture.Routes) != 80 {
-		t.Fatalf("route fixture version/count = %d/%d, want 1/80", fixture.Version, len(fixture.Routes))
+	update := os.Getenv(updateProtobufRouteFixturesEnvironment) == "1"
+	if update {
+		fixture.Routes = synchronizeProtobufRouteFixtureInventory(t, fixture.Routes)
+	}
+	if fixture.Version != 1 || len(fixture.Routes) != 97 {
+		t.Fatalf("route fixture version/count = %d/%d, want 1/97", fixture.Version, len(fixture.Routes))
 	}
 	assertProtobufRouteFixtureInventory(t, fixture.Routes)
 	futureFieldNumber := protowire.Number(fixture.FutureFieldNumber)
@@ -64,7 +69,6 @@ func TestEveryProtobufHTTPRouteHasCrossRuntimeForwardCompatibility(t *testing.T)
 		t.Fatalf("future field number = %d", futureFieldNumber)
 	}
 
-	update := os.Getenv(updateProtobufRouteFixturesEnvironment) == "1"
 	seenPaths := make(map[string]struct{}, len(fixture.Routes))
 	for index := range fixture.Routes {
 		route := &fixture.Routes[index]
@@ -115,6 +119,30 @@ func TestEveryProtobufHTTPRouteHasCrossRuntimeForwardCompatibility(t *testing.T)
 	}
 }
 
+func synchronizeProtobufRouteFixtureInventory(
+	t *testing.T,
+	existing []protobufHTTPRouteContractRecord,
+) []protobufHTTPRouteContractRecord {
+	t.Helper()
+	registered := registeredProtobufHTTPRoutes(t)
+	byPath := make(map[string]protobufHTTPRouteContractRecord, len(existing))
+	for _, route := range existing {
+		byPath[route.Path] = route
+	}
+	routes := make([]protobufHTTPRouteContractRecord, 0, len(registered))
+	for path, signature := range registered {
+		route := byPath[path]
+		route.Path = path
+		route.RequestType = signature.RequestType
+		route.ResponseType = signature.ResponseType
+		routes = append(routes, route)
+	}
+	sort.Slice(routes, func(left, right int) bool {
+		return routes[left].Path < routes[right].Path
+	})
+	return routes
+}
+
 func TestProtobufRouteInventoryFailsClosed(t *testing.T) {
 	t.Parallel()
 
@@ -127,7 +155,7 @@ type ambiguousResponse = pair[*opensplunk.GetAppRequest, *opensplunk.GetAppRespo
 type nestedAmbiguousResponse = outer[ambiguousResponse, *opensplunk.GetSystemBootstrapResponse]
 type aliasedRoute = protobufRouteDefinition
 type lookalikeRoute struct { definition router.RouteDefinition }
-var direct = newForwardCompatibleProtoRoute[*opensplunk.GetAppRequest, *opensplunk.GetAppResponse](router.RouteConfig[*opensplunk.GetAppRequest, *opensplunk.GetAppResponse]{})
+var direct = newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.GetAppRequest, *opensplunk.GetAppResponse]{})
 var indirect = newForwardCompatibleProtoRoute[*opensplunk.GetAppRequest, *opensplunk.GetAppResponse]
 var converted = (protobufRouteDefinition)(lookalikeRoute{definition: router.RouteConfigBase{}})
 func bypasses() {
@@ -142,6 +170,9 @@ func bypasses() {
 		t.Fatalf("parse inventory guard fixture: %v", err)
 	}
 	direct := protobufDirectRouteRegistrationPositions(file)
+	if len(direct) != 1 {
+		t.Fatalf("direct protobuf route registrations = %d, want 1", len(direct))
+	}
 	if _, found := indirectProtobufRouteConstructorPosition(
 		file,
 		direct,
@@ -234,7 +265,7 @@ func registeredProtobufHTTPRoutes(t *testing.T) map[string]protobufHTTPRouteSign
 			if !ok {
 				return true
 			}
-			typeArguments, genericRoute := protobufTrackedRouteTypeArguments(call.Fun)
+			typeArguments, genericRoute := protobufRouteRegistrationTypeArguments(call)
 			if !genericRoute {
 				return true
 			}
@@ -599,7 +630,7 @@ func protobufDirectRouteRegistrationPositions(
 		if !ok {
 			return true
 		}
-		if _, genericRoute := protobufTrackedRouteTypeArguments(call.Fun); genericRoute {
+		if _, genericRoute := protobufRouteRegistrationTypeArguments(call); genericRoute {
 			positions[call.Fun.Pos()] = struct{}{}
 		}
 		return true
@@ -664,6 +695,42 @@ func protobufTrackedRouteTypeArguments(expression ast.Expr) ([]ast.Expr, bool) {
 	}
 	identifier, ok := base.(*ast.Ident)
 	return arguments, ok && identifier.Name == "newForwardCompatibleProtoRoute"
+}
+
+func protobufRouteRegistrationTypeArguments(call *ast.CallExpr) ([]ast.Expr, bool) {
+	if arguments, genericRoute := protobufTrackedRouteTypeArguments(call.Fun); genericRoute {
+		return arguments, true
+	}
+	identifier, ok := call.Fun.(*ast.Ident)
+	if !ok || identifier.Name != "newForwardCompatibleProtoRoute" {
+		return nil, false
+	}
+	if len(call.Args) != 1 {
+		return nil, true
+	}
+	config, ok := call.Args[0].(*ast.CompositeLit)
+	if !ok {
+		return nil, true
+	}
+	return protobufRouteConfigTypeArguments(config.Type), true
+}
+
+func protobufRouteConfigTypeArguments(expression ast.Expr) []ast.Expr {
+	var base ast.Expr
+	var arguments []ast.Expr
+	switch indexed := expression.(type) {
+	case *ast.IndexListExpr:
+		base, arguments = indexed.X, indexed.Indices
+	case *ast.IndexExpr:
+		base, arguments = indexed.X, []ast.Expr{indexed.Index}
+	default:
+		return nil
+	}
+	selector, ok := base.(*ast.SelectorExpr)
+	if !ok || selector.Sel.Name != "RouteConfig" {
+		return nil
+	}
+	return arguments
 }
 
 func protobufRouteConfigField(config *ast.CompositeLit, name string) ast.Expr {

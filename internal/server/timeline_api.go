@@ -18,7 +18,7 @@ import (
 
 func (handler *apiHandler) searchTimelineRoutes(noAuth router.AuthLevel, smallRequestBytes int64) []protobufRouteDefinition {
 	return []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute[*opensplunk.GetSearchTimelineRequest, *serializedSearchTimelineResponse](router.RouteConfig[*opensplunk.GetSearchTimelineRequest, *serializedSearchTimelineResponse]{
+		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.GetSearchTimelineRequest, *serializedSearchTimelineResponse]{
 			Path: "/search/jobs/timeline", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedSearchTimelineCodec(), Handler: handler.getSearchTimeline,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},

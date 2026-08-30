@@ -17,6 +17,7 @@ import (
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/buildmetadata"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/searchartifacts"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobproto"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
@@ -226,36 +227,36 @@ func (handler *apiHandler) createSearchJob(request *http.Request, input *openspl
 		}
 		return nil, err
 	}
-	if !historyRerun && handler.knowledgeSearchAdmission {
+	if handler.trustedSearchAdmission == nil && (historyRerun || handler.knowledgeSearchAdmission) {
 		if err := handler.authorizeSearchApp(request.Context(), resolved.AppID); err != nil {
+			if contextErr := historyRerunContextError(request.Context(), err, historyRerun); contextErr != nil {
+				return nil, contextErr
+			}
 			return nil, err
 		}
 	}
-	requestedIndexes, err := handler.resolveAuthorizedSearchIndexes(request.Context(), resolved.IndexScope)
-	if err != nil {
-		if contextErr := historyRerunContextError(
-			request.Context(),
-			err,
-			historyRerun,
-		); contextErr != nil {
-			return nil, contextErr
+	var job searchjobs.Job
+	if handler.trustedSearchAdmission != nil {
+		job, err = handler.trustedSearchAdmission.AdmitTrustedSearch(request.Context(), TrustedSearchAdmissionRequest{
+			SPL: resolved.SPL, OwnerID: handler.ownerID, TenantID: handler.tenantID,
+			AppID: resolved.AppID, IndexScope: slices.Clone(resolved.IndexScope),
+			TimeRange: resolved.TimeRange, Source: source,
+		})
+	} else {
+		var requestedIndexes []string
+		requestedIndexes, err = handler.resolveAuthorizedSearchIndexes(request.Context(), resolved.IndexScope)
+		if err != nil {
+			if contextErr := historyRerunContextError(request.Context(), err, historyRerun); contextErr != nil {
+				return nil, contextErr
+			}
+			return nil, err
 		}
-		return nil, err
+		job, err = handler.jobs.Create(request.Context(), searchjobs.CreateRequest{
+			SPL: resolved.SPL, OwnerID: handler.ownerID, TenantID: handler.tenantID,
+			AuthorizedIndexes: slices.Clone(requestedIndexes), RequestedIndexes: requestedIndexes,
+			TimeRange: resolved.TimeRange, AppID: resolved.AppID, Source: source,
+		})
 	}
-
-	job, err := handler.jobs.Create(request.Context(), searchjobs.CreateRequest{
-		SPL:      resolved.SPL,
-		OwnerID:  handler.ownerID,
-		TenantID: handler.tenantID,
-		// The catalog check above authorizes this exact immutable request scope.
-		// Passing every catalog index would make admission grow with the whole
-		// deployment and could exceed the manager's metadata bound.
-		AuthorizedIndexes: slices.Clone(requestedIndexes),
-		RequestedIndexes:  requestedIndexes,
-		TimeRange:         resolved.TimeRange,
-		AppID:             resolved.AppID,
-		Source:            source,
-	})
 	if err != nil {
 		if contextErr := historyRerunContextError(
 			request.Context(),
@@ -267,7 +268,14 @@ func (handler *apiHandler) createSearchJob(request *http.Request, input *openspl
 		if contextErr := requestContextFailure(request.Context(), err); contextErr != nil {
 			return nil, contextErr
 		}
-		return nil, mapSearchJobError(err)
+		switch {
+		case errors.Is(err, ErrTrustedSearchAppUnavailable), errors.Is(err, ErrTrustedSearchIndexUnavailable):
+			return nil, forbiddenError("search authority is unavailable")
+		case errors.Is(err, ErrTrustedSearchAuthorityUnavailable):
+			return nil, unavailableError("control plane is unavailable")
+		default:
+			return nil, mapSearchJobError(err)
+		}
 	}
 	if job.AppID != resolved.AppID || !handler.validKnowledgeSearchJobProjection(job) {
 		return nil, internalError()
@@ -415,9 +423,6 @@ func (handler *apiHandler) resolveHistoryRerun(
 		AppID:      definition.GetAppId(),
 		IndexScope: slices.Clone(definition.GetIndexScope()),
 	}
-	if err := handler.authorizeSearchApp(ctx, resolved.AppID); err != nil {
-		return resolvedSearchDefinition{}, searchjobs.JobSource{}, err
-	}
 	if err := ctx.Err(); err != nil {
 		return resolvedSearchDefinition{}, searchjobs.JobSource{}, err
 	}
@@ -559,13 +564,37 @@ func (handler *apiHandler) getSearchJob(request *http.Request, input *opensplunk
 	if contextErr := requestContextFailure(request.Context(), err); contextErr != nil {
 		return nil, contextErr
 	}
+	if errors.Is(err, searchjobs.ErrNotFound) && handler.searchArtifacts != nil {
+		record, artifactErr := handler.searchArtifacts.Get(request.Context(), handler.accessScope(), id, searchartifacts.AccessLaunch)
+		if artifactErr != nil {
+			return nil, mapSearchArtifactError(artifactErr)
+		}
+		converted, projectionErr := retainedSearchJobToProto(record, handler.now())
+		if projectionErr != nil {
+			return nil, internalError()
+		}
+		return &opensplunk.GetSearchJobResponse{SearchJob: converted}, nil
+	}
 	if err != nil {
 		return nil, mapSearchJobError(err)
 	}
 	if !handler.validKnowledgeSearchJobProjection(job) {
 		return nil, internalError()
 	}
-	converted, err := searchJobToProto(job, handler.now())
+	var converted *opensplunk.SearchJob
+	if handler.searchArtifacts != nil {
+		record, artifactErr := handler.searchArtifacts.Get(request.Context(), handler.accessScope(), id, searchartifacts.AccessLaunch)
+		if artifactErr != nil {
+			return nil, mapSearchArtifactError(artifactErr)
+		}
+		record, artifactErr = handler.overlayLiveSearchJob(request.Context(), record)
+		if artifactErr != nil {
+			return nil, artifactErr
+		}
+		converted, err = retainedSearchJobToProto(record, handler.now())
+	} else {
+		converted, err = searchJobToProto(job, handler.now())
+	}
 	if err != nil {
 		return nil, internalError()
 	}
@@ -596,8 +625,25 @@ func (handler *apiHandler) getSearchResults(request *http.Request, input *opensp
 	if contextErr := requestContextFailure(request.Context(), err); contextErr != nil {
 		return nil, contextErr
 	}
+	durable := handler.searchArtifacts != nil && (errors.Is(err, searchjobs.ErrNotFound) ||
+		(err == nil && job.State == searchjobs.StateExpired))
 	if err != nil {
-		return nil, mapSearchJobError(err)
+		if !durable {
+			return nil, mapSearchJobError(err)
+		}
+	}
+	if !durable && handler.searchArtifacts != nil {
+		record, artifactErr := handler.searchArtifacts.Get(request.Context(), handler.accessScope(), id, searchartifacts.AccessRefresh)
+		if artifactErr != nil {
+			return nil, mapSearchArtifactError(artifactErr)
+		}
+		switch record.State {
+		case searchartifacts.StateFailed, searchartifacts.StateCanceled, searchartifacts.StateInterrupted:
+			// A terminal durable projection is authoritative for retained-result
+			// availability. In particular, publication compensation may mark the
+			// artifact failed while the in-memory executor remains completed.
+			return nil, mapSearchArtifactError(searchartifacts.ErrNotReady)
+		}
 	}
 	release, acquired := handler.acquireSerialization()
 	if !acquired {
@@ -609,10 +655,23 @@ func (handler *apiHandler) getSearchResults(request *http.Request, input *opensp
 			release()
 		}
 	}()
-	page, err := handler.jobs.ResultsFor(handler.accessScope(), id, searchjobs.PageRequest{
-		Limit:  pageSize,
-		Cursor: pageToken,
-	})
+	var page searchjobs.ResultPage
+	if durable {
+		page, job, err = handler.durableResultPage(request.Context(), id, pageSize, pageToken)
+	} else {
+		page, err = handler.jobs.ResultsFor(handler.accessScope(), id, searchjobs.PageRequest{
+			Limit:  pageSize,
+			Cursor: pageToken,
+		})
+		// The in-memory manager and durable store have independent retention
+		// clocks. Sharing can keep the artifact alive for seven days after the
+		// manager's original manual lifetime elapses. If that boundary crosses
+		// between the metadata read and result acquisition, finish from the
+		// already-refreshed durable snapshot instead of reporting a false 410.
+		if errors.Is(err, searchjobs.ErrExpired) && handler.searchArtifacts != nil {
+			page, job, err = handler.durableResultPage(request.Context(), id, pageSize, pageToken)
+		}
+	}
 	if contextErr := requestContextFailure(request.Context(), err); contextErr != nil {
 		return nil, contextErr
 	}
@@ -840,10 +899,10 @@ func rejectUnsupportedSearchDefinitionFields(definition *opensplunk.SearchDefini
 }
 
 func (handler *apiHandler) pageRequest(page *opensplunk.PageRequest) (int, string, bool, error) {
+	pageSize := uint32(0)
 	if page == nil {
 		return 0, "", false, nil
 	}
-	pageSize := uint32(0)
 	if page.PageSize != nil {
 		pageSize = page.GetPageSize()
 		if pageSize == 0 {
@@ -943,6 +1002,9 @@ func normalizeRequestedIndexes(input []string) ([]string, error) {
 }
 
 func mapSearchJobError(err error) error {
+	if transportError, ok := errors.AsType[*router.HTTPError](err); ok {
+		return transportError
+	}
 	switch {
 	case errors.Is(err, searchjobs.ErrNotFound):
 		return router.NewHTTPError(http.StatusNotFound, "search job not found")

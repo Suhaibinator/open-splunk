@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+package open_splunk;
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk;opensplunk";
+
+enum ScheduleValidationMode {
+  SCHEDULE_VALIDATION_MODE_UNSPECIFIED = 0;
+  SCHEDULE_VALIDATION_MODE_SCHEDULED_REPORT = 1;
+  SCHEDULE_VALIDATION_MODE_WEBHOOK_ALERT = 2;
+}
+
+enum ScheduleValidationField {
+  SCHEDULE_VALIDATION_FIELD_UNSPECIFIED = 0;
+  SCHEDULE_VALIDATION_FIELD_CRON = 1;
+  SCHEDULE_VALIDATION_FIELD_TIMEZONE = 2;
+  SCHEDULE_VALIDATION_FIELD_DISPATCH_TTL = 3;
+  SCHEDULE_VALIDATION_FIELD_WEBHOOK_TTL = 4;
+}
+
+enum ScheduleValidationCode {
+  SCHEDULE_VALIDATION_CODE_UNSPECIFIED = 0;
+  SCHEDULE_VALIDATION_CODE_REQUIRED = 1;
+  SCHEDULE_VALIDATION_CODE_INVALID = 2;
+  SCHEDULE_VALIDATION_CODE_TOO_LARGE = 3;
+}
+
+message ScheduleValidationViolation {
+  ScheduleValidationField field = 1;
+  ScheduleValidationCode code = 2;
+  string message = 3;
+}
+
+// POST /api/schedules/validate
+message ValidateScheduleRequest {
+  ScheduleValidationMode mode = 1;
+  string cron = 2;
+  string timezone = 3;
+  string dispatch_ttl = 4;
+  string webhook_ttl = 5;
+}
+
+message ValidateScheduleResponse {
+  bool valid = 1;
+  repeated ScheduleValidationViolation violations = 2;
+}

@@ -120,6 +120,38 @@ message CancelSearchJobResponse {
   SearchJob search_job = 1;
 }
 
+// POST /api/search/jobs/settings/get
+message GetSearchJobSettingsRequest {
+  string search_job_id = 1;
+}
+
+message GetSearchJobSettingsResponse {
+  SearchJob search_job = 1;
+}
+
+// POST /api/search/jobs/settings/update
+message UpdateSearchJobSettingsRequest {
+  string search_job_id = 1;
+  uint64 expected_state_version = 2;
+  SearchJobVisibility visibility = 3;
+  SearchJobRetentionClass retention_class = 4;
+}
+
+message UpdateSearchJobSettingsResponse {
+  SearchJob search_job = 1;
+}
+
+// POST /api/search/jobs/share atomically makes one retained result available
+// to Everyone and changes its sliding lifetime to seven days.
+message ShareSearchJobRequest {
+  string search_job_id = 1;
+  uint64 expected_state_version = 2;
+}
+
+message ShareSearchJobResponse {
+  SearchJob search_job = 1;
+}
+
 // POST /api/search/validate
 message ValidateSearchRequest {
   SearchDefinition definition = 1;

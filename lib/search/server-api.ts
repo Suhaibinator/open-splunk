@@ -73,6 +73,22 @@ export {
   searchHistoryToDemo,
   updateServerSavedSearch,
 } from "./server-objects";
+
+export {
+  adaptScheduledReportRun,
+  listServerScheduledReportRuns,
+  runServerSavedSearch,
+  scheduledReportOutcomePresentation,
+  setServerSavedSearchSchedule,
+  validateScheduledReportConfiguration,
+} from "./server-scheduled-reports";
+export type {
+  ListServerScheduledReportRunsOptions,
+  RunServerSavedSearchResult,
+  ScheduledReportConfiguration,
+  ScheduledReportOutcomePresentation,
+  ServerScheduledReportRun,
+} from "./server-scheduled-reports";
 export type {
   ListSavedSearchesOptions,
   ListServerHistoryOptions,

@@ -123,6 +123,53 @@ type Failure struct {
 	Diagnostics []Diagnostic
 }
 
+// FailureCauseKind identifies the trusted layer that supplied a failed job's
+// private cause. It lets operational reporters classify failures without
+// inspecting or publishing arbitrary error text.
+type FailureCauseKind uint8
+
+const (
+	FailureCauseUnknown FailureCauseKind = iota
+	FailureCauseParsing
+	FailureCausePlanning
+	FailureCauseExecution
+	FailureCauseInvariant
+	FailureCauseRecoveredPanic
+)
+
+// FailureReport is the bounded, allowlisted operational projection captured
+// exactly when one job enters StateFailed.
+type FailureReport struct {
+	JobID        string
+	TenantID     string
+	OwnerID      string
+	AppID        string
+	Source       JobSource
+	Phase        State
+	Code         FailureCode
+	Message      string
+	Retryable    bool
+	MaxRuntime   time.Duration
+	QueueWait    time.Duration
+	Elapsed      time.Duration
+	ScannedRows  uint64
+	ScannedBytes uint64
+	ProducedRows uint64
+	ResultBytes  uint64
+}
+
+// FailureNotification is either one exact failure report or a bounded
+// coalescing summary. Coalesced is zero for an exact notification; otherwise
+// Report is the latest failure among Coalesced reports observed while the
+// preceding callback was in flight. Cause is trusted process-private detail
+// for classification only; reporters must never serialize its text.
+type FailureNotification struct {
+	Report    FailureReport
+	Coalesced uint64
+	CauseKind FailureCauseKind
+	Cause     error
+}
+
 // JobOrigin identifies the authoritative product surface that launched a
 // search. IDs are retained separately so history can reopen the originating
 // object without trusting a client-selected tenant or owner.
@@ -135,14 +182,41 @@ const (
 	JobOriginHistoryRerun
 	JobOriginDashboard
 	JobOriginAPI
+	JobOriginScheduledReport
+	JobOriginAlert
 )
+
+// String returns the stable operational spelling of a search origin.
+func (origin JobOrigin) String() string {
+	switch origin {
+	case JobOriginAdHoc:
+		return "ad_hoc"
+	case JobOriginSavedSearch:
+		return "saved_search"
+	case JobOriginHistoryRerun:
+		return "history_rerun"
+	case JobOriginDashboard:
+		return "dashboard"
+	case JobOriginAPI:
+		return "api"
+	case JobOriginScheduledReport:
+		return "scheduled_report"
+	case JobOriginAlert:
+		return "alert"
+	default:
+		return "invalid"
+	}
+}
 
 // JobSource is normalized provenance for one search attempt. ObjectID is
 // required for saved-search, history-rerun, and dashboard origins and must be
 // empty for ad-hoc and API origins.
 type JobSource struct {
-	Origin   JobOrigin
-	ObjectID string
+	Origin      JobOrigin
+	ObjectID    string
+	AlertID     string
+	AlertRunID  string
+	ScheduledAt time.Time
 }
 
 // CreateRequest is user intent plus server-resolved authorization. TimeRange
@@ -158,6 +232,9 @@ type CreateRequest struct {
 	TimeRange         searchtime.Range
 	AppID             string
 	Source            JobSource
+	// RetentionLifetime overrides the manager default for trusted scheduled
+	// admissions. Browser-created jobs must leave it zero.
+	RetentionLifetime time.Duration
 }
 
 // ValidateRequest is a server-resolved planning scope for synchronous SPL
@@ -327,12 +404,13 @@ type Job struct {
 	// ResultsTruncated reports that the retained immutable snapshot contains
 	// exactly the configured row limit and the executor attempted to emit at
 	// least one additional row. It is never inferred from an executor error.
-	ResultsTruncated bool
-	Failure          *Failure
-	CreatedAt        time.Time
-	StartedAt        time.Time
-	FinishedAt       time.Time
-	ExpiresAt        time.Time
+	ResultsTruncated  bool
+	Failure           *Failure
+	CreatedAt         time.Time
+	StartedAt         time.Time
+	FinishedAt        time.Time
+	ExpiresAt         time.Time
+	RetentionLifetime time.Duration
 }
 
 // JobJournal durably brackets one asynchronous search attempt. Admit is
@@ -353,6 +431,13 @@ type JobJournal interface {
 	Finalize(context.Context, Job) error
 }
 
+// CompletedResultJournal is an optional extension implemented by journals
+// that durably retain immutable completed rows. The manager invokes it only
+// after Finalize succeeds and owns the supplied lease for the callback.
+type CompletedResultJournal interface {
+	FinalizeResults(context.Context, Job, ResultLease) error
+}
+
 // JournalOperation identifies the durable lifecycle operation that failed.
 type JournalOperation uint8
 
@@ -360,6 +445,7 @@ const (
 	JournalOperationInvalid JournalOperation = iota
 	JournalOperationAdmit
 	JournalOperationFinalize
+	JournalOperationFinalizeResults
 )
 
 // String returns the stable lowercase spelling of a journal operation.
@@ -369,6 +455,8 @@ func (operation JournalOperation) String() string {
 		return "admit"
 	case JournalOperationFinalize:
 		return "finalize"
+	case JournalOperationFinalizeResults:
+		return "finalize_results"
 	default:
 		return "invalid"
 	}

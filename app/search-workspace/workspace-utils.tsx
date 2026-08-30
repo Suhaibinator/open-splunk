@@ -301,6 +301,7 @@ export function phaseLabel(phase: JobPhase): string {
     case "completed": return "Completed";
     case "failed": return "Failed";
     case "canceled": return "Canceled";
+    case "interrupted": return "Interrupted";
     case "expired": return "Expired";
   }
 }
@@ -318,6 +319,7 @@ export function historyPhase(state: DemoHistoryEntry["state"]): JobPhase {
     case "Completed": return "completed";
     case "Expired": return "expired";
     case "Failed": return "failed";
+    case "Interrupted": return "interrupted";
   }
 }
 
@@ -326,6 +328,7 @@ export function stateTone(phase: JobPhase): StatusTone {
   if (phase === "failed") return "error";
   if (phase === "expired") return "neutral";
   if (phase === "canceled") return "neutral";
+  if (phase === "interrupted") return "neutral";
   return "running";
 }
 
@@ -340,8 +343,9 @@ export function backendJobPhase(state: SearchJobState): JobPhase {
     case SearchJobState.SEARCH_JOB_STATE_CANCELED: return "canceled";
     case SearchJobState.SEARCH_JOB_STATE_FAILED: return "failed";
     case SearchJobState.SEARCH_JOB_STATE_EXPIRED: return "expired";
+    case SearchJobState.SEARCH_JOB_STATE_INTERRUPTED: return "interrupted";
     default:
-      return "queued";
+      throw new TypeError("The search job returned an unsupported lifecycle state.");
   }
 }
 

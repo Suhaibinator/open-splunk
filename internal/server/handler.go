@@ -16,6 +16,7 @@ import (
 	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/alerts"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/buildmetadata"
@@ -27,13 +28,17 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/knowledgepreview"
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
+	"github.com/Suhaibinator/open-splunk/internal/scheduledreports"
 	"github.com/Suhaibinator/open-splunk/internal/searchanalysis"
+	"github.com/Suhaibinator/open-splunk/internal/searchartifacts"
 	"github.com/Suhaibinator/open-splunk/internal/searchaudit"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
 	"github.com/Suhaibinator/open-splunk/internal/searchinspection"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchlimits"
+	"github.com/Suhaibinator/open-splunk/internal/searchretention"
 	"github.com/Suhaibinator/open-splunk/internal/searchsuggestions"
+	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -66,7 +71,7 @@ const (
 	defaultMaximumConcurrentDownloads = 16
 	defaultRouteTimeout               = 15 * time.Second
 	defaultSearchTimeout              = 2 * time.Minute
-	defaultResultRetention            = 15 * time.Minute
+	defaultResultRetention            = searchretention.ManualLifetime
 	maximumRequestBytes               = int64(128 << 10)
 	maximumSmallRequestBytes          = int64(16 << 10)
 	maximumTransportPageSize          = uint32(10_000)
@@ -96,6 +101,42 @@ type SearchJobs interface {
 	ListPageFor(context.Context, searchjobs.AccessScope, searchjobs.JobListRequest) (searchjobs.JobListPage, error)
 	ResultsFor(searchjobs.AccessScope, string, searchjobs.PageRequest) (searchjobs.ResultPage, error)
 	CancelFor(searchjobs.AccessScope, string) error
+}
+
+var (
+	ErrTrustedSearchAppUnavailable       = errors.New("trusted search app is unavailable")
+	ErrTrustedSearchIndexUnavailable     = errors.New("trusted search index is unavailable")
+	ErrTrustedSearchAuthorityUnavailable = errors.New("trusted search authority is unavailable")
+)
+
+// TrustedSearchAdmissionRequest is fully parsed search intent. The trusted
+// service still re-resolves live app/index authority before creating the job.
+type TrustedSearchAdmissionRequest struct {
+	SPL               string
+	OwnerID           string
+	TenantID          string
+	AppID             string
+	IndexScope        []string
+	TimeRange         searchtime.Range
+	Source            searchjobs.JobSource
+	RetentionLifetime time.Duration
+}
+
+// TrustedSearchAdmission is shared by interactive, report, and alert paths in
+// production so none of them can drift around current app/index authority.
+type TrustedSearchAdmission interface {
+	AdmitTrustedSearch(context.Context, TrustedSearchAdmissionRequest) (searchjobs.Job, error)
+}
+
+// SearchArtifacts is the durable retained-result surface. It is deliberately
+// separate from the live manager: process restarts discard execution state but
+// must not invalidate completed job links.
+type SearchArtifacts interface {
+	Get(context.Context, searchjobs.AccessScope, string, searchartifacts.AccessMode) (searchartifacts.Record, error)
+	ListPage(context.Context, searchjobs.AccessScope, searchartifacts.ListRequest) (searchartifacts.ListPage, error)
+	Acquire(context.Context, searchjobs.AccessScope, string) (searchartifacts.ResultLease, error)
+	ShareExpected(context.Context, searchjobs.AccessScope, string, uint64) (searchartifacts.Record, error)
+	UpdateSettingsExpected(context.Context, searchjobs.AccessScope, string, searchartifacts.Settings, uint64) (searchartifacts.Record, error)
 }
 
 // knowledgeSearchAdmission reports whether the configured search service will
@@ -503,6 +544,13 @@ type Settings interface {
 	Current() control.ServerSearchSettings
 }
 
+// AlertCoordinator is the complete scheduled/run-now execution boundary. It
+// remains an interface here so transport tests do not need runtime search and
+// webhook dependencies.
+type AlertCoordinator interface {
+	RunNow(context.Context, string, string) (alerts.RunSummary, error)
+}
+
 // Config composes the trusted-network browser API and embedded static UI.
 // OwnerID and TenantID are fixed process identities for the initial
 // single-user release; authentication can replace them without changing the
@@ -510,6 +558,8 @@ type Settings interface {
 type Config struct {
 	Logger                     *zap.Logger
 	SearchJobs                 SearchJobs
+	SearchArtifacts            SearchArtifacts
+	TrustedSearchAdmission     TrustedSearchAdmission
 	RuntimeReadiness           RuntimeReadiness
 	Indexes                    IndexCatalog
 	IndexAdmin                 IndexAdministration
@@ -537,6 +587,12 @@ type Config struct {
 	// of the lookup routes are registered.
 	LookupManagement           LookupManagement
 	SavedSearches              SavedSearches
+	ScheduledReports           *scheduledreports.Service
+	AlertService               *alerts.Service
+	AlertRepository            alerts.Repository
+	AlertDeliverer             alerts.WebhookDeliverer
+	AlertCoordinator           AlertCoordinator
+	AlertPublicBaseURL         string
 	Dashboards                 Dashboards
 	SearchHistory              SearchHistory
 	Exports                    Exports
@@ -575,6 +631,8 @@ type Config struct {
 type apiHandler struct {
 	logger                     *zap.Logger
 	jobs                       SearchJobs
+	searchArtifacts            SearchArtifacts
+	trustedSearchAdmission     TrustedSearchAdmission
 	indexes                    IndexCatalog
 	indexAdmin                 IndexAdministration
 	indexStatistics            IndexStatistics
@@ -597,6 +655,13 @@ type apiHandler struct {
 	lookupManagement           LookupManagement
 	knowledgeSearchAdmission   bool
 	savedSearches              SavedSearches
+	scheduledReports           *scheduledreports.Service
+	alertService               *alerts.Service
+	alertRepository            alerts.Repository
+	alertDeliverer             alerts.WebhookDeliverer
+	alertCoordinator           AlertCoordinator
+	alertPublicBaseURL         string
+	alertsEnabled              bool
 	dashboards                 Dashboards
 	searchHistory              SearchHistory
 	exports                    Exports
@@ -626,6 +691,7 @@ type apiHandler struct {
 	knowledgeAttemptGate       chan struct{}
 	downloadGate               chan struct{}
 	adminCursorKey             [32]byte
+	searchArtifactCursorKey    [32]byte
 	appCursorKey               []byte
 	browserAllowedHosts        map[string]struct{}
 	trustForwardedProto        bool
@@ -648,6 +714,10 @@ func NewHandler(config Config) (*Handler, error) {
 	runtimeReadiness := config.RuntimeReadiness
 	if isNilDependency(runtimeReadiness) {
 		runtimeReadiness = nil
+	}
+	trustedSearchAdmission := config.TrustedSearchAdmission
+	if isNilDependency(trustedSearchAdmission) {
+		trustedSearchAdmission = nil
 	}
 	indexAdmin := config.IndexAdmin
 	if isNilDependency(indexAdmin) {
@@ -803,6 +873,14 @@ func NewHandler(config Config) (*Handler, error) {
 			"create server handler: lookup management service is not ready",
 		)
 	}
+	alertCoordinator := config.AlertCoordinator
+	if isNilDependency(alertCoordinator) {
+		alertCoordinator = nil
+	}
+	completeAlertFamily := config.AlertService != nil &&
+		!isNilDependency(config.AlertRepository) &&
+		!isNilDependency(config.AlertDeliverer) &&
+		alertCoordinator != nil
 	browserAuthenticator := config.BrowserAuthenticator
 	if isNilDependency(browserAuthenticator) {
 		browserAuthenticator = nil
@@ -823,7 +901,8 @@ func NewHandler(config Config) (*Handler, error) {
 		appAdmin != nil ||
 		knowledgeCatalog != nil ||
 		lookupManagement != nil ||
-		inspectionService != nil) &&
+		inspectionService != nil ||
+		completeAlertFamily) &&
 		browserAuthenticator == nil {
 		return nil, errors.New(
 			"create server handler: administrative services require browser authentication",
@@ -923,6 +1002,10 @@ func NewHandler(config Config) (*Handler, error) {
 	searchWebSocket := config.SearchWebSocket
 	if isNilDependency(searchWebSocket) {
 		searchWebSocket = nil
+	}
+	searchArtifacts := config.SearchArtifacts
+	if isNilDependency(searchArtifacts) {
+		searchArtifacts = nil
 	}
 	if config.WebUI == nil {
 		return nil, errors.New("create server handler: web UI filesystem is required")
@@ -1042,6 +1125,9 @@ func NewHandler(config Config) (*Handler, error) {
 		auditSearch:        auditEvents != nil,
 		searchAttemptAudit: searchAttemptAuditEvents != nil,
 		serverSettings:     serverSettings != nil,
+		durableJobs:        searchArtifacts != nil,
+		scheduledSearches:  config.ScheduledReports != nil,
+		alerts:             completeAlertFamily,
 		fieldDiscovery:     fieldService != nil,
 		previews:           searchWebSocket != nil,
 		knowledge:          completeKnowledgeFamily,
@@ -1058,15 +1144,23 @@ func NewHandler(config Config) (*Handler, error) {
 		return nil, fmt.Errorf("create server handler: %w", err)
 	}
 	var adminCursorKey [32]byte
-	if indexAdmin != nil || ingestionTokens != nil {
+	if indexAdmin != nil || ingestionTokens != nil || completeAlertFamily {
 		if _, err := rand.Read(adminCursorKey[:]); err != nil {
 			return nil, errors.New("create server handler: secure randomness unavailable for administrative cursors")
+		}
+	}
+	var searchArtifactCursorKey [32]byte
+	if searchArtifacts != nil {
+		if _, err := rand.Read(searchArtifactCursorKey[:]); err != nil {
+			return nil, errors.New("create server handler: secure randomness unavailable for retained-result cursors")
 		}
 	}
 
 	api := &apiHandler{
 		logger:                     logger,
 		jobs:                       config.SearchJobs,
+		searchArtifacts:            searchArtifacts,
+		trustedSearchAdmission:     trustedSearchAdmission,
 		indexes:                    config.Indexes,
 		indexAdmin:                 indexAdmin,
 		indexStatistics:            indexStatistics,
@@ -1089,6 +1183,13 @@ func NewHandler(config Config) (*Handler, error) {
 		lookupManagement:           lookupManagement,
 		knowledgeSearchAdmission:   knowledgeAdmission,
 		savedSearches:              config.SavedSearches,
+		scheduledReports:           config.ScheduledReports,
+		alertService:               config.AlertService,
+		alertRepository:            config.AlertRepository,
+		alertDeliverer:             config.AlertDeliverer,
+		alertCoordinator:           alertCoordinator,
+		alertPublicBaseURL:         config.AlertPublicBaseURL,
+		alertsEnabled:              completeAlertFamily,
 		dashboards:                 dashboardService,
 		searchHistory:              searchHistoryService,
 		exports:                    exportService,
@@ -1117,6 +1218,7 @@ func NewHandler(config Config) (*Handler, error) {
 		knowledgeAttemptGate:       make(chan struct{}, concurrentRequests),
 		downloadGate:               make(chan struct{}, concurrentDownloads),
 		adminCursorKey:             adminCursorKey,
+		searchArtifactCursorKey:    searchArtifactCursorKey,
 		appCursorKey:               appCursorKey,
 		browserAllowedHosts:        browserAllowedHosts,
 		trustForwardedProto:        config.TrustForwardedProto,
@@ -1137,7 +1239,45 @@ func NewHandler(config Config) (*Handler, error) {
 		"/api/saved-searches/duplicate",
 		"/api/saved-searches/delete",
 	)
-	administratorRoutes := make(map[string]struct{}, 15)
+	administratorRoutes := make(map[string]struct{}, 25)
+	if api.searchArtifacts != nil {
+		for _, path := range []string{
+			"/api/search/jobs/settings/get",
+			"/api/search/jobs/settings/update",
+			"/api/search/jobs/share",
+		} {
+			apiRoutes[path] = http.MethodPost
+		}
+	}
+	if api.scheduledReports != nil {
+		for _, path := range []string{
+			"/api/saved-searches/schedule/set",
+			"/api/saved-searches/run",
+			"/api/saved-searches/runs/list",
+		} {
+			apiRoutes[path] = http.MethodPost
+		}
+	}
+	if api.scheduledReports != nil || completeAlertFamily {
+		apiRoutes["/api/schedules/validate"] = http.MethodPost
+	}
+	if completeAlertFamily {
+		for _, path := range []string{
+			"/api/alerts/create",
+			"/api/alerts/get",
+			"/api/alerts/list",
+			"/api/alerts/update",
+			"/api/alerts/state/set",
+			"/api/alerts/delete",
+			"/api/alerts/run",
+			"/api/alerts/webhook/test",
+			"/api/alerts/secret/rotate",
+			"/api/alerts/runs/list",
+		} {
+			apiRoutes[path] = http.MethodPost
+			administratorRoutes[path] = struct{}{}
+		}
+	}
 	if api.searchHistory != nil {
 		for _, path := range []string{
 			"/api/search/history/get",
@@ -1439,6 +1579,9 @@ type serviceCapabilities struct {
 	dashboards         bool
 	quarantine         bool
 	serverSettings     bool
+	durableJobs        bool
+	scheduledSearches  bool
+	alerts             bool
 }
 
 func featuresForServices(features []opensplunk.ServerFeature, capabilities serviceCapabilities) []opensplunk.ServerFeature {
@@ -1466,6 +1609,9 @@ func featuresForServices(features []opensplunk.ServerFeature, capabilities servi
 		{opensplunk.ServerFeature_SERVER_FEATURE_DASHBOARDS, capabilities.dashboards},
 		{opensplunk.ServerFeature_SERVER_FEATURE_KNOWLEDGE_QUARANTINE, capabilities.quarantine},
 		{opensplunk.ServerFeature_SERVER_FEATURE_SERVER_SETTINGS_ADMIN, capabilities.serverSettings},
+		{opensplunk.ServerFeature_SERVER_FEATURE_DURABLE_SEARCH_JOBS, capabilities.durableJobs},
+		{opensplunk.ServerFeature_SERVER_FEATURE_SCHEDULED_SEARCHES, capabilities.scheduledSearches},
+		{opensplunk.ServerFeature_SERVER_FEATURE_ALERTS, capabilities.alerts},
 	}
 	enabled := make(map[opensplunk.ServerFeature]bool, len(managed))
 	for _, item := range managed {
@@ -1533,67 +1679,67 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 	smallRequestBytes := min(maximumRequestBytes, maximumSmallRequestBytes)
 
 	routes := []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute[*opensplunk.GetSystemBootstrapRequest, *opensplunk.GetSystemBootstrapResponse](router.RouteConfig[*opensplunk.GetSystemBootstrapRequest, *opensplunk.GetSystemBootstrapResponse]{
+		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.GetSystemBootstrapRequest, *opensplunk.GetSystemBootstrapResponse]{
 			Path: "/system/bootstrap", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.GetSystemBootstrapRequest, *opensplunk.GetSystemBootstrapResponse](), Handler: handler.getSystemBootstrap,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunk.ValidateSearchRequest, *opensplunk.ValidateSearchResponse](router.RouteConfig[*opensplunk.ValidateSearchRequest, *opensplunk.ValidateSearchResponse]{
+		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.ValidateSearchRequest, *opensplunk.ValidateSearchResponse]{
 			Path: "/search/validate", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.ValidateSearchRequest, *opensplunk.ValidateSearchResponse](), Handler: handler.validateSearch,
 			SourceType: router.Body,
 		}),
-		newForwardCompatibleProtoRoute[*opensplunk.CreateSearchJobRequest, *opensplunk.CreateSearchJobResponse](router.RouteConfig[*opensplunk.CreateSearchJobRequest, *opensplunk.CreateSearchJobResponse]{
+		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.CreateSearchJobRequest, *opensplunk.CreateSearchJobResponse]{
 			Path: "/search/jobs/create", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.CreateSearchJobRequest, *opensplunk.CreateSearchJobResponse](), Handler: handler.createSearchJob,
 			SourceType: router.Body,
 		}),
-		newForwardCompatibleProtoRoute[*opensplunk.GetSearchJobRequest, *opensplunk.GetSearchJobResponse](router.RouteConfig[*opensplunk.GetSearchJobRequest, *opensplunk.GetSearchJobResponse]{
+		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.GetSearchJobRequest, *opensplunk.GetSearchJobResponse]{
 			Path: "/search/jobs/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.GetSearchJobRequest, *opensplunk.GetSearchJobResponse](), Handler: handler.getSearchJob,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunk.ListSearchJobsRequest, *serializedSearchJobListResponse](router.RouteConfig[*opensplunk.ListSearchJobsRequest, *serializedSearchJobListResponse]{
+		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.ListSearchJobsRequest, *serializedSearchJobListResponse]{
 			Path: searchJobsListRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedSearchJobListCodec(), Handler: handler.listSearchJobs,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunk.GetSearchResultsRequest, *serializedSearchResultsResponse](router.RouteConfig[*opensplunk.GetSearchResultsRequest, *serializedSearchResultsResponse]{
+		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.GetSearchResultsRequest, *serializedSearchResultsResponse]{
 			Path: "/search/jobs/results", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedSearchResultsCodec(), Handler: handler.getSearchResults,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunk.CancelSearchJobRequest, *opensplunk.CancelSearchJobResponse](router.RouteConfig[*opensplunk.CancelSearchJobRequest, *opensplunk.CancelSearchJobResponse]{
+		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.CancelSearchJobRequest, *opensplunk.CancelSearchJobResponse]{
 			Path: "/search/jobs/cancel", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.CancelSearchJobRequest, *opensplunk.CancelSearchJobResponse](), Handler: handler.cancelSearchJob,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunk.CreateSavedSearchRequest, *opensplunk.CreateSavedSearchResponse](router.RouteConfig[*opensplunk.CreateSavedSearchRequest, *opensplunk.CreateSavedSearchResponse]{
+		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.CreateSavedSearchRequest, *opensplunk.CreateSavedSearchResponse]{
 			Path: "/saved-searches/create", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.CreateSavedSearchRequest, *opensplunk.CreateSavedSearchResponse](), Handler: handler.createSavedSearch,
 			SourceType: router.Body,
 		}),
-		newForwardCompatibleProtoRoute[*opensplunk.GetSavedSearchRequest, *opensplunk.GetSavedSearchResponse](router.RouteConfig[*opensplunk.GetSavedSearchRequest, *opensplunk.GetSavedSearchResponse]{
+		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.GetSavedSearchRequest, *opensplunk.GetSavedSearchResponse]{
 			Path: "/saved-searches/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.GetSavedSearchRequest, *opensplunk.GetSavedSearchResponse](), Handler: handler.getSavedSearch,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunk.ListSavedSearchesRequest, *serializedSavedSearchListResponse](router.RouteConfig[*opensplunk.ListSavedSearchesRequest, *serializedSavedSearchListResponse]{
+		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.ListSavedSearchesRequest, *serializedSavedSearchListResponse]{
 			Path: "/saved-searches/list", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedSavedSearchListCodec(), Handler: handler.listSavedSearches,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunk.UpdateSavedSearchRequest, *opensplunk.UpdateSavedSearchResponse](router.RouteConfig[*opensplunk.UpdateSavedSearchRequest, *opensplunk.UpdateSavedSearchResponse]{
+		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.UpdateSavedSearchRequest, *opensplunk.UpdateSavedSearchResponse]{
 			Path: "/saved-searches/update", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.UpdateSavedSearchRequest, *opensplunk.UpdateSavedSearchResponse](), Handler: handler.updateSavedSearch,
 			SourceType: router.Body,
 		}),
-		newForwardCompatibleProtoRoute[*opensplunk.DuplicateSavedSearchRequest, *opensplunk.DuplicateSavedSearchResponse](router.RouteConfig[*opensplunk.DuplicateSavedSearchRequest, *opensplunk.DuplicateSavedSearchResponse]{
+		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.DuplicateSavedSearchRequest, *opensplunk.DuplicateSavedSearchResponse]{
 			Path: "/saved-searches/duplicate", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.DuplicateSavedSearchRequest, *opensplunk.DuplicateSavedSearchResponse](), Handler: handler.duplicateSavedSearch,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunk.DeleteSavedSearchRequest, *opensplunk.DeleteSavedSearchResponse](router.RouteConfig[*opensplunk.DeleteSavedSearchRequest, *opensplunk.DeleteSavedSearchResponse]{
+		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.DeleteSavedSearchRequest, *opensplunk.DeleteSavedSearchResponse]{
 			Path: "/saved-searches/delete", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.DeleteSavedSearchRequest, *opensplunk.DeleteSavedSearchResponse](), Handler: handler.deleteSavedSearch,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
@@ -1601,6 +1747,18 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 	}
 	if handler.dashboards != nil {
 		routes = append(routes, handler.dashboardRoutes(noAuth, smallRequestBytes)...)
+	}
+	if handler.searchArtifacts != nil {
+		routes = append(routes, handler.searchArtifactRoutes(noAuth, smallRequestBytes)...)
+	}
+	if handler.scheduledReports != nil {
+		routes = append(routes, handler.scheduledReportRoutes(noAuth, smallRequestBytes)...)
+	}
+	if handler.scheduledReports != nil || handler.alertsEnabled {
+		routes = append(routes, handler.scheduleValidationRoutes(noAuth, smallRequestBytes)...)
+	}
+	if handler.alertsEnabled {
+		routes = append(routes, handler.alertRoutes(noAuth, maximumRequestBytes, smallRequestBytes)...)
 	}
 	if handler.indexAdmin != nil {
 		routes = append(routes, handler.indexAdministrationRoutes(noAuth, smallRequestBytes)...)
@@ -1674,22 +1832,22 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 	}
 	if handler.exports != nil {
 		routes = append(routes,
-			newForwardCompatibleProtoRoute[*opensplunk.CreateExportJobRequest, *opensplunk.CreateExportJobResponse](router.RouteConfig[*opensplunk.CreateExportJobRequest, *opensplunk.CreateExportJobResponse]{
+			newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.CreateExportJobRequest, *opensplunk.CreateExportJobResponse]{
 				Path: "/search/exports/create", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 				Codec: codec.NewProtoCodec[*opensplunk.CreateExportJobRequest, *opensplunk.CreateExportJobResponse](), Handler: handler.createExportJob,
 				SourceType: router.Body,
 			}),
-			newForwardCompatibleProtoRoute[*opensplunk.GetExportJobRequest, *opensplunk.GetExportJobResponse](router.RouteConfig[*opensplunk.GetExportJobRequest, *opensplunk.GetExportJobResponse]{
+			newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.GetExportJobRequest, *opensplunk.GetExportJobResponse]{
 				Path: "/search/exports/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 				Codec: codec.NewProtoCodec[*opensplunk.GetExportJobRequest, *opensplunk.GetExportJobResponse](), Handler: handler.getExportJob,
 				SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 			}),
-			newForwardCompatibleProtoRoute[*opensplunk.ListExportJobsRequest, *serializedExportListResponse](router.RouteConfig[*opensplunk.ListExportJobsRequest, *serializedExportListResponse]{
+			newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.ListExportJobsRequest, *serializedExportListResponse]{
 				Path: exportJobsListRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 				Codec: newSerializedExportListCodec(), Handler: handler.listExportJobs,
 				SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 			}),
-			newForwardCompatibleProtoRoute[*opensplunk.CancelExportJobRequest, *opensplunk.CancelExportJobResponse](router.RouteConfig[*opensplunk.CancelExportJobRequest, *opensplunk.CancelExportJobResponse]{
+			newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.CancelExportJobRequest, *opensplunk.CancelExportJobResponse]{
 				Path: "/search/exports/cancel", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 				Codec: codec.NewProtoCodec[*opensplunk.CancelExportJobRequest, *opensplunk.CancelExportJobResponse](), Handler: handler.cancelExportJob,
 				SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},

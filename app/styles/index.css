@@ -13,8 +13,7 @@
  *   1. tokens          -- names only; no rule, so nothing to override
  *   2. base            -- the reset and the element defaults every page gets
  *   3. primitives      -- one implementation each of button, table, form,
- *                         modal, status and layout, in that order, so the
- *                         chrome in `layout.css` can lean on the five above it
+ *                         modal, status, layout and chart, in that order
  *   4. features        -- one file per surface, each colocated with the code
  *                         that renders it, free to override any primitive
  *   5. interaction     -- the coarse-pointer and reduced-motion contracts,
@@ -23,10 +22,8 @@
  * A feature rule and a primitive rule regularly have the same specificity --
  * `.reports-table-wrap` against `.table-wrap` -- and the feature is the one
  * meant to win, which is why the whole feature block sits below the
- * primitives. The five files that were CSS modules until this phase relied on
- * the same order, by way of the bundler happening to emit them after
- * `globals.css`; the order was real and load-bearing, and nothing wrote it
- * down. Now it is written down.
+ * primitives. Keeping that load-bearing order explicit here prevents bundler
+ * chunking or JavaScript import order from deciding the cascade implicitly.
  *
  * The token layer owns every theme value. A sheet below it may declare a
  * custom property only as a component-scoped knob -- a name its own container
@@ -55,6 +52,7 @@
 @import url("./primitives/modal.css");
 @import url("./primitives/status.css");
 @import url("./primitives/layout.css");
+@import url("./primitives/chart.css");
 @import url("../search-workspace/search-editor.css");
 @import url("../search-workspace/search-job.css");
 @import url("../search-workspace/search-fields.css");
@@ -69,6 +67,7 @@
 @import url("../analytics/analytics.css");
 @import url("../dashboards/operations-dashboard.css");
 @import url("../reports/reports.css");
+@import url("../reports/alerts.css");
 @import url("../search-workspace/components/workspace-dialogs.css");
 @import url("../search-workspace/panels/visualization-panel.css");
 @import url("./interaction.css");

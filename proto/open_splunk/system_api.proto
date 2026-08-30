@@ -51,6 +51,9 @@ enum ServerFeature {
   // Versioned, persistent node-wide search limits can be read and updated by
   // an authenticated browser administrator.
   SERVER_FEATURE_SERVER_SETTINGS_ADMIN = 20;
+  SERVER_FEATURE_DURABLE_SEARCH_JOBS = 21;
+  SERVER_FEATURE_SCHEDULED_SEARCHES = 22;
+  SERVER_FEATURE_ALERTS = 23;
 }
 
 message BrowserApiLimits {

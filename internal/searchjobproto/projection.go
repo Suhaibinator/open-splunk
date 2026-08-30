@@ -218,6 +218,15 @@ func Source(source searchjobs.JobSource) (*opensplunk.SearchJobSource, error) {
 		result.DashboardId = new(source.ObjectID)
 	case searchjobs.JobOriginAPI:
 		result.Origin = opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_API
+	case searchjobs.JobOriginScheduledReport:
+		result.Origin = opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_SCHEDULED_REPORT
+		result.ScheduledReportRunId = new(source.ObjectID)
+		result.ScheduledAt = timestamppb.New(source.ScheduledAt)
+	case searchjobs.JobOriginAlert:
+		result.Origin = opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_ALERT
+		result.AlertId = new(source.AlertID)
+		result.AlertRunId = new(source.AlertRunID)
+		result.ScheduledAt = timestamppb.New(source.ScheduledAt)
 	default:
 		return nil, errors.New("invalid search-job source origin")
 	}

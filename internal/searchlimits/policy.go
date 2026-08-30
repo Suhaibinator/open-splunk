@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"sync/atomic"
 	"time"
+
+	"github.com/Suhaibinator/open-splunk/internal/searchretention"
 )
 
 type contextKey struct{}
@@ -59,7 +61,7 @@ var (
 		MaxResultBytes:      64 << 20,
 		MaxTotalResultBytes: 512 << 20,
 		MaxConcurrent:       4,
-		ResultRetention:     15 * time.Minute,
+		ResultRetention:     searchretention.ManualLifetime,
 	}
 	supportedRange = Range{
 		Minimum: Policy{

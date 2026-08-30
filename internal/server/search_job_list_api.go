@@ -12,6 +12,7 @@ import (
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/asciifold"
+	"github.com/Suhaibinator/open-splunk/internal/searchartifacts"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobproto"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"google.golang.org/protobuf/proto"
@@ -26,6 +27,10 @@ const (
 	maximumSearchJobListFailureMessageBytes = 4 << 10
 	maximumSearchJobListResponseBytes       = 8 << 20
 )
+
+type contextualSearchJobGetter interface {
+	GetForContext(context.Context, searchjobs.AccessScope, string) (searchjobs.Job, error)
+}
 
 func (handler *apiHandler) listSearchJobs(
 	request *http.Request,
@@ -72,12 +77,61 @@ func (handler *apiHandler) listSearchJobs(
 			release()
 		}
 	}()
+	if !isNilDependency(handler.searchArtifacts) {
+		message, listErr := handler.listDurableSearchJobs(
+			request.Context(), handler.searchArtifacts, pageSize, pageToken, includeTotal,
+			states, appID, text, textMatcher,
+		)
+		if listErr != nil {
+			return nil, listErr
+		}
+		if proto.Size(message) > maximumSearchJobListResponseBytes {
+			return nil, internalError()
+		}
+		if err := searchJobListRequestContextError(request.Context()); err != nil {
+			return nil, err
+		}
+		transferred = true
+		return &serializedSearchJobListResponse{
+			message: message,
+			ctx:     request.Context(),
+			release: release,
+		}, nil
+	}
+
+	managerStates := make([]searchjobs.State, 0, len(states))
+	for _, state := range states {
+		if managerState, ok := searchJobListManagerState(state); ok {
+			managerStates = append(managerStates, managerState)
+		}
+	}
+	if len(states) != 0 && len(managerStates) == 0 {
+		if pageToken != "" {
+			return nil, badRequestError("page token is invalid")
+		}
+		zero := uint64(0)
+		page := searchjobs.JobListPage{}
+		if includeTotal {
+			page.TotalSize = &zero
+			page.TotalSizeExact = true
+		}
+		pageResponse, pageErr := searchJobListPageResponse(page, pageSize, pageToken, includeTotal)
+		if pageErr != nil {
+			return nil, internalError()
+		}
+		transferred = true
+		return &serializedSearchJobListResponse{
+			message: &opensplunk.ListSearchJobsResponse{Page: pageResponse},
+			ctx:     request.Context(),
+			release: release,
+		}, nil
+	}
 
 	page, operationErr := handler.jobs.ListPageFor(request.Context(), handler.accessScope(), searchjobs.JobListRequest{
 		PageSize:     pageSize,
 		PageToken:    pageToken,
 		IncludeTotal: includeTotal,
-		StateFilters: slices.Clone(states),
+		StateFilters: slices.Clone(managerStates),
 		AppIDFilter:  cloneOptionalString(appID),
 		TextFilter:   cloneOptionalString(text),
 	})
@@ -90,6 +144,24 @@ func (handler *apiHandler) listSearchJobs(
 	if len(page.Jobs) > pageSize {
 		return nil, internalError()
 	}
+	retainedByJobID := make(map[string]searchartifacts.Record)
+	if inspector, ok := handler.searchArtifacts.(searchArtifactMetadataBatchInspector); ok {
+		jobIDs := make([]string, len(page.Jobs))
+		for index, item := range page.Jobs {
+			jobIDs[index] = item.ID
+		}
+		retainedByJobID, operationErr = inspector.InspectMany(
+			request.Context(),
+			handler.accessScope(),
+			jobIDs,
+		)
+		if contextErr := requestContextFailure(request.Context(), operationErr); contextErr != nil {
+			return nil, router.NewHTTPError(http.StatusRequestTimeout, "search job list request was canceled")
+		}
+		if operationErr != nil {
+			return nil, mapSearchArtifactError(operationErr)
+		}
+	}
 
 	converted := make([]*opensplunk.SearchJob, len(page.Jobs))
 	seenIDs := make(map[string]struct{}, len(page.Jobs))
@@ -101,7 +173,7 @@ func (handler *apiHandler) listSearchJobs(
 		}
 		job := searchJobListItemAsJob(item)
 		if !handler.validKnowledgeSearchJobProjection(job) ||
-			!validSearchJobListItem(job, handler.accessScope(), states, appID, textMatcher) {
+			!validSearchJobListItem(job, handler.accessScope(), managerStates, appID, textMatcher) {
 			return nil, internalError()
 		}
 		if _, exists := seenIDs[job.ID]; exists {
@@ -114,6 +186,9 @@ func (handler *apiHandler) listSearchJobs(
 		previous = job
 
 		projected, projectionErr := searchJobToProto(job, projectionNow)
+		if retained, ok := retainedByJobID[job.ID]; ok {
+			projected, projectionErr = retainedSearchJobToProto(retained, projectionNow)
+		}
 		if projectionErr != nil {
 			return nil, internalError()
 		}
@@ -142,6 +217,258 @@ func (handler *apiHandler) listSearchJobs(
 		ctx:     request.Context(),
 		release: release,
 	}, nil
+}
+
+func (handler *apiHandler) listDurableSearchJobs(
+	ctx context.Context,
+	lister SearchArtifacts,
+	pageSize int,
+	pageToken string,
+	includeTotal bool,
+	states []opensplunk.SearchJobState,
+	appID *string,
+	text *string,
+	textMatcher *asciifold.Matcher,
+) (*opensplunk.ListSearchJobsResponse, error) {
+	request := searchartifacts.ListRequest{
+		PageSize:     min(searchartifacts.MaximumListPageSize, pageSize+1),
+		PageToken:    pageToken,
+		StateFilters: durableSearchJobListStates(states),
+		AppIDFilter:  cloneOptionalString(appID),
+		TextFilter:   cloneOptionalString(text),
+	}
+	selected := make([]searchartifacts.Record, 0, pageSize)
+	nextPageToken := ""
+	hasMore := false
+	firstPageToken, err := handler.scanDurableSearchJobs(ctx, lister, request,
+		func(item searchartifacts.ListItem) (bool, error) {
+			record, matches, itemErr := handler.durableSearchJobListItem(
+				ctx, item.Record, states, appID, textMatcher,
+			)
+			if itemErr != nil || !matches {
+				return false, itemErr
+			}
+			if len(selected) < pageSize {
+				selected = append(selected, record)
+				nextPageToken = item.AfterPageToken
+				return false, nil
+			}
+			hasMore = true
+			return true, nil
+		})
+	if err != nil {
+		return nil, err
+	}
+	if !hasMore {
+		nextPageToken = ""
+	}
+
+	var totalSize *uint64
+	if includeTotal {
+		total := uint64(0)
+		if firstPageToken != "" {
+			countRequest := request
+			countRequest.PageToken = firstPageToken
+			_, err := handler.scanDurableSearchJobs(ctx, lister, countRequest,
+				func(item searchartifacts.ListItem) (bool, error) {
+					_, matches, itemErr := handler.durableSearchJobListItem(
+						ctx, item.Record, states, appID, textMatcher,
+					)
+					if matches {
+						total++
+					}
+					return false, itemErr
+				})
+			if err != nil {
+				return nil, err
+			}
+		}
+		totalSize = &total
+	}
+
+	converted := make([]*opensplunk.SearchJob, len(selected))
+	projectionNow := handler.now()
+	for index, record := range selected {
+		projected, err := retainedSearchJobToProto(record, projectionNow)
+		if err != nil {
+			return nil, internalError()
+		}
+		projected.Plan = nil
+		projected.ResultSchema = nil
+		projected.Diagnostics = nil
+		converted[index] = projected
+	}
+	pageResponse, err := searchJobListPageResponse(searchjobs.JobListPage{
+		Jobs:           make([]searchjobs.JobListItem, len(selected)),
+		NextPageToken:  nextPageToken,
+		TotalSize:      totalSize,
+		TotalSizeExact: includeTotal,
+	}, pageSize, pageToken, includeTotal)
+	if err != nil {
+		return nil, internalError()
+	}
+	return &opensplunk.ListSearchJobsResponse{SearchJobs: converted, Page: pageResponse}, nil
+}
+
+func (handler *apiHandler) scanDurableSearchJobs(
+	ctx context.Context,
+	lister SearchArtifacts,
+	request searchartifacts.ListRequest,
+	visit func(searchartifacts.ListItem) (bool, error),
+) (string, error) {
+	firstPageToken := ""
+	for {
+		page, err := lister.ListPage(ctx, handler.accessScope(), request)
+		if contextErr := requestContextFailure(ctx, err); contextErr != nil {
+			return "", router.NewHTTPError(http.StatusRequestTimeout, "search job list request was canceled")
+		}
+		if err != nil {
+			return "", mapSearchArtifactError(err)
+		}
+		if firstPageToken == "" {
+			firstPageToken = page.FirstPageToken
+		}
+		for _, item := range page.Items {
+			stop, visitErr := visit(item)
+			if visitErr != nil {
+				return "", visitErr
+			}
+			if stop {
+				return firstPageToken, nil
+			}
+		}
+		if page.NextPageToken == "" {
+			return firstPageToken, nil
+		}
+		request.PageToken = page.NextPageToken
+	}
+}
+
+func (handler *apiHandler) durableSearchJobListItem(
+	ctx context.Context,
+	record searchartifacts.Record,
+	states []opensplunk.SearchJobState,
+	appID *string,
+	text *asciifold.Matcher,
+) (searchartifacts.Record, bool, error) {
+	record, err := handler.overlayLiveSearchJob(ctx, record)
+	if err != nil {
+		return searchartifacts.Record{}, false, err
+	}
+	if !handler.validKnowledgeSearchJobProjection(record.Job) ||
+		!validDurableSearchJobListInvariant(record, handler.accessScope()) {
+		return searchartifacts.Record{}, false, internalError()
+	}
+	if len(states) != 0 && !slices.Contains(states, durableSearchJobListState(record)) {
+		return record, false, nil
+	}
+	if appID != nil && record.Job.AppID != *appID || text != nil && !text.Contains(record.Job.SPL) {
+		return record, false, nil
+	}
+	return record, true, nil
+}
+
+func (handler *apiHandler) overlayLiveSearchJob(
+	ctx context.Context,
+	record searchartifacts.Record,
+) (searchartifacts.Record, error) {
+	if record.State < searchartifacts.StateQueued || record.State > searchartifacts.StateRunning {
+		return record, nil
+	}
+	var (
+		job searchjobs.Job
+		err error
+	)
+	if getter, ok := handler.jobs.(contextualSearchJobGetter); ok {
+		job, err = getter.GetForContext(ctx, handler.accessScope(), record.Job.ID)
+	} else {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return searchartifacts.Record{}, contextErr
+		}
+		job, err = handler.jobs.GetFor(handler.accessScope(), record.Job.ID)
+	}
+	if errors.Is(err, searchjobs.ErrNotFound) {
+		return record, nil
+	}
+	if err != nil {
+		return searchartifacts.Record{}, mapSearchJobError(err)
+	}
+	if contextErr := ctx.Err(); contextErr != nil {
+		return searchartifacts.Record{}, contextErr
+	}
+	if job.ID != record.Job.ID || job.TenantID != record.Job.TenantID || job.OwnerID != record.Job.OwnerID {
+		return searchartifacts.Record{}, internalError()
+	}
+	state := durableSearchJobState(job.State)
+	if state == searchartifacts.StateInvalid {
+		return searchartifacts.Record{}, internalError()
+	}
+	record.Job = job
+	record.State = state
+	if record.ExpiresAt.IsZero() && !job.ExpiresAt.IsZero() {
+		record.ExpiresAt = job.ExpiresAt
+	}
+	return record, nil
+}
+
+func validDurableSearchJobListInvariant(
+	record searchartifacts.Record,
+	scope searchjobs.AccessScope,
+) bool {
+	if record.Job.TenantID != scope.TenantID ||
+		(record.Job.OwnerID != scope.OwnerID && record.Visibility != searchartifacts.VisibilityEveryone) ||
+		(record.Visibility != searchartifacts.VisibilityPrivate && record.Visibility != searchartifacts.VisibilityEveryone) {
+		return false
+	}
+	validationScope := searchjobs.AccessScope{TenantID: record.Job.TenantID, OwnerID: record.Job.OwnerID}
+	return validSearchJobListItem(record.Job, validationScope, nil, nil, nil)
+}
+
+func durableSearchJobListState(record searchartifacts.Record) opensplunk.SearchJobState {
+	if record.State == searchartifacts.StateInterrupted {
+		return opensplunk.SearchJobState_SEARCH_JOB_STATE_INTERRUPTED
+	}
+	if record.State == searchartifacts.StateExpired {
+		return opensplunk.SearchJobState_SEARCH_JOB_STATE_EXPIRED
+	}
+	return searchjobproto.State(record.Job.State)
+}
+
+func durableSearchJobListStates(states []opensplunk.SearchJobState) []searchartifacts.State {
+	result := make([]searchartifacts.State, 0, len(states))
+	for _, state := range states {
+		if state == opensplunk.SearchJobState_SEARCH_JOB_STATE_INTERRUPTED {
+			result = append(result, searchartifacts.StateInterrupted)
+			continue
+		}
+		if managerState, ok := searchJobListManagerState(state); ok {
+			result = append(result, durableSearchJobState(managerState))
+		}
+	}
+	return result
+}
+
+func durableSearchJobState(state searchjobs.State) searchartifacts.State {
+	switch state {
+	case searchjobs.StateQueued:
+		return searchartifacts.StateQueued
+	case searchjobs.StateParsing:
+		return searchartifacts.StateParsing
+	case searchjobs.StatePlanning:
+		return searchartifacts.StatePlanning
+	case searchjobs.StateRunning:
+		return searchartifacts.StateRunning
+	case searchjobs.StateCompleted:
+		return searchartifacts.StateCompleted
+	case searchjobs.StateFailed:
+		return searchartifacts.StateFailed
+	case searchjobs.StateCanceled:
+		return searchartifacts.StateCanceled
+	case searchjobs.StateExpired:
+		return searchartifacts.StateExpired
+	default:
+		return searchartifacts.StateInvalid
+	}
 }
 
 func searchJobListItemAsJob(item searchjobs.JobListItem) searchjobs.Job {
@@ -203,28 +530,27 @@ func (handler *apiHandler) searchJobListPageRequest(page *opensplunk.PageRequest
 	return min(pageSize, maximumSearchJobListRows), pageToken, includeTotal, nil
 }
 
-func searchJobListStateFilters(input []opensplunk.SearchJobState) ([]searchjobs.State, error) {
+func searchJobListStateFilters(input []opensplunk.SearchJobState) ([]opensplunk.SearchJobState, error) {
 	if len(input) > maximumSearchJobListStateFilters {
 		return nil, errors.New("state filters cannot contain more than 16 values")
 	}
-	result := make([]searchjobs.State, 0, len(input))
-	seen := make(map[searchjobs.State]struct{}, len(input))
+	result := make([]opensplunk.SearchJobState, 0, len(input))
+	seen := make(map[opensplunk.SearchJobState]struct{}, len(input))
 	for _, state := range input {
-		converted, ok := searchJobListState(state)
-		if !ok {
+		if _, managerState := searchJobListManagerState(state); !managerState && state != opensplunk.SearchJobState_SEARCH_JOB_STATE_INTERRUPTED {
 			return nil, errors.New("state filter is invalid or unsupported")
 		}
-		if _, exists := seen[converted]; exists {
+		if _, exists := seen[state]; exists {
 			continue
 		}
-		seen[converted] = struct{}{}
-		result = append(result, converted)
+		seen[state] = struct{}{}
+		result = append(result, state)
 	}
 	slices.Sort(result)
 	return result, nil
 }
 
-func searchJobListState(input opensplunk.SearchJobState) (searchjobs.State, bool) {
+func searchJobListManagerState(input opensplunk.SearchJobState) (searchjobs.State, bool) {
 	switch input {
 	case opensplunk.SearchJobState_SEARCH_JOB_STATE_QUEUED:
 		return searchjobs.StateQueued, true
@@ -243,8 +569,8 @@ func searchJobListState(input opensplunk.SearchJobState) (searchjobs.State, bool
 	case opensplunk.SearchJobState_SEARCH_JOB_STATE_EXPIRED:
 		return searchjobs.StateExpired, true
 	default:
-		// UNSPECIFIED, FINALIZING, and values unknown to this binary all fail
-		// closed because the manager implements no corresponding lifecycle.
+		// UNSPECIFIED, FINALIZING, INTERRUPTED, and values unknown to this
+		// binary have no corresponding in-memory manager lifecycle.
 		return searchjobs.StateInvalid, false
 	}
 }

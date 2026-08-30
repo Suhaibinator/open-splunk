@@ -29,9 +29,7 @@ func (handler *apiHandler) searchAttemptAuditRoutes(
 	smallRequestBytes int64,
 ) []protobufRouteDefinition {
 	return []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute[
-			*opensplunk.ListSearchAttemptAuditEventsRequest,
-			*serializedSearchAttemptAuditListResponse](router.RouteConfig[
+		newForwardCompatibleProtoRoute(router.RouteConfig[
 			*opensplunk.ListSearchAttemptAuditEventsRequest,
 			*serializedSearchAttemptAuditListResponse,
 		]{
@@ -126,7 +124,6 @@ func (handler *apiHandler) searchAttemptAuditListRequest(
 		"search attempt audit",
 		defaultSearchAttemptAuditListPageSize,
 		searchaudit.MaximumListPageSize,
-		maximumSearchAttemptAuditPageTokenBytes,
 	)
 	if err != nil {
 		return searchaudit.ListRequest{}, err

@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import Link from "next/link";
 
 import { SharingScope, SortDirection } from "@/gen/ts/open_splunk/common";
 import { SavedSearchSortBy } from "@/gen/ts/open_splunk/saved_search_api";
+import { ServerFeature } from "@/gen/ts/open_splunk/system_api";
 import {
   createOpenSplunkApiClient,
   getSystemBootstrap,
@@ -12,6 +13,7 @@ import {
   RepeatedPageCursorError,
   type SystemBootstrapModel,
 } from "@/lib/api";
+import { supportsServerFeature } from "@/lib/api/system-bootstrap";
 import { createErrorMessage } from "@/lib/error-message";
 import { savedSearchLaunchHref } from "@/lib/search/launch-url";
 import {
@@ -21,6 +23,7 @@ import {
 import {
   deleteServerSavedSearch,
   duplicateServerSavedSearch,
+  getServerSavedSearch,
   listServerSavedSearches,
   renameServerSavedSearch,
   savedSearchForDisplay,
@@ -33,6 +36,14 @@ import { AppIcon } from "../_components/app-icon";
 import { formatMediumDateTime } from "../_components/date-format";
 import { PageHeading } from "../_components/product-shell";
 import { Modal } from "../_components/modal";
+import { AlertsPanel } from "./alerts-panel";
+import {
+  reportsViewForKey,
+  scheduledReportConfigurationTarget,
+  SCHEDULE_REPORT_QUERY_PARAMETER,
+  type ReportsView,
+} from "./reports-view-state";
+import { ScheduledReportActions, ScheduledReportStatus } from "./scheduled-report-controls";
 
 type SavedSearchScope = "all" | "private" | "app" | "global";
 type SortOrder = "updated" | "name";
@@ -103,14 +114,33 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
   const [actionPending, setActionPending] = useState<SavedSearchAction | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [scheduleTargetId, setScheduleTargetId] = useState<string | null>(null);
+  const [view, setView] = useState<ReportsView>("saved-searches");
+  const alertsTabRef = useRef<HTMLButtonElement>(null);
+  const savedSearchesTabRef = useRef<HTMLButtonElement>(null);
   const bootstrapRef = useRef<SystemBootstrapModel | null>(null);
   const loadMoreAbortRef = useRef<AbortController | null>(null);
   const actionAbortRef = useRef<AbortController | null>(null);
   const pageTokensSeenRef = useRef<Set<string>>(new Set());
   const hasLoadedRef = useRef(false);
   const reload = useCallback(() => setGeneration((current) => current + 1), []);
+  const clearScheduleTarget = useCallback(() => {
+    setScheduleTargetId(null);
+    const url = new URL(window.location.href);
+    url.searchParams.delete(SCHEDULE_REPORT_QUERY_PARAMETER);
+    window.history.replaceState(window.history.state, "", url);
+  }, []);
 
   useEffect(() => () => actionAbortRef.current?.abort(), []);
+
+  useEffect(() => {
+    try {
+      setScheduleTargetId(scheduledReportConfigurationTarget(new URL(window.location.href).searchParams));
+    } catch (reason) {
+      setActionNotice(reason instanceof Error ? reason.message : "The report schedule link is invalid.");
+      clearScheduleTarget();
+    }
+  }, [clearScheduleTarget]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setEffectiveQuery(query.trim()), 250);
@@ -196,6 +226,32 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
     };
   }, [appFilter, client, effectiveQuery, generation, scope, sort]);
 
+  useEffect(() => {
+    const bootstrap = bootstrapRef.current;
+    if (scheduleTargetId === null || state !== "available" || savedSearches.some((item) => item.id === scheduleTargetId)) return;
+    if (bootstrap === null || !supportsServerFeature(bootstrap, ServerFeature.SERVER_FEATURE_SCHEDULED_SEARCHES)) {
+      setActionNotice("This server does not advertise scheduled reports.");
+      clearScheduleTarget();
+      return;
+    }
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const result = await getServerSavedSearch(client, bootstrap, scheduleTargetId, { signal: controller.signal });
+        if (controller.signal.aborted) return;
+        if (result.status === "unavailable") throw new Error("The saved report is unavailable.");
+        setSavedSearches((current) => current.some((item) => item.id === result.value.id)
+          ? current
+          : [result.value, ...current]);
+      } catch (reason) {
+        if (controller.signal.aborted) return;
+        setActionNotice(errorMessage(reason));
+        clearScheduleTarget();
+      }
+    })();
+    return () => controller.abort();
+  }, [clearScheduleTarget, client, savedSearches, scheduleTargetId, state]);
+
   const loadMore = useCallback(async () => {
     const bootstrap = bootstrapRef.current;
     const pageToken = nextPageToken;
@@ -269,6 +325,9 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
   const refreshPending = state === "loading" || refreshing;
   const controlsPending = refreshPending || actionPending !== null;
   const actionNameError = savedSearchNameValidationError(actionName);
+  const currentBootstrap = bootstrapRef.current;
+  const schedulingAvailable = currentBootstrap !== null
+    && supportsServerFeature(currentBootstrap, ServerFeature.SERVER_FEATURE_SCHEDULED_SEARCHES);
 
   function openAction(nextAction: SavedSearchAction, target: ServerSavedSearch) {
     if (actionPending !== null) return;
@@ -277,6 +336,16 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
       ? nextDuplicateSavedSearchName(target.name, savedSearches.map((candidate) => candidate.name))
       : target.name);
     setModal({ action: nextAction, target });
+  }
+
+  function moveReportsView(event: KeyboardEvent<HTMLButtonElement>) {
+    const nextView = reportsViewForKey(view, event.key);
+    if (nextView === null) return;
+    event.preventDefault();
+    setView(nextView);
+    window.requestAnimationFrame(() => {
+      (nextView === "saved-searches" ? savedSearchesTabRef : alertsTabRef).current?.focus();
+    });
   }
 
   function closeAction() {
@@ -406,10 +475,19 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
     <div className="suite-page reports-page">
       <PageHeading
         eyebrow="SEARCH & REPORTING"
-        title="Saved searches"
-        description="Open reusable search definitions persisted by the connected server."
-        actions={<><Link className="button" href="/search/">Open Search</Link><button className="button button--primary" type="button" aria-busy={refreshPending} aria-disabled={controlsPending} onClick={() => { if (!controlsPending) reload(); }}>{refreshing ? "Refreshing…" : state === "loading" ? "Loading…" : "Refresh"}</button></>}
+        title={view === "saved-searches" ? "Saved searches" : "Alerts"}
+        description={view === "saved-searches"
+          ? "Open reusable search definitions persisted by the connected server."
+          : "Manage scheduled result conditions and signed webhook delivery."}
+        actions={<><Link className="button" href="/search/">Open Search</Link>{view === "saved-searches" ? <button className="button button--primary" type="button" aria-busy={refreshPending} aria-disabled={controlsPending} onClick={() => { if (!controlsPending) reload(); }}>{refreshing ? "Refreshing…" : state === "loading" ? "Loading…" : "Refresh"}</button> : null}</>}
       />
+
+      <div className="reports-view-tabs" role="tablist" aria-label="Search reporting views">
+        <button ref={savedSearchesTabRef} className={`button ${view === "saved-searches" ? "button--primary" : "button--secondary"}`} id="reports-saved-searches-tab" role="tab" aria-controls="reports-saved-searches-panel" aria-selected={view === "saved-searches"} tabIndex={view === "saved-searches" ? 0 : -1} type="button" onClick={() => setView("saved-searches")} onKeyDown={moveReportsView}>Saved Searches</button>
+        <button ref={alertsTabRef} className={`button ${view === "alerts" ? "button--primary" : "button--secondary"}`} id="reports-alerts-tab" role="tab" aria-controls="reports-alerts-panel" aria-selected={view === "alerts"} tabIndex={view === "alerts" ? 0 : -1} type="button" onClick={() => setView("alerts")} onKeyDown={moveReportsView}>Alerts</button>
+      </div>
+
+      <div id="reports-saved-searches-panel" role="tabpanel" aria-labelledby="reports-saved-searches-tab" hidden={view !== "saved-searches"}>
 
       {state === "loading" ? <BackendResourceState kind="loading" title="Loading saved searches" message="Reading persisted definitions from the server…" /> : null}
       {state === "unavailable" ? <BackendResourceState kind="unavailable" title="Saved searches are unavailable" message="The backend does not advertise or register the saved-search service. Scheduled reports are not substituted. Use Refresh to retry." /> : null}
@@ -437,7 +515,7 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
 
           <section className="suite-card reports-library" aria-labelledby="saved-search-library-title" aria-busy={refreshing}>
             <header className="reports-library-header">
-              <div><h2 id="saved-search-library-title">Saved search library</h2><p>These are reusable definitions, not scheduled reports.</p></div>
+              <div><h2 id="saved-search-library-title">Saved search library</h2><p>Reusable definitions with optional durable schedules and retained run history.</p></div>
               <span><strong>{visible.length}</strong> {visible.length === 1 ? "saved search" : "saved searches"}{complete ? "" : " loaded"}</span>
             </header>
 
@@ -485,8 +563,8 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
               </div>
             ) : (
               <div className="table-wrap reports-table-wrap">
-                <table className="table table--fixed table--cards reports-table reports-table--backend">
-                  <thead><tr><th scope="col">Saved search</th><th scope="col">App</th><th scope="col">Sharing</th><th scope="col">Owner</th><th scope="col">Time range</th><th scope="col">Modified</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
+                <table className="table table--fixed table--cards reports-table reports-table--backend reports-table--scheduled">
+                  <thead><tr><th scope="col">Saved search</th><th scope="col">App</th><th scope="col">Sharing</th><th scope="col">Owner</th><th scope="col">Time range</th><th scope="col">Schedule</th><th scope="col">Modified</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
                   <tbody>{visible.map((savedSearch) => {
                     const display = savedSearchForDisplay(savedSearch, formatDate);
                     return (
@@ -503,11 +581,28 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
                         <td data-label="Sharing"><StatusLabel tone="neutral">{scopeLabel(savedSearch.sharingScope)}</StatusLabel></td>
                         <td data-label="Owner">{savedSearch.ownerId || "Current user"}</td>
                         <td data-label="Time range"><code>{savedSearch.search.timeRange?.earliest ?? "Server default"} → {savedSearch.search.timeRange?.latest ?? "Server default"}</code></td>
+                        <td data-label="Schedule">{schedulingAvailable ? <ScheduledReportStatus savedSearch={savedSearch} /> : "Unavailable"}</td>
                         <td data-label="Modified">{display.updatedAt}</td>
                         <td className="reports-open-cell reports-action-cell">
                           <Link href={launchHref(savedSearch)} aria-label={`Open ${savedSearch.name} in Search`}>Open <AppIcon name="chevron-right" size="xs" /></Link>
                           <button type="button" disabled={controlsPending} onClick={() => openAction("rename", savedSearch)} aria-label={`Rename ${savedSearch.name}`}>Rename</button>
                           <button type="button" disabled={controlsPending} onClick={() => openAction("duplicate", savedSearch)} aria-label={`Duplicate ${savedSearch.name}`}>Duplicate</button>
+                          {schedulingAvailable && currentBootstrap !== null ? (
+                            <ScheduledReportActions
+                              autoOpenSchedule={scheduleTargetId === savedSearch.id}
+                              bootstrap={currentBootstrap}
+                              client={client}
+                              disabled={controlsPending}
+                              savedSearch={savedSearch}
+                              onNotice={setActionNotice}
+                              onRefresh={reload}
+                              onScheduleOpened={clearScheduleTarget}
+                              onUpdated={(updated) => {
+                                setSavedSearches((current) => current.map((item) => item.id === updated.id ? updated : item));
+                                invalidatePagingAfterMutation();
+                              }}
+                            />
+                          ) : null}
                           <button className="reports-delete-action" type="button" disabled={controlsPending} onClick={() => openAction("delete", savedSearch)} aria-label={`Delete ${savedSearch.name}`}>Delete</button>
                         </td>
                       </tr>
@@ -518,10 +613,10 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
             )}
           </section>
 
-          <section className="suite-card backend-unavailable-card">
+          {schedulingAvailable ? null : <section className="suite-card backend-unavailable-card">
             <header className="suite-card-header"><div><h2>Scheduling and delivery</h2><p>Unavailable in backend mode.</p></div><span aria-hidden="true">i</span></header>
             <p>The backend persists saved search definitions but does not register report scheduling, execution, or delivery routes. No schedule or last-run status is inferred.</p>
-          </section>
+          </section>}
         </>
       ) : null}
 
@@ -597,6 +692,8 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
           {actionError === null ? null : <p className="reports-action-error" role="alert">{actionError}</p>}
         </Modal>
       ) : null}
+      </div>
+      <div id="reports-alerts-panel" role="tabpanel" aria-labelledby="reports-alerts-tab" hidden={view !== "alerts"}>{view === "alerts" ? <AlertsPanel apiBaseUrl={apiBaseUrl} /> : null}</div>
     </div>
   );
 }

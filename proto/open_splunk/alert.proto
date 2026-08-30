@@ -1,0 +1,95 @@
+syntax = "proto3";
+
+package open_splunk;
+
+import "google/protobuf/timestamp.proto";
+import "open_splunk/search.proto";
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk;opensplunk";
+
+enum AlertConditionOperator {
+  ALERT_CONDITION_OPERATOR_UNSPECIFIED = 0;
+  ALERT_CONDITION_OPERATOR_GREATER_THAN = 1;
+  ALERT_CONDITION_OPERATOR_LESS_THAN = 2;
+  ALERT_CONDITION_OPERATOR_EQUAL = 3;
+  ALERT_CONDITION_OPERATOR_NOT_EQUAL = 4;
+}
+
+message AlertCondition {
+  AlertConditionOperator operator = 1;
+  uint64 threshold = 2;
+}
+
+message WebhookAlertAction {
+  // Accepted only on create/update and never returned by get/list.
+  optional string url = 1;
+  // Omission applies the Splunk-compatible default of five rows. An explicit
+  // zero requests a webhook with schema and counts but no sample rows.
+  optional uint32 sample_row_count = 2;
+  string ttl = 3;
+  optional string hostname = 4;
+  optional google.protobuf.Timestamp secret_rotated_at = 5;
+  uint64 secret_generation = 6;
+}
+
+message AlertDefinition {
+  string name = 1;
+  optional string description = 2;
+  SearchDefinition search = 3;
+  string cron = 4;
+  string timezone = 5;
+  AlertCondition condition = 6;
+  WebhookAlertAction webhook = 7;
+  string dispatch_ttl = 8;
+}
+
+enum AlertRunOutcome {
+  ALERT_RUN_OUTCOME_UNSPECIFIED = 0;
+  ALERT_RUN_OUTCOME_RUNNING = 1;
+  ALERT_RUN_OUTCOME_SEARCH_FAILED = 2;
+  ALERT_RUN_OUTCOME_NOT_TRIGGERED = 3;
+  ALERT_RUN_OUTCOME_INDETERMINATE = 4;
+  ALERT_RUN_OUTCOME_DELIVERED = 5;
+  ALERT_RUN_OUTCOME_DELIVERY_FAILED = 6;
+  ALERT_RUN_OUTCOME_SKIPPED_OVERLAP = 7;
+  ALERT_RUN_OUTCOME_INTERRUPTED = 8;
+  ALERT_RUN_OUTCOME_DELIVERY_SKIPPED_SECRET_ROTATED = 9;
+  ALERT_RUN_OUTCOME_SEARCH_CANCELED = 10;
+  ALERT_RUN_OUTCOME_SEARCH_EXPIRED = 11;
+  ALERT_RUN_OUTCOME_DELIVERY_UNKNOWN = 12;
+}
+
+message AlertStatus {
+  optional google.protobuf.Timestamp next_run_at = 1;
+  optional google.protobuf.Timestamp last_evaluated_at = 2;
+  optional google.protobuf.Timestamp last_delivered_at = 3;
+  AlertRunOutcome last_outcome = 4;
+}
+
+message Alert {
+  string alert_id = 1;
+  uint64 version = 2;
+  AlertDefinition definition = 3;
+  bool enabled = 4;
+  AlertStatus status = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
+}
+
+message AlertRun {
+  string alert_run_id = 1;
+  string alert_id = 2;
+  uint64 alert_version = 3;
+  google.protobuf.Timestamp scheduled_at = 4;
+  optional google.protobuf.Timestamp started_at = 5;
+  optional google.protobuf.Timestamp finished_at = 6;
+  AlertRunOutcome outcome = 7;
+  uint32 missed_occurrence_count = 8;
+  optional string search_job_id = 9;
+  optional google.protobuf.Timestamp search_job_expires_at = 10;
+  optional string failure_category = 11;
+  optional string delivery_id = 12;
+  optional uint64 result_count = 13;
+  bool result_count_exact = 14;
+  RetainedResultStatus retained_result_status = 15;
+}

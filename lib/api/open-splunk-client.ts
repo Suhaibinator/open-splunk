@@ -6,6 +6,7 @@ import {
 } from "./protobuf-transport";
 import {
   appRoutes,
+  alertRoutes,
   auditEventRoutes,
   collectorRoutes,
   dashboardRoutes,
@@ -15,6 +16,7 @@ import {
   indexRoutes,
   ingestionTokenRoutes,
   savedSearchRoutes,
+  scheduleRoutes,
   searchAttemptAuditRoutes,
   searchRoutes,
   serverSettingsRoutes,
@@ -91,6 +93,9 @@ export class OpenSplunkApiClient {
     fieldSummary: this.route(searchRoutes.fieldSummary),
     timeline: this.route(searchRoutes.timeline),
     cancel: this.route(searchRoutes.cancel),
+    getSettings: this.route(searchRoutes.getSettings),
+    updateSettings: this.route(searchRoutes.updateSettings),
+    share: this.route(searchRoutes.share),
     inspect: this.route(searchRoutes.inspect),
   };
 
@@ -101,6 +106,26 @@ export class OpenSplunkApiClient {
     update: this.route(savedSearchRoutes.update),
     duplicate: this.route(savedSearchRoutes.duplicate),
     delete: this.route(savedSearchRoutes.delete),
+    setSchedule: this.route(savedSearchRoutes.setSchedule),
+    run: this.route(savedSearchRoutes.run),
+    listRuns: this.route(savedSearchRoutes.listRuns),
+  };
+
+  public readonly schedules = {
+    validate: this.route(scheduleRoutes.validate),
+  };
+
+  public readonly alerts = {
+    create: this.route(alertRoutes.create),
+    get: this.route(alertRoutes.get),
+    list: this.route(alertRoutes.list),
+    update: this.route(alertRoutes.update),
+    setState: this.route(alertRoutes.setState),
+    delete: this.route(alertRoutes.delete),
+    run: this.route(alertRoutes.run),
+    testWebhook: this.route(alertRoutes.testWebhook),
+    rotateSecret: this.route(alertRoutes.rotateSecret),
+    listRuns: this.route(alertRoutes.listRuns),
   };
 
   public readonly dashboards = {

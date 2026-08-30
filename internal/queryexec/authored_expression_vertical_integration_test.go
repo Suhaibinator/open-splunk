@@ -149,9 +149,9 @@ func TestAuthoredExpressionExecutorManagerAgainstClickHouse(t *testing.T) {
 		},
 		CursorKey:   []byte("0123456789abcdef0123456789abcdef"),
 		CursorScope: "authored-expression-vertical",
-		OnExecutionError: func(_ string, _ searchjobs.FailureCode, cause error) {
+		OnFailure: func(notification searchjobs.FailureNotification) {
 			select {
-			case executionErrors <- cause:
+			case executionErrors <- notification.Cause:
 			default:
 			}
 		},

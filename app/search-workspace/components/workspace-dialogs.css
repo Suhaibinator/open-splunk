@@ -117,12 +117,6 @@
 .workspace-dialog-export-summary--warning h3 { color: var(--status-warning-strong); }
 .workspace-dialog-export-summary--error h3 { color: var(--status-error-strong); }
 
-.workspace-dialog-export-summary p {
-  color: var(--fg-muted);
-  font-size: var(--type-xs);
-  line-height: 1.45;
-  margin: 0;
-}
 
 .workspace-dialog-export-summary dl {
   border-top: 1px solid var(--border);
@@ -145,12 +139,6 @@
   border-right: 0;
 }
 
-.workspace-dialog-export-summary dt {
-  color: var(--fg-muted);
-  font-size: var(--type-xxs);
-  font-weight: 700;
-  text-transform: uppercase;
-}
 
 .workspace-dialog-export-summary dd {
   color: var(--fg-text);
@@ -191,6 +179,101 @@
 
   .workspace-dialog-export-summary dl { grid-template-columns: 1fr; }
   .workspace-dialog-export-summary dl > div { border-right: 0; }
+}
+
+/* Search sharing and retained-job settings */
+.search-sharing-options {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.search-sharing-option {
+  align-items: flex-start;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  justify-content: flex-start;
+  min-height: auto;
+  padding: var(--space-3);
+  text-align: left;
+}
+
+.search-sharing-option strong {
+  color: var(--fg-text);
+  font-size: var(--type-md);
+}
+
+.search-sharing-option span {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+}
+
+.search-sharing-error {
+  background: var(--status-error-soft);
+  border: 1px solid var(--status-error-edge);
+  color: var(--status-error-strong);
+  font-size: var(--type-sm);
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+}
+
+.search-sharing-note {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  margin: 0;
+}
+
+.search-sharing-manual-copy {
+  background: var(--bg-subtle);
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3);
+}
+
+.search-sharing-manual-copy > span {
+  color: var(--fg-text);
+  font-size: var(--type-sm);
+  font-weight: 700;
+}
+
+.search-sharing-manual-copy input {
+  width: 100%;
+}
+
+.search-sharing-manual-copy small {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+}
+
+.search-sharing-settings {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0;
+}
+
+.search-sharing-settings > div {
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3);
+}
+
+.search-sharing-settings dt {
+  color: var(--fg-muted);
+  font-size: var(--type-xxs);
+  font-weight: 700;
+}
+
+.search-sharing-settings dd {
+  color: var(--fg-text);
+  font-size: var(--type-sm);
+  margin: 0;
+}
+
+@media (max-width: 480px) {
+  .search-sharing-settings {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* Capability-gated settings rows */

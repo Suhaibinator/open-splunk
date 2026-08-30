@@ -22,6 +22,7 @@ const ownedMarkdownPaths = [
   "docs/collector-configuration.md",
   "docs/hec.md",
   "docs/auditing.md",
+  "docs/search-sharing-alerts.md",
   "docs/roadmap.md",
   "docs/releasing.md",
   "deploy/README.md",

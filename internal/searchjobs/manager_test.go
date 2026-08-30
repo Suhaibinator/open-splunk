@@ -1902,6 +1902,7 @@ func TestNewEnforcesMaximumScopeIndexes(t *testing.T) {
 
 func TestExecutionDeadlinePropagatesAndFailsAsTimeout(t *testing.T) {
 	deadlineObserved := make(chan bool, 1)
+	reported := make(chan FailureNotification, 1)
 	executor := executorFunc(func(ctx context.Context, _ clickhouse.CompiledQuery, _ ResultSink) error {
 		_, hasDeadline := ctx.Deadline()
 		deadlineObserved <- hasDeadline
@@ -1913,6 +1914,9 @@ func TestExecutionDeadlinePropagatesAndFailsAsTimeout(t *testing.T) {
 		MaxRuntime:      100 * time.Millisecond,
 		CleanupInterval: -1,
 		NewID:           sequenceIDs("timeout"),
+		OnFailure: func(notification FailureNotification) {
+			reported <- notification
+		},
 	})
 	job, err := manager.Create(context.Background(), validRequest())
 	if err != nil {
@@ -1930,17 +1934,26 @@ func TestExecutionDeadlinePropagatesAndFailsAsTimeout(t *testing.T) {
 	default:
 		t.Fatal("executor was not called")
 	}
+	select {
+	case notification := <-reported:
+		report := notification.Report
+		if notification.Coalesced != 0 || report.JobID != job.ID || report.Code != FailureTimeout ||
+			!report.Retryable || report.Phase != StateRunning || notification.CauseKind != FailureCauseExecution ||
+			!errors.Is(notification.Cause, context.DeadlineExceeded) || report.MaxRuntime != 100*time.Millisecond {
+			t.Fatalf("timeout failure report = %#v", notification)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout failure report was not delivered")
+	}
 }
 
-func TestExecutionErrorHookRunsAfterFailureAndContainsPanics(t *testing.T) {
+func TestFailureHookRunsAfterFailureAndContainsPanics(t *testing.T) {
 	t.Parallel()
 
 	type observation struct {
-		jobID    string
-		code     FailureCode
-		cause    error
-		jobState State
-		getErr   error
+		notification FailureNotification
+		jobState     State
+		getErr       error
 	}
 	cause := errors.New("private ClickHouse message containing generated SQL and password")
 	reported := make(chan observation, 2)
@@ -1952,16 +1965,14 @@ func TestExecutionErrorHookRunsAfterFailureAndContainsPanics(t *testing.T) {
 		MaxConcurrent:   1,
 		CleanupInterval: -1,
 		NewID:           sequenceIDs("execution-hook"),
-		OnExecutionError: func(jobID string, code FailureCode, gotCause error) {
-			job, getErr := manager.Get(jobID)
+		OnFailure: func(notification FailureNotification) {
+			job, getErr := manager.Get(notification.Report.JobID)
 			reported <- observation{
-				jobID:    jobID,
-				code:     code,
-				cause:    gotCause,
-				jobState: job.State,
-				getErr:   getErr,
+				notification: notification,
+				jobState:     job.State,
+				getErr:       getErr,
 			}
-			panic("private execution hook panic")
+			panic("private failure hook panic")
 		},
 	})
 
@@ -1976,50 +1987,64 @@ func TestExecutionErrorHookRunsAfterFailureAndContainsPanics(t *testing.T) {
 		}
 		select {
 		case got := <-reported:
-			if got.jobID != created.ID || got.code != FailureExecution || !errors.Is(got.cause, cause) ||
+			report := got.notification.Report
+			if report.JobID != created.ID || report.Code != FailureExecution ||
+				!errors.Is(got.notification.Cause, cause) || got.notification.CauseKind != FailureCauseExecution ||
+				got.notification.Coalesced != 0 ||
 				got.jobState != StateFailed || got.getErr != nil {
-				t.Fatalf("execution error observation = %#v", got)
+				t.Fatalf("failure observation = %#v", got)
 			}
 		case <-time.After(time.Second):
-			t.Fatal("execution error hook was not called")
+			t.Fatal("failure hook was not called")
 		}
-		deadline := time.Now().Add(time.Second)
-		for len(manager.executionErrorHookGate) != 0 {
-			if time.Now().After(deadline) {
-				t.Fatal("execution error hook gate was not released after panic")
-			}
-			time.Sleep(time.Millisecond)
-		}
+		waitForFailureReporterIdle(t, manager)
 	}
 }
 
-func TestBlockedExecutionErrorHookCannotBlockShutdown(t *testing.T) {
+func TestBlockedFailureHookCoalescesWithoutBlockingShutdown(t *testing.T) {
 	t.Parallel()
 
-	hookStarted := make(chan struct{}, 1)
+	reported := make(chan FailureNotification, 2)
 	releaseHook := make(chan struct{})
+	var hookCalls atomic.Uint32
 	manager := newTestManager(t, Config{
 		Executor: executorFunc(func(context.Context, clickhouse.CompiledQuery, ResultSink) error {
 			return errors.New("private execution error")
 		}),
 		MaxConcurrent:   1,
 		CleanupInterval: -1,
-		NewID:           sequenceIDs("blocked-execution-hook"),
-		OnExecutionError: func(string, FailureCode, error) {
-			hookStarted <- struct{}{}
-			<-releaseHook
+		NewID:           sequenceIDs("blocked-failure-hook"),
+		OnFailure: func(notification FailureNotification) {
+			reported <- notification
+			if hookCalls.Add(1) == 1 {
+				<-releaseHook
+			}
 		},
 	})
 
-	created, err := manager.Create(context.Background(), validRequest())
+	first, err := manager.Create(context.Background(), validRequest())
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitForState(t, manager, created.ID, StateFailed)
+	waitForState(t, manager, first.ID, StateFailed)
 	select {
-	case <-hookStarted:
+	case notification := <-reported:
+		if notification.Report.JobID != first.ID || notification.Coalesced != 0 {
+			t.Fatalf("first failure notification = %#v", notification)
+		}
 	case <-time.After(time.Second):
-		t.Fatal("execution error hook did not start")
+		t.Fatal("failure hook did not start")
+	}
+
+	const coalescedCount = 5
+	var latest Job
+	for range coalescedCount {
+		created, createErr := manager.Create(context.Background(), validRequest())
+		if createErr != nil {
+			close(releaseHook)
+			t.Fatal(createErr)
+		}
+		latest = waitForState(t, manager, created.ID, StateFailed)
 	}
 
 	closed := make(chan error, 1)
@@ -2034,11 +2059,20 @@ func TestBlockedExecutionErrorHookCannotBlockShutdown(t *testing.T) {
 	case <-time.After(time.Second):
 		close(releaseHook)
 		<-closed
-		t.Fatal("blocked execution error hook stalled manager shutdown")
+		t.Fatal("blocked failure hook stalled manager shutdown")
+	}
+
+	select {
+	case notification := <-reported:
+		if notification.Report.JobID != latest.ID || notification.Coalesced != coalescedCount {
+			t.Fatalf("coalesced failure notification = %#v", notification)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("coalesced failure notification was not reported")
 	}
 }
 
-func TestCanceledExecutionDoesNotCallExecutionErrorHook(t *testing.T) {
+func TestCanceledAndCompletedJobsDoNotCallFailureHook(t *testing.T) {
 	t.Parallel()
 
 	var executions atomic.Uint64
@@ -2055,8 +2089,8 @@ func TestCanceledExecutionDoesNotCallExecutionErrorHook(t *testing.T) {
 		}),
 		MaxConcurrent:   1,
 		CleanupInterval: -1,
-		NewID:           sequenceIDs("canceled-execution-hook"),
-		OnExecutionError: func(string, FailureCode, error) {
+		NewID:           sequenceIDs("canceled-failure-hook"),
+		OnFailure: func(FailureNotification) {
 			reported <- struct{}{}
 		},
 	})
@@ -2081,12 +2115,9 @@ func TestCanceledExecutionDoesNotCallExecutionErrorHook(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForState(t, manager, completed.ID, StateCompleted)
-	if got := len(manager.executionErrorHookGate); got != 0 {
-		t.Fatalf("canceled execution acquired the error-hook gate: len = %d", got)
-	}
 	select {
 	case <-reported:
-		t.Fatal("canceled execution reported an execution failure")
+		t.Fatal("canceled or completed job reported a failure")
 	default:
 	}
 }
@@ -2095,30 +2126,39 @@ func TestFailuresAreClassifiedAndStorageDetailsAreNotExposed(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name        string
-		request     CreateRequest
-		executorErr error
-		wantCode    FailureCode
-		wantText    string
-		wantRetry   bool
+		name         string
+		request      CreateRequest
+		executorErr  error
+		emitCounters bool
+		wantCode     FailureCode
+		wantText     string
+		wantRetry    bool
+		wantPhase    State
+		wantCause    FailureCauseKind
 	}{
 		{
-			name:     "parse",
-			request:  withSPL(validRequest(), "index=main |"),
-			wantCode: FailureInvalidSPL,
-			wantText: "SPL_",
+			name:      "parse",
+			request:   withSPL(validRequest(), "index=main |"),
+			wantCode:  FailureInvalidSPL,
+			wantText:  "SPL_",
+			wantPhase: StateParsing,
+			wantCause: FailureCauseParsing,
 		},
 		{
-			name:     "forbidden index",
-			request:  withSPL(validRequest(), "index=secret | table message"),
-			wantCode: FailureIndexForbidden,
-			wantText: "outside the authorized scope",
+			name:      "forbidden index",
+			request:   withSPL(validRequest(), "index=secret | table message"),
+			wantCode:  FailureIndexForbidden,
+			wantText:  "outside the authorized scope",
+			wantPhase: StatePlanning,
+			wantCause: FailureCausePlanning,
 		},
 		{
-			name:     "compiler semantic diagnostic",
-			request:  withSPL(validRequest(), "index=main | timechart span=5m count by severity"),
-			wantCode: FailureUnsupportedSPL,
-			wantText: "currently support strings",
+			name:      "compiler semantic diagnostic",
+			request:   withSPL(validRequest(), "index=main | timechart span=5m count by severity"),
+			wantCode:  FailureUnsupportedSPL,
+			wantText:  "currently support strings",
+			wantPhase: StatePlanning,
+			wantCause: FailureCausePlanning,
 		},
 		{
 			name:        "storage",
@@ -2127,6 +2167,8 @@ func TestFailuresAreClassifiedAndStorageDetailsAreNotExposed(t *testing.T) {
 			wantCode:    FailureStorageUnavailable,
 			wantText:    "storage is unavailable",
 			wantRetry:   true,
+			wantPhase:   StateRunning,
+			wantCause:   FailureCauseExecution,
 		},
 		{
 			name:        "index retired during execution",
@@ -2135,6 +2177,8 @@ func TestFailuresAreClassifiedAndStorageDetailsAreNotExposed(t *testing.T) {
 			wantCode:    FailureExecution,
 			wantText:    "index became unavailable",
 			wantRetry:   false,
+			wantPhase:   StateRunning,
+			wantCause:   FailureCauseExecution,
 		},
 		{
 			name:        "unsupported runtime field value",
@@ -2142,13 +2186,27 @@ func TestFailuresAreClassifiedAndStorageDetailsAreNotExposed(t *testing.T) {
 			executorErr: fmt.Errorf("generated SQL and password: %w", ErrUnsupportedValue),
 			wantCode:    FailureUnsupportedSPL,
 			wantText:    "does not support one or more field values",
+			wantPhase:   StateRunning,
+			wantCause:   FailureCauseExecution,
 		},
 		{
-			name:        "execution",
+			name:         "execution",
+			request:      validRequest(),
+			executorErr:  errors.New("query contained secret generated SQL and password"),
+			emitCounters: true,
+			wantCode:     FailureExecution,
+			wantText:     "execution failed",
+			wantPhase:    StateRunning,
+			wantCause:    FailureCauseExecution,
+		},
+		{
+			name:        "invalid execution result",
 			request:     validRequest(),
-			executorErr: errors.New("query contained secret generated SQL and password"),
-			wantCode:    FailureExecution,
-			wantText:    "execution failed",
+			executorErr: fmt.Errorf("private invalid stream detail: %w", ErrInvalidResult),
+			wantCode:    FailureInternal,
+			wantText:    "invalid result",
+			wantPhase:   StateRunning,
+			wantCause:   FailureCauseExecution,
 		},
 		{
 			name:        "execution resource limit",
@@ -2156,12 +2214,30 @@ func TestFailuresAreClassifiedAndStorageDetailsAreNotExposed(t *testing.T) {
 			executorErr: fmt.Errorf("server max_bytes_to_read contained secret: %w", ErrExecutionLimit),
 			wantCode:    FailureResourceLimit,
 			wantText:    "configured execution resource limit",
+			wantPhase:   StateRunning,
+			wantCause:   FailureCauseExecution,
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
+			reported := make(chan FailureNotification, 1)
 			executor := executorFunc(func(_ context.Context, _ clickhouse.CompiledQuery, sink ResultSink) error {
+				if test.emitCounters {
+					if err := sink.SetSchema(messageSchema()); err != nil {
+						return err
+					}
+					progressSink, ok := sink.(ProgressSink)
+					if !ok {
+						return errors.New("test sink does not expose progress")
+					}
+					if err := progressSink.ReportProgress(ExecutionProgressDelta{ScannedRows: 7, ScannedBytes: 70}); err != nil {
+						return err
+					}
+					if err := sink.AddRow([]Value{StringValue("counted before failure")}); err != nil {
+						return err
+					}
+				}
 				if test.executorErr != nil {
 					return test.executorErr
 				}
@@ -2170,12 +2246,19 @@ func TestFailuresAreClassifiedAndStorageDetailsAreNotExposed(t *testing.T) {
 				}
 				return nil
 			})
+			request := test.request
+			request.AppID = "search"
+			request.Source = JobSource{Origin: JobOriginSavedSearch, ObjectID: "saved-search-1"}
 			manager := newTestManager(t, Config{
 				Executor:        executor,
+				MaxRuntime:      4 * time.Second,
 				CleanupInterval: -1,
 				NewID:           sequenceIDs("failure-" + test.name),
+				OnFailure: func(notification FailureNotification) {
+					reported <- notification
+				},
 			})
-			job, err := manager.Create(context.Background(), test.request)
+			job, err := manager.Create(context.Background(), request)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2187,6 +2270,24 @@ func TestFailuresAreClassifiedAndStorageDetailsAreNotExposed(t *testing.T) {
 				if strings.Contains(failed.Failure.Message, secret) {
 					t.Fatalf("safe failure leaked %q: %q", secret, failed.Failure.Message)
 				}
+			}
+			select {
+			case notification := <-reported:
+				report := notification.Report
+				if notification.Coalesced != 0 || report.JobID != job.ID || report.TenantID != request.TenantID ||
+					report.OwnerID != request.OwnerID || report.AppID != request.AppID || report.Source != request.Source ||
+					report.Phase != test.wantPhase || report.Code != test.wantCode || report.Message != failed.Failure.Message ||
+					report.Retryable != test.wantRetry || report.MaxRuntime != 4*time.Second || notification.CauseKind != test.wantCause {
+					t.Fatalf("failure report = %#v", notification)
+				}
+				if report.QueueWait < 0 || report.Elapsed < 0 {
+					t.Fatalf("failure report durations = queue %v, elapsed %v", report.QueueWait, report.Elapsed)
+				}
+				if test.emitCounters && (report.ScannedRows != 7 || report.ScannedBytes != 70 || report.ProducedRows != 1 || report.ResultBytes == 0) {
+					t.Fatalf("failure report counters = %#v", report)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("failure report was not delivered")
 			}
 		})
 	}
@@ -2492,6 +2593,7 @@ func TestExecutorPanicBecomesSafeFailureAndWorkerSurvives(t *testing.T) {
 	t.Parallel()
 
 	executionContexts := make(chan context.Context, 2)
+	reported := make(chan FailureNotification, 2)
 	manager := newTestManager(t, Config{
 		Executor: executorFunc(func(ctx context.Context, _ clickhouse.CompiledQuery, _ ResultSink) error {
 			executionContexts <- ctx
@@ -2500,6 +2602,9 @@ func TestExecutorPanicBecomesSafeFailureAndWorkerSurvives(t *testing.T) {
 		MaxConcurrent:   1,
 		CleanupInterval: -1,
 		NewID:           sequenceIDs("panic"),
+		OnFailure: func(notification FailureNotification) {
+			reported <- notification
+		},
 	})
 	for range 2 {
 		job, err := manager.Create(context.Background(), validRequest())
@@ -2516,6 +2621,17 @@ func TestExecutorPanicBecomesSafeFailureAndWorkerSurvives(t *testing.T) {
 		case <-time.After(2 * time.Second):
 			t.Fatal("panic left execution deadline context active")
 		}
+		select {
+		case notification := <-reported:
+			if notification.Coalesced != 0 || notification.Report.JobID != job.ID ||
+				notification.Report.Code != FailureInternal ||
+				notification.CauseKind != FailureCauseRecoveredPanic || notification.Cause != nil {
+				t.Fatalf("panic failure report = %#v", notification)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("panic failure report was not delivered")
+		}
+		waitForFailureReporterIdle(t, manager)
 	}
 }
 
@@ -2924,6 +3040,23 @@ func waitForState(t *testing.T, manager *Manager, id string, want State) Job {
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("job %q state = %v, want %v", id, job.State, want)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func waitForFailureReporterIdle(t *testing.T, manager *Manager) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		manager.failureReportMu.Lock()
+		running := manager.failureReportRunning
+		manager.failureReportMu.Unlock()
+		if !running {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("failure reporter did not become idle")
 		}
 		time.Sleep(time.Millisecond)
 	}

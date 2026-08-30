@@ -108,11 +108,17 @@ import {
   type ServerSearchJobInspectionState,
 } from "@/lib/search/server-inspection";
 import { applyFieldPivot, type PivotMode } from "@/lib/search/query-pivots";
-import { boundedIndexSearchQuery, splFromFindInput } from "@/lib/search/launch-url";
+import {
+  boundedIndexSearchQuery,
+  parseSearchLaunch,
+  replaceSearchLaunchSource,
+  splFromFindInput,
+} from "@/lib/search/launch-url";
 import {
   duplicateSavedSearchName,
   savedSearchNameWithSuffix,
 } from "@/lib/search/saved-search-names";
+import { getExactRetainedSearchJob } from "@/lib/search/server-jobs";
 import {
   cancelServerExport,
   clearServerSearchHistory,
@@ -151,7 +157,12 @@ import {
 import { AppIcon, type AppIconName } from "./_components/app-icon";
 import { StatusDot, statusClassName } from "./_components/status";
 import { ProductShell } from "./_components/product-shell";
+import { AlertSecretRecovery } from "./reports/alert-secret-recovery";
+import { AlertWizard } from "./reports/alert-wizard";
+import { defaultAlertForm } from "./reports/alerts-ui-state";
+import { scheduledReportConfigurationHref } from "./reports/reports-view-state";
 import { SearchComposer } from "./search-workspace/components/search-composer";
+import { SearchSharingDialog } from "./search-workspace/components/search-sharing-dialog";
 import { WorkspaceDialogs } from "./search-workspace/components/workspace-dialogs";
 import { serializeRowsForClipboard } from "./search-workspace/clipboard-export";
 import {
@@ -224,6 +235,8 @@ import {
   timelineBoundaryLabel,
   timelineIndexFromPointer,
 } from "./search-workspace/workspace-utils";
+import { useSearchSharing } from "./search-workspace/use-search-sharing";
+import { useSaveAsAlert } from "./search-workspace/use-save-as-alert";
 
 const ACTIVE_PHASES = new Set<JobPhase>(["queued", "parsing", "planning", "running", "finalizing"]);
 const RESULT_TAB_ORDER: ResultTab[] = ["events", "patterns", "statistics", "visualization"];
@@ -248,12 +261,31 @@ const BACKEND_PHASE_PROGRESS: Record<JobPhase, number> = {
   completed: 100,
   failed: 100,
   canceled: 100,
+  interrupted: 100,
   expired: 100,
 };
 
 interface BackendBootstrapState {
   response: SystemBootstrapModel;
   receivedAt: number;
+}
+
+function replaceCurrentSearchLaunch(
+  source: "q" | "savedSearchId" | "historySearchId" | "searchJobId",
+  value: string,
+  range: TimeRange | null = null,
+  run = source !== "searchJobId",
+) {
+  const url = new URL(window.location.href);
+  url.search = replaceSearchLaunchSource(url.searchParams, source, value, run).toString();
+  if (range !== null) {
+    url.searchParams.set("earliest", range.earliest);
+    url.searchParams.set("latest", range.latest);
+    url.searchParams.set("label", range.label);
+    if (range.timezone) url.searchParams.set("timezone", range.timezone);
+    else url.searchParams.delete("timezone");
+  }
+  window.history.replaceState(window.history.state, "", url);
 }
 
 type BackendConnectionState = "loading" | "ready" | "error";
@@ -281,6 +313,11 @@ interface BackendPreviewDisplay {
   schema: ResultSchema;
   snapshot: LivePreviewSnapshot;
   adapted: AdaptedSearchResults;
+}
+
+interface RetainedJobRecovery {
+  definitionRecovered: boolean;
+  state: "expired" | "missing";
 }
 
 interface SavedWorkspaceBaseline {
@@ -684,6 +721,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const [backendSnapshotComplete, setBackendSnapshotComplete] = useState(true);
   const [backendResultsTruncated, setBackendResultsTruncated] = useState(false);
   const [backendResultsExpired, setBackendResultsExpired] = useState(false);
+  const [retainedJobRecovery, setRetainedJobRecovery] = useState<RetainedJobRecovery | null>(null);
   const [backendExpiresAt, setBackendExpiresAt] = useState<Date | null>(null);
   const [backendNotices, setBackendNotices] = useState<string[]>([]);
   const [backendInspection, setBackendInspection] = useState<ServerSearchJobInspectionState>({
@@ -742,6 +780,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const [persistedLaunchPending, setPersistedLaunchPending] = useState(false);
   const [saveName, setSaveName] = useState("Production log investigation");
   const [saveDescription, setSaveDescription] = useState("");
+  const [savePurpose, setSavePurpose] = useState<"report" | "search">("search");
   const [saveAsNew, setSaveAsNew] = useState(false);
   const [activeSavedSearchId, setActiveSavedSearchId] = useState<string | null>(null);
   const [savedWorkspaceBaseline, setSavedWorkspaceBaseline] = useState<SavedWorkspaceBaseline | null>(null);
@@ -898,6 +937,12 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const urlLaunchAppliedRef = useRef(false);
   const persistedLaunchEpochRef = useRef(0);
   const persistedLaunchPendingRef = useRef(false);
+  const openRetainedBackendJobRef = useRef<(jobID: string, signal: AbortSignal) => Promise<void>>(async () => {});
+  const restoreUnavailableRetainedJobFromHistoryRef = useRef<(
+    jobID: string,
+    unavailableState: RetainedJobRecovery["state"],
+    signal: AbortSignal,
+  ) => Promise<boolean>>(async () => false);
   const openSavedSearchRef = useRef<(saved: DemoSavedSearch, fallbackRange?: TimeRange) => void>(() => undefined);
   const openHistoryEntryRef = useRef<(
     entry: DemoHistoryEntry,
@@ -914,6 +959,27 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const saveAsButtonRef = useRef<HTMLButtonElement>(null);
   const saveDialogReturnFocusRef = useRef<HTMLElement | null>(null);
   const menuReturnFocusRef = useRef<HTMLElement | null>(null);
+  const searchSharing = useSearchSharing({
+    client: apiClient,
+    bootstrap: backendBootstrapModel,
+    backendEnabled,
+    job: backendJobRef.current,
+    activeSavedSearchId,
+    query: submittedQuery,
+    timeRange: submittedTimeRange,
+    copyText: copyShareText,
+    onJobUpdated: (job) => {
+      if (job.searchJobId === backendJobIdRef.current && job.stateVersion > backendJobVersionRef.current) {
+        applyBackendJob(job, generationRef.current);
+      }
+    },
+  });
+  const saveAsAlert = useSaveAsAlert({
+    backendEnabled,
+    client: apiClient,
+    loadBootstrap: async () => (await ensureBackendBootstrap()).response,
+    onNotice: showToast,
+  });
 
   const isRunning = ACTIVE_PHASES.has(phase);
   const searchIsClosed = submittedQuery.trim().length === 0;
@@ -948,6 +1014,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         && (backendAuthoritativeResultsReady || backendPreviewHasRows)
         && phase !== "failed"
         && phase !== "canceled"
+        && phase !== "interrupted"
         && phase !== "expired"
       : phase !== "failed" && phase !== "canceled");
   const diagnostic = useMemo(() => query.trim().length === 0 ? null : getQueryDiagnostic(query), [query]);
@@ -1133,6 +1200,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const visibleEventCount = searchIsClosed
     || phase === "failed"
     || phase === "canceled"
+    || phase === "interrupted"
     || phase === "expired"
     || (backendEnabled && backendResultsExpired)
     ? 0
@@ -1970,6 +2038,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     setBackendSnapshotComplete(true);
     setBackendResultsTruncated(false);
     setBackendResultsExpired(false);
+    setRetainedJobRecovery(null);
     setBackendExpiresAt(null);
     setBackendNotices([]);
   }
@@ -1996,6 +2065,10 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   }
 
   async function copyText(text: string, successMessage: string) {
+    await copyShareText(text, successMessage);
+  }
+
+  async function copyShareText(text: string, successMessage: string): Promise<boolean> {
     try {
       if (navigator.clipboard !== undefined) {
         await navigator.clipboard.writeText(text);
@@ -2012,8 +2085,10 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         if (!copied) throw new Error("Clipboard copy was rejected.");
       }
       showToast(successMessage, "success");
+      return true;
     } catch {
       showToast("Could not access the clipboard. Select and copy the value manually.", "warning");
+      return false;
     }
   }
 
@@ -2260,19 +2335,27 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     if (urlLaunchAppliedRef.current) return;
     urlLaunchAppliedRef.current = true;
     const url = new URL(window.location.href);
-    const sharedQuery = url.searchParams.get("q");
-    const savedSearchLaunchId = url.searchParams.get("savedSearchId")?.trim() || null;
-    const historySearchLaunchId = url.searchParams.get("historySearchId")?.trim() || null;
-    const initialQuery = sharedQuery === null || sharedQuery.trim().length === 0
-      ? initialWorkspaceQuery
-      : sharedQuery;
+    let launch: ReturnType<typeof parseSearchLaunch>;
+    try {
+      launch = parseSearchLaunch(url.searchParams);
+    } catch (error) {
+      setPhase("failed");
+      setProgress(100);
+      showToast(error instanceof Error ? error.message : "The search launch URL is invalid.", "warning");
+      return;
+    }
+    const sharedQuery = launch.source === "q" ? launch.value : null;
+    const savedSearchLaunchId = launch.source === "savedSearchId" ? launch.value : null;
+    const historySearchLaunchId = launch.source === "historySearchId" ? launch.value : null;
+    const searchJobLaunchId = launch.source === "searchJobId" ? launch.value : null;
+    const initialQuery = sharedQuery ?? initialWorkspaceQuery;
     const earliest = url.searchParams.get("earliest");
     const latest = url.searchParams.get("latest");
     const sharedTimezone = url.searchParams.get("timezone")?.trim() || undefined;
     const sharedRange = TIME_PRESETS.find((preset) => preset.earliest === earliest && preset.latest === latest);
     let initialRange = TIME_PRESETS[3];
     timelineZoomParentRef.current = null;
-    if (sharedQuery !== null && sharedQuery.trim().length > 0) {
+    if (sharedQuery !== null) {
       setQuery(sharedQuery);
       setEditorCaret(sharedQuery.length);
     }
@@ -2285,14 +2368,61 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       setTimeRange(restoredRange);
       setDraftTimeRange(restoredRange);
     }
-    const hasContextualQuery = sharedQuery !== null && sharedQuery.trim().length > 0;
-    const shouldRunContextualQuery = hasContextualQuery && url.searchParams.get("run") !== "0";
-    const shouldRunPersistedSearch = url.searchParams.get("run") !== "0";
-    if (backendEnabled && savedSearchLaunchId !== null && historySearchLaunchId !== null) {
-      setPhase("failed");
-      setProgress(100);
-      showToast("A search launch can reference either a saved search or a history entry, not both.", "warning");
-      return;
+    const hasContextualQuery = sharedQuery !== null;
+    const shouldRunContextualQuery = hasContextualQuery && launch.run;
+    const shouldRunPersistedSearch = launch.run;
+    if (backendEnabled && searchJobLaunchId !== null) {
+      const controller = new AbortController();
+      persistedLaunchPendingRef.current = true;
+      setPersistedLaunchPending(true);
+      setPhase("queued");
+      setProgress(1);
+      void openRetainedBackendJobRef.current(searchJobLaunchId, controller.signal)
+        .catch(async (error: unknown) => {
+          if (controller.signal.aborted) return;
+          const unavailableState = isHttpStatus(error, 410)
+            ? "expired"
+            : isHttpStatus(error, 404) ? "missing" : null;
+          if (unavailableState !== null) {
+            let recovered = false;
+            try {
+              recovered = await restoreUnavailableRetainedJobFromHistoryRef.current(
+                searchJobLaunchId,
+                unavailableState,
+                controller.signal,
+              );
+            } catch {
+              recovered = false;
+            }
+            if (controller.signal.aborted) return;
+            setRetainedJobRecovery({ definitionRecovered: recovered, state: unavailableState });
+            setPhase("expired");
+            setProgress(100);
+            setBackendResultsExpired(true);
+            showToast(
+              recovered
+                ? "Exact results are unavailable. The search definition was restored from history and is ready to run again."
+                : "Exact results are unavailable and the search definition is no longer in retained history.",
+              "warning",
+            );
+            return;
+          }
+          setPhase("failed");
+          setProgress(100);
+          showToast(error instanceof Error ? error.message : "Unable to open the retained search job.", "warning");
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) {
+            persistedLaunchPendingRef.current = false;
+            setPersistedLaunchPending(false);
+          }
+        });
+      return () => {
+        controller.abort();
+        persistedLaunchPendingRef.current = false;
+        setPersistedLaunchPending(false);
+        urlLaunchAppliedRef.current = false;
+      };
     }
     if (backendEnabled && (savedSearchLaunchId !== null || historySearchLaunchId !== null)) {
       const controller = new AbortController();
@@ -2415,6 +2545,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       setBackendSnapshotComplete(true);
       setBackendResultsTruncated(false);
       setBackendResultsExpired(false);
+      setRetainedJobRecovery(null);
       setBackendExpiresAt(null);
       setBackendNotices([]);
       setTimelineStart(null);
@@ -2867,8 +2998,11 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         "The server did not expose an authoritative timeline for this search.",
       ));
     } else if (isHttpStatus(timelineResult.reason, 410)) {
-      setBackendResultsExpired(true);
-      setPhase("expired");
+      setBackendTimeline([]);
+      setBackendNotices((current) => appendUniqueMessage(
+        current,
+        "Retained result rows are available, but timeline metadata is no longer available.",
+      ));
     } else if (!(timelineResult.reason instanceof DOMException && timelineResult.reason.name === "AbortError")) {
       setBackendTimeline([]);
       setBackendNotices((current) => appendUniqueMessage(
@@ -2915,8 +3049,13 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       ));
     } else if (isHttpStatus(fieldResult.reason, 410)) {
       pendingSavedSelectedFieldsRef.current = null;
-      setBackendResultsExpired(true);
-      setPhase("expired");
+      backendFieldCatalogNextPageTokenRef.current = null;
+      setBackendFieldsHasMore(false);
+      setFields([]);
+      setBackendNotices((current) => appendUniqueMessage(
+        current,
+        "Retained result rows are available, but field metadata is no longer available.",
+      ));
     } else if (!(fieldResult.reason instanceof DOMException && fieldResult.reason.name === "AbortError")) {
       pendingSavedSelectedFieldsRef.current = null;
       setFields([]);
@@ -2997,8 +3136,10 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       if (isHttpStatus(error, 410)) {
         backendFieldCatalogNextPageTokenRef.current = null;
         setBackendFieldsHasMore(false);
-        setBackendResultsExpired(true);
-        setPhase("expired");
+        setBackendNotices((current) => appendUniqueMessage(
+          current,
+          "Retained result rows remain available, but additional field metadata has expired.",
+        ));
       } else if (error instanceof RepeatedPageCursorError) {
         backendFieldCatalogNextPageTokenRef.current = null;
         setBackendFieldsHasMore(false);
@@ -3780,6 +3921,17 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       pendingSavedSelectedFieldsRef.current = null;
       pendingSavedVisualizationRef.current = undefined;
       showToast("Search canceled.", "warning");
+    } else if (terminalPhase === "interrupted") {
+      clearBackendPreview("disabled", "Search interrupted by a server restart. No retained result was produced.");
+      setBackendAuthoritativeResultsReady(false);
+      pendingSavedPreferredTabRef.current = null;
+      pendingSavedSelectedFieldsRef.current = null;
+      pendingSavedVisualizationRef.current = undefined;
+      setBackendNotices((current) => appendUniqueMessage(
+        current,
+        "This search was interrupted by a server restart. Run it again to create a new result snapshot.",
+      ));
+      showToast("Search interrupted by a server restart. Run it again.", "warning");
     } else if (terminalPhase === "expired") {
       clearBackendPreview("disabled", "Search expired. Live preview rows were discarded.");
       setBackendAuthoritativeResultsReady(false);
@@ -3802,6 +3954,97 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       : current);
   }
 
+  async function restoreUnavailableRetainedJobFromHistory(
+    jobID: string,
+    unavailableState: RetainedJobRecovery["state"],
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    const bootstrap = await ensureBackendBootstrap();
+    if (signal.aborted) return false;
+    const result = await getServerSearchHistoryEntry(
+      apiClient,
+      bootstrap.response,
+      jobID,
+      { signal },
+    );
+    if (result.status === "unavailable" || signal.aborted) return false;
+    const historyEntry = result.value;
+    await ensurePersistedLaunchAppContext(bootstrap, historyEntry.search.appId, signal);
+    if (signal.aborted) return false;
+    const definition = historyEntry.search;
+    const restoredRange: TimeRange = {
+      label: definition.timeRange?.earliest === "-24h"
+        ? "Last 24 hours"
+        : `${definition.timeRange?.earliest ?? "earliest"} to ${definition.timeRange?.latest ?? "now"}`,
+      earliest: definition.timeRange?.earliest ?? "-24h",
+      latest: definition.timeRange?.latest ?? "now",
+      timezone: definition.timeRange?.timezone,
+    };
+    clearDisplayedJobForDraft(restoredRange);
+    backendHistoryRef.current.set(historyEntry.id, historyEntry);
+    backendHistoryRerunRef.current = historyEntry;
+    const displayEntry = historyEntryForDisplay(historyEntry);
+    setHistory((current) => [
+      displayEntry,
+      ...current.filter((entry) => entry.id !== displayEntry.id),
+    ]);
+    setQuery(definition.spl);
+    setEditorCaret(definition.spl.length);
+    setSubmittedQuery(definition.spl);
+    setTimeRange(restoredRange);
+    setDraftTimeRange(restoredRange);
+    setSubmittedTimeRange(restoredRange);
+    activeSavedSearchIdRef.current = null;
+    setActiveSavedSearchId(null);
+    restoreBackendPresentation(definition);
+    setRetainedJobRecovery({ definitionRecovered: true, state: unavailableState });
+    setBackendResultsExpired(true);
+    setPhase("expired");
+    setProgress(100);
+    return true;
+  }
+
+  async function openRetainedBackendJob(jobID: string, signal: AbortSignal) {
+    const initialRange = timeRange;
+    clearDisplayedJobForDraft(initialRange);
+    const generation = generationRef.current;
+    setPhase("queued");
+    setProgress(1);
+    const bootstrap = await ensureBackendBootstrap();
+    if (signal.aborted || generationRef.current !== generation) return;
+    let job: SearchJob = await getExactRetainedSearchJob(apiClient, jobID, { signal });
+    const definition = job.definition;
+    if (definition === undefined) throw new TypeError("The retained job definition was unavailable.");
+    const jobRange: TimeRange = {
+      label: definition.timeRange?.earliest === "-24h"
+        ? "Last 24 hours"
+        : `${definition.timeRange?.earliest ?? "earliest"} to ${definition.timeRange?.latest ?? "now"}`,
+      earliest: definition.timeRange?.earliest ?? "-24h",
+      latest: definition.timeRange?.latest ?? "now",
+      timezone: definition.timeRange?.timezone,
+    };
+    setQuery(definition.spl);
+    setEditorCaret(definition.spl.length);
+    setSubmittedQuery(definition.spl);
+    setTimeRange(jobRange);
+    setDraftTimeRange(jobRange);
+    setSubmittedTimeRange(jobRange);
+    const savedSearchID = job.source?.savedSearchId?.trim() || null;
+    activeSavedSearchIdRef.current = savedSearchID;
+    setActiveSavedSearchId(savedSearchID);
+    restoreBackendPresentation(definition);
+    backendJobIdRef.current = job.searchJobId;
+    applyBackendJob(job, generation);
+    if (ACTIVE_PHASES.has(backendJobPhase(job.state))) {
+      job = await monitorBackendJob(job, bootstrap, signal, generation);
+    }
+    if (signal.aborted || generationRef.current !== generation) return;
+    await applyBackendTerminalJob(job, bootstrap, signal, generation);
+  }
+
+  openRetainedBackendJobRef.current = openRetainedBackendJob;
+  restoreUnavailableRetainedJobFromHistoryRef.current = restoreUnavailableRetainedJobFromHistory;
+
   async function runBackendSearch(nextQuery: string, rangeOverride: TimeRange = timeRange) {
     const generation = ++generationRef.current;
     const launchTimeRange = rangeOverride;
@@ -3809,6 +4052,11 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     const launchHistoryEntry = launchSavedSearchId === null
       ? backendHistoryRerunRef.current
       : null;
+    if (launchSavedSearchId === null && launchHistoryEntry === null) {
+      replaceCurrentSearchLaunch("q", nextQuery, launchTimeRange);
+    } else if (launchHistoryEntry !== null) {
+      replaceCurrentSearchLaunch("historySearchId", launchHistoryEntry.id, null, true);
+    }
     if (launchSavedSearchId === null && launchHistoryEntry === null) {
       pendingSavedPreferredTabRef.current = null;
       pendingSavedVisualizationRef.current = undefined;
@@ -4620,10 +4868,15 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     runSearch(submittedQuery, parentRange);
   }
 
-  function openSaveDialog(returnFocus?: HTMLElement | null, forceNew = activeSavedSearchId === null) {
+  function openSaveDialog(
+    returnFocus?: HTMLElement | null,
+    forceNew = activeSavedSearchId === null,
+    purpose: "report" | "search" = "search",
+  ) {
     saveDialogReturnFocusRef.current = returnFocus
       ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
     const existing = savedSearches.find((item) => item.id === activeSavedSearchId);
+    setSavePurpose(purpose);
     setSaveAsNew(forceNew);
     setSaveName(existing === undefined
       ? "Production log investigation"
@@ -4634,6 +4887,27 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     setSaveError(null);
     setModal("save");
     setMenu(null);
+  }
+
+  async function openReportDialog() {
+    setMenu(null);
+    if (!backendEnabled) {
+      showToast("Scheduled reports require a connected backend.", "warning");
+      return;
+    }
+    try {
+      const bootstrap = await ensureBackendBootstrap();
+      if (
+        !supportsServerFeature(bootstrap.response, ServerFeature.SERVER_FEATURE_SAVED_SEARCHES)
+        || !supportsServerFeature(bootstrap.response, ServerFeature.SERVER_FEATURE_SCHEDULED_SEARCHES)
+      ) {
+        showToast("This server does not advertise scheduled reports.", "warning");
+        return;
+      }
+      openSaveDialog(saveAsButtonRef.current, true, "report");
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Unable to prepare the report.", "warning");
+    }
   }
 
   function savedSearchIndexScope(
@@ -4683,10 +4957,62 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     return backendIndexScope(searchText, bootstrap);
   }
 
+  function reusableSearchVisualization(existing?: VisualizationSpec): VisualizationSpec | undefined {
+    const schemaFields = backendResultSchema?.columns
+      .map((column) => column.fieldName)
+      .filter(Boolean) ?? [];
+    return preservedSavedVisualizationRef.current
+      ?? (activeTab === "visualization" || visualizationEditedRef.current
+        ? {
+          ...existing,
+          type: visualizationTypeForChartStyle(
+            isTimechartResult && timechartValueColumns.length > 1 ? "line" : chartStyle,
+          ),
+          title: chartTitle.trim() || undefined,
+          xField: isTimechartResult
+            ? schemaFields.find((field) => field === "_time") ?? schemaFields[0] ?? existing?.xField
+            : existing?.xField ?? schemaFields[0],
+          yFields: timechartValueColumns.length > 0
+            ? timechartValueColumns
+            : existing?.yFields ?? schemaFields.slice(1),
+          stackMode: existing?.stackMode ?? VisualizationStackMode.VISUALIZATION_STACK_MODE_NONE,
+          showLegend: legendPosition !== "none",
+          showDataLabels,
+        }
+        : existing);
+  }
+
+  async function openAlertWizard() {
+    setMenu(null);
+    await saveAsAlert.open((response) => {
+      const bootstrap = backendBootstrapRef.current ?? receivedBackendBootstrap(response);
+      const existing = activeSavedSearchId === null
+        ? undefined
+        : backendSavedSearchesRef.current.get(activeSavedSearchId);
+      const selectedFields = pendingSavedSelectedFieldsRef.current === null
+        ? fields.filter((field) => field.selected).map((field) => field.name)
+        : [...pendingSavedSelectedFieldsRef.current];
+      return defaultAlertForm({
+        name: existing === undefined ? "" : `${existing.name} alert`,
+        spl: query,
+        earliest: timeRange.earliest,
+        latest: timeRange.latest,
+        searchTimezone: timeRange.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC",
+        scheduleTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC",
+        appId: existing?.search.appId ?? bootstrap.response.selectedAppId ?? undefined,
+        indexScope: savedSearchIndexScope(query, bootstrap, existing),
+        preferredResultTab: searchResultTabFromWorkspace(activeTab),
+        selectedFields,
+        visualization: reusableSearchVisualization(existing?.search.visualization),
+      });
+    });
+  }
+
   async function saveBackendSearch(
     forceCreate: boolean,
     nameOverride = saveName,
     descriptionOverride = saveDescription,
+    purpose: "report" | "search" = "search",
   ) {
     const trimmedName = nameOverride.trim();
     const trimmedDescription = descriptionOverride.trim();
@@ -4702,45 +5028,24 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     let updatedSavedSearchId: string | null = null;
     try {
       const bootstrap = await ensureBackendBootstrap();
-      const existing = forceCreate || activeSavedSearchId === null
+      const source = activeSavedSearchId === null
         ? undefined
         : backendSavedSearchesRef.current.get(activeSavedSearchId);
+      const existing = forceCreate ? undefined : source;
       operation = existing === undefined ? "create" : "update";
       updatedSavedSearchId = existing?.id ?? null;
-      const schemaFields = backendResultSchema?.columns
-        .map((column) => column.fieldName)
-        .filter(Boolean) ?? [];
-      const existingVisualization = existing?.search.visualization;
-      const visualization: VisualizationSpec | undefined = preservedSavedVisualizationRef.current
-        ?? (activeTab === "visualization" || visualizationEditedRef.current
-        ? {
-          ...existingVisualization,
-          type: visualizationTypeForChartStyle(
-            isTimechartResult && timechartValueColumns.length > 1 ? "line" : chartStyle,
-          ),
-          title: chartTitle.trim() || undefined,
-          xField: isTimechartResult
-            ? schemaFields.find((field) => field === "_time") ?? schemaFields[0] ?? existingVisualization?.xField
-            : existingVisualization?.xField ?? schemaFields[0],
-          yFields: timechartValueColumns.length > 0
-            ? timechartValueColumns
-            : existingVisualization?.yFields ?? schemaFields.slice(1),
-          stackMode: existingVisualization?.stackMode
-            ?? VisualizationStackMode.VISUALIZATION_STACK_MODE_NONE,
-          showLegend: legendPosition !== "none",
-          showDataLabels,
-        }
-        : existingVisualization);
+      const sourceVisualization = source?.search.visualization;
+      const visualization = reusableSearchVisualization(sourceVisualization);
       const search = {
         spl: query,
         earliest: timeRange.earliest,
         latest: timeRange.latest,
         timezone: timeRange.timezone
-          ?? existing?.search.timeRange?.timezone
+          ?? source?.search.timeRange?.timezone
           ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
-        indexScope: savedSearchIndexScope(query, bootstrap, existing),
-        appId: existing !== undefined
-          ? existing.search.appId
+        indexScope: savedSearchIndexScope(query, bootstrap, source),
+        appId: source !== undefined
+          ? source.search.appId
           : backendHistoryRerunRef.current !== null
             ? backendHistoryRerunRef.current.search.appId
             : bootstrap.response.selectedAppId ?? undefined,
@@ -4749,7 +5054,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           ? fields.filter((field) => field.selected).map((field) => field.name)
           : [...pendingSavedSelectedFieldsRef.current],
         visualization,
-        base: existing?.search ?? backendHistoryRerunRef.current?.search,
+        base: source?.search ?? backendHistoryRerunRef.current?.search,
       };
       const result = existing === undefined
         ? await createServerSavedSearch(apiClient, bootstrap.response, {
@@ -4789,6 +5094,11 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         displaySearch,
         ...current.filter((item) => item.id !== displaySearch.id),
       ]);
+      replaceCurrentSearchLaunch("savedSearchId", result.value.id);
+      if (purpose === "report") {
+        window.location.assign(productHref(scheduledReportConfigurationHref(result.value.id)));
+        return;
+      }
       showToast(`Saved “${result.value.name}”.`, "success");
     } catch (error) {
       let message: string;
@@ -4821,7 +5131,12 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     const trimmedName = saveName.trim();
     if (trimmedName.length === 0) return;
     if (backendEnabled) {
-      void saveBackendSearch(saveAsNew || activeSavedSearchId === null);
+      void saveBackendSearch(saveAsNew || activeSavedSearchId === null, saveName, saveDescription, savePurpose);
+      return;
+    }
+    if (savePurpose === "report") {
+      setModal(null);
+      showToast("Scheduled reports require a connected backend.", "warning");
       return;
     }
     const id = saveAsNew || activeSavedSearchId === null ? newDemoObjectId("saved") : activeSavedSearchId;
@@ -4841,6 +5156,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     setSavedWorkspaceBaseline(null);
     setSavedBaselineCaptureId(id);
     setModal(null);
+    replaceCurrentSearchLaunch("savedSearchId", id);
     showToast(`Saved “${trimmedName}”.`, "success");
   }
 
@@ -4962,6 +5278,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     setSavedWorkspaceBaseline(null);
     setSavedBaselineCaptureId(saved.id);
     backendHistoryRerunRef.current = null;
+    replaceCurrentSearchLaunch("savedSearchId", saved.id);
     const presentationNotice = restoreBackendPresentation(
       backendSavedSearchesRef.current.get(saved.id)?.search,
     );
@@ -4999,6 +5316,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     }
     activeSavedSearchIdRef.current = null;
     setActiveSavedSearchId(null);
+    replaceCurrentSearchLaunch("historySearchId", entry.id, null, rerun);
     setModal(null);
     if (rerun) runSearch(entry.query, restoredRange);
     else showToast("Search restored without running.", "info");
@@ -5242,6 +5560,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         if (activeSavedSearchId === id) {
           activeSavedSearchIdRef.current = null;
           setActiveSavedSearchId(null);
+          replaceCurrentSearchLaunch("q", query, timeRange, false);
         }
         showToast("Saved search deleted.", "warning");
       } catch (error) {
@@ -5263,6 +5582,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     if (activeSavedSearchId === id) {
       activeSavedSearchIdRef.current = null;
       setActiveSavedSearchId(null);
+      replaceCurrentSearchLaunch("q", query, timeRange, false);
     }
     showToast("Saved search deleted.", "warning");
   }
@@ -6044,6 +6364,17 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         title: "Search is running",
         detail: "Results will appear here as soon as the backend produces them.",
       }
+    : backendEnabled && retainedJobRecovery !== null
+      ? {
+          icon: "hourglass",
+          tone: "warning",
+          title: retainedJobRecovery.state === "expired"
+            ? "Search results expired"
+            : "Search results unavailable",
+          detail: retainedJobRecovery.definitionRecovered
+            ? "The exact result snapshot is unavailable. Its 30-day history entry restored the search definition without running it."
+            : "Neither the exact result snapshot nor its 30-day history entry is available. The original search cannot be reconstructed.",
+        }
     : backendEnabled && backendResultsExpired
       ? {
           icon: "hourglass",
@@ -6058,6 +6389,13 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           title: "Search failed before results were produced",
           detail: "Review the search error, adjust the SPL or time range, and run it again.",
         }
+    : phase === "interrupted"
+      ? {
+          icon: "warning",
+          tone: "warning",
+          title: "Search was interrupted",
+          detail: "The server restarted before producing a retained result. Run the search again to create a fresh result snapshot.",
+        }
       : {
           icon: "circle-x",
           tone: "warning",
@@ -6070,6 +6408,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       ? query
       : submittedQuery;
   const emptyStateCanRun = emptyStateRunQuery.trim().length > 0
+    && (retainedJobRecovery === null || retainedJobRecovery.definitionRecovered)
     && (!backendEnabled || (
       backendConnectionState === "ready"
       && !backendHasNoSearchableIndexes
@@ -6187,6 +6526,48 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const workspaceOverlays = (
     <>
       {menu !== null ? <button type="button" className="menu-dismiss" aria-label="Close menu" onClick={() => setMenu(null)} /> : null}
+      {searchSharing.dialog === null ? null : (
+        <SearchSharingDialog
+          dialog={searchSharing.dialog}
+          settings={searchSharing.settings}
+          loadState={searchSharing.loadState}
+          mutationState={searchSharing.mutationState}
+          manualCopyValue={searchSharing.manualCopyValue}
+          canCopyJob={searchSharing.canCopyJob}
+          canCopySavedSearch={searchSharing.canCopySavedSearch}
+          onClose={searchSharing.close}
+          onCopyJobLink={() => void searchSharing.copyJobLink()}
+          onCopyQueryLink={() => void searchSharing.copyQueryLink()}
+          onCopySavedSearchLink={() => void searchSharing.copySavedSearchLink()}
+          onMakeShared={() => void searchSharing.makeShared()}
+          onMakePrivate={() => void searchSharing.makePrivate()}
+        />
+      )}
+      {saveAsAlert.draft === null ? null : (
+        <AlertWizard
+          applications={saveAsAlert.applications.map((app) => ({
+            id: app.appId,
+            name: app.displayName || app.slug || app.appId,
+            defaultIndexNames: [...app.defaultIndexNames],
+          })) ?? []}
+          administratorSignInRequired={saveAsAlert.administratorSignInRequired}
+          initialValue={saveAsAlert.draft}
+          pending={saveAsAlert.pending}
+          returnFocus={saveAsButtonRef.current}
+          submitError={saveAsAlert.error}
+          validateSchedule={saveAsAlert.validateSchedule}
+          onClose={saveAsAlert.close}
+          onSubmit={(value) => void saveAsAlert.submit(value)}
+        />
+      )}
+      {saveAsAlert.secret === null ? null : (
+        <AlertSecretRecovery
+          alertName={saveAsAlert.secret.name}
+          secret={saveAsAlert.secret.value}
+          returnFocus={saveAsButtonRef.current}
+          onClose={saveAsAlert.closeSecret}
+        />
+      )}
       <WorkspaceDialogs
         activeSavedSearchId={activeSavedSearchId}
         activeTab={activeTab}
@@ -6235,6 +6616,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         saveDescription={saveDescription}
         saveDialogReturnFocus={saveDialogReturnFocusRef.current}
         saveName={saveName}
+        savePurpose={savePurpose}
         saveState={objectMutation?.kind === "save"
           ? { status: "pending" }
           : saveError === null
@@ -6388,8 +6770,8 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
             {menu === "save-as" ? (
               <div className="floating-menu action-menu" role="menu">
                 <button role="menuitem" type="button" onClick={() => openSaveDialog(saveAsButtonRef.current, true)}><span><AppIcon name="save" size="md" /></span><span><strong>Saved search</strong><small>Preserve this SPL and time range</small></span></button>
-                <button role="menuitem" type="button" onClick={() => showToast("Reports extend saved searches in a later phase.")}><span><AppIcon name="file" size="md" /></span><span><strong>Report</strong><small>Save table and visualization settings</small></span></button>
-                <button role="menuitem" type="button" onClick={() => showToast("Alerts are planned after scheduled searches.")}><span><AppIcon name="alert" size="md" /></span><span><strong>Alert</strong><small>Schedule and notify</small></span></button>
+                <button role="menuitem" type="button" onClick={() => void openReportDialog()}><span><AppIcon name="file" size="md" /></span><span><strong>Report</strong><small>Save presentation and configure a schedule</small></span></button>
+                <button role="menuitem" type="button" onClick={() => void openAlertWizard()}><span><AppIcon name="alert" size="md" /></span><span><strong>Alert</strong><small>Schedule and notify</small></span></button>
               </div>
             ) : null}
           </div>
@@ -6467,7 +6849,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
 
       <section className={`job-strip${searchIsClosed ? " is-closed" : ""}`} data-testid="job-strip" aria-label="Search job status" aria-busy={isRunning}>
         <div className="job-primary">
-          <span className={statusClassName("icon", stateTone(phase))} aria-hidden="true"><AppIcon name={phase === "completed" ? "check" : phase === "failed" ? "warning" : phase === "canceled" ? "close" : phase === "expired" ? "hourglass" : "loading"} size="xs" spin={isRunning} /></span>
+          <span className={statusClassName("icon", stateTone(phase))} aria-hidden="true"><AppIcon name={phase === "completed" ? "check" : phase === "failed" || phase === "interrupted" ? "warning" : phase === "canceled" ? "close" : phase === "expired" ? "hourglass" : "loading"} size="xs" spin={isRunning} /></span>
           <span className="job-result-copy">
             <output className="sr-only" aria-live="polite" aria-atomic="true">Search status: {persistedLaunchPending ? "Opening persisted search" : phaseLabel(phase)}</output>
             <strong aria-hidden="true">{persistedLaunchPending ? "Opening persisted search" : phaseLabel(phase)}</strong>
@@ -6489,7 +6871,14 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           <span><small>Progress</small><strong aria-hidden="true">{progress}%</strong><progress className="sr-only" aria-label="Search progress" max={100} value={progress}>{progress}%</progress></span>
         </div>
         <div className="job-controls">
-          <button type="button" onClick={() => setModal("jobs")}>Job <AppIcon name="chevron-down" size="xs" /></button>
+          <button type="button" onClick={() => {
+            if (backendEnabled) {
+              setModal(null);
+              searchSharing.open("settings");
+            } else {
+              setModal("jobs");
+            }
+          }}>Job <AppIcon name="chevron-down" size="xs" /></button>
           <button type="button" aria-label="Inspect search job" title="Inspect job" onClick={openJobInspector}><AppIcon name="info" size="md" /></button>
           <button
             type="button"
@@ -6508,19 +6897,8 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
             title={submittedQuery.trim().length === 0 ? "Run a search before sharing it" : "Share search"}
             disabled={submittedQuery.trim().length === 0}
             onClick={() => {
-              const url = new URL(window.location.href);
-              url.searchParams.set("q", submittedQuery);
-              url.searchParams.set("earliest", submittedTimeRange.earliest);
-              url.searchParams.set("latest", submittedTimeRange.latest);
-              url.searchParams.set("label", submittedTimeRange.label);
-              if (submittedTimeRange.timezone) {
-                url.searchParams.set("timezone", submittedTimeRange.timezone);
-              } else {
-                url.searchParams.delete("timezone");
-              }
-              url.searchParams.set("run", "1");
-              url.hash = "search";
-              void copyText(url.toString(), "Search link copied to the clipboard.");
+              setModal(null);
+              searchSharing.open("share");
             }}
           ><AppIcon name="share" size="md" /></button>
           <div className="header-menu-wrap search-mode-wrap">
@@ -6643,9 +7021,13 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
                 ? <button className="button button--secondary button--compact" type="button" onClick={() => {
                     if (backendWorkspaceTransitionBlocked()) return;
                     timelineZoomParentRef.current = null;
-                    clearPersistedContextForAdHocSearch();
+                    if (retainedJobRecovery?.definitionRecovered !== true) {
+                      clearPersistedContextForAdHocSearch();
+                    }
                     runSearch(emptyStateRunQuery);
-                  }}>{searchIsClosed ? "Run the default search" : "Run search again"}</button>
+                  }}>{retainedJobRecovery?.definitionRecovered === true
+                    ? "Run again from history"
+                    : searchIsClosed ? "Run the default search" : "Run search again"}</button>
                 : null}
         </section>
       ) : null}

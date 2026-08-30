@@ -110,6 +110,251 @@ func TestCreateVerifyRestoreControlPlaneRoundTrip(t *testing.T) {
 	}
 }
 
+func TestCreateVerifyRestoreIncludesSearchArtifacts(t *testing.T) {
+	t.Parallel()
+
+	fixture := newRecoveryFixture(t)
+	artifactSource := filepath.Join(filepath.Dir(fixture.sourceDatabase), "retained-results")
+	if err := os.Mkdir(artifactSource, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(artifactSource, searchArtifactLockFilename),
+		nil,
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	artifactNames := []string{
+		searchArtifactPrefix + strings.Repeat("1", sha256.Size*2) + searchArtifactSuffix,
+		searchArtifactPrefix + strings.Repeat("2", sha256.Size*2) + searchArtifactSuffix,
+	}
+	for index, name := range artifactNames {
+		if err := os.WriteFile(
+			filepath.Join(artifactSource, name),
+			[]byte(strings.Repeat(string(rune('a'+index)), index+3)),
+			0o600,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	create := fixture.createOptions()
+	create.SearchArtifactDirectory = artifactSource
+	manifest, err := Create(t.Context(), create)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.FormatVersion != artifactManifestFormatVersion ||
+		manifest.SearchArtifacts == nil ||
+		manifest.SearchArtifacts.FileCount != uint64(len(artifactNames)) {
+		t.Fatalf("artifact-aware manifest = %#v", manifest)
+	}
+	bundleEntries, err := os.ReadDir(fixture.bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotBundleNames := make([]string, 0, len(bundleEntries))
+	for _, entry := range bundleEntries {
+		gotBundleNames = append(gotBundleNames, entry.Name())
+	}
+	wantBundleNames := append(append([]string(nil), bundleMemberNames...), searchArtifactsFilename)
+	slices.Sort(gotBundleNames)
+	slices.Sort(wantBundleNames)
+	if !slices.Equal(gotBundleNames, wantBundleNames) {
+		t.Fatalf("bundle entries = %v, want %v", gotBundleNames, wantBundleNames)
+	}
+	assertExactRecoveryDirectory(
+		t,
+		filepath.Join(fixture.bundle, searchArtifactsFilename),
+		artifactNames,
+	)
+	if _, err := Verify(t.Context(), fixture.bundle, fixture.release); err != nil {
+		t.Fatal(err)
+	}
+
+	restore := fixture.restoreOptions()
+	externalArtifactParent := privateTestDirectory(t)
+	unrelatedPath := filepath.Join(externalArtifactParent, "unrelated")
+	if err := os.WriteFile(unrelatedPath, []byte("preserve"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	restore.SearchArtifactDirectory = filepath.Join(externalArtifactParent, "restored-results")
+	if err := PreflightRestore(t.Context(), restore); err != nil {
+		t.Fatal(err)
+	}
+	if err := Restore(t.Context(), restore); err != nil {
+		t.Fatal(err)
+	}
+	assertExactRecoveryDirectory(t, restore.SearchArtifactDirectory, artifactNames)
+	for _, name := range artifactNames {
+		want, err := os.ReadFile(filepath.Join(artifactSource, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := os.ReadFile(filepath.Join(restore.SearchArtifactDirectory, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("restored artifact %q = %q, want %q", name, got, want)
+		}
+	}
+	if got, err := os.ReadFile(unrelatedPath); err != nil || string(got) != "preserve" {
+		t.Fatalf("external parent member = %q, %v", got, err)
+	}
+}
+
+func TestRestoreRejectsOverlappingOrSymlinkedExternalSearchArtifactTargets(t *testing.T) {
+	t.Parallel()
+
+	for name, target := range map[string]func(*testing.T, *recoveryFixture) string{
+		"backup source": func(_ *testing.T, fixture *recoveryFixture) string {
+			return fixture.bundle
+		},
+		"control destination subtree": func(t *testing.T, fixture *recoveryFixture) string {
+			parent := filepath.Join(fixture.restoreDirectory, "nested")
+			if err := os.Mkdir(parent, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			return filepath.Join(parent, "results")
+		},
+		"symlinked parent": func(t *testing.T, _ *recoveryFixture) string {
+			realParent := privateTestDirectory(t)
+			aliasParent := filepath.Join(privateTestDirectory(t), "alias")
+			if err := os.Symlink(realParent, aliasParent); err != nil {
+				t.Fatal(err)
+			}
+			return filepath.Join(aliasParent, "results")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			fixture := newRecoveryFixture(t)
+			artifactSource := filepath.Join(filepath.Dir(fixture.sourceDatabase), "retained-results")
+			if err := os.Mkdir(artifactSource, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			create := fixture.createOptions()
+			create.SearchArtifactDirectory = artifactSource
+			if _, err := Create(t.Context(), create); err != nil {
+				t.Fatal(err)
+			}
+			restore := fixture.restoreOptions()
+			restore.SearchArtifactDirectory = target(t, fixture)
+			before := testDirectorySnapshot(t, fixture.restoreDirectory)
+			if err := PreflightRestore(t.Context(), restore); err == nil {
+				t.Fatal("unsafe search-artifact target passed preflight")
+			}
+			if err := Restore(t.Context(), restore); err == nil {
+				t.Fatal("unsafe search-artifact target restored")
+			}
+			after := testDirectorySnapshot(t, fixture.restoreDirectory)
+			if !slices.Equal(before, after) {
+				t.Fatalf("rejected target mutated control destination: before=%q after=%q", before, after)
+			}
+		})
+	}
+}
+
+func TestVerifyRejectsSearchArtifactMutation(t *testing.T) {
+	t.Parallel()
+
+	fixture := newRecoveryFixture(t)
+	artifactSource := filepath.Join(filepath.Dir(fixture.sourceDatabase), "retained-results")
+	if err := os.Mkdir(artifactSource, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	name := searchArtifactPrefix + strings.Repeat("3", sha256.Size*2) + searchArtifactSuffix
+	if err := os.WriteFile(filepath.Join(artifactSource, name), []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	create := fixture.createOptions()
+	create.SearchArtifactDirectory = artifactSource
+	if _, err := Create(t.Context(), create); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(fixture.bundle, searchArtifactsFilename, name),
+		[]byte("mutation"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Verify(t.Context(), fixture.bundle, fixture.release); err == nil {
+		t.Fatal("mutated search artifact verified")
+	}
+}
+
+func TestCreateDiscoversDefaultSearchArtifactDirectory(t *testing.T) {
+	t.Parallel()
+
+	fixture := newRecoveryFixture(t)
+	artifactSource := fixture.sourceDatabase + ".search-artifacts"
+	if err := os.Mkdir(artifactSource, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	name := searchArtifactPrefix + strings.Repeat("5", sha256.Size*2) + searchArtifactSuffix
+	if err := os.WriteFile(filepath.Join(artifactSource, name), []byte("default"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := Create(t.Context(), fixture.createOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.SearchArtifacts == nil || manifest.SearchArtifacts.FileCount != 1 {
+		t.Fatalf("default-discovered search artifacts = %#v", manifest.SearchArtifacts)
+	}
+	if _, err := os.Stat(filepath.Join(fixture.bundle, searchArtifactsFilename, name)); err != nil {
+		t.Fatal(err)
+	}
+	restore := fixture.restoreOptions()
+	if err := Restore(t.Context(), restore); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(restore.DatabasePath+".search-artifacts", name)); err != nil {
+		t.Fatalf("default-derived restored search artifact: %v", err)
+	}
+}
+
+func TestRemoveCreatedBundleRemovesSearchArtifactDirectory(t *testing.T) {
+	t.Parallel()
+
+	fixture := newRecoveryFixture(t)
+	artifactSource := filepath.Join(filepath.Dir(fixture.sourceDatabase), "retained-results")
+	if err := os.Mkdir(artifactSource, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	name := searchArtifactPrefix + strings.Repeat("4", sha256.Size*2) + searchArtifactSuffix
+	if err := os.WriteFile(filepath.Join(artifactSource, name), []byte("retained"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	create := fixture.createOptions()
+	create.SearchArtifactDirectory = artifactSource
+	if _, err := Create(t.Context(), create); err != nil {
+		t.Fatal(err)
+	}
+	parent, err := privatefs.OpenDirectory(filepath.Dir(fixture.bundle))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	child, err := privatefs.OpenDirectory(fixture.bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer child.Close()
+	if err := ValidateCreatedBundleForRemoval(parent, filepath.Base(fixture.bundle), child); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveCreatedBundle(parent, filepath.Base(fixture.bundle), child); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(fixture.bundle); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("removed artifact-aware bundle remains: %v", err)
+	}
+}
+
 func TestRemoveCreatedBundleOwnsCompleteMemberNamespace(t *testing.T) {
 	t.Parallel()
 

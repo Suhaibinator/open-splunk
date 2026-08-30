@@ -123,6 +123,79 @@ func TestJobJournalRoundTripsMaximumHistoryRerunProvenanceID(t *testing.T) {
 	}
 }
 
+func TestJobJournalRoundTripsScheduledProvenance(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name   string
+		source searchjobs.JobSource
+		assert func(*testing.T, *opensplunk.SearchJobSource, time.Time)
+	}{
+		{
+			name: "scheduled report",
+			source: searchjobs.JobSource{
+				Origin:   searchjobs.JobOriginScheduledReport,
+				ObjectID: "scheduled-run-1",
+			},
+			assert: func(t *testing.T, source *opensplunk.SearchJobSource, scheduledAt time.Time) {
+				t.Helper()
+				if source.GetOrigin() != opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_SCHEDULED_REPORT ||
+					source.GetScheduledReportRunId() != "scheduled-run-1" ||
+					!source.GetScheduledAt().AsTime().Equal(scheduledAt) {
+					t.Fatalf("scheduled-report source = %+v", source)
+				}
+			},
+		},
+		{
+			name: "alert",
+			source: searchjobs.JobSource{
+				Origin:  searchjobs.JobOriginAlert,
+				AlertID: "alert-1", AlertRunID: "alert-run-1",
+			},
+			assert: func(t *testing.T, source *opensplunk.SearchJobSource, scheduledAt time.Time) {
+				t.Helper()
+				if source.GetOrigin() != opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_ALERT ||
+					source.GetAlertId() != "alert-1" || source.GetAlertRunId() != "alert-run-1" ||
+					!source.GetScheduledAt().AsTime().Equal(scheduledAt) {
+					t.Fatalf("alert source = %+v", source)
+				}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, store := openTestStore(t, Options{})
+			journal, err := NewJobJournal(store)
+			if err != nil {
+				t.Fatal(err)
+			}
+			scheduledAt := time.Date(2026, time.August, 30, 12, 34, 56, 789_123_456, time.UTC)
+			test.source.ScheduledAt = scheduledAt
+			job := journalJob("job-"+strings.ReplaceAll(test.name, " ", "-"), searchjobs.StateQueued, scheduledAt)
+			job.Source = test.source
+			if err := journal.Admit(context.Background(), job); err != nil {
+				t.Fatalf("Admit() error = %v", err)
+			}
+			job.State = searchjobs.StateCompleted
+			job.EffectiveIndexes = []string{"main"}
+			job.StartedAt = scheduledAt.Add(time.Second)
+			job.FinishedAt = scheduledAt.Add(2 * time.Second)
+			if err := journal.Finalize(context.Background(), job); err != nil {
+				t.Fatalf("Finalize() error = %v", err)
+			}
+			got, err := store.Get(
+				context.Background(),
+				AccessScope{TenantID: "tenant", OwnerID: "owner"},
+				job.ID,
+			)
+			if err != nil {
+				t.Fatalf("Get() error = %v", err)
+			}
+			test.assert(t, got.GetSource(), time.UnixMicro(scheduledAt.UnixMicro()).UTC())
+		})
+	}
+}
+
 func provenanceSource(
 	origin opensplunk.SearchJobOrigin,
 	objectID string,

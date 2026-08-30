@@ -262,7 +262,7 @@ Failure artifacts are written beneath `test-results/css-contracts`.
 
 `scripts/style-invariants.test.mjs` runs inside `npm run test:frontend` and
 holds every structural property of the styling layer that the contracts above
-cannot see. It is one file of 100 tests in ten sections,
+cannot see. It is one file of structural tests in nine sections,
 described in full under
 [Guardrails](../docs/theming.md#guardrails-what-holds-this-in-place). In short:
 
@@ -281,13 +281,14 @@ described in full under
   stylesheet exactly once, `app/layout.tsx` is the only file that pulls a
   stylesheet in, no `.module.css` or `:global()` comes back, no test file reads
   a stylesheet's characters, and the load order is the one documented.
-- **Parity, responsive ownership, one-of-each-primitive, and reachability** —
-  every rule still has a caller, in every global stylesheet. The other
+- **Responsive ownership, one-of-each-primitive, and reachability** — every
+  rule still has a caller, in every global stylesheet. The other
   direction is narrower: a class the markup asks for is checked against the
   stylesheets only when it carries one of the five colocated feature prefixes
   (`analytics-`, `operations-`, `reports-`, `visualization-`,
   `workspace-dialog-`), so an unstyled class outside those five is not
-  reported. `docs/theming.md` §9 says why and what it costs.
+  reported. [Theming](../docs/theming.md#guardrails-what-holds-this-in-place)
+  explains why and what it costs.
 - **The parsers underneath**, pinned against the shapes that have already
   fooled a simpler implementation.
 
@@ -296,10 +297,11 @@ itself never opens a stylesheet — which is the first invariant it asserts. A
 class that genuinely only exists at runtime belongs in
 `scripts/css-dynamic-classes.json`, with a comment naming the code that
 produces it; an entry there that stops being needed fails the suite, so the
-list cannot become a quiet home for dead CSS. The same is true of every other
-ledger the suite reads — `css-retired-classes.json`, `css-duplicate-blocks.json`,
-`css-literal-debt.json` and `css-phase3-monolith.json` — each of which is
-compared against the tree in both directions.
+list cannot become a quiet home for dead CSS. The same is true of the other
+ledgers the suite reads — `css-retired-classes.json` and
+`css-literal-debt.json` — each of which is compared against the tree in both
+directions. Repeated declaration blocks have no ledger: the suite requires
+them to be consolidated.
 
 `scripts/safety-net.test.mjs` guards the net itself: every unit test file must
 appear in the hardcoded list in `scripts/test-frontend.mjs`, and every listed

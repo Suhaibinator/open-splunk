@@ -36,6 +36,8 @@ enum SearchJobOrigin {
   SEARCH_JOB_ORIGIN_HISTORY_RERUN = 3;
   SEARCH_JOB_ORIGIN_DASHBOARD = 4;
   SEARCH_JOB_ORIGIN_API = 5;
+  SEARCH_JOB_ORIGIN_SCHEDULED_REPORT = 6;
+  SEARCH_JOB_ORIGIN_ALERT = 7;
 }
 
 message SearchJobSource {
@@ -43,6 +45,34 @@ message SearchJobSource {
   optional string saved_search_id = 2;
   optional string history_search_id = 3;
   optional string dashboard_id = 4;
+  optional string scheduled_report_run_id = 5;
+  optional string alert_id = 6;
+  optional string alert_run_id = 7;
+  optional google.protobuf.Timestamp scheduled_at = 8;
+}
+
+enum SearchJobVisibility {
+  SEARCH_JOB_VISIBILITY_UNSPECIFIED = 0;
+  SEARCH_JOB_VISIBILITY_PRIVATE = 1;
+  SEARCH_JOB_VISIBILITY_EVERYONE = 2;
+}
+
+enum SearchJobRetentionClass {
+  SEARCH_JOB_RETENTION_CLASS_UNSPECIFIED = 0;
+  SEARCH_JOB_RETENTION_CLASS_MANUAL = 1;
+  SEARCH_JOB_RETENTION_CLASS_SHARED = 2;
+  SEARCH_JOB_RETENTION_CLASS_SCHEDULED_REPORT = 3;
+  SEARCH_JOB_RETENTION_CLASS_SCHEDULED_ALERT = 4;
+  SEARCH_JOB_RETENTION_CLASS_TRIGGERED_WEBHOOK = 5;
+}
+
+enum RetainedResultStatus {
+  RETAINED_RESULT_STATUS_UNSPECIFIED = 0;
+  RETAINED_RESULT_STATUS_PENDING = 1;
+  RETAINED_RESULT_STATUS_AVAILABLE = 2;
+  RETAINED_RESULT_STATUS_EXPIRED = 3;
+  RETAINED_RESULT_STATUS_MISSING = 4;
+  RETAINED_RESULT_STATUS_CORRUPT = 5;
 }
 
 enum SearchJobState {
@@ -56,6 +86,9 @@ enum SearchJobState {
   SEARCH_JOB_STATE_FAILED = 7;
   SEARCH_JOB_STATE_CANCELED = 8;
   SEARCH_JOB_STATE_EXPIRED = 9;
+  // A nonterminal durable job recovered after process restart. It is terminal
+  // and never resumes automatically.
+  SEARCH_JOB_STATE_INTERRUPTED = 10;
 }
 
 enum SearchExecutionPhase {
@@ -136,7 +169,7 @@ message SearchJobOptions {
   bool enable_timeline = 3;
 }
 
-// SearchJob is a transient, immutable-snapshot execution record. state_version
+// SearchJob is a retained, immutable-snapshot execution record. state_version
 // increases whenever observable state, progress, or result metadata changes.
 message SearchJob {
   reserved 6;
@@ -167,4 +200,9 @@ message SearchJob {
   // Definition-free identity for the immutable knowledge authority admitted
   // with this job. It is absent for legacy or feature-disabled attempts.
   optional KnowledgeSnapshotSummary knowledge_snapshot = 23;
+  SearchJobVisibility visibility = 24;
+  SearchJobRetentionClass retention_class = 25;
+  google.protobuf.Duration retention_lifetime = 26;
+  google.protobuf.Timestamp last_accessed_at = 27;
+  RetainedResultStatus retained_result_status = 28;
 }

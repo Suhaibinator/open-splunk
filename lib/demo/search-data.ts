@@ -60,7 +60,7 @@ export interface DemoHistoryEntry {
   appId?: string;
   sourceLabel?: string;
   resolvedTimeRange?: string;
-  state: "Completed" | "Canceled" | "Failed" | "Expired";
+  state: "Completed" | "Canceled" | "Failed" | "Interrupted" | "Expired";
   events: number;
   eventsExact?: string;
   duration: string;

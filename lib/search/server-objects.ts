@@ -9,7 +9,10 @@ import {
   SearchHistorySortBy,
   type SearchHistoryFilter,
 } from "@/gen/ts/open_splunk/history_api";
-import type { SavedSearch } from "@/gen/ts/open_splunk/saved_search";
+import {
+  ScheduledSearchOutcome,
+  type SavedSearch,
+} from "@/gen/ts/open_splunk/saved_search";
 import { SavedSearchSortBy } from "@/gen/ts/open_splunk/saved_search_api";
 import {
   SearchJobState,
@@ -42,6 +45,7 @@ import {
   type SystemBootstrapModel,
 } from "@/lib/api/system-bootstrap";
 import { serverSearchJobOriginLabel } from "./server-jobs";
+import { adaptRetainedJobReference, type RetainedResultState } from "./server-job-settings";
 
 export interface ServerSearchDefinitionInput {
   spl: string;
@@ -65,8 +69,27 @@ export interface ServerSavedSearch {
   search: SearchDefinition;
   sharingScope: SharingScope;
   ownerId: string | null;
+  schedule: ServerSavedSearchSchedule | null;
+  scheduleStatus: ServerScheduledSearchStatus | null;
   createdAt: Date | null;
   updatedAt: Date | null;
+}
+
+export interface ServerSavedSearchSchedule {
+  configVersion: bigint;
+  enabled: boolean;
+  cron: string;
+  timezone: string;
+  dispatchTtl: string;
+}
+
+export interface ServerScheduledSearchStatus {
+  nextRunAt: Date | null;
+  lastRunAt: Date | null;
+  lastOutcome: ScheduledSearchOutcome;
+  latestSearchJobId: string | null;
+  latestRetainedResultState: RetainedResultState | null;
+  latestResultExpiresAt: Date | null;
 }
 
 export interface ServerSearchHistoryEntry {
@@ -104,9 +127,53 @@ function requireSearchDefinition(search: SearchDefinition | undefined, context: 
   return search;
 }
 
+function validScheduledSearchStatusOutcome(outcome: ScheduledSearchOutcome): boolean {
+  switch (outcome) {
+    case ScheduledSearchOutcome.SCHEDULED_SEARCH_OUTCOME_UNSPECIFIED:
+    case ScheduledSearchOutcome.SCHEDULED_SEARCH_OUTCOME_RUNNING:
+    case ScheduledSearchOutcome.SCHEDULED_SEARCH_OUTCOME_COMPLETED:
+    case ScheduledSearchOutcome.SCHEDULED_SEARCH_OUTCOME_FAILED:
+    case ScheduledSearchOutcome.SCHEDULED_SEARCH_OUTCOME_CANCELED:
+    case ScheduledSearchOutcome.SCHEDULED_SEARCH_OUTCOME_SKIPPED_OVERLAP:
+    case ScheduledSearchOutcome.SCHEDULED_SEARCH_OUTCOME_INTERRUPTED:
+      return true;
+    case ScheduledSearchOutcome.UNRECOGNIZED:
+    default:
+      return false;
+  }
+}
+
 export function adaptSavedSearch(savedSearch: SavedSearch): ServerSavedSearch {
   const definition = savedSearch.definition;
   if (definition === undefined) throw new TypeError("The saved search response did not include a definition.");
+  const schedule = definition.schedule;
+  const scheduleStatus = savedSearch.scheduleStatus;
+  if (
+    schedule !== undefined
+    && (
+      schedule.configVersion <= 0n
+      || schedule.cron.trim().length === 0
+      || schedule.timezone.trim().length === 0
+      || schedule.dispatchTtl.trim().length === 0
+    )
+  ) {
+    throw new TypeError("The saved search response included an invalid schedule projection.");
+  }
+  if (scheduleStatus !== undefined && !validScheduledSearchStatusOutcome(scheduleStatus.lastOutcome)) {
+    throw new TypeError("The saved search response included an unsupported schedule outcome.");
+  }
+  let latestResult: ReturnType<typeof adaptRetainedJobReference> = {
+    retainedResultState: null,
+    searchJobExpiresAt: null,
+    searchJobId: null,
+  };
+  if (scheduleStatus !== undefined) {
+    latestResult = adaptRetainedJobReference({
+      retainedResultStatus: scheduleStatus.latestRetainedResultStatus,
+      searchJobExpiresAt: scheduleStatus.latestResultExpiresAt,
+      searchJobId: scheduleStatus.latestSearchJobId,
+    });
+  }
   return {
     id: savedSearch.savedSearchId,
     version: savedSearch.version,
@@ -115,6 +182,21 @@ export function adaptSavedSearch(savedSearch: SavedSearch): ServerSavedSearch {
     search: requireSearchDefinition(definition.search, "The saved search"),
     sharingScope: definition.sharingScope,
     ownerId: definition.ownerId?.trim() || null,
+    schedule: schedule === undefined ? null : {
+      configVersion: schedule.configVersion,
+      enabled: schedule.enabled,
+      cron: schedule.cron,
+      timezone: schedule.timezone,
+      dispatchTtl: schedule.dispatchTtl,
+    },
+    scheduleStatus: scheduleStatus === undefined ? null : {
+      nextRunAt: validDate(scheduleStatus.nextRunAt),
+      lastRunAt: validDate(scheduleStatus.lastRunAt),
+      lastOutcome: scheduleStatus.lastOutcome,
+      latestSearchJobId: latestResult.searchJobId,
+      latestRetainedResultState: latestResult.retainedResultState,
+      latestResultExpiresAt: latestResult.searchJobExpiresAt,
+    },
     createdAt: validDate(savedSearch.createdAt),
     updatedAt: validDate(savedSearch.updatedAt),
   };
@@ -181,10 +263,14 @@ export function savedSearchForDisplay(
 }
 
 function historyState(state: SearchJobState): DemoHistoryEntry["state"] {
-  if (state === SearchJobState.SEARCH_JOB_STATE_CANCELED) return "Canceled";
-  if (state === SearchJobState.SEARCH_JOB_STATE_EXPIRED) return "Expired";
-  if (state === SearchJobState.SEARCH_JOB_STATE_FAILED) return "Failed";
-  return "Completed";
+  switch (state) {
+    case SearchJobState.SEARCH_JOB_STATE_COMPLETED: return "Completed";
+    case SearchJobState.SEARCH_JOB_STATE_CANCELED: return "Canceled";
+    case SearchJobState.SEARCH_JOB_STATE_EXPIRED: return "Expired";
+    case SearchJobState.SEARCH_JOB_STATE_FAILED: return "Failed";
+    case SearchJobState.SEARCH_JOB_STATE_INTERRUPTED: return "Interrupted";
+    default: throw new TypeError("The history entry returned an unsupported final state.");
+  }
 }
 
 function formatResolvedHistoryRange(range: ResolvedTimeRange | null): string | undefined {

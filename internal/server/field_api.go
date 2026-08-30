@@ -27,12 +27,12 @@ const (
 
 func (handler *apiHandler) searchFieldRoutes(noAuth router.AuthLevel, smallRequestBytes int64) []protobufRouteDefinition {
 	return []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute[*opensplunk.ListSearchFieldsRequest, *serializedSearchFieldsResponse](router.RouteConfig[*opensplunk.ListSearchFieldsRequest, *serializedSearchFieldsResponse]{
+		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.ListSearchFieldsRequest, *serializedSearchFieldsResponse]{
 			Path: searchFieldsListRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedSearchFieldsCodec(), Handler: handler.listSearchFields,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunk.GetSearchFieldSummaryRequest, *serializedSearchFieldSummaryResponse](router.RouteConfig[*opensplunk.GetSearchFieldSummaryRequest, *serializedSearchFieldSummaryResponse]{
+		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.GetSearchFieldSummaryRequest, *serializedSearchFieldSummaryResponse]{
 			Path: searchFieldSummaryRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedSearchFieldSummaryCodec(), Handler: handler.getSearchFieldSummary,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},

@@ -10,6 +10,16 @@ export const MAXIMUM_ADMINISTRATOR_BEARER_TOKEN_BYTES = 512;
 let administratorBearerToken: string | null = null;
 
 const ADMINISTRATOR_ROUTE_PATHS: ReadonlySet<string> = new Set([
+  "/api/alerts/create",
+  "/api/alerts/delete",
+  "/api/alerts/get",
+  "/api/alerts/list",
+  "/api/alerts/run",
+  "/api/alerts/runs/list",
+  "/api/alerts/secret/rotate",
+  "/api/alerts/state/set",
+  "/api/alerts/update",
+  "/api/alerts/webhook/test",
   "/api/apps/create",
   "/api/apps/delete",
   "/api/apps/get",

@@ -80,7 +80,6 @@
 .audit-table td strong, .audit-table td small { display: block; }
 .audit-table td small { color: var(--fg-muted); font-size: var(--type-xxs); margin-top: 3px; }
 .audit-table code { font-size: var(--type-xxs); }
-.activity-summary { display: grid; gap: 9px; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: var(--space-3); }
 .activity-summary article { align-items: center; background: var(--bg-surface); border: 1px solid var(--border); display: flex; gap: 9px; min-height: 63px; padding: 10px 13px; }
 .activity-summary article > div { display: flex; flex-direction: column; }
 .activity-summary strong { font-size: var(--type-xxl); font-weight: 400; }
@@ -160,26 +159,8 @@
 }
 .live-jobs-toolbar > .activity-filter-group { display: flex; min-width: 0; }
 .live-jobs-filter-row { align-items: center; display: flex; gap: 7px; }
-.live-jobs-text-filter,
-.live-jobs-app-filter {
-  align-items: center;
-  background: var(--bg-surface);
-  border: 1px solid var(--border-strong);
-  display: flex;
-  height: 32px;
-}
 .live-jobs-text-filter { min-width: 250px; }
 .live-jobs-text-filter i { color: var(--fg-muted); font-style: normal; padding-left: 9px; }
-.live-jobs-text-filter input {
-  background: transparent;
-  border: 0;
-  font-size: var(--type-xs);
-  height: 30px;
-  min-width: 0;
-  outline: 0;
-  padding: 0 var(--space-2);
-  width: 100%;
-}
 .live-jobs-app-filter select {
   background: var(--bg-surface);
   border: 0;
@@ -210,7 +191,8 @@
 .live-jobs-table td:nth-child(2) > small,
 .live-jobs-table td:nth-child(2) > code { margin-top: 3px; }
 .live-jobs-table td:nth-child(3) small,
-.live-jobs-table td:nth-child(5) small { color: var(--fg-muted); display: block; font-size: var(--type-xxs); margin-top: 3px; }
+.live-jobs-table td:nth-child(5) small,
+.export-jobs-table td small { color: var(--fg-muted); display: block; font-size: var(--type-xxs); margin-top: 3px; }
 .export-jobs-table { min-width: 1120px; }
 .export-jobs-table td:first-child > strong,
 .export-jobs-table td:first-child > code,
@@ -218,7 +200,6 @@
 .export-jobs-table td:nth-child(5) > strong { display: block; }
 .export-jobs-table td:first-child > code { margin-top: 3px; }
 .export-jobs-table td code { font-size: var(--type-xxs); overflow-wrap: anywhere; }
-.export-jobs-table td small { color: var(--fg-muted); display: block; font-size: var(--type-xxs); margin-top: 3px; }
 .live-job-spl {
   color: var(--fg-text);
   display: block;
@@ -274,14 +255,6 @@
   justify-content: space-between;
   min-height: 36px;
   padding: 7px var(--space-2) 7px 11px;
-}
-.history-action-notice button {
-  background: transparent;
-  border: 0;
-  color: var(--status-success-strong);
-  font-size: var(--type-xl);
-  height: 28px;
-  width: 28px;
 }
 .history-row-actions {
   align-items: center;
@@ -354,12 +327,6 @@
   color: var(--fg-muted);
   font-size: var(--type-xxs);
   text-transform: uppercase;
-}
-.history-clear-scope dd {
-  color: var(--fg-text);
-  font-size: var(--type-xs);
-  margin: 0;
-  overflow-wrap: anywhere;
 }
 .backend-history-table td:nth-child(2) { white-space: normal; }
 .backend-history-table td:nth-child(2) > strong,

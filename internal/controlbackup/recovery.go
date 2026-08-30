@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"fortio.org/safecast"
@@ -40,6 +41,15 @@ var bundleStageCleanupNames = []string{
 	databaseFilename + "-wal",
 	manifestFilename,
 	masterKeyFilename,
+	searchArtifactsFilename,
+}
+
+func bundleNames(manifest Manifest) []string {
+	names := append([]string(nil), bundleMemberNames...)
+	if manifest.SearchArtifacts != nil {
+		names = append(names, searchArtifactsFilename)
+	}
+	return names
 }
 
 // ErrDeploymentBindingMismatch identifies a verified control-plane child that
@@ -80,11 +90,12 @@ func (err *PublicationStatusError) Unwrap() error {
 // bundle directory. The caller must hold the supported server lock for the
 // complete operation.
 type CreateOptions struct {
-	DatabasePath           string
-	MasterKeyPath          string
-	AdministratorTokenPath string
-	Destination            string
-	Release                ReleaseIdentity
+	DatabasePath            string
+	MasterKeyPath           string
+	AdministratorTokenPath  string
+	SearchArtifactDirectory string
+	Destination             string
+	Release                 ReleaseIdentity
 }
 
 // RestoreOptions identifies one verified bundle and three runtime targets in
@@ -98,14 +109,15 @@ type CreateOptions struct {
 // by deployment recovery to bind this child to its already-verified outer
 // manifest. Control-plane-only restores leave both empty.
 type RestoreOptions struct {
-	Source                 string
-	DatabasePath           string
-	DatabaseLock           *os.File
-	MasterKeyPath          string
-	AdministratorTokenPath string
-	Release                ReleaseIdentity
-	ExpectedRecoverySetID  string
-	ExpectedManifestSHA256 string
+	Source                  string
+	DatabasePath            string
+	DatabaseLock            *os.File
+	MasterKeyPath           string
+	AdministratorTokenPath  string
+	SearchArtifactDirectory string
+	Release                 ReleaseIdentity
+	ExpectedRecoverySetID   string
+	ExpectedManifestSHA256  string
 }
 
 type createHooks struct {
@@ -145,17 +157,21 @@ type restoreTargets struct {
 	databaseLockName       string
 	masterKeyName          string
 	administratorTokenName string
+	searchArtifactParent   string
+	searchArtifactName     string
 }
 
 type restorePlan struct {
-	source         *privatefs.Directory
-	destination    *privatefs.Directory
-	manifest       Manifest
-	targets        restoreTargets
-	stageNames     []string
-	finalNames     []string
-	namespaceNames []string
-	knownNames     []string
+	source              *privatefs.Directory
+	destination         *privatefs.Directory
+	artifactDestination *privatefs.Directory
+	manifest            Manifest
+	targets             restoreTargets
+	stageNames          []string
+	finalNames          []string
+	namespaceNames      []string
+	knownNames          []string
+	artifactStageName   string
 }
 
 func (plan *restorePlan) close() error {
@@ -172,7 +188,19 @@ func (plan *restorePlan) close() error {
 		destinationErr = plan.destination.Close()
 		plan.destination = nil
 	}
-	return errors.Join(sourceErr, destinationErr)
+	var artifactDestinationErr error
+	if plan.artifactDestination != nil {
+		artifactDestinationErr = plan.artifactDestination.Close()
+		plan.artifactDestination = nil
+	}
+	return errors.Join(sourceErr, destinationErr, artifactDestinationErr)
+}
+
+func (plan *restorePlan) searchArtifactDestination() *privatefs.Directory {
+	if plan.artifactDestination != nil {
+		return plan.artifactDestination
+	}
+	return plan.destination
 }
 
 // Create produces and verifies one atomic directory bundle. It never copies a
@@ -369,6 +397,42 @@ func createWithHooks(
 	if err != nil {
 		return Manifest{}, err
 	}
+	searchArtifactDirectory := options.SearchArtifactDirectory
+	if searchArtifactDirectory == "" {
+		candidate := options.DatabasePath + ".search-artifacts"
+		if _, err := os.Lstat(candidate); err == nil {
+			searchArtifactDirectory = candidate
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return Manifest{}, fmt.Errorf("create control-plane backup: discover search artifacts: %w", err)
+		}
+	}
+	var searchArtifacts *DirectoryIdentity
+	if searchArtifactDirectory != "" {
+		if _, _, err := validateExactAbsolutePath(
+			"search-artifact directory",
+			searchArtifactDirectory,
+		); err != nil {
+			return Manifest{}, err
+		}
+		sourceArtifacts, err := privatefs.OpenDirectory(searchArtifactDirectory)
+		if err != nil {
+			return Manifest{}, fmt.Errorf("create control-plane backup: open search artifacts: %w", err)
+		}
+		artifactIdentity, artifactStage, copyErr := copySearchArtifactDirectory(
+			ctx,
+			sourceArtifacts,
+			stage,
+			searchArtifactsFilename,
+		)
+		closeErr := sourceArtifacts.Close()
+		if artifactStage != nil {
+			closeErr = errors.Join(closeErr, artifactStage.Close())
+		}
+		if copyErr != nil || closeErr != nil {
+			return Manifest{}, errors.Join(copyErr, closeErr)
+		}
+		searchArtifacts = &artifactIdentity
+	}
 	fingerprint, err := auth.FingerprintServerMasterKey(masterKey)
 	if err != nil {
 		return Manifest{}, err
@@ -378,8 +442,12 @@ func createWithHooks(
 		return Manifest{}, err
 	}
 	createdAt := hooks.now().UTC().UnixMicro()
+	formatVersion := manifestFormatVersion
+	if searchArtifacts != nil {
+		formatVersion = artifactManifestFormatVersion
+	}
 	manifest = Manifest{
-		FormatVersion:               manifestFormatVersion,
+		FormatVersion:               formatVersion,
 		CreatedAtUnixMicro:          createdAt,
 		RecoverySetID:               recoverySetID,
 		Scope:                       controlPlaneOnlyScope,
@@ -392,6 +460,7 @@ func createWithHooks(
 		MasterKey:                   masterKeyMember.identity,
 		AdministratorToken:          administratorTokenMember.identity,
 		MasterKeyFingerprintSHA256:  hex.EncodeToString(fingerprint[:]),
+		SearchArtifacts:             searchArtifacts,
 	}
 	encodedManifest, err := marshalManifest(manifest)
 	if err != nil {
@@ -400,7 +469,8 @@ func createWithHooks(
 	if _, err := writeMember(ctx, stage, manifestFilename, encodedManifest); err != nil {
 		return Manifest{}, err
 	}
-	if err := stage.RequireEntries(bundleMemberNames, len(bundleMemberNames)); err != nil {
+	memberNames := bundleNames(manifest)
+	if err := stage.RequireEntries(memberNames, len(memberNames)); err != nil {
 		return Manifest{}, err
 	}
 	if err := stage.Sync(); err != nil {
@@ -474,7 +544,7 @@ func createWithHooks(
 	}
 	stableStageInfo, stageStatErr := stage.PinnedInfo()
 	publishedInfo, statErr := published.PinnedInfo()
-	entriesErr := published.RequireEntries(bundleMemberNames, len(bundleMemberNames))
+	entriesErr := published.RequireEntries(memberNames, len(memberNames))
 	if stageStatErr != nil || statErr != nil || entriesErr != nil {
 		publishedCloseErr := published.Close()
 		return Manifest{}, fmt.Errorf(
@@ -536,8 +606,12 @@ func Verify(
 		return Manifest{}, fmt.Errorf("verify control-plane backup: open bundle: %w", err)
 	}
 	defer func() { returnedErr = errors.Join(returnedErr, bundle.Close()) }()
-	if err := bundle.RequireEntries(bundleMemberNames, len(bundleMemberNames)); err != nil {
-		return Manifest{}, fmt.Errorf("verify control-plane backup: %w", err)
+	entries, err := bundle.List(len(bundleMemberNames) + 1)
+	if err != nil {
+		return Manifest{}, fmt.Errorf("verify control-plane backup: invalid bundle entries: %w", err)
+	}
+	if !slices.Contains(entries, manifestFilename) {
+		return Manifest{}, errors.New("verify control-plane backup: manifest is missing")
 	}
 	manifestMember, err := inspectMember(ctx, bundle, manifestFilename, privatefs.FilePolicy{
 		AllowedModes: privateMode,
@@ -554,6 +628,20 @@ func Verify(
 	}
 	if err := validateManifestRelease(manifest, expected); err != nil {
 		return Manifest{}, err
+	}
+	memberNames := bundleNames(manifest)
+	if err := bundle.RequireEntries(memberNames, len(memberNames)); err != nil {
+		return Manifest{}, fmt.Errorf("verify control-plane backup: %w", err)
+	}
+	if manifest.SearchArtifacts != nil {
+		if err := verifySearchArtifactDirectory(
+			ctx,
+			bundle,
+			searchArtifactsFilename,
+			*manifest.SearchArtifacts,
+		); err != nil {
+			return Manifest{}, fmt.Errorf("verify control-plane backup search artifacts: %w", err)
+		}
 	}
 	databaseMember, err := inspectMember(
 		ctx,
@@ -620,7 +708,7 @@ func Verify(
 		manifest.SQLiteMigrationLedgerSHA256 {
 		return Manifest{}, errors.New("control-plane backup SQLite migration ledger does not match its manifest")
 	}
-	if err := bundle.RequireEntries(bundleMemberNames, len(bundleMemberNames)); err != nil {
+	if err := bundle.RequireEntries(memberNames, len(memberNames)); err != nil {
 		return Manifest{}, fmt.Errorf("verify control-plane backup after SQLite inspection: %w", err)
 	}
 	if err := bundle.Revalidate(); err != nil {
@@ -669,6 +757,9 @@ func PreflightRestore(ctx context.Context, options RestoreOptions) (returnedErr 
 		return err
 	}
 	if err := validateRestoreStageFiles(plan.destination, entries, plan.stageNames); err != nil {
+		return err
+	}
+	if err := preflightRestoreSearchArtifacts(ctx, &plan, entries); err != nil {
 		return err
 	}
 	if _, err := inspectRestorePrefix(
@@ -721,6 +812,9 @@ func restoreWithHooks(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if err := cleanupRestoreSearchArtifactStage(&plan, options.DatabaseLock); err != nil {
+		return err
+	}
 	if err := cleanupRestoreStagesWithHooks(
 		plan.destination,
 		plan.stageNames,
@@ -729,6 +823,9 @@ func restoreWithHooks(
 		options.DatabaseLock,
 		cleanupRestoreStagesHooks{},
 	); err != nil {
+		return err
+	}
+	if err := ensureRestoredSearchArtifacts(ctx, &plan, options.DatabaseLock); err != nil {
 		return err
 	}
 	prefix, err := inspectRestorePrefix(
@@ -1065,6 +1162,26 @@ func openRestorePlan(
 	}
 	plan.source = source
 	plan.destination = destination
+	artifactPath := filepath.Join(targets.searchArtifactParent, targets.searchArtifactName)
+	if manifest.SearchArtifacts != nil && pathsOverlap(artifactPath, options.Source) {
+		return restorePlan{}, errors.New(errorPrefix + ": search-artifact destination must not overlap the backup source")
+	}
+	if manifest.SearchArtifacts != nil && targets.searchArtifactParent != targets.parentPath {
+		artifactDestination, openErr := privatefs.OpenDirectory(targets.searchArtifactParent)
+		if openErr != nil {
+			return restorePlan{}, fmt.Errorf("%s: open search-artifact destination: %w", errorPrefix, openErr)
+		}
+		artifactInfo, statErr := os.Stat(targets.searchArtifactParent)
+		if statErr != nil {
+			_ = artifactDestination.Close()
+			return restorePlan{}, fmt.Errorf("%s: inspect search-artifact destination: %w", errorPrefix, statErr)
+		}
+		if os.SameFile(sourceInfo, artifactInfo) || os.SameFile(destinationInfo, artifactInfo) {
+			_ = artifactDestination.Close()
+			return restorePlan{}, errors.New(errorPrefix + ": search-artifact destination must be a distinct directory")
+		}
+		plan.artifactDestination = artifactDestination
+	}
 	return plan, nil
 }
 
@@ -1122,17 +1239,35 @@ func buildRestorePlan(manifest Manifest, targets restoreTargets) (restorePlan, e
 	if targets.databaseLockName != "" {
 		namespaceNames = append(namespaceNames, targets.databaseLockName)
 	}
-	if err := validateRestoreNamespace(stageNames, namespaceNames); err != nil {
+	artifactStageName := ""
+	if manifest.SearchArtifacts != nil {
+		artifactStageName = ".restore-" + manifest.RecoverySetID + "-search-artifacts"
+		if targets.searchArtifactParent == targets.parentPath {
+			namespaceNames = append(namespaceNames, targets.searchArtifactName)
+		}
+	}
+	allStageNames := append([]string(nil), stageNames...)
+	if artifactStageName != "" && targets.searchArtifactParent == targets.parentPath {
+		allStageNames = append(allStageNames, artifactStageName)
+	}
+	if err := validateRestoreNamespace(allStageNames, namespaceNames); err != nil {
 		return restorePlan{}, err
 	}
-	knownNames := append(append([]string(nil), stageNames...), namespaceNames...)
+	if artifactStageName != "" && artifactStageName == targets.searchArtifactName {
+		return restorePlan{}, fmt.Errorf(
+			"restore control-plane backup: search-artifact target name %q conflicts with the recovery staging namespace",
+			targets.searchArtifactName,
+		)
+	}
+	knownNames := append(append([]string(nil), allStageNames...), namespaceNames...)
 	return restorePlan{
-		manifest:       manifest,
-		targets:        targets,
-		stageNames:     stageNames,
-		finalNames:     finalNames,
-		namespaceNames: namespaceNames,
-		knownNames:     knownNames,
+		manifest:          manifest,
+		targets:           targets,
+		stageNames:        stageNames,
+		finalNames:        finalNames,
+		namespaceNames:    namespaceNames,
+		knownNames:        knownNames,
+		artifactStageName: artifactStageName,
 	}, nil
 }
 
@@ -1161,7 +1296,24 @@ func validateRestoreTargets(options RestoreOptions) (restoreTargets, error) {
 	if databaseParent != keyParent || databaseParent != tokenParent {
 		return restoreTargets{}, errors.New("restore control-plane backup targets must share one exact parent directory")
 	}
+	artifactPath := searchArtifactDirectoryPath(
+		options.DatabasePath,
+		options.SearchArtifactDirectory,
+	)
+	artifactParent, artifactName, err := validateExactAbsolutePath(
+		"restored search-artifact directory",
+		artifactPath,
+	)
+	if err != nil {
+		return restoreTargets{}, err
+	}
+	if artifactParent != databaseParent && pathsOverlap(artifactPath, databaseParent) {
+		return restoreTargets{}, errors.New("restored search-artifact directory must not overlap the control-plane destination")
+	}
 	names := []string{databaseName, keyName, tokenName}
+	if artifactParent == databaseParent {
+		names = append(names, artifactName)
+	}
 	unique := make(map[string]struct{}, len(names))
 	for _, name := range names {
 		if _, exists := unique[name]; exists {
@@ -1204,7 +1356,21 @@ func validateRestoreTargets(options RestoreOptions) (restoreTargets, error) {
 		databaseLockName:       databaseLockName,
 		masterKeyName:          keyName,
 		administratorTokenName: tokenName,
+		searchArtifactParent:   artifactParent,
+		searchArtifactName:     artifactName,
 	}, nil
+}
+
+func pathsOverlap(left, right string) bool {
+	contains := func(parent, child string) bool {
+		relative, err := filepath.Rel(parent, child)
+		if err != nil {
+			return true
+		}
+		return relative == "." ||
+			(relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)))
+	}
+	return contains(left, right) || contains(right, left)
 }
 
 func restoreStageNames(recoverySetID string) []string {

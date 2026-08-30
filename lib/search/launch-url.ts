@@ -8,6 +8,14 @@ interface SearchLaunchOptions {
   timezone?: string;
 }
 
+export type SearchLaunchSource = "q" | "savedSearchId" | "historySearchId" | "searchJobId";
+
+export interface ParsedSearchLaunch {
+  source: SearchLaunchSource | null;
+  value: string | null;
+  run: boolean;
+}
+
 export const DEFAULT_SEARCH_HEAD_LIMIT = 10;
 
 export function boundedIndexSearchQuery(indexName: string): string {
@@ -31,7 +39,7 @@ export function searchLaunchHref(query: string, options: SearchLaunchOptions = {
   return `/search/?${parameters.toString()}`;
 }
 
-function objectLaunchHref(parameter: "savedSearchId" | "historySearchId", id: string, run = true): string {
+function objectLaunchHref(parameter: Exclude<SearchLaunchSource, "q">, id: string, run = true): string {
   const normalizedId = id.trim();
   if (normalizedId.length === 0) throw new TypeError("A persisted search ID is required.");
   const parameters = new URLSearchParams({
@@ -47,6 +55,48 @@ export function savedSearchLaunchHref(savedSearchId: string, run = true): string
 
 export function historySearchLaunchHref(searchJobId: string, run = true): string {
   return objectLaunchHref("historySearchId", searchJobId, run);
+}
+
+export function searchJobLaunchHref(searchJobId: string): string {
+  return objectLaunchHref("searchJobId", searchJobId, false);
+}
+
+/** Reads one canonical launch source and rejects ambiguous deep links. */
+export function parseSearchLaunch(parameters: URLSearchParams): ParsedSearchLaunch {
+  const candidates = (["q", "savedSearchId", "historySearchId", "searchJobId"] as const)
+    .flatMap((source) => parameters.getAll(source).map((rawValue) => ({
+      source,
+      value: source === "q" ? rawValue : rawValue.trim(),
+    })));
+  if (candidates.length > 1) {
+    throw new TypeError("A search launch URL must contain exactly one source.");
+  }
+  const candidate = candidates[0];
+  if (candidate !== undefined && candidate.value.trim().length === 0) {
+    throw new TypeError("A search launch source cannot be empty.");
+  }
+  return {
+    source: candidate?.source ?? null,
+    value: candidate?.value ?? null,
+    run: parameters.get("run") !== "0" && candidate?.source !== "searchJobId",
+  };
+}
+
+/** Replaces every launch-source parameter before installing the selected one. */
+export function replaceSearchLaunchSource(
+  parameters: URLSearchParams,
+  source: SearchLaunchSource,
+  value: string,
+  run = source !== "searchJobId",
+): URLSearchParams {
+  if (value.trim().length === 0) throw new TypeError("A search launch value is required.");
+  const normalized = source === "q" ? value : value.trim();
+  const next = new URLSearchParams(parameters);
+  for (const key of ["q", "savedSearchId", "historySearchId", "searchJobId"] as const) next.delete(key);
+  for (const key of ["earliest", "latest", "label", "timezone"] as const) next.delete(key);
+  next.set(source, normalized);
+  next.set("run", run ? "1" : "0");
+  return next;
 }
 
 export function splFromFindInput(value: string, defaultIndex = "gradethis"): string {

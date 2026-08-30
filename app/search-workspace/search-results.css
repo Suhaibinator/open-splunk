@@ -141,12 +141,6 @@
   top: -2px;
 }
 
-.pattern-table article > button {
-  background: transparent;
-  border: 0;
-  color: var(--fg-link);
-  font-size: var(--type-xs);
-}
 
 .severity-dot {
   border-radius: 50%;
@@ -516,18 +510,6 @@
   position: relative;
 }
 
-.chart-grid {
-  display: flex;
-  flex-direction: column;
-  inset: 0;
-  justify-content: space-around;
-  pointer-events: none;
-  position: absolute;
-}
-
-.chart-grid span {
-  border-top: 1px solid var(--border-subtle);
-}
 
 .line-chart-axis {
   bottom: 3px;
@@ -619,14 +601,6 @@
   stroke: var(--border-strong);
 }
 
-.time-series-chart__line {
-  fill: none;
-  stroke: var(--chart-series-1);
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: var(--chart-stroke-width, 2.25);
-  vector-effect: non-scaling-stroke;
-}
 
 .time-series-chart__inspect {
   appearance: none;

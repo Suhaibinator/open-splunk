@@ -373,12 +373,6 @@
   padding: 7px 9px;
 }
 
-.field-inspector > footer button {
-  background: transparent;
-  border: 0;
-  color: var(--fg-link);
-  font-size: var(--type-xs);
-}
 
 .event-results {
   background: var(--bg-surface);
@@ -764,12 +758,7 @@
   font-style: italic;
 }
 
-.event-field code {
-  font-size: var(--type-xxs);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+.event-field code { font-size: var(--type-xxs); }
 
 .event-field-actions {
   opacity: 0;

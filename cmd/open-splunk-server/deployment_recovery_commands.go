@@ -31,15 +31,16 @@ const (
 )
 
 type deploymentRecoveryBackupOptions struct {
-	DatabasePath           string
-	MasterKeyPath          string
-	AdministratorTokenPath string
-	Destination            string
-	ArchiveRoot            string
-	Address                string
-	PasswordFile           string
-	CACertFile             string
-	ServerName             string
+	DatabasePath            string
+	MasterKeyPath           string
+	AdministratorTokenPath  string
+	SearchArtifactDirectory string
+	Destination             string
+	ArchiveRoot             string
+	Address                 string
+	PasswordFile            string
+	CACertFile              string
+	ServerName              string
 }
 
 type deploymentRecoveryVerifyOptions struct {
@@ -48,15 +49,16 @@ type deploymentRecoveryVerifyOptions struct {
 }
 
 type deploymentRecoveryRestoreOptions struct {
-	Source                 string
-	ArchiveRoot            string
-	DatabasePath           string
-	MasterKeyPath          string
-	AdministratorTokenPath string
-	Address                string
-	PasswordFile           string
-	CACertFile             string
-	ServerName             string
+	Source                  string
+	ArchiveRoot             string
+	DatabasePath            string
+	MasterKeyPath           string
+	AdministratorTokenPath  string
+	SearchArtifactDirectory string
+	Address                 string
+	PasswordFile            string
+	CACertFile              string
+	ServerName              string
 }
 
 type deploymentRecoverySession interface {
@@ -201,6 +203,7 @@ func parseBackupDeploymentRecoverySetOptions(
 	flags.StringVar(&options.DatabasePath, "control-db", "", "absolute stopped-server SQLite database path")
 	flags.StringVar(&options.MasterKeyPath, "master-key", "", "absolute matching server master-key path")
 	flags.StringVar(&options.AdministratorTokenPath, "administrator-token-file", "", "absolute matching administrator-token path")
+	flags.StringVar(&options.SearchArtifactDirectory, "search-artifact-directory", "", "absolute retained-search directory (default: <control-db>.search-artifacts when present)")
 	flags.StringVar(&options.Destination, "destination", "", "absolute new private recovery-set directory")
 	flags.StringVar(&options.ArchiveRoot, "archive-root", "", "absolute ClickHouse recovery archive root")
 	registerDeploymentRecoveryClickHouseFlags(flags, &options.Address, &options.PasswordFile, &options.CACertFile, &options.ServerName, "backup")
@@ -220,6 +223,11 @@ func parseBackupDeploymentRecoverySetOptions(
 		{name: "-ca-cert", value: options.CACertFile},
 	}); err != nil {
 		return deploymentRecoveryBackupOptions{}, err
+	}
+	if options.SearchArtifactDirectory != "" {
+		if err := validateDeploymentRecoveryPaths("backup deployment recovery set", []deploymentRecoveryPath{{name: "-search-artifact-directory", value: options.SearchArtifactDirectory}}); err != nil {
+			return deploymentRecoveryBackupOptions{}, err
+		}
 	}
 	if err := validateDeploymentRecoveryConnectionFields("backup deployment recovery set", options.Address, options.ServerName); err != nil {
 		return deploymentRecoveryBackupOptions{}, err
@@ -261,6 +269,7 @@ func parseRestoreDeploymentRecoverySetOptions(
 	flags.StringVar(&options.DatabasePath, "control-db", "", "absolute absent or exactly resumed SQLite database path")
 	flags.StringVar(&options.MasterKeyPath, "master-key", "", "absolute absent or exactly resumed server master-key path")
 	flags.StringVar(&options.AdministratorTokenPath, "administrator-token-file", "", "absolute absent or exactly resumed administrator-token path")
+	flags.StringVar(&options.SearchArtifactDirectory, "search-artifact-directory", "", "absolute absent or exactly resumed retained-search directory (default: <control-db>.search-artifacts)")
 	registerDeploymentRecoveryClickHouseFlags(flags, &options.Address, &options.PasswordFile, &options.CACertFile, &options.ServerName, "restore")
 	if err := flags.Parse(arguments); err != nil {
 		return deploymentRecoveryRestoreOptions{}, fmt.Errorf("restore deployment recovery set: parse flags: %w", err)
@@ -278,6 +287,11 @@ func parseRestoreDeploymentRecoverySetOptions(
 		{name: "-ca-cert", value: options.CACertFile},
 	}); err != nil {
 		return deploymentRecoveryRestoreOptions{}, err
+	}
+	if options.SearchArtifactDirectory != "" {
+		if err := validateDeploymentRecoveryPaths("restore deployment recovery set", []deploymentRecoveryPath{{name: "-search-artifact-directory", value: options.SearchArtifactDirectory}}); err != nil {
+			return deploymentRecoveryRestoreOptions{}, err
+		}
 	}
 	if err := validateDeploymentRecoveryConnectionFields("restore deployment recovery set", options.Address, options.ServerName); err != nil {
 		return deploymentRecoveryRestoreOptions{}, err
@@ -388,13 +402,14 @@ func runBackupDeploymentRecoverySetWithDependencies(
 	}
 
 	createOptions := recoveryset.CreateOptions{
-		DatabasePath:           options.DatabasePath,
-		MasterKeyPath:          options.MasterKeyPath,
-		AdministratorTokenPath: options.AdministratorTokenPath,
-		Destination:            options.Destination,
-		ArchiveRoot:            options.ArchiveRoot,
-		ArchiveOwnership:       deploymentRecoveryArchiveOwnership(),
-		Release:                release,
+		DatabasePath:            options.DatabasePath,
+		MasterKeyPath:           options.MasterKeyPath,
+		AdministratorTokenPath:  options.AdministratorTokenPath,
+		SearchArtifactDirectory: options.SearchArtifactDirectory,
+		Destination:             options.Destination,
+		ArchiveRoot:             options.ArchiveRoot,
+		ArchiveOwnership:        deploymentRecoveryArchiveOwnership(),
+		Release:                 release,
 		NativeBackup: func(
 			callbackContext context.Context,
 			request recoveryset.NativeBackupRequest,
@@ -476,14 +491,15 @@ func runRestoreDeploymentRecoverySetWithDependencies(
 		return fmt.Errorf("restore deployment recovery set: verify before mutation: %w", err)
 	}
 	controlRestoreOptions := controlbackup.RestoreOptions{
-		Source:                 filepath.Join(options.Source, verification.Manifest.ControlPlane.Directory),
-		DatabasePath:           options.DatabasePath,
-		DatabaseLock:           databaseLock,
-		MasterKeyPath:          options.MasterKeyPath,
-		AdministratorTokenPath: options.AdministratorTokenPath,
-		Release:                release,
-		ExpectedRecoverySetID:  verification.Manifest.RecoverySetID,
-		ExpectedManifestSHA256: verification.Manifest.ControlPlane.Manifest.SHA256,
+		Source:                  filepath.Join(options.Source, verification.Manifest.ControlPlane.Directory),
+		DatabasePath:            options.DatabasePath,
+		DatabaseLock:            databaseLock,
+		MasterKeyPath:           options.MasterKeyPath,
+		AdministratorTokenPath:  options.AdministratorTokenPath,
+		SearchArtifactDirectory: options.SearchArtifactDirectory,
+		Release:                 release,
+		ExpectedRecoverySetID:   verification.Manifest.RecoverySetID,
+		ExpectedManifestSHA256:  verification.Manifest.ControlPlane.Manifest.SHA256,
 	}
 	if err := dependencies.preflightControlPlane(ctx, controlRestoreOptions); err != nil {
 		return fmt.Errorf("restore deployment recovery set: preflight control plane before ClickHouse mutation: %w", err)

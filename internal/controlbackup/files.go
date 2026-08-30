@@ -348,45 +348,64 @@ func prepareExactBundleCleanup(
 	parent *privatefs.Directory,
 	name string,
 	child *privatefs.Directory,
-) ([]pinnedCleanupFile, error) {
+) (files []pinnedCleanupFile, artifacts *privatefs.Directory, returnedErr error) {
 	if parent == nil {
-		return nil, errors.New("prepare created control-plane bundle removal: parent is required")
+		return nil, nil, errors.New("prepare created control-plane bundle removal: parent is required")
 	}
 	if err := privatefs.ValidateComponent(name); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if child == nil {
-		return nil, errors.New(
+		return nil, nil, errors.New(
 			"prepare created control-plane bundle removal: pinned child is required",
 		)
 	}
 	if err := parent.RequirePinnedChildDirectory(name, child); err != nil {
-		return nil, fmt.Errorf(
+		return nil, nil, fmt.Errorf(
 			"prepare created control-plane bundle removal: bind pinned child: %w",
 			err,
 		)
 	}
 	entries, err := child.List(len(bundleStageCleanupNames))
 	if err != nil {
-		return nil, fmt.Errorf(
+		return nil, nil, fmt.Errorf(
 			"prepare created control-plane bundle removal: inventory child: %w",
 			err,
 		)
 	}
 	for _, entry := range entries {
 		if !slices.Contains(bundleStageCleanupNames, entry) {
-			return nil, fmt.Errorf(
+			return nil, nil, fmt.Errorf(
 				"prepare created control-plane bundle removal: unexpected child entry %q",
 				entry,
 			)
 		}
 	}
 
-	files := make([]pinnedCleanupFile, 0, len(entries))
+	files = make([]pinnedCleanupFile, 0, len(entries))
 	for _, entry := range entries {
+		if entry == searchArtifactsFilename {
+			artifactDirectory, openErr := openPinnedChild(child, entry)
+			if openErr != nil {
+				return nil, nil, errors.Join(openErr, closePinnedCleanupFiles(files))
+			}
+			if _, _, inspectErr := inspectSearchArtifactDirectory(
+				context.Background(),
+				artifactDirectory,
+				false,
+			); inspectErr != nil {
+				return nil, nil, errors.Join(
+					inspectErr,
+					artifactDirectory.Close(),
+					closePinnedCleanupFiles(files),
+				)
+			}
+			artifacts = artifactDirectory
+			continue
+		}
 		file, openErr := child.OpenRegular(entry, anySizePrivateFilePolicy)
 		if openErr != nil {
-			return nil, errors.Join(
+			return nil, nil, errors.Join(
 				fmt.Errorf(
 					"prepare created control-plane bundle removal: open child entry %q: %w",
 					entry,
@@ -399,26 +418,36 @@ func prepareExactBundleCleanup(
 	}
 	for _, member := range files {
 		if err := child.RequirePinnedRegular(member.name, member.file); err != nil {
-			return nil, errors.Join(
+			var artifactCloseErr error
+			if artifacts != nil {
+				artifactCloseErr = artifacts.Close()
+			}
+			return nil, nil, errors.Join(
 				fmt.Errorf(
 					"prepare created control-plane bundle removal: bind child entry %q: %w",
 					member.name,
 					err,
 				),
 				closePinnedCleanupFiles(files),
+				artifactCloseErr,
 			)
 		}
 	}
 	if err := parent.RequirePinnedChildDirectory(name, child); err != nil {
-		return nil, errors.Join(
+		var artifactCloseErr error
+		if artifacts != nil {
+			artifactCloseErr = artifacts.Close()
+		}
+		return nil, nil, errors.Join(
 			fmt.Errorf(
 				"prepare created control-plane bundle removal: rebind pinned child: %w",
 				err,
 			),
 			closePinnedCleanupFiles(files),
+			artifactCloseErr,
 		)
 	}
-	return files, nil
+	return files, artifacts, nil
 }
 
 // ValidateCreatedBundleForRemoval performs the complete non-mutating preflight
@@ -430,11 +459,15 @@ func ValidateCreatedBundleForRemoval(
 	name string,
 	child *privatefs.Directory,
 ) error {
-	files, err := prepareExactBundleCleanup(parent, name, child)
+	files, artifacts, err := prepareExactBundleCleanup(parent, name, child)
 	if err != nil {
 		return err
 	}
-	if err := closePinnedCleanupFiles(files); err != nil {
+	var artifactCloseErr error
+	if artifacts != nil {
+		artifactCloseErr = artifacts.Close()
+	}
+	if err := errors.Join(closePinnedCleanupFiles(files), artifactCloseErr); err != nil {
 		return fmt.Errorf("validate created control-plane bundle removal: %w", err)
 	}
 	return nil
@@ -449,13 +482,22 @@ func RemoveCreatedBundle(
 	name string,
 	child *privatefs.Directory,
 ) (returnedErr error) {
-	files, err := prepareExactBundleCleanup(parent, name, child)
+	files, artifacts, err := prepareExactBundleCleanup(parent, name, child)
 	if err != nil {
 		return fmt.Errorf("remove created control-plane bundle: %w", err)
 	}
 	defer func() {
-		returnedErr = errors.Join(returnedErr, closePinnedCleanupFiles(files))
+		var artifactCloseErr error
+		if artifacts != nil {
+			artifactCloseErr = artifacts.Close()
+		}
+		returnedErr = errors.Join(returnedErr, closePinnedCleanupFiles(files), artifactCloseErr)
 	}()
+	if artifacts != nil {
+		if err := removeSearchArtifactDirectory(child, searchArtifactsFilename, artifacts); err != nil {
+			return fmt.Errorf("remove created control-plane bundle: remove search artifacts: %w", err)
+		}
+	}
 
 	for index := range files {
 		member := &files[index]

@@ -48,6 +48,9 @@ options may subsequently apply a documented derived-default rule.
 | `OPEN_SPLUNK_SERVER_MASTER_KEY_FILE` | `-master-key-file` | `<control-database-file>.key` | Select the server master key bound to the control database. | File path. A missing key is generated as 32 bytes with mode `0600`; an existing key must contain exactly 32 bytes. Preserve it with the control database. |
 | `OPEN_SPLUNK_SERVER_LOCK_FILE` | `-server-lock-file` | `/tmp/open-splunk-server-open_splunk.server.lock` | Select the host-wide singleton lock that fences the canonical ClickHouse schema. | Exact absolute path. A custom path must be inside an existing private directory. |
 | `OPEN_SPLUNK_SERVER_EXPORT_ARTIFACT_DIRECTORY` | `-export-artifact-directory` | `<control-database-file>.exports` | Select the private directory for generated export artifacts. | Valid UTF-8 path without NUL bytes; must resolve to a dedicated non-root directory and must not escape through a leading `..`. |
+| `OPEN_SPLUNK_SERVER_SEARCH_ARTIFACT_DIRECTORY` | `-search-artifact-directory` | `<control-database-file>.search-artifacts` | Select the private directory for durable retained-search results. | Dedicated non-root directory owned by the server user. It is exclusively locked while the server runs and stores owner-only files with checksums. |
+| `OPEN_SPLUNK_SERVER_ALERT_PUBLIC_BASE_URL` | `-alert-public-base-url` | disabled | Supply absolute links in webhook payloads and permit alert enabling. | Absolute `http://` or `https://` URL reachable by webhook receivers; HTTPS is recommended outside trusted local development. Alerts may be configured while absent but cannot be enabled. |
+| `OPEN_SPLUNK_SERVER_ALERT_PRIVATE_WEBHOOK_HOSTS` | `-alert-private-webhook-hosts` | empty | Permit named webhook receivers whose validated address is private, loopback, or link-local. | Comma-separated exact DNS hostnames; public HTTPS destinations need no entry. |
 | `OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN` | `-administrator-token` | None; required unless a token file is used | Configure the browser administrator bearer token. | Token68 ASCII, 32–512 bytes, without a `Bearer ` prefix or whitespace; trailing `=` padding is allowed. Mutually exclusive with the token-file setting at the same tier. The environment value is removed after parsing. |
 | `OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN_FILE` | `-administrator-token-file` | None; required unless a raw token is used | Read the browser administrator token from a file. | Regular file owned by the server user, exactly mode `0400` or `0600`, with one hard link. One trailing LF or CRLF is removed. Mutually exclusive with the raw token at the same tier. |
 | `OPEN_SPLUNK_SERVER_CLICKHOUSE_ADDRESS` | `-clickhouse-address` | `127.0.0.1:9000` | Select the ClickHouse native-protocol endpoint. | Non-empty native endpoint, normally `host:port`. In Compose, use the service name and container port rather than a host-published port. |
@@ -373,7 +376,7 @@ Verified TLS remains available for non-Compose or customized deployments via
 ## Persistent state
 
 The Compose service persists the SQLite control plane, generated master key,
-singleton lock, and export artifacts in named volumes. ClickHouse data remains
-owned by the existing ClickHouse service. The default Compose deployment does
-not configure backup or restore jobs; back up both systems using your normal
-infrastructure procedures.
+singleton lock, retained-search artifacts, and export artifacts in named
+volumes. ClickHouse data remains owned by the existing ClickHouse service. The
+default Compose deployment does not configure backup or restore jobs; back up
+both systems using your normal infrastructure procedures.

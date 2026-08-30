@@ -17,6 +17,8 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/server"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 const (
@@ -79,6 +81,31 @@ func TestRuntimeSearchAttemptAuditSurvivesHistoryDeleteAndStoreReopen(t *testing
 	if historyEntry.GetFinalState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_FAILED ||
 		historyEntry.GetFailure().GetCode() != opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_INVALID_SPL {
 		t.Fatalf("parse-invalid search history = %+v", historyEntry)
+	}
+	select {
+	case notification := <-first.failureReported:
+		if notification.Coalesced != 0 ||
+			notification.Report.JobID != historyEntry.GetSearchJobId() ||
+			notification.Report.Code != searchjobs.FailureInvalidSPL ||
+			notification.Report.Message != historyEntry.GetFailure().GetMessage() {
+			t.Fatalf("failure log/history correlation = notification %+v, history %+v", notification, historyEntry)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for correlated failure log")
+	}
+	failureLog := first.failureLog.String()
+	for _, want := range []string{
+		`"msg":"search failed"`,
+		`"job_id":"` + runtimeSearchAttemptAuditJobID + `"`,
+		`"failure_code":"invalid_spl"`,
+		`"cause_class":"spl_parsing"`,
+	} {
+		if !strings.Contains(failureLog, want) {
+			t.Fatalf("runtime failure log %q does not contain %q", failureLog, want)
+		}
+	}
+	if strings.Contains(failureLog, runtimeSearchAttemptAuditSPLCanary) {
+		t.Fatalf("runtime failure log disclosed SPL: %q", failureLog)
 	}
 
 	var deletedResponse opensplunk.DeleteSearchHistoryEntryResponse
@@ -249,11 +276,13 @@ func TestRuntimeSearchAdmissionFailsClosedWithoutAttemptAuditJournal(t *testing.
 }
 
 type runtimeSearchAttemptAuditFixture struct {
-	database *control.DB
-	history  *searchhistory.Store
-	jobs     *searchjobs.Manager
-	handler  *server.Handler
-	closed   bool
+	database        *control.DB
+	history         *searchhistory.Store
+	jobs            *searchjobs.Manager
+	handler         *server.Handler
+	failureLog      *bytes.Buffer
+	failureReported chan searchjobs.FailureNotification
+	closed          bool
 }
 
 func openRuntimeSearchAttemptAuditFixture(
@@ -310,6 +339,13 @@ func openRuntimeSearchAttemptAuditFixture(
 	if err != nil {
 		t.Fatal(err)
 	}
+	failureLog := &bytes.Buffer{}
+	failureLogger := zap.New(zapcore.NewCore(
+		zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig()),
+		zapcore.AddSync(failureLog),
+		zap.DebugLevel,
+	))
+	failureReported := make(chan searchjobs.FailureNotification, 1)
 	jobs, err := searchjobs.New(searchjobs.Config{
 		Executor:        runtimeSearchAttemptAuditExecutor{},
 		Snapshotter:     runtimeSearchAttemptAuditSnapshotter(23),
@@ -322,12 +358,18 @@ func openRuntimeSearchAttemptAuditFixture(
 		NewID: func() string {
 			return runtimeSearchAttemptAuditJobID
 		},
+		OnFailure: func(notification searchjobs.FailureNotification) {
+			logSearchFailure(failureLogger, notification)
+			failureReported <- notification
+		},
 		CursorKey: bytes.Repeat([]byte("j"), 32),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	fixture.jobs = jobs
+	fixture.failureLog = failureLog
+	fixture.failureReported = failureReported
 	fixture.handler = newRuntimeSearchAttemptAuditHandler(
 		t,
 		runtimeSearchAttemptAuditAuthenticator(t, bearerToken),

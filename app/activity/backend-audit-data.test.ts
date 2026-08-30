@@ -523,9 +523,8 @@ test("activity layouts preserve capability tabs and mobile job metadata", () => 
   // not about any one file, so it is asserted against computed style in
   // integration/style-contracts/css-contracts.spec.ts ("activity job table contracts"),
   // beside the `.live-jobs-table` contracts. Matching the stylesheet's
-  // characters here pinned the rule to a file: Phase 4 moved it from
-  // app/globals.css to app/styles/primitives/table.css, and Phase 5 may move it
-  // again, breaking this test on a change that renders no differently.
+  // characters here would pin the rule to a file, breaking this test if the
+  // implementation moved without changing what the browser renders.
 });
 
 test("search-attempt requests include only exact actor and owner filters", () => {

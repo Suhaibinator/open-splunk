@@ -20,10 +20,16 @@ import {
   SearchDefinition,
   SearchJob,
   SearchJobOptions,
+  SearchJobRetentionClass,
+  searchJobRetentionClassFromJSON,
+  searchJobRetentionClassToJSON,
   SearchJobSource,
   SearchJobState,
   searchJobStateFromJSON,
   searchJobStateToJSON,
+  SearchJobVisibility,
+  searchJobVisibilityFromJSON,
+  searchJobVisibilityToJSON,
 } from "./search";
 
 export enum SearchSuggestionKind {
@@ -205,6 +211,40 @@ export interface CancelSearchJobRequest {
 }
 
 export interface CancelSearchJobResponse {
+  searchJob: SearchJob | undefined;
+}
+
+/** POST /api/search/jobs/settings/get */
+export interface GetSearchJobSettingsRequest {
+  searchJobId: string;
+}
+
+export interface GetSearchJobSettingsResponse {
+  searchJob: SearchJob | undefined;
+}
+
+/** POST /api/search/jobs/settings/update */
+export interface UpdateSearchJobSettingsRequest {
+  searchJobId: string;
+  expectedStateVersion: bigint;
+  visibility: SearchJobVisibility;
+  retentionClass: SearchJobRetentionClass;
+}
+
+export interface UpdateSearchJobSettingsResponse {
+  searchJob: SearchJob | undefined;
+}
+
+/**
+ * POST /api/search/jobs/share atomically makes one retained result available
+ * to Everyone and changes its sliding lifetime to seven days.
+ */
+export interface ShareSearchJobRequest {
+  searchJobId: string;
+  expectedStateVersion: bigint;
+}
+
+export interface ShareSearchJobResponse {
   searchJob: SearchJob | undefined;
 }
 
@@ -1882,6 +1922,540 @@ export const CancelSearchJobResponse: MessageFns<CancelSearchJobResponse> = {
   },
   fromPartial<I extends Exact<DeepPartial<CancelSearchJobResponse>, I>>(object: I): CancelSearchJobResponse {
     const message = createBaseCancelSearchJobResponse();
+    message.searchJob = (object.searchJob !== undefined && object.searchJob !== null)
+      ? SearchJob.fromPartial(object.searchJob)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseGetSearchJobSettingsRequest(): GetSearchJobSettingsRequest {
+  return { searchJobId: "" };
+}
+
+export const GetSearchJobSettingsRequest: MessageFns<GetSearchJobSettingsRequest> = {
+  encode(message: GetSearchJobSettingsRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.searchJobId !== "") {
+      writer.uint32(10).string(message.searchJobId);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): GetSearchJobSettingsRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseGetSearchJobSettingsRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.searchJobId = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): GetSearchJobSettingsRequest {
+    return {
+      searchJobId: isSet(object.searchJobId)
+        ? globalThis.String(object.searchJobId)
+        : isSet(object.search_job_id)
+        ? globalThis.String(object.search_job_id)
+        : "",
+    };
+  },
+
+  toJSON(message: GetSearchJobSettingsRequest): unknown {
+    const obj: any = {};
+    if (message.searchJobId !== "") {
+      obj.searchJobId = message.searchJobId;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GetSearchJobSettingsRequest>, I>>(base?: I): GetSearchJobSettingsRequest {
+    return GetSearchJobSettingsRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GetSearchJobSettingsRequest>, I>>(object: I): GetSearchJobSettingsRequest {
+    const message = createBaseGetSearchJobSettingsRequest();
+    message.searchJobId = object.searchJobId ?? "";
+    return message;
+  },
+};
+
+function createBaseGetSearchJobSettingsResponse(): GetSearchJobSettingsResponse {
+  return { searchJob: undefined };
+}
+
+export const GetSearchJobSettingsResponse: MessageFns<GetSearchJobSettingsResponse> = {
+  encode(message: GetSearchJobSettingsResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.searchJob !== undefined) {
+      SearchJob.encode(message.searchJob, writer.uint32(10).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): GetSearchJobSettingsResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseGetSearchJobSettingsResponse();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.searchJob = SearchJob.decode(reader, reader.uint32());
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): GetSearchJobSettingsResponse {
+    return {
+      searchJob: isSet(object.searchJob)
+        ? SearchJob.fromJSON(object.searchJob)
+        : isSet(object.search_job)
+        ? SearchJob.fromJSON(object.search_job)
+        : undefined,
+    };
+  },
+
+  toJSON(message: GetSearchJobSettingsResponse): unknown {
+    const obj: any = {};
+    if (message.searchJob !== undefined) {
+      obj.searchJob = SearchJob.toJSON(message.searchJob);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GetSearchJobSettingsResponse>, I>>(base?: I): GetSearchJobSettingsResponse {
+    return GetSearchJobSettingsResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GetSearchJobSettingsResponse>, I>>(object: I): GetSearchJobSettingsResponse {
+    const message = createBaseGetSearchJobSettingsResponse();
+    message.searchJob = (object.searchJob !== undefined && object.searchJob !== null)
+      ? SearchJob.fromPartial(object.searchJob)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseUpdateSearchJobSettingsRequest(): UpdateSearchJobSettingsRequest {
+  return { searchJobId: "", expectedStateVersion: 0n, visibility: 0, retentionClass: 0 };
+}
+
+export const UpdateSearchJobSettingsRequest: MessageFns<UpdateSearchJobSettingsRequest> = {
+  encode(message: UpdateSearchJobSettingsRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.searchJobId !== "") {
+      writer.uint32(10).string(message.searchJobId);
+    }
+    if (message.expectedStateVersion !== 0n) {
+      if (BigInt.asUintN(64, message.expectedStateVersion) !== message.expectedStateVersion) {
+        throw new globalThis.Error("value provided for field message.expectedStateVersion of type uint64 too large");
+      }
+      writer.uint32(16).uint64(message.expectedStateVersion);
+    }
+    if (message.visibility !== 0) {
+      writer.uint32(24).int32(message.visibility);
+    }
+    if (message.retentionClass !== 0) {
+      writer.uint32(32).int32(message.retentionClass);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): UpdateSearchJobSettingsRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseUpdateSearchJobSettingsRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.searchJobId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.expectedStateVersion = reader.uint64() as bigint;
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.visibility = reader.int32() as any;
+            continue;
+          }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+
+            message.retentionClass = reader.int32() as any;
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): UpdateSearchJobSettingsRequest {
+    return {
+      searchJobId: isSet(object.searchJobId)
+        ? globalThis.String(object.searchJobId)
+        : isSet(object.search_job_id)
+        ? globalThis.String(object.search_job_id)
+        : "",
+      expectedStateVersion: isSet(object.expectedStateVersion)
+        ? BigInt(object.expectedStateVersion)
+        : isSet(object.expected_state_version)
+        ? BigInt(object.expected_state_version)
+        : 0n,
+      visibility: isSet(object.visibility) ? searchJobVisibilityFromJSON(object.visibility) : 0,
+      retentionClass: isSet(object.retentionClass)
+        ? searchJobRetentionClassFromJSON(object.retentionClass)
+        : isSet(object.retention_class)
+        ? searchJobRetentionClassFromJSON(object.retention_class)
+        : 0,
+    };
+  },
+
+  toJSON(message: UpdateSearchJobSettingsRequest): unknown {
+    const obj: any = {};
+    if (message.searchJobId !== "") {
+      obj.searchJobId = message.searchJobId;
+    }
+    if (message.expectedStateVersion !== 0n) {
+      obj.expectedStateVersion = message.expectedStateVersion.toString();
+    }
+    if (message.visibility !== 0) {
+      obj.visibility = searchJobVisibilityToJSON(message.visibility);
+    }
+    if (message.retentionClass !== 0) {
+      obj.retentionClass = searchJobRetentionClassToJSON(message.retentionClass);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<UpdateSearchJobSettingsRequest>, I>>(base?: I): UpdateSearchJobSettingsRequest {
+    return UpdateSearchJobSettingsRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<UpdateSearchJobSettingsRequest>, I>>(
+    object: I,
+  ): UpdateSearchJobSettingsRequest {
+    const message = createBaseUpdateSearchJobSettingsRequest();
+    message.searchJobId = object.searchJobId ?? "";
+    message.expectedStateVersion = (object.expectedStateVersion !== undefined && object.expectedStateVersion !== null)
+      ? BigInt(object.expectedStateVersion)
+      : 0n;
+    message.visibility = object.visibility ?? 0;
+    message.retentionClass = object.retentionClass ?? 0;
+    return message;
+  },
+};
+
+function createBaseUpdateSearchJobSettingsResponse(): UpdateSearchJobSettingsResponse {
+  return { searchJob: undefined };
+}
+
+export const UpdateSearchJobSettingsResponse: MessageFns<UpdateSearchJobSettingsResponse> = {
+  encode(message: UpdateSearchJobSettingsResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.searchJob !== undefined) {
+      SearchJob.encode(message.searchJob, writer.uint32(10).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): UpdateSearchJobSettingsResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseUpdateSearchJobSettingsResponse();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.searchJob = SearchJob.decode(reader, reader.uint32());
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): UpdateSearchJobSettingsResponse {
+    return {
+      searchJob: isSet(object.searchJob)
+        ? SearchJob.fromJSON(object.searchJob)
+        : isSet(object.search_job)
+        ? SearchJob.fromJSON(object.search_job)
+        : undefined,
+    };
+  },
+
+  toJSON(message: UpdateSearchJobSettingsResponse): unknown {
+    const obj: any = {};
+    if (message.searchJob !== undefined) {
+      obj.searchJob = SearchJob.toJSON(message.searchJob);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<UpdateSearchJobSettingsResponse>, I>>(base?: I): UpdateSearchJobSettingsResponse {
+    return UpdateSearchJobSettingsResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<UpdateSearchJobSettingsResponse>, I>>(
+    object: I,
+  ): UpdateSearchJobSettingsResponse {
+    const message = createBaseUpdateSearchJobSettingsResponse();
+    message.searchJob = (object.searchJob !== undefined && object.searchJob !== null)
+      ? SearchJob.fromPartial(object.searchJob)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseShareSearchJobRequest(): ShareSearchJobRequest {
+  return { searchJobId: "", expectedStateVersion: 0n };
+}
+
+export const ShareSearchJobRequest: MessageFns<ShareSearchJobRequest> = {
+  encode(message: ShareSearchJobRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.searchJobId !== "") {
+      writer.uint32(10).string(message.searchJobId);
+    }
+    if (message.expectedStateVersion !== 0n) {
+      if (BigInt.asUintN(64, message.expectedStateVersion) !== message.expectedStateVersion) {
+        throw new globalThis.Error("value provided for field message.expectedStateVersion of type uint64 too large");
+      }
+      writer.uint32(16).uint64(message.expectedStateVersion);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ShareSearchJobRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseShareSearchJobRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.searchJobId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.expectedStateVersion = reader.uint64() as bigint;
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): ShareSearchJobRequest {
+    return {
+      searchJobId: isSet(object.searchJobId)
+        ? globalThis.String(object.searchJobId)
+        : isSet(object.search_job_id)
+        ? globalThis.String(object.search_job_id)
+        : "",
+      expectedStateVersion: isSet(object.expectedStateVersion)
+        ? BigInt(object.expectedStateVersion)
+        : isSet(object.expected_state_version)
+        ? BigInt(object.expected_state_version)
+        : 0n,
+    };
+  },
+
+  toJSON(message: ShareSearchJobRequest): unknown {
+    const obj: any = {};
+    if (message.searchJobId !== "") {
+      obj.searchJobId = message.searchJobId;
+    }
+    if (message.expectedStateVersion !== 0n) {
+      obj.expectedStateVersion = message.expectedStateVersion.toString();
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ShareSearchJobRequest>, I>>(base?: I): ShareSearchJobRequest {
+    return ShareSearchJobRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ShareSearchJobRequest>, I>>(object: I): ShareSearchJobRequest {
+    const message = createBaseShareSearchJobRequest();
+    message.searchJobId = object.searchJobId ?? "";
+    message.expectedStateVersion = (object.expectedStateVersion !== undefined && object.expectedStateVersion !== null)
+      ? BigInt(object.expectedStateVersion)
+      : 0n;
+    return message;
+  },
+};
+
+function createBaseShareSearchJobResponse(): ShareSearchJobResponse {
+  return { searchJob: undefined };
+}
+
+export const ShareSearchJobResponse: MessageFns<ShareSearchJobResponse> = {
+  encode(message: ShareSearchJobResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.searchJob !== undefined) {
+      SearchJob.encode(message.searchJob, writer.uint32(10).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ShareSearchJobResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseShareSearchJobResponse();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.searchJob = SearchJob.decode(reader, reader.uint32());
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): ShareSearchJobResponse {
+    return {
+      searchJob: isSet(object.searchJob)
+        ? SearchJob.fromJSON(object.searchJob)
+        : isSet(object.search_job)
+        ? SearchJob.fromJSON(object.search_job)
+        : undefined,
+    };
+  },
+
+  toJSON(message: ShareSearchJobResponse): unknown {
+    const obj: any = {};
+    if (message.searchJob !== undefined) {
+      obj.searchJob = SearchJob.toJSON(message.searchJob);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ShareSearchJobResponse>, I>>(base?: I): ShareSearchJobResponse {
+    return ShareSearchJobResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ShareSearchJobResponse>, I>>(object: I): ShareSearchJobResponse {
+    const message = createBaseShareSearchJobResponse();
     message.searchJob = (object.searchJob !== undefined && object.searchJob !== null)
       ? SearchJob.fromPartial(object.searchJob)
       : undefined;

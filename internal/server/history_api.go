@@ -42,22 +42,22 @@ const (
 
 func (handler *apiHandler) searchHistoryRoutes(noAuth router.AuthLevel, smallRequestBytes int64) []protobufRouteDefinition {
 	return []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute[*opensplunk.GetSearchHistoryEntryRequest, *opensplunk.GetSearchHistoryEntryResponse](router.RouteConfig[*opensplunk.GetSearchHistoryEntryRequest, *opensplunk.GetSearchHistoryEntryResponse]{
+		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.GetSearchHistoryEntryRequest, *opensplunk.GetSearchHistoryEntryResponse]{
 			Path: "/search/history/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.GetSearchHistoryEntryRequest, *opensplunk.GetSearchHistoryEntryResponse](), Handler: handler.getSearchHistoryEntry,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunk.ListSearchHistoryRequest, *serializedSearchHistoryListResponse](router.RouteConfig[*opensplunk.ListSearchHistoryRequest, *serializedSearchHistoryListResponse]{
+		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.ListSearchHistoryRequest, *serializedSearchHistoryListResponse]{
 			Path: "/search/history/list", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedSearchHistoryListCodec(), Handler: handler.listSearchHistory,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunk.DeleteSearchHistoryEntryRequest, *opensplunk.DeleteSearchHistoryEntryResponse](router.RouteConfig[*opensplunk.DeleteSearchHistoryEntryRequest, *opensplunk.DeleteSearchHistoryEntryResponse]{
+		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.DeleteSearchHistoryEntryRequest, *opensplunk.DeleteSearchHistoryEntryResponse]{
 			Path: "/search/history/delete", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.DeleteSearchHistoryEntryRequest, *opensplunk.DeleteSearchHistoryEntryResponse](), Handler: handler.deleteSearchHistoryEntry,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunk.ClearSearchHistoryRequest, *opensplunk.ClearSearchHistoryResponse](router.RouteConfig[*opensplunk.ClearSearchHistoryRequest, *opensplunk.ClearSearchHistoryResponse]{
+		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.ClearSearchHistoryRequest, *opensplunk.ClearSearchHistoryResponse]{
 			Path: "/search/history/clear", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.ClearSearchHistoryRequest, *opensplunk.ClearSearchHistoryResponse](), Handler: handler.clearSearchHistory,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
