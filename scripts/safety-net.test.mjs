@@ -7,7 +7,7 @@
 // screenshot whose baseline was never committed only fails on the machine that
 // runs the suite -- while a baseline whose test was deleted lingers forever.
 //
-// The repository walk is borrowed from `scripts/css-inventory.mjs` rather than
+// The repository walk is borrowed from `scripts/style-inventory.mjs` rather than
 // duplicated; it skips dependency and build directories, which is exactly what
 // these checks need too.
 import assert from "node:assert/strict";
@@ -17,7 +17,7 @@ import process from "node:process";
 import test from "node:test";
 
 import { BACKEND_VISUAL_EXPORT, DEMO_VISUAL_EXPORT } from "./build-visual-exports.mjs";
-import { listRepositoryFiles, relativePosix } from "./css-inventory.mjs";
+import { listRepositoryFiles, relativePosix } from "./style-inventory.mjs";
 import { countRecordedScreenshots, parseDeterminismArguments } from "./visual-determinism.mjs";
 
 const workspace = process.cwd();

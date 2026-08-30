@@ -255,19 +255,40 @@ Baselines live in `integration/visual/__screenshots__/<platform>/<project>/`
 and are committed. They are platform-specific because font rasterization is:
 a machine whose platform has no directory there must generate its own set.
 
-Only a `darwin` set is committed today, so `npm run test:visual` is a
-developer-local gate: the `ubuntu-latest` CI runner has no baselines to compare
-against. Committing a `linux` set generated in the runner's own container is the
-work that puts this half of the net under CI. `npm run test:contracts` below has
-no such constraint and does run in CI.
+Only a `darwin` set is committed today, so CI runs this suite in a `visual` job
+of its own on `macos-latest` rather than in the `ubuntu-latest` `frontend` job,
+which has no baselines to compare against; the job uploads `test-results/visual`
+on failure so a red run hands back the expected image, the received image and
+the diff. Committing a `linux` set generated in the runner's own container is
+the work that would fold it back into the `frontend` job.
+`npm run test:contracts` below has no such constraint and runs there already.
+
+The two projects are `desktop` (1440x900) and `mobile` (760x1000), and every
+screenshot must have a baseline under both. The exceptions — surfaces that do
+not exist at the other viewport at all — are listed in
+`scripts/visual-baseline-projects.json`, which `scripts/safety-net.test.mjs`
+reads: it fails on a screenshot with no baseline, on an entry naming a project
+that does not exist, and on an entry naming a screenshot no spec pins any more.
+A missing baseline is otherwise silent on every machine but the one running the
+suite.
 
 The suite fails on a layout change but tolerates
 `maxDiffPixelRatio: 0.002`, so normalizing a color by one or two RGB units
-still passes. Update baselines only when a visual change is intended, review
-the regenerated PNGs, and describe the change in the commit body:
+still passes. **A CSS refactor that is a refactor updates no baseline.** When a
+change is a deliberate restyle, regenerate them, look at every regenerated PNG,
+and say in the commit body which surfaces moved and why:
 
 ```sh
 npm run test:visual -- --update-snapshots
+git add integration/visual/__screenshots__   # review the diff first
+```
+
+`--update-snapshots` writes a baseline for every screenshot it takes, including
+ones that were already correct, so run it after the change is final rather than
+while iterating. To regenerate one surface, pass the spec:
+
+```sh
+npm run test:visual -- --update-snapshots integration/visual/product-pages.visual.spec.ts
 ```
 
 Failure artifacts (actual, expected, and diff images) are written beneath
@@ -290,7 +311,7 @@ file `app/styles/index.css` imports, in that file's order, because `setContent`
 cannot resolve an `@import` inside an injected `<style>` and would otherwise
 render every `var()` as its fallback and every rule as nothing at all. The list
 is read out of `index.css` rather than restated, and
-`scripts/token-layer.test.mjs` asserts that it still is — and that every
+`scripts/style-invariants.test.mjs` asserts that it still is — and that every
 stylesheet under `app/` is in it. That assertion *runs* the harness's own
 `importedStylesheets` body and compares its result with `index.css`, rather than
 re-implementing the parse: re-implementing it compared `index.css` with itself,
@@ -349,24 +370,42 @@ When it fails, pin whatever varies rather than widening a tolerance.
 
 ## Stylesheet structural invariants
 
-`scripts/css-invariants.test.mjs` runs inside `npm run test:frontend` and keeps
-the properties this phase established true:
+`scripts/style-invariants.test.mjs` runs inside `npm run test:frontend` and
+holds every structural property of the styling layer that neither a screenshot
+nor the contracts above can see. It is one file of 100 tests in ten sections,
+described in full under
+[Guardrails](../docs/theming.md#guardrails-what-holds-this-in-place). In short:
 
-- no test file may read a stylesheet's characters, because appearance is pinned
-  by screenshots and behaviour by the computed-style contracts above;
-- every `var(--x)` in every stylesheet must resolve to a custom property some
-  stylesheet declares or some component sets at runtime;
-- every class an application stylesheet writes rules for must be reachable from a
-  literal `className` or an interpolation base;
-- the walker must reach the colocated feature stylesheets, and no `.module.css`
-  may come back: a CSS module's classes are scoped to a generated hash, so none
-  of the invariants above can see them at all.
+- **Reach.** One test asserts every walk the file depends on is populated, so
+  nothing below can pass by having nothing to look at.
+- **The token layer.** One declaration site per name, no colour literal inside
+  a semantic token, a dark block that redefines only names the light block
+  declares, and no stylesheet outside `app/styles/tokens-*.css` declaring a
+  token of its own.
+- **The naming grammar.** Every name parses under the documented grammar, a
+  step number really says how light a primitive is, a name family holds one
+  kind of value, and every mandated text pairing keeps WCAG AA.
+- **The literal sweep.** Colour and scale literals outside the token layer must
+  match `scripts/css-literal-debt.json` exactly, in both directions.
+- **The stylesheet set.** `app/styles/index.css` imports every application
+  stylesheet exactly once, `app/layout.tsx` is the only file that pulls a
+  stylesheet in, no `.module.css` or `:global()` comes back, no test file reads
+  a stylesheet's characters, and the load order is the one documented.
+- **Parity, responsive ownership, one-of-each-primitive, and reachability in
+  both directions** — every rule still has a caller, and every class the markup
+  asks for still has a rule.
+- **The parsers underneath**, pinned against the shapes that have already
+  fooled a simpler implementation.
 
-The parsing lives in `scripts/css-inventory.mjs` so the test file itself never
-opens a stylesheet. A class that genuinely only exists at runtime belongs in
+The reading and parsing live in `scripts/style-inventory.mjs` so the test file
+itself never opens a stylesheet — which is the first invariant it asserts. A
+class that genuinely only exists at runtime belongs in
 `scripts/css-dynamic-classes.json`, with a comment naming the code that
 produces it; an entry there that stops being needed fails the suite, so the
-list cannot become a quiet home for dead CSS.
+list cannot become a quiet home for dead CSS. The same is true of every other
+ledger the suite reads — `css-retired-classes.json`, `css-duplicate-blocks.json`,
+`css-literal-debt.json` and `css-phase3-monolith.json` — each of which is
+compared against the tree in both directions.
 
 `scripts/safety-net.test.mjs` guards the net itself: every unit test file must
 appear in the hardcoded list in `scripts/test-frontend.mjs`, and every

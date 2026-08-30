@@ -5,7 +5,7 @@ import { gotoVisualRoute } from "./visual-harness";
 /**
  * What the token sweep looks like once a browser has resolved it.
  *
- * `scripts/css-token-sweep.test.mjs` reads the stylesheets and can prove that a
+ * `scripts/style-invariants.test.mjs` reads the stylesheets and can prove that a
  * literal is gone from the source. It cannot prove that the token which
  * replaced it resolves to the right thing in the shipped cascade, and it cannot
  * see a literal at all once the export's minifier has rewritten it. These tests
