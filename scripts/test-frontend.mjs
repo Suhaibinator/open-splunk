@@ -23,6 +23,7 @@ const scriptTests = [
 const testFiles = [
   path.join("app", "_components", "app-icon.test.tsx"),
   path.join("app", "_components", "button.test.tsx"),
+  path.join("app", "_components", "field-validation.test.tsx"),
   path.join("app", "_components", "status.test.tsx"),
   path.join("app", "home-dashboard-data.test.ts"),
   path.join("app", "analytics", "analytics-data.test.ts"),
@@ -32,6 +33,7 @@ const testFiles = [
   path.join("app", "dashboards", "dashboard-panel-runner.test.ts"),
   path.join("app", "admin", "admin-resource-data.test.ts"),
   path.join("app", "admin", "backend-admin-console-hec.test.ts"),
+  path.join("app", "admin", "ingestion-policy-form.test.ts"),
   path.join("app", "admin", "search-limits-form.test.ts"),
   path.join("app", "admin", "token-create-recovery-policy.test.ts"),
   path.join("app", "admin", "knowledge-manager-data.test.ts"),
@@ -51,6 +53,7 @@ const testFiles = [
   path.join("app", "search-workspace", "workspace-utils.test.ts"),
   path.join("app", "search-workspace", "virtual-table.test.ts"),
   path.join("app", "datasets", "index-observability-data.test.ts"),
+  path.join("lib", "byte-quantity.test.ts"),
   path.join("lib", "api", "pagination.test.ts"),
   path.join("lib", "api", "cursor-pages.test.ts"),
   path.join("lib", "api", "open-splunk-client-routes.test.ts"),

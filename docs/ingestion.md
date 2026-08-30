@@ -105,6 +105,15 @@ Every token and logical index may independently set
 absence means unlimited. Values may not exceed 1,000,000 events/second or 1 TiB
 per second.
 
+The administration console states the byte rate, and the index policy's
+`max_event_bytes`, as a byte size in the same notation the collector's
+configuration file uses: a bare byte count, `B`, decimal `KB`/`MB`/`GB`/`TB`/`PB`,
+or binary `KiB`/`MiB`/`GiB`/`TiB`/`PiB` (see **YAML parsing and scalar syntax**
+in docs/collector-configuration.md). Because `MB` and `MiB` are different
+numbers, each field prints the exact byte count it read underneath itself
+whenever the text is not already that count's shortest spelling. The wire format
+is unchanged: every one of these fields is a byte count on the API.
+
 Only fresh events that pass index authorization, event validation, mandatory
 redaction, and host/source constraints are charged. Byte charge is the
 server-computed protobuf encoding size before normalization/redaction; client

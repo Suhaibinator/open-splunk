@@ -264,6 +264,11 @@
       "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
     },
     {
+      "after": " || .field-error.field-error || align-items: center; color: var(--status-error); display: flex; font-size: var(--type-xs); gap: var(--space-1)",
+      "before": [],
+      "why": "New in Phase 5's field-validation primitive: the note under a form field, in its error form. There was no rule to move -- every form that showed a per-field message rendered it in the same muted grey as the hint it replaced, so the message read as more advice rather than as the reason the submit button was disabled. The class is doubled for the reason app/styles/primitives/form.css states at the rule: a feature's own `label > small` colour is (0,1,2) and loads after the primitive. It carries a warning glyph beside the colour, because colour alone does not distinguish an error for a reader who cannot see the hue."
+    },
+    {
       "after": " || .field-group h2 span || background: var(--bg-subtle); border-radius: var(--radius-md); color: var(--fg-muted); font-size: var(--type-xxs); margin-left: 6px; padding: 2px 5px",
       "before": " || .field-group h2 span || background: var(--bg-subtle); border-radius: var(--radius-md); color: var(--fg-muted); font-size: 8px; margin-left: 6px; padding: 2px 5px",
       "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
@@ -386,11 +391,6 @@
     {
       "after": " || .knowledge-manager__advanced-filter-actions output[role=\"alert\"] || color: var(--status-error-strong)",
       "before": " || .knowledge-manager__advanced-filter-actions output[role=\"alert\"] || color: #93443f",
-      "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
-    },
-    {
-      "after": " || .knowledge-manager__advanced-filter-grid [aria-invalid=\"true\"] || border-color: var(--status-error)",
-      "before": " || .knowledge-manager__advanced-filter-grid [aria-invalid=\"true\"] || border-color: #a34f49",
       "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
     },
     {
@@ -705,6 +705,11 @@
       "after": " || .segmented-fieldset label.selected || background: var(--accent-soft); border-color: var(--accent-bright)",
       "before": " || .segmented-fieldset label.selected || background: var(--accent-soft); border-color: #6d9e4c",
       "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || .settings-invalid-summary || color: var(--status-error); font-size: var(--type-xs); margin-right: auto",
+      "before": [],
+      "why": "New in Phase 5's field-validation work: the line beside the search-limits Apply button naming the fields holding it disabled. There was no rule to move, because there was no such line -- a form that could not be submitted said so only by greying out the button, which named nothing. `margin-right: auto` is what keeps it at the left of the `.settings-actions` row while the buttons stay flush right."
     },
     {
       "after": " || .setup-checklist .is-complete > span || background: var(--accent-bright); border-color: var(--accent-bright); color: var(--fg-inverse)",
@@ -1140,6 +1145,14 @@
       "after": " || .wordmark--hero b || font-size: var(--type-xxl); line-height: normal; margin: 0 2px",
       "before": " || .wordmark--hero b || font-size: 25px; line-height: normal; margin: 0 2px",
       "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
+    },
+    {
+      "after": " || [aria-invalid=\"true\"][aria-invalid=\"true\"] || border-color: var(--status-error)",
+      "before": [
+        " || .knowledge-manager__advanced-filter-grid [aria-invalid=\"true\"] || border-color: #a34f49",
+        " || .signin-card input[aria-invalid=\"true\"] || border-color: var(--status-error)"
+      ],
+      "why": "Two features painted an invalid field for themselves and the rest of the product did not paint one at all: search limits, the reports rename dialog and the index-observability range each set `aria-invalid` on a control that no rule anywhere selected, so a value the form could not accept looked exactly like one it could and the only signal was a submit button greyed out without naming a field. Both rules fold into one doubled attribute selector in app/styles/primitives/form.css, which reaches every form that marks a control the way a screen reader needs it marked. The knowledge-manager half also carried Phase 5's colour-literal substitution, which is why its `before` is the hex spelling -- the rule replacing it reads the same tier-2 role, so nothing about the painted colour changes."
     },
     {
       "after": " || body || min-height: 100%; margin: 0; background: var(--bg-canvas); color: var(--fg-text); font-family: var(--font-sans); font-size: var(--type-md); text-rendering: optimizelegibility",
