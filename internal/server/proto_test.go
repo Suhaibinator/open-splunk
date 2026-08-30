@@ -61,7 +61,7 @@ func TestForwardCompatibleProtoSanitizerDiscardsUnknownFieldsRecursively(t *test
 	list.ProtoReflect().SetUnknown(unknown)
 	list.GetValues()[0].ProtoReflect().SetUnknown(unknown)
 
-	got, err := forwardCompatibleProtoSanitizer(request)
+	got, err := forwardCompatibleProtoSanitizer(t.Context(), request)
 	if err != nil {
 		t.Fatalf("sanitize request: %v", err)
 	}

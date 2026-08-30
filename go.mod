@@ -6,7 +6,7 @@ require (
 	fortio.org/safecast v1.2.0
 	github.com/ClickHouse/ch-go v0.74.0
 	github.com/ClickHouse/clickhouse-go/v2 v2.48.0
-	github.com/Suhaibinator/SRouter v1.6.1
+	github.com/Suhaibinator/SRouter v1.6.3
 	github.com/ebitengine/purego v0.10.2
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
@@ -41,7 +41,7 @@ require (
 	github.com/segmentio/asm v1.2.1 // indirect
 	github.com/xyproto/randomstring v1.2.0 // indirect
 	go.opentelemetry.io/otel v1.46.0 // indirect
-	go.opentelemetry.io/otel/sdk/metric v1.45.0 // indirect
+	go.opentelemetry.io/otel/sdk/metric v1.46.0 // indirect
 	go.opentelemetry.io/otel/trace v1.46.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/mod v0.40.0 // indirect

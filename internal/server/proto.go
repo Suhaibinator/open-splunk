@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"time"
@@ -229,7 +230,7 @@ func unwrapProtobufRoutes(routes []protobufRouteDefinition) []router.RouteDefini
 // the exception: unknown fields inside their persisted definitions are rejected
 // before ordinary unknown fields are cleared. SRouter has already enforced the
 // raw body limit, so discarded bytes still consume the caller's request budget.
-func forwardCompatibleProtoSanitizer[T proto.Message](request T) (T, error) {
+func forwardCompatibleProtoSanitizer[T proto.Message](_ context.Context, request T) (T, error) {
 	if isNilDependency(request) {
 		return request, nil
 	}

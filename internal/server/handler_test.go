@@ -34,7 +34,10 @@ var testNow = time.Date(2026, 7, 22, 12, 0, 0, 123_000_000, time.UTC)
 func TestHandlerPassesConfiguredLoggerToSRouter(t *testing.T) {
 	t.Parallel()
 
-	core, observed := observer.New(zapcore.ErrorLevel)
+	// SRouter v1.6.3 logs expected client failures, including this 404, at
+	// Info level. Observe that level so this test continues to verify the
+	// configured logger is passed through to SRouter.
+	core, observed := observer.New(zapcore.InfoLevel)
 	handler := newTestHandler(t, Config{
 		Logger:     zap.New(core),
 		SearchJobs: &fakeSearchJobs{getErr: searchjobs.ErrNotFound},

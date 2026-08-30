@@ -209,15 +209,15 @@ func TestLookupDefinitionSanitizerRejectsUnknownSemanticsBeforePersistence(t *te
 		run  func(*opensplunk.LookupDefinition) error
 	}{
 		{"create", func(definition *opensplunk.LookupDefinition) error {
-			_, err := forwardCompatibleProtoSanitizer(&opensplunk.CreateLookupRequest{Definition: definition})
+			_, err := forwardCompatibleProtoSanitizer(t.Context(), &opensplunk.CreateLookupRequest{Definition: definition})
 			return err
 		}},
 		{"replace", func(definition *opensplunk.LookupDefinition) error {
-			_, err := forwardCompatibleProtoSanitizer(&opensplunk.ReplaceLookupRequest{Definition: definition})
+			_, err := forwardCompatibleProtoSanitizer(t.Context(), &opensplunk.ReplaceLookupRequest{Definition: definition})
 			return err
 		}},
 		{"preview", func(definition *opensplunk.LookupDefinition) error {
-			_, err := forwardCompatibleProtoSanitizer(&opensplunk.PreviewLookupRequest{Definition: definition})
+			_, err := forwardCompatibleProtoSanitizer(t.Context(), &opensplunk.PreviewLookupRequest{Definition: definition})
 			return err
 		}},
 	}
@@ -238,7 +238,7 @@ func TestLookupDefinitionSanitizerRejectsUnknownSemanticsBeforePersistence(t *te
 	oversized.KeyMappings = make([]*opensplunk.LookupFieldMapping, 5)
 	oversized.KeyMappings[0] = &opensplunk.LookupFieldMapping{}
 	addKnowledgeHTTPUnknown(oversized.KeyMappings[0])
-	if _, err := forwardCompatibleProtoSanitizer(&opensplunk.CreateLookupRequest{Definition: oversized}); err == nil ||
+	if _, err := forwardCompatibleProtoSanitizer(t.Context(), &opensplunk.CreateLookupRequest{Definition: oversized}); err == nil ||
 		!strings.Contains(err.Error(), "entry limit") {
 		t.Fatalf("sanitize oversized definition error = %v", err)
 	}
@@ -248,7 +248,7 @@ func TestLookupDefinitionSanitizerRejectsUnknownSemanticsBeforePersistence(t *te
 
 	envelope := &opensplunk.CreateLookupRequest{Definition: lookupHTTPDefinition("catalog"), CsvData: []byte("id,value\n")}
 	addKnowledgeHTTPUnknown(envelope)
-	if _, err := forwardCompatibleProtoSanitizer(envelope); err != nil {
+	if _, err := forwardCompatibleProtoSanitizer(t.Context(), envelope); err != nil {
 		t.Fatalf("sanitize future request envelope: %v", err)
 	}
 	if len(envelope.ProtoReflect().GetUnknown()) != 0 {
