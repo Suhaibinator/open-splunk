@@ -21,6 +21,49 @@ import (
 
 var validationTestNow = time.Date(2026, 7, 21, 18, 0, 0, 0, time.UTC)
 
+// redactionTestFields opts the redaction-focused validator tests into every
+// spelling they exercise. Production validators have no implicit field list.
+var redactionTestFields = []string{
+	"authorization",
+	"proxy_authorization",
+	"cookie",
+	"set_cookie",
+	"password",
+	"passwd",
+	"secret",
+	"token",
+	"access_token",
+	"refresh_token",
+	"session_token",
+	"auth_token",
+	"api_key",
+	"apikey",
+	"client_secret",
+	"private_key",
+	"passwordHash",
+	"HTTPAuthorization",
+	"JWTToken",
+	"X-API-Key",
+	"http.request.header.api_key",
+	"apiKeyValue",
+	"tls.private_key",
+	"db_password",
+	"request_auth_token_value",
+	"http_request_header_authorization",
+	"dbpassword",
+	"passwordhash",
+	"authtoken",
+	"accesstoken",
+	"myapikey",
+	"HTTPAPIKey",
+	"httpauthorization",
+	"mycookie",
+	"myprivatekey",
+	"tlsprivate_key",
+	`password\"safe`,
+	strings.Repeat("a", 240) + "_password",
+}
+
 func TestValidateAndNormalizeEventDoesNotMutateInput(t *testing.T) {
 	v := newTestValidator(t, DefaultLimits())
 	event := validTestEvent("event-1", "main")
@@ -46,6 +89,31 @@ func TestValidateAndNormalizeEventDoesNotMutateInput(t *testing.T) {
 	}
 	if !got.IndexTime.Equal(validationTestNow) {
 		t.Fatalf("IndexTime = %v, want %v", got.IndexTime, validationTestNow)
+	}
+}
+
+func TestValidateAndNormalizeEventDoesNotRedactWithoutPolicy(t *testing.T) {
+	t.Parallel()
+
+	v, err := NewValidator(DefaultLimits(), RedactionPolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := validTestEvent("event-no-redaction", "main")
+	event.Raw = []byte(`{"token":"visible-token","token_id":42,"caller":"session_token_persistence.go:119"}`)
+	event.Fields = object(
+		stringField("token", "visible-token"),
+		stringField("token_type", "authentication"),
+	)
+
+	got, rejection := v.ValidateAndNormalizeEvent(event, EventContext{ReceivedAt: validationTestNow})
+	if rejection != nil {
+		t.Fatalf("ValidateAndNormalizeEvent() rejection = %v", rejection)
+	}
+	if !bytes.Equal(got.Event.GetRaw(), event.GetRaw()) ||
+		got.Event.GetFields().GetFields()[0].GetValue().GetStringValue() != "visible-token" ||
+		got.Event.GetFields().GetFields()[1].GetValue().GetStringValue() != "authentication" {
+		t.Fatalf("unconfigured event was redacted: raw=%q fields=%+v", got.Event.GetRaw(), got.Event.GetFields())
 	}
 }
 
@@ -433,8 +501,8 @@ func TestRedactEventInPlaceUsesAdditionalPolicyWithoutCloning(t *testing.T) {
 	t.Parallel()
 
 	validator, err := NewValidator(DefaultLimits(), RedactionPolicy{
-		AdditionalSensitiveFields: []string{"customer_credential"},
-		Replacement:               "***",
+		SensitiveFields: []string{"customer_credential"},
+		Replacement:     "***",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -564,11 +632,11 @@ func TestValidateAndNormalizeEventSanitizesNonJSONRawKeyValues(t *testing.T) {
 	}
 }
 
-func TestValidateAndNormalizeEventRawRedactionCoversMandatoryFieldVariants(t *testing.T) {
+func TestValidateAndNormalizeEventRawRedactionCoversConfiguredFieldVariants(t *testing.T) {
 	t.Parallel()
 
 	v := newTestValidator(t, DefaultLimits())
-	for _, field := range mandatorySensitiveFields {
+	for _, field := range redactionTestFields[:16] {
 		for _, spelling := range []string{
 			field,
 			strings.ReplaceAll(field, "_", "-"),
@@ -591,7 +659,7 @@ func TestValidateAndNormalizeEventRawRedactionCoversMandatoryFieldVariants(t *te
 					t.Fatalf("ValidateAndNormalizeEvent() rejection = %v", rejection)
 				}
 				if bytes.Contains(got.Event.Raw, []byte(secret)) || !bytes.Contains(got.Event.Raw, []byte(DefaultRedactionReplacement)) {
-					t.Fatalf("mandatory raw field %q was not redacted: %q", spelling, got.Event.Raw)
+					t.Fatalf("configured raw field %q was not redacted: %q", spelling, got.Event.Raw)
 				}
 			})
 		}
@@ -628,7 +696,7 @@ func TestValidateAndNormalizeEventRedactsWholeCookieAndPrivateKeyLines(t *testin
 func TestValidateAndNormalizeEventRedactsAdditionalRawField(t *testing.T) {
 	t.Parallel()
 
-	v, err := NewValidator(DefaultLimits(), RedactionPolicy{AdditionalSensitiveFields: []string{"custom_audit_secret"}})
+	v, err := NewValidator(DefaultLimits(), RedactionPolicy{SensitiveFields: []string{"custom_audit_secret"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -711,7 +779,7 @@ func TestValidateAndNormalizeEventRawRedactionMatchesStructuredNameSemantics(t *
 func TestValidateAndNormalizeEventRawRedactionNormalizesConfiguredSeparators(t *testing.T) {
 	t.Parallel()
 
-	v, err := NewValidator(DefaultLimits(), RedactionPolicy{AdditionalSensitiveFields: []string{"customer_credential"}})
+	v, err := NewValidator(DefaultLimits(), RedactionPolicy{SensitiveFields: []string{"customer_credential"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1286,7 +1354,10 @@ func TestValidateAndNormalizeEventRechecksSizeAfterRedaction(t *testing.T) {
 	event.Fields = object(stringField("token", "x"))
 	limits := DefaultLimits()
 	limits.MaxEventBytes = uint64(proto.Size(event) + 32)
-	v, err := NewValidator(limits, RedactionPolicy{Replacement: string(bytes.Repeat([]byte("r"), 256))})
+	v, err := NewValidator(limits, RedactionPolicy{
+		SensitiveFields: []string{"token"},
+		Replacement:     string(bytes.Repeat([]byte("r"), 256)),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1437,7 +1508,7 @@ func TestEventIDDigestUsesLengthPrefixedEventIDs(t *testing.T) {
 
 func newTestValidator(t *testing.T, limits Limits) *Validator {
 	t.Helper()
-	v, err := NewValidator(limits, RedactionPolicy{})
+	v, err := NewValidator(limits, RedactionPolicy{SensitiveFields: redactionTestFields})
 	if err != nil {
 		t.Fatal(err)
 	}

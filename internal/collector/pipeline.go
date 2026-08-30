@@ -121,8 +121,7 @@ func processCloneOnWrite(
 // Scope: this ordered processor covers STRUCTURED dynamic fields only. The
 // daemon compiles the same configured fields/replacement into a durability
 // sanitizer before this chain. It scrubs raw/message text and follows the
-// actual ordered lineage of top-level renames before WAL append. The ingestion
-// server independently reapplies mandatory redaction as defense in depth.
+// actual ordered lineage of top-level renames before WAL append.
 func NewRedactProcessor(fields []string, replacement string) (Processor, error) {
 	if len(fields) == 0 {
 		return nil, errors.New("collector: redact processor requires at least one field")

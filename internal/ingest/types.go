@@ -31,7 +31,7 @@ const (
 	HardMaxInFlightBatches   uint32 = 64
 	HardMaxStreamsPerSubject uint32 = 16
 	// HardMaxDurable*Bytes mirror the bounded server-owned replay formats. A
-	// source batch can grow during mandatory redaction and rejection reporting,
+	// source batch can grow during configured redaction and rejection reporting,
 	// so normalized representations are checked independently.
 	HardMaxDurableOutboxBytes   uint64 = 16 << 20
 	HardMaxDurableMetadataBytes uint64 = 1 << 20
@@ -157,11 +157,10 @@ func (l Limits) validate() error {
 	}
 }
 
-// RedactionPolicy adds deployment-specific sensitive field names. Mandatory
-// built-in names always remain enabled.
+// RedactionPolicy opts selected field names into redaction.
 type RedactionPolicy struct {
-	AdditionalSensitiveFields []string
-	Replacement               string
+	SensitiveFields []string
+	Replacement     string
 }
 
 // EventContext contains only server-derived metadata. None of these values are
@@ -312,7 +311,7 @@ type CollectorSessionManager interface {
 }
 
 // StoreBatch contains only events which passed validation, authorization, and
-// mandatory redaction. BatchID and event IDs remain stable across retries.
+// configured redaction. BatchID and event IDs remain stable across retries.
 type StoreBatch struct {
 	TenantID           string
 	Source             IngestionSource

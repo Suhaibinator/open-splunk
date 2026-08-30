@@ -562,10 +562,10 @@ func TestDaemonRestartDoesNotRequeuePendingWALSourcePrefix(t *testing.T) {
 	}
 }
 
-// TestDaemonRedactsSecretsBeforeOfflineWALAppend proves the edge collector
-// never persists known secret families while the ingestion server is
-// unreachable. Server-side redaction is too late for this trust boundary: the
-// local WAL must already contain only the sanitized event.
+// TestDaemonRedactsSecretsBeforeOfflineWALAppend proves explicit redaction
+// policies are applied while the ingestion server is unreachable. Server-side
+// redaction is too late for this trust boundary: the local WAL must already
+// contain only the sanitized event.
 func TestDaemonRedactsSecretsBeforeOfflineWALAppend(t *testing.T) {
 	t.Parallel()
 	stateDir := t.TempDir()
@@ -592,6 +592,9 @@ func TestDaemonRedactsSecretsBeforeOfflineWALAppend(t *testing.T) {
 
 	cfg := newTestConfig(t, stateDir, filepath.Join(logDir, "*.log"), filepath.Join(stateDir, "token"))
 	cfg.Processors = []config.ProcessorConfig{
+		{
+			Type: "redact", Fields: []string{"token", "authorization"},
+		},
 		{
 			Type: "redact", Fields: []string{"customer_credential"}, Replacement: "***",
 		},
@@ -749,14 +752,14 @@ func TestBuildDurableRedactorRejectsUnsupportedProcessor(t *testing.T) {
 	}
 }
 
-func TestBuildProcessorRuntimeEmptyPipelineRetainsMandatoryBoundary(t *testing.T) {
+func TestBuildProcessorRuntimeEmptyPipelineDoesNotRedact(t *testing.T) {
 	t.Parallel()
 
 	pipeline, redactor, err := buildProcessorRuntime(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw := `{"token":"mandatory-secret","safe":"kept"}`
+	raw := `{"token":"unconfigured-value","safe":"kept"}`
 	event := testEvent(t, testDecoder(t), 0, uint64(len(raw)), 1, raw)
 	sanitized := redactor.beforePipeline(event, nil)
 	out, err := pipeline.Process(sanitized)
@@ -766,9 +769,8 @@ func TestBuildProcessorRuntimeEmptyPipelineRetainsMandatoryBoundary(t *testing.T
 	if out != event {
 		t.Fatal("empty processor runtime cloned an exclusively owned event")
 	}
-	if bytes.Contains(out.GetRaw(), []byte("mandatory-secret")) ||
-		!bytes.Contains(out.GetRaw(), []byte(ingest.DefaultRedactionReplacement)) {
-		t.Fatalf("empty processor runtime did not retain mandatory redaction: %q", out.GetRaw())
+	if !bytes.Equal(out.GetRaw(), []byte(raw)) {
+		t.Fatalf("empty processor runtime changed raw event: %q", out.GetRaw())
 	}
 }
 
@@ -783,9 +785,10 @@ func TestDurableRedactorPreventsRenameDeclassification(t *testing.T) {
 		replacement string
 	}{
 		{
-			name: "mandatory sensitive source to ordinary destination",
+			name: "configured sensitive source to ordinary destination",
 			processors: []config.ProcessorConfig{
 				{Type: "rename", From: "token", To: "public_value"},
+				{Type: "redact", Fields: []string{"token"}},
 			},
 			raw:         `{"token":"mandatory-declassification-secret","safe":"kept"}`,
 			finalField:  "public_value",
@@ -796,6 +799,7 @@ func TestDurableRedactorPreventsRenameDeclassification(t *testing.T) {
 			processors: []config.ProcessorConfig{
 				{Type: "rename", From: "credential", To: "token"},
 				{Type: "rename", From: "token", To: "public_value"},
+				{Type: "redact", Fields: []string{"token"}},
 			},
 			raw:         `{"credential":"transient-declassification-secret","safe":"kept"}`,
 			finalField:  "public_value",
@@ -901,6 +905,7 @@ func TestDurableRedactorSkipsLineageWithoutOrdinaryRenameSource(t *testing.T) {
 
 	pipeline, err := buildPipeline([]config.ProcessorConfig{
 		{Type: "rename", From: "ordinary_source", To: "token"},
+		{Type: "redact", Fields: []string{"token"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -982,6 +987,7 @@ func TestDurableRedactorTracksExactOrderedRenameLineage(t *testing.T) {
 			processors: []config.ProcessorConfig{
 				{Type: "deny", Fields: []string{"C"}},
 				{Type: "rename", From: "C", To: "token"},
+				{Type: "redact", Fields: []string{"token"}},
 			},
 			raw:       `{"C":"denied-safe-data"}`,
 			wantValue: "denied-safe-data",
@@ -990,6 +996,7 @@ func TestDurableRedactorTracksExactOrderedRenameLineage(t *testing.T) {
 			name: "normalized lookalike is not exact source",
 			processors: []config.ProcessorConfig{
 				{Type: "rename", From: "userID", To: "token"},
+				{Type: "redact", Fields: []string{"token"}},
 			},
 			raw:       `{"user_id":"lookalike-safe-data","nested":{"userID":"nested-safe-data"}}`,
 			wantName:  "user_id",
@@ -1040,7 +1047,10 @@ func TestDurableRedactorTracksExactOrderedRenameLineage(t *testing.T) {
 func TestDurableRedactorHandlesPunctuationAliasAndPreservesNestedLookalike(t *testing.T) {
 	t.Parallel()
 
-	processors := []config.ProcessorConfig{{Type: "rename", From: "---", To: "token"}}
+	processors := []config.ProcessorConfig{
+		{Type: "rename", From: "---", To: "token"},
+		{Type: "redact", Fields: []string{"token"}},
+	}
 	pipeline, err := buildPipeline(processors)
 	if err != nil {
 		t.Fatal(err)
@@ -1074,7 +1084,10 @@ func TestDurableRedactorHandlesPunctuationAliasAndPreservesNestedLookalike(t *te
 func TestDurableRedactorSeparatesConstantAliasFromRawAndMessageProvenance(t *testing.T) {
 	t.Parallel()
 
-	processors := []config.ProcessorConfig{{Type: "rename", From: "userID", To: "token"}}
+	processors := []config.ProcessorConfig{
+		{Type: "rename", From: "userID", To: "token"},
+		{Type: "redact", Fields: []string{"token"}},
+	}
 	pipeline, err := buildPipeline(processors)
 	if err != nil {
 		t.Fatal(err)
@@ -1150,7 +1163,7 @@ func TestDurableRedactorSeparatesConstantAliasFromRawAndMessageProvenance(t *tes
 	}
 }
 
-func TestDurableRedactorPreservesExactConfiguredPoliciesAndDeduplicatesMandatoryDefaults(t *testing.T) {
+func TestDurableRedactorPreservesAndGroupsExactConfiguredPolicies(t *testing.T) {
 	t.Parallel()
 
 	redundantPipeline, err := buildPipeline([]config.ProcessorConfig{{
@@ -1160,12 +1173,12 @@ func TestDurableRedactorPreservesExactConfiguredPoliciesAndDeduplicatesMandatory
 	if err != nil {
 		t.Fatal(err)
 	}
-	redundant, err := buildDurableRedactor(redundantPipeline)
+	configuredDefaults, err := buildDurableRedactor(redundantPipeline)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(redundant.configured) != 0 {
-		t.Fatalf("redundant mandatory policy was not eliminated: %+v", redundant)
+	if len(configuredDefaults.configured) != 1 {
+		t.Fatalf("default-marker policies compiled to %d scans, want 1", len(configuredDefaults.configured))
 	}
 	groupedPipeline, err := buildPipeline([]config.ProcessorConfig{
 		{Type: "redact", Fields: []string{"customer_a"}, Replacement: "MASKED"},
@@ -1229,7 +1242,7 @@ func TestDurableRedactorPreservesExactConfiguredPoliciesAndDeduplicatesMandatory
 	}
 }
 
-func TestDurableRedactorKeepsLastConfiguredReplacementAfterMandatoryPolicy(t *testing.T) {
+func TestDurableRedactorKeepsLastConfiguredReplacement(t *testing.T) {
 	t.Parallel()
 
 	processors := []config.ProcessorConfig{
@@ -1244,8 +1257,8 @@ func TestDurableRedactorKeepsLastConfiguredReplacementAfterMandatoryPolicy(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(redactor.configured) != 0 {
-		t.Fatalf("final mandatory replacement should need no supplemental scan: %d", len(redactor.configured))
+	if len(redactor.configured) != 1 {
+		t.Fatalf("configured replacement compiled to %d scans, want 1", len(redactor.configured))
 	}
 	raw := `{"message":"token=message-secret","token":"structured-secret","safe":"kept"}`
 	event := redactor.beforePipeline(
@@ -1270,7 +1283,7 @@ func TestDurableRedactorKeepsLastConfiguredReplacementAfterMandatoryPolicy(t *te
 	}
 }
 
-func TestDurableRedactorConfiguredReplacementOverridesMandatoryMarkerForResolvedFields(t *testing.T) {
+func TestDurableRedactorUsesConfiguredMarkersForResolvedFields(t *testing.T) {
 	t.Parallel()
 
 	pipeline, err := buildPipeline([]config.ProcessorConfig{
@@ -1285,7 +1298,7 @@ func TestDurableRedactorConfiguredReplacementOverridesMandatoryMarkerForResolved
 		t.Fatal(err)
 	}
 	if len(redactor.configured) != 1 {
-		t.Fatalf("mandatory override plus neutral marker compiled to %d direct passes, want one",
+		t.Fatalf("configured markers compiled to %d direct passes, want one",
 			len(redactor.configured))
 	}
 
@@ -1323,7 +1336,7 @@ func TestDurableRedactorConfiguredReplacementOverridesMandatoryMarkerForResolved
 	}
 }
 
-func TestDurableRedactorMandatoryFailClosedBoundaryPrecedesConfiguredReplacement(t *testing.T) {
+func TestDurableRedactorConfiguredFailClosedBoundaryUsesConfiguredReplacement(t *testing.T) {
 	t.Parallel()
 
 	pipeline, err := buildPipeline([]config.ProcessorConfig{{
@@ -1347,16 +1360,13 @@ func TestDurableRedactorMandatoryFailClosedBoundaryPrecedesConfiguredReplacement
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(out.GetRaw()) != ingest.DefaultRedactionReplacement ||
-		out.GetMessage() != ingest.DefaultRedactionReplacement {
-		t.Fatalf("mandatory fail-closed marker = raw:%q message:%q, want %q",
-			out.GetRaw(), out.GetMessage(), ingest.DefaultRedactionReplacement)
+	if string(out.GetRaw()) != "CUSTOM" || out.GetMessage() != "CUSTOM" {
+		t.Fatalf("configured fail-closed marker = raw:%q message:%q, want CUSTOM",
+			out.GetRaw(), out.GetMessage())
 	}
 	if bytes.Contains(out.GetRaw(), []byte("boundary-secret")) ||
-		strings.Contains(out.GetMessage(), "boundary-secret") ||
-		bytes.Contains(out.GetRaw(), []byte("CUSTOM")) ||
-		strings.Contains(out.GetMessage(), "CUSTOM") {
-		t.Fatalf("fail-closed boundary leaked or was reclassified: raw:%q message:%q",
+		strings.Contains(out.GetMessage(), "boundary-secret") {
+		t.Fatalf("fail-closed boundary leaked: raw:%q message:%q",
 			out.GetRaw(), out.GetMessage())
 	}
 }

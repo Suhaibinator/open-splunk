@@ -13,25 +13,6 @@ import (
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 )
 
-var mandatorySensitiveFields = []string{
-	"authorization",
-	"proxy_authorization",
-	"cookie",
-	"set_cookie",
-	"password",
-	"passwd",
-	"secret",
-	"token",
-	"access_token",
-	"refresh_token",
-	"session_token",
-	"auth_token",
-	"api_key",
-	"apikey",
-	"client_secret",
-	"private_key",
-}
-
 type rawSecretKind uint8
 
 type redactionMatch struct {
@@ -98,17 +79,8 @@ const (
 	rawSecretPrivateKey
 )
 
-func sensitiveFieldSet(additional []string, mandatory, exact bool) map[string]struct{} {
-	capacity := len(additional)
-	if mandatory {
-		capacity += len(mandatorySensitiveFields)
-	}
-	result := make(map[string]struct{}, capacity)
-	if mandatory {
-		for _, name := range mandatorySensitiveFields {
-			result[normalizeSensitiveName(name)] = struct{}{}
-		}
-	}
+func sensitiveFieldSet(additional []string, exact bool) map[string]struct{} {
+	result := make(map[string]struct{}, len(additional))
 	for _, name := range additional {
 		if exact {
 			result[name] = struct{}{}
@@ -150,10 +122,10 @@ func normalizeSensitiveName(name string) string {
 }
 
 func (v *Validator) isSensitive(name string) bool {
-	return v.matchSensitiveName(name, true).kind != rawSecretNone
+	return v.matchSensitiveName(name).kind != rawSecretNone
 }
 
-func (v *Validator) matchSensitiveName(name string, allowComponentMatch bool) redactionMatch {
+func (v *Validator) matchSensitiveName(name string) redactionMatch {
 	if v.exact {
 		if match, ok := v.replacementByName[name]; ok {
 			return match
@@ -167,17 +139,9 @@ func (v *Validator) matchSensitiveName(name string, allowComponentMatch bool) re
 		return redactionMatch{}
 	}
 	normalized := normalizeSensitiveName(name)
-	components := strings.Split(normalized, "_")
 	if _, ok := v.sensitive[normalized]; ok {
 		return redactionMatch{
-			kind:        rawSecretKindForComponents(components),
-			replacement: v.replacement,
-		}
-	}
-	if v.mandatory && allowComponentMatch &&
-		hasMandatorySensitiveComponent(components) {
-		return redactionMatch{
-			kind:        rawSecretKindForComponents(components),
+			kind:        rawSecretKindForName(normalized),
 			replacement: v.replacement,
 		}
 	}
@@ -198,39 +162,12 @@ func (v *Validator) depthLimitReplacement() string {
 	return v.replacement
 }
 
-// IsSensitiveField reports whether name is covered by the validator's
-// mandatory or deployment-specific redaction policy. Collectors use it while
-// tracing rename processors backwards so the original raw key is sanitized
-// when a pipeline later gives that value a sensitive name.
+// IsSensitiveField reports whether name is covered by the validator's explicit
+// redaction policy. Collectors use it while tracing rename processors backwards
+// so the original raw key is sanitized when a pipeline later gives that value a
+// sensitive name.
 func (v *Validator) IsSensitiveField(name string) bool {
 	return v != nil && v.isSensitive(name)
-}
-
-func hasMandatorySensitiveComponent(components []string) bool {
-	for index, component := range components {
-		if hasMandatorySensitiveFamilyAffix(component) {
-			return true
-		}
-		if index+1 < len(components) &&
-			(((component == "api" || strings.HasSuffix(component, "api")) && components[index+1] == "key") ||
-				((component == "private" || strings.HasSuffix(component, "private")) && components[index+1] == "key")) {
-			return true
-		}
-	}
-	return false
-}
-
-func hasMandatorySensitiveFamilyAffix(component string) bool {
-	for _, family := range []string{"authorization", "cookie", "password", "passwd", "secret", "token", "apikey", "privatekey"} {
-		if hasSensitiveFamilyAffix(component, family) {
-			return true
-		}
-	}
-	return false
-}
-
-func hasSensitiveFamilyAffix(component, family string) bool {
-	return component == family || strings.HasPrefix(component, family) || strings.HasSuffix(component, family)
 }
 
 func (v *Validator) redactObject(object *opensplunk.TypedObject) {
@@ -242,7 +179,7 @@ func (v *Validator) redactObject(object *opensplunk.TypedObject) {
 			continue
 		}
 		if v.orderedOnChange {
-			if match := v.matchSensitiveName(field.GetName(), true); match.kind != rawSecretNone {
+			if match := v.matchSensitiveName(field.GetName()); match.kind != rawSecretNone {
 				v.redactFieldInPolicyOrder(field, match.order)
 				continue
 			}
@@ -267,7 +204,7 @@ func (v *Validator) redactFieldInPolicyOrder(
 }
 
 func (v *Validator) redactFieldByName(field *opensplunk.TypedObjectField) bool {
-	match := v.matchSensitiveName(field.GetName(), true)
+	match := v.matchSensitiveName(field.GetName())
 	if match.kind == rawSecretNone {
 		return false
 	}
@@ -751,7 +688,7 @@ func (v *Validator) rawSecretMatchBefore(raw []byte, delimiter int) (redactionMa
 		quotedLowerBound++
 	}
 	if quotedName, ok := rawQuotedKeyBefore(raw, quotedKeyEnd, quotedLowerBound); ok {
-		return v.matchSensitiveName(quotedName, true), true, false
+		return v.matchSensitiveName(quotedName), true, false
 	}
 	if match, parsed := v.rawEscapedQuotedSecretMatchBefore(raw, quotedKeyEnd, quotedLowerBound, quotedKeyBudget); parsed {
 		return match, true, match.kind != rawSecretNone
@@ -783,7 +720,7 @@ func (v *Validator) rawSecretMatchBefore(raw []byte, delimiter int) (redactionMa
 	if keyStart == keyEnd {
 		return redactionMatch{}, false, false
 	}
-	if match := v.matchSensitiveName(string(raw[keyStart:keyEnd]), true); match.kind != rawSecretNone {
+	if match := v.matchSensitiveName(string(raw[keyStart:keyEnd])); match.kind != rawSecretNone {
 		return match, false, false
 	}
 
@@ -806,7 +743,7 @@ func (v *Validator) rawSecretMatchBefore(raw []byte, delimiter int) (redactionMa
 		if previousStart == separatorStart {
 			break
 		}
-		if match := v.matchSensitiveName(string(raw[previousStart:keyEnd]), false); match.kind != rawSecretNone {
+		if match := v.matchSensitiveName(string(raw[previousStart:keyEnd])); match.kind != rawSecretNone {
 			return match, false, false
 		}
 		extendedStart = previousStart
@@ -922,7 +859,7 @@ func (v *Validator) rawEscapedQuotedSecretMatchBefore(
 func (v *Validator) classifyRecursivelyEncodedKey(decoded string) redactionMatch {
 	for depth := 0; ; depth++ {
 		if len(decoded) <= int(v.limits.MaxFieldNameBytes) {
-			if match := v.matchSensitiveName(decoded, true); match.kind != rawSecretNone {
+			if match := v.matchSensitiveName(decoded); match.kind != rawSecretNone {
 				return match
 			}
 		}
@@ -1006,6 +943,10 @@ func rawEscapeLayer(backslashRun int) int {
 
 func rawSecretKindForName(name string) rawSecretKind {
 	return rawSecretKindForComponents(strings.Split(normalizeSensitiveName(name), "_"))
+}
+
+func hasSensitiveFamilyAffix(component, family string) bool {
+	return component == family || strings.HasPrefix(component, family) || strings.HasSuffix(component, family)
 }
 
 func rawSecretKindForComponents(components []string) rawSecretKind {
@@ -1330,7 +1271,7 @@ func (v *Validator) redactJSONValue(
 	case map[string]any:
 		var change redactionChange
 		for name, child := range typed {
-			if match := v.matchSensitiveName(name, true); match.kind != rawSecretNone {
+			if match := v.matchSensitiveName(name); match.kind != rawSecretNone {
 				matchChange := changedBy(match)
 				replacement := match.replacement
 				if embeddedDepth >= maxEmbeddedJSONRedactionDepth && len(v.ordered) > 0 {

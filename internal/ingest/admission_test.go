@@ -46,8 +46,8 @@ func TestAdmissionPreparerPrepareHECNormalizesAndPlansPolicy(t *testing.T) {
 	preparer, err := NewAdmissionPreparer(AdmissionConfig{
 		DefaultIndexRetention: defaultRetention,
 		Redaction: RedactionPolicy{
-			AdditionalSensitiveFields: []string{"customer_secret"},
-			Replacement:               "<masked>",
+			SensitiveFields: []string{"customer_secret"},
+			Replacement:     "<masked>",
 		},
 	}, store)
 	if err != nil {

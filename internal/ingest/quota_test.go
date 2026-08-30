@@ -51,6 +51,7 @@ func TestProcessBatchBuildsAtomicAcceptedEventQuotaAdmission(t *testing.T) {
 		}, nil
 	})
 	config := testServiceConfig()
+	config.Redaction.SensitiveFields = []string{"token"}
 	config.SessionManager = newTestCollectorSessionManager(
 		AuthorizerFunc(func(context.Context, string) (Authorization, error) {
 			return authorization, nil

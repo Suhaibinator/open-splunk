@@ -35,8 +35,8 @@ Native ingestion follows this sequence:
 1. The collector reads a file, builds a canonical event, and writes the batch
    to its local WAL before sending it.
 2. The server authenticates the token and collector identity, refreshes token
-   and index policy, validates/redacts events, and checks token and index
-   virtual schedules.
+   and index policy, validates events, and checks token and index virtual
+   schedules. Explicit collector redaction has already run before the local WAL.
 3. One serializable SQLite transaction reserves visibility, stores immutable
    request identity and outbox payload, charges quotas, and records terminal
    per-event rejection information.
@@ -46,9 +46,9 @@ Native ingestion follows this sequence:
 5. Reconciliation resolves ambiguous ClickHouse outcomes before newer source
    work advances. Only committed visibility can become searchable.
 
-HEC uses the same policy, quota, visibility, outbox, redaction, and ClickHouse
-path. Its HTTP decoder and acknowledgment store are adapters, not alternate
-storage or authority systems.
+HEC uses the same policy, quota, visibility, outbox, and ClickHouse path. Its
+HTTP decoder and acknowledgment store are adapters, not alternate storage or
+authority systems.
 
 Search follows this sequence:
 

@@ -20,8 +20,8 @@ func BenchmarkCompositeSupplementalRedactor(b *testing.B) {
 		sequential := make([]*Validator, policyCount)
 		for index := range policyCount {
 			policies[index] = RedactionPolicy{
-				AdditionalSensitiveFields: []string{fmt.Sprintf("secret_%02d", index)},
-				Replacement:               fmt.Sprintf("<MASK_%02d>", index),
+				SensitiveFields: []string{fmt.Sprintf("secret_%02d", index)},
+				Replacement:     fmt.Sprintf("<MASK_%02d>", index),
 			}
 			var err error
 			sequential[index], err = NewSupplementalRedactor(DefaultLimits(), policies[index])
@@ -182,12 +182,12 @@ func BenchmarkCompositeSupplementalRedactorSyntaxMarkerHitOnly(b *testing.B) {
 	for _, policyCount := range []int{2, 8, compositeSafeMissPolicyCount} {
 		policies := compositeSafeMissPolicies(false)[:policyCount]
 		policies[0] = RedactionPolicy{
-			AdditionalSensitiveFields: []string{"alpha"},
-			Replacement:               "beta=generated",
+			SensitiveFields: []string{"alpha"},
+			Replacement:     "beta=generated",
 		}
 		policies[1] = RedactionPolicy{
-			AdditionalSensitiveFields: []string{"beta"},
-			Replacement:               "FINAL",
+			SensitiveFields: []string{"beta"},
+			Replacement:     "FINAL",
 		}
 		sequential := make([]*Validator, len(policies))
 		for index, policy := range policies {
@@ -268,12 +268,12 @@ func BenchmarkCompositeSupplementalRedactorSyntaxMarkerHitOnly(b *testing.B) {
 func BenchmarkCompositeSupplementalRedactorSyntaxMarkerSparseHit(b *testing.B) {
 	policies := compositeSafeMissPolicies(false)
 	policies[0] = RedactionPolicy{
-		AdditionalSensitiveFields: []string{"alpha"},
-		Replacement:               "beta=generated",
+		SensitiveFields: []string{"alpha"},
+		Replacement:     "beta=generated",
 	}
 	policies[1] = RedactionPolicy{
-		AdditionalSensitiveFields: []string{"beta"},
-		Replacement:               "FINAL",
+		SensitiveFields: []string{"beta"},
+		Replacement:     "FINAL",
 	}
 	sequential := make([]*Validator, len(policies))
 	for index, policy := range policies {

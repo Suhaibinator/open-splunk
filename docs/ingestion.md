@@ -114,12 +114,12 @@ numbers, each field prints the exact byte count it read underneath itself
 whenever the text is not already that count's shortest spelling. The wire format
 is unchanged: every one of these fields is a byte count on the API.
 
-Only fresh events that pass index authorization, event validation, mandatory
-redaction, and host/source constraints are charged. Byte charge is the
-server-computed protobuf encoding size before normalization/redaction; client
-totals are never accounting authority. Token charge includes all admitted
-events, while each index receives its subset. A mixed-index batch commits all
-applicable schedules or none.
+Only fresh events that pass index authorization, event validation, and
+host/source constraints are charged. Byte charge is the server-computed
+protobuf encoding size before normalization and any explicitly configured
+redaction; client totals are never accounting authority. Token charge includes
+all admitted events, while each index receives its subset. A mixed-index batch
+commits all applicable schedules or none.
 
 Each enabled dimension stores a durable next-admission time. Admission advances
 it by `ceil(charge / rate seconds)`. This virtual schedule permits one complete

@@ -95,8 +95,8 @@ func TestSequentialSupplementalRedactionOrderingRegressions(t *testing.T) {
 		{
 			name: "earlier outer assignment consumes later inner assignment",
 			policies: []RedactionPolicy{
-				{AdditionalSensitiveFields: []string{"alpha"}, Replacement: "<FIRST>"},
-				{AdditionalSensitiveFields: []string{"beta"}, Replacement: "[SECOND]"},
+				{SensitiveFields: []string{"alpha"}, Replacement: "<FIRST>"},
+				{SensitiveFields: []string{"beta"}, Replacement: "[SECOND]"},
 			},
 			raw:  `alpha=" beta=0"`,
 			want: `alpha="<FIRST>"`,
@@ -104,8 +104,8 @@ func TestSequentialSupplementalRedactionOrderingRegressions(t *testing.T) {
 		{
 			name: "policy order beats text order for embedded JSON",
 			policies: []RedactionPolicy{
-				{AdditionalSensitiveFields: []string{"alpha"}, Replacement: "<FIRST>"},
-				{AdditionalSensitiveFields: []string{"beta"}, Replacement: "[SECOND]"},
+				{SensitiveFields: []string{"alpha"}, Replacement: "<FIRST>"},
+				{SensitiveFields: []string{"beta"}, Replacement: "[SECOND]"},
 			},
 			raw:  `first="{\"beta\":\"b\"}" second="{\"alpha\":\"a\"}"`,
 			want: `<FIRST>`,
@@ -113,8 +113,8 @@ func TestSequentialSupplementalRedactionOrderingRegressions(t *testing.T) {
 		{
 			name: "policy order beats text order for ambiguous encoded values",
 			policies: []RedactionPolicy{
-				{AdditionalSensitiveFields: []string{"alpha"}, Replacement: "<FIRST>"},
-				{AdditionalSensitiveFields: []string{"beta"}, Replacement: "[SECOND]"},
+				{SensitiveFields: []string{"alpha"}, Replacement: "<FIRST>"},
+				{SensitiveFields: []string{"beta"}, Replacement: "[SECOND]"},
 			},
 			raw:  `beta=\"b\" alpha=\"a\"`,
 			want: `<FIRST>`,
@@ -122,8 +122,8 @@ func TestSequentialSupplementalRedactionOrderingRegressions(t *testing.T) {
 		{
 			name: "generated marker can become a later quoted key",
 			policies: []RedactionPolicy{
-				{AdditionalSensitiveFields: []string{"alpha"}, Replacement: "beta"},
-				{AdditionalSensitiveFields: []string{"beta"}, Replacement: "FINAL"},
+				{SensitiveFields: []string{"alpha"}, Replacement: "beta"},
+				{SensitiveFields: []string{"beta"}, Replacement: "FINAL"},
 			},
 			raw:  `alpha="old"=original-secret`,
 			want: `alpha="beta"="FINAL"`,
@@ -177,8 +177,8 @@ func TestCompositeSupplementalRedactorDoesNotHideEarlierFailClosedBoundary(t *te
 			t.Parallel()
 
 			policies := []RedactionPolicy{
-				{AdditionalSensitiveFields: []string{"alpha"}, Replacement: "<FIRST>"},
-				{AdditionalSensitiveFields: []string{test.laterField}, Replacement: "[SECOND]"},
+				{SensitiveFields: []string{"alpha"}, Replacement: "<FIRST>"},
+				{SensitiveFields: []string{test.laterField}, Replacement: "[SECOND]"},
 			}
 			composite, err := NewCompositeSupplementalRedactor(DefaultLimits(), policies)
 			if err != nil {
@@ -204,8 +204,8 @@ func TestCompositeSupplementalRedactorPreservesPEMExtentMarkerInteraction(t *tes
 	t.Parallel()
 
 	policies := []RedactionPolicy{
-		{AdditionalSensitiveFields: []string{"alpha"}, Replacement: "-----BEGIN PRIVATE KEY-----"},
-		{AdditionalSensitiveFields: []string{"private_key"}, Replacement: "[SECOND]"},
+		{SensitiveFields: []string{"alpha"}, Replacement: "-----BEGIN PRIVATE KEY-----"},
+		{SensitiveFields: []string{"private_key"}, Replacement: "[SECOND]"},
 	}
 	composite, err := NewCompositeSupplementalRedactor(DefaultLimits(), policies)
 	if err != nil {
@@ -234,8 +234,8 @@ func TestCompositeSupplementalRedactorReplaysEarlierMatchThatCanExposeLaterKey(t
 	t.Parallel()
 
 	policies := []RedactionPolicy{
-		{AdditionalSensitiveFields: []string{"beta"}, Replacement: "[SECOND]"},
-		{AdditionalSensitiveFields: []string{"gamma"}, Replacement: "THIRD"},
+		{SensitiveFields: []string{"beta"}, Replacement: "[SECOND]"},
+		{SensitiveFields: []string{"gamma"}, Replacement: "THIRD"},
 	}
 	composite, err := NewCompositeSupplementalRedactor(DefaultLimits(), policies)
 	if err != nil {
@@ -284,8 +284,8 @@ func TestCompositeSupplementalRedactorHonorsLaterDepthPolicyAfterDirectKeyMatch(
 	t.Parallel()
 
 	policies := []RedactionPolicy{
-		{AdditionalSensitiveFields: []string{"alpha"}, Replacement: "FIRST_DEPTH"},
-		{AdditionalSensitiveFields: []string{"beta"}, Replacement: "LAST_DEPTH"},
+		{SensitiveFields: []string{"alpha"}, Replacement: "FIRST_DEPTH"},
+		{SensitiveFields: []string{"beta"}, Replacement: "LAST_DEPTH"},
 	}
 	composite, err := NewCompositeSupplementalRedactor(DefaultLimits(), policies)
 	if err != nil {
@@ -323,9 +323,9 @@ func TestCompositeSupplementalRedactorChoosesCompatibilityFallbackOnlyWhenNeeded
 	t.Parallel()
 
 	ordinary, err := NewCompositeSupplementalRedactor(DefaultLimits(), []RedactionPolicy{
-		{AdditionalSensitiveFields: []string{"alpha"}, Replacement: "<FIRST>"},
-		{AdditionalSensitiveFields: []string{"beta"}, Replacement: "[SECOND]"},
-		{AdditionalSensitiveFields: []string{"third"}, Replacement: "***"},
+		{SensitiveFields: []string{"alpha"}, Replacement: "<FIRST>"},
+		{SensitiveFields: []string{"beta"}, Replacement: "[SECOND]"},
+		{SensitiveFields: []string{"third"}, Replacement: "***"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -338,8 +338,8 @@ func TestCompositeSupplementalRedactorChoosesCompatibilityFallbackOnlyWhenNeeded
 		)
 	}
 	finalSyntax, err := NewCompositeSupplementalRedactor(DefaultLimits(), []RedactionPolicy{
-		{AdditionalSensitiveFields: []string{"alpha"}, Replacement: "<FIRST>"},
-		{AdditionalSensitiveFields: []string{"beta"}, Replacement: "MASK:2"},
+		{SensitiveFields: []string{"alpha"}, Replacement: "<FIRST>"},
+		{SensitiveFields: []string{"beta"}, Replacement: "MASK:2"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -355,22 +355,22 @@ func TestCompositeSupplementalRedactorChoosesCompatibilityFallbackOnlyWhenNeeded
 		{
 			name: "syntax-bearing generated marker",
 			policies: []RedactionPolicy{
-				{AdditionalSensitiveFields: []string{"alpha"}, Replacement: "beta=generated"},
-				{AdditionalSensitiveFields: []string{"beta"}, Replacement: "FINAL"},
+				{SensitiveFields: []string{"alpha"}, Replacement: "beta=generated"},
+				{SensitiveFields: []string{"beta"}, Replacement: "FINAL"},
 			},
 		},
 		{
 			name: "repeated exact field",
 			policies: []RedactionPolicy{
-				{AdditionalSensitiveFields: []string{"repeat"}, Replacement: "OLD"},
-				{AdditionalSensitiveFields: []string{"repeat"}, Replacement: "NEW"},
+				{SensitiveFields: []string{"repeat"}, Replacement: "OLD"},
+				{SensitiveFields: []string{"repeat"}, Replacement: "NEW"},
 			},
 		},
 		{
 			name: "generated marker becomes later exact field",
 			policies: []RedactionPolicy{
-				{AdditionalSensitiveFields: []string{"alpha"}, Replacement: "beta"},
-				{AdditionalSensitiveFields: []string{"beta"}, Replacement: "FINAL"},
+				{SensitiveFields: []string{"alpha"}, Replacement: "beta"},
+				{SensitiveFields: []string{"beta"}, Replacement: "FINAL"},
 			},
 		},
 	} {
@@ -410,8 +410,8 @@ func compositeSafeMissPolicies(syntaxBearing bool) []RedactionPolicy {
 	policies := make([]RedactionPolicy, compositeSafeMissPolicyCount)
 	for index := range policies {
 		policies[index] = RedactionPolicy{
-			AdditionalSensitiveFields: []string{fmt.Sprintf("secret_%02d", index)},
-			Replacement:               compositeSafeMissReplacement(index, syntaxBearing),
+			SensitiveFields: []string{fmt.Sprintf("secret_%02d", index)},
+			Replacement:     compositeSafeMissReplacement(index, syntaxBearing),
 		}
 	}
 	return policies
@@ -546,8 +546,8 @@ func TestCompositeSupplementalRedactorSyntaxSafeMissAllocationParity(t *testing.
 
 func TestCompositeSupplementalRedactorOrderedReplayMatchesSequentialAcrossSurfaces(t *testing.T) {
 	policies := []RedactionPolicy{
-		{AdditionalSensitiveFields: []string{"alpha"}, Replacement: "beta=generated"},
-		{AdditionalSensitiveFields: []string{"beta"}, Replacement: "FINAL"},
+		{SensitiveFields: []string{"alpha"}, Replacement: "beta=generated"},
+		{SensitiveFields: []string{"beta"}, Replacement: "FINAL"},
 	}
 	composite, err := NewCompositeSupplementalRedactor(DefaultLimits(), policies)
 	if err != nil {
@@ -734,9 +734,9 @@ func TestCompositeSupplementalRedactorDirectFieldReplaysFromMiddleMatch(t *testi
 	t.Parallel()
 
 	policies := []RedactionPolicy{
-		{AdditionalSensitiveFields: []string{"unrelated"}, Replacement: "<PREFIX>"},
-		{AdditionalSensitiveFields: []string{"alpha"}, Replacement: "beta=generated"},
-		{AdditionalSensitiveFields: []string{"beta"}, Replacement: "FINAL"},
+		{SensitiveFields: []string{"unrelated"}, Replacement: "<PREFIX>"},
+		{SensitiveFields: []string{"alpha"}, Replacement: "beta=generated"},
+		{SensitiveFields: []string{"beta"}, Replacement: "FINAL"},
 	}
 	composite, err := NewCompositeSupplementalRedactor(DefaultLimits(), policies)
 	if err != nil {
@@ -774,22 +774,22 @@ func TestCompositeSupplementalRedactorDirectFieldDropsUnknownBytesLikeSequential
 		{
 			name: "single policy",
 			policies: []RedactionPolicy{
-				{AdditionalSensitiveFields: []string{"alpha"}, Replacement: "FINAL"},
+				{SensitiveFields: []string{"alpha"}, Replacement: "FINAL"},
 			},
 		},
 		{
 			name: "unrelated syntax-bearing prefix",
 			policies: []RedactionPolicy{
-				{AdditionalSensitiveFields: []string{"unrelated"}, Replacement: "MASK:0"},
-				{AdditionalSensitiveFields: []string{"alpha"}, Replacement: "FINAL"},
+				{SensitiveFields: []string{"unrelated"}, Replacement: "MASK:0"},
+				{SensitiveFields: []string{"alpha"}, Replacement: "FINAL"},
 			},
 			wantOrderedPath: true,
 		},
 		{
 			name: "earlier direct replacement",
 			policies: []RedactionPolicy{
-				{AdditionalSensitiveFields: []string{"alpha"}, Replacement: "OLD"},
-				{AdditionalSensitiveFields: []string{"alpha"}, Replacement: "FINAL"},
+				{SensitiveFields: []string{"alpha"}, Replacement: "OLD"},
+				{SensitiveFields: []string{"alpha"}, Replacement: "FINAL"},
 			},
 			wantOrderedPath: true,
 		},
@@ -856,16 +856,16 @@ func TestNewCompositeSupplementalRedactorValidatesEveryPolicy(t *testing.T) {
 		t.Fatal("composite policy without fields was accepted")
 	}
 	if _, err := NewCompositeSupplementalRedactor(DefaultLimits(), []RedactionPolicy{{
-		AdditionalSensitiveFields: []string{"alpha"},
-		Replacement:               string([]byte{0xff}),
+		SensitiveFields: []string{"alpha"},
+		Replacement:     string([]byte{0xff}),
 	}}); err == nil {
 		t.Fatal("composite policy with invalid UTF-8 replacement was accepted")
 	}
 	limits := DefaultLimits()
 	limits.MaxFieldNameBytes = 0
 	if _, err := NewCompositeSupplementalRedactor(limits, []RedactionPolicy{{
-		AdditionalSensitiveFields: []string{"alpha"},
-		Replacement:               "MASKED",
+		SensitiveFields: []string{"alpha"},
+		Replacement:     "MASKED",
 	}}); err == nil {
 		t.Fatal("composite policy with invalid limits was accepted")
 	}
@@ -875,9 +875,9 @@ func TestCompositeSupplementalRedactorUsesPerFieldValueExtent(t *testing.T) {
 	t.Parallel()
 
 	composite, err := NewCompositeSupplementalRedactor(DefaultLimits(), []RedactionPolicy{
-		{AdditionalSensitiveFields: []string{"authorization"}, Replacement: "<AUTH>"},
-		{AdditionalSensitiveFields: []string{"cookie"}, Replacement: "<COOKIE>"},
-		{AdditionalSensitiveFields: []string{"private_key"}, Replacement: "<KEY>"},
+		{SensitiveFields: []string{"authorization"}, Replacement: "<AUTH>"},
+		{SensitiveFields: []string{"cookie"}, Replacement: "<COOKIE>"},
+		{SensitiveFields: []string{"private_key"}, Replacement: "<KEY>"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -920,8 +920,8 @@ func TestCompositeSupplementalRedactorReevaluatesBinaryUTF8BetweenPolicies(t *te
 	t.Parallel()
 
 	policies := []RedactionPolicy{
-		{AdditionalSensitiveFields: []string{"alpha"}, Replacement: "<FIRST>"},
-		{AdditionalSensitiveFields: []string{"beta"}, Replacement: "[SECOND]"},
+		{SensitiveFields: []string{"alpha"}, Replacement: "<FIRST>"},
+		{SensitiveFields: []string{"beta"}, Replacement: "[SECOND]"},
 	}
 	composite, err := NewCompositeSupplementalRedactor(DefaultLimits(), policies)
 	if err != nil {
@@ -947,9 +947,9 @@ func TestCompositeSupplementalRedactorIsSafeForConcurrentUse(t *testing.T) {
 	t.Parallel()
 
 	policies := []RedactionPolicy{
-		{AdditionalSensitiveFields: []string{"alpha"}, Replacement: "beta=generated"},
-		{AdditionalSensitiveFields: []string{"beta"}, Replacement: "FINAL"},
-		{AdditionalSensitiveFields: []string{"third"}, Replacement: "***"},
+		{SensitiveFields: []string{"alpha"}, Replacement: "beta=generated"},
+		{SensitiveFields: []string{"beta"}, Replacement: "FINAL"},
+		{SensitiveFields: []string{"third"}, Replacement: "***"},
 	}
 	composite, err := NewCompositeSupplementalRedactor(DefaultLimits(), policies)
 	if err != nil {
@@ -1277,16 +1277,16 @@ func applySequentialSupplementalRedaction(
 func supplementalRedactionCases() []supplementalRedactionCase {
 	ordinary := []RedactionPolicy{
 		{
-			AdditionalSensitiveFields: []string{"alpha", "customerCredential", "a:b", "api key"},
-			Replacement:               "<FIRST>",
+			SensitiveFields: []string{"alpha", "customerCredential", "a:b", "api key"},
+			Replacement:     "<FIRST>",
 		},
 		{
-			AdditionalSensitiveFields: []string{"beta", "customer_credential"},
-			Replacement:               "[SECOND]",
+			SensitiveFields: []string{"beta", "customer_credential"},
+			Replacement:     "[SECOND]",
 		},
 		{
-			AdditionalSensitiveFields: []string{"third"},
-			Replacement:               "THIRD",
+			SensitiveFields: []string{"third"},
+			Replacement:     "THIRD",
 		},
 	}
 	return []supplementalRedactionCase{
@@ -1517,8 +1517,8 @@ func supplementalRedactionCases() []supplementalRedactionCase {
 		{
 			name: "later policy rewrites an earlier generated marker",
 			policies: []RedactionPolicy{
-				{AdditionalSensitiveFields: []string{"alpha"}, Replacement: "beta=generated-secret"},
-				{AdditionalSensitiveFields: []string{"beta"}, Replacement: "FINAL"},
+				{SensitiveFields: []string{"alpha"}, Replacement: "beta=generated-secret"},
+				{SensitiveFields: []string{"beta"}, Replacement: "FINAL"},
 			},
 			event: func(t *testing.T) *opensplunk.LogEvent {
 				t.Helper()
@@ -1536,8 +1536,8 @@ func supplementalRedactionCases() []supplementalRedactionCase {
 		{
 			name: "plain generated marker becomes a later quoted key",
 			policies: []RedactionPolicy{
-				{AdditionalSensitiveFields: []string{"alpha"}, Replacement: "beta"},
-				{AdditionalSensitiveFields: []string{"beta"}, Replacement: "FINAL"},
+				{SensitiveFields: []string{"alpha"}, Replacement: "beta"},
+				{SensitiveFields: []string{"beta"}, Replacement: "FINAL"},
 			},
 			event: func(t *testing.T) *opensplunk.LogEvent {
 				t.Helper()
@@ -1552,8 +1552,8 @@ func supplementalRedactionCases() []supplementalRedactionCase {
 		{
 			name: "last sequential policy wins for a repeated exact field",
 			policies: []RedactionPolicy{
-				{AdditionalSensitiveFields: []string{"repeat"}, Replacement: "OLD"},
-				{AdditionalSensitiveFields: []string{"repeat"}, Replacement: "NEW"},
+				{SensitiveFields: []string{"repeat"}, Replacement: "OLD"},
+				{SensitiveFields: []string{"repeat"}, Replacement: "NEW"},
 			},
 			event: func(t *testing.T) *opensplunk.LogEvent {
 				t.Helper()
@@ -1568,8 +1568,8 @@ func supplementalRedactionCases() []supplementalRedactionCase {
 		{
 			name: "large ambiguous encoded key uses first ordered fallback",
 			policies: []RedactionPolicy{
-				{AdditionalSensitiveFields: []string{"alpha"}, Replacement: "FIRST"},
-				{AdditionalSensitiveFields: []string{"beta"}, Replacement: "SECOND"},
+				{SensitiveFields: []string{"alpha"}, Replacement: "FIRST"},
+				{SensitiveFields: []string{"beta"}, Replacement: "SECOND"},
 			},
 			event: func(t *testing.T) *opensplunk.LogEvent {
 				t.Helper()
@@ -1714,9 +1714,9 @@ func requireCompositeSupplementalMatchesSequential(
 
 func FuzzCompositeSupplementalRedactorMatchesSequentialPolicies(f *testing.F) {
 	policies := []RedactionPolicy{
-		{AdditionalSensitiveFields: []string{"alpha", "a:b"}, Replacement: "<FIRST>"},
-		{AdditionalSensitiveFields: []string{"beta", "customer_credential"}, Replacement: "[SECOND]"},
-		{AdditionalSensitiveFields: []string{"third"}, Replacement: "***"},
+		{SensitiveFields: []string{"alpha", "a:b"}, Replacement: "<FIRST>"},
+		{SensitiveFields: []string{"beta", "customer_credential"}, Replacement: "[SECOND]"},
+		{SensitiveFields: []string{"third"}, Replacement: "***"},
 	}
 	composite, err := NewCompositeSupplementalRedactor(DefaultLimits(), policies)
 	if err != nil {
@@ -1787,26 +1787,26 @@ func FuzzCompositeSupplementalRedactorOrderedOnChangeMatchesSequentialPolicies(f
 			name:        "syntax marker",
 			directField: "alpha",
 			policies: []RedactionPolicy{
-				{AdditionalSensitiveFields: []string{"alpha"}, Replacement: "beta=generated"},
-				{AdditionalSensitiveFields: []string{"beta"}, Replacement: "FINAL"},
-				{AdditionalSensitiveFields: []string{"third"}, Replacement: "<LAST>"},
+				{SensitiveFields: []string{"alpha"}, Replacement: "beta=generated"},
+				{SensitiveFields: []string{"beta"}, Replacement: "FINAL"},
+				{SensitiveFields: []string{"third"}, Replacement: "<LAST>"},
 			},
 		},
 		{
 			name:        "repeated field",
 			directField: "repeat",
 			policies: []RedactionPolicy{
-				{AdditionalSensitiveFields: []string{"repeat"}, Replacement: "OLD"},
-				{AdditionalSensitiveFields: []string{"beta"}, Replacement: "[SECOND]"},
-				{AdditionalSensitiveFields: []string{"repeat"}, Replacement: "NEW"},
+				{SensitiveFields: []string{"repeat"}, Replacement: "OLD"},
+				{SensitiveFields: []string{"beta"}, Replacement: "[SECOND]"},
+				{SensitiveFields: []string{"repeat"}, Replacement: "NEW"},
 			},
 		},
 		{
 			name:        "marker becomes later field",
 			directField: "alpha",
 			policies: []RedactionPolicy{
-				{AdditionalSensitiveFields: []string{"alpha"}, Replacement: "beta"},
-				{AdditionalSensitiveFields: []string{"beta"}, Replacement: "FINAL"},
+				{SensitiveFields: []string{"alpha"}, Replacement: "beta"},
+				{SensitiveFields: []string{"beta"}, Replacement: "FINAL"},
 			},
 		},
 		{
@@ -1814,10 +1814,10 @@ func FuzzCompositeSupplementalRedactorOrderedOnChangeMatchesSequentialPolicies(f
 			directField: "alpha",
 			policies: []RedactionPolicy{
 				{
-					AdditionalSensitiveFields: []string{"alpha"},
-					Replacement:               "-----BEGIN PRIVATE KEY-----",
+					SensitiveFields: []string{"alpha"},
+					Replacement:     "-----BEGIN PRIVATE KEY-----",
 				},
-				{AdditionalSensitiveFields: []string{"private_key"}, Replacement: "[KEY]"},
+				{SensitiveFields: []string{"private_key"}, Replacement: "[KEY]"},
 			},
 		},
 	}
