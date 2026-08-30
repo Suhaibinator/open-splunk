@@ -1121,33 +1121,10 @@ export function collectImportSpecifiers(source) {
 /** The one file `app/layout.tsx` imports, and the only `@import` list. */
 export const STYLESHEET_ENTRY_POINT = "app/styles/index.css";
 
-/** The monolith Phase 4 split, kept as a name so nothing has to spell it twice. */
-export const RETIRED_MONOLITH = "app/globals.css";
-
-/** Where the frozen pre-split rule set lives. */
-export const MONOLITH_LEDGER = "scripts/css-phase3-monolith.json";
-
-/** Files that name stylesheets for a tool rather than for the browser. */
-const TOOL_CONFIGURATION_FILES = Object.freeze([
-  ".github/workflows/ci.yml",
-  ".stylelintrc.json",
-  "Makefile",
-  "next.config.ts",
-  "package.json",
-  "playwright.contracts.config.ts",
-]);
-
-/** Sources whose comments hold the refactor's history and must not count. */
-const COMMENTED_SOURCE_EXTENSIONS = new Set([".cjs", ".js", ".jsx", ".mjs", ".ts", ".tsx"]);
-
 /**
- * The scanners, which have to spell in code what they are looking for.
- *
- * `RETIRED_MONOLITH` and the module extension are string constants of this file,
- * so a scan that read this file would report itself and nothing else. Excluding
- * the scanner hides nothing: it imports no stylesheet and reads no `styles`
- * object, and a module that came back would still be a file, which the file
- * walk sees whatever this list says.
+ * The scanner has to spell the module extension and `styles` access patterns it
+ * rejects. Excluding itself prevents those patterns from reporting the scanner;
+ * a module that came back would still be found by the repository file walk.
  */
 const SCANNER_MODULES = new Set(["scripts/style-inventory.mjs"]);
 
@@ -1162,47 +1139,6 @@ function tidy(text) {
 /** Reads one repository-relative path. */
 function readRepositoryFile(root, relative) {
   return readFile(path.join(root, ...relative.split("/")), "utf8");
-}
-
-/**
- * Blocks that only hold other rules, and so declare nothing of their own.
- *
- * A `@media` block is the context of the rules inside it rather than a rule, and
- * `cssBlocks` already hands each of those rules its ancestor list, so counting
- * the container as well would double-count every responsive rule.
- */
-function isContainerAtRule(prelude) {
-  return /^@(?:media|supports|keyframes|layer|container)\b/u.test(prelude);
-}
-
-/**
- * One rule as a single comparable line.
- *
- * The shape is `<at-rules> || <selector list> || <declarations>`: everything
- * that decides what the rule paints and nothing that decides where it is
- * written. Two rules compare equal exactly when the browser cannot tell them
- * apart, which is what makes "the split moved this rule" a checkable claim.
- */
-export function ruleSignature(block) {
-  const at = block.ancestors.map((ancestor) => tidy(ancestor)).join(" ");
-  const selector = tidy(block.prelude).replaceAll(/\s*,\s*/gu, ", ");
-  const declarations = cssDeclarations(block.body)
-    .map((declaration) => `${tidy(declaration.property)}: ${tidy(declaration.value)}`)
-    .join("; ");
-  return `${at} || ${selector} || ${declarations}`;
-}
-
-/** Every rule one stylesheet's text states, in source order. */
-export function collectRuleSignatures(css) {
-  return cssBlocks(css)
-    .filter((block) => !isContainerAtRule(block.prelude))
-    .map((block) => ruleSignature(block));
-}
-
-/** Splits a signature back into its at-rule, selector and declaration parts. */
-function ruleParts(signature) {
-  const [at = "", selector = "", declarations = ""] = signature.split(" || ");
-  return { at, declarations, selector };
 }
 
 /**
@@ -1253,151 +1189,6 @@ export async function listApplicationStylesheets(root) {
     .toSorted();
 }
 
-/**
- * Every path the repository holds, as a set.
- *
- * Callers ask it several questions in a row -- does the monolith still exist,
- * does each of two dozen imports resolve -- and one walk answers all of them.
- */
-export async function collectRepositoryPaths(root) {
-  return new Set((await listRepositoryFiles(root)).map((file) => relativePosix(root, file)));
-}
-
-/** The frozen pre-split rule set, with the exclusions and edits it records. */
-export async function readMonolithLedger(root) {
-  const parsed = JSON.parse(await readFile(path.join(root, ...MONOLITH_LEDGER.split("/")), "utf8"));
-  return {
-    excluded: new Set(parsed.excluded.flatMap((entry) => entry.files)),
-    rules: parsed.rules,
-    substitutions: parsed.substitutions,
-  };
-}
-
-/**
- * Every rule the split set states, concatenated in `index.css` import order.
- *
- * The stylesheets the ledger excludes are skipped: they were never in the
- * monolith, so including them would report the whole token layer as new.
- */
-export async function collectSplitRules(root, excluded) {
-  const wanted = (await listIndexImports(root)).filter((entry) => !excluded.has(entry.file));
-  const perFile = await Promise.all(wanted.map(async (entry) => (
-    collectRuleSignatures(await readRepositoryFile(root, entry.file))
-      .map((signature) => ({ file: entry.file, signature }))
-  )));
-  return perFile.flat();
-}
-
-/** Counts how many times each value appears, so two lists diff as multisets. */
-function tally(values) {
-  const counts = new Map();
-  for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1);
-  return counts;
-}
-
-/**
- * The multiset difference between the frozen monolith and the split set.
- *
- * `missing` is what the monolith stated and the split set does not; `extra` is
- * the reverse. Order is deliberately not compared -- the phase moved every
- * responsive rule to the file owning its base rules, which reorders them on
- * purpose -- so a rule that merely moved shows up in neither list.
- */
-export function diffRuleSets(recorded, live) {
-  const before = tally(recorded);
-  const after = tally(live.map((rule) => rule.signature));
-  const sites = new Map();
-  for (const rule of live) sites.set(rule.signature, rule.file);
-  const missing = [];
-  const extra = [];
-  for (const [signature, count] of before) {
-    for (let index = after.get(signature) ?? 0; index < count; index += 1) missing.push(signature);
-  }
-  for (const [signature, count] of after) {
-    for (let index = before.get(signature) ?? 0; index < count; index += 1) {
-      extra.push(`${sites.get(signature)} :: ${signature}`);
-    }
-  }
-  return { extra: extra.toSorted(), missing: missing.toSorted() };
-}
-
-/**
- * Applies the ledger's recorded edits so only unrecorded drift survives.
- *
- * An entry's `before` is one rule, the list of rules a later phase folded into
- * one, or the empty list. The list form exists because two rules with the same
- * selector under the same at-rules are a `no-duplicate-selectors` finding whose
- * only fix is to state them once: the later rule's declarations already win, so
- * the fold keeps every value the cascade was resolving to and there is nothing
- * left for a one-for-one rewrite to name. The rules are replaced in place at
- * the first member's position and the rest drop out, which is where the fold
- * put them.
- *
- * The empty list is how a rule that is genuinely new is recorded. Parity holds
- * the split set to the monolith's text in both directions, so a rule nobody
- * wrote before is reported as `extra` exactly as a rule copied into a second
- * file is, and until this form existed the only ways past it were to delete the
- * test or to forge a `before` -- which is why the empty case is spelled out
- * here rather than left to `before[0]` being `undefined` and quietly matching
- * nothing. An addition is appended after every recorded rule, sorted, because
- * the monolith holds no position for it: that makes it the last declaration of
- * its selector, so if it contests a selector an existing rule also states and
- * the live tree does not put it last, "every repeated selector keeps the order
- * that decides its value" fails -- which is the right answer, since a new rule
- * that ties on specificity is deciding a value by where it was typed.
- */
-export function applySubstitutions(rules, substitutions) {
-  const replacements = new Map();
-  const folded = new Set();
-  const added = [];
-  for (const entry of substitutions) {
-    const before = Array.isArray(entry.before) ? entry.before : [entry.before];
-    if (before.length === 0) {
-      added.push(entry.after);
-      continue;
-    }
-    replacements.set(before[0], entry.after);
-    for (const rule of before.slice(1)) folded.add(rule);
-  }
-  const remaining = new Map();
-  for (const rule of folded) remaining.set(rule, rules.filter((one) => one === rule).length);
-  const rewritten = rules.flatMap((rule) => {
-    if (folded.has(rule) && remaining.get(rule) > 0) {
-      remaining.set(rule, remaining.get(rule) - 1);
-      return [];
-    }
-    return [replacements.get(rule) ?? rule];
-  });
-  return rewritten.concat(added.toSorted());
-}
-
-/**
- * The declared order of every property a repeated selector states more than once.
- *
- * Two rules with the same selector under the same at-rules tie on specificity,
- * so the later one wins and their order is the whole answer to "which value does
- * this element get". Keying on the selector text rather than on a guess at which
- * selectors match the same element keeps the check exact: it reports a real
- * inversion and never an imagined one. Selector lists are split, because
- * `.a, .b { color }` and a later `.b { color }` contest `.b` no differently for
- * `.b` having been written beside `.a`.
- */
-export function collectTieBreakOrder(signatures) {
-  const order = new Map();
-  for (const signature of signatures) {
-    const { at, declarations, selector } = ruleParts(signature);
-    if (declarations === "") continue;
-    for (const one of selector.split(", ")) {
-      for (const declaration of declarations.split("; ")) {
-        const separator = declaration.indexOf(":");
-        const key = `${at} || ${one} || ${declaration.slice(0, separator)}`;
-        order.set(key, [...(order.get(key) ?? []), declaration.slice(separator + 2)]);
-      }
-    }
-  }
-  return order;
-}
-
 /** Class names a selector list names, without duplicates. */
 function selectorClasses(selector) {
   return [...new Set([...selector.matchAll(/\.(-?[_a-zA-Z][\w-]*)/gu)].map((match) => match[1]))];
@@ -1445,9 +1236,9 @@ export async function collectResponsiveOwnership(root) {
  * largest-first so each overrides the one above it; the pointer query has to
  * follow them all, or a tap target set at a width beats the coarse-pointer
  * minimum. A query that also constrains height is not on the width canon at all
- * -- the two `max-height: 650px` queries are a legacy step the canon lists as
- * untouched -- so it sorts after every width and before the pointer rules,
- * which is where both of them already sit.
+ * -- the two `max-height: 650px` queries are its only height exception -- so it
+ * sorts after every width and before the pointer rules, which is where both of
+ * them already sit.
  */
 export function mediaQueryRank(query) {
   if (/prefers-reduced-motion/u.test(query)) return 400;
@@ -1530,7 +1321,7 @@ export async function collectModuleLaneReferences(root) {
   const perFile = await Promise.all((await listRepositoryFiles(root)).map(async (file) => {
     const relative = relativePosix(root, file);
     if (relative.endsWith(".module.css")) return [`${relative} is a CSS module`];
-    if (!COMMENTED_SOURCE_EXTENSIONS.has(path.extname(file))) return [];
+    if (!SOURCE_EXTENSIONS.has(path.extname(file))) return [];
     if (SCANNER_MODULES.has(relative) || /\.(?:test|spec)\.[a-z]+$/u.test(relative)) return [];
     const source = maskStringLiterals(await readFile(file, "utf8"));
     const offenders = [];
@@ -1540,28 +1331,6 @@ export async function collectModuleLaneReferences(root) {
       offenders.push(`${relative} reads styles${match[1] === "[" ? "[…]" : match[1]}`);
     }
     return offenders;
-  }));
-  return perFile.flat().toSorted();
-}
-
-/**
- * Live references to the deleted monolith, in code and in the tool configuration.
- *
- * Prose keeps saying `app/globals.css`, and should: the comments explaining the
- * split would be unreadable without naming what was split. What must not survive
- * is an instruction -- an import, a lint target, a path handed to a browser --
- * so source comments are masked and Markdown is left alone entirely.
- */
-export async function collectMonolithReferences(root) {
-  const configured = new Set(TOOL_CONFIGURATION_FILES);
-  const perFile = await Promise.all((await listRepositoryFiles(root)).map(async (file) => {
-    const relative = relativePosix(root, file);
-    if (SCANNER_MODULES.has(relative)) return [];
-    const isSource = COMMENTED_SOURCE_EXTENSIONS.has(path.extname(file));
-    if (!isSource && !configured.has(relative)) return [];
-    const raw = await readFile(file, "utf8");
-    const source = isSource ? maskStringLiterals(raw) : raw;
-    return source.includes(RETIRED_MONOLITH) ? [relative] : [];
   }));
   return perFile.flat().toSorted();
 }
@@ -1632,7 +1401,7 @@ export async function collectStylesheetImportSites(root) {
       const css = stripCssComments(await readFile(file, "utf8"));
       return [...css.matchAll(/@import\s+url\("([^"]+)"\)/gu)].map((match) => `${relative} @imports ${match[1]}`);
     }
-    if (!COMMENTED_SOURCE_EXTENSIONS.has(extension)) return [];
+    if (!SOURCE_EXTENSIONS.has(extension)) return [];
     const masked = maskStringLiterals(await readFile(file, "utf8"));
     return [...masked.matchAll(/\bimport\s+‹([^›]*\.css)›/gu)].map((match) => `${relative} imports ${match[1]}`);
   }));

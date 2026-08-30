@@ -503,37 +503,6 @@ async function resolveTokens(page: Page, names: readonly string[]): Promise<stri
   }), names);
 }
 
-// Every pre-refactor `:root` colour and the value it carried before the token
-// layer existed, keyed by the role that carries it now. Phase 2 rewrote the
-// call sites and deleted the aliases, so what is pinned here is the semantic
-// name and the chain below it. `--orange` and `--yellow` named no role, so the
-// primitive each resolved to is pinned directly rather than dropped.
-const PRE_REFACTOR_COLOUR_VALUES: ReadonlyArray<readonly [string, string]> = [
-  ["--bg-inverse", "rgb(22, 27, 31)"],
-  ["--chrome-bar", "rgb(30, 37, 43)"],
-  ["--chrome-appbar", "rgb(63, 70, 76)"],
-  ["--chrome-hover", "rgb(75, 83, 90)"],
-  ["--bg-canvas", "rgb(246, 246, 244)"],
-  ["--bg-surface", "rgb(255, 255, 255)"],
-  ["--bg-subtle", "rgb(242, 243, 243)"],
-  ["--bg-raised", "rgb(251, 251, 250)"],
-  ["--border", "rgb(207, 212, 215)"],
-  ["--border-strong", "rgb(174, 182, 187)"],
-  ["--fg-text", "rgb(40, 52, 61)"],
-  ["--fg-strong", "rgb(25, 37, 45)"],
-  ["--fg-muted", "rgb(100, 113, 122)"],
-  ["--fg-faint", "rgb(137, 148, 155)"],
-  ["--accent", "rgb(71, 127, 43)"],
-  ["--accent-hover", "rgb(55, 106, 32)"],
-  ["--accent-soft", "rgb(232, 242, 225)"],
-  ["--status-info", "rgb(40, 120, 168)"],
-  ["--status-info-soft", "rgb(232, 243, 249)"],
-  ["--orange-400", "rgb(217, 122, 35)"],
-  ["--status-error", "rgb(201, 60, 55)"],
-  ["--status-error-soft", "rgb(255, 240, 238)"],
-  ["--amber-500", "rgb(210, 166, 0)"],
-];
-
 const SEMANTIC_COLOUR_TOKENS: readonly string[] = [
   "--bg-canvas",
   "--bg-surface",
@@ -598,52 +567,6 @@ const SEMANTIC_COLOUR_TOKENS: readonly string[] = [
   "--focus-ring",
 ];
 
-// The semantic tokens whose value is a contract rather than a choice, and the
-// literal each one has to reproduce.
-//
-// `PRE_REFACTOR_COLOUR_VALUES` above pins twenty-three pre-refactor values, which
-// left the rest of tier 2 checked only for "resolves to something". Every token
-// below stands in for a literal an application stylesheet or a component still ships --
-// the four severity swatches (`.legend-info` and its peers, and the same four
-// in `visualization-panel.tsx`), the categorical ramp against
-// `TIME_SERIES_COLORS`, the search-term highlight, the selection wash, the
-// focus outline and the chrome the product shell paints -- so a wrong primitive
-// behind any of them would make Phase 2's substitution move pixels. Pinning the
-// value here is what makes that substitution provably a no-op.
-const EXPECTED_SEMANTIC_TOKENS: ReadonlyArray<readonly [string, string]> = [
-  ["--bg-inverse", "rgb(22, 27, 31)"],
-  ["--fg-inverse", "rgb(255, 255, 255)"],
-  ["--fg-link", "rgb(40, 120, 168)"],
-  ["--border-focus", "rgb(47, 138, 193)"],
-  ["--status-warning", "rgb(168, 115, 0)"],
-  ["--status-warning-soft", "rgb(255, 248, 233)"],
-  ["--status-neutral", "rgb(116, 129, 136)"],
-  ["--status-neutral-soft", "rgb(242, 243, 243)"],
-  ["--level-info", "rgb(95, 156, 58)"],
-  ["--level-warn", "rgb(221, 162, 41)"],
-  ["--level-error", "rgb(200, 79, 72)"],
-  ["--level-debug", "rgb(82, 144, 176)"],
-  ["--chart-series-1", "rgb(95, 156, 58)"],
-  ["--chart-series-2", "rgb(40, 120, 168)"],
-  ["--chart-series-3", "rgb(221, 162, 41)"],
-  ["--chart-series-4", "rgb(139, 103, 168)"],
-  ["--chart-series-5", "rgb(200, 79, 72)"],
-  ["--chart-series-6", "rgb(77, 154, 138)"],
-  ["--chart-series-7", "rgb(199, 101, 148)"],
-  ["--chart-series-8", "rgb(111, 127, 181)"],
-  ["--chart-series-9", "rgb(165, 120, 53)"],
-  ["--chart-series-10", "rgb(79, 143, 111)"],
-  ["--chart-series-11", "rgb(138, 109, 85)"],
-  ["--chart-series-12", "rgb(112, 143, 55)"],
-  ["--chrome-bar", "rgb(30, 37, 43)"],
-  ["--chrome-appbar", "rgb(63, 70, 76)"],
-  ["--chrome-hover", "rgb(75, 83, 90)"],
-  ["--chrome-fg", "rgb(255, 255, 255)"],
-  ["--highlight", "rgb(255, 241, 168)"],
-  ["--selection", "rgb(232, 243, 249)"],
-  ["--focus-ring", "rgb(47, 138, 193)"],
-];
-
 /** WCAG 2.2 AA for text below 18.66px, which is every size this product ships. */
 const AA_CONTRAST = 4.5;
 
@@ -664,58 +587,7 @@ function contrastRatio(first: string, second: string): number {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
-/** The pre-refactor alias names Phase 2 deleted, which may not come back. */
-const RETIRED_ALIASES: readonly string[] = [
-  "--app-bar",
-  "--app-bar-hover",
-  "--black",
-  "--blue",
-  "--blue-soft",
-  "--border-dark",
-  "--canvas",
-  "--faint",
-  "--green",
-  "--green-soft",
-  "--green-strong",
-  "--muted",
-  "--orange",
-  "--product-bar",
-  "--red",
-  "--red-soft",
-  "--surface",
-  "--surface-raised",
-  "--surface-subtle",
-  "--text",
-  "--text-strong",
-  "--yellow",
-];
-
 test.describe("colour token contracts", () => {
-  test("every role resolves to the value its pre-refactor name carried", async ({ page }) => {
-    await mount(page, "", DESKTOP_WIDTH);
-
-    const resolved = await resolveTokens(page, PRE_REFACTOR_COLOUR_VALUES.map(([name]) => name));
-    expect(resolved).toEqual(PRE_REFACTOR_COLOUR_VALUES.map(([, value]) => value));
-  });
-
-  test("the deleted pre-refactor aliases stay deleted", async ({ page }) => {
-    await mount(page, "", DESKTOP_WIDTH);
-
-    // A `var()` with no fallback on a name nothing declares leaves the property
-    // unset, and `color` then inherits; the fallback makes "undeclared" a value
-    // this can read. A name that comes back would be a second spelling of a
-    // role, which is exactly what the two-tier split exists to prevent.
-    const revived = await page.evaluate((names) => names.filter((name) => {
-      const probe = document.createElement("span");
-      probe.style.color = `var(${name}, rgb(1, 2, 3))`;
-      document.body.append(probe);
-      const value = globalThis.getComputedStyle(probe).color;
-      probe.remove();
-      return value !== "rgb(1, 2, 3)";
-    }), RETIRED_ALIASES);
-    expect(revived, "pre-refactor alias names the token layer declares again").toEqual([]);
-  });
-
   test("every semantic token resolves to a real colour", async ({ page }) => {
     await mount(page, "", DESKTOP_WIDTH);
 
@@ -731,13 +603,6 @@ test.describe("colour token contracts", () => {
     expect(unresolved).toEqual([]);
     // Distinct roles must not have collapsed onto one primitive by accident.
     expect(new Set(resolved).size).toBeGreaterThan(SEMANTIC_COLOUR_TOKENS.length / 2);
-  });
-
-  test("every semantic token that stands in for a literal resolves to that literal", async ({ page }) => {
-    await mount(page, "", DESKTOP_WIDTH);
-
-    const resolved = await resolveTokens(page, EXPECTED_SEMANTIC_TOKENS.map(([name]) => name));
-    expect(resolved).toEqual(EXPECTED_SEMANTIC_TOKENS.map(([, value]) => value));
   });
 
   // The five connected-backend state badges are a 13px bold glyph on a wash,

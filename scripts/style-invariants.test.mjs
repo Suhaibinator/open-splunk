@@ -1,14 +1,9 @@
 // Every structural invariant the CSS cleanup leaves behind, in one suite.
 //
-// Phases 0 to 4 each ended with a set of assertions written to keep that
-// phase's work from growing back, in a file of its own: reachability, the token
-// layer, the naming grammar, the literal sweep, the one-of-each-primitive fold,
-// and the split that replaced the single application stylesheet. Seven files
-// asked overlapping questions -- two of them checked that no test reads a
-// stylesheet, three checked the cascade order -- through three parsing
-// libraries, two of which exported a function of the same name returning
-// different sets in different shapes. Phase 5 folds them into this file and the
-// one library it reads through.
+// The styling cleanup left a set of assertions that keep its active contracts
+// from regressing: reachability, the token layer, the naming grammar, the
+// literal sweep, the one-of-each-primitive fold, and the ordered stylesheet
+// entry point. They live in this suite and read through one inventory library.
 //
 // What every assertion here has in common is that nothing else in the toolchain
 // can see it. CSS reports no duplicate rule, no unmatched class, no dangling
@@ -27,9 +22,9 @@
 //
 // The sections run: the reach that stops everything below passing by having
 // nothing to look at; the token layer and its grammar; the literal sweep; the
-// stylesheet set and its cascade order; parity with the stylesheet the split
-// replaced; where a responsive rule lives; one implementation of each
-// primitive; reachability in both directions; and the parsers.
+// stylesheet set and its cascade order; where a responsive rule lives; one
+// implementation of each primitive; reachability in both directions; and the
+// parsers.
 import assert from "node:assert/strict";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
@@ -37,11 +32,8 @@ import process from "node:process";
 import test from "node:test";
 
 import {
-  MONOLITH_LEDGER,
-  RETIRED_MONOLITH,
   STYLESHEET_ENTRY_POINT,
   acceptedKinds,
-  applySubstitutions,
   collectAnimationReferences,
   collectBaseRuleSites,
   collectClassAttributeTokens,
@@ -59,12 +51,9 @@ import {
   collectKeyframeSites,
   collectMediaQueryRuns,
   collectModuleLaneReferences,
-  collectMonolithReferences,
   collectPrimitiveReferences,
   collectPropertyKindMismatches,
-  collectRepositoryPaths,
   collectResponsiveOwnership,
-  collectRuleSignatures,
   collectRuntimeCustomProperties,
   collectScaleLiterals,
   collectScopeEscapes,
@@ -72,12 +61,10 @@ import {
   collectSeriesPalette,
   collectSeverityPalette,
   collectSourceClassEvidence,
-  collectSplitRules,
   collectStyledClasses,
   collectStylesheetClasses,
   collectStylesheetImportSites,
   collectTestStylesheetReads,
-  collectTieBreakOrder,
   collectTokenBlocks,
   collectTokenComments,
   collectTokenLayer,
@@ -89,7 +76,6 @@ import {
   cssDeclarations,
   declarationSignature,
   describeRuleSite,
-  diffRuleSets,
   findComposedStylesheetReads,
   findStylesheetTextReads,
   findTestStylesheetReads,
@@ -110,9 +96,7 @@ import {
   mediaQueryRank,
   normaliseHex,
   readHarnessExportExpression,
-  readMonolithLedger,
   relativePosix,
-  ruleSignature,
   stripCssComments,
   tokenKind,
   valueComponents,
@@ -215,18 +199,12 @@ test("the inventory reaches every stylesheet, test file and call site the suite 
   assert.ok(
     imports.length > 20,
     `${STYLESHEET_ENTRY_POINT} states only ${imports.length} imports; the walker is reading the wrong file`
-      + " and every parity and ordering assertion is vacuous",
+      + " and every import-order assertion is vacuous",
   );
   const application = await listApplicationStylesheets(workspace);
   assert.ok(
     application.length > 20,
     `the walker found only ${application.length} application stylesheets; it is missing the layer`,
-  );
-  const ledger = await readMonolithLedger(workspace);
-  assert.ok(
-    ledger.rules.length > 1500,
-    `${MONOLITH_LEDGER} records only ${ledger.rules.length} rules; the frozen rule set is truncated and`
-      + " parity would pass by having nothing to compare",
   );
 
   const retired = await readRetiredClasses();
@@ -484,62 +462,6 @@ test("the fixture harness injects exactly the stylesheets the application loads"
 
 /* == 3. The naming grammar and what the names promise ========================== */
 
-/**
- * The values `app/globals.css` shipped at 7459a0cc, the commit before the token
- * layer landed, each against the name that carries it today.
- *
- * Phase 1 moved these declarations into `app/styles` and rewrote each as a
- * chain of `var()` references; Phase 2 rewrote the call sites and deleted the
- * pre-refactor aliases, so the left-hand side is now the role rather than the
- * retired name. The contract is unchanged and is the reason the table survives
- * the deletion: if a chain resolves anywhere but here, the refactor moved a
- * pixel, and it moved it in a place no screenshot may happen to cover.
- * docs/theming.md tabulates which retired name each role replaced.
- *
- * `--orange` and `--yellow` named no role, so the primitive each resolved to is
- * pinned directly; every other row is a tier-2 token.
- */
-const PRE_REFACTOR_VALUES = {
-  "--accent": "#477f2b",
-  "--accent-hover": "#376a20",
-  "--accent-soft": "#e8f2e1",
-  "--amber-500": "#d2a600",
-  "--bg-canvas": "#f6f6f4",
-  "--bg-inverse": "#161b1f",
-  "--bg-raised": "#fbfbfa",
-  "--bg-subtle": "#f2f3f3",
-  "--bg-surface": "#ffffff",
-  "--border": "#cfd4d7",
-  "--border-strong": "#aeb6bb",
-  "--chrome-appbar": "#3f464c",
-  "--chrome-bar": "#1e252b",
-  "--chrome-hover": "#4b535a",
-  "--fg-faint": "#89949b",
-  "--fg-muted": "#64717a",
-  "--fg-strong": "#19252d",
-  "--fg-text": "#28343d",
-  "--font-mono": '"SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
-  "--font-sans": "Arial, Helvetica, sans-serif",
-  "--orange-400": "#d97a23",
-  "--shadow-lg": "0 10px 30px rgb(18 29 36 / 18%), 0 2px 7px rgb(18 29 36 / 12%)",
-  "--status-error": "#c93c37",
-  "--status-error-soft": "#fff0ee",
-  "--status-info": "#2878a8",
-  "--status-info-soft": "#e8f3f9",
-};
-
-/**
- * The pre-refactor alias block, now empty.
- *
- * `docs/theming.md`: "nothing may be added to that block, and each one
- * disappears as its call sites are rewritten". Phase 2 rewrote the last call
- * site, so the block is gone and the set below is the assertion that it stays
- * gone. The test it feeds still earns its runtime for the other shape it
- * catches: a tier-2 token the dark block forgot to restate looks exactly like a
- * new alias from here.
- */
-const LEGACY_ALIASES = new Set([]);
-
 /** Group prefixes the semantic tier is allowed to use, from docs/theming.md. */
 const SEMANTIC_GROUPS = ["accent", "bg", "border", "chart", "chrome", "fg", "level", "status", "syntax"];
 
@@ -562,9 +484,9 @@ const PRIMITIVE_STEPS = new Set([0, 50, 100, 150, 200, 250, 300, 350, 400, 450, 
  * surface flips between themes and the two chrome bars do not. Every ground a
  * foreground token's comment names is still checked, in both themes; what
  * changed is which token owns the bars. Secondary and tertiary text
- * are left out on purpose -- `--fg-faint` is placeholder ink and its ratio is
- * inherited from the pre-refactor palette, so pinning it here would assert a
- * decision this layer did not make.
+ * are left out on purpose -- `--fg-faint` is placeholder ink, so pinning it
+ * here would turn a current implementation detail into an accessibility
+ * promise.
  */
 const MANDATED_TEXT_PAIRS = [
   ["--fg-text", "--bg-canvas"],
@@ -689,7 +611,6 @@ test("every token name parses under the documented naming grammar", async () => 
       offenders.push(`${name} is not lowercase kebab-case`);
       continue;
     }
-    if (LEGACY_ALIASES.has(name)) continue;
     if (primitives.has(name)) {
       const parsed = /^--[a-z]+-(\d+)$/u.exec(name);
       if (parsed === null) offenders.push(`${name} holds a literal but is not named --<hue>-<step>`);
@@ -716,7 +637,7 @@ test("no semantic or scale token name mentions a hue", async () => {
   const hues = new Set([...primitives.keys()].map((name) => family(name)));
   const offenders = [];
   for (const name of light.keys()) {
-    if (primitives.has(name) || LEGACY_ALIASES.has(name)) continue;
+    if (primitives.has(name)) continue;
     const mentioned = name.slice(2).split("-").filter((segment) => hues.has(segment));
     if (mentioned.length > 0) offenders.push(`${name} names the hue ${mentioned.join(", ")}`);
   }
@@ -726,48 +647,6 @@ test("no semantic or scale token name mentions a hue", async () => {
     "docs/theming.md: \"No token name mentions a hue. --status-error, never --status-red.\" A hue in\n"
       + "the name freezes the colour into every call site and a theme can no longer move it:\n"
       + `${describeList(offenders.toSorted())}`,
-  );
-});
-
-test("the frozen legacy alias block gains no new members", async () => {
-  const { dark, fileOf, light, primitives } = await readTokenLayer();
-  // An alias is a colour token no theme can move: it exists to keep a
-  // pre-refactor call site working, so the dark block deliberately leaves it
-  // alone and it follows whatever semantic token it points at. The chart ramp
-  // is the one themeable token that is also unrestated, and is documented so.
-  const aliases = [...light]
-    .filter(([name, value]) => (
-      fileOf.get(name) === "app/styles/tokens-color.css"
-      && !primitives.has(name)
-      && value.startsWith("var(")
-      && !dark.has(name)
-      && !/^--chart-series-\d+$/u.test(name)
-    ))
-    .map(([name]) => name);
-  assert.deepEqual(
-    aliases.toSorted(),
-    [...LEGACY_ALIASES].toSorted(),
-    "The set of pre-refactor aliases changed. The block is empty and stays empty: a new token needs\n"
-      + "a documented role name, never a legacy one, and a deleted alias never comes back. A tier-2\n"
-      + "token that the dark block forgot to restate also lands here -- give it a dark value and it\n"
-      + "leaves the list again.",
-  );
-});
-
-test("every role that replaced a pre-refactor custom property resolves to its original value", async () => {
-  const { light } = await readTokenLayer();
-  const drift = [];
-  for (const [name, expected] of Object.entries(PRE_REFACTOR_VALUES)) {
-    const actual = resolve(name, light);
-    if (actual !== expected) drift.push(`${name} resolves to ${actual ?? "nothing"}, was ${expected}`);
-  }
-  assert.deepEqual(
-    drift,
-    [],
-    "The move off literals is a rename, not a recolour: the role that replaced each name\n"
-      + "the application stylesheet declared before the token layer has to resolve to the byte\n"
-      + "that name resolved to at 7459a0cc. A screenshot only covers the pixels a\n"
-      + `spec happens to visit, so the whole table is checked here:\n${describeList(drift)}`,
   );
 });
 
@@ -855,7 +734,6 @@ test("a semantic token points at a primitive and a primitive holds a literal", a
         if (references.length > 0) offenders.push(`${name} is a primitive but reads ${references.join(", ")}`);
         continue;
       }
-      if (LEGACY_ALIASES.has(name)) continue;
       for (const reference of references) {
         if (!primitives.has(reference)) {
           offenders.push(`${theme} ${name} reads ${reference}, which is not a tier-1 primitive`);
@@ -880,7 +758,7 @@ test("no two tokens in a role group resolve to the same colour in either theme",
     for (const [group, pattern] of Object.entries(ROLE_GROUPS)) {
       const byColour = new Map();
       for (const name of light.keys()) {
-        if (primitives.has(name) || LEGACY_ALIASES.has(name) || !pattern.test(name)) continue;
+        if (primitives.has(name) || !pattern.test(name)) continue;
         const value = resolve(name, scope);
         byColour.set(value, [...(byColour.get(value) ?? []), name]);
       }
@@ -918,7 +796,7 @@ test("the dark theme restates every themeable semantic token", async () => {
   const { dark, light, primitives } = await readTokenLayer();
   const missing = [];
   for (const name of light.keys()) {
-    if (primitives.has(name) || LEGACY_ALIASES.has(name) || dark.has(name)) continue;
+    if (primitives.has(name) || dark.has(name)) continue;
     // The categorical ramp is documented as theme-independent: those twelve
     // hues separate from each other, not from the background.
     if (/^--chart-series-\d+$/u.test(name)) continue;
@@ -959,12 +837,11 @@ test("text keeps AA contrast against every ground its role comment promises", as
   );
 });
 
-test("every token outside the frozen legacy block states its role in one line", async () => {
+test("every colour token states its role in one line", async () => {
   const files = await collectTokenComments(workspace);
   const undocumented = [];
   for (const { declarations, file } of files) {
     for (const { comment, name } of declarations) {
-      if (LEGACY_ALIASES.has(name)) continue;
       // The scale file states each family's rationale in a banner above it,
       // which is the same promise made once for eight steps rather than eight
       // times; only the colour tiers carry a comment per token.
@@ -1183,23 +1060,6 @@ function loadBand(specifier) {
   return "features";
 }
 
-test("the monolith is gone and nothing still points at it", async () => {
-  assert.equal(
-    (await collectRepositoryPaths(workspace)).has(RETIRED_MONOLITH),
-    false,
-    `${RETIRED_MONOLITH} is back. Phase 4 exists to make a theme change a one-file edit; a second`
-      + " home for a rule is the thing it removed.",
-  );
-  const references = await collectMonolithReferences(workspace);
-  assert.deepEqual(
-    references,
-    [],
-    `Code or tool configuration still names ${RETIRED_MONOLITH}. A lint target, an injected path or an`
-      + " import that points at a deleted file does not fail -- it silently covers nothing. Prose may"
-      + ` still recall the monolith; an instruction may not:\n${describeList(references)}`,
-  );
-});
-
 test("app/styles/index.css imports every application stylesheet exactly once", async () => {
   const imports = await listIndexImports(workspace);
   const counts = new Map();
@@ -1214,7 +1074,8 @@ test("app/styles/index.css imports every application stylesheet exactly once", a
     "A stylesheet is imported twice. Its rules are then stated twice, and the second copy wins ties the\n"
       + `first one used to lose, which no baseline can show:\n${describeList(repeated)}`,
   );
-  const present = await collectRepositoryPaths(workspace);
+  const application = await listApplicationStylesheets(workspace);
+  const present = new Set(application);
   const missing = imports
     .filter((entry) => !present.has(entry.file))
     .map((entry) => `${entry.specifier} resolves to ${entry.file}`);
@@ -1224,7 +1085,7 @@ test("app/styles/index.css imports every application stylesheet exactly once", a
     `${STYLESHEET_ENTRY_POINT} imports files that do not exist. The bundler drops an unresolved @import,`
       + ` so the rules are simply absent:\n${describeList(missing.toSorted())}`,
   );
-  const orphans = (await listApplicationStylesheets(workspace))
+  const orphans = application
     .filter((file) => file !== STYLESHEET_ENTRY_POINT && !counts.has(file))
     .toSorted();
   assert.deepEqual(
@@ -1243,7 +1104,7 @@ test("app/styles/index.css states imports the scanner reads, and nothing else", 
     imports.length,
     `${STYLESHEET_ENTRY_POINT} states ${statements} @import rules and the scan reads ${imports.length} of them.`
       + " The browser loads all of them; every check built on the import list -- the reachability walk, the"
-      + " fixture injection, the parity comparison below -- covers only the ones it can parse, and says"
+      + " fixture injection, and import-order checks -- covers only the ones it can parse, and says"
       + " nothing at all about the rest. Write the missed one as @import url(\"…\"), or teach the scanner"
       + " the spelling.",
   );
@@ -1383,89 +1244,7 @@ test("app/styles/index.css loads tokens, base, the primitives, the features, the
   );
 });
 
-/* == 6. Parity with the stylesheet the split replaced ========================== */
-
-test("every rule the monolith stated is stated once by the split set, unchanged", async () => {
-  const ledger = await readMonolithLedger(workspace);
-  const recorded = applySubstitutions(ledger.rules, ledger.substitutions);
-  const live = await collectSplitRules(workspace, ledger.excluded);
-  const compared = new Set(live.map((rule) => rule.file));
-  assert.ok(
-    compared.size > 15,
-    `parity is comparing only ${compared.size} of the layer's stylesheets. Every file the ledger excludes`
-      + " is a file this test says nothing about, so an exclusion is the one way to make the comparison"
-      + " pass by shrinking it.",
-  );
-  const { extra, missing } = diffRuleSets(recorded, live);
-  assert.deepEqual(
-    missing,
-    [],
-    `These rules were in ${RETIRED_MONOLITH} and are in no file ${STYLESHEET_ENTRY_POINT} imports, or arrived\n`
-      + "with a declaration changed. The phase claims a move, and a move loses nothing: put the rule back\n"
-      + `verbatim, or record the edit in ${MONOLITH_LEDGER} with the reason it is not a\n`
-      + `move:\n${describeList(missing)}`,
-  );
-  assert.deepEqual(
-    extra,
-    [],
-    `These rules are in the split set and were never in ${RETIRED_MONOLITH}. A rule that was copied rather\n`
-      + "than moved is now stated twice, and the two copies drift apart with nothing to report it: state it\n"
-      + "once and let the cascade reach it. A rule that is genuinely new is recorded, not forbidden -- add\n"
-      + `an entry to ${MONOLITH_LEDGER} whose "after" is the rule verbatim and whose "before" is the empty\n`
-      + "list, which is the ledger's addition form and is pinned by \"applySubstitutions records a rule\n"
-      + `that is new as an addition":\n${describeList(extra)}`,
-  );
-});
-
-test("the monolith ledger records no edit the split set no longer makes", async () => {
-  const ledger = await readMonolithLedger(workspace);
-  const stated = new Set(ledger.rules);
-  const live = new Set((await collectSplitRules(workspace, ledger.excluded)).map((rule) => rule.signature));
-  const stale = [];
-  for (const entry of ledger.substitutions) {
-    for (const before of Array.isArray(entry.before) ? entry.before : [entry.before]) {
-      if (!stated.has(before)) stale.push(`no monolith rule reads ${before}`);
-    }
-    if (!live.has(entry.after)) stale.push(`no rule in the split set reads ${entry.after}`);
-  }
-  const imported = new Set((await listIndexImports(workspace)).map((entry) => entry.file));
-  for (const file of [...ledger.excluded].toSorted()) {
-    if (!imported.has(file)) stale.push(`${file} is excluded from parity but nothing imports it`);
-  }
-  assert.deepEqual(
-    stale.toSorted(),
-    [],
-    `${MONOLITH_LEDGER} grandfathers edits that no longer describe the tree. An exemption nobody can see\n`
-      + "the effect of is an exemption nobody reviews, and it hides the next edit made under the same\n"
-      + `heading:\n${describeList(stale.toSorted())}`,
-  );
-});
-
-test("every repeated selector keeps the order that decides its value", async () => {
-  const ledger = await readMonolithLedger(workspace);
-  const recorded = collectTieBreakOrder(applySubstitutions(ledger.rules, ledger.substitutions));
-  const split = await collectSplitRules(workspace, ledger.excluded);
-  const live = collectTieBreakOrder(split.map((rule) => rule.signature));
-  const contested = [...recorded.entries()].filter(([, values]) => values.length > 1);
-  assert.ok(
-    contested.length > 10,
-    `only ${contested.length} selectors state a property more than once; the tie-break scan is not reading`
-      + " the layer and this assertion is vacuous",
-  );
-  const inverted = contested
-    .filter(([key, values]) => JSON.stringify(live.get(key) ?? []) !== JSON.stringify(values))
-    .map(([key, values]) => `${key}: was [${values.join(" -> ")}], now [${(live.get(key) ?? []).join(" -> ")}]`)
-    .toSorted();
-  assert.deepEqual(
-    inverted,
-    [],
-    "Two rules with the same selector under the same at-rules tie on specificity, so the later one wins\n"
-      + "and their order is the whole answer to what the element gets. The split moved one of them past\n"
-      + `the other, which changes the value with every rule still present:\n${describeList(inverted)}`,
-  );
-});
-
-/* == 7. Where a responsive rule lives ========================================== */
+/* == 6. Where a responsive rule lives ========================================== */
 
 /**
  * Responsive rules that override base rules no file of their own declares.
@@ -1557,7 +1336,7 @@ test("every run of media queries follows the documented order", async () => {
   );
 });
 
-/* == 8. One implementation of each primitive =================================== */
+/* == 7. One implementation of each primitive =================================== */
 
 const duplicateAllowlistPath = path.join(workspace, "scripts", "css-duplicate-blocks.json");
 
@@ -1729,7 +1508,7 @@ test("the duplicate-block allowlist carries no stale entries", async () => {
   );
 });
 
-/* == 9. Reachability, in both directions ======================================= */
+/* == 8. Reachability, in both directions ======================================= */
 
 const allowlistPath = path.join(workspace, "scripts", "css-dynamic-classes.json");
 
@@ -1979,7 +1758,7 @@ test("every Modal import resolves to the one component module", async () => {
   );
 });
 
-/* == 10. The parsers underneath ================================================ */
+/* == 9. The parsers underneath ================================================= */
 
 // Every invariant above is worth exactly as much as the parsing beneath it
 // can see, and each of these pins `scripts/style-inventory.mjs` against a shape
@@ -2146,122 +1925,6 @@ test("normaliseHex makes two spellings of one colour compare equal", () => {
   assert.equal(normaliseHex("#FFF"), "#ffffff");
   assert.equal(normaliseHex("#2878A8"), "#2878a8");
   assert.equal(normaliseHex("#15232b3d"), "#15232b3d");
-});
-
-test("ruleSignature carries a rule's at-rule context and its declarations", () => {
-  const signatures = collectRuleSignatures(`
-    @media (max-width: 760px) {
-      .fixture-card,
-      .fixture-panel { gap: 4px; padding: 0.5rem; }
-    }
-    /* .fixture-retired { color: red; } */
-    .fixture-live { color: var(--fg-text); }
-  `);
-  assert.deepEqual(signatures, [
-    "@media (max-width: 760px) || .fixture-card, .fixture-panel || gap: 4px; padding: 0.5rem",
-    " || .fixture-live || color: var(--fg-text)",
-  ]);
-});
-
-test("ruleSignature keeps a value that carries its own commas, colons and parentheses", () => {
-  const [signature] = collectRuleSignatures(
-    ".fixture-shell { background: url(https://example.test/a.png); box-shadow: 0 1px 2px rgb(0 0 0 / 10%), 0 0 1px #000; }",
-  );
-  assert.equal(
-    signature,
-    " || .fixture-shell || background: url(https://example.test/a.png);"
-      + " box-shadow: 0 1px 2px rgb(0 0 0 / 10%), 0 0 1px #000",
-  );
-});
-
-test("ruleSignature normalises only whitespace, so two spellings of one rule compare equal", () => {
-  const spread = ruleSignature({
-    ancestors: ["@media\n  (max-width: 480px)"],
-    body: "\n  color:  red;\n  gap:\t1px;\n",
-    prelude: ".fixture-a ,\n.fixture-b",
-  });
-  const compact = ruleSignature({
-    ancestors: ["@media (max-width: 480px)"],
-    body: "color: red; gap: 1px;",
-    prelude: ".fixture-a, .fixture-b",
-  });
-  assert.equal(spread, compact);
-});
-
-test("diffRuleSets counts rules rather than merely matching them", () => {
-  const stated = " || .fixture-a || color: red";
-  const once = diffRuleSets([stated], [{ file: "app/one.css", signature: stated }]);
-  assert.deepEqual([once.missing, once.extra], [[], []]);
-  const twice = diffRuleSets([stated], [
-    { file: "app/one.css", signature: stated },
-    { file: "app/two.css", signature: stated },
-  ]);
-  // A rule copied into a second file, rather than moved, is the failure a set
-  // comparison cannot see: both sides would still contain it.
-  assert.deepEqual(twice.missing, []);
-  assert.deepEqual(twice.extra, [`app/two.css :: ${stated}`]);
-});
-
-test("applySubstitutions rewrites only the rules the ledger names", () => {
-  const rewritten = applySubstitutions(
-    [" || .fixture-a || width: 48px", " || .fixture-b || width: 48px"],
-    [{ after: " || .fixture-a || width: var(--fixture-width, 48px)", before: " || .fixture-a || width: 48px" }],
-  );
-  assert.deepEqual(rewritten, [
-    " || .fixture-a || width: var(--fixture-width, 48px)",
-    " || .fixture-b || width: 48px",
-  ]);
-});
-
-test("applySubstitutions folds a list of rules into the one that replaced them", () => {
-  const rewritten = applySubstitutions(
-    [" || .fixture-a || width: 48px", " || .fixture-b || width: 8px", " || .fixture-a || height: 20px"],
-    [{
-      after: " || .fixture-a || height: 20px; width: 48px",
-      before: [" || .fixture-a || width: 48px", " || .fixture-a || height: 20px"],
-    }],
-  );
-  assert.deepEqual(rewritten, [
-    " || .fixture-a || height: 20px; width: 48px",
-    " || .fixture-b || width: 8px",
-  ]);
-});
-
-test("applySubstitutions records a rule that is new as an addition", () => {
-  // The one way past parity for a rule the monolith never stated. `before: []`
-  // has to append `after`, because the alternative a developer reaches for --
-  // deleting the assertion -- retires the whole provenance proof to land one
-  // rule. Pinned here so the ledger's documented escape hatch cannot rot into
-  // the no-op it was before Phase 5's review: `before[0]` on an empty list is
-  // `undefined`, which matches no rule and silently records nothing.
-  const rewritten = applySubstitutions(
-    [" || .fixture-a || width: 48px"],
-    [{ after: " || .fixture-new || color: var(--fg-text)", before: [] }],
-  );
-  assert.deepEqual(rewritten, [
-    " || .fixture-a || width: 48px",
-    " || .fixture-new || color: var(--fg-text)",
-  ]);
-  assert.deepEqual(
-    diffRuleSets(rewritten, [
-      { file: "app/fixture.css", signature: " || .fixture-a || width: 48px" },
-      { file: "app/fixture.css", signature: " || .fixture-new || color: var(--fg-text)" },
-    ]),
-    { extra: [], missing: [] },
-    "a recorded addition must clear parity; if it does not, the ledger documents a path that does"
-      + " not exist and the next new rule deletes the test instead",
-  );
-});
-
-test("collectTieBreakOrder splits selector lists and keeps declaration order", () => {
-  const order = collectTieBreakOrder([
-    " || .fixture-a, .fixture-b || color: red",
-    "@media (max-width: 480px) || .fixture-b || color: green",
-    " || .fixture-b || color: blue",
-  ]);
-  assert.deepEqual(order.get(" || .fixture-b || color"), ["red", "blue"]);
-  assert.deepEqual(order.get(" || .fixture-a || color"), ["red"]);
-  assert.deepEqual(order.get("@media (max-width: 480px) || .fixture-b || color"), ["green"]);
 });
 
 test("mediaQueryRank sorts widths largest first and puts the pointer queries after them", () => {

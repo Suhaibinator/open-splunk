@@ -7,13 +7,11 @@ import { type Page } from "@playwright/test";
  * The shipped stylesheets, in the order `app/layout.tsx` loads them.
  *
  * The contract suite mounts fixture markup in a bare page, so nothing loads
- * the application's CSS for it. The fixtures used
- * to inject `app/globals.css` alone, which was complete only while that one
- * file held every rule and every custom property. It now holds neither: the
- * token layer declares the properties and `app/styles/index.css` imports a
- * file per primitive and per feature, so injecting any single one of them
- * would leave the fixture painting browser defaults and the assertions
- * pinning the fallback rather than the shipped rule.
+ * the application's CSS for it. The token layer declares the properties and
+ * `app/styles/index.css` imports a file per primitive and per feature, so
+ * injecting any single stylesheet would leave the fixture painting browser
+ * defaults and the assertions pinning the fallback rather than the shipped
+ * rule.
  *
  * `app/styles/index.css` cannot stand in for its imports here either: an
  * `@import` inside an injected `<style>` resolves against the page URL, which
