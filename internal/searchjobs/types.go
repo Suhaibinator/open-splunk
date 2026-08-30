@@ -182,6 +182,8 @@ const (
 	JobOriginHistoryRerun
 	JobOriginDashboard
 	JobOriginAPI
+	JobOriginScheduledReport
+	JobOriginAlert
 )
 
 // String returns the stable operational spelling of a search origin.
@@ -197,6 +199,10 @@ func (origin JobOrigin) String() string {
 		return "dashboard"
 	case JobOriginAPI:
 		return "api"
+	case JobOriginScheduledReport:
+		return "scheduled_report"
+	case JobOriginAlert:
+		return "alert"
 	default:
 		return "invalid"
 	}
@@ -206,8 +212,11 @@ func (origin JobOrigin) String() string {
 // required for saved-search, history-rerun, and dashboard origins and must be
 // empty for ad-hoc and API origins.
 type JobSource struct {
-	Origin   JobOrigin
-	ObjectID string
+	Origin      JobOrigin
+	ObjectID    string
+	AlertID     string
+	AlertRunID  string
+	ScheduledAt time.Time
 }
 
 // CreateRequest is user intent plus server-resolved authorization. TimeRange
@@ -223,6 +232,9 @@ type CreateRequest struct {
 	TimeRange         searchtime.Range
 	AppID             string
 	Source            JobSource
+	// RetentionLifetime overrides the manager default for trusted scheduled
+	// admissions. Browser-created jobs must leave it zero.
+	RetentionLifetime time.Duration
 }
 
 // ValidateRequest is a server-resolved planning scope for synchronous SPL
@@ -392,12 +404,13 @@ type Job struct {
 	// ResultsTruncated reports that the retained immutable snapshot contains
 	// exactly the configured row limit and the executor attempted to emit at
 	// least one additional row. It is never inferred from an executor error.
-	ResultsTruncated bool
-	Failure          *Failure
-	CreatedAt        time.Time
-	StartedAt        time.Time
-	FinishedAt       time.Time
-	ExpiresAt        time.Time
+	ResultsTruncated  bool
+	Failure           *Failure
+	CreatedAt         time.Time
+	StartedAt         time.Time
+	FinishedAt        time.Time
+	ExpiresAt         time.Time
+	RetentionLifetime time.Duration
 }
 
 // JobJournal durably brackets one asynchronous search attempt. Admit is
@@ -418,6 +431,13 @@ type JobJournal interface {
 	Finalize(context.Context, Job) error
 }
 
+// CompletedResultJournal is an optional extension implemented by journals
+// that durably retain immutable completed rows. The manager invokes it only
+// after Finalize succeeds and owns the supplied lease for the callback.
+type CompletedResultJournal interface {
+	FinalizeResults(context.Context, Job, ResultLease) error
+}
+
 // JournalOperation identifies the durable lifecycle operation that failed.
 type JournalOperation uint8
 
@@ -425,6 +445,7 @@ const (
 	JournalOperationInvalid JournalOperation = iota
 	JournalOperationAdmit
 	JournalOperationFinalize
+	JournalOperationFinalizeResults
 )
 
 // String returns the stable lowercase spelling of a journal operation.
@@ -434,6 +455,8 @@ func (operation JournalOperation) String() string {
 		return "admit"
 	case JournalOperationFinalize:
 		return "finalize"
+	case JournalOperationFinalizeResults:
+		return "finalize_results"
 	default:
 		return "invalid"
 	}

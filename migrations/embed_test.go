@@ -14,8 +14,12 @@ var embeddedMigrationName = regexp.MustCompile(`^(\d{4})_[a-z0-9]+(?:_[a-z0-9]+)
 
 var embeddedMigrationSHA256 = map[string]map[string]string{
 	"SQLite": {
-		"0001_baseline.sql":               "3ceec9b0c2f2a44edccff0b3e8b5cd0622fe72c462dc8c36616d9d7683bb2b75",
-		"0002_server_search_settings.sql": "0c485f9b509705e049453a5bc8dd21f71e0543a54045cde4854d737d340a3038",
+		"0001_baseline.sql":                "3ceec9b0c2f2a44edccff0b3e8b5cd0622fe72c462dc8c36616d9d7683bb2b75",
+		"0002_server_search_settings.sql":  "0c485f9b509705e049453a5bc8dd21f71e0543a54045cde4854d737d340a3038",
+		"0003_durable_search_jobs.sql":     "1371ae38492b5a05894f3f25b3f9ccfb8a41cd51c71d74deb2878754057ab79a",
+		"0004_saved_search_schedules.sql":  "fbd52b43e24c247394a005c6cd518b90947ee80350dacd61fbfee827f27954bd",
+		"0005_alerts.sql":                  "ffd83bedc7c2c3e27b8ba2f2985731dfda05d9733e907410f76ec7b1d14aeec2",
+		"0006_feature_operation_audit.sql": "b39358fdfc47d552af4cbd31d50ef9a80aaf538677c929ba29e17bcb13fd1a79",
 	},
 	"ClickHouse": {
 		"0001_baseline.sql": "3f1d7104e6fbb1072c8353855d055a950b22135828ec9f23d0bd63c1fef601da",

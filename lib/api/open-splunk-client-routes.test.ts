@@ -11,6 +11,7 @@ import {
   type ProtobufTransport,
 } from "./protobuf-transport";
 import {
+  alertRoutes,
   appRoutes,
   auditEventRoutes,
   collectorRoutes,
@@ -21,13 +22,14 @@ import {
   indexRoutes,
   ingestionTokenRoutes,
   savedSearchRoutes,
+  scheduleRoutes,
   searchAttemptAuditRoutes,
   searchRoutes,
   serverSettingsRoutes,
   systemRoutes,
 } from "./routes";
 
-const EXPECTED_METHOD_COUNT = 61;
+const EXPECTED_METHOD_COUNT = 78;
 
 /**
  * The binder's failure mode is a transposition — a method wired to a sibling
@@ -46,6 +48,8 @@ const expectedRoutes: Readonly<Record<string, Readonly<Record<string, object>>>>
   hec: { getOperationalSnapshot: hecOperationsRoutes.get },
   search: searchRoutes,
   savedSearches: savedSearchRoutes,
+  schedules: scheduleRoutes,
+  alerts: alertRoutes,
   dashboards: dashboardRoutes,
   history: historyRoutes,
   exports: exportRoutes,

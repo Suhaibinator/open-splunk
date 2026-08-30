@@ -16,8 +16,11 @@ import (
 
 const (
 	manifestFormatVersion          = uint32(1)
+	artifactManifestFormatVersion  = uint32(2)
 	maximumManifestBytes           = 16 << 10
 	maximumDatabaseBytes           = uint64(1 << 40)
+	maximumSearchArtifactFiles     = uint64(100_000)
+	maximumSearchArtifactBytes     = uint64(1 << 30)
 	maximumTimestampUnixMicro      = int64(253_402_300_799_999_999)
 	recoverySetIDBytes             = 16
 	recoverySetIDHexBytes          = recoverySetIDBytes * 2
@@ -31,6 +34,7 @@ const (
 	masterKeyFilename          = "master.key"
 	administratorTokenFilename = "administrator.token"
 	manifestFilename           = "manifest.json"
+	searchArtifactsFilename    = "search-artifacts"
 )
 
 // MigrationIdentity binds a contiguous migration ledger to the exact source
@@ -48,6 +52,15 @@ type FileIdentity struct {
 	SHA256    string `json:"sha256"`
 }
 
+// DirectoryIdentity binds a bounded directory snapshot to its exact sorted
+// member identities without expanding the recovery manifest per artifact.
+type DirectoryIdentity struct {
+	Name      string `json:"name"`
+	FileCount uint64 `json:"file_count"`
+	SizeBytes uint64 `json:"size_bytes"`
+	SHA256    string `json:"sha256"`
+}
+
 // ReleaseIdentity is the compatibility boundary required to verify or restore
 // a bundle. The name is retained for callers, but identity is source- and
 // schema-based and does not include a product version.
@@ -60,19 +73,20 @@ type ReleaseIdentity struct {
 // Manifest is the canonical recovery-bundle manifest. ClickHouseIncluded is
 // required to be false: a control-plane bundle is not a deployment backup.
 type Manifest struct {
-	FormatVersion               uint32            `json:"format_version"`
-	CreatedAtUnixMicro          int64             `json:"created_at_unix_micro"`
-	RecoverySetID               string            `json:"recovery_set_id"`
-	Scope                       string            `json:"scope"`
-	ClickHouseIncluded          bool              `json:"clickhouse_included"`
-	SourceRevision              string            `json:"source_revision"`
-	SQLiteMigrations            MigrationIdentity `json:"sqlite_migrations"`
-	SQLiteMigrationLedgerSHA256 string            `json:"sqlite_migration_ledger_sha256"`
-	ClickHouseMigrations        MigrationIdentity `json:"clickhouse_migrations"`
-	Database                    FileIdentity      `json:"database"`
-	MasterKey                   FileIdentity      `json:"master_key"`
-	AdministratorToken          FileIdentity      `json:"administrator_token"`
-	MasterKeyFingerprintSHA256  string            `json:"master_key_fingerprint_sha256"`
+	FormatVersion               uint32             `json:"format_version"`
+	CreatedAtUnixMicro          int64              `json:"created_at_unix_micro"`
+	RecoverySetID               string             `json:"recovery_set_id"`
+	Scope                       string             `json:"scope"`
+	ClickHouseIncluded          bool               `json:"clickhouse_included"`
+	SourceRevision              string             `json:"source_revision"`
+	SQLiteMigrations            MigrationIdentity  `json:"sqlite_migrations"`
+	SQLiteMigrationLedgerSHA256 string             `json:"sqlite_migration_ledger_sha256"`
+	ClickHouseMigrations        MigrationIdentity  `json:"clickhouse_migrations"`
+	Database                    FileIdentity       `json:"database"`
+	MasterKey                   FileIdentity       `json:"master_key"`
+	AdministratorToken          FileIdentity       `json:"administrator_token"`
+	MasterKeyFingerprintSHA256  string             `json:"master_key_fingerprint_sha256"`
+	SearchArtifacts             *DirectoryIdentity `json:"search_artifacts,omitempty"`
 }
 
 // ReleaseIdentity returns the exact release compatibility fields recorded by
@@ -148,8 +162,20 @@ func unmarshalManifest(encoded []byte) (Manifest, error) {
 }
 
 func validateManifest(manifest Manifest) error {
-	if manifest.FormatVersion != manifestFormatVersion {
+	if manifest.FormatVersion != manifestFormatVersion &&
+		manifest.FormatVersion != artifactManifestFormatVersion {
 		return fmt.Errorf("control-plane backup manifest format version %d is unsupported; create a fresh backup", manifest.FormatVersion)
+	}
+	if manifest.FormatVersion == manifestFormatVersion && manifest.SearchArtifacts != nil {
+		return errors.New("control-plane backup legacy manifest cannot contain search artifacts")
+	}
+	if manifest.FormatVersion == artifactManifestFormatVersion {
+		if manifest.SearchArtifacts == nil {
+			return errors.New("control-plane backup search-artifact identity is missing")
+		}
+		if err := validateDirectoryIdentity(*manifest.SearchArtifacts); err != nil {
+			return fmt.Errorf("control-plane backup search artifacts: %w", err)
+		}
 	}
 	if manifest.CreatedAtUnixMicro <= 0 || manifest.CreatedAtUnixMicro > maximumTimestampUnixMicro {
 		return errors.New("control-plane backup manifest creation time is invalid")
@@ -188,6 +214,20 @@ func validateManifest(manifest Manifest) error {
 	}
 	if !buildinfo.ValidSHA256(manifest.MasterKeyFingerprintSHA256) {
 		return errors.New("control-plane backup manifest master-key identity is invalid")
+	}
+	return nil
+}
+
+func validateDirectoryIdentity(identity DirectoryIdentity) error {
+	if identity.Name != searchArtifactsFilename {
+		return fmt.Errorf("directory name must be exactly %q", searchArtifactsFilename)
+	}
+	if identity.FileCount > maximumSearchArtifactFiles ||
+		identity.SizeBytes > maximumSearchArtifactBytes {
+		return errors.New("directory contents are outside the supported bounds")
+	}
+	if !buildinfo.ValidSHA256(identity.SHA256) {
+		return errors.New("directory SHA-256 is invalid")
 	}
 	return nil
 }

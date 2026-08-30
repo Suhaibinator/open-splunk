@@ -26,6 +26,7 @@ a document explicitly says otherwise.
 - [HTTP Event Collector](hec.md) covers the HEC protocol and its deployment,
   recovery, load, soak, and slow-client gates.
 - [Auditing](auditing.md) covers mutation and search-attempt journals.
+- [Search sharing, schedules, and alerts](search-sharing-alerts.md) defines link lifecycles, scheduled retention, and signed webhook delivery.
 - [Roadmap](roadmap.md) lists only work that is not implemented.
 - [Build and publication status](releasing.md) defines current development
   artifacts, official v0 publication, and the work required before v1.

@@ -25,6 +25,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/searchlimits"
+	"github.com/Suhaibinator/open-splunk/internal/searchretention"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
@@ -49,7 +50,7 @@ const (
 	defaultJournalTimeout         = 10 * time.Second
 	defaultMaxSPLBytes            = 64 << 10
 	defaultMaxIdentityBytes       = 1 << 10
-	defaultRetentionTTL           = 15 * time.Minute
+	defaultRetentionTTL           = searchretention.ManualLifetime
 	defaultExpiredRetention       = 5 * time.Minute
 	defaultCleanupInterval        = time.Minute
 	minimumCursorKeyBytes         = 32
@@ -724,6 +725,9 @@ func (manager *Manager) Create(ctx context.Context, request CreateRequest) (Job,
 	}
 	request = normalizedRequest
 	admittedLimits := manager.currentLimits()
+	if request.RetentionLifetime > 0 {
+		admittedLimits.ResultRetention = request.RetentionLifetime
+	}
 	if err := manager.beginOperation(); err != nil {
 		return Job{}, err
 	}
@@ -828,22 +832,23 @@ func (manager *Manager) Create(ctx context.Context, request CreateRequest) (Job,
 	timeIntent := request.TimeRange.Intent()
 	entry := &jobEntry{
 		job: Job{
-			ID:               id,
-			Version:          1,
-			OwnerID:          strings.Clone(request.OwnerID),
-			SPL:              sourceSPL,
-			NormalizedSPL:    strings.TrimSpace(sourceSPL),
-			TenantID:         strings.Clone(request.TenantID),
-			RequestedIndexes: cloneStrings(request.RequestedIndexes),
-			TimeRange:        timeIntent,
-			AppID:            request.AppID,
-			Source:           request.Source,
-			Earliest:         request.TimeRange.Earliest(),
-			Latest:           request.TimeRange.Latest(),
-			IndexTimeCutoff:  now,
-			VisibilityCutoff: visibilityCutoff,
-			State:            StateQueued,
-			CreatedAt:        now,
+			ID:                id,
+			Version:           1,
+			OwnerID:           strings.Clone(request.OwnerID),
+			SPL:               sourceSPL,
+			NormalizedSPL:     strings.TrimSpace(sourceSPL),
+			TenantID:          strings.Clone(request.TenantID),
+			RequestedIndexes:  cloneStrings(request.RequestedIndexes),
+			TimeRange:         timeIntent,
+			AppID:             request.AppID,
+			Source:            request.Source,
+			Earliest:          request.TimeRange.Earliest(),
+			Latest:            request.TimeRange.Latest(),
+			IndexTimeCutoff:   now,
+			VisibilityCutoff:  visibilityCutoff,
+			State:             StateQueued,
+			CreatedAt:         now,
+			RetentionLifetime: admittedLimits.ResultRetention,
 		},
 		authorizedIndexes: cloneStrings(request.AuthorizedIndexes),
 		history:           []State{StateQueued},
@@ -1102,6 +1107,28 @@ func (manager *Manager) finalizeJournal(job Job) {
 }
 
 func (manager *Manager) finalizeJournalWithContext(ctx context.Context, job Job) {
+	if completed, ok := manager.journal.(completedPublicationJournal); ok && job.State == StateCompleted {
+		lease, err := manager.AcquireResultsFor(ctx, AccessScope{
+			TenantID: job.TenantID,
+			OwnerID:  job.OwnerID,
+		}, job.ID)
+		if err != nil {
+			manager.reportJournalError(JournalOperationFinalizeResults, job, err)
+			return
+		}
+		defer func() { _ = lease.Close() }()
+		outcome := completed.finalizeCompleted(ctx, cloneJob(job), lease)
+		if outcome.Finalize != nil {
+			manager.reportJournalError(JournalOperationFinalize, job, outcome.Finalize)
+		}
+		if outcome.Results != nil {
+			manager.reportJournalError(JournalOperationFinalizeResults, job, outcome.Results)
+		}
+		if outcome.Projection != nil {
+			manager.reportJournalError(JournalOperationFinalize, job, outcome.Projection)
+		}
+		return
+	}
 	if err := invokeJournal(func() error {
 		return manager.journal.Finalize(ctx, cloneJob(job))
 	}); err != nil {
@@ -1110,6 +1137,25 @@ func (manager *Manager) finalizeJournalWithContext(ctx context.Context, job Job)
 		// record remains available for idempotent startup recovery, while the
 		// in-memory terminal outcome is never rolled back.
 		manager.reportJournalError(JournalOperationFinalize, job, err)
+		return
+	}
+	completed, ok := manager.journal.(CompletedResultJournal)
+	if !ok || job.State != StateCompleted {
+		return
+	}
+	lease, err := manager.AcquireResultsFor(ctx, AccessScope{
+		TenantID: job.TenantID,
+		OwnerID:  job.OwnerID,
+	}, job.ID)
+	if err != nil {
+		manager.reportJournalError(JournalOperationFinalizeResults, job, err)
+		return
+	}
+	defer func() { _ = lease.Close() }()
+	if err := invokeJournal(func() error {
+		return completed.FinalizeResults(ctx, cloneJob(job), lease)
+	}); err != nil {
+		manager.reportJournalError(JournalOperationFinalizeResults, job, err)
 	}
 }
 
@@ -1193,6 +1239,8 @@ func (manager *Manager) validateRequestSize(request CreateRequest) error {
 	for _, value := range []string{
 		request.AppID,
 		request.Source.ObjectID,
+		request.Source.AlertID,
+		request.Source.AlertRunID,
 	} {
 		if len(value) > defaultMaxIdentityBytes || !utf8.ValidString(value) {
 			return fmt.Errorf("%w: search intent metadata exceeds %d bytes", ErrRequestTooLarge, defaultMaxIdentityBytes)
@@ -1209,6 +1257,9 @@ func normalizeCreateRequest(request CreateRequest) (CreateRequest, error) {
 		return CreateRequest{}, errors.New("create search job: owner or tenant identity is invalid")
 	}
 	request.AppID = strings.Clone(request.AppID)
+	if request.RetentionLifetime < 0 || request.RetentionLifetime > searchretention.MaximumLifetime {
+		return CreateRequest{}, errors.New("create search job: retention lifetime is invalid")
+	}
 	if !canonicalJobMetadataIdentifier(request.AppID, maximumJobAppIDBytes, true) {
 		return CreateRequest{}, errors.New("create search job: app ID is invalid")
 	}
@@ -1218,6 +1269,8 @@ func normalizeCreateRequest(request CreateRequest) (CreateRequest, error) {
 		return CreateRequest{}, errors.New("create search job: source metadata is invalid")
 	}
 	source.ObjectID = strings.Clone(source.ObjectID)
+	source.AlertID = strings.Clone(source.AlertID)
+	source.AlertRunID = strings.Clone(source.AlertRunID)
 	request.Source = source
 	return request, nil
 }
@@ -1226,7 +1279,7 @@ func normalizeCreateRequest(request CreateRequest) (CreateRequest, error) {
 // origin/object relationship. It performs no allocation, so trusted retained
 // values can be checked again at serialization boundaries without copying.
 func CanonicalJobSource(source JobSource) (JobSource, error) {
-	if source.Origin == JobOriginInvalid && source.ObjectID == "" {
+	if source.Origin == JobOriginInvalid && source.ObjectID == "" && source.AlertID == "" && source.AlertRunID == "" && source.ScheduledAt.IsZero() {
 		source.Origin = JobOriginAdHoc
 	}
 	requiresObject := false
@@ -1234,6 +1287,15 @@ func CanonicalJobSource(source JobSource) (JobSource, error) {
 	case JobOriginAdHoc, JobOriginAPI:
 	case JobOriginSavedSearch, JobOriginHistoryRerun, JobOriginDashboard:
 		requiresObject = true
+	case JobOriginScheduledReport:
+		requiresObject = true
+		if source.ScheduledAt.IsZero() || source.AlertID != "" || source.AlertRunID != "" {
+			return JobSource{}, errors.New("scheduled report source metadata is invalid")
+		}
+	case JobOriginAlert:
+		if source.ObjectID != "" || source.AlertID == "" || source.AlertRunID == "" || source.ScheduledAt.IsZero() {
+			return JobSource{}, errors.New("alert source metadata is invalid")
+		}
 	default:
 		return JobSource{}, errors.New("search job source origin is invalid")
 	}
@@ -1246,6 +1308,11 @@ func CanonicalJobSource(source JobSource) (JobSource, error) {
 		false,
 	) {
 		return JobSource{}, errors.New("search job source object ID is invalid")
+	}
+	for _, value := range []string{source.AlertID, source.AlertRunID} {
+		if value != "" && !canonicalJobMetadataIdentifier(value, maximumJobSourceIDBytes, false) {
+			return JobSource{}, errors.New("search job alert source ID is invalid")
+		}
 	}
 	return source, nil
 }

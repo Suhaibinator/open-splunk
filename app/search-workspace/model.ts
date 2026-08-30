@@ -36,6 +36,7 @@ export type JobPhase =
   | "completed"
   | "failed"
   | "canceled"
+  | "interrupted"
   | "expired";
 export type SearchMode = "Smart" | "Fast" | "Verbose";
 export type ExportStage = "configure" | "pending" | "ready" | "error";

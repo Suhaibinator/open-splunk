@@ -11,6 +11,8 @@ import (
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 )
 
+const maximumBoundedListRequestTokenBytes = 2 << 10
+
 type boundedListPageMetadata struct {
 	itemCount     int
 	nextPageToken string
@@ -92,7 +94,6 @@ func (handler *apiHandler) boundedListPageRequest(
 	noun string,
 	defaultPageSize uint32,
 	serviceMaximum uint32,
-	maximumTokenBytes int,
 ) (uint32, string, bool, error) {
 	maximumPageSize := min(handler.maximumPageSize, serviceMaximum)
 	pageSize := min(defaultPageSize, maximumPageSize)
@@ -112,7 +113,7 @@ func (handler *apiHandler) boundedListPageRequest(
 	pageToken := ""
 	if page.PageToken != nil {
 		pageToken = page.GetPageToken()
-		if !validBoundedListPageToken(pageToken, maximumTokenBytes, false) {
+		if !validBoundedListPageToken(pageToken, maximumBoundedListRequestTokenBytes, false) {
 			return 0, "", false, badRequestError(
 				noun + " page token is invalid",
 			)

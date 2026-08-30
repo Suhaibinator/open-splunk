@@ -55,14 +55,15 @@ type NativeBackup func(context.Context, NativeBackupRequest) (NativeBackupIdenti
 // CreateOptions identifies one stopped deployment, the new owner-private
 // outer directory, and the separately mounted ClickHouse recovery root.
 type CreateOptions struct {
-	DatabasePath           string
-	MasterKeyPath          string
-	AdministratorTokenPath string
-	Destination            string
-	ArchiveRoot            string
-	ArchiveOwnership       ArchiveOwnershipPolicy
-	Release                controlbackup.ReleaseIdentity
-	NativeBackup           NativeBackup
+	DatabasePath            string
+	MasterKeyPath           string
+	AdministratorTokenPath  string
+	SearchArtifactDirectory string
+	Destination             string
+	ArchiveRoot             string
+	ArchiveOwnership        ArchiveOwnershipPolicy
+	Release                 controlbackup.ReleaseIdentity
+	NativeBackup            NativeBackup
 }
 
 // VerifyOptions identifies a published outer directory and its external
@@ -255,11 +256,12 @@ func createWithHooks(
 		createControlPlane = controlbackup.CreatePinned
 	}
 	childManifest, child, err := createControlPlane(ctx, controlbackup.CreateOptions{
-		DatabasePath:           options.DatabasePath,
-		MasterKeyPath:          options.MasterKeyPath,
-		AdministratorTokenPath: options.AdministratorTokenPath,
-		Destination:            childPath,
-		Release:                options.Release,
+		DatabasePath:            options.DatabasePath,
+		MasterKeyPath:           options.MasterKeyPath,
+		AdministratorTokenPath:  options.AdministratorTokenPath,
+		SearchArtifactDirectory: options.SearchArtifactDirectory,
+		Destination:             childPath,
+		Release:                 options.Release,
 	})
 	if err != nil {
 		if _, ok := errors.AsType[*controlbackup.PublicationStatusError](err); ok {

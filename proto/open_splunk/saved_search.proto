@@ -8,12 +8,62 @@ import "open_splunk/search.proto";
 
 option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk;opensplunk";
 
+message SavedSearchSchedule {
+  bool enabled = 1;
+  string cron = 2;
+  string timezone = 3;
+  // Splunk-compatible TTL expression: explicit seconds or Np periods.
+  string dispatch_ttl = 4;
+  // Independent optimistic token for schedule-only mutations. Zero denotes
+  // an unscheduled saved search; persisted schedules always start at one.
+  uint64 config_version = 5;
+}
+
+enum ScheduledSearchOutcome {
+  SCHEDULED_SEARCH_OUTCOME_UNSPECIFIED = 0;
+  SCHEDULED_SEARCH_OUTCOME_RUNNING = 1;
+  SCHEDULED_SEARCH_OUTCOME_COMPLETED = 2;
+  SCHEDULED_SEARCH_OUTCOME_FAILED = 3;
+  SCHEDULED_SEARCH_OUTCOME_CANCELED = 4;
+  SCHEDULED_SEARCH_OUTCOME_SKIPPED_OVERLAP = 5;
+  SCHEDULED_SEARCH_OUTCOME_INTERRUPTED = 6;
+}
+
+message ScheduledSearchStatus {
+  optional google.protobuf.Timestamp next_run_at = 1;
+  optional google.protobuf.Timestamp last_run_at = 2;
+  ScheduledSearchOutcome last_outcome = 3;
+  optional string latest_search_job_id = 4;
+  optional google.protobuf.Timestamp latest_result_expires_at = 5;
+  // Current availability of latest_search_job_id. Pending jobs intentionally
+  // omit latest_result_expires_at until the terminal retention window begins.
+  RetainedResultStatus latest_retained_result_status = 6;
+}
+
+message ScheduledSearchRun {
+  string scheduled_search_run_id = 1;
+  string saved_search_id = 2;
+  google.protobuf.Timestamp scheduled_at = 3;
+  optional google.protobuf.Timestamp started_at = 4;
+  optional google.protobuf.Timestamp finished_at = 5;
+  ScheduledSearchOutcome outcome = 6;
+  optional string search_job_id = 7;
+  uint32 skipped_occurrence_count = 8;
+  // Current sliding expiry and availability of the retained result. These are
+  // joined from the durable job catalog without refreshing its lifetime.
+  optional google.protobuf.Timestamp search_job_expires_at = 9;
+  RetainedResultStatus retained_result_status = 10;
+}
+
 message SavedSearchDefinition {
   string name = 1;
   optional string description = 2;
   SearchDefinition search = 3;
   SharingScope sharing_scope = 4;
   optional string owner_id = 5;
+  // Output-only joined scheduling state. Mutations use
+  // SetSavedSearchScheduleRequest so config_version is checked atomically.
+  optional SavedSearchSchedule schedule = 6;
 }
 
 // SavedSearch is a deliberately persisted reusable definition. version is an
@@ -24,4 +74,5 @@ message SavedSearch {
   SavedSearchDefinition definition = 3;
   google.protobuf.Timestamp created_at = 4;
   google.protobuf.Timestamp updated_at = 5;
+  optional ScheduledSearchStatus schedule_status = 6;
 }

@@ -1002,6 +1002,306 @@ func (x *CancelSearchJobResponse) GetSearchJob() *SearchJob {
 	return nil
 }
 
+// POST /api/search/jobs/settings/get
+type GetSearchJobSettingsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SearchJobId   string                 `protobuf:"bytes,1,opt,name=search_job_id,json=searchJobId,proto3" json:"search_job_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetSearchJobSettingsRequest) Reset() {
+	*x = GetSearchJobSettingsRequest{}
+	mi := &file_open_splunk_search_api_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetSearchJobSettingsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetSearchJobSettingsRequest) ProtoMessage() {}
+
+func (x *GetSearchJobSettingsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_open_splunk_search_api_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetSearchJobSettingsRequest.ProtoReflect.Descriptor instead.
+func (*GetSearchJobSettingsRequest) Descriptor() ([]byte, []int) {
+	return file_open_splunk_search_api_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *GetSearchJobSettingsRequest) GetSearchJobId() string {
+	if x != nil {
+		return x.SearchJobId
+	}
+	return ""
+}
+
+type GetSearchJobSettingsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SearchJob     *SearchJob             `protobuf:"bytes,1,opt,name=search_job,json=searchJob,proto3" json:"search_job,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetSearchJobSettingsResponse) Reset() {
+	*x = GetSearchJobSettingsResponse{}
+	mi := &file_open_splunk_search_api_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetSearchJobSettingsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetSearchJobSettingsResponse) ProtoMessage() {}
+
+func (x *GetSearchJobSettingsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_open_splunk_search_api_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetSearchJobSettingsResponse.ProtoReflect.Descriptor instead.
+func (*GetSearchJobSettingsResponse) Descriptor() ([]byte, []int) {
+	return file_open_splunk_search_api_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *GetSearchJobSettingsResponse) GetSearchJob() *SearchJob {
+	if x != nil {
+		return x.SearchJob
+	}
+	return nil
+}
+
+// POST /api/search/jobs/settings/update
+type UpdateSearchJobSettingsRequest struct {
+	state                protoimpl.MessageState  `protogen:"open.v1"`
+	SearchJobId          string                  `protobuf:"bytes,1,opt,name=search_job_id,json=searchJobId,proto3" json:"search_job_id,omitempty"`
+	ExpectedStateVersion uint64                  `protobuf:"varint,2,opt,name=expected_state_version,json=expectedStateVersion,proto3" json:"expected_state_version,omitempty"`
+	Visibility           SearchJobVisibility     `protobuf:"varint,3,opt,name=visibility,proto3,enum=open_splunk.SearchJobVisibility" json:"visibility,omitempty"`
+	RetentionClass       SearchJobRetentionClass `protobuf:"varint,4,opt,name=retention_class,json=retentionClass,proto3,enum=open_splunk.SearchJobRetentionClass" json:"retention_class,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *UpdateSearchJobSettingsRequest) Reset() {
+	*x = UpdateSearchJobSettingsRequest{}
+	mi := &file_open_splunk_search_api_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateSearchJobSettingsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateSearchJobSettingsRequest) ProtoMessage() {}
+
+func (x *UpdateSearchJobSettingsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_open_splunk_search_api_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateSearchJobSettingsRequest.ProtoReflect.Descriptor instead.
+func (*UpdateSearchJobSettingsRequest) Descriptor() ([]byte, []int) {
+	return file_open_splunk_search_api_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *UpdateSearchJobSettingsRequest) GetSearchJobId() string {
+	if x != nil {
+		return x.SearchJobId
+	}
+	return ""
+}
+
+func (x *UpdateSearchJobSettingsRequest) GetExpectedStateVersion() uint64 {
+	if x != nil {
+		return x.ExpectedStateVersion
+	}
+	return 0
+}
+
+func (x *UpdateSearchJobSettingsRequest) GetVisibility() SearchJobVisibility {
+	if x != nil {
+		return x.Visibility
+	}
+	return SearchJobVisibility_SEARCH_JOB_VISIBILITY_UNSPECIFIED
+}
+
+func (x *UpdateSearchJobSettingsRequest) GetRetentionClass() SearchJobRetentionClass {
+	if x != nil {
+		return x.RetentionClass
+	}
+	return SearchJobRetentionClass_SEARCH_JOB_RETENTION_CLASS_UNSPECIFIED
+}
+
+type UpdateSearchJobSettingsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SearchJob     *SearchJob             `protobuf:"bytes,1,opt,name=search_job,json=searchJob,proto3" json:"search_job,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpdateSearchJobSettingsResponse) Reset() {
+	*x = UpdateSearchJobSettingsResponse{}
+	mi := &file_open_splunk_search_api_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateSearchJobSettingsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateSearchJobSettingsResponse) ProtoMessage() {}
+
+func (x *UpdateSearchJobSettingsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_open_splunk_search_api_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateSearchJobSettingsResponse.ProtoReflect.Descriptor instead.
+func (*UpdateSearchJobSettingsResponse) Descriptor() ([]byte, []int) {
+	return file_open_splunk_search_api_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *UpdateSearchJobSettingsResponse) GetSearchJob() *SearchJob {
+	if x != nil {
+		return x.SearchJob
+	}
+	return nil
+}
+
+// POST /api/search/jobs/share atomically makes one retained result available
+// to Everyone and changes its sliding lifetime to seven days.
+type ShareSearchJobRequest struct {
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	SearchJobId          string                 `protobuf:"bytes,1,opt,name=search_job_id,json=searchJobId,proto3" json:"search_job_id,omitempty"`
+	ExpectedStateVersion uint64                 `protobuf:"varint,2,opt,name=expected_state_version,json=expectedStateVersion,proto3" json:"expected_state_version,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *ShareSearchJobRequest) Reset() {
+	*x = ShareSearchJobRequest{}
+	mi := &file_open_splunk_search_api_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ShareSearchJobRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ShareSearchJobRequest) ProtoMessage() {}
+
+func (x *ShareSearchJobRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_open_splunk_search_api_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ShareSearchJobRequest.ProtoReflect.Descriptor instead.
+func (*ShareSearchJobRequest) Descriptor() ([]byte, []int) {
+	return file_open_splunk_search_api_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *ShareSearchJobRequest) GetSearchJobId() string {
+	if x != nil {
+		return x.SearchJobId
+	}
+	return ""
+}
+
+func (x *ShareSearchJobRequest) GetExpectedStateVersion() uint64 {
+	if x != nil {
+		return x.ExpectedStateVersion
+	}
+	return 0
+}
+
+type ShareSearchJobResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SearchJob     *SearchJob             `protobuf:"bytes,1,opt,name=search_job,json=searchJob,proto3" json:"search_job,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ShareSearchJobResponse) Reset() {
+	*x = ShareSearchJobResponse{}
+	mi := &file_open_splunk_search_api_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ShareSearchJobResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ShareSearchJobResponse) ProtoMessage() {}
+
+func (x *ShareSearchJobResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_open_splunk_search_api_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ShareSearchJobResponse.ProtoReflect.Descriptor instead.
+func (*ShareSearchJobResponse) Descriptor() ([]byte, []int) {
+	return file_open_splunk_search_api_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *ShareSearchJobResponse) GetSearchJob() *SearchJob {
+	if x != nil {
+		return x.SearchJob
+	}
+	return nil
+}
+
 // POST /api/search/validate
 type ValidateSearchRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1012,7 +1312,7 @@ type ValidateSearchRequest struct {
 
 func (x *ValidateSearchRequest) Reset() {
 	*x = ValidateSearchRequest{}
-	mi := &file_open_splunk_search_api_proto_msgTypes[16]
+	mi := &file_open_splunk_search_api_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1024,7 +1324,7 @@ func (x *ValidateSearchRequest) String() string {
 func (*ValidateSearchRequest) ProtoMessage() {}
 
 func (x *ValidateSearchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_search_api_proto_msgTypes[16]
+	mi := &file_open_splunk_search_api_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1037,7 +1337,7 @@ func (x *ValidateSearchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ValidateSearchRequest.ProtoReflect.Descriptor instead.
 func (*ValidateSearchRequest) Descriptor() ([]byte, []int) {
-	return file_open_splunk_search_api_proto_rawDescGZIP(), []int{16}
+	return file_open_splunk_search_api_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *ValidateSearchRequest) GetDefinition() *SearchDefinition {
@@ -1061,7 +1361,7 @@ type ValidateSearchResponse struct {
 
 func (x *ValidateSearchResponse) Reset() {
 	*x = ValidateSearchResponse{}
-	mi := &file_open_splunk_search_api_proto_msgTypes[17]
+	mi := &file_open_splunk_search_api_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1073,7 +1373,7 @@ func (x *ValidateSearchResponse) String() string {
 func (*ValidateSearchResponse) ProtoMessage() {}
 
 func (x *ValidateSearchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_search_api_proto_msgTypes[17]
+	mi := &file_open_splunk_search_api_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1086,7 +1386,7 @@ func (x *ValidateSearchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ValidateSearchResponse.ProtoReflect.Descriptor instead.
 func (*ValidateSearchResponse) Descriptor() ([]byte, []int) {
-	return file_open_splunk_search_api_proto_rawDescGZIP(), []int{17}
+	return file_open_splunk_search_api_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ValidateSearchResponse) GetValid() bool {
@@ -1146,7 +1446,7 @@ type SearchSuggestion struct {
 
 func (x *SearchSuggestion) Reset() {
 	*x = SearchSuggestion{}
-	mi := &file_open_splunk_search_api_proto_msgTypes[18]
+	mi := &file_open_splunk_search_api_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1158,7 +1458,7 @@ func (x *SearchSuggestion) String() string {
 func (*SearchSuggestion) ProtoMessage() {}
 
 func (x *SearchSuggestion) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_search_api_proto_msgTypes[18]
+	mi := &file_open_splunk_search_api_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1171,7 +1471,7 @@ func (x *SearchSuggestion) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchSuggestion.ProtoReflect.Descriptor instead.
 func (*SearchSuggestion) Descriptor() ([]byte, []int) {
-	return file_open_splunk_search_api_proto_rawDescGZIP(), []int{18}
+	return file_open_splunk_search_api_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *SearchSuggestion) GetKind() SearchSuggestionKind {
@@ -1238,7 +1538,7 @@ type GetSearchSuggestionsRequest struct {
 
 func (x *GetSearchSuggestionsRequest) Reset() {
 	*x = GetSearchSuggestionsRequest{}
-	mi := &file_open_splunk_search_api_proto_msgTypes[19]
+	mi := &file_open_splunk_search_api_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1250,7 +1550,7 @@ func (x *GetSearchSuggestionsRequest) String() string {
 func (*GetSearchSuggestionsRequest) ProtoMessage() {}
 
 func (x *GetSearchSuggestionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_search_api_proto_msgTypes[19]
+	mi := &file_open_splunk_search_api_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1263,7 +1563,7 @@ func (x *GetSearchSuggestionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSearchSuggestionsRequest.ProtoReflect.Descriptor instead.
 func (*GetSearchSuggestionsRequest) Descriptor() ([]byte, []int) {
-	return file_open_splunk_search_api_proto_rawDescGZIP(), []int{19}
+	return file_open_splunk_search_api_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *GetSearchSuggestionsRequest) GetSpl() string {
@@ -1318,7 +1618,7 @@ type GetSearchSuggestionsResponse struct {
 
 func (x *GetSearchSuggestionsResponse) Reset() {
 	*x = GetSearchSuggestionsResponse{}
-	mi := &file_open_splunk_search_api_proto_msgTypes[20]
+	mi := &file_open_splunk_search_api_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1330,7 +1630,7 @@ func (x *GetSearchSuggestionsResponse) String() string {
 func (*GetSearchSuggestionsResponse) ProtoMessage() {}
 
 func (x *GetSearchSuggestionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_search_api_proto_msgTypes[20]
+	mi := &file_open_splunk_search_api_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1343,7 +1643,7 @@ func (x *GetSearchSuggestionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSearchSuggestionsResponse.ProtoReflect.Descriptor instead.
 func (*GetSearchSuggestionsResponse) Descriptor() ([]byte, []int) {
-	return file_open_splunk_search_api_proto_rawDescGZIP(), []int{20}
+	return file_open_splunk_search_api_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *GetSearchSuggestionsResponse) GetSuggestions() []*SearchSuggestion {
@@ -1440,6 +1740,27 @@ const file_open_splunk_search_api_proto_rawDesc = "" +
 	"\a_reason\"P\n" +
 	"\x17CancelSearchJobResponse\x125\n" +
 	"\n" +
+	"search_job\x18\x01 \x01(\v2\x16.open_splunk.SearchJobR\tsearchJob\"A\n" +
+	"\x1bGetSearchJobSettingsRequest\x12\"\n" +
+	"\rsearch_job_id\x18\x01 \x01(\tR\vsearchJobId\"U\n" +
+	"\x1cGetSearchJobSettingsResponse\x125\n" +
+	"\n" +
+	"search_job\x18\x01 \x01(\v2\x16.open_splunk.SearchJobR\tsearchJob\"\x8b\x02\n" +
+	"\x1eUpdateSearchJobSettingsRequest\x12\"\n" +
+	"\rsearch_job_id\x18\x01 \x01(\tR\vsearchJobId\x124\n" +
+	"\x16expected_state_version\x18\x02 \x01(\x04R\x14expectedStateVersion\x12@\n" +
+	"\n" +
+	"visibility\x18\x03 \x01(\x0e2 .open_splunk.SearchJobVisibilityR\n" +
+	"visibility\x12M\n" +
+	"\x0fretention_class\x18\x04 \x01(\x0e2$.open_splunk.SearchJobRetentionClassR\x0eretentionClass\"X\n" +
+	"\x1fUpdateSearchJobSettingsResponse\x125\n" +
+	"\n" +
+	"search_job\x18\x01 \x01(\v2\x16.open_splunk.SearchJobR\tsearchJob\"q\n" +
+	"\x15ShareSearchJobRequest\x12\"\n" +
+	"\rsearch_job_id\x18\x01 \x01(\tR\vsearchJobId\x124\n" +
+	"\x16expected_state_version\x18\x02 \x01(\x04R\x14expectedStateVersion\"O\n" +
+	"\x16ShareSearchJobResponse\x125\n" +
+	"\n" +
 	"search_job\x18\x01 \x01(\v2\x16.open_splunk.SearchJobR\tsearchJob\"V\n" +
 	"\x15ValidateSearchRequest\x12=\n" +
 	"\n" +
@@ -1499,80 +1820,93 @@ func file_open_splunk_search_api_proto_rawDescGZIP() []byte {
 }
 
 var file_open_splunk_search_api_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_open_splunk_search_api_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
+var file_open_splunk_search_api_proto_msgTypes = make([]protoimpl.MessageInfo, 27)
 var file_open_splunk_search_api_proto_goTypes = []any{
-	(SearchSuggestionKind)(0),             // 0: open_splunk.SearchSuggestionKind
-	(*CreateSearchJobRequest)(nil),        // 1: open_splunk.CreateSearchJobRequest
-	(*CreateSearchJobResponse)(nil),       // 2: open_splunk.CreateSearchJobResponse
-	(*GetSearchJobRequest)(nil),           // 3: open_splunk.GetSearchJobRequest
-	(*GetSearchJobResponse)(nil),          // 4: open_splunk.GetSearchJobResponse
-	(*ListSearchJobsRequest)(nil),         // 5: open_splunk.ListSearchJobsRequest
-	(*ListSearchJobsResponse)(nil),        // 6: open_splunk.ListSearchJobsResponse
-	(*GetSearchResultsRequest)(nil),       // 7: open_splunk.GetSearchResultsRequest
-	(*GetSearchResultsResponse)(nil),      // 8: open_splunk.GetSearchResultsResponse
-	(*ListSearchFieldsRequest)(nil),       // 9: open_splunk.ListSearchFieldsRequest
-	(*ListSearchFieldsResponse)(nil),      // 10: open_splunk.ListSearchFieldsResponse
-	(*GetSearchFieldSummaryRequest)(nil),  // 11: open_splunk.GetSearchFieldSummaryRequest
-	(*GetSearchFieldSummaryResponse)(nil), // 12: open_splunk.GetSearchFieldSummaryResponse
-	(*GetSearchTimelineRequest)(nil),      // 13: open_splunk.GetSearchTimelineRequest
-	(*GetSearchTimelineResponse)(nil),     // 14: open_splunk.GetSearchTimelineResponse
-	(*CancelSearchJobRequest)(nil),        // 15: open_splunk.CancelSearchJobRequest
-	(*CancelSearchJobResponse)(nil),       // 16: open_splunk.CancelSearchJobResponse
-	(*ValidateSearchRequest)(nil),         // 17: open_splunk.ValidateSearchRequest
-	(*ValidateSearchResponse)(nil),        // 18: open_splunk.ValidateSearchResponse
-	(*SearchSuggestion)(nil),              // 19: open_splunk.SearchSuggestion
-	(*GetSearchSuggestionsRequest)(nil),   // 20: open_splunk.GetSearchSuggestionsRequest
-	(*GetSearchSuggestionsResponse)(nil),  // 21: open_splunk.GetSearchSuggestionsResponse
-	(*SearchDefinition)(nil),              // 22: open_splunk.SearchDefinition
-	(*SearchJobSource)(nil),               // 23: open_splunk.SearchJobSource
-	(*SearchJobOptions)(nil),              // 24: open_splunk.SearchJobOptions
-	(*SearchJob)(nil),                     // 25: open_splunk.SearchJob
-	(*PageRequest)(nil),                   // 26: open_splunk.PageRequest
-	(SearchJobState)(0),                   // 27: open_splunk.SearchJobState
-	(*PageResponse)(nil),                  // 28: open_splunk.PageResponse
-	(*ResultPage)(nil),                    // 29: open_splunk.ResultPage
-	(*FieldProfile)(nil),                  // 30: open_splunk.FieldProfile
-	(*FieldSummary)(nil),                  // 31: open_splunk.FieldSummary
-	(*durationpb.Duration)(nil),           // 32: google.protobuf.Duration
-	(*TimelineBucket)(nil),                // 33: open_splunk.TimelineBucket
-	(*Diagnostic)(nil),                    // 34: open_splunk.Diagnostic
-	(ResultSetKind)(0),                    // 35: open_splunk.ResultSetKind
-	(*SourceRange)(nil),                   // 36: open_splunk.SourceRange
-	(*TimeRangeSpec)(nil),                 // 37: open_splunk.TimeRangeSpec
+	(SearchSuggestionKind)(0),               // 0: open_splunk.SearchSuggestionKind
+	(*CreateSearchJobRequest)(nil),          // 1: open_splunk.CreateSearchJobRequest
+	(*CreateSearchJobResponse)(nil),         // 2: open_splunk.CreateSearchJobResponse
+	(*GetSearchJobRequest)(nil),             // 3: open_splunk.GetSearchJobRequest
+	(*GetSearchJobResponse)(nil),            // 4: open_splunk.GetSearchJobResponse
+	(*ListSearchJobsRequest)(nil),           // 5: open_splunk.ListSearchJobsRequest
+	(*ListSearchJobsResponse)(nil),          // 6: open_splunk.ListSearchJobsResponse
+	(*GetSearchResultsRequest)(nil),         // 7: open_splunk.GetSearchResultsRequest
+	(*GetSearchResultsResponse)(nil),        // 8: open_splunk.GetSearchResultsResponse
+	(*ListSearchFieldsRequest)(nil),         // 9: open_splunk.ListSearchFieldsRequest
+	(*ListSearchFieldsResponse)(nil),        // 10: open_splunk.ListSearchFieldsResponse
+	(*GetSearchFieldSummaryRequest)(nil),    // 11: open_splunk.GetSearchFieldSummaryRequest
+	(*GetSearchFieldSummaryResponse)(nil),   // 12: open_splunk.GetSearchFieldSummaryResponse
+	(*GetSearchTimelineRequest)(nil),        // 13: open_splunk.GetSearchTimelineRequest
+	(*GetSearchTimelineResponse)(nil),       // 14: open_splunk.GetSearchTimelineResponse
+	(*CancelSearchJobRequest)(nil),          // 15: open_splunk.CancelSearchJobRequest
+	(*CancelSearchJobResponse)(nil),         // 16: open_splunk.CancelSearchJobResponse
+	(*GetSearchJobSettingsRequest)(nil),     // 17: open_splunk.GetSearchJobSettingsRequest
+	(*GetSearchJobSettingsResponse)(nil),    // 18: open_splunk.GetSearchJobSettingsResponse
+	(*UpdateSearchJobSettingsRequest)(nil),  // 19: open_splunk.UpdateSearchJobSettingsRequest
+	(*UpdateSearchJobSettingsResponse)(nil), // 20: open_splunk.UpdateSearchJobSettingsResponse
+	(*ShareSearchJobRequest)(nil),           // 21: open_splunk.ShareSearchJobRequest
+	(*ShareSearchJobResponse)(nil),          // 22: open_splunk.ShareSearchJobResponse
+	(*ValidateSearchRequest)(nil),           // 23: open_splunk.ValidateSearchRequest
+	(*ValidateSearchResponse)(nil),          // 24: open_splunk.ValidateSearchResponse
+	(*SearchSuggestion)(nil),                // 25: open_splunk.SearchSuggestion
+	(*GetSearchSuggestionsRequest)(nil),     // 26: open_splunk.GetSearchSuggestionsRequest
+	(*GetSearchSuggestionsResponse)(nil),    // 27: open_splunk.GetSearchSuggestionsResponse
+	(*SearchDefinition)(nil),                // 28: open_splunk.SearchDefinition
+	(*SearchJobSource)(nil),                 // 29: open_splunk.SearchJobSource
+	(*SearchJobOptions)(nil),                // 30: open_splunk.SearchJobOptions
+	(*SearchJob)(nil),                       // 31: open_splunk.SearchJob
+	(*PageRequest)(nil),                     // 32: open_splunk.PageRequest
+	(SearchJobState)(0),                     // 33: open_splunk.SearchJobState
+	(*PageResponse)(nil),                    // 34: open_splunk.PageResponse
+	(*ResultPage)(nil),                      // 35: open_splunk.ResultPage
+	(*FieldProfile)(nil),                    // 36: open_splunk.FieldProfile
+	(*FieldSummary)(nil),                    // 37: open_splunk.FieldSummary
+	(*durationpb.Duration)(nil),             // 38: google.protobuf.Duration
+	(*TimelineBucket)(nil),                  // 39: open_splunk.TimelineBucket
+	(SearchJobVisibility)(0),                // 40: open_splunk.SearchJobVisibility
+	(SearchJobRetentionClass)(0),            // 41: open_splunk.SearchJobRetentionClass
+	(*Diagnostic)(nil),                      // 42: open_splunk.Diagnostic
+	(ResultSetKind)(0),                      // 43: open_splunk.ResultSetKind
+	(*SourceRange)(nil),                     // 44: open_splunk.SourceRange
+	(*TimeRangeSpec)(nil),                   // 45: open_splunk.TimeRangeSpec
 }
 var file_open_splunk_search_api_proto_depIdxs = []int32{
-	22, // 0: open_splunk.CreateSearchJobRequest.definition:type_name -> open_splunk.SearchDefinition
-	23, // 1: open_splunk.CreateSearchJobRequest.source:type_name -> open_splunk.SearchJobSource
-	24, // 2: open_splunk.CreateSearchJobRequest.options:type_name -> open_splunk.SearchJobOptions
-	25, // 3: open_splunk.CreateSearchJobResponse.search_job:type_name -> open_splunk.SearchJob
-	25, // 4: open_splunk.GetSearchJobResponse.search_job:type_name -> open_splunk.SearchJob
-	26, // 5: open_splunk.ListSearchJobsRequest.page:type_name -> open_splunk.PageRequest
-	27, // 6: open_splunk.ListSearchJobsRequest.state_filters:type_name -> open_splunk.SearchJobState
-	25, // 7: open_splunk.ListSearchJobsResponse.search_jobs:type_name -> open_splunk.SearchJob
-	28, // 8: open_splunk.ListSearchJobsResponse.page:type_name -> open_splunk.PageResponse
-	26, // 9: open_splunk.GetSearchResultsRequest.page:type_name -> open_splunk.PageRequest
-	29, // 10: open_splunk.GetSearchResultsResponse.result_page:type_name -> open_splunk.ResultPage
-	26, // 11: open_splunk.ListSearchFieldsRequest.page:type_name -> open_splunk.PageRequest
-	30, // 12: open_splunk.ListSearchFieldsResponse.fields:type_name -> open_splunk.FieldProfile
-	28, // 13: open_splunk.ListSearchFieldsResponse.page:type_name -> open_splunk.PageResponse
-	31, // 14: open_splunk.GetSearchFieldSummaryResponse.field_summary:type_name -> open_splunk.FieldSummary
-	32, // 15: open_splunk.GetSearchTimelineRequest.preferred_bucket_width:type_name -> google.protobuf.Duration
-	33, // 16: open_splunk.GetSearchTimelineResponse.buckets:type_name -> open_splunk.TimelineBucket
-	32, // 17: open_splunk.GetSearchTimelineResponse.bucket_width:type_name -> google.protobuf.Duration
-	25, // 18: open_splunk.CancelSearchJobResponse.search_job:type_name -> open_splunk.SearchJob
-	22, // 19: open_splunk.ValidateSearchRequest.definition:type_name -> open_splunk.SearchDefinition
-	34, // 20: open_splunk.ValidateSearchResponse.diagnostics:type_name -> open_splunk.Diagnostic
-	35, // 21: open_splunk.ValidateSearchResponse.predicted_result_kind:type_name -> open_splunk.ResultSetKind
-	0,  // 22: open_splunk.SearchSuggestion.kind:type_name -> open_splunk.SearchSuggestionKind
-	36, // 23: open_splunk.SearchSuggestion.replacement_range:type_name -> open_splunk.SourceRange
-	37, // 24: open_splunk.GetSearchSuggestionsRequest.time_range:type_name -> open_splunk.TimeRangeSpec
-	19, // 25: open_splunk.GetSearchSuggestionsResponse.suggestions:type_name -> open_splunk.SearchSuggestion
-	34, // 26: open_splunk.GetSearchSuggestionsResponse.diagnostics:type_name -> open_splunk.Diagnostic
-	27, // [27:27] is the sub-list for method output_type
-	27, // [27:27] is the sub-list for method input_type
-	27, // [27:27] is the sub-list for extension type_name
-	27, // [27:27] is the sub-list for extension extendee
-	0,  // [0:27] is the sub-list for field type_name
+	28, // 0: open_splunk.CreateSearchJobRequest.definition:type_name -> open_splunk.SearchDefinition
+	29, // 1: open_splunk.CreateSearchJobRequest.source:type_name -> open_splunk.SearchJobSource
+	30, // 2: open_splunk.CreateSearchJobRequest.options:type_name -> open_splunk.SearchJobOptions
+	31, // 3: open_splunk.CreateSearchJobResponse.search_job:type_name -> open_splunk.SearchJob
+	31, // 4: open_splunk.GetSearchJobResponse.search_job:type_name -> open_splunk.SearchJob
+	32, // 5: open_splunk.ListSearchJobsRequest.page:type_name -> open_splunk.PageRequest
+	33, // 6: open_splunk.ListSearchJobsRequest.state_filters:type_name -> open_splunk.SearchJobState
+	31, // 7: open_splunk.ListSearchJobsResponse.search_jobs:type_name -> open_splunk.SearchJob
+	34, // 8: open_splunk.ListSearchJobsResponse.page:type_name -> open_splunk.PageResponse
+	32, // 9: open_splunk.GetSearchResultsRequest.page:type_name -> open_splunk.PageRequest
+	35, // 10: open_splunk.GetSearchResultsResponse.result_page:type_name -> open_splunk.ResultPage
+	32, // 11: open_splunk.ListSearchFieldsRequest.page:type_name -> open_splunk.PageRequest
+	36, // 12: open_splunk.ListSearchFieldsResponse.fields:type_name -> open_splunk.FieldProfile
+	34, // 13: open_splunk.ListSearchFieldsResponse.page:type_name -> open_splunk.PageResponse
+	37, // 14: open_splunk.GetSearchFieldSummaryResponse.field_summary:type_name -> open_splunk.FieldSummary
+	38, // 15: open_splunk.GetSearchTimelineRequest.preferred_bucket_width:type_name -> google.protobuf.Duration
+	39, // 16: open_splunk.GetSearchTimelineResponse.buckets:type_name -> open_splunk.TimelineBucket
+	38, // 17: open_splunk.GetSearchTimelineResponse.bucket_width:type_name -> google.protobuf.Duration
+	31, // 18: open_splunk.CancelSearchJobResponse.search_job:type_name -> open_splunk.SearchJob
+	31, // 19: open_splunk.GetSearchJobSettingsResponse.search_job:type_name -> open_splunk.SearchJob
+	40, // 20: open_splunk.UpdateSearchJobSettingsRequest.visibility:type_name -> open_splunk.SearchJobVisibility
+	41, // 21: open_splunk.UpdateSearchJobSettingsRequest.retention_class:type_name -> open_splunk.SearchJobRetentionClass
+	31, // 22: open_splunk.UpdateSearchJobSettingsResponse.search_job:type_name -> open_splunk.SearchJob
+	31, // 23: open_splunk.ShareSearchJobResponse.search_job:type_name -> open_splunk.SearchJob
+	28, // 24: open_splunk.ValidateSearchRequest.definition:type_name -> open_splunk.SearchDefinition
+	42, // 25: open_splunk.ValidateSearchResponse.diagnostics:type_name -> open_splunk.Diagnostic
+	43, // 26: open_splunk.ValidateSearchResponse.predicted_result_kind:type_name -> open_splunk.ResultSetKind
+	0,  // 27: open_splunk.SearchSuggestion.kind:type_name -> open_splunk.SearchSuggestionKind
+	44, // 28: open_splunk.SearchSuggestion.replacement_range:type_name -> open_splunk.SourceRange
+	45, // 29: open_splunk.GetSearchSuggestionsRequest.time_range:type_name -> open_splunk.TimeRangeSpec
+	25, // 30: open_splunk.GetSearchSuggestionsResponse.suggestions:type_name -> open_splunk.SearchSuggestion
+	42, // 31: open_splunk.GetSearchSuggestionsResponse.diagnostics:type_name -> open_splunk.Diagnostic
+	32, // [32:32] is the sub-list for method output_type
+	32, // [32:32] is the sub-list for method input_type
+	32, // [32:32] is the sub-list for extension type_name
+	32, // [32:32] is the sub-list for extension extendee
+	0,  // [0:32] is the sub-list for field type_name
 }
 
 func init() { file_open_splunk_search_api_proto_init() }
@@ -1589,16 +1923,16 @@ func file_open_splunk_search_api_proto_init() {
 	file_open_splunk_search_api_proto_msgTypes[10].OneofWrappers = []any{}
 	file_open_splunk_search_api_proto_msgTypes[12].OneofWrappers = []any{}
 	file_open_splunk_search_api_proto_msgTypes[14].OneofWrappers = []any{}
-	file_open_splunk_search_api_proto_msgTypes[17].OneofWrappers = []any{}
-	file_open_splunk_search_api_proto_msgTypes[18].OneofWrappers = []any{}
-	file_open_splunk_search_api_proto_msgTypes[19].OneofWrappers = []any{}
+	file_open_splunk_search_api_proto_msgTypes[23].OneofWrappers = []any{}
+	file_open_splunk_search_api_proto_msgTypes[24].OneofWrappers = []any{}
+	file_open_splunk_search_api_proto_msgTypes[25].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_open_splunk_search_api_proto_rawDesc), len(file_open_splunk_search_api_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   21,
+			NumMessages:   27,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

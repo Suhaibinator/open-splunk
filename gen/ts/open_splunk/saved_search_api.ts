@@ -16,7 +16,7 @@ import {
   sortDirectionFromJSON,
   sortDirectionToJSON,
 } from "./common";
-import { SavedSearch, SavedSearchDefinition } from "./saved_search";
+import { SavedSearch, SavedSearchDefinition, SavedSearchSchedule, ScheduledSearchRun } from "./saved_search";
 
 export enum SavedSearchSortBy {
   SAVED_SEARCH_SORT_BY_UNSPECIFIED = 0,
@@ -129,6 +129,45 @@ export interface DeleteSavedSearchRequest {
 
 export interface DeleteSavedSearchResponse {
   savedSearchId: string;
+}
+
+/** POST /api/saved-searches/schedule/set */
+export interface SetSavedSearchScheduleRequest {
+  savedSearchId: string;
+  expectedVersion: bigint;
+  schedule:
+    | SavedSearchSchedule
+    | undefined;
+  /**
+   * Zero creates the first schedule. Existing schedules require their
+   * current config_version so concurrent editors cannot overwrite each other.
+   */
+  expectedScheduleVersion: bigint;
+}
+
+export interface SetSavedSearchScheduleResponse {
+  savedSearch: SavedSearch | undefined;
+}
+
+/** POST /api/saved-searches/run */
+export interface RunSavedSearchRequest {
+  savedSearchId: string;
+}
+
+export interface RunSavedSearchResponse {
+  scheduledSearchRunId: string;
+  searchJobId: string;
+}
+
+/** POST /api/saved-searches/runs/list */
+export interface ListScheduledSearchRunsRequest {
+  savedSearchId: string;
+  page: PageRequest | undefined;
+}
+
+export interface ListScheduledSearchRunsResponse {
+  runs: ScheduledSearchRun[];
+  page: PageResponse | undefined;
 }
 
 function createBaseCreateSavedSearchRequest(): CreateSavedSearchRequest {
@@ -1312,6 +1351,575 @@ export const DeleteSavedSearchResponse: MessageFns<DeleteSavedSearchResponse> = 
   fromPartial<I extends Exact<DeepPartial<DeleteSavedSearchResponse>, I>>(object: I): DeleteSavedSearchResponse {
     const message = createBaseDeleteSavedSearchResponse();
     message.savedSearchId = object.savedSearchId ?? "";
+    return message;
+  },
+};
+
+function createBaseSetSavedSearchScheduleRequest(): SetSavedSearchScheduleRequest {
+  return { savedSearchId: "", expectedVersion: 0n, schedule: undefined, expectedScheduleVersion: 0n };
+}
+
+export const SetSavedSearchScheduleRequest: MessageFns<SetSavedSearchScheduleRequest> = {
+  encode(message: SetSavedSearchScheduleRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.savedSearchId !== "") {
+      writer.uint32(10).string(message.savedSearchId);
+    }
+    if (message.expectedVersion !== 0n) {
+      if (BigInt.asUintN(64, message.expectedVersion) !== message.expectedVersion) {
+        throw new globalThis.Error("value provided for field message.expectedVersion of type uint64 too large");
+      }
+      writer.uint32(16).uint64(message.expectedVersion);
+    }
+    if (message.schedule !== undefined) {
+      SavedSearchSchedule.encode(message.schedule, writer.uint32(26).fork()).join();
+    }
+    if (message.expectedScheduleVersion !== 0n) {
+      if (BigInt.asUintN(64, message.expectedScheduleVersion) !== message.expectedScheduleVersion) {
+        throw new globalThis.Error("value provided for field message.expectedScheduleVersion of type uint64 too large");
+      }
+      writer.uint32(32).uint64(message.expectedScheduleVersion);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SetSavedSearchScheduleRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseSetSavedSearchScheduleRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.savedSearchId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.expectedVersion = reader.uint64() as bigint;
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.schedule = SavedSearchSchedule.decode(reader, reader.uint32());
+            continue;
+          }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+
+            message.expectedScheduleVersion = reader.uint64() as bigint;
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): SetSavedSearchScheduleRequest {
+    return {
+      savedSearchId: isSet(object.savedSearchId)
+        ? globalThis.String(object.savedSearchId)
+        : isSet(object.saved_search_id)
+        ? globalThis.String(object.saved_search_id)
+        : "",
+      expectedVersion: isSet(object.expectedVersion)
+        ? BigInt(object.expectedVersion)
+        : isSet(object.expected_version)
+        ? BigInt(object.expected_version)
+        : 0n,
+      schedule: isSet(object.schedule) ? SavedSearchSchedule.fromJSON(object.schedule) : undefined,
+      expectedScheduleVersion: isSet(object.expectedScheduleVersion)
+        ? BigInt(object.expectedScheduleVersion)
+        : isSet(object.expected_schedule_version)
+        ? BigInt(object.expected_schedule_version)
+        : 0n,
+    };
+  },
+
+  toJSON(message: SetSavedSearchScheduleRequest): unknown {
+    const obj: any = {};
+    if (message.savedSearchId !== "") {
+      obj.savedSearchId = message.savedSearchId;
+    }
+    if (message.expectedVersion !== 0n) {
+      obj.expectedVersion = message.expectedVersion.toString();
+    }
+    if (message.schedule !== undefined) {
+      obj.schedule = SavedSearchSchedule.toJSON(message.schedule);
+    }
+    if (message.expectedScheduleVersion !== 0n) {
+      obj.expectedScheduleVersion = message.expectedScheduleVersion.toString();
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SetSavedSearchScheduleRequest>, I>>(base?: I): SetSavedSearchScheduleRequest {
+    return SetSavedSearchScheduleRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SetSavedSearchScheduleRequest>, I>>(
+    object: I,
+  ): SetSavedSearchScheduleRequest {
+    const message = createBaseSetSavedSearchScheduleRequest();
+    message.savedSearchId = object.savedSearchId ?? "";
+    message.expectedVersion = (object.expectedVersion !== undefined && object.expectedVersion !== null)
+      ? BigInt(object.expectedVersion)
+      : 0n;
+    message.schedule = (object.schedule !== undefined && object.schedule !== null)
+      ? SavedSearchSchedule.fromPartial(object.schedule)
+      : undefined;
+    message.expectedScheduleVersion =
+      (object.expectedScheduleVersion !== undefined && object.expectedScheduleVersion !== null)
+        ? BigInt(object.expectedScheduleVersion)
+        : 0n;
+    return message;
+  },
+};
+
+function createBaseSetSavedSearchScheduleResponse(): SetSavedSearchScheduleResponse {
+  return { savedSearch: undefined };
+}
+
+export const SetSavedSearchScheduleResponse: MessageFns<SetSavedSearchScheduleResponse> = {
+  encode(message: SetSavedSearchScheduleResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.savedSearch !== undefined) {
+      SavedSearch.encode(message.savedSearch, writer.uint32(10).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SetSavedSearchScheduleResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseSetSavedSearchScheduleResponse();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.savedSearch = SavedSearch.decode(reader, reader.uint32());
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): SetSavedSearchScheduleResponse {
+    return {
+      savedSearch: isSet(object.savedSearch)
+        ? SavedSearch.fromJSON(object.savedSearch)
+        : isSet(object.saved_search)
+        ? SavedSearch.fromJSON(object.saved_search)
+        : undefined,
+    };
+  },
+
+  toJSON(message: SetSavedSearchScheduleResponse): unknown {
+    const obj: any = {};
+    if (message.savedSearch !== undefined) {
+      obj.savedSearch = SavedSearch.toJSON(message.savedSearch);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SetSavedSearchScheduleResponse>, I>>(base?: I): SetSavedSearchScheduleResponse {
+    return SetSavedSearchScheduleResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SetSavedSearchScheduleResponse>, I>>(
+    object: I,
+  ): SetSavedSearchScheduleResponse {
+    const message = createBaseSetSavedSearchScheduleResponse();
+    message.savedSearch = (object.savedSearch !== undefined && object.savedSearch !== null)
+      ? SavedSearch.fromPartial(object.savedSearch)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseRunSavedSearchRequest(): RunSavedSearchRequest {
+  return { savedSearchId: "" };
+}
+
+export const RunSavedSearchRequest: MessageFns<RunSavedSearchRequest> = {
+  encode(message: RunSavedSearchRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.savedSearchId !== "") {
+      writer.uint32(10).string(message.savedSearchId);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): RunSavedSearchRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseRunSavedSearchRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.savedSearchId = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): RunSavedSearchRequest {
+    return {
+      savedSearchId: isSet(object.savedSearchId)
+        ? globalThis.String(object.savedSearchId)
+        : isSet(object.saved_search_id)
+        ? globalThis.String(object.saved_search_id)
+        : "",
+    };
+  },
+
+  toJSON(message: RunSavedSearchRequest): unknown {
+    const obj: any = {};
+    if (message.savedSearchId !== "") {
+      obj.savedSearchId = message.savedSearchId;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<RunSavedSearchRequest>, I>>(base?: I): RunSavedSearchRequest {
+    return RunSavedSearchRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<RunSavedSearchRequest>, I>>(object: I): RunSavedSearchRequest {
+    const message = createBaseRunSavedSearchRequest();
+    message.savedSearchId = object.savedSearchId ?? "";
+    return message;
+  },
+};
+
+function createBaseRunSavedSearchResponse(): RunSavedSearchResponse {
+  return { scheduledSearchRunId: "", searchJobId: "" };
+}
+
+export const RunSavedSearchResponse: MessageFns<RunSavedSearchResponse> = {
+  encode(message: RunSavedSearchResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.scheduledSearchRunId !== "") {
+      writer.uint32(10).string(message.scheduledSearchRunId);
+    }
+    if (message.searchJobId !== "") {
+      writer.uint32(18).string(message.searchJobId);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): RunSavedSearchResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseRunSavedSearchResponse();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.scheduledSearchRunId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.searchJobId = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): RunSavedSearchResponse {
+    return {
+      scheduledSearchRunId: isSet(object.scheduledSearchRunId)
+        ? globalThis.String(object.scheduledSearchRunId)
+        : isSet(object.scheduled_search_run_id)
+        ? globalThis.String(object.scheduled_search_run_id)
+        : "",
+      searchJobId: isSet(object.searchJobId)
+        ? globalThis.String(object.searchJobId)
+        : isSet(object.search_job_id)
+        ? globalThis.String(object.search_job_id)
+        : "",
+    };
+  },
+
+  toJSON(message: RunSavedSearchResponse): unknown {
+    const obj: any = {};
+    if (message.scheduledSearchRunId !== "") {
+      obj.scheduledSearchRunId = message.scheduledSearchRunId;
+    }
+    if (message.searchJobId !== "") {
+      obj.searchJobId = message.searchJobId;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<RunSavedSearchResponse>, I>>(base?: I): RunSavedSearchResponse {
+    return RunSavedSearchResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<RunSavedSearchResponse>, I>>(object: I): RunSavedSearchResponse {
+    const message = createBaseRunSavedSearchResponse();
+    message.scheduledSearchRunId = object.scheduledSearchRunId ?? "";
+    message.searchJobId = object.searchJobId ?? "";
+    return message;
+  },
+};
+
+function createBaseListScheduledSearchRunsRequest(): ListScheduledSearchRunsRequest {
+  return { savedSearchId: "", page: undefined };
+}
+
+export const ListScheduledSearchRunsRequest: MessageFns<ListScheduledSearchRunsRequest> = {
+  encode(message: ListScheduledSearchRunsRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.savedSearchId !== "") {
+      writer.uint32(10).string(message.savedSearchId);
+    }
+    if (message.page !== undefined) {
+      PageRequest.encode(message.page, writer.uint32(18).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ListScheduledSearchRunsRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseListScheduledSearchRunsRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.savedSearchId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.page = PageRequest.decode(reader, reader.uint32());
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): ListScheduledSearchRunsRequest {
+    return {
+      savedSearchId: isSet(object.savedSearchId)
+        ? globalThis.String(object.savedSearchId)
+        : isSet(object.saved_search_id)
+        ? globalThis.String(object.saved_search_id)
+        : "",
+      page: isSet(object.page) ? PageRequest.fromJSON(object.page) : undefined,
+    };
+  },
+
+  toJSON(message: ListScheduledSearchRunsRequest): unknown {
+    const obj: any = {};
+    if (message.savedSearchId !== "") {
+      obj.savedSearchId = message.savedSearchId;
+    }
+    if (message.page !== undefined) {
+      obj.page = PageRequest.toJSON(message.page);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ListScheduledSearchRunsRequest>, I>>(base?: I): ListScheduledSearchRunsRequest {
+    return ListScheduledSearchRunsRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ListScheduledSearchRunsRequest>, I>>(
+    object: I,
+  ): ListScheduledSearchRunsRequest {
+    const message = createBaseListScheduledSearchRunsRequest();
+    message.savedSearchId = object.savedSearchId ?? "";
+    message.page = (object.page !== undefined && object.page !== null)
+      ? PageRequest.fromPartial(object.page)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseListScheduledSearchRunsResponse(): ListScheduledSearchRunsResponse {
+  return { runs: [], page: undefined };
+}
+
+export const ListScheduledSearchRunsResponse: MessageFns<ListScheduledSearchRunsResponse> = {
+  encode(message: ListScheduledSearchRunsResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    for (const v of message.runs) {
+      ScheduledSearchRun.encode(v!, writer.uint32(10).fork()).join();
+    }
+    if (message.page !== undefined) {
+      PageResponse.encode(message.page, writer.uint32(18).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ListScheduledSearchRunsResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseListScheduledSearchRunsResponse();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.runs.push(ScheduledSearchRun.decode(reader, reader.uint32()));
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.page = PageResponse.decode(reader, reader.uint32());
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): ListScheduledSearchRunsResponse {
+    return {
+      runs: globalThis.Array.isArray(object?.runs) ? object.runs.map((e: any) => ScheduledSearchRun.fromJSON(e)) : [],
+      page: isSet(object.page) ? PageResponse.fromJSON(object.page) : undefined,
+    };
+  },
+
+  toJSON(message: ListScheduledSearchRunsResponse): unknown {
+    const obj: any = {};
+    if (message.runs?.length) {
+      obj.runs = message.runs.map((e) => ScheduledSearchRun.toJSON(e));
+    }
+    if (message.page !== undefined) {
+      obj.page = PageResponse.toJSON(message.page);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ListScheduledSearchRunsResponse>, I>>(base?: I): ListScheduledSearchRunsResponse {
+    return ListScheduledSearchRunsResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ListScheduledSearchRunsResponse>, I>>(
+    object: I,
+  ): ListScheduledSearchRunsResponse {
+    const message = createBaseListScheduledSearchRunsResponse();
+    message.runs = object.runs?.map((e) => ScheduledSearchRun.fromPartial(e)) || [];
+    message.page = (object.page !== undefined && object.page !== null)
+      ? PageResponse.fromPartial(object.page)
+      : undefined;
     return message;
   },
 };

@@ -384,6 +384,7 @@
   border: 1px solid var(--border-strong);
   box-shadow: var(--shadow-lg);
   color: var(--fg-text);
+  left: auto;
   margin: 0;
   padding: 0;
   position: absolute;

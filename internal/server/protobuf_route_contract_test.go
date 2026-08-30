@@ -12,6 +12,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -55,8 +56,12 @@ func TestEveryProtobufHTTPRouteHasCrossRuntimeForwardCompatibility(t *testing.T)
 	if err := json.Unmarshal(encoded, &fixture); err != nil {
 		t.Fatalf("decode route fixture: %v", err)
 	}
-	if fixture.Version != 1 || len(fixture.Routes) != 80 {
-		t.Fatalf("route fixture version/count = %d/%d, want 1/80", fixture.Version, len(fixture.Routes))
+	update := os.Getenv(updateProtobufRouteFixturesEnvironment) == "1"
+	if update {
+		fixture.Routes = synchronizeProtobufRouteFixtureInventory(t, fixture.Routes)
+	}
+	if fixture.Version != 1 || len(fixture.Routes) != 97 {
+		t.Fatalf("route fixture version/count = %d/%d, want 1/97", fixture.Version, len(fixture.Routes))
 	}
 	assertProtobufRouteFixtureInventory(t, fixture.Routes)
 	futureFieldNumber := protowire.Number(fixture.FutureFieldNumber)
@@ -64,7 +69,6 @@ func TestEveryProtobufHTTPRouteHasCrossRuntimeForwardCompatibility(t *testing.T)
 		t.Fatalf("future field number = %d", futureFieldNumber)
 	}
 
-	update := os.Getenv(updateProtobufRouteFixturesEnvironment) == "1"
 	seenPaths := make(map[string]struct{}, len(fixture.Routes))
 	for index := range fixture.Routes {
 		route := &fixture.Routes[index]
@@ -113,6 +117,30 @@ func TestEveryProtobufHTTPRouteHasCrossRuntimeForwardCompatibility(t *testing.T)
 			t.Fatalf("write updated route fixture: %v", err)
 		}
 	}
+}
+
+func synchronizeProtobufRouteFixtureInventory(
+	t *testing.T,
+	existing []protobufHTTPRouteContractRecord,
+) []protobufHTTPRouteContractRecord {
+	t.Helper()
+	registered := registeredProtobufHTTPRoutes(t)
+	byPath := make(map[string]protobufHTTPRouteContractRecord, len(existing))
+	for _, route := range existing {
+		byPath[route.Path] = route
+	}
+	routes := make([]protobufHTTPRouteContractRecord, 0, len(registered))
+	for path, signature := range registered {
+		route := byPath[path]
+		route.Path = path
+		route.RequestType = signature.RequestType
+		route.ResponseType = signature.ResponseType
+		routes = append(routes, route)
+	}
+	sort.Slice(routes, func(left, right int) bool {
+		return routes[left].Path < routes[right].Path
+	})
+	return routes
 }
 
 func TestProtobufRouteInventoryFailsClosed(t *testing.T) {

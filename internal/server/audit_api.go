@@ -127,7 +127,6 @@ func (handler *apiHandler) auditListRequest(
 		"audit event",
 		defaultAuditListPageSize,
 		audit.MaximumListPageSize,
-		maximumAuditPageTokenBytes,
 	)
 	if err != nil {
 		return audit.ListRequest{}, err

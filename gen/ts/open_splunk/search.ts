@@ -63,6 +63,8 @@ export enum SearchJobOrigin {
   SEARCH_JOB_ORIGIN_HISTORY_RERUN = 3,
   SEARCH_JOB_ORIGIN_DASHBOARD = 4,
   SEARCH_JOB_ORIGIN_API = 5,
+  SEARCH_JOB_ORIGIN_SCHEDULED_REPORT = 6,
+  SEARCH_JOB_ORIGIN_ALERT = 7,
   UNRECOGNIZED = -1,
 }
 
@@ -86,6 +88,12 @@ export function searchJobOriginFromJSON(object: any): SearchJobOrigin {
     case 5:
     case "SEARCH_JOB_ORIGIN_API":
       return SearchJobOrigin.SEARCH_JOB_ORIGIN_API;
+    case 6:
+    case "SEARCH_JOB_ORIGIN_SCHEDULED_REPORT":
+      return SearchJobOrigin.SEARCH_JOB_ORIGIN_SCHEDULED_REPORT;
+    case 7:
+    case "SEARCH_JOB_ORIGIN_ALERT":
+      return SearchJobOrigin.SEARCH_JOB_ORIGIN_ALERT;
     case -1:
     case "UNRECOGNIZED":
     default:
@@ -107,7 +115,164 @@ export function searchJobOriginToJSON(object: SearchJobOrigin): string {
       return "SEARCH_JOB_ORIGIN_DASHBOARD";
     case SearchJobOrigin.SEARCH_JOB_ORIGIN_API:
       return "SEARCH_JOB_ORIGIN_API";
+    case SearchJobOrigin.SEARCH_JOB_ORIGIN_SCHEDULED_REPORT:
+      return "SEARCH_JOB_ORIGIN_SCHEDULED_REPORT";
+    case SearchJobOrigin.SEARCH_JOB_ORIGIN_ALERT:
+      return "SEARCH_JOB_ORIGIN_ALERT";
     case SearchJobOrigin.UNRECOGNIZED:
+    default:
+      return "UNRECOGNIZED";
+  }
+}
+
+export enum SearchJobVisibility {
+  SEARCH_JOB_VISIBILITY_UNSPECIFIED = 0,
+  SEARCH_JOB_VISIBILITY_PRIVATE = 1,
+  SEARCH_JOB_VISIBILITY_EVERYONE = 2,
+  UNRECOGNIZED = -1,
+}
+
+export function searchJobVisibilityFromJSON(object: any): SearchJobVisibility {
+  switch (object) {
+    case 0:
+    case "SEARCH_JOB_VISIBILITY_UNSPECIFIED":
+      return SearchJobVisibility.SEARCH_JOB_VISIBILITY_UNSPECIFIED;
+    case 1:
+    case "SEARCH_JOB_VISIBILITY_PRIVATE":
+      return SearchJobVisibility.SEARCH_JOB_VISIBILITY_PRIVATE;
+    case 2:
+    case "SEARCH_JOB_VISIBILITY_EVERYONE":
+      return SearchJobVisibility.SEARCH_JOB_VISIBILITY_EVERYONE;
+    case -1:
+    case "UNRECOGNIZED":
+    default:
+      return SearchJobVisibility.UNRECOGNIZED;
+  }
+}
+
+export function searchJobVisibilityToJSON(object: SearchJobVisibility): string {
+  switch (object) {
+    case SearchJobVisibility.SEARCH_JOB_VISIBILITY_UNSPECIFIED:
+      return "SEARCH_JOB_VISIBILITY_UNSPECIFIED";
+    case SearchJobVisibility.SEARCH_JOB_VISIBILITY_PRIVATE:
+      return "SEARCH_JOB_VISIBILITY_PRIVATE";
+    case SearchJobVisibility.SEARCH_JOB_VISIBILITY_EVERYONE:
+      return "SEARCH_JOB_VISIBILITY_EVERYONE";
+    case SearchJobVisibility.UNRECOGNIZED:
+    default:
+      return "UNRECOGNIZED";
+  }
+}
+
+export enum SearchJobRetentionClass {
+  SEARCH_JOB_RETENTION_CLASS_UNSPECIFIED = 0,
+  SEARCH_JOB_RETENTION_CLASS_MANUAL = 1,
+  SEARCH_JOB_RETENTION_CLASS_SHARED = 2,
+  SEARCH_JOB_RETENTION_CLASS_SCHEDULED_REPORT = 3,
+  SEARCH_JOB_RETENTION_CLASS_SCHEDULED_ALERT = 4,
+  SEARCH_JOB_RETENTION_CLASS_TRIGGERED_WEBHOOK = 5,
+  UNRECOGNIZED = -1,
+}
+
+export function searchJobRetentionClassFromJSON(object: any): SearchJobRetentionClass {
+  switch (object) {
+    case 0:
+    case "SEARCH_JOB_RETENTION_CLASS_UNSPECIFIED":
+      return SearchJobRetentionClass.SEARCH_JOB_RETENTION_CLASS_UNSPECIFIED;
+    case 1:
+    case "SEARCH_JOB_RETENTION_CLASS_MANUAL":
+      return SearchJobRetentionClass.SEARCH_JOB_RETENTION_CLASS_MANUAL;
+    case 2:
+    case "SEARCH_JOB_RETENTION_CLASS_SHARED":
+      return SearchJobRetentionClass.SEARCH_JOB_RETENTION_CLASS_SHARED;
+    case 3:
+    case "SEARCH_JOB_RETENTION_CLASS_SCHEDULED_REPORT":
+      return SearchJobRetentionClass.SEARCH_JOB_RETENTION_CLASS_SCHEDULED_REPORT;
+    case 4:
+    case "SEARCH_JOB_RETENTION_CLASS_SCHEDULED_ALERT":
+      return SearchJobRetentionClass.SEARCH_JOB_RETENTION_CLASS_SCHEDULED_ALERT;
+    case 5:
+    case "SEARCH_JOB_RETENTION_CLASS_TRIGGERED_WEBHOOK":
+      return SearchJobRetentionClass.SEARCH_JOB_RETENTION_CLASS_TRIGGERED_WEBHOOK;
+    case -1:
+    case "UNRECOGNIZED":
+    default:
+      return SearchJobRetentionClass.UNRECOGNIZED;
+  }
+}
+
+export function searchJobRetentionClassToJSON(object: SearchJobRetentionClass): string {
+  switch (object) {
+    case SearchJobRetentionClass.SEARCH_JOB_RETENTION_CLASS_UNSPECIFIED:
+      return "SEARCH_JOB_RETENTION_CLASS_UNSPECIFIED";
+    case SearchJobRetentionClass.SEARCH_JOB_RETENTION_CLASS_MANUAL:
+      return "SEARCH_JOB_RETENTION_CLASS_MANUAL";
+    case SearchJobRetentionClass.SEARCH_JOB_RETENTION_CLASS_SHARED:
+      return "SEARCH_JOB_RETENTION_CLASS_SHARED";
+    case SearchJobRetentionClass.SEARCH_JOB_RETENTION_CLASS_SCHEDULED_REPORT:
+      return "SEARCH_JOB_RETENTION_CLASS_SCHEDULED_REPORT";
+    case SearchJobRetentionClass.SEARCH_JOB_RETENTION_CLASS_SCHEDULED_ALERT:
+      return "SEARCH_JOB_RETENTION_CLASS_SCHEDULED_ALERT";
+    case SearchJobRetentionClass.SEARCH_JOB_RETENTION_CLASS_TRIGGERED_WEBHOOK:
+      return "SEARCH_JOB_RETENTION_CLASS_TRIGGERED_WEBHOOK";
+    case SearchJobRetentionClass.UNRECOGNIZED:
+    default:
+      return "UNRECOGNIZED";
+  }
+}
+
+export enum RetainedResultStatus {
+  RETAINED_RESULT_STATUS_UNSPECIFIED = 0,
+  RETAINED_RESULT_STATUS_PENDING = 1,
+  RETAINED_RESULT_STATUS_AVAILABLE = 2,
+  RETAINED_RESULT_STATUS_EXPIRED = 3,
+  RETAINED_RESULT_STATUS_MISSING = 4,
+  RETAINED_RESULT_STATUS_CORRUPT = 5,
+  UNRECOGNIZED = -1,
+}
+
+export function retainedResultStatusFromJSON(object: any): RetainedResultStatus {
+  switch (object) {
+    case 0:
+    case "RETAINED_RESULT_STATUS_UNSPECIFIED":
+      return RetainedResultStatus.RETAINED_RESULT_STATUS_UNSPECIFIED;
+    case 1:
+    case "RETAINED_RESULT_STATUS_PENDING":
+      return RetainedResultStatus.RETAINED_RESULT_STATUS_PENDING;
+    case 2:
+    case "RETAINED_RESULT_STATUS_AVAILABLE":
+      return RetainedResultStatus.RETAINED_RESULT_STATUS_AVAILABLE;
+    case 3:
+    case "RETAINED_RESULT_STATUS_EXPIRED":
+      return RetainedResultStatus.RETAINED_RESULT_STATUS_EXPIRED;
+    case 4:
+    case "RETAINED_RESULT_STATUS_MISSING":
+      return RetainedResultStatus.RETAINED_RESULT_STATUS_MISSING;
+    case 5:
+    case "RETAINED_RESULT_STATUS_CORRUPT":
+      return RetainedResultStatus.RETAINED_RESULT_STATUS_CORRUPT;
+    case -1:
+    case "UNRECOGNIZED":
+    default:
+      return RetainedResultStatus.UNRECOGNIZED;
+  }
+}
+
+export function retainedResultStatusToJSON(object: RetainedResultStatus): string {
+  switch (object) {
+    case RetainedResultStatus.RETAINED_RESULT_STATUS_UNSPECIFIED:
+      return "RETAINED_RESULT_STATUS_UNSPECIFIED";
+    case RetainedResultStatus.RETAINED_RESULT_STATUS_PENDING:
+      return "RETAINED_RESULT_STATUS_PENDING";
+    case RetainedResultStatus.RETAINED_RESULT_STATUS_AVAILABLE:
+      return "RETAINED_RESULT_STATUS_AVAILABLE";
+    case RetainedResultStatus.RETAINED_RESULT_STATUS_EXPIRED:
+      return "RETAINED_RESULT_STATUS_EXPIRED";
+    case RetainedResultStatus.RETAINED_RESULT_STATUS_MISSING:
+      return "RETAINED_RESULT_STATUS_MISSING";
+    case RetainedResultStatus.RETAINED_RESULT_STATUS_CORRUPT:
+      return "RETAINED_RESULT_STATUS_CORRUPT";
+    case RetainedResultStatus.UNRECOGNIZED:
     default:
       return "UNRECOGNIZED";
   }
@@ -124,6 +289,11 @@ export enum SearchJobState {
   SEARCH_JOB_STATE_FAILED = 7,
   SEARCH_JOB_STATE_CANCELED = 8,
   SEARCH_JOB_STATE_EXPIRED = 9,
+  /**
+   * SEARCH_JOB_STATE_INTERRUPTED - A nonterminal durable job recovered after process restart. It is terminal
+   * and never resumes automatically.
+   */
+  SEARCH_JOB_STATE_INTERRUPTED = 10,
   UNRECOGNIZED = -1,
 }
 
@@ -159,6 +329,9 @@ export function searchJobStateFromJSON(object: any): SearchJobState {
     case 9:
     case "SEARCH_JOB_STATE_EXPIRED":
       return SearchJobState.SEARCH_JOB_STATE_EXPIRED;
+    case 10:
+    case "SEARCH_JOB_STATE_INTERRUPTED":
+      return SearchJobState.SEARCH_JOB_STATE_INTERRUPTED;
     case -1:
     case "UNRECOGNIZED":
     default:
@@ -188,6 +361,8 @@ export function searchJobStateToJSON(object: SearchJobState): string {
       return "SEARCH_JOB_STATE_CANCELED";
     case SearchJobState.SEARCH_JOB_STATE_EXPIRED:
       return "SEARCH_JOB_STATE_EXPIRED";
+    case SearchJobState.SEARCH_JOB_STATE_INTERRUPTED:
+      return "SEARCH_JOB_STATE_INTERRUPTED";
     case SearchJobState.UNRECOGNIZED:
     default:
       return "UNRECOGNIZED";
@@ -375,6 +550,10 @@ export interface SearchJobSource {
   savedSearchId?: string | undefined;
   historySearchId?: string | undefined;
   dashboardId?: string | undefined;
+  scheduledReportRunId?: string | undefined;
+  alertId?: string | undefined;
+  alertRunId?: string | undefined;
+  scheduledAt?: Date | undefined;
 }
 
 export interface SearchProgress {
@@ -434,7 +613,7 @@ export interface SearchJobOptions {
 }
 
 /**
- * SearchJob is a transient, immutable-snapshot execution record. state_version
+ * SearchJob is a retained, immutable-snapshot execution record. state_version
  * increases whenever observable state, progress, or result metadata changes.
  */
 export interface SearchJob {
@@ -470,6 +649,11 @@ export interface SearchJob {
    * with this job. It is absent for legacy or feature-disabled attempts.
    */
   knowledgeSnapshot?: KnowledgeSnapshotSummary | undefined;
+  visibility: SearchJobVisibility;
+  retentionClass: SearchJobRetentionClass;
+  retentionLifetime: Duration | undefined;
+  lastAccessedAt: Date | undefined;
+  retainedResultStatus: RetainedResultStatus;
 }
 
 function createBaseSearchDefinition(): SearchDefinition {
@@ -670,7 +854,16 @@ export const SearchDefinition: MessageFns<SearchDefinition> = {
 };
 
 function createBaseSearchJobSource(): SearchJobSource {
-  return { origin: 0, savedSearchId: undefined, historySearchId: undefined, dashboardId: undefined };
+  return {
+    origin: 0,
+    savedSearchId: undefined,
+    historySearchId: undefined,
+    dashboardId: undefined,
+    scheduledReportRunId: undefined,
+    alertId: undefined,
+    alertRunId: undefined,
+    scheduledAt: undefined,
+  };
 }
 
 export const SearchJobSource: MessageFns<SearchJobSource> = {
@@ -686,6 +879,18 @@ export const SearchJobSource: MessageFns<SearchJobSource> = {
     }
     if (message.dashboardId !== undefined) {
       writer.uint32(34).string(message.dashboardId);
+    }
+    if (message.scheduledReportRunId !== undefined) {
+      writer.uint32(42).string(message.scheduledReportRunId);
+    }
+    if (message.alertId !== undefined) {
+      writer.uint32(50).string(message.alertId);
+    }
+    if (message.alertRunId !== undefined) {
+      writer.uint32(58).string(message.alertRunId);
+    }
+    if (message.scheduledAt !== undefined) {
+      Timestamp.encode(toTimestamp(message.scheduledAt), writer.uint32(66).fork()).join();
     }
     return writer;
   },
@@ -735,6 +940,38 @@ export const SearchJobSource: MessageFns<SearchJobSource> = {
             message.dashboardId = reader.string();
             continue;
           }
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+
+            message.scheduledReportRunId = reader.string();
+            continue;
+          }
+          case 6: {
+            if (tag !== 50) {
+              break;
+            }
+
+            message.alertId = reader.string();
+            continue;
+          }
+          case 7: {
+            if (tag !== 58) {
+              break;
+            }
+
+            message.alertRunId = reader.string();
+            continue;
+          }
+          case 8: {
+            if (tag !== 66) {
+              break;
+            }
+
+            message.scheduledAt = fromTimestamp(Timestamp.decode(reader, reader.uint32()));
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -765,6 +1002,26 @@ export const SearchJobSource: MessageFns<SearchJobSource> = {
         : isSet(object.dashboard_id)
         ? globalThis.String(object.dashboard_id)
         : undefined,
+      scheduledReportRunId: isSet(object.scheduledReportRunId)
+        ? globalThis.String(object.scheduledReportRunId)
+        : isSet(object.scheduled_report_run_id)
+        ? globalThis.String(object.scheduled_report_run_id)
+        : undefined,
+      alertId: isSet(object.alertId)
+        ? globalThis.String(object.alertId)
+        : isSet(object.alert_id)
+        ? globalThis.String(object.alert_id)
+        : undefined,
+      alertRunId: isSet(object.alertRunId)
+        ? globalThis.String(object.alertRunId)
+        : isSet(object.alert_run_id)
+        ? globalThis.String(object.alert_run_id)
+        : undefined,
+      scheduledAt: isSet(object.scheduledAt)
+        ? fromJsonTimestamp(object.scheduledAt)
+        : isSet(object.scheduled_at)
+        ? fromJsonTimestamp(object.scheduled_at)
+        : undefined,
     };
   },
 
@@ -782,6 +1039,18 @@ export const SearchJobSource: MessageFns<SearchJobSource> = {
     if (message.dashboardId !== undefined) {
       obj.dashboardId = message.dashboardId;
     }
+    if (message.scheduledReportRunId !== undefined) {
+      obj.scheduledReportRunId = message.scheduledReportRunId;
+    }
+    if (message.alertId !== undefined) {
+      obj.alertId = message.alertId;
+    }
+    if (message.alertRunId !== undefined) {
+      obj.alertRunId = message.alertRunId;
+    }
+    if (message.scheduledAt !== undefined) {
+      obj.scheduledAt = message.scheduledAt.toISOString();
+    }
     return obj;
   },
 
@@ -794,6 +1063,10 @@ export const SearchJobSource: MessageFns<SearchJobSource> = {
     message.savedSearchId = object.savedSearchId ?? undefined;
     message.historySearchId = object.historySearchId ?? undefined;
     message.dashboardId = object.dashboardId ?? undefined;
+    message.scheduledReportRunId = object.scheduledReportRunId ?? undefined;
+    message.alertId = object.alertId ?? undefined;
+    message.alertRunId = object.alertRunId ?? undefined;
+    message.scheduledAt = object.scheduledAt ?? undefined;
     return message;
   },
 };
@@ -1648,6 +1921,11 @@ function createBaseSearchJob(): SearchJob {
     plan: undefined,
     resultsTruncated: false,
     knowledgeSnapshot: undefined,
+    visibility: 0,
+    retentionClass: 0,
+    retentionLifetime: undefined,
+    lastAccessedAt: undefined,
+    retainedResultStatus: 0,
   };
 }
 
@@ -1721,6 +1999,21 @@ export const SearchJob: MessageFns<SearchJob> = {
     }
     if (message.knowledgeSnapshot !== undefined) {
       KnowledgeSnapshotSummary.encode(message.knowledgeSnapshot, writer.uint32(186).fork()).join();
+    }
+    if (message.visibility !== 0) {
+      writer.uint32(192).int32(message.visibility);
+    }
+    if (message.retentionClass !== 0) {
+      writer.uint32(200).int32(message.retentionClass);
+    }
+    if (message.retentionLifetime !== undefined) {
+      Duration.encode(message.retentionLifetime, writer.uint32(210).fork()).join();
+    }
+    if (message.lastAccessedAt !== undefined) {
+      Timestamp.encode(toTimestamp(message.lastAccessedAt), writer.uint32(218).fork()).join();
+    }
+    if (message.retainedResultStatus !== 0) {
+      writer.uint32(224).int32(message.retainedResultStatus);
     }
     return writer;
   },
@@ -1914,6 +2207,46 @@ export const SearchJob: MessageFns<SearchJob> = {
             message.knowledgeSnapshot = KnowledgeSnapshotSummary.decode(reader, reader.uint32());
             continue;
           }
+          case 24: {
+            if (tag !== 192) {
+              break;
+            }
+
+            message.visibility = reader.int32() as any;
+            continue;
+          }
+          case 25: {
+            if (tag !== 200) {
+              break;
+            }
+
+            message.retentionClass = reader.int32() as any;
+            continue;
+          }
+          case 26: {
+            if (tag !== 210) {
+              break;
+            }
+
+            message.retentionLifetime = Duration.decode(reader, reader.uint32());
+            continue;
+          }
+          case 27: {
+            if (tag !== 218) {
+              break;
+            }
+
+            message.lastAccessedAt = fromTimestamp(Timestamp.decode(reader, reader.uint32()));
+            continue;
+          }
+          case 28: {
+            if (tag !== 224) {
+              break;
+            }
+
+            message.retainedResultStatus = reader.int32() as any;
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -2010,6 +2343,27 @@ export const SearchJob: MessageFns<SearchJob> = {
         : isSet(object.knowledge_snapshot)
         ? KnowledgeSnapshotSummary.fromJSON(object.knowledge_snapshot)
         : undefined,
+      visibility: isSet(object.visibility) ? searchJobVisibilityFromJSON(object.visibility) : 0,
+      retentionClass: isSet(object.retentionClass)
+        ? searchJobRetentionClassFromJSON(object.retentionClass)
+        : isSet(object.retention_class)
+        ? searchJobRetentionClassFromJSON(object.retention_class)
+        : 0,
+      retentionLifetime: isSet(object.retentionLifetime)
+        ? Duration.fromJSON(object.retentionLifetime)
+        : isSet(object.retention_lifetime)
+        ? Duration.fromJSON(object.retention_lifetime)
+        : undefined,
+      lastAccessedAt: isSet(object.lastAccessedAt)
+        ? fromJsonTimestamp(object.lastAccessedAt)
+        : isSet(object.last_accessed_at)
+        ? fromJsonTimestamp(object.last_accessed_at)
+        : undefined,
+      retainedResultStatus: isSet(object.retainedResultStatus)
+        ? retainedResultStatusFromJSON(object.retainedResultStatus)
+        : isSet(object.retained_result_status)
+        ? retainedResultStatusFromJSON(object.retained_result_status)
+        : 0,
     };
   },
 
@@ -2081,6 +2435,21 @@ export const SearchJob: MessageFns<SearchJob> = {
     if (message.knowledgeSnapshot !== undefined) {
       obj.knowledgeSnapshot = KnowledgeSnapshotSummary.toJSON(message.knowledgeSnapshot);
     }
+    if (message.visibility !== 0) {
+      obj.visibility = searchJobVisibilityToJSON(message.visibility);
+    }
+    if (message.retentionClass !== 0) {
+      obj.retentionClass = searchJobRetentionClassToJSON(message.retentionClass);
+    }
+    if (message.retentionLifetime !== undefined) {
+      obj.retentionLifetime = Duration.toJSON(message.retentionLifetime);
+    }
+    if (message.lastAccessedAt !== undefined) {
+      obj.lastAccessedAt = message.lastAccessedAt.toISOString();
+    }
+    if (message.retainedResultStatus !== 0) {
+      obj.retainedResultStatus = retainedResultStatusToJSON(message.retainedResultStatus);
+    }
     return obj;
   },
 
@@ -2129,6 +2498,13 @@ export const SearchJob: MessageFns<SearchJob> = {
     message.knowledgeSnapshot = (object.knowledgeSnapshot !== undefined && object.knowledgeSnapshot !== null)
       ? KnowledgeSnapshotSummary.fromPartial(object.knowledgeSnapshot)
       : undefined;
+    message.visibility = object.visibility ?? 0;
+    message.retentionClass = object.retentionClass ?? 0;
+    message.retentionLifetime = (object.retentionLifetime !== undefined && object.retentionLifetime !== null)
+      ? Duration.fromPartial(object.retentionLifetime)
+      : undefined;
+    message.lastAccessedAt = object.lastAccessedAt ?? undefined;
+    message.retainedResultStatus = object.retainedResultStatus ?? 0;
     return message;
   },
 };

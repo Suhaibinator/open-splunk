@@ -103,6 +103,42 @@ func (store *fakeSavedSearches) callCount() int {
 	return store.calls
 }
 
+func TestSavedSearchScheduleProjectionStaysOutsideBaseRepository(t *testing.T) {
+	t.Parallel()
+	handler := &apiHandler{ownerID: "owner-1"}
+	definition := savedSearchDefinition("owner-1", "search", "Scheduled")
+	definition.Schedule = &opensplunk.SavedSearchSchedule{
+		Enabled: true, Cron: "0 * * * *", Timezone: "UTC", DispatchTtl: "2p", ConfigVersion: 7,
+	}
+
+	persisted, err := handler.savedSearchDefinition(definition)
+	if err != nil {
+		t.Fatalf("savedSearchDefinition() error = %v", err)
+	}
+	if persisted.GetSchedule() != nil {
+		t.Fatalf("base repository definition retained schedule = %+v", persisted.GetSchedule())
+	}
+	if definition.GetSchedule().GetConfigVersion() != 7 {
+		t.Fatal("normalization mutated the caller's schedule projection")
+	}
+
+	record := savedSearchRecord("saved-1", 3, "owner-1", "search", "Scheduled")
+	record.Definition.Schedule = proto.Clone(definition.GetSchedule()).(*opensplunk.SavedSearchSchedule)
+	record.ScheduleStatus = &opensplunk.ScheduledSearchStatus{
+		LastOutcome: opensplunk.ScheduledSearchOutcome_SCHEDULED_SEARCH_OUTCOME_COMPLETED,
+	}
+	projected, err := handler.cloneSavedSearch(record)
+	if err != nil {
+		t.Fatalf("cloneSavedSearch() error = %v", err)
+	}
+	if projected.GetDefinition().GetSchedule() != nil || projected.GetScheduleStatus() != nil {
+		t.Fatalf("base projection leaked joined scheduling state = %+v", projected)
+	}
+	if record.GetDefinition().GetSchedule().GetConfigVersion() != 7 || record.GetScheduleStatus() == nil {
+		t.Fatal("projection cleanup mutated the repository record")
+	}
+}
+
 func TestSavedSearchRoutesRoundTripProtobuf(t *testing.T) {
 	ownerID := "owner-1"
 	appID := "app-main"

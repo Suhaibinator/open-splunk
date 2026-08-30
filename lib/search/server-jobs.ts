@@ -31,6 +31,7 @@ const LISTABLE_STATES = new Set<SearchJobState>([
   SearchJobState.SEARCH_JOB_STATE_FAILED,
   SearchJobState.SEARCH_JOB_STATE_CANCELED,
   SearchJobState.SEARCH_JOB_STATE_EXPIRED,
+  SearchJobState.SEARCH_JOB_STATE_INTERRUPTED,
 ]);
 
 const CANCELABLE_STATES = new Set<SearchJobState>([
@@ -74,6 +75,28 @@ export interface ListServerSearchJobsOptions extends ProtobufRequestOptions {
   pageToken?: string;
   includeTotalSize?: boolean;
   maximumPages?: number;
+}
+
+// Loads the exact retained job identified by a deep link. This deliberately
+// uses the job-read route; rerunning is an explicit recovery action owned by
+// the caller after an expired response.
+export async function getExactRetainedSearchJob(
+  client: OpenSplunkApiClient,
+  searchJobId: string,
+  options?: ProtobufRequestOptions,
+): Promise<SearchJob & { definition: SearchDefinition }> {
+  const id = searchJobId.trim();
+  if (id.length === 0) throw new TypeError("Search job ID is required.");
+  const response = await client.search.get({
+    searchJobId: id,
+    includePlan: false,
+    includeGeneratedSql: false,
+  }, options);
+  const job = response.searchJob;
+  if (job === undefined || job.searchJobId !== id) {
+    throw new TypeError("The server returned an invalid retained search job.");
+  }
+  return { ...job, definition: requireDefinition(job) };
 }
 
 function requireDefinition(job: SearchJob): SearchDefinition {
@@ -271,9 +294,17 @@ export function serverSearchJobCanCancel(job: ServerSearchJob): boolean {
 }
 
 export function serverSearchJobOriginLabel(source: SearchJobSource | null): string {
-  if (source?.origin === SearchJobOrigin.SEARCH_JOB_ORIGIN_SAVED_SEARCH) return "Saved search";
-  if (source?.origin === SearchJobOrigin.SEARCH_JOB_ORIGIN_HISTORY_RERUN) return "History rerun";
-  if (source?.origin === SearchJobOrigin.SEARCH_JOB_ORIGIN_DASHBOARD) return "Dashboard";
-  if (source?.origin === SearchJobOrigin.SEARCH_JOB_ORIGIN_API) return "API";
-  return "Ad hoc";
+  switch (source?.origin) {
+    case SearchJobOrigin.SEARCH_JOB_ORIGIN_AD_HOC: return "Ad hoc search";
+    case SearchJobOrigin.SEARCH_JOB_ORIGIN_SAVED_SEARCH: return "Saved search";
+    case SearchJobOrigin.SEARCH_JOB_ORIGIN_HISTORY_RERUN: return "History rerun";
+    case SearchJobOrigin.SEARCH_JOB_ORIGIN_DASHBOARD: return "Dashboard";
+    case SearchJobOrigin.SEARCH_JOB_ORIGIN_API: return "API";
+    case SearchJobOrigin.SEARCH_JOB_ORIGIN_SCHEDULED_REPORT: return "Scheduled report";
+    case SearchJobOrigin.SEARCH_JOB_ORIGIN_ALERT: return "Alert";
+    case SearchJobOrigin.SEARCH_JOB_ORIGIN_UNSPECIFIED:
+    case SearchJobOrigin.UNRECOGNIZED:
+    case undefined:
+    default: return "Unknown";
+  }
 }

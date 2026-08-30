@@ -20,6 +20,8 @@ import (
 
 	opensplunkroot "github.com/Suhaibinator/open-splunk"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/alerts"
+	"github.com/Suhaibinator/open-splunk/internal/alertstore"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/buildinfo"
@@ -29,12 +31,16 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/dashboards"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
+	"github.com/Suhaibinator/open-splunk/internal/featureaudit"
 	"github.com/Suhaibinator/open-splunk/internal/hechttp"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgepreview"
 	"github.com/Suhaibinator/open-splunk/internal/logging"
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
+	"github.com/Suhaibinator/open-splunk/internal/scheduledreports"
+	"github.com/Suhaibinator/open-splunk/internal/scheduler"
+	"github.com/Suhaibinator/open-splunk/internal/searchartifacts"
 	"github.com/Suhaibinator/open-splunk/internal/searchaudit"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -83,6 +89,9 @@ type options struct {
 	administratorToken                        string
 	administratorTokenFile                    string
 	exportArtifactDir                         string
+	searchArtifactDir                         string
+	alertPublicBaseURL                        string
+	alertPrivateWebhookHostsCSV               string
 	clickhouseAddress                         string
 	clickhouseDatabase                        string
 	clickhouseUsername                        string
@@ -201,6 +210,7 @@ func runWithOptions(config options) error {
 		}
 		return writeEmbeddedReleaseVerification(os.Stdout, release)
 	}
+	featureOperations := newRuntimeFeatureOperations(logger)
 	httpTLSConfig, err := loadHTTPServerTLSConfig(
 		config.httpTLSCert,
 		config.httpTLSKey,
@@ -266,6 +276,23 @@ func runWithOptions(config options) error {
 			logger.Warn("close control plane", zap.Error(err))
 		}
 	}()
+	featureAudit, err := featureaudit.New(
+		startupContext,
+		controlDB,
+		featureaudit.Options{
+			TenantID: config.tenantID,
+			OnFailure: func(failure featureaudit.Failure) {
+				logger.Warn(
+					"persist feature operation audit",
+					zap.String("category", string(failure.Category)),
+				)
+			},
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("open feature operation audit: %w", err)
+	}
+	featureOperations.SetAuditor(featureAudit)
 	collectorBootEpoch, err := newCollectorBootEpoch()
 	if err != nil {
 		return err
@@ -643,10 +670,32 @@ func runWithOptions(config options) error {
 		Database: "open_splunk",
 		Table:    "events",
 	}
-	jobJournal, err := searchhistory.NewJobJournal(searchHistory)
+	historyJobJournal, err := searchhistory.NewJobJournal(searchHistory)
 	if err != nil {
 		return fmt.Errorf("create search-history job journal: %w", err)
 	}
+	searchArtifactStore, err := searchartifacts.New(startupContext, searchartifacts.Config{
+		DB:        controlDB.SQLDB(),
+		Directory: config.searchArtifactDir,
+		Observer:  featureOperations,
+	})
+	if err != nil {
+		return fmt.Errorf("open durable search artifacts: %w", err)
+	}
+	defer func() {
+		if err := searchArtifactStore.Close(); err != nil {
+			logger.Warn("close durable search artifacts", zap.Error(err))
+		}
+	}()
+	scheduledReportJournal, err := newRuntimeScheduledReportJournal(runtimeScheduledReportJournalOptions{})
+	if err != nil {
+		return fmt.Errorf("create scheduled-report completion journal: %w", err)
+	}
+	// Register this before the search manager's close so LIFO shutdown lets the
+	// manager publish every terminal scheduled-job outcome before retry workers
+	// are stopped. The artifact store remains alive until both have closed.
+	defer scheduledReportJournal.Close()
+	jobJournal := searchjobs.NewCompositeJournal(searchArtifactStore, historyJobJournal, scheduledReportJournal)
 	// Construct the catalog and its immutable resolver before search admission.
 	// Manager captures this exact resolver in its private configuration; no
 	// later HTTP composition can rotate search-time knowledge authority.
@@ -801,6 +850,112 @@ func runWithOptions(config options) error {
 	if err != nil {
 		return err
 	}
+	trustedScheduledAdmission := &runtimeTrustedSearchAdmission{
+		jobs: jobs, indexes: controlDB, apps: appCatalog,
+	}
+	alertRepository, err := alertstore.NewSQLRepository(controlDB, alertstore.SQLRepositoryOptions{TenantID: config.tenantID})
+	if err != nil {
+		clear(appCursorKey)
+		return fmt.Errorf("open alert repository: %w", err)
+	}
+	alertObservability := alerts.ObservabilityOptions{Observer: featureOperations}
+	alertLifecycleRepository := alerts.ObserveRepository(alertRepository, alertObservability)
+	alertRunRepository := alerts.ObserveRunRepository(alertRepository, alertObservability)
+	alertKeyMaterial, err := loadVerifiedMasterKey(startupContext, controlDB, config.masterKeyPath)
+	if err != nil {
+		clear(appCursorKey)
+		return fmt.Errorf("open alert encryption key: %w", err)
+	}
+	alertKey, err := deriveServerKey(alertKeyMaterial, "webhook-alert-secrets")
+	clear(alertKeyMaterial)
+	if err != nil {
+		clear(appCursorKey)
+		return fmt.Errorf("derive alert encryption key: %w", err)
+	}
+	alertCipher, err := alerts.NewAESGCMCipher(alertKey, nil)
+	clear(alertKey)
+	if err != nil {
+		clear(appCursorKey)
+		return fmt.Errorf("create alert encryption: %w", err)
+	}
+	alertService, err := alerts.NewService(alertLifecycleRepository, alertCipher, alerts.ServiceOptions{PublicBaseURL: config.alertPublicBaseURL})
+	if err != nil {
+		clear(appCursorKey)
+		return fmt.Errorf("create alert service: %w", err)
+	}
+	if err := alertService.ValidateEnabledRuntime(startupContext, defaultOwnerID); err != nil {
+		clear(appCursorKey)
+		return fmt.Errorf("validate enabled alerts: %w", err)
+	}
+	alertDeliverer, err := alerts.NewDeliverer(alerts.DeliveryOptions{DestinationPolicy: alerts.DestinationPolicy{
+		PrivateHostAllowlist: splitConfiguredValues(config.alertPrivateWebhookHostsCSV),
+	}})
+	if err != nil {
+		clear(appCursorKey)
+		return fmt.Errorf("create alert deliverer: %w", err)
+	}
+	alertTestDeliverer := alerts.ObserveTestWebhookDeliverer(alertDeliverer, alertObservability)
+	alertArtifacts, err := newRuntimeAlertArtifacts(searchArtifactStore, config.tenantID)
+	if err != nil {
+		clear(appCursorKey)
+		return fmt.Errorf("create alert artifact runtime: %w", err)
+	}
+	alertCoordinator, err := alerts.NewCoordinator(alerts.CoordinatorOptions{
+		RunRepository: alertRunRepository, Admission: trustedScheduledAdmission,
+		Jobs: alertArtifacts, Results: alertArtifacts, Retention: alertArtifacts,
+		Authorizer: alertService, Deliverer: alertDeliverer, PublicBaseURL: config.alertPublicBaseURL,
+	})
+	if err != nil {
+		clear(appCursorKey)
+		return fmt.Errorf("create alert coordinator: %w", err)
+	}
+	// Coordinator workers deliberately outlive individual scheduler and HTTP
+	// request contexts. Register shutdown immediately so every later startup
+	// failure joins them before artifact and database teardown. The timeout
+	// bounds durable-completion retry grace; Close still joins every worker.
+	// The scheduler shutdown defer is registered below and therefore runs first.
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		if err := alertCoordinator.Close(ctx); err != nil {
+			logger.Warn("close alert coordinator", zap.Error(err))
+		}
+	}()
+	if _, err := alertCoordinator.Recover(startupContext); err != nil {
+		clear(appCursorKey)
+		return fmt.Errorf("recover alert runs: %w", err)
+	}
+	alertEngine, err := scheduler.NewEngine(scheduler.EngineOptions{Stepper: alertCoordinator})
+	if err != nil {
+		clear(appCursorKey)
+		return fmt.Errorf("create alert scheduler: %w", err)
+	}
+	scheduledReportRepository, err := scheduledreports.NewRepository(controlDB.GORMDB(), scheduledreports.RepositoryOptions{})
+	if err != nil {
+		clear(appCursorKey)
+		return fmt.Errorf("open scheduled reports: %w", err)
+	}
+	scheduledReportService, err := scheduledreports.NewService(scheduledreports.ServiceOptions{
+		Store: scheduledReportRepository, Admitter: trustedScheduledAdmission,
+		Observer: featureOperations,
+	})
+	if err != nil {
+		clear(appCursorKey)
+		return fmt.Errorf("create scheduled report service: %w", err)
+	}
+	if _, err := scheduledReportService.Recover(startupContext); err != nil {
+		clear(appCursorKey)
+		return fmt.Errorf("recover scheduled reports: %w", err)
+	}
+	if err := scheduledReportJournal.Bind(scheduledReportService); err != nil {
+		clear(appCursorKey)
+		return fmt.Errorf("bind scheduled-report completion journal: %w", err)
+	}
+	scheduledReportEngine, err := scheduler.NewEngine(scheduler.EngineOptions{Stepper: scheduledReportService})
+	if err != nil {
+		clear(appCursorKey)
+		return fmt.Errorf("create scheduled report scheduler: %w", err)
+	}
 	collectorAdministration, err := newRuntimeCollectorAdministration(
 		startupContext,
 		controlDB,
@@ -815,6 +970,8 @@ func runWithOptions(config options) error {
 	httpConfig := server.Config{
 		Logger:                     logger,
 		SearchJobs:                 jobs,
+		SearchArtifacts:            searchArtifactStore,
+		TrustedSearchAdmission:     trustedScheduledAdmission,
 		RuntimeReadiness:           connection,
 		SearchInspections:          inspection.service,
 		SearchWebSocket:            searchWebSocket,
@@ -834,6 +991,12 @@ func runWithOptions(config options) error {
 		AppCatalog:                 appCatalog,
 		AppCursorKey:               appCursorKey,
 		SavedSearches:              savedSearches,
+		ScheduledReports:           scheduledReportService,
+		AlertService:               alertService,
+		AlertRepository:            alertLifecycleRepository,
+		AlertDeliverer:             alertTestDeliverer,
+		AlertCoordinator:           alertCoordinator,
+		AlertPublicBaseURL:         config.alertPublicBaseURL,
 		Dashboards:                 dashboardStore,
 		SearchHistory:              searchHistory,
 		WebUI:                      release.WebUI,
@@ -906,6 +1069,25 @@ func runWithOptions(config options) error {
 	var rootHandler http.Handler = requests
 
 	shutdownContext, rawStopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	schedulerContext, cancelSchedulers := context.WithCancel(shutdownContext)
+	var schedulerWorkers sync.WaitGroup
+	schedulerWorkers.Add(2)
+	go func() {
+		defer schedulerWorkers.Done()
+		if err := scheduledReportEngine.Run(schedulerContext); !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			logger.Error("scheduled report scheduler stopped", zap.Error(err))
+		}
+	}()
+	go func() {
+		defer schedulerWorkers.Done()
+		if err := alertEngine.Run(schedulerContext); !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			logger.Error("alert scheduler stopped", zap.Error(err))
+		}
+	}()
+	defer func() {
+		cancelSchedulers()
+		schedulerWorkers.Wait()
+	}()
 	var stopSignalsOnce sync.Once
 	stopSignals := func() { stopSignalsOnce.Do(rawStopSignals) }
 	defer stopSignals()

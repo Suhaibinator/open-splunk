@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useRef } from "react";
+import { type ReactNode, useEffect, useId, useRef } from "react";
 
 import { installModalSurface } from "./modal-surface";
 import { AppIcon } from "./app-icon";
@@ -26,6 +26,8 @@ export function Modal({
   returnFocus = null,
   initialFocus,
 }: ModalProps) {
+  const titleId = useId();
+  const subtitleId = useId();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const onCloseRef = useRef(onClose);
   const dismissibleRef = useRef(dismissible);
@@ -64,14 +66,15 @@ export function Modal({
         ref={dialogRef}
         open
         className={`modal-card${wide ? " modal-card-wide" : ""}`}
-        aria-labelledby="modal-title"
+        aria-describedby={subtitle === undefined ? undefined : subtitleId}
+        aria-labelledby={titleId}
         aria-modal="true"
         tabIndex={-1}
       >
         <header className="modal-header">
           <div>
-            <h2 id="modal-title">{title}</h2>
-            {subtitle === undefined ? null : <p>{subtitle}</p>}
+            <h2 id={titleId}>{title}</h2>
+            {subtitle === undefined ? null : <p id={subtitleId}>{subtitle}</p>}
           </div>
           {dismissible
             ? <button className="button button--ghost button--icon" aria-label="Close dialog" type="button" onClick={onClose}><AppIcon name="close" size="lg" /></button>

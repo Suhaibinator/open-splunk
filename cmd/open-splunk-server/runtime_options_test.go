@@ -56,7 +56,7 @@ func TestRuntimeOptionRegistryIsCompleteAndUnique(t *testing.T) {
 	if err := validateRuntimeOptionRegistry(flags, runtimeOptionBindings); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := len(runtimeOptionBindings), 33; got != want {
+	if got, want := len(runtimeOptionBindings), 36; got != want {
 		t.Fatalf("runtime option binding count = %d, want %d", got, want)
 	}
 
@@ -134,6 +134,7 @@ func TestParseRuntimeOptionsPrecedenceAndTypes(t *testing.T) {
 		if config.httpAddress != "127.0.0.1:8080" ||
 			config.tenantID != "default" || config.hecEnabled ||
 			config.masterKeyPath != "open-splunk.db.key" ||
+			config.searchArtifactDir != "open-splunk.db.search-artifacts" ||
 			config.logLevel != "info" || config.logFormat != "json" {
 			t.Fatalf("default runtime configuration = %#v", config)
 		}
@@ -157,6 +158,7 @@ func TestParseRuntimeOptionsPrecedenceAndTypes(t *testing.T) {
 			config.httpAddress != "0.0.0.0:8081" || !config.trustForwardedProto ||
 			config.controlDBPath != "/state/control.db" ||
 			config.masterKeyPath != "/state/control.db.key" ||
+			config.searchArtifactDir != "/state/control.db.search-artifacts" ||
 			config.searchHistoryMaximumAge != 6*time.Hour ||
 			config.searchHistoryMaximumEntriesPerOwner != 37 ||
 			config.searchAttemptAuditMaximumRetainedAttempts != 41 {

@@ -719,6 +719,120 @@ func TestTerminalJournalFailureIsObservableAndDoesNotChangeJobOutcome(t *testing
 	}
 }
 
+type publicationJournalFunc struct {
+	jobJournalFunc
+	finalizeResults func(context.Context, Job, ResultLease) error
+}
+
+func (journal publicationJournalFunc) FinalizeResults(ctx context.Context, job Job, results ResultLease) error {
+	return journal.finalizeResults(ctx, job, results)
+}
+
+func TestCompletedResultPublishesBeforeUnrelatedTerminalProjection(t *testing.T) {
+	t.Parallel()
+
+	projectionCause := errors.New("history projection unavailable")
+	var published atomic.Bool
+	publicationCalls := make(chan struct{}, 1)
+	projectionObserved := make(chan bool, 1)
+	reported := make(chan error, 1)
+	publication := publicationJournalFunc{
+		jobJournalFunc: jobJournalFunc{},
+		finalizeResults: func(_ context.Context, job Job, results ResultLease) error {
+			if job.State != StateCompleted || results.RowCount() != 1 {
+				t.Errorf("result publication snapshot = job %#v rows %d", job, results.RowCount())
+			}
+			published.Store(true)
+			publicationCalls <- struct{}{}
+			return nil
+		},
+	}
+	projection := jobJournalFunc{finalize: func(_ context.Context, job Job) error {
+		if job.State == StateCompleted {
+			projectionObserved <- published.Load()
+		}
+		return projectionCause
+	}}
+	manager := newTestManager(t, Config{
+		Executor: executorFunc(func(_ context.Context, _ clickhouse.CompiledQuery, sink ResultSink) error {
+			if err := sink.SetSchema(messageSchema()); err != nil {
+				return err
+			}
+			return sink.AddRow([]Value{StringValue("ready")})
+		}),
+		Journal:         NewCompositeJournal(projection, publication),
+		OnJournalError:  func(err error) { reported <- err },
+		MaxConcurrent:   1,
+		CleanupInterval: -1,
+		NewID:           sequenceIDs("ordered-publication"),
+	})
+
+	created, err := manager.Create(context.Background(), validRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForState(t, manager, created.ID, StateCompleted)
+	select {
+	case <-publicationCalls:
+	case <-time.After(2 * time.Second):
+		t.Fatal("exact result publication did not run")
+	}
+	select {
+	case observed := <-projectionObserved:
+		if !observed {
+			t.Fatal("terminal metadata projection observed completion before exact results")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("terminal metadata projection did not run")
+	}
+	assertJournalError(t, <-reported, JournalOperationFinalize,
+		created.ID, StateCompleted, projectionCause)
+}
+
+func TestCompletedResultPublicationFailureProjectsTerminalStorageFailure(t *testing.T) {
+	t.Parallel()
+
+	publicationCause := errors.New("artifact byte capacity exhausted")
+	projected := make(chan Job, 1)
+	reported := make(chan error, 1)
+	publication := publicationJournalFunc{
+		jobJournalFunc: jobJournalFunc{},
+		finalizeResults: func(context.Context, Job, ResultLease) error {
+			return publicationCause
+		},
+	}
+	projection := jobJournalFunc{finalize: func(_ context.Context, job Job) error {
+		projected <- job
+		return nil
+	}}
+	manager := newTestManager(t, Config{
+		Executor: executorFunc(func(_ context.Context, _ clickhouse.CompiledQuery, sink ResultSink) error {
+			if err := sink.SetSchema(messageSchema()); err != nil {
+				return err
+			}
+			return sink.AddRow([]Value{StringValue("unpublished")})
+		}),
+		Journal: NewCompositeJournal(publication, projection), OnJournalError: func(err error) { reported <- err },
+		MaxConcurrent: 1, CleanupInterval: -1, NewID: sequenceIDs("failed-result-publication"),
+	})
+	created, err := manager.Create(context.Background(), validRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForState(t, manager, created.ID, StateCompleted)
+	select {
+	case job := <-projected:
+		if job.State != StateFailed || job.Failure == nil || job.Failure.Code != FailureStorageUnavailable ||
+			job.Schema != nil || job.RowCount != 0 || job.ResultBytes != 0 {
+			t.Fatalf("terminal publication projection = %#v", job)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("terminal publication failure was not projected")
+	}
+	assertJournalError(t, <-reported, JournalOperationFinalizeResults,
+		created.ID, StateCompleted, publicationCause)
+}
+
 func assertJournalError(t *testing.T, got error, operation JournalOperation, id string, state State, cause error) {
 	t.Helper()
 	var journalErr *JournalError

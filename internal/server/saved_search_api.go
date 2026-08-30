@@ -87,6 +87,10 @@ func (handler *apiHandler) getSavedSearch(request *http.Request, input *opensplu
 	if converted.GetSavedSearchId() != id {
 		return nil, internalError()
 	}
+	converted, err = handler.augmentScheduledSearch(request.Context(), converted)
+	if err != nil {
+		return nil, mapScheduledReportError(err)
+	}
 	if err := savedSearchRequestContextError(request.Context()); err != nil {
 		return nil, err
 	}
@@ -166,6 +170,9 @@ func (handler *apiHandler) listSavedSearches(request *http.Request, input *opens
 			}
 		}
 	}
+	if err := handler.augmentScheduledSearches(request.Context(), converted); err != nil {
+		return nil, mapScheduledReportError(err)
+	}
 	page := &opensplunk.PageResponse{}
 	if result.NextPageToken != nil {
 		if len(*result.NextPageToken) == 0 || len(*result.NextPageToken) > maximumPageTokenBytes || !utf8.ValidString(*result.NextPageToken) {
@@ -229,6 +236,10 @@ func (handler *apiHandler) updateSavedSearch(request *http.Request, input *opens
 	}
 	if converted.GetSavedSearchId() != id || converted.GetVersion() != input.GetExpectedVersion()+1 {
 		return nil, internalError()
+	}
+	converted, err = handler.augmentScheduledSearch(request.Context(), converted)
+	if err != nil {
+		return nil, mapScheduledReportError(err)
 	}
 	return &opensplunk.UpdateSavedSearchResponse{SavedSearch: converted}, nil
 }
@@ -295,7 +306,12 @@ func (handler *apiHandler) savedSearchDefinition(input *opensplunk.SavedSearchDe
 	if input.OwnerId != nil && input.GetOwnerId() != handler.ownerID {
 		return nil, errors.New("saved search owner must match the authenticated owner")
 	}
-	return proto.Clone(input).(*opensplunk.SavedSearchDefinition), nil
+	result := proto.Clone(input).(*opensplunk.SavedSearchDefinition)
+	// Scheduling has its own repository and optimistic config version. Never
+	// let a round-tripped response bypass that boundary through the base saved
+	// search create/update APIs.
+	result.Schedule = nil
+	return result, nil
 }
 
 func (handler *apiHandler) cloneSavedSearch(input *opensplunk.SavedSearch) (*opensplunk.SavedSearch, error) {
@@ -330,7 +346,12 @@ func (handler *apiHandler) cloneSavedSearch(input *opensplunk.SavedSearch) (*ope
 	if input.GetCreatedAt() == nil || input.GetCreatedAt().CheckValid() != nil || input.GetUpdatedAt() == nil || input.GetUpdatedAt().CheckValid() != nil || input.GetUpdatedAt().AsTime().Before(input.GetCreatedAt().AsTime()) {
 		return nil, errors.New("saved search service returned invalid timestamps")
 	}
-	return proto.Clone(input).(*opensplunk.SavedSearch), nil
+	result := proto.Clone(input).(*opensplunk.SavedSearch)
+	// These are joined projections owned by the scheduled-report service, not
+	// fields the base saved-object repository may persist authoritatively.
+	result.Definition.Schedule = nil
+	result.ScheduleStatus = nil
+	return result, nil
 }
 
 func (handler *apiHandler) savedSearchPageRequest(page *opensplunk.PageRequest) (uint32, string, bool, error) {

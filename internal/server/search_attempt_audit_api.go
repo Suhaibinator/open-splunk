@@ -126,7 +126,6 @@ func (handler *apiHandler) searchAttemptAuditListRequest(
 		"search attempt audit",
 		defaultSearchAttemptAuditListPageSize,
 		searchaudit.MaximumListPageSize,
-		maximumSearchAttemptAuditPageTokenBytes,
 	)
 	if err != nil {
 		return searchaudit.ListRequest{}, err

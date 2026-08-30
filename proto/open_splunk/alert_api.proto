@@ -1,0 +1,107 @@
+syntax = "proto3";
+
+package open_splunk;
+
+import "google/protobuf/field_mask.proto";
+import "open_splunk/alert.proto";
+import "open_splunk/common.proto";
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk;opensplunk";
+
+message CreateAlertRequest {
+  AlertDefinition definition = 1;
+  optional string client_request_id = 2;
+}
+
+message CreateAlertResponse {
+  Alert alert = 1;
+  string signing_secret = 2;
+  bool replayed = 3;
+}
+
+message GetAlertRequest {
+  string alert_id = 1;
+}
+
+message GetAlertResponse {
+  Alert alert = 1;
+}
+
+message ListAlertsRequest {
+  PageRequest page = 1;
+  optional string app_id_filter = 2;
+  optional string text_filter = 3;
+}
+
+message ListAlertsResponse {
+  repeated Alert alerts = 1;
+  PageResponse page = 2;
+}
+
+message UpdateAlertRequest {
+  string alert_id = 1;
+  uint64 expected_version = 2;
+  AlertDefinition definition = 3;
+  google.protobuf.FieldMask update_mask = 4;
+}
+
+message UpdateAlertResponse {
+  Alert alert = 1;
+}
+
+message SetAlertEnabledRequest {
+  string alert_id = 1;
+  uint64 expected_version = 2;
+  bool enabled = 3;
+}
+
+message SetAlertEnabledResponse {
+  Alert alert = 1;
+}
+
+message DeleteAlertRequest {
+  string alert_id = 1;
+  uint64 expected_version = 2;
+}
+
+message DeleteAlertResponse {
+  string alert_id = 1;
+}
+
+message RunAlertRequest {
+  string alert_id = 1;
+}
+
+message RunAlertResponse {
+  AlertRun run = 1;
+}
+
+message TestAlertWebhookRequest {
+  string alert_id = 1;
+}
+
+message TestAlertWebhookResponse {
+  string delivery_id = 1;
+  bool delivered = 2;
+  optional string failure_category = 3;
+}
+
+message RotateAlertSecretRequest {
+  string alert_id = 1;
+  uint64 expected_version = 2;
+}
+
+message RotateAlertSecretResponse {
+  Alert alert = 1;
+  string signing_secret = 2;
+}
+
+message ListAlertRunsRequest {
+  string alert_id = 1;
+  PageRequest page = 2;
+}
+
+message ListAlertRunsResponse {
+  repeated AlertRun runs = 1;
+  PageResponse page = 2;
+}

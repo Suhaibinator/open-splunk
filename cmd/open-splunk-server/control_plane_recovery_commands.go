@@ -95,6 +95,7 @@ func parseBackupControlPlaneOptions(arguments []string) (controlbackup.CreateOpt
 		"",
 		"absolute matching administrator-token path",
 	)
+	flags.StringVar(&options.SearchArtifactDirectory, "search-artifact-directory", "", "absolute retained-search directory (default: <control-db>.search-artifacts when present)")
 	flags.StringVar(&options.Destination, "destination", "", "absolute new private bundle directory")
 	if err := flags.Parse(arguments); err != nil {
 		return controlbackup.CreateOptions{}, fmt.Errorf("backup control plane: parse flags: %w", err)
@@ -109,8 +110,12 @@ func parseBackupControlPlaneOptions(arguments []string) (controlbackup.CreateOpt
 		{name: "-control-db", path: options.DatabasePath},
 		{name: "-master-key", path: options.MasterKeyPath},
 		{name: "-administrator-token-file", path: options.AdministratorTokenPath},
+		{name: "-search-artifact-directory", path: options.SearchArtifactDirectory},
 		{name: "-destination", path: options.Destination},
 	} {
+		if item.path == "" && item.name == "-search-artifact-directory" {
+			continue
+		}
 		if err := validateRecoveryCommandPath(item.name, item.path); err != nil {
 			return controlbackup.CreateOptions{}, fmt.Errorf("backup control plane: %w", err)
 		}
@@ -148,6 +153,7 @@ func parseRestoreControlPlaneOptions(arguments []string) (controlbackup.RestoreO
 		"",
 		"absolute absent administrator-token path",
 	)
+	flags.StringVar(&options.SearchArtifactDirectory, "search-artifact-directory", "", "absolute absent retained-search directory (default: <control-db>.search-artifacts)")
 	if err := flags.Parse(arguments); err != nil {
 		return controlbackup.RestoreOptions{}, fmt.Errorf("restore control plane: parse flags: %w", err)
 	}
@@ -162,7 +168,11 @@ func parseRestoreControlPlaneOptions(arguments []string) (controlbackup.RestoreO
 		{name: "-control-db", path: options.DatabasePath},
 		{name: "-master-key", path: options.MasterKeyPath},
 		{name: "-administrator-token-file", path: options.AdministratorTokenPath},
+		{name: "-search-artifact-directory", path: options.SearchArtifactDirectory},
 	} {
+		if item.path == "" && item.name == "-search-artifact-directory" {
+			continue
+		}
 		if err := validateRecoveryCommandPath(item.name, item.path); err != nil {
 			return controlbackup.RestoreOptions{}, fmt.Errorf("restore control plane: %w", err)
 		}

@@ -40,6 +40,9 @@ var runtimeOptionBindings = []runtimeOptionBinding{
 	{flagName: "master-key-file", environmentName: "OPEN_SPLUNK_SERVER_MASTER_KEY_FILE"},
 	{flagName: "server-lock-file", environmentName: "OPEN_SPLUNK_SERVER_LOCK_FILE"},
 	{flagName: "export-artifact-directory", environmentName: "OPEN_SPLUNK_SERVER_EXPORT_ARTIFACT_DIRECTORY"},
+	{flagName: "search-artifact-directory", environmentName: "OPEN_SPLUNK_SERVER_SEARCH_ARTIFACT_DIRECTORY"},
+	{flagName: "alert-public-base-url", environmentName: "OPEN_SPLUNK_SERVER_ALERT_PUBLIC_BASE_URL"},
+	{flagName: "alert-private-webhook-hosts", environmentName: "OPEN_SPLUNK_SERVER_ALERT_PRIVATE_WEBHOOK_HOSTS"},
 	{flagName: "administrator-token", environmentName: "OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN", credentialGroup: administratorCredentialGroup, sensitive: true},
 	{flagName: "administrator-token-file", environmentName: "OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN_FILE", credentialGroup: administratorCredentialGroup},
 	{flagName: "clickhouse-address", environmentName: "OPEN_SPLUNK_SERVER_CLICKHOUSE_ADDRESS"},
@@ -115,6 +118,9 @@ func parseRuntimeOptions(
 	if strings.TrimSpace(result.masterKeyPath) == "" {
 		result.masterKeyPath = result.controlDBPath + ".key"
 	}
+	if strings.TrimSpace(result.searchArtifactDir) == "" {
+		result.searchArtifactDir = result.controlDBPath + ".search-artifacts"
+	}
 	if _, err := logging.ParseLevel(result.logLevel); err != nil {
 		return options{}, fmt.Errorf("configure -log-level: %w", err)
 	}
@@ -168,6 +174,9 @@ func registerRuntimeFlags(flags *flag.FlagSet, result *options) {
 	flags.StringVar(&result.masterKeyPath, "master-key-file", "", "server master-key file (default: <control-database-file>.key)")
 	flags.StringVar(&result.serverLockFile, "server-lock-file", hostSingletonLockPath, "host-wide singleton lock file")
 	flags.StringVar(&result.exportArtifactDir, "export-artifact-directory", "", "private export-artifact directory (default: <control-database-file>.exports)")
+	flags.StringVar(&result.searchArtifactDir, "search-artifact-directory", "", "private retained-search directory (default: <control-database-file>.search-artifacts)")
+	flags.StringVar(&result.alertPublicBaseURL, "alert-public-base-url", "", "absolute public base URL required before enabling webhook alerts")
+	flags.StringVar(&result.alertPrivateWebhookHostsCSV, "alert-private-webhook-hosts", "", "comma-separated exact hostnames permitted to resolve to private addresses")
 	flags.StringVar(&result.administratorToken, "administrator-token", "", "administrator bearer token (unsafe in process arguments; prefer -administrator-token-file)")
 	flags.StringVar(&result.administratorTokenFile, "administrator-token-file", "", "owner-only administrator bearer-token file (required mode 0400 or 0600)")
 	flags.StringVar(&result.clickhouseAddress, "clickhouse-address", "127.0.0.1:9000", "ClickHouse native-protocol address")

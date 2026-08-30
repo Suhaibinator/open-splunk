@@ -72,6 +72,44 @@ function expectEqualTracks(tracks: number[], count: number): void {
   }
 }
 
+test("desktop time picker stays right-anchored inside the viewport", async ({ page }) => {
+  await mount(page, `
+    <section class="search-composer">
+      <div class="spl-editor"></div>
+      <div class="time-picker-wrap">
+        <button class="time-range-button" type="button">Last 24 hours</button>
+        <dialog class="time-popover" open>
+          <header class="time-popover-header"><strong>Select time range</strong></header>
+          <div class="time-picker-layout">
+            <aside class="time-picker-nav"></aside>
+            <div class="time-picker-content">Common time ranges</div>
+          </div>
+          <footer class="time-popover-footer"><button type="button">Apply</button></footer>
+        </dialog>
+      </div>
+      <button class="button run-button" type="button">Search</button>
+    </section>
+  `, DESKTOP_WIDTH);
+
+  const geometry = await page.locator(".time-popover").evaluate((element) => {
+    const dialog = element.getBoundingClientRect();
+    const trigger = element.previousElementSibling?.getBoundingClientRect();
+    if (trigger === undefined) throw new Error("fixture is missing the time range trigger");
+    return {
+      dialogLeft: dialog.left,
+      dialogRight: dialog.right,
+      documentWidth: document.documentElement.scrollWidth,
+      triggerRight: trigger.right,
+      viewportWidth: document.documentElement.clientWidth,
+    };
+  });
+
+  expect(geometry.dialogLeft).toBeGreaterThanOrEqual(0);
+  expect(geometry.dialogRight).toBeCloseTo(geometry.triggerRight, 0);
+  expect(geometry.dialogRight).toBeLessThanOrEqual(geometry.viewportWidth);
+  expect(geometry.documentWidth).toBe(geometry.viewportWidth);
+});
+
 const KNOWLEDGE_FILTER_OPTIONS = ["App scope", "Object type", "Sharing", "State"];
 
 const knowledgeManagerMarkup = `

@@ -3,12 +3,14 @@ import * as HistoryApi from "@/gen/ts/open_splunk/history_api";
 import * as HecAdminApi from "@/gen/ts/open_splunk/hec_admin_api";
 import * as IndexApi from "@/gen/ts/open_splunk/index_api";
 import * as AppApi from "@/gen/ts/open_splunk/app_api";
+import * as AlertApi from "@/gen/ts/open_splunk/alert_api";
 import * as AuditApi from "@/gen/ts/open_splunk/audit_api";
 import * as CollectorAdminApi from "@/gen/ts/open_splunk/collector_admin_api";
 import * as DashboardApi from "@/gen/ts/open_splunk/dashboard_api";
 import * as KnowledgeApi from "@/gen/ts/open_splunk/knowledge_api";
 import * as LookupApi from "@/gen/ts/open_splunk/lookup_api";
 import * as SavedSearchApi from "@/gen/ts/open_splunk/saved_search_api";
+import * as ScheduleApi from "@/gen/ts/open_splunk/schedule_api";
 import * as SearchApi from "@/gen/ts/open_splunk/search_api";
 import * as SearchAttemptAuditApi from "@/gen/ts/open_splunk/search_attempt_audit_api";
 import * as SearchInspectionApi from "@/gen/ts/open_splunk/search_inspection_api";
@@ -442,6 +444,21 @@ export const searchRoutes = {
     SearchApi.CancelSearchJobRequest,
     SearchApi.CancelSearchJobResponse,
   ),
+  getSettings: defineProtobufRoute(
+    "/api/search/jobs/settings/get",
+    SearchApi.GetSearchJobSettingsRequest,
+    SearchApi.GetSearchJobSettingsResponse,
+  ),
+  updateSettings: defineProtobufRoute(
+    "/api/search/jobs/settings/update",
+    SearchApi.UpdateSearchJobSettingsRequest,
+    SearchApi.UpdateSearchJobSettingsResponse,
+  ),
+  share: defineProtobufRoute(
+    "/api/search/jobs/share",
+    SearchApi.ShareSearchJobRequest,
+    SearchApi.ShareSearchJobResponse,
+  ),
   inspect: defineProtobufRoute(
     "/api/search/jobs/inspect",
     SearchInspectionApi.InspectSearchJobRequest,
@@ -480,6 +497,42 @@ export const savedSearchRoutes = {
     "/api/saved-searches/delete",
     SavedSearchApi.DeleteSavedSearchRequest,
     SavedSearchApi.DeleteSavedSearchResponse,
+  ),
+  setSchedule: defineProtobufRoute(
+    "/api/saved-searches/schedule/set",
+    SavedSearchApi.SetSavedSearchScheduleRequest,
+    SavedSearchApi.SetSavedSearchScheduleResponse,
+  ),
+  run: defineProtobufRoute(
+    "/api/saved-searches/run",
+    SavedSearchApi.RunSavedSearchRequest,
+    SavedSearchApi.RunSavedSearchResponse,
+  ),
+  listRuns: defineProtobufRoute(
+    "/api/saved-searches/runs/list",
+    SavedSearchApi.ListScheduledSearchRunsRequest,
+    SavedSearchApi.ListScheduledSearchRunsResponse,
+  ),
+} as const;
+
+export const alertRoutes = {
+  create: defineProtobufRoute("/api/alerts/create", AlertApi.CreateAlertRequest, AlertApi.CreateAlertResponse),
+  get: defineProtobufRoute("/api/alerts/get", AlertApi.GetAlertRequest, AlertApi.GetAlertResponse),
+  list: defineProtobufRoute("/api/alerts/list", AlertApi.ListAlertsRequest, AlertApi.ListAlertsResponse),
+  update: defineProtobufRoute("/api/alerts/update", AlertApi.UpdateAlertRequest, AlertApi.UpdateAlertResponse),
+  setState: defineProtobufRoute("/api/alerts/state/set", AlertApi.SetAlertEnabledRequest, AlertApi.SetAlertEnabledResponse),
+  delete: defineProtobufRoute("/api/alerts/delete", AlertApi.DeleteAlertRequest, AlertApi.DeleteAlertResponse),
+  run: defineProtobufRoute("/api/alerts/run", AlertApi.RunAlertRequest, AlertApi.RunAlertResponse),
+  testWebhook: defineProtobufRoute("/api/alerts/webhook/test", AlertApi.TestAlertWebhookRequest, AlertApi.TestAlertWebhookResponse),
+  rotateSecret: defineProtobufRoute("/api/alerts/secret/rotate", AlertApi.RotateAlertSecretRequest, AlertApi.RotateAlertSecretResponse),
+  listRuns: defineProtobufRoute("/api/alerts/runs/list", AlertApi.ListAlertRunsRequest, AlertApi.ListAlertRunsResponse),
+} as const;
+
+export const scheduleRoutes = {
+  validate: defineProtobufRoute(
+    "/api/schedules/validate",
+    ScheduleApi.ValidateScheduleRequest,
+    ScheduleApi.ValidateScheduleResponse,
   ),
 } as const;
 
@@ -564,6 +617,7 @@ export const exportRoutes = {
 } as const;
 
 export const openSplunkRoutes = {
+  alerts: alertRoutes,
   system: systemRoutes,
   serverSettings: serverSettingsRoutes,
   apps: appRoutes,
@@ -577,6 +631,7 @@ export const openSplunkRoutes = {
   hec: hecOperationsRoutes,
   search: searchRoutes,
   savedSearches: savedSearchRoutes,
+  schedules: scheduleRoutes,
   dashboards: dashboardRoutes,
   history: historyRoutes,
   exports: exportRoutes,

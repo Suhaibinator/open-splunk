@@ -66,6 +66,9 @@ export enum ServerFeature {
    * an authenticated browser administrator.
    */
   SERVER_FEATURE_SERVER_SETTINGS_ADMIN = 20,
+  SERVER_FEATURE_DURABLE_SEARCH_JOBS = 21,
+  SERVER_FEATURE_SCHEDULED_SEARCHES = 22,
+  SERVER_FEATURE_ALERTS = 23,
   UNRECOGNIZED = -1,
 }
 
@@ -134,6 +137,15 @@ export function serverFeatureFromJSON(object: any): ServerFeature {
     case 20:
     case "SERVER_FEATURE_SERVER_SETTINGS_ADMIN":
       return ServerFeature.SERVER_FEATURE_SERVER_SETTINGS_ADMIN;
+    case 21:
+    case "SERVER_FEATURE_DURABLE_SEARCH_JOBS":
+      return ServerFeature.SERVER_FEATURE_DURABLE_SEARCH_JOBS;
+    case 22:
+    case "SERVER_FEATURE_SCHEDULED_SEARCHES":
+      return ServerFeature.SERVER_FEATURE_SCHEDULED_SEARCHES;
+    case 23:
+    case "SERVER_FEATURE_ALERTS":
+      return ServerFeature.SERVER_FEATURE_ALERTS;
     case -1:
     case "UNRECOGNIZED":
     default:
@@ -185,6 +197,12 @@ export function serverFeatureToJSON(object: ServerFeature): string {
       return "SERVER_FEATURE_KNOWLEDGE_QUARANTINE";
     case ServerFeature.SERVER_FEATURE_SERVER_SETTINGS_ADMIN:
       return "SERVER_FEATURE_SERVER_SETTINGS_ADMIN";
+    case ServerFeature.SERVER_FEATURE_DURABLE_SEARCH_JOBS:
+      return "SERVER_FEATURE_DURABLE_SEARCH_JOBS";
+    case ServerFeature.SERVER_FEATURE_SCHEDULED_SEARCHES:
+      return "SERVER_FEATURE_SCHEDULED_SEARCHES";
+    case ServerFeature.SERVER_FEATURE_ALERTS:
+      return "SERVER_FEATURE_ALERTS";
     case ServerFeature.UNRECOGNIZED:
     default:
       return "UNRECOGNIZED";

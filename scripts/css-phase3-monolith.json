@@ -1326,6 +1326,151 @@
       "after": " || .top-value > div button || background: var(--bg-subtle); border: 1px solid var(--border); color: var(--fg-muted); height: 22px; justify-content: center; padding: 0; width: 24px",
       "before": " || .top-value > div button || background: var(--bg-subtle); border: 1px solid var(--border); color: var(--fg-muted); height: 22px; width: 24px",
       "why": "The include and exclude glyphs sat 2px right of centre. The icon it holds was off-centre: base.css gives an icon-carrying button `display: inline-flex` and `align-items: center` but no `justify-content`, and nothing resets the UA `padding: 1px 6px`, so a fixed-width box centres the glyph only by coincidence. The rule now states `justify-content: center` (and drops the UA padding where the box is narrower than icon plus padding) so the glyph sits where the box says it does."
+    },
+    {
+      "after": " || .alerts-actions || display: flex; flex-wrap: wrap; gap: var(--space-1)",
+      "before": [],
+      "why": "The alerts management view is new, so this token-backed feature rule has no Phase 3 monolith predecessor."
+    },
+    {
+      "after": " || .alerts-discard-confirmation || align-items: flex-start; color: var(--fg-secondary); display: flex; font-size: var(--type-xs); gap: var(--space-2)",
+      "before": [],
+      "why": "The alerts one-time-secret recovery flow is new, so this token-backed feature rule has no Phase 3 monolith predecessor."
+    },
+    {
+      "after": " || .alerts-endpoint-choice label || align-items: center; display: flex; gap: var(--space-2)",
+      "before": [],
+      "why": "The alert endpoint-preservation control is new, so this token-backed layout rule has no Phase 3 monolith predecessor."
+    },
+    {
+      "after": " || .alerts-endpoint-choice || display: grid; gap: var(--space-2); margin: 0; padding: 0",
+      "before": [],
+      "why": "The alert endpoint-preservation control is new, so this token-backed layout rule has no Phase 3 monolith predecessor."
+    },
+    {
+      "after": " || .alerts-error a || color: inherit; font-weight: 700",
+      "before": [],
+      "why": "The alerts management view is new, so this token-backed feature rule has no Phase 3 monolith predecessor."
+    },
+    {
+      "after": " || .alerts-error, .alerts-inline-error || background: var(--status-error-soft); color: var(--status-error)",
+      "before": [],
+      "why": "The alerts management view is new, so this token-backed feature rule has no Phase 3 monolith predecessor."
+    },
+    {
+      "after": " || .alerts-form-grid > label || display: flex; flex-direction: column; gap: var(--space-1)",
+      "before": [],
+      "why": "The alert editor is new, so this token-backed feature rule has no Phase 3 monolith predecessor."
+    },
+    {
+      "after": " || .alerts-form-grid || display: grid; gap: var(--space-3); grid-template-columns: repeat(2, minmax(0, 1fr))",
+      "before": [],
+      "why": "The alert editor is new, so this token-backed feature rule has no Phase 3 monolith predecessor."
+    },
+    {
+      "after": " || .alerts-history-table td || white-space: normal",
+      "before": [],
+      "why": "Alert run history is new, so this feature rule has no Phase 3 monolith predecessor."
+    },
+    {
+      "after": " || .alerts-notice, .alerts-error || align-items: center; display: flex; font-size: var(--type-xs); justify-content: space-between; margin: 0; padding: var(--space-2) var(--space-4)",
+      "before": [],
+      "why": "The alerts management view is new, so this token-backed feature rule has no Phase 3 monolith predecessor."
+    },
+    {
+      "after": " || .alerts-notice, .alerts-inline-success || background: var(--status-success-soft); color: var(--status-success)",
+      "before": [],
+      "why": "The alerts management view is new, so this token-backed feature rule has no Phase 3 monolith predecessor."
+    },
+    {
+      "after": " || .alerts-notice[data-tone=\"warning\"] || background: var(--status-warning-soft); color: var(--status-warning-strong)",
+      "before": [],
+      "why": "Alert creation replays and failed webhook tests need a warning treatment distinct from successful operations, so this token-backed feature rule has no Phase 3 monolith predecessor."
+    },
+    {
+      "after": " || .alerts-panel || margin-top: var(--space-4); overflow: hidden",
+      "before": [],
+      "why": "The alerts management view is new, so this token-backed feature rule has no Phase 3 monolith predecessor."
+    },
+    {
+      "after": " || .alerts-panel-header h2 || color: var(--fg-text); font-size: var(--type-lg)",
+      "before": [],
+      "why": "The alerts management view is new, so this token-backed feature rule has no Phase 3 monolith predecessor."
+    },
+    {
+      "after": " || .alerts-panel-header h2, .alerts-panel-header p || margin: 0",
+      "before": [],
+      "why": "The alerts management view is new, so this feature rule has no Phase 3 monolith predecessor."
+    },
+    {
+      "after": " || .alerts-panel-header p, .alerts-table small, .alerts-history-table small || color: var(--fg-muted); display: block; font-size: var(--type-xs); margin-top: var(--space-1); overflow: hidden; text-overflow: ellipsis",
+      "before": [],
+      "why": "The alerts management view is new, so this token-backed feature rule has no Phase 3 monolith predecessor."
+    },
+    {
+      "after": " || .alerts-panel-header || align-items: center; background: var(--bg-surface); display: flex; justify-content: space-between; padding: var(--space-3) var(--space-4)",
+      "before": [],
+      "why": "The alerts management view is new, so this token-backed feature rule has no Phase 3 monolith predecessor."
+    },
+    {
+      "after": " || .alerts-secret-recovery p || margin: 0",
+      "before": [],
+      "why": "The alerts one-time-secret recovery flow is new, so this feature rule has no Phase 3 monolith predecessor."
+    },
+    {
+      "after": " || .alerts-secret-recovery || display: flex; flex-direction: column; gap: var(--space-3)",
+      "before": [],
+      "why": "The alerts one-time-secret recovery flow is new, so this token-backed feature rule has no Phase 3 monolith predecessor."
+    },
+    {
+      "after": " || .alerts-secret-value code || overflow-wrap: anywhere; white-space: normal",
+      "before": [],
+      "why": "The alerts one-time-secret recovery flow is new, so this feature rule has no Phase 3 monolith predecessor."
+    },
+    {
+      "after": " || .alerts-secret-value || align-items: center; background: var(--bg-subtle); display: flex; gap: var(--space-2); justify-content: space-between; padding: var(--space-3)",
+      "before": [],
+      "why": "The alerts one-time-secret recovery flow is new, so this token-backed feature rule has no Phase 3 monolith predecessor."
+    },
+    {
+      "after": " || .alerts-table td > strong || color: var(--fg-text); display: block",
+      "before": [],
+      "why": "The alerts management view is new, so this token-backed feature rule has no Phase 3 monolith predecessor."
+    },
+    {
+      "after": " || .alerts-wizard || gap: var(--space-3)",
+      "before": [],
+      "why": "The alert creation wizard is new, so this token-backed feature rule has no Phase 3 monolith predecessor."
+    },
+    {
+      "after": " || .alerts-wizard-note || background: var(--bg-subtle); color: var(--fg-secondary); font-size: var(--type-xs); margin: 0; padding: var(--space-3)",
+      "before": [],
+      "why": "The alert creation wizard is new, so this token-backed feature rule has no Phase 3 monolith predecessor."
+    },
+    {
+      "after": " || .alerts-wizard-steps li || background: var(--bg-subtle); color: var(--fg-muted); font-size: var(--type-xs); padding: var(--space-2); text-align: center",
+      "before": [],
+      "why": "The alert creation wizard is new, so this token-backed feature rule has no Phase 3 monolith predecessor."
+    },
+    {
+      "after": " || .alerts-wizard-steps li[aria-current=\"step\"] || background: var(--accent-soft); color: var(--accent); font-weight: 700",
+      "before": [],
+      "why": "The alert creation wizard is new, so this token-backed feature rule has no Phase 3 monolith predecessor."
+    },
+    {
+      "after": " || .alerts-wizard-steps || display: grid; gap: var(--space-2); grid-template-columns: repeat(3, 1fr); list-style: none; margin: 0; padding: 0",
+      "before": [],
+      "why": "The alert creation wizard is new, so this token-backed feature rule has no Phase 3 monolith predecessor."
+    },
+    {
+      "after": "@media (max-width: 760px) || .alerts-form-grid || grid-template-columns: 1fr",
+      "before": [],
+      "why": "The alert editor's responsive layout is new, so this feature rule has no Phase 3 monolith predecessor."
+    },
+    {
+      "after": "@media (max-width: 760px) || .alerts-panel-header || align-items: flex-start; gap: var(--space-2)",
+      "before": [],
+      "why": "The alerts management view's responsive layout is new, so this token-backed feature rule has no Phase 3 monolith predecessor."
     }
   ],
   "rules": [

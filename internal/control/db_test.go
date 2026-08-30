@@ -14,6 +14,7 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/searchlimits"
 	"github.com/Suhaibinator/open-splunk/migrations"
 	"gorm.io/gorm"
 	_ "modernc.org/sqlite"
@@ -38,8 +39,8 @@ func TestOpenConfiguresSQLiteAndAppliesMigrations(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema migrations: %v", err)
 	}
-	if migrationCount != 2 {
-		t.Fatalf("schema migration count = %d, want 2", migrationCount)
+	if migrationCount != 6 {
+		t.Fatalf("schema migration count = %d, want 6", migrationCount)
 	}
 
 	// Foreign keys are connection-local in SQLite. Force database/sql to open
@@ -87,8 +88,8 @@ func TestOpenConfiguresSQLiteAndAppliesMigrations(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema migrations after reopen: %v", err)
 	}
-	if migrationCount != 2 {
-		t.Fatalf("schema migration count after reopen = %d, want 2", migrationCount)
+	if migrationCount != 6 {
+		t.Fatalf("schema migration count after reopen = %d, want 6", migrationCount)
 	}
 }
 
@@ -573,7 +574,14 @@ func TestServerSettingsMigrationPreservesExistingAuditLedger(t *testing.T) {
 	if err := ledgerRows.Close(); err != nil {
 		t.Fatal(err)
 	}
-	wantLedger := []string{"0001_baseline.sql", "0002_server_search_settings.sql"}
+	wantLedger := []string{
+		"0001_baseline.sql",
+		"0002_server_search_settings.sql",
+		"0003_durable_search_jobs.sql",
+		"0004_saved_search_schedules.sql",
+		"0005_alerts.sql",
+		"0006_feature_operation_audit.sql",
+	}
 	if strings.Join(ledger, ",") != strings.Join(wantLedger, ",") {
 		t.Fatalf("post-upgrade migration ledger = %v, want %v", ledger, wantLedger)
 	}
@@ -636,6 +644,75 @@ func TestServerSettingsMigrationPreservesExistingAuditLedger(t *testing.T) {
 	defer rows.Close()
 	if rows.Next() {
 		t.Fatal("server-settings migration introduced a foreign-key violation")
+	}
+}
+
+func TestDurableSearchUpgradePreservesExplicitResultRetention(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	raw, err := sql.Open(
+		"sqlite",
+		filepath.Join(t.TempDir(), "retention-upgrade.sqlite")+"?_txlock=immediate&_pragma=foreign_keys(1)",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+
+	prefix := fstest.MapFS{}
+	for _, name := range []string{
+		"0001_baseline.sql",
+		"0002_server_search_settings.sql",
+	} {
+		contents, err := fs.ReadFile(migrations.SQLite(), name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		prefix[name] = &fstest.MapFile{Data: contents}
+	}
+	if err := ApplyMigrations(ctx, raw, prefix); err != nil {
+		t.Fatalf("apply pre-durable migration prefix: %v", err)
+	}
+
+	limits := searchlimits.Default()
+	explicitRetention := 15 * time.Minute
+	if _, err := raw.ExecContext(ctx, `
+		INSERT INTO server_search_settings (
+			singleton_id, version, maximum_runtime_nanoseconds,
+			maximum_memory_bytes, maximum_rows_to_read,
+			maximum_bytes_to_read, maximum_grouped_rows, maximum_threads,
+			maximum_result_rows, maximum_result_bytes,
+			maximum_total_result_bytes, maximum_concurrent_searches,
+			result_retention_nanoseconds, updated_at_unix_micro
+		) VALUES (1, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+		int64(limits.MaxRuntime), limits.MaxMemoryBytes, limits.MaxRowsToRead,
+		limits.MaxBytesToRead, limits.MaxGroupedRows, limits.MaxThreads,
+		limits.MaxResultRows, limits.MaxResultBytes, limits.MaxTotalResultBytes,
+		limits.MaxConcurrent, int64(explicitRetention),
+	); err != nil {
+		t.Fatalf("seed explicit pre-upgrade retention: %v", err)
+	}
+
+	if err := ApplyMigrations(ctx, raw, migrations.SQLite()); err != nil {
+		t.Fatalf("apply durable-search migration suffix: %v", err)
+	}
+	var version int64
+	var retainedNanoseconds int64
+	if err := raw.QueryRowContext(ctx, `
+		SELECT version, result_retention_nanoseconds
+		FROM server_search_settings
+		WHERE singleton_id = 1`,
+	).Scan(&version, &retainedNanoseconds); err != nil {
+		t.Fatalf("read upgraded search settings: %v", err)
+	}
+	if version != 1 || time.Duration(retainedNanoseconds) != explicitRetention {
+		t.Fatalf(
+			"upgraded search settings = version %d, retention %s; want 1/%s",
+			version,
+			time.Duration(retainedNanoseconds),
+			explicitRetention,
+		)
 	}
 }
 
@@ -847,8 +924,8 @@ func TestConcurrentOpenSerializesMigrationStartup(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatalf("count schema migrations: %v", err)
 	}
-	if count != 2 {
-		t.Fatalf("schema migration count = %d, want 2", count)
+	if count != 6 {
+		t.Fatalf("schema migration count = %d, want 6", count)
 	}
 }
 

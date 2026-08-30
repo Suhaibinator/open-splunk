@@ -6,12 +6,15 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/searchartifacts"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"google.golang.org/protobuf/proto"
 )
@@ -175,6 +178,198 @@ func TestSearchJobListUsesBoundedCanonicalOptions(t *testing.T) {
 	jobs.mu.Unlock()
 	if captured.PageSize != maximumSearchJobListRows {
 		t.Fatalf("clamped page size = %d, want %d", captured.PageSize, maximumSearchJobListRows)
+	}
+}
+
+func TestSearchJobListOverlaysDurableSettingsWithoutRefreshingRetention(t *testing.T) {
+	job := listSearchJob("shared-job", testNow)
+	job.Version = 3
+	job.ExpiresAt = testNow.Add(10 * time.Minute)
+	artifacts := &batchListSearchArtifacts{records: map[string]searchartifacts.Record{
+		job.ID: {
+			Job: job, State: searchartifacts.StateCompleted,
+			Visibility:     searchartifacts.VisibilityEveryone,
+			RetentionClass: searchartifacts.RetentionShared,
+			Lifetime:       7 * 24 * time.Hour, ExpiresAt: testNow.Add(7 * 24 * time.Hour),
+			ArtifactPresent: true,
+		},
+	}}
+	handler := newSearchJobListTestHandler(t, &fakeSearchJobs{listPage: listPage(job)}, Config{
+		SearchArtifacts: artifacts,
+	})
+	response := postProto(t, handler, searchJobsListPath, &opensplunk.ListSearchJobsRequest{})
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var decoded opensplunk.ListSearchJobsResponse
+	unmarshalResponse(t, response, &decoded)
+	projected := decoded.GetSearchJobs()[0]
+	if projected.GetVisibility() != opensplunk.SearchJobVisibility_SEARCH_JOB_VISIBILITY_EVERYONE ||
+		projected.GetRetentionClass() != opensplunk.SearchJobRetentionClass_SEARCH_JOB_RETENTION_CLASS_SHARED ||
+		projected.GetRetainedResultStatus() != opensplunk.RetainedResultStatus_RETAINED_RESULT_STATUS_AVAILABLE ||
+		!projected.GetExpiresAt().AsTime().Equal(testNow.Add(7*24*time.Hour)) {
+		t.Fatalf("durable list projection = %+v", projected)
+	}
+	if artifacts.listCalls != 1 || artifacts.inspectCalls != 0 {
+		t.Fatalf("durable list calls = %d, inspection calls = %d", artifacts.listCalls, artifacts.inspectCalls)
+	}
+}
+
+func TestSearchJobListRestoresDurableTerminalJobsAfterRestart(t *testing.T) {
+	ctx := context.Background()
+	now := testNow
+	database, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	directory := filepath.Join(t.TempDir(), "artifacts")
+	openStore := func() *searchartifacts.Store {
+		store, err := searchartifacts.New(ctx, searchartifacts.Config{
+			DB: database.SQLDB(), Directory: directory, Clock: func() time.Time { return now },
+			CleanupInterval: -1, TombstoneRetention: time.Hour,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return store
+	}
+	store := openStore()
+
+	interrupted := durableListQueuedJob("durable-interrupted", testNow, "owner-1")
+	if err := store.Admit(ctx, interrupted); err != nil {
+		t.Fatal(err)
+	}
+	completed := durableListQueuedJob("durable-completed", testNow.Add(-time.Minute), "owner-1")
+	persistDurableListCompletion(t, store, completed, testNow, time.Hour)
+	expired := durableListQueuedJob("durable-expired", testNow.Add(-2*time.Minute), "owner-1")
+	persistDurableListCompletion(t, store, expired, testNow, time.Minute)
+	shared := durableListQueuedJob("durable-shared", testNow.Add(-3*time.Minute), "owner-2")
+	persistDurableListCompletion(t, store, shared, testNow, time.Hour)
+	if _, err := store.Share(ctx, searchjobs.AccessScope{TenantID: "tenant-1", OwnerID: "owner-2"}, shared.ID); err != nil {
+		t.Fatal(err)
+	}
+	private := durableListQueuedJob("durable-private", testNow.Add(-4*time.Minute), "owner-2")
+	persistDurableListCompletion(t, store, private, testNow, time.Hour)
+
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(2 * time.Minute)
+	store = openStore()
+	t.Cleanup(func() { _ = store.Close() })
+
+	jobs := &fakeSearchJobs{getErr: searchjobs.ErrNotFound}
+	handler := newSearchJobListTestHandler(t, jobs, Config{SearchArtifacts: store})
+	pageSize := uint32(2)
+	response := postProto(t, handler, searchJobsListPath, &opensplunk.ListSearchJobsRequest{
+		Page: &opensplunk.PageRequest{PageSize: &pageSize, IncludeTotalSize: true},
+	})
+	if response.Code != http.StatusOK {
+		t.Fatalf("first page status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var first opensplunk.ListSearchJobsResponse
+	unmarshalResponse(t, response, &first)
+	if got := protoSearchJobIDs(first.GetSearchJobs()); !slices.Equal(got, []string{interrupted.ID, completed.ID}) {
+		t.Fatalf("first durable IDs = %v", got)
+	}
+	if first.GetSearchJobs()[0].GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_INTERRUPTED ||
+		first.GetSearchJobs()[1].GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED {
+		t.Fatalf("first durable states = %+v", first.GetSearchJobs())
+	}
+	if first.GetPage().GetTotalSize() != 4 || !first.GetPage().GetTotalSizeExact() ||
+		first.GetPage().GetNextPageToken() == "" {
+		t.Fatalf("first durable page = %+v", first.GetPage())
+	}
+
+	token := first.GetPage().GetNextPageToken()
+	response = postProto(t, handler, searchJobsListPath, &opensplunk.ListSearchJobsRequest{
+		Page: &opensplunk.PageRequest{PageSize: &pageSize, PageToken: &token, IncludeTotalSize: true},
+	})
+	if response.Code != http.StatusOK {
+		t.Fatalf("second page status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var second opensplunk.ListSearchJobsResponse
+	unmarshalResponse(t, response, &second)
+	if got := protoSearchJobIDs(second.GetSearchJobs()); !slices.Equal(got, []string{expired.ID, shared.ID}) {
+		t.Fatalf("second durable IDs = %v", got)
+	}
+	if second.GetSearchJobs()[0].GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_EXPIRED ||
+		second.GetSearchJobs()[1].GetVisibility() != opensplunk.SearchJobVisibility_SEARCH_JOB_VISIBILITY_EVERYONE ||
+		second.GetPage().GetTotalSize() != 4 || !second.GetPage().GetTotalSizeExact() {
+		t.Fatalf("second durable response = %+v", &second)
+	}
+	if jobs.listCalls != 0 {
+		t.Fatalf("live manager list calls = %d, want durable authority", jobs.listCalls)
+	}
+
+	response = postProto(t, handler, searchJobsListPath, &opensplunk.ListSearchJobsRequest{
+		StateFilters: []opensplunk.SearchJobState{opensplunk.SearchJobState_SEARCH_JOB_STATE_INTERRUPTED},
+	})
+	if response.Code != http.StatusOK {
+		t.Fatalf("interrupted filter status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var filtered opensplunk.ListSearchJobsResponse
+	unmarshalResponse(t, response, &filtered)
+	if got := protoSearchJobIDs(filtered.GetSearchJobs()); !slices.Equal(got, []string{interrupted.ID}) {
+		t.Fatalf("interrupted durable IDs = %v", got)
+	}
+}
+
+func TestSearchJobListAppliesStateFilterAfterLiveOverlay(t *testing.T) {
+	ctx := context.Background()
+	now := testNow
+	database, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	store, err := searchartifacts.New(ctx, searchartifacts.Config{
+		DB: database.SQLDB(), Directory: filepath.Join(t.TempDir(), "artifacts"),
+		Clock: func() time.Time { return now }, CleanupInterval: -1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	queued := durableListQueuedJob("live-running", now, "owner-1")
+	if err := store.Admit(ctx, queued); err != nil {
+		t.Fatal(err)
+	}
+	running := queued
+	running.Version = 2
+	running.State = searchjobs.StateRunning
+	running.StartedAt = now
+	jobs := &fakeSearchJobs{getJob: running}
+	handler := newSearchJobListTestHandler(t, jobs, Config{SearchArtifacts: store})
+
+	response := postProto(t, handler, searchJobsListPath, &opensplunk.ListSearchJobsRequest{
+		Page:         &opensplunk.PageRequest{IncludeTotalSize: true},
+		StateFilters: []opensplunk.SearchJobState{opensplunk.SearchJobState_SEARCH_JOB_STATE_RUNNING},
+	})
+	if response.Code != http.StatusOK {
+		t.Fatalf("running filter status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var runningPage opensplunk.ListSearchJobsResponse
+	unmarshalResponse(t, response, &runningPage)
+	if got := protoSearchJobIDs(runningPage.GetSearchJobs()); !slices.Equal(got, []string{queued.ID}) ||
+		runningPage.GetPage().GetTotalSize() != 1 || !runningPage.GetPage().GetTotalSizeExact() ||
+		runningPage.GetSearchJobs()[0].GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_RUNNING {
+		t.Fatalf("running filter response = %+v", &runningPage)
+	}
+
+	response = postProto(t, handler, searchJobsListPath, &opensplunk.ListSearchJobsRequest{
+		Page:         &opensplunk.PageRequest{IncludeTotalSize: true},
+		StateFilters: []opensplunk.SearchJobState{opensplunk.SearchJobState_SEARCH_JOB_STATE_QUEUED},
+	})
+	if response.Code != http.StatusOK {
+		t.Fatalf("queued filter status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var queuedPage opensplunk.ListSearchJobsResponse
+	unmarshalResponse(t, response, &queuedPage)
+	if len(queuedPage.GetSearchJobs()) != 0 || queuedPage.GetPage().GetTotalSize() != 0 ||
+		!queuedPage.GetPage().GetTotalSizeExact() {
+		t.Fatalf("queued filter response = %+v", &queuedPage)
 	}
 }
 
@@ -705,4 +900,118 @@ func listPage(jobs ...searchjobs.Job) searchjobs.JobListPage {
 		items[index] = listItem(jobs[index])
 	}
 	return searchjobs.JobListPage{Jobs: items}
+}
+
+type batchListSearchArtifacts struct {
+	launchSearchArtifacts
+	records      map[string]searchartifacts.Record
+	ids          []string
+	inspectCalls int
+	listCalls    int
+}
+
+func (artifacts *batchListSearchArtifacts) ListPage(
+	_ context.Context,
+	_ searchjobs.AccessScope,
+	_ searchartifacts.ListRequest,
+) (searchartifacts.ListPage, error) {
+	artifacts.listCalls++
+	items := make([]searchartifacts.ListItem, 0, len(artifacts.records))
+	for _, record := range artifacts.records {
+		items = append(items, searchartifacts.ListItem{Record: record})
+	}
+	slices.SortFunc(items, func(left, right searchartifacts.ListItem) int {
+		if order := right.Record.Job.CreatedAt.Compare(left.Record.Job.CreatedAt); order != 0 {
+			return order
+		}
+		return strings.Compare(right.Record.Job.ID, left.Record.Job.ID)
+	})
+	return searchartifacts.ListPage{Items: items}, nil
+}
+
+type durableListResultLease struct {
+	returned bool
+}
+
+func (*durableListResultLease) Schema() searchjobs.Schema {
+	return searchjobs.Schema{Columns: []searchjobs.Column{{Name: "value", Kind: searchjobs.ValueKindString}}}
+}
+
+func (*durableListResultLease) RowCount() uint64       { return 1 }
+func (*durableListResultLease) RowCountExact() bool    { return true }
+func (*durableListResultLease) ResultsTruncated() bool { return false }
+func (*durableListResultLease) Generation() uint64     { return 1 }
+func (*durableListResultLease) Close() error           { return nil }
+func (lease *durableListResultLease) Next(ctx context.Context) (searchjobs.ResultRow, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return searchjobs.ResultRow{}, false, err
+	}
+	if lease.returned {
+		return searchjobs.ResultRow{}, false, nil
+	}
+	lease.returned = true
+	return searchjobs.ResultRow{Ordinal: 0, Values: []searchjobs.Value{searchjobs.StringValue("retained")}}, true, nil
+}
+
+func durableListQueuedJob(id string, created time.Time, owner string) searchjobs.Job {
+	job := listSearchJob(id, created)
+	job.Version = 1
+	job.OwnerID = owner
+	job.State = searchjobs.StateQueued
+	job.Schema = nil
+	job.StartedAt = time.Time{}
+	job.FinishedAt = time.Time{}
+	job.ExpiresAt = time.Time{}
+	job.RowCount = 0
+	job.ResultBytes = 0
+	job.Failure = nil
+	return job
+}
+
+func persistDurableListCompletion(
+	t *testing.T,
+	store *searchartifacts.Store,
+	queued searchjobs.Job,
+	finished time.Time,
+	lifetime time.Duration,
+) {
+	t.Helper()
+	ctx := context.Background()
+	if err := store.Admit(ctx, queued); err != nil {
+		t.Fatal(err)
+	}
+	completed := queued
+	completed.Version = 2
+	completed.State = searchjobs.StateCompleted
+	completed.StartedAt = finished
+	completed.FinishedAt = finished
+	completed.ExpiresAt = finished.Add(lifetime)
+	completed.Schema = new((&durableListResultLease{}).Schema())
+	completed.RowCount = 1
+	if err := store.Finalize(ctx, completed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PersistResults(ctx, searchjobs.AccessScope{
+		TenantID: completed.TenantID, OwnerID: completed.OwnerID,
+	}, completed.ID, &durableListResultLease{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func protoSearchJobIDs(jobs []*opensplunk.SearchJob) []string {
+	result := make([]string, len(jobs))
+	for index, job := range jobs {
+		result[index] = job.GetSearchJobId()
+	}
+	return result
+}
+
+func (artifacts *batchListSearchArtifacts) InspectMany(
+	_ context.Context,
+	_ searchjobs.AccessScope,
+	ids []string,
+) (map[string]searchartifacts.Record, error) {
+	artifacts.inspectCalls++
+	artifacts.ids = append([]string(nil), ids...)
+	return artifacts.records, nil
 }

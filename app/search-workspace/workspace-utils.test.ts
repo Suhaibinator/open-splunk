@@ -3,8 +3,10 @@ import test from "node:test";
 import { isValidElement, type ReactNode } from "react";
 
 import { SPL_PIPELINE_COMMANDS } from "@/lib/search/spl-syntax";
+import { SearchJobState } from "@/gen/ts/open_splunk/search";
 
 import {
+  backendJobPhase,
   eventCountForQuery,
   eventFieldValueWhiteSpace,
   filteredDemoEvents,
@@ -453,9 +455,22 @@ test("a recorded history outcome reads its tone from the one job vocabulary", ()
   assert.equal(historyPhase("Failed"), "failed");
   assert.equal(historyPhase("Canceled"), "canceled");
   assert.equal(historyPhase("Expired"), "expired");
+  assert.equal(historyPhase("Interrupted"), "interrupted");
 
   assert.equal(stateTone(historyPhase("Completed")), "success");
   assert.equal(stateTone(historyPhase("Failed")), "error");
   assert.equal(stateTone(historyPhase("Canceled")), "neutral");
   assert.equal(stateTone(historyPhase("Expired")), "neutral");
+  assert.equal(stateTone(historyPhase("Interrupted")), "neutral");
+});
+
+test("backend lifecycle mapping treats restart interruption as terminal and rejects unknown states", () => {
+  assert.equal(
+    backendJobPhase(SearchJobState.SEARCH_JOB_STATE_INTERRUPTED),
+    "interrupted",
+  );
+  assert.throws(
+    () => backendJobPhase(SearchJobState.UNRECOGNIZED),
+    /unsupported lifecycle state/,
+  );
 });

@@ -66,6 +66,9 @@ const (
 	// Versioned, persistent node-wide search limits can be read and updated by
 	// an authenticated browser administrator.
 	ServerFeature_SERVER_FEATURE_SERVER_SETTINGS_ADMIN ServerFeature = 20
+	ServerFeature_SERVER_FEATURE_DURABLE_SEARCH_JOBS   ServerFeature = 21
+	ServerFeature_SERVER_FEATURE_SCHEDULED_SEARCHES    ServerFeature = 22
+	ServerFeature_SERVER_FEATURE_ALERTS                ServerFeature = 23
 )
 
 // Enum value maps for ServerFeature.
@@ -92,6 +95,9 @@ var (
 		18: "SERVER_FEATURE_DASHBOARDS",
 		19: "SERVER_FEATURE_KNOWLEDGE_QUARANTINE",
 		20: "SERVER_FEATURE_SERVER_SETTINGS_ADMIN",
+		21: "SERVER_FEATURE_DURABLE_SEARCH_JOBS",
+		22: "SERVER_FEATURE_SCHEDULED_SEARCHES",
+		23: "SERVER_FEATURE_ALERTS",
 	}
 	ServerFeature_value = map[string]int32{
 		"SERVER_FEATURE_UNSPECIFIED":             0,
@@ -115,6 +121,9 @@ var (
 		"SERVER_FEATURE_DASHBOARDS":              18,
 		"SERVER_FEATURE_KNOWLEDGE_QUARANTINE":    19,
 		"SERVER_FEATURE_SERVER_SETTINGS_ADMIN":   20,
+		"SERVER_FEATURE_DURABLE_SEARCH_JOBS":     21,
+		"SERVER_FEATURE_SCHEDULED_SEARCHES":      22,
+		"SERVER_FEATURE_ALERTS":                  23,
 	}
 )
 
@@ -437,7 +446,7 @@ const file_open_splunk_system_api_proto_rawDesc = "" +
 	" \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"serverTime\x120\n" +
 	"\x05build\x18\v \x01(\v2\x1a.open_splunk.BuildMetadataR\x05buildB\x12\n" +
-	"\x10_selected_app_idJ\x04\b\x01\x10\x02J\x04\b\x02\x10\x03J\x04\b\x03\x10\x04R\x0eserver_versionR\vapi_versionR\x19spl_compatibility_version*\xef\x05\n" +
+	"\x10_selected_app_idJ\x04\b\x01\x10\x02J\x04\b\x02\x10\x03J\x04\b\x03\x10\x04R\x0eserver_versionR\vapi_versionR\x19spl_compatibility_version*\xd9\x06\n" +
 	"\rServerFeature\x12\x1e\n" +
 	"\x1aSERVER_FEATURE_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15SERVER_FEATURE_SEARCH\x10\x01\x12!\n" +
@@ -460,7 +469,10 @@ const file_open_splunk_system_api_proto_rawDesc = "" +
 	" SERVER_FEATURE_LOOKUP_MANAGEMENT\x10\x11\x12\x1d\n" +
 	"\x19SERVER_FEATURE_DASHBOARDS\x10\x12\x12'\n" +
 	"#SERVER_FEATURE_KNOWLEDGE_QUARANTINE\x10\x13\x12(\n" +
-	"$SERVER_FEATURE_SERVER_SETTINGS_ADMIN\x10\x14BCZAgithub.com/Suhaibinator/open-splunk/gen/go/open_splunk;opensplunkb\x06proto3"
+	"$SERVER_FEATURE_SERVER_SETTINGS_ADMIN\x10\x14\x12&\n" +
+	"\"SERVER_FEATURE_DURABLE_SEARCH_JOBS\x10\x15\x12%\n" +
+	"!SERVER_FEATURE_SCHEDULED_SEARCHES\x10\x16\x12\x19\n" +
+	"\x15SERVER_FEATURE_ALERTS\x10\x17BCZAgithub.com/Suhaibinator/open-splunk/gen/go/open_splunk;opensplunkb\x06proto3"
 
 var (
 	file_open_splunk_system_api_proto_rawDescOnce sync.Once
