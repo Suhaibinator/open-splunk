@@ -58,6 +58,17 @@ interface ProductShellProps {
 }
 
 type BackendAppCatalogState = "idle" | "loading" | "available" | "error";
+type ProductMenu = "apps" | "help" | "user";
+
+const PRODUCT_MENU_POPOVER_IDS: Record<ProductMenu, string> = {
+  apps: "suite-app-popover",
+  help: "suite-help-popover",
+  user: "suite-user-popover",
+};
+
+export function productMenuControlId(activeMenu: ProductMenu | null, triggerMenu: ProductMenu): string | undefined {
+  return activeMenu === triggerMenu ? PRODUCT_MENU_POPOVER_IDS[triggerMenu] : undefined;
+}
 
 const PRIMARY_NAV: Array<{ key: ProductSection; label: string; href: string }> = [
   { key: "search", label: "Search", href: "/search/" },
@@ -119,7 +130,7 @@ export function ProductShell({
   utilities,
 }: ProductShellProps) {
   const ownsCatalog = appSwitcher === undefined;
-  const [menu, setMenu] = useState<"apps" | "help" | "user" | null>(null);
+  const [menu, setMenu] = useState<ProductMenu | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [backendApps, setBackendApps] = useState<AppSummary[]>([]);
   const [selectedBackendAppId, setSelectedBackendAppId] = useState<string | null>(null);
@@ -168,7 +179,7 @@ export function ProductShell({
                   ? "Dashboard definitions and panel searches use registered backend routes when available."
                   : "This page uses the configured backend where the server advertises support.";
 
-  function toggleMenu(nextMenu: "apps" | "help" | "user", trigger: HTMLButtonElement) {
+  function toggleMenu(nextMenu: ProductMenu, trigger: HTMLButtonElement) {
     menuTriggerRef.current = trigger;
     setMenu((current) => current === nextMenu ? null : nextMenu);
   }
@@ -178,7 +189,7 @@ export function ProductShell({
     if (returnFocus) window.requestAnimationFrame(() => menuTriggerRef.current?.focus());
   }
 
-  function openMenuFromKeyboard(event: ReactKeyboardEvent<HTMLButtonElement>, nextMenu: "apps" | "help" | "user") {
+  function openMenuFromKeyboard(event: ReactKeyboardEvent<HTMLButtonElement>, nextMenu: ProductMenu) {
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
     event.preventDefault();
     menuTriggerRef.current = event.currentTarget;
@@ -326,7 +337,7 @@ export function ProductShell({
           <button
             className="suite-app-switcher"
             type="button"
-            aria-controls="suite-app-popover"
+            aria-controls={productMenuControlId(menu, "apps")}
             aria-haspopup="menu"
             aria-expanded={menu === "apps"}
             onClick={(event) => {
@@ -339,7 +350,7 @@ export function ProductShell({
             App: <strong>{switcherAppName}</strong> <AppIcon name="chevron-down" size="xs" />
           </button>
           {menu === "apps" ? (
-            <div className="suite-popover suite-app-popover" id="suite-app-popover" role="menu" data-suite-menu="apps">
+            <div className="suite-popover suite-app-popover" id={PRODUCT_MENU_POPOVER_IDS.apps} role="menu" data-suite-menu="apps">
               <span className="suite-menu-label">{dataMode === "backend" ? "Server apps" : "Your apps"}</span>
               {dataMode === "backend" ? (
                 backendAppCatalogState === "loading" ? (
@@ -375,9 +386,9 @@ export function ProductShell({
           <Link href={productHref("/admin/")}>Settings</Link>
           <Link href={productHref("/activity/")}>Activity {dataMode === "demo" ? <span className="activity-count">1</span> : null}</Link>
           <div className="suite-menu-anchor">
-            <button type="button" aria-controls="suite-help-popover" aria-haspopup="menu" aria-expanded={menu === "help"} onClick={(event) => { const opening = menu !== "help"; toggleMenu("help", event.currentTarget); if (opening && event.detail === 0) focusFirstMenuItem("help"); }} onKeyDown={(event) => openMenuFromKeyboard(event, "help")}>Help <AppIcon name="chevron-down" size="xs" /></button>
+            <button type="button" aria-controls={productMenuControlId(menu, "help")} aria-haspopup="menu" aria-expanded={menu === "help"} onClick={(event) => { const opening = menu !== "help"; toggleMenu("help", event.currentTarget); if (opening && event.detail === 0) focusFirstMenuItem("help"); }} onKeyDown={(event) => openMenuFromKeyboard(event, "help")}>Help <AppIcon name="chevron-down" size="xs" /></button>
             {menu === "help" ? (
-              <div className="suite-popover suite-utility-popover" id="suite-help-popover" role="menu" data-suite-menu="help">
+              <div className="suite-popover suite-utility-popover" id={PRODUCT_MENU_POPOVER_IDS.help} role="menu" data-suite-menu="help">
                 <span className="suite-menu-label">Documentation is not bundled in this frontend preview.</span>
                 <span className="suite-menu-rule" />
                 <button role="menuitem" type="button" onClick={() => closeMenu(true)}>Close · Open Splunk {OPEN_SPLUNK_BUILD_LABEL}</button>
@@ -391,11 +402,11 @@ export function ProductShell({
             <button type="submit" aria-label="Search"><AppIcon name="search" size="sm" /></button>
           </form>
           <div className="suite-menu-anchor">
-            <button className="suite-user-button" type="button" aria-label={`${sessionLabel} menu`} aria-controls="suite-user-popover" aria-haspopup="menu" aria-expanded={menu === "user"} onClick={(event) => { const opening = menu !== "user"; toggleMenu("user", event.currentTarget); if (opening && event.detail === 0) focusFirstMenuItem("user"); }} onKeyDown={(event) => openMenuFromKeyboard(event, "user")}>
+            <button className="suite-user-button" type="button" aria-label={`${sessionLabel} menu`} aria-controls={productMenuControlId(menu, "user")} aria-haspopup="menu" aria-expanded={menu === "user"} onClick={(event) => { const opening = menu !== "user"; toggleMenu("user", event.currentTarget); if (opening && event.detail === 0) focusFirstMenuItem("user"); }} onKeyDown={(event) => openMenuFromKeyboard(event, "user")}>
               <span>{sessionInitial}</span><b>{sessionLabel}</b><AppIcon name="chevron-down" size="xs" />
             </button>
             {menu === "user" ? (
-              <div className="suite-popover suite-utility-popover suite-user-popover" id="suite-user-popover" role="menu" data-suite-menu="user">
+              <div className="suite-popover suite-utility-popover suite-user-popover" id={PRODUCT_MENU_POPOVER_IDS.user} role="menu" data-suite-menu="user">
                 <div className="suite-user-summary"><span aria-hidden="true">{sessionInitial}</span><div><strong>{sessionLabel}</strong><small>{sessionDetail}</small></div></div>
                 <Link role="menuitem" href={productHref("/admin/")}>{localSession ? "Server administration" : "Account settings"}</Link>
                 <Link role="menuitem" href="/signin/">{localSession ? "About local access" : "Sign out"}</Link>

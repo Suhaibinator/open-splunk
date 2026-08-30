@@ -901,7 +901,8 @@
   .suite-utilities > a,
   .suite-utilities > button,
   .suite-utilities > .suite-menu-anchor:not(:last-child) { display: none; }
-  .suite-product-bar > .suite-menu-anchor > .suite-app-switcher { max-width: 195px; }
+  .suite-product-bar > .suite-menu-anchor:has(> .suite-app-switcher) { flex: 1; min-width: 0; }
+  .suite-product-bar > .suite-menu-anchor > .suite-app-switcher { max-width: 195px; width: 100%; }
   .suite-product-bar > .suite-menu-anchor > .suite-app-switcher > strong {
     min-width: 0;
     overflow: hidden;
@@ -983,7 +984,6 @@
 }
 
 @media (max-width: 480px) {
-  .suite-product-bar > .suite-menu-anchor > .suite-app-switcher { max-width: calc(100vw - 142px); }
   .suite-page-heading h1,
   .dashboard-title-row h1,
   .home-hero h1 { font-size: var(--type-xl); }

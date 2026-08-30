@@ -110,6 +110,198 @@ test("desktop time picker stays right-anchored inside the viewport", async ({ pa
   expect(geometry.documentWidth).toBe(geometry.viewportWidth);
 });
 
+test.describe("search workspace touch targets", () => {
+  test.use({ hasTouch: true });
+
+  const appMenuMarkup = `
+    <div class="suite-shell splunk-shell">
+      <header class="suite-product-bar">
+        <button class="drawer-trigger" type="button" aria-label="Open product navigation"><span></span><span></span><span></span></button>
+        <a class="wordmark" href="#"><span>open</span><b>&gt;</b><span>splunk</span></a>
+        <div class="suite-menu-anchor">
+          <button class="suite-app-switcher search-app-switcher" type="button" aria-expanded="true">App: <strong>Backend unavailable</strong></button>
+          <div class="floating-menu app-menu" role="menu">
+            <span class="menu-label">Server apps</span>
+            <button role="menuitem" type="button"><span class="app-glyph">!</span><span><strong>Retry backend connection</strong><small>System bootstrap is unavailable</small></span></button>
+            <button class="selected" role="menuitem" type="button"><span class="app-glyph">S</span><span><strong>Search &amp; Reporting</strong><small>Default indexes: gradethis, application, infrastructure</small></span><b>Selected</b></button>
+            <div class="menu-separator"></div>
+            <a role="menuitem" href="#"><span class="app-glyph">+</span><span><strong>Manage apps</strong><small>Open system administration and app permissions</small></span></a>
+          </div>
+        </div>
+        <nav class="suite-utilities"><div class="suite-menu-anchor"><button class="suite-user-button" type="button"><span>A</span></button></div></nav>
+      </header>
+    </div>`;
+
+  const eventRowMarkup = `
+    <section class="event-list">
+      <div class="event-head"><span></span><span>Time</span><span>Event</span><span class="event-row-actions-heading">Event Actions</span></div>
+      <article class="event-row level-error">
+        <button class="event-expander" type="button" aria-label="Expand event">›</button>
+        <button class="event-time" type="button"><span>8/29/26</span><strong>12:58:04.754 PM</strong></button>
+        <div class="event-content"><button class="event-raw" type="button">Email verification completion failed because the supplied verification token expired before the request completed.</button></div>
+        <button class="event-copy-raw" type="button" aria-label="Copy raw event">Copy</button>
+      </article>
+    </section>`;
+
+  test("coarse-pointer controls retain the 44px interaction floor", async ({ page }) => {
+    await mount(page, `
+      <div class="splunk-shell">
+        <div class="suite-product-bar">
+          <div class="suite-menu-anchor">
+            <button class="suite-app-switcher search-app-switcher" type="button">App: Search</button>
+          </div>
+        </div>
+        <header class="search-title-row">
+          <div class="search-actions">
+            <button class="search-action-save" type="button">Save</button>
+          </div>
+        </header>
+        <section class="job-strip">
+          <div class="job-controls">
+            <button type="button">Job</button>
+            <div class="header-menu-wrap"><button type="button">Smart Mode</button></div>
+          </div>
+        </section>
+        <article><button class="event-copy-raw" type="button">Copy raw event</button></article>
+        <div class="event-detail"><header><button class="event-detail-copy-raw" type="button">Copy raw</button></header></div>
+      </div>
+    `, MOBILE_WIDTH);
+
+    expect(await page.evaluate(() => globalThis.matchMedia("(pointer: coarse)").matches)).toBe(true);
+    await Promise.all([
+      ".search-app-switcher",
+      ".search-action-save",
+      ".job-controls > button",
+      ".job-controls .header-menu-wrap > button",
+      ".event-copy-raw",
+      ".event-detail-copy-raw",
+    ].map(async (selector) => {
+      const box = await page.locator(selector).evaluate((element) => {
+        const bounds = element.getBoundingClientRect();
+        return { height: bounds.height, width: bounds.width };
+      });
+      expect(box.height, `${selector} height`).toBeGreaterThanOrEqual(44);
+      expect(box.width, `${selector} width`).toBeGreaterThanOrEqual(44);
+    }));
+  });
+
+  test("the open Search app menu stays inside a narrow viewport", async ({ page }) => {
+    async function mobileGeometry(width: number) {
+      await mount(page, appMenuMarkup, width);
+      return page.locator(".app-menu").evaluate((element) => {
+        const bounds = element.getBoundingClientRect();
+        const visibleDescendantOverflows = Array.from(element.querySelectorAll("*"))
+          .filter((descendant) => {
+            const style = globalThis.getComputedStyle(descendant);
+            const descendantBounds = descendant.getBoundingClientRect();
+            return style.display !== "none"
+              && style.visibility !== "hidden"
+              && descendantBounds.width > 0
+              && descendantBounds.height > 0;
+          })
+          .flatMap((descendant) => {
+            const descendantBounds = descendant.getBoundingClientRect();
+            if (descendantBounds.left >= bounds.left - 0.5 && descendantBounds.right <= bounds.right + 0.5) return [];
+            return [{
+              className: descendant.getAttribute("class") ?? "",
+              left: descendantBounds.left,
+              right: descendantBounds.right,
+              tagName: descendant.tagName,
+            }];
+          });
+        return {
+          documentWidth: document.documentElement.scrollWidth,
+          left: bounds.left,
+          position: globalThis.getComputedStyle(element).position,
+          right: bounds.right,
+          viewportWidth: document.documentElement.clientWidth,
+          visibleDescendantOverflows,
+        };
+      });
+    }
+
+    const narrowGeometry = await mobileGeometry(320);
+    const phoneGeometry = await mobileGeometry(390);
+    for (const geometry of [narrowGeometry, phoneGeometry]) {
+      expect(geometry.position).toBe("fixed");
+      expect(geometry.left).toBeGreaterThanOrEqual(0);
+      expect(geometry.right).toBeLessThanOrEqual(geometry.viewportWidth);
+      expect(geometry.documentWidth).toBe(geometry.viewportWidth);
+      expect(geometry.visibleDescendantOverflows).toEqual([]);
+    }
+
+    await mount(page, appMenuMarkup, DESKTOP_WIDTH);
+    const desktopGeometry = await page.locator(".app-menu").evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      const anchor = element.parentElement?.getBoundingClientRect();
+      if (anchor === undefined) throw new Error("fixture is missing the app-menu anchor");
+      return {
+        anchorLeft: anchor.left,
+        left: bounds.left,
+        position: globalThis.getComputedStyle(element).position,
+      };
+    });
+    expect(desktopGeometry.position).toBe("absolute");
+    expect(desktopGeometry.left).toBeCloseTo(desktopGeometry.anchorLeft, 0);
+  });
+
+  test("event rows reserve the complete coarse-pointer action target", async ({ page }) => {
+    async function eventGeometry(width: number, displayRaw = false) {
+      await mount(page, eventRowMarkup, width);
+      if (displayRaw) {
+        await page.locator(".event-list").evaluate((element) => element.classList.add("display-raw"));
+      }
+      const rowTracks = await gridTracks(page, ".event-row");
+      const headDisplay = await page.locator(".event-head").evaluate(
+        (element) => globalThis.getComputedStyle(element).display,
+      );
+      const headTracks = headDisplay === "none" ? [] : await gridTracks(page, ".event-head");
+      return page.locator(".event-copy-raw").evaluate((element, tracks) => {
+        const bounds = element.getBoundingClientRect();
+        const rowBounds = element.closest(".event-row")?.getBoundingClientRect();
+        if (rowBounds === undefined) throw new Error("fixture is missing the event row");
+        return {
+          bounds: { height: bounds.height, left: bounds.left, right: bounds.right, width: bounds.width },
+          documentWidth: document.documentElement.scrollWidth,
+          headTracks: tracks.head,
+          rowBounds: { left: rowBounds.left, right: rowBounds.right },
+          rowTracks: tracks.row,
+          viewportWidth: document.documentElement.clientWidth,
+        };
+      }, { head: headTracks, row: rowTracks });
+    }
+
+    const narrow = await eventGeometry(320);
+    const phone = await eventGeometry(390);
+    const folded = await eventGeometry(520);
+
+    for (const geometry of [narrow, phone, folded]) {
+      expect(geometry.bounds.height).toBeGreaterThanOrEqual(44);
+      expect(geometry.bounds.width).toBeGreaterThanOrEqual(44);
+      expect(geometry.bounds.left).toBeGreaterThanOrEqual(0);
+      expect(geometry.bounds.right).toBeLessThanOrEqual(geometry.viewportWidth);
+      expect(geometry.documentWidth).toBe(geometry.viewportWidth);
+      expect(geometry.rowTracks.at(-1)).toBeCloseTo(44, 0);
+    }
+    expect(narrow.rowTracks).toHaveLength(3);
+    expect(phone.rowTracks).toHaveLength(3);
+    expect(folded.rowTracks).toHaveLength(4);
+    expect(folded.headTracks).toHaveLength(4);
+    expect(folded.headTracks.at(-1)).toBeCloseTo(44, 0);
+
+    const rawDesktop = await eventGeometry(DESKTOP_WIDTH, true);
+    const rawFolded = await eventGeometry(520, true);
+    for (const geometry of [rawDesktop, rawFolded]) {
+      expect(geometry.rowTracks).toHaveLength(4);
+      expect(geometry.headTracks).toHaveLength(4);
+      expect(geometry.rowTracks).toEqual(geometry.headTracks);
+      expect(geometry.bounds.left).toBeCloseTo(geometry.rowBounds.right - 44, 0);
+      expect(geometry.bounds.right).toBeLessThanOrEqual(geometry.rowBounds.right);
+      expect(geometry.documentWidth).toBe(geometry.viewportWidth);
+    }
+  });
+});
+
 const KNOWLEDGE_FILTER_OPTIONS = ["App scope", "Object type", "Sharing", "State"];
 
 const knowledgeManagerMarkup = `
@@ -728,9 +920,15 @@ const operationsHeaderMarkup = `
   </div>
 </header>
 <div class="operations-volume-chart">
-  <fieldset class="operations-volume-plot">
-    ${Array.from({ length: 24 }, () => '<button type="button" class="operations-volume-bar"><span></span></button>').join("")}
-  </fieldset>
+  <div class="operations-volume-scroll">
+    <div class="operations-volume-scroll-content">
+      <fieldset class="operations-volume-plot">
+        ${Array.from({ length: 24 }, (_, index) => `<button type="button" class="operations-volume-bar"><span class="operations-volume-fill" style="--bar-height: ${index === 12 ? "100%" : "30%"}"></span></button>`).join("")}
+      </fieldset>
+      <div class="operations-volume-axis"><span>Start</span><span>End</span></div>
+    </div>
+  </div>
+  <span class="operations-volume-tooltip" hidden role="tooltip"><strong>Middle bucket</strong><span>84,219 events</span></span>
 </div>`;
 
 const knowledgeInspectionMarkup = `
@@ -791,6 +989,71 @@ test.describe("folded breakpoint contracts", () => {
     await mount(page, operationsHeaderMarkup, INSIDE_430_FOLD);
     expectEqualTracks(await gridTracks(page, ".operations-header-actions"), 2);
     await expect(page.locator(".operations-volume-plot")).toHaveCSS("height", "196px");
+
+    const bars = page.locator(".operations-volume-bar");
+    await expect(bars).toHaveCount(24);
+    const targets = await bars.evaluateAll((elements) => elements.map((element) => {
+      const bounds = element.getBoundingClientRect();
+      return { height: bounds.height, left: bounds.left, right: bounds.right, width: bounds.width };
+    }));
+    expect(targets.every((target) => target.width >= 44 && target.height >= 44)).toBe(true);
+    expect(targets.every((target, index) => index === 0 || target.left >= targets[index - 1]!.right)).toBe(true);
+    const scrollGeometry = await page.locator(".operations-volume-scroll").evaluate((element) => ({
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+    }));
+    expect(scrollGeometry.scrollWidth).toBeGreaterThan(scrollGeometry.clientWidth);
+
+    const middleBar = bars.nth(12);
+    const scroll = page.locator(".operations-volume-scroll");
+    await scroll.evaluate((element) => { element.scrollLeft = element.scrollWidth / 2; });
+    await middleBar.evaluate((element) => { element.classList.add("operations-volume-bar--active"); });
+    const tooltip = page.locator(".operations-volume-tooltip");
+    await tooltip.evaluate((element: HTMLElement) => { element.hidden = false; });
+    await expect(tooltip).toBeVisible();
+    const tooltipGeometry = await tooltip.evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      const chart = element.closest(".operations-volume-chart")?.getBoundingClientRect();
+      if (chart === undefined) throw new Error("fixture is missing the volume chart");
+      let visibleBottom = globalThis.innerHeight;
+      let visibleLeft = 0;
+      let visibleRight = globalThis.innerWidth;
+      let visibleTop = 0;
+      for (let ancestor = element.parentElement; ancestor !== null; ancestor = ancestor.parentElement) {
+        const overflow = globalThis.getComputedStyle(ancestor);
+        const ancestorBounds = ancestor.getBoundingClientRect();
+        if (overflow.overflowX !== "visible") {
+          visibleLeft = Math.max(visibleLeft, ancestorBounds.left);
+          visibleRight = Math.min(visibleRight, ancestorBounds.right);
+        }
+        if (overflow.overflowY !== "visible") {
+          visibleBottom = Math.min(visibleBottom, ancestorBounds.bottom);
+          visibleTop = Math.max(visibleTop, ancestorBounds.top);
+        }
+      }
+      return {
+        chartBottom: chart.bottom,
+        chartLeft: chart.left,
+        chartRight: chart.right,
+        chartTop: chart.top,
+        tooltipBottom: bounds.bottom,
+        tooltipLeft: bounds.left,
+        tooltipRight: bounds.right,
+        tooltipTop: bounds.top,
+        visibleBottom,
+        visibleLeft,
+        visibleRight,
+        visibleTop,
+      };
+    });
+    expect(tooltipGeometry.tooltipLeft).toBeGreaterThanOrEqual(tooltipGeometry.chartLeft);
+    expect(tooltipGeometry.tooltipRight).toBeLessThanOrEqual(tooltipGeometry.chartRight);
+    expect(tooltipGeometry.tooltipTop).toBeGreaterThanOrEqual(tooltipGeometry.chartTop);
+    expect(tooltipGeometry.tooltipBottom).toBeLessThanOrEqual(tooltipGeometry.chartBottom);
+    expect(tooltipGeometry.tooltipLeft).toBeGreaterThanOrEqual(tooltipGeometry.visibleLeft);
+    expect(tooltipGeometry.tooltipRight).toBeLessThanOrEqual(tooltipGeometry.visibleRight);
+    expect(tooltipGeometry.tooltipTop).toBeGreaterThanOrEqual(tooltipGeometry.visibleTop);
+    expect(tooltipGeometry.tooltipBottom).toBeLessThanOrEqual(tooltipGeometry.visibleBottom);
 
     // Between 481px and 760px the range picker still leads a `1fr auto` row and
     // the plot keeps its full height, so the fold reaches only the narrow band.

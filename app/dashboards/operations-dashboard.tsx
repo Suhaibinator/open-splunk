@@ -136,46 +136,51 @@ function VolumeBarChart({ points }: VolumeBarChartProps) {
 
   return (
     <div className="operations-volume-chart">
-      <fieldset className="operations-volume-plot">
-        <legend className="sr-only">Indexed events by time bucket</legend>
-        {points.map((point, index) => {
-          const isActive = activeIndex === index;
-          const edgeClass = index < 2 ? "operations-volume-tooltip--start" : index > points.length - 3 ? "operations-volume-tooltip--end" : "";
-          return (
-            <button
-              aria-describedby={isActive ? `${point.id}-tooltip` : undefined}
-              aria-label={`${point.label}: ${NUMBER_FORMAT.format(point.value)} indexed events`}
-              className={`operations-volume-bar ${isActive ? "operations-volume-bar--active" : ""}`}
-              key={point.id}
-              onBlur={() => setActiveIndex(null)}
-              onClick={() => setActiveIndex(index)}
-              onFocus={() => handleFocus(index)}
-              onKeyDown={(event) => handleKeyDown(event, index)}
-              onPointerEnter={() => setActiveIndex(index)}
-              onPointerLeave={(event) => {
-                if (document.activeElement !== event.currentTarget) setActiveIndex(null);
-              }}
-              ref={(element) => { itemRefs.current[index] = element; }}
-              tabIndex={focusIndex === index ? 0 : -1}
-              type="button"
-            >
-              <span
-                className="operations-volume-fill"
-                style={{ "--bar-height": `${Math.max(5, (point.value / maximum) * 100)}%` } as CSSProperties}
-              >
-                {isActive ? (
-                  <span className={`operations-volume-tooltip ${edgeClass}`} id={`${point.id}-tooltip`} role="tooltip">
-                    <strong>{point.label}</strong>
-                    <span>{NUMBER_FORMAT.format(point.value)} events</span>
-                  </span>
-                ) : null}
-              </span>
-            </button>
-          );
-        })}
-      </fieldset>
-      <div className="operations-volume-axis" aria-hidden="true"><span>{points[0]?.label}</span><span>{points.at(-1)?.label}</span></div>
-      <p className="operations-chart-hint">Hover, tap, or focus a bar. Use arrow keys to inspect adjacent buckets.</p>
+      <div className="operations-volume-scroll">
+        <div className="operations-volume-scroll-content">
+          <fieldset className="operations-volume-plot">
+            <legend className="sr-only">Indexed events by time bucket</legend>
+            {points.map((point, index) => {
+              const isActive = activeIndex === index;
+              return (
+                <button
+                  aria-describedby={isActive ? `${point.id}-tooltip` : undefined}
+                  aria-label={`${point.label}: ${NUMBER_FORMAT.format(point.value)} indexed events`}
+                  className={`operations-volume-bar ${isActive ? "operations-volume-bar--active" : ""}`}
+                  key={point.id}
+                  onBlur={() => setActiveIndex(null)}
+                  onClick={() => setActiveIndex(index)}
+                  onFocus={(event) => {
+                    handleFocus(index);
+                    event.currentTarget.scrollIntoView({ block: "nearest", inline: "nearest" });
+                  }}
+                  onKeyDown={(event) => handleKeyDown(event, index)}
+                  onPointerEnter={() => setActiveIndex(index)}
+                  onPointerLeave={(event) => {
+                    if (document.activeElement !== event.currentTarget) setActiveIndex(null);
+                  }}
+                  ref={(element) => { itemRefs.current[index] = element; }}
+                  tabIndex={focusIndex === index ? 0 : -1}
+                  type="button"
+                >
+                  <span
+                    className="operations-volume-fill"
+                    style={{ "--bar-height": `${Math.max(5, (point.value / maximum) * 100)}%` } as CSSProperties}
+                  />
+                </button>
+              );
+            })}
+          </fieldset>
+          <div className="operations-volume-axis" aria-hidden="true"><span>{points[0]?.label}</span><span>{points.at(-1)?.label}</span></div>
+        </div>
+      </div>
+      {activeIndex === null ? null : (
+        <span className="operations-volume-tooltip" id={`${points[activeIndex]!.id}-tooltip`} role="tooltip">
+          <strong>{points[activeIndex]!.label}</strong>
+          <span>{NUMBER_FORMAT.format(points[activeIndex]!.value)} events</span>
+        </span>
+      )}
+      <p className="operations-chart-hint">Hover, tap, or focus a bar. Scroll the chart or use arrow keys to inspect adjacent buckets.</p>
     </div>
   );
 }

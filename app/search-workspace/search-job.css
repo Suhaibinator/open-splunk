@@ -572,3 +572,11 @@
   .timeline-axis span:nth-child(2),
   .timeline-axis span:nth-child(4) { display: none; }
 }
+
+@media (pointer: coarse) {
+  .job-controls > button,
+  .job-controls .header-menu-wrap > button {
+    min-height: calc(var(--space-8) + var(--space-1));
+    min-width: calc(var(--space-8) + var(--space-1));
+  }
+}
