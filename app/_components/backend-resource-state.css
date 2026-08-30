@@ -45,7 +45,7 @@
 .backend-resource-state--empty { border-left: 4px solid var(--status-neutral); }
 .backend-resource-state--empty > span { background: var(--status-neutral-soft); color: var(--fg-secondary); }
 .backend-resource-state--loading { border-left: 4px solid var(--status-info); }
-.backend-resource-state--loading > span { animation: spin 1.1s linear infinite; background: var(--status-info-soft); color: var(--status-info-strong); }
+.backend-resource-state--loading > span { background: var(--status-info-soft); color: var(--status-info-strong); }
 .backend-list-notice {
   background: var(--status-warning-soft);
   border: 1px solid var(--status-warning-edge);

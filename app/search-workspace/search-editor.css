@@ -426,6 +426,8 @@
   color: var(--fg-muted);
   font-size: var(--type-xxl);
   height: 30px;
+  justify-content: center;
+  padding: 0;
   width: 30px;
 }
 

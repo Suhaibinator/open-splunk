@@ -5,6 +5,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KnowledgeObject } from "@/gen/ts/open_splunk/knowledge";
 
 import { AppIcon, StatusIcon } from "../_components/app-icon";
+import { StatusLabel, type StatusTone } from "../_components/status";
 
 import {
   KNOWLEDGE_LIFECYCLE_STATE_FILTER_OPTIONS,
@@ -1035,7 +1036,7 @@ function KnowledgeListRow({
       >
         <span data-label="Object"><strong>{object.name}</strong><small>{object.appId} · v{object.version.toLocaleString()}</small></span>
         <span data-label="Type">{object.objectTypeLabel}</span>
-        <span data-label="State"><i className={`knowledge-state knowledge-state--${object.stateLabel.toLowerCase()}`} />{object.stateLabel}</span>
+        <span data-label="State"><StatusLabel tone={knowledgeStateTone(object.stateLabel)}>{object.stateLabel}</StatusLabel></span>
         <span data-label="Scope">{object.sharingScopeLabel}</span>
       </button>
     </li>
@@ -1569,4 +1570,20 @@ function KnowledgeStatus({
       {action}
     </output>
   );
+}
+
+/** The tone the `.status` primitive paints for a knowledge object's state. */
+function knowledgeStateTone(stateLabel: string): StatusTone {
+  switch (stateLabel) {
+    case "Active":
+      return "success";
+    case "Draft":
+      return "info";
+    case "Quarantined":
+      return "progress";
+    case "Deleted":
+      return "error";
+    default:
+      return "neutral";
+  }
 }

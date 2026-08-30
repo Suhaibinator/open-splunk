@@ -4,7 +4,7 @@
    a glyph; a tone modifier says which outcome it reports. Shape and tone are
    separate so a tone is one declaration rather than one per shape, which is
    what lets `.status--dot`, `.status--icon` and the dot inside `.status--label`
-   read the same six roles. The tone always sits on the element that paints, so
+   read the same seven roles. The tone always sits on the element that paints, so
    `.status--label` (a row of text) carries no tone of its own: its `.status
    .status--dot` child carries it. `--running` is `--info` plus the pulse, so a
    caller does not have to spell an in-flight state as two classes. */
@@ -46,6 +46,7 @@
 .status--warning { background: var(--status-warning); }
 .status--error { background: var(--status-error); }
 .status--neutral { background: var(--status-neutral); }
+.status--progress { background: var(--status-progress); }
 .status--running { animation: pulse-ring 1.3s ease-in-out infinite; background: var(--status-info); }
 
 /* Badges

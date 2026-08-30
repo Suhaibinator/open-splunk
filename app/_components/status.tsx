@@ -15,7 +15,7 @@ import type { ReactNode } from "react";
  * state is informational, and making callers spell it as two classes only
  * invited half of them to forget the second one.
  */
-export type StatusTone = "success" | "info" | "warning" | "error" | "neutral" | "running";
+export type StatusTone = "success" | "info" | "warning" | "error" | "neutral" | "progress" | "running";
 
 export interface StatusDotProps {
   /** Extra classes for a feature's own layout, never for colour. */

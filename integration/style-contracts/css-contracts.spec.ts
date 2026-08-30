@@ -95,7 +95,7 @@ const knowledgeManagerMarkup = `
           <button class="knowledge-manager__row" type="button">
             <span data-label="Object"><strong>saved_search</strong><small>search · v3</small></span>
             <span data-label="Type">Saved search</span>
-            <span data-label="State"><i class="knowledge-state knowledge-state--active"></i>Active</span>
+            <span data-label="State"><span class="status status--label"><i class="status status--dot status--success"></i>Active</span></span>
             <span data-label="Scope">App</span>
           </button>
         </li>

@@ -899,7 +899,7 @@
   .drawer > header > div > span:last-child { display: flex; flex-direction: column; gap: 2px; }
   .drawer > header small { color: var(--chrome-fg-faint); font-size: var(--type-xs); }
 .suite-user-avatar { align-items: center; background: var(--accent); border-radius: 50%; display: flex; height: 34px; justify-content: center; width: 34px; }
-  .drawer > header button { background: transparent; border: 0; color: var(--chrome-fg-muted); font-size: var(--type-xxl); height: 44px; width: 44px; }
+  .drawer > header button { background: transparent; border: 0; color: var(--chrome-fg-muted); font-size: var(--type-xxl); height: 44px; justify-content: center; padding: 0; width: 44px; }
   .drawer-label { color: var(--fg-muted); font-size: var(--type-xs); font-weight: 700; letter-spacing: 0.1em; padding: 15px var(--space-4) 6px; }
   .drawer > a { align-items: center; border-left: 3px solid transparent; display: flex; font-size: var(--type-sm); gap: var(--space-3); min-height: 47px; padding: 0 var(--space-4); text-decoration: none; }
   .drawer > a:hover { background: var(--bg-subtle); }

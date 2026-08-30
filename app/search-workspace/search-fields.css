@@ -355,6 +355,8 @@
   border: 1px solid var(--border);
   color: var(--fg-muted);
   height: 22px;
+  justify-content: center;
+  padding: 0;
   width: 24px;
 }
 
@@ -785,7 +787,9 @@
   color: var(--status-info);
   font-size: var(--type-xs);
   height: 21px;
+  justify-content: center;
   margin-left: -1px;
+  padding: 0;
   width: 23px;
 }
 
