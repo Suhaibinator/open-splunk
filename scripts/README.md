@@ -55,6 +55,17 @@ section and what it can see.
 than a test file so the suite can assert on stylesheet structure without opening
 a stylesheet itself — which is one of the invariants it enforces.
 
+`style-guardrails.test.mjs` guards the guardrails. Half of it pins the wiring —
+that `npm run lint` still chains `lint:css` over the whole layer, that no rule
+in `.stylelintrc.json` is set to null or downgraded by a `defaultSeverity`, that
+the two documented exemptions name exactly the files they document, and that CI
+still runs all four gates — because unwiring any of those makes the phase bar
+false while every other test stays green. The other half covers the four
+spellings a value can take where the property that names it never appears: a
+size or a face inside the `font` shorthand, a step inside an `@container` query,
+a colour keyword inside another function's parentheses, and a colour in an
+inline `style`, which is the one place that outranks the whole stylesheet layer.
+
 Five JSON ledgers record what the suite deliberately allows, each compared
 against the tree in both directions so that paying a row off fails as loudly as
 adding an unrecorded one:

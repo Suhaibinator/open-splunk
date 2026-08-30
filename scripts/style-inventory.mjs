@@ -2172,3 +2172,183 @@ export async function collectSeriesPalette(root) {
   const slice = /const CATEGORY_COLORS = TIME_SERIES_COLORS\.slice\(0,\s*(\d+)\)/u.exec(panelSource);
   return { categoryCount: slice === null ? null : Number(slice[1]), series: entries };
 }
+
+/* == The spellings the per-property gates cannot see ========================== */
+
+// Every collector above answers a question about a declaration whose property
+// names the thing being checked: `font-size` is checked because it is spelled
+// `font-size`, and a breakpoint is checked because it is spelled `@media`. The
+// four below exist because CSS lets the same value be written somewhere the
+// property name never appears -- inside a shorthand, inside another function's
+// parentheses, inside a container query, or inside a `style` attribute the
+// browser applies after every rule has run -- and each of those was walked past
+// both `npm run lint:css` and the invariant suite while they were green.
+
+/**
+ * Every argument token of a declaration value, at every nesting depth.
+ *
+ * `valueComponents` stops at the outermost parenthesis on purpose: it answers
+ * "what did this declaration state", and `color-mix(in srgb, var(--accent) 12%,
+ * transparent)` states one thing. This answers the other question -- "what
+ * values are written anywhere in here" -- which is what a literal sweep needs,
+ * because a colour keyword one level down paints exactly as hard as one at the
+ * top and no `var()` can reach it either. Function names are dropped rather
+ * than returned: `linear-gradient` is the operation, not an argument, and
+ * keeping it would file every gradient as though it named a colour.
+ */
+export function flattenValueComponents(value) {
+  const tokens = [];
+  let buffer = "";
+  function flush(isFunctionName) {
+    const text = buffer.trim();
+    buffer = "";
+    if (text.length > 0 && !isFunctionName) tokens.push(text);
+  }
+  for (const character of value) {
+    if (character === "(") flush(true);
+    else if (character === ")" || character === "," || /\s/u.test(character)) flush(false);
+    else buffer += character;
+  }
+  flush(false);
+  return tokens;
+}
+
+/**
+ * Named colours a function's parentheses hide from the top-level sweep.
+ *
+ * `hasColourLiteral` finds `#`, `rgb(`, `oklch(` and every other function form
+ * wherever they sit, because it tests the whole string; a bare keyword it can
+ * only find by splitting, and it splits at depth zero. So
+ * `color-mix(in srgb, rebeccapurple 30%, transparent)` reads as migrated while
+ * painting a literal -- and Phase 5 made `color-mix` the idiom for every
+ * translucent colour in the layer, which is what turns a corner case into the
+ * likeliest next miss.
+ */
+export async function collectNestedColourLiterals(root) {
+  const found = [];
+  for (const declaration of await collectApplicationDeclarations(root)) {
+    const nested = flattenValueComponents(declaration.value)
+      .filter((token) => NAMED_COLOURS.has(token.toLowerCase()))
+      .filter((token) => !valueComponents(declaration.value).includes(token));
+    for (const token of new Set(nested)) {
+      found.push(`${declaration.file} | ${declaration.selector} | ${declaration.property}: ${token} in ${declaration.value}`);
+    }
+  }
+  return found.toSorted();
+}
+
+/** Keywords the `font` shorthand may state that name neither a size nor a face. */
+const FONT_SHORTHAND_KEYWORDS = new Set([
+  "all-small-caps", "bold", "bolder", "caption", "condensed", "expanded", "extra-condensed",
+  "extra-expanded", "icon", "inherit", "initial", "italic", "lighter", "menu", "message-box",
+  "normal", "oblique", "petite-caps", "revert", "revert-layer", "semi-condensed", "semi-expanded",
+  "small-caps", "small-caption", "status-bar", "titling-caps", "ultra-condensed", "ultra-expanded",
+  "unicase", "unset",
+]);
+
+/** A length written as a number and a unit, which is what a scale token replaces. */
+const LENGTH_LITERAL = /^-?[\d.]+(?:px|rem|em|ex|ch|pt|pc|in|cm|mm|q|vw|vh|vmin|vmax|%)$/iu;
+
+/**
+ * Sizes and faces the `font` shorthand states without ever saying `font-size`.
+ *
+ * `font: 12px/1.4 system-ui, sans-serif` sets exactly what
+ * `declaration-property-value-allowed-list` guards under `font-size` and
+ * `font-family`, and neither rule fires, because stylelint keys those lists on
+ * the property that is written. `SCALE_PROPERTY` misses it for the same reason.
+ * A shorthand that names its size and its face through `var()` is fine and is
+ * not reported; so is a whole-value keyword like `font: inherit`, which states
+ * no size at all. The line-height and weight slots are left alone: neither is
+ * on a token scale in this repository, and `font: 600 var(--type-xs)/1` is the
+ * migrated shape rather than a miss.
+ */
+export async function collectFontShorthandLiterals(root) {
+  const found = [];
+  for (const declaration of await collectApplicationDeclarations(root)) {
+    if (declaration.property !== "font") continue;
+    const hidden = [];
+    for (const token of withoutImportant(declaration.value).split(/[\s,/]+/u).filter(Boolean)) {
+      if (token.startsWith("var(") || token.includes("var(")) continue;
+      if (FONT_SHORTHAND_KEYWORDS.has(token.toLowerCase())) continue;
+      if (/^-?[\d.]+$/u.test(token)) continue;
+      if (LENGTH_LITERAL.test(token)) hidden.push(`${token} (a size)`);
+      else if (/^[A-Za-z][\w-]*$/u.test(token) || token.startsWith('"')) hidden.push(`${token} (a face)`);
+    }
+    if (hidden.length === 0) continue;
+    found.push(`${declaration.file} | ${declaration.selector} | font: ${declaration.value} -- ${hidden.join(", ")}`);
+  }
+  return found.toSorted();
+}
+
+/**
+ * Every `@container` prelude the layer states, with the file that states it.
+ *
+ * A container query carries a width exactly as a media query does, and it is
+ * invisible to both gates that police the breakpoint canon: stylelint's
+ * `media-feature-name-value-allowed-list` only reads `@media`, and
+ * `collectMediaQueryRuns` collects preludes that start with `@media` and drops
+ * everything else. A second ladder written this way would not be reported by
+ * anything until a designer noticed the layout stepping at a width the docs do
+ * not list.
+ */
+export async function collectContainerQueries(root) {
+  const files = await listApplicationStylesheets(root);
+  const perFile = await Promise.all(files.map(async (file) => {
+    const css = stripCssComments(await readRepositoryFile(root, file));
+    return cssBlocks(css)
+      .flatMap((block) => block.ancestors.concat(block.prelude))
+      .filter((prelude) => prelude.startsWith("@container"))
+      .map((prelude) => `${file} | ${tidy(prelude)}`);
+  }));
+  return [...new Set(perFile.flat())].toSorted();
+}
+
+/**
+ * Colours written into a `style` attribute, in the spellings CSS counts.
+ *
+ * `collectTypeScriptColourLiterals` looks for `#` and `rgb(`; the stylesheet
+ * sweep beside it also counts a named colour and every modern colour function.
+ * The two disagreeing means one language's guardrail is weaker than the
+ * other's, and an inline style is the stronger of the two places to write a
+ * colour: it outranks every rule in the cascade. Only style-shaped sites are
+ * read -- a `style` prop and `setProperty` -- because a bare search for
+ * "white" over TypeScript would claim `white-space` and every identifier that
+ * happens to contain a colour word.
+ */
+export async function collectInlineStyleColourLiterals(root) {
+  const files = await listApplicationTypeScript(root);
+  const perFile = await Promise.all(files.map(async (file) => {
+    const source = await readFile(file, "utf8");
+    const found = [];
+    for (const site of source.matchAll(/style=\{\{([\s\S]*?)\}\}|setProperty\(([^)]*)\)/gu)) {
+      const body = site[1] ?? site[2] ?? "";
+      for (const quoted of body.matchAll(/"([^"]*)"|'([^']*)'/gu)) {
+        const text = quoted[1] ?? quoted[2] ?? "";
+        const named = flattenValueComponents(text).filter((token) => NAMED_COLOURS.has(token.toLowerCase()));
+        const functional = /(?<![\w-])(?:hwb|lab|lch|oklab|oklch)\(/u.test(text);
+        if (named.length > 0 || functional) found.push(`${relativePosix(root, file)}: ${text}`);
+      }
+    }
+    return found;
+  }));
+  return perFile.flat().toSorted();
+}
+
+/**
+ * How many `!important` declarations each stylesheet states.
+ *
+ * `declaration-no-important` is switched off for the two files whose overrides
+ * no specificity can win, which means those two files are the one place the
+ * flag can spread with nothing to report it. A count is the only mechanical
+ * hold on an exemption a linter has been told to ignore: it makes adding the
+ * fifteenth `!important` a decision somebody writes down rather than a line
+ * that lands green.
+ */
+export async function collectImportantCounts(root) {
+  const counts = {};
+  for (const declaration of await collectApplicationDeclarations(root)) {
+    if (!/!\s*important\s*$/iu.test(declaration.value)) continue;
+    counts[declaration.file] = (counts[declaration.file] ?? 0) + 1;
+  }
+  return Object.fromEntries(Object.entries(counts).toSorted());
+}
