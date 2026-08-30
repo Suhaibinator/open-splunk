@@ -10,6 +10,8 @@ const workspace = process.cwd();
 const checker = path.join(workspace, "scripts", "check-docs.mjs");
 const ownedMarkdownPaths = [
   "README.md",
+  "AGENTS.md",
+  "CLAUDE.md",
   "docs/README.md",
   "docs/architecture.md",
   "docs/api.md",

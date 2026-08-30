@@ -6,6 +6,8 @@ import process from "node:process";
 
 const ownedMarkdownPaths = Object.freeze([
   "README.md",
+  "AGENTS.md",
+  "CLAUDE.md",
   "docs/README.md",
   "docs/architecture.md",
   "docs/api.md",
