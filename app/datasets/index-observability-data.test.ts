@@ -5,7 +5,6 @@ import { ValueType } from "@/gen/ts/open_splunk/value";
 
 import {
   fieldCountLabel,
-  formatStorageBytes,
   mergeIndexFieldPage,
   nextObservedIndexId,
   normalizeIndexObservationQuery,
@@ -54,12 +53,6 @@ test("mergeIndexFieldPage rejects cursor and field overlap", () => {
     fields: [field("host")],
     page: { nextPageToken: undefined, totalSize: undefined, totalSizeExact: false },
   }, "cursor-2"), /repeated field host/);
-});
-
-test("formatStorageBytes uses binary storage units", () => {
-  assert.equal(formatStorageBytes(0n), "0 B");
-  assert.equal(formatStorageBytes(1_536n), "1.5 KiB");
-  assert.equal(formatStorageBytes(1_073_741_824n), "1 GiB");
 });
 
 test("normalizeIndexObservationQuery trims applied values and rejects unbounded ranges", () => {

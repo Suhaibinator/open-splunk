@@ -25,6 +25,7 @@ import {
 } from "@/lib/api";
 import { createErrorMessage } from "@/lib/error-message";
 
+import { summarizeByteQuantity } from "@/lib/byte-quantity";
 import { BackendResourceState } from "../_components/backend-resource-state";
 import { StatusLabel } from "../_components/status";
 import { AppIcon } from "../_components/app-icon";
@@ -341,21 +342,6 @@ function titleCaseEnum(value: string, prefix: string): string {
   return value.replace(prefix, "").toLowerCase().split("_").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
 }
 
-function formatBytes(value: bigint): string {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return `${value.toLocaleString()} B`;
-  if (number < 1024) return `${number.toLocaleString()} B`;
-  const units = ["KiB", "MiB", "GiB", "TiB"];
-  let amount = number;
-  let unit = "B";
-  for (const candidate of units) {
-    amount /= 1024;
-    unit = candidate;
-    if (amount < 1024) break;
-  }
-  return `${amount.toLocaleString(undefined, { maximumFractionDigits: 1 })} ${unit}`;
-}
-
 function formatAge(seconds: bigint | undefined, nanos: number | undefined): string {
   if (seconds === undefined) return "None";
   const total = Number(seconds) + (nanos ?? 0) / 1_000_000_000;
@@ -366,7 +352,7 @@ function formatAge(seconds: bigint | undefined, nanos: number | undefined): stri
 
 function InputRows({ inputs }: { inputs: CollectorInputHealth[] }) {
   if (inputs.length === 0) return <BackendResourceState kind="empty" title="No input telemetry" message="This collector has not reported any configured input health." />;
-  return <div className="table-wrap"><table className="table"><caption className="sr-only">Collector inputs</caption><thead><tr><th scope="col">Input</th><th scope="col">State</th><th scope="col">Sources</th><th scope="col">Events read</th><th scope="col">Bytes read</th><th scope="col">Last event</th></tr></thead><tbody>{inputs.map((input) => <tr key={input.inputId}><td><strong>{input.inputId}</strong>{input.statusMessage ? <small className="table-secondary">{input.statusMessage}</small> : null}</td><td>{titleCaseEnum(collectorInputStateToJSON(input.state), "COLLECTOR_INPUT_STATE_")}</td><td>{input.activeSources.toLocaleString()} active<small className="table-secondary">{input.discoveredSources.toLocaleString()} discovered</small></td><td>{input.eventsReadTotal.toLocaleString()}</td><td>{formatBytes(input.bytesReadTotal)}</td><td>{formatDate(input.lastEventAt)}</td></tr>)}</tbody></table></div>;
+  return <div className="table-wrap"><table className="table"><caption className="sr-only">Collector inputs</caption><thead><tr><th scope="col">Input</th><th scope="col">State</th><th scope="col">Sources</th><th scope="col">Events read</th><th scope="col">Bytes read</th><th scope="col">Last event</th></tr></thead><tbody>{inputs.map((input) => <tr key={input.inputId}><td><strong>{input.inputId}</strong>{input.statusMessage ? <small className="table-secondary">{input.statusMessage}</small> : null}</td><td>{titleCaseEnum(collectorInputStateToJSON(input.state), "COLLECTOR_INPUT_STATE_")}</td><td>{input.activeSources.toLocaleString()} active<small className="table-secondary">{input.discoveredSources.toLocaleString()} discovered</small></td><td>{input.eventsReadTotal.toLocaleString()}</td><td>{summarizeByteQuantity(input.bytesReadTotal)}</td><td>{formatDate(input.lastEventAt)}</td></tr>)}</tbody></table></div>;
 }
 
 export function CollectorFleetPanel({ apiBaseUrl, bootstrap }: PanelProps) {
@@ -545,7 +531,7 @@ export function CollectorFleetPanel({ apiBaseUrl, bootstrap }: PanelProps) {
             return <tr key={collector.collectorId}>
               <td><strong>{collector.displayName || collector.hostname || collector.collectorId}</strong><small className="table-secondary">{collector.collectorId}{collector.sourceRevision ? ` · rev ${collector.sourceRevision.slice(0, 12)}` : ""}</small></td>
               <td><StatusLabel tone={connection === "Online" ? "success" : connection === "Stale" ? "warning" : "neutral"}>{connection}</StatusLabel><small className="table-secondary">{disabled ? "Administratively disabled" : `${collector.operatingSystem ?? "OS unknown"}${collector.architecture ? ` / ${collector.architecture}` : ""}`}</small></td>
-              <td>{collector.queue === undefined ? "Not reported" : <>{formatBytes(collector.queue.queuedBytes)}<small className="table-secondary">{collector.queue.queuedEvents.toLocaleString()} events · oldest {formatAge(collector.queue.oldestEventAge?.seconds, collector.queue.oldestEventAge?.nanos)}</small></>}</td>
+              <td>{collector.queue === undefined ? "Not reported" : <>{summarizeByteQuantity(collector.queue.queuedBytes)}<small className="table-secondary">{collector.queue.queuedEvents.toLocaleString()} events · oldest {formatAge(collector.queue.oldestEventAge?.seconds, collector.queue.oldestEventAge?.nanos)}</small></>}</td>
               <td>{collector.inputs.length.toLocaleString()}<small className="table-secondary">{collector.inputs.filter((input) => titleCaseEnum(collectorInputStateToJSON(input.state), "COLLECTOR_INPUT_STATE_") === "Healthy").length.toLocaleString()} healthy</small></td>
               <td className="table-long-value">{collector.authorizedIndexes.join(", ") || "None"}</td>
               <td>{formatDate(collector.lastSeenAt)}</td>
@@ -562,7 +548,7 @@ export function CollectorFleetPanel({ apiBaseUrl, bootstrap }: PanelProps) {
           <dl className="backend-definition-list">
             <div><dt>Collector ID</dt><dd><code>{target.collectorId}</code></dd></div><div><dt>Hostname</dt><dd>{target.hostname ?? "Not reported"}</dd></div><div><dt>Runtime</dt><dd>{[target.operatingSystem, target.architecture, target.sourceRevision ? `rev ${target.sourceRevision.slice(0, 12)}` : undefined].filter(Boolean).join(" · ") || "Not reported"}</dd></div><div><dt>Active instance</dt><dd>{target.activeInstanceId ?? "None"}</dd></div><div><dt>Connected</dt><dd>{formatDate(target.connectedAt)}</dd></div><div><dt>Last seen</dt><dd>{formatDate(target.lastSeenAt)}</dd></div>
           </dl>
-          <section className="suite-card"><header className="suite-card-header"><div><h3>Durable queue</h3><p>Backlog, delivery, and rejection telemetry.</p></div></header>{target.queue === undefined ? <BackendResourceState kind="empty" title="Queue telemetry unavailable" message="The collector has not reported queue statistics." /> : <dl className="backend-definition-list"><div><dt>Queued</dt><dd>{target.queue.queuedEvents.toLocaleString()} events · {formatBytes(target.queue.queuedBytes)}</dd></div><div><dt>Oldest event</dt><dd>{formatAge(target.queue.oldestEventAge?.seconds, target.queue.oldestEventAge?.nanos)}</dd></div><div><dt>Sent / acknowledged</dt><dd>{target.queue.sentEventsTotal.toLocaleString()} / {target.queue.acknowledgedEventsTotal.toLocaleString()}</dd></div><div><dt>Retried batches</dt><dd>{target.queue.retriedBatchesTotal.toLocaleString()}</dd></div><div><dt>Rejected / dropped</dt><dd>{target.queue.rejectedEventsTotal.toLocaleString()} / {target.queue.droppedEventsTotal.toLocaleString()}</dd></div></dl>}</section>
+          <section className="suite-card"><header className="suite-card-header"><div><h3>Durable queue</h3><p>Backlog, delivery, and rejection telemetry.</p></div></header>{target.queue === undefined ? <BackendResourceState kind="empty" title="Queue telemetry unavailable" message="The collector has not reported queue statistics." /> : <dl className="backend-definition-list"><div><dt>Queued</dt><dd>{target.queue.queuedEvents.toLocaleString()} events · {summarizeByteQuantity(target.queue.queuedBytes)}</dd></div><div><dt>Oldest event</dt><dd>{formatAge(target.queue.oldestEventAge?.seconds, target.queue.oldestEventAge?.nanos)}</dd></div><div><dt>Sent / acknowledged</dt><dd>{target.queue.sentEventsTotal.toLocaleString()} / {target.queue.acknowledgedEventsTotal.toLocaleString()}</dd></div><div><dt>Retried batches</dt><dd>{target.queue.retriedBatchesTotal.toLocaleString()}</dd></div><div><dt>Rejected / dropped</dt><dd>{target.queue.rejectedEventsTotal.toLocaleString()} / {target.queue.droppedEventsTotal.toLocaleString()}</dd></div></dl>}</section>
           <section className="suite-card"><header className="suite-card-header"><div><h3>Inputs</h3><p>Health and progress for every reported input.</p></div></header><InputRows inputs={target.inputs} /></section>
           <section className="suite-card"><header className="suite-card-header"><div><h3>Authorization and capabilities</h3></div></header><dl className="backend-definition-list"><div><dt>Authorized indexes</dt><dd>{target.authorizedIndexes.join(", ") || "None"}</dd></div><div><dt>Capabilities</dt><dd>{target.capabilities.map((item) => titleCaseEnum(collectorCapabilityToJSON(item), "COLLECTOR_CAPABILITY_")).join(", ") || "None reported"}</dd></div></dl></section>
         </div>

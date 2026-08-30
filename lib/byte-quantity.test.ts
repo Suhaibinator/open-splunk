@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { describeByteQuantity, formatByteQuantity, parseByteQuantity } from "./byte-quantity";
+import {
+  describeByteQuantity,
+  formatByteQuantity,
+  parseByteQuantity,
+  summarizeByteQuantity,
+} from "./byte-quantity";
 
 const KIB = 1n << 10n;
 const MIB = 1n << 20n;
@@ -113,4 +118,59 @@ test("the echo groups digits without Intl, which cannot hold these limits", () =
   assert.equal(describeByteQuantity(MIB), "1,048,576 bytes");
   assert.equal(describeByteQuantity(TIB), "1,099,511,627,776 bytes");
   assert.equal(describeByteQuantity((1n << 64n) - 1n), "18,446,744,073,709,551,615 bytes");
+});
+
+test("a displayed size keeps the binary labels the parser reads back", () => {
+  // The search workspace's copy divided by 1024 and labelled the result
+  // `KB`/`MB`/`GB`, so a mebibyte printed as `1 MB` -- a binary magnitude under
+  // a decimal name, which is the same defect the form fields had.
+  assert.equal(summarizeByteQuantity(1_048_576n), "1 MiB");
+  assert.equal(summarizeByteQuantity(1_073_741_824n), "1 GiB");
+  assert.equal(summarizeByteQuantity(1n << 40n), "1 TiB");
+  assert.equal(summarizeByteQuantity(1n << 50n), "1 PiB");
+  for (const bytes of [1_048_576n, 3n << 30n, 7n << 20n]) {
+    assert.equal(parseByteQuantity(summarizeByteQuantity(bytes)), bytes, bytes.toString());
+  }
+});
+
+test("a displayed size rounds to a tenth and drops a whole one", () => {
+  // These three are the assertions the dataset panel's own copy carried before
+  // it folded into this one.
+  assert.equal(summarizeByteQuantity(0n), "0 B");
+  assert.equal(summarizeByteQuantity(1_536n), "1.5 KiB");
+  assert.equal(summarizeByteQuantity(1_073_741_824n), "1 GiB");
+  // The lookup manager's copy wrote `2.0 KiB` here, and stopped at MiB, so two
+  // gibibytes read as `2048.0 MiB`.
+  assert.equal(summarizeByteQuantity(2_048n), "2 KiB");
+  assert.equal(summarizeByteQuantity(2n << 30n), "2 GiB");
+  // And the search workspace's dropped the tenth above ten units, so 10.6 GiB
+  // was reported as 11 GB.
+  assert.equal(summarizeByteQuantity((10n << 30n) + (644245094n)), "10.6 GiB");
+});
+
+test("a displayed size stays exact where a float divide would drift", () => {
+  // Queue-depth telemetry is a uint64 counter, and the largest values are
+  // exactly the ones the column exists to show.
+  assert.equal(summarizeByteQuantity((1n << 64n) - 1n), "16,384 PiB");
+  assert.equal(summarizeByteQuantity(1023n), "1023 B");
+  assert.equal(summarizeByteQuantity(1024n), "1 KiB");
+  // Rounding reports the unit it was measured in rather than jumping to the
+  // next one, which is what every folded copy already did. The integer part is
+  // grouped, which only shows just below a unit boundary and above a pebibyte;
+  // two of the folded copies grouped and three did not.
+  assert.equal(summarizeByteQuantity(1_048_575n), "1,024 KiB");
+});
+
+test("a negative size is shown as zero rather than refused", () => {
+  // Two of the five folded copies already clamped, and no caller has a
+  // rendering for a negative size.
+  assert.equal(summarizeByteQuantity(-1n), "0 B");
+  assert.equal(summarizeByteQuantity(-1n << 30n), "0 B");
+});
+
+test("a displayed size rounds and a field's value does not", () => {
+  // The two formatters answer different questions: a table cell wants a
+  // magnitude, and a field holds a value the next save sends back.
+  assert.equal(summarizeByteQuantity(MIB + 1n), "1 MiB");
+  assert.equal(formatByteQuantity(MIB + 1n), "1048577 B");
 });

@@ -1,5 +1,10 @@
 /**
- * The one way the product reads and writes a byte quantity in a form field.
+ * The one way the product reads, writes and displays a byte quantity.
+ *
+ * Three of the four functions here serve a form field and the fourth serves
+ * every table cell and stat tile that shows a size. They are one module because
+ * they are one notation: a field that accepts `512 MiB` and a cell that prints
+ * `1.5 GiB` have to mean the same thing by those suffixes.
  *
  * The admin console used to hold two opposite conventions at once. Search
  * limits labelled four fields "…bytes" and then divided the protobuf value by a
@@ -131,6 +136,48 @@ export function formatByteQuantity(bytes: bigint): string {
   // `B`, not `bytes`: the round trip has to land back inside the notation, and
   // `parseByteSize` has no long spelling for the unitless case.
   return `${bytes.toString()} B`;
+}
+
+/**
+ * Display units, largest first. `summarizeByteQuantity` alone reaches PiB: a
+ * form field's ceiling is a tebibyte, but a durable queue's telemetry is not
+ * bounded by one.
+ */
+const DISPLAY_UNITS: readonly { label: string; multiplier: bigint }[] = [
+  { label: "PiB", multiplier: 1n << 50n },
+  ...BYTE_UNITS,
+];
+
+/**
+ * A byte count rounded for display: `0 B`, `1.5 GiB`, `1,024 PiB`.
+ *
+ * Five copies of this used to exist -- `formatBinaryBytes` in the search
+ * workspace, `formatStorageBytes` in the dataset panel, and a private
+ * `formatBytes` in each of the admin resource panels, the lookup manager and the
+ * analytics console -- and they did not agree. Two rounded a whole quantity to
+ * `2.0 KiB` where the others wrote `2 KiB`; the lookup manager's stopped at MiB,
+ * so two gibibytes read as `2048.0 MiB`; and the search workspace's divided by
+ * 1024 while labelling the result `KB`/`MB`/`GB`, printing a mebibyte as `1 MB`.
+ * That last one is the same defect as the form fields': a binary magnitude under
+ * a decimal name. Here the labels are the ones `parseByteQuantity` reads back.
+ *
+ * Distinct from `formatByteQuantity`, which is what a *field* holds: that one
+ * never rounds, because a value it writes is a value the next save sends. This
+ * one always rounds, because a table cell wants a magnitude rather than a count.
+ *
+ * The arithmetic stays in `bigint`: these are uint64 counters, and a float
+ * divide would drift on exactly the largest values a queue-depth column exists
+ * to show. A negative is shown as zero rather than refused -- two of the five
+ * copies already clamped, and no caller has a rendering for a negative size.
+ */
+export function summarizeByteQuantity(bytes: bigint): string {
+  const value = bytes < 0n ? 0n : bytes;
+  const unit = DISPLAY_UNITS.find(({ multiplier }) => value >= multiplier);
+  if (unit === undefined) return `${value.toString()} B`;
+  const tenths = ((value * 10n) + (unit.multiplier / 2n)) / unit.multiplier;
+  const whole = (tenths / 10n).toString().replace(DIGIT_GROUPS, ",");
+  const fraction = tenths % 10n;
+  return fraction === 0n ? `${whole} ${unit.label}` : `${whole}.${fraction} ${unit.label}`;
 }
 
 /**

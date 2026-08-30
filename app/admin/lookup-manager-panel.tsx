@@ -51,6 +51,7 @@ export {
   isExactLookupColumn,
   isExactPublicField,
 } from "./lookup-manager-contract";
+import { summarizeByteQuantity } from "@/lib/byte-quantity";
 
 type LoadState = "loading" | "available" | "unavailable" | "error";
 type LookupModal = "create" | "replace" | "delete";
@@ -387,12 +388,6 @@ function sharingScopeLabel(scope: SharingScope): string {
 
 function formatDate(value: Date | undefined): string {
   return formatMediumDateTime(value, "Unavailable");
-}
-
-function formatBytes(value: bigint): string {
-  if (value < 1024n) return `${value.toLocaleString()} B`;
-  if (value < 1024n * 1024n) return `${(Number(value) / 1024).toFixed(1)} KiB`;
-  return `${(Number(value) / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
 export function LookupManagerPanel({
@@ -757,7 +752,7 @@ export function LookupManagerTable({
                   <small className="table-secondary">{definition?.appId ?? "Unknown app"} · v{lookup.version.toLocaleString()} · {sharingScopeLabel(definition?.sharingScope ?? SharingScope.SHARING_SCOPE_UNSPECIFIED)}</small>
                   {definition?.description ? <small className="table-secondary">{definition.description}</small> : null}
                 </td>
-                <td>{lookup.rowCount.toLocaleString()} rows<small className="table-secondary">{lookup.columns.length.toLocaleString()} columns · {formatBytes(lookup.canonicalSizeBytes)}</small></td>
+                <td>{lookup.rowCount.toLocaleString()} rows<small className="table-secondary">{lookup.columns.length.toLocaleString()} columns · {summarizeByteQuantity(lookup.canonicalSizeBytes)}</small></td>
                 <td>{definition?.automatic ? "Automatic + explicit" : "Explicit only"}<small className="table-secondary">{definition?.keyMappings.length ?? 0} key · {definition?.outputMappings.length ?? 0} output</small></td>
                 <td><StatusLabel tone={stateLabel === "Active" ? "success" : "neutral"}>{stateLabel}</StatusLabel></td>
                 <td>{formatDate(lookup.updatedAt)}</td>

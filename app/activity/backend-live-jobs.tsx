@@ -38,7 +38,7 @@ import {
   searchJobStateTone,
   searchJobStateLabel,
 } from "./backend-activity-shared";
-import { formatDecimalBytes } from "../search-workspace/formatters";
+import { summarizeByteQuantity } from "@/lib/byte-quantity";
 
 type LiveJobFilter = "all" | "active" | "completed" | "failed" | "canceled";
 type LoadState = "loading" | "available" | "unavailable" | "error";
@@ -550,7 +550,7 @@ export function BackendLiveJobs({ apiBaseUrl }: BackendLiveJobsProps) {
                         </td>
                         <td data-label="Rows / bytes" className="numeric-data">
                           <strong title={approximate ? "Server reports estimated counters" : "Server-reported row count"}>{approximate ? "~" : ""}{formatActivityCount(job.progress?.producedRows ?? 0n)} rows</strong>
-                          <small title={`${formatActivityCount(job.progress?.resultBytes ?? 0n)} bytes`}>{formatDecimalBytes(job.progress?.resultBytes ?? 0n)}</small>
+                          <small title={`${formatActivityCount(job.progress?.resultBytes ?? 0n)} bytes`}>{summarizeByteQuantity(job.progress?.resultBytes ?? 0n)}</small>
                         </td>
                         <td data-label="Created">
                           <time dateTime={job.createdAt?.toISOString()}>{formatActivityDate(job.createdAt)}</time>

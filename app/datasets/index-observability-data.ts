@@ -95,17 +95,3 @@ export function fieldCountLabel(snapshot: IndexFieldSnapshot): string {
   return `${loaded} field${snapshot.fields.length === 1 ? "" : "s"} loaded · approximately ${total} total`;
 }
 
-export function formatStorageBytes(bytes: bigint): string {
-  const units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
-  let value = bytes < 0n ? 0n : bytes;
-  let unit = 0;
-  let divisor = 1n;
-  while (unit < units.length - 1 && value >= 1_024n) {
-    value /= 1_024n;
-    divisor *= 1_024n;
-    unit += 1;
-  }
-  if (unit === 0) return `${value.toLocaleString()} ${units[unit]}`;
-  const tenths = ((bytes < 0n ? 0n : bytes) * 10n + divisor / 2n) / divisor;
-  return `${Number(tenths) / 10} ${units[unit]}`;
-}

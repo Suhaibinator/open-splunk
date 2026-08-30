@@ -11,6 +11,7 @@ const scriptTests = [
   "build-ui-output.test.mjs",
   "check-docs.test.mjs",
   "compile-protos.test.mjs",
+  "byte-formatting.test.mjs",
   "style-invariants.test.mjs",
   "style-guardrails.test.mjs",
   "safety-net.test.mjs",
