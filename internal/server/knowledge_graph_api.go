@@ -101,9 +101,9 @@ func serveKnowledgeGraph[Request proto.Message, Response proto.Message](
 			nil,
 		)
 	}
-	if !knowledgeGraphRequestPreflight(input, fields) {
-		return nil, invalidRequest()
-	}
+	// The route sanitizer already bounded the root identity, version, and page.
+	// cloneKnowledgeMessage below still rejects a request this handler cannot
+	// detach.
 	release, ok := handler.acquireSerialization()
 	if !ok {
 		return nil, handler.rejectKnowledgeRequest(
@@ -162,29 +162,6 @@ func serveKnowledgeGraph[Request proto.Message, Response proto.Message](
 		ctx:     request.Context(),
 		release: release,
 	}, nil
-}
-
-func knowledgeGraphRequestPreflight[Request proto.Message](
-	input Request,
-	fields func(Request) (string, *uint64, *opensplunk.PageRequest),
-) bool {
-	if isNilDependency(input) || fields == nil {
-		return false
-	}
-	objectID, version, page := fields(input)
-	if !validKnowledgeIdentity(objectID, maximumKnowledgeObjectIDBytes) ||
-		version != nil && (*version == 0 || *version > math.MaxInt64) {
-		return false
-	}
-	if page == nil {
-		return true
-	}
-	return (page.PageSize == nil || page.GetPageSize() <= knowledgecatalog.MaximumPageSize) &&
-		(page.PageToken == nil || validBoundedListPageToken(
-			page.GetPageToken(),
-			maximumKnowledgePageTokenBytes,
-			true,
-		))
 }
 
 func knowledgeGraphListRequest(

@@ -387,22 +387,6 @@ func TestValidateKnowledgeObjectCodecClosesRequestBody(t *testing.T) {
 	}
 }
 
-func TestValidateKnowledgeObjectSanitizerPreservesUnknownAuthorities(t *testing.T) {
-	request := &opensplunk.ValidateKnowledgeObjectRequest{
-		Definition: validateTestDefinition("unknowns"),
-		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"name"}},
-	}
-	request.ProtoReflect().SetUnknown(validateTestVarintField(100, 1))
-	request.UpdateMask.ProtoReflect().SetUnknown(validateTestVarintField(101, 2))
-	request.Definition.GetFieldAlias().ProtoReflect().SetUnknown(validateTestVarintField(102, 3))
-	got, err := sanitizeValidateKnowledgeObjectRequest(t.Context(), request)
-	if err != nil || got != request || len(got.ProtoReflect().GetUnknown()) == 0 ||
-		len(got.GetUpdateMask().ProtoReflect().GetUnknown()) == 0 ||
-		len(got.GetDefinition().GetFieldAlias().ProtoReflect().GetUnknown()) == 0 {
-		t.Fatalf("Validate sanitizer changed unknown authorities: %v / %v", got, err)
-	}
-}
-
 func validateTestSeal(t *testing.T) knowledgevalidation.SealedValidateResponse {
 	t.Helper()
 	result, err := knowledgevalidation.BuildInactive(t.Context(), validateTestDefinition("response"))

@@ -94,13 +94,13 @@ func (handler *apiHandler) lookupManagementRoutes(noAuth router.AuthLevel) []rou
 			Path: lookupGetRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newLookupBoundedCodec(codec.NewProtoCodec[*opensplunk.GetLookupRequest, *opensplunk.GetLookupResponse](), "get"), Handler: handler.getLookup,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumLookupSmallRequestBytes},
-			Sanitizer: discardUnknownProtoFields,
+			Sanitizer: sanitizeGetLookupRequest,
 		},
 		router.RouteConfig[*opensplunk.ListLookupsRequest, *serializedListLookupsResponse]{
 			Path: lookupListRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newLookupBoundedCodec(codec.NewProtoCodec[*opensplunk.ListLookupsRequest, *opensplunk.ListLookupsResponse](), "list"), Handler: handler.listLookups,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumLookupSmallRequestBytes},
-			Sanitizer: discardUnknownProtoFields,
+			Sanitizer: sanitizeListLookupsRequest,
 		},
 		router.RouteConfig[*opensplunk.ReplaceLookupRequest, *serializedReplaceLookupResponse]{
 			Path: lookupReplaceRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
@@ -112,13 +112,13 @@ func (handler *apiHandler) lookupManagementRoutes(noAuth router.AuthLevel) []rou
 			Path: lookupSetStateRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newLookupBoundedCodec(codec.NewProtoCodec[*opensplunk.SetLookupStateRequest, *opensplunk.SetLookupStateResponse](), "set state"), Handler: handler.setLookupState,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumLookupSmallRequestBytes},
-			Sanitizer: discardUnknownProtoFields,
+			Sanitizer: sanitizeSetLookupStateRequest,
 		},
 		router.RouteConfig[*opensplunk.DeleteLookupRequest, *serializedDeleteLookupResponse]{
 			Path: lookupDeleteRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newLookupBoundedCodec(codec.NewProtoCodec[*opensplunk.DeleteLookupRequest, *opensplunk.DeleteLookupResponse](), "delete"), Handler: handler.deleteLookup,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumLookupSmallRequestBytes},
-			Sanitizer: discardUnknownProtoFields,
+			Sanitizer: sanitizeDeleteLookupRequest,
 		},
 		router.RouteConfig[*opensplunk.PreviewLookupRequest, *serializedPreviewLookupResponse]{
 			Path: lookupPreviewRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
@@ -279,39 +279,6 @@ func boundedLookupDefinitionRepeatedShape(definition *opensplunk.LookupDefinitio
 			len(selector.GetHostPatterns()) <= knowledge.MaximumSelectorPatternsPerDimension &&
 			len(selector.GetSourcePatterns()) <= knowledge.MaximumSelectorPatternsPerDimension &&
 			len(selector.GetSourcetypePatterns()) <= knowledge.MaximumSelectorPatternsPerDimension
-}
-
-// sanitizeCreateLookupRequest rejects unknown fields inside the persisted lookup
-// definition and then discards unknown fields from the rest of the request
-// envelope. Replace and Preview share the rule.
-func sanitizeCreateLookupRequest(
-	ctx context.Context,
-	request *opensplunk.CreateLookupRequest,
-) (*opensplunk.CreateLookupRequest, error) {
-	if err := rejectUnknownLookupDefinition(request.GetDefinition()); err != nil {
-		return request, err
-	}
-	return discardUnknownProtoFields(ctx, request)
-}
-
-func sanitizeReplaceLookupRequest(
-	ctx context.Context,
-	request *opensplunk.ReplaceLookupRequest,
-) (*opensplunk.ReplaceLookupRequest, error) {
-	if err := rejectUnknownLookupDefinition(request.GetDefinition()); err != nil {
-		return request, err
-	}
-	return discardUnknownProtoFields(ctx, request)
-}
-
-func sanitizePreviewLookupRequest(
-	ctx context.Context,
-	request *opensplunk.PreviewLookupRequest,
-) (*opensplunk.PreviewLookupRequest, error) {
-	if err := rejectUnknownLookupDefinition(request.GetDefinition()); err != nil {
-		return request, err
-	}
-	return discardUnknownProtoFields(ctx, request)
 }
 
 // rejectUnknownLookupDefinition prevents a newer client's persisted semantic
