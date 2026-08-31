@@ -31,28 +31,20 @@ func (handler *apiHandler) searchFieldRoutes(noAuth router.AuthLevel, smallReque
 			Path: searchFieldsListRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedSearchFieldsCodec(), Handler: handler.listSearchFields,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: discardUnknownProtoFields,
+			Sanitizer: handler.sanitizeListSearchFieldsRequest,
 		},
 		router.RouteConfig[*opensplunk.GetSearchFieldSummaryRequest, *serializedSearchFieldSummaryResponse]{
 			Path: searchFieldSummaryRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedSearchFieldSummaryCodec(), Handler: handler.getSearchFieldSummary,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: discardUnknownProtoFields,
+			Sanitizer: handler.sanitizeGetSearchFieldSummaryRequest,
 		},
 	}
 }
 
 func (handler *apiHandler) listSearchFields(request *http.Request, input *opensplunk.ListSearchFieldsRequest) (*serializedSearchFieldsResponse, error) {
-	if input == nil {
-		return nil, badRequestError("search field request is required")
-	}
-	searchJobID := strings.TrimSpace(input.GetSearchJobId())
-	if searchJobID == "" {
-		return nil, badRequestError("search job ID is required")
-	}
-
 	analysisRequest := searchanalysis.ListFieldsRequest{
-		SearchJobID:     searchJobID,
+		SearchJobID:     input.GetSearchJobId(),
 		NameFilter:      input.GetNameFilter(),
 		InterestingOnly: input.GetInterestingOnly(),
 	}
@@ -60,20 +52,8 @@ func (handler *apiHandler) listSearchFields(request *http.Request, input *opensp
 	if page := input.GetPage(); page != nil {
 		includeTotal = page.GetIncludeTotalSize()
 		if page.PageSize != nil {
-			pageSize := page.GetPageSize()
-			if pageSize == 0 || pageSize > handler.maximumPageSize {
-				return nil, badRequestError("search field page size is outside the supported range")
-			}
-			// page_size is a requested maximum. A field service may enforce a
-			// lower endpoint-specific maximum than the browser-wide page limit;
-			// return a shorter page with a continuation instead of rejecting a
-			// request that is valid under the advertised common contract.
-			pageSize = min(pageSize, handler.maximumFieldPageSize)
-			analysisRequest.PageSize = &pageSize
+			analysisRequest.PageSize = new(page.GetPageSize())
 		}
-		// Page tokens are opaque authenticated service output. Preserve their
-		// bytes exactly so whitespace or any other mutation cannot become a
-		// second accepted spelling of the same cursor.
 		analysisRequest.PageToken = page.GetPageToken()
 	}
 
