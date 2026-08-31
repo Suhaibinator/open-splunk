@@ -216,8 +216,8 @@ func TestCollectorAdministrationListPassesOpaqueTokenAndReleasesPermit(
 		ownerID,
 		"/api/collectors/list",
 	)
-	result, err := handler.listCollectors(
-		request,
+	sanitized, err := handler.sanitizeListCollectorsRequest(
+		request.Context(),
 		&opensplunk.ListCollectorsRequest{
 			Page: &opensplunk.PageRequest{
 				PageSize:         &pageSize,
@@ -234,6 +234,10 @@ func TestCollectorAdministrationListPassesOpaqueTokenAndReleasesPermit(
 			SortDirection:   opensplunk.SortDirection_SORT_DIRECTION_DESCENDING,
 		},
 	)
+	if err != nil {
+		t.Fatalf("sanitizeListCollectorsRequest() = %v", err)
+	}
+	result, err := handler.listCollectors(request, sanitized)
 	if err != nil || result == nil {
 		t.Fatalf("listCollectors() = %#v, %v", result, err)
 	}
@@ -399,8 +403,8 @@ func TestCollectorAdministrationCommittedMutationSurvivesCancellation(
 		"/api/collectors/update",
 	)
 	displayName := " Production Collector "
-	result, err := handler.updateCollector(
-		request,
+	sanitized, err := sanitizeUpdateCollectorRequest(
+		request.Context(),
 		&opensplunk.UpdateCollectorRequest{
 			CollectorId:     collectorID,
 			ExpectedVersion: 1,
@@ -410,6 +414,10 @@ func TestCollectorAdministrationCommittedMutationSurvivesCancellation(
 			},
 		},
 	)
+	if err != nil {
+		t.Fatalf("sanitizeUpdateCollectorRequest() = %v", err)
+	}
+	result, err := handler.updateCollector(request, sanitized)
 	if err != nil || result == nil {
 		t.Fatalf("updateCollector() = %#v, %v", result, err)
 	}

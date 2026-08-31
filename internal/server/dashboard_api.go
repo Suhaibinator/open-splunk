@@ -39,10 +39,7 @@ func (handler *apiHandler) createDashboard(request *http.Request, input *openspl
 }
 
 func (handler *apiHandler) getDashboard(request *http.Request, input *opensplunk.GetDashboardRequest) (*opensplunk.GetDashboardResponse, error) {
-	id, err := dashboardID(input.GetDashboardId())
-	if err != nil {
-		return nil, badRequestError(err.Error())
-	}
+	id := input.GetDashboardId()
 	record, err := handler.dashboards.Get(request.Context(), handler.dashboardScope(), id)
 	if mapped := mapDashboardCallError(request, err); mapped != nil {
 		return nil, mapped
@@ -56,13 +53,6 @@ func (handler *apiHandler) getDashboard(request *http.Request, input *opensplunk
 
 func (handler *apiHandler) listDashboards(request *http.Request, input *opensplunk.ListDashboardsRequest) (*serializedDashboardListResponse, error) {
 	appID := input.AppIdFilter
-	if appID != nil {
-		normalized, err := normalizeSearchAppID(input.GetAppIdFilter())
-		if err != nil || normalized == "" || normalized != input.GetAppIdFilter() {
-			return nil, badRequestError("dashboard app ID filter is invalid")
-		}
-		appID = new(normalized)
-	}
 	release, acquired := handler.acquireSerialization()
 	if !acquired {
 		return nil, unavailableError("dashboard response capacity is exhausted")
@@ -93,13 +83,7 @@ func (handler *apiHandler) listDashboards(request *http.Request, input *opensplu
 }
 
 func (handler *apiHandler) updateDashboard(request *http.Request, input *opensplunk.UpdateDashboardRequest) (*opensplunk.UpdateDashboardResponse, error) {
-	id, err := dashboardID(input.GetDashboardId())
-	if err != nil {
-		return nil, badRequestError(err.Error())
-	}
-	if err := administrationExpectedVersion(input.GetExpectedVersion()); err != nil {
-		return nil, badRequestError(err.Error())
-	}
+	id := input.GetDashboardId()
 	definition, err := handler.dashboardDefinition(request, input.GetDefinition())
 	if err != nil {
 		return nil, err
@@ -116,14 +100,8 @@ func (handler *apiHandler) updateDashboard(request *http.Request, input *openspl
 }
 
 func (handler *apiHandler) deleteDashboard(request *http.Request, input *opensplunk.DeleteDashboardRequest) (*opensplunk.DeleteDashboardResponse, error) {
-	id, err := dashboardID(input.GetDashboardId())
-	if err != nil {
-		return nil, badRequestError(err.Error())
-	}
-	if err := administrationExpectedVersion(input.GetExpectedVersion()); err != nil {
-		return nil, badRequestError(err.Error())
-	}
-	err = handler.dashboards.Delete(request.Context(), handler.dashboardScope(), id, input.GetExpectedVersion())
+	id := input.GetDashboardId()
+	err := handler.dashboards.Delete(request.Context(), handler.dashboardScope(), id, input.GetExpectedVersion())
 	if mapped := mapDashboardCallError(request, err); mapped != nil {
 		return nil, mapped
 	}
@@ -131,14 +109,8 @@ func (handler *apiHandler) deleteDashboard(request *http.Request, input *openspl
 }
 
 func (handler *apiHandler) runDashboardPanel(request *http.Request, input *opensplunk.RunDashboardPanelRequest) (*opensplunk.RunDashboardPanelResponse, error) {
-	id, err := dashboardID(input.GetDashboardId())
-	if err != nil {
-		return nil, badRequestError(err.Error())
-	}
-	panelID, err := dashboardPanelID(input.GetPanelId())
-	if err != nil {
-		return nil, badRequestError(err.Error())
-	}
+	id := input.GetDashboardId()
+	panelID := input.GetPanelId()
 	record, err := handler.dashboards.Get(request.Context(), handler.dashboardScope(), id)
 	if mapped := mapDashboardCallError(request, err); mapped != nil {
 		return nil, mapped
@@ -190,31 +162,16 @@ func (handler *apiHandler) runDashboardPanel(request *http.Request, input *opens
 	return &opensplunk.RunDashboardPanelResponse{SearchJob: converted}, nil
 }
 
+// dashboardDefinition resolves a definition the route sanitizer has already
+// bounded and made canonical, so only the runtime checks remain: whether the
+// caller may use the app and every panel index.
 func (handler *apiHandler) dashboardDefinition(request *http.Request, input *opensplunk.DashboardDefinition) (*opensplunk.DashboardDefinition, error) {
-	if input == nil {
-		return nil, badRequestError("dashboard definition is required")
-	}
 	definition := proto.Clone(input).(*opensplunk.DashboardDefinition)
-	if proto.Size(definition) > maximumDashboardDefinitionBytes {
-		return nil, badRequestError("dashboard definition is too large")
-	}
-	if definition.OwnerId != nil && definition.GetOwnerId() != "" && definition.GetOwnerId() != handler.ownerID {
-		return nil, badRequestError("dashboard owner must match the authenticated owner")
-	}
-	appID, err := normalizeSearchAppID(definition.GetAppId())
-	if err != nil || appID == "" || appID != definition.GetAppId() {
-		return nil, badRequestError("dashboard app ID is invalid")
-	}
+	appID := definition.GetAppId()
 	if err := handler.authorizeSearchApp(request.Context(), appID); err != nil {
 		return nil, err
 	}
 	for _, panel := range definition.GetPanels() {
-		if panel == nil || panel.GetSearch() == nil {
-			return nil, badRequestError("every dashboard panel requires a search definition")
-		}
-		if panel.Search.AppId == nil || strings.TrimSpace(panel.Search.GetAppId()) == "" {
-			panel.Search.AppId = new(appID)
-		}
 		resolved, err := handler.resolveSearchDefinition(panel.GetSearch(), func(*opensplunk.SearchDefinition) error { return nil })
 		if err != nil {
 			return nil, err
@@ -257,14 +214,6 @@ func dashboardID(input string) (string, error) {
 	return id, nil
 }
 
-func dashboardPanelID(input string) (string, error) {
-	id := strings.TrimSpace(input)
-	if id == "" || id != input || validateBoundedIdentifier(id, 128, false) != nil {
-		return "", errors.New("dashboard panel ID is invalid")
-	}
-	return id, nil
-}
-
 func mapDashboardCallError(request *http.Request, operationErr error) error {
 	if operationErr == nil {
 		return nil
@@ -293,32 +242,32 @@ func (handler *apiHandler) dashboardRoutes(noAuth router.AuthLevel, smallRequest
 		router.RouteConfig[*opensplunk.CreateDashboardRequest, *opensplunk.CreateDashboardResponse]{
 			Path: "/dashboards/create", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.CreateDashboardRequest, *opensplunk.CreateDashboardResponse](), Handler: handler.createDashboard, SourceType: router.Body,
-			Sanitizer: discardUnknownProtoFields,
+			Sanitizer: handler.sanitizeCreateDashboardRequest,
 		},
 		router.RouteConfig[*opensplunk.GetDashboardRequest, *opensplunk.GetDashboardResponse]{
 			Path: "/dashboards/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.GetDashboardRequest, *opensplunk.GetDashboardResponse](), Handler: handler.getDashboard, SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: discardUnknownProtoFields,
+			Sanitizer: sanitizeGetDashboardRequest,
 		},
 		router.RouteConfig[*opensplunk.ListDashboardsRequest, *serializedDashboardListResponse]{
 			Path: "/dashboards/list", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedDashboardListCodec(), Handler: handler.listDashboards, SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: discardUnknownProtoFields,
+			Sanitizer: sanitizeListDashboardsRequest,
 		},
 		router.RouteConfig[*opensplunk.UpdateDashboardRequest, *opensplunk.UpdateDashboardResponse]{
 			Path: "/dashboards/update", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.UpdateDashboardRequest, *opensplunk.UpdateDashboardResponse](), Handler: handler.updateDashboard, SourceType: router.Body,
-			Sanitizer: discardUnknownProtoFields,
+			Sanitizer: handler.sanitizeUpdateDashboardRequest,
 		},
 		router.RouteConfig[*opensplunk.DeleteDashboardRequest, *opensplunk.DeleteDashboardResponse]{
 			Path: "/dashboards/delete", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.DeleteDashboardRequest, *opensplunk.DeleteDashboardResponse](), Handler: handler.deleteDashboard, SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: discardUnknownProtoFields,
+			Sanitizer: sanitizeDeleteDashboardRequest,
 		},
 		router.RouteConfig[*opensplunk.RunDashboardPanelRequest, *opensplunk.RunDashboardPanelResponse]{
 			Path: "/dashboards/panels/run", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.RunDashboardPanelRequest, *opensplunk.RunDashboardPanelResponse](), Handler: handler.runDashboardPanel, SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: discardUnknownProtoFields,
+			Sanitizer: sanitizeRunDashboardPanelRequest,
 		},
 	}
 }
