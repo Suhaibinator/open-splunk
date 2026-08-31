@@ -1,11 +1,8 @@
-// Apply optional flat-display metadata without changing the authoritative
-// typed list retained by the result model. Native members use the shared
-// canonical scalar text; containers and non-finite numbers fail closed.
-export function flatMultivalueDisplay(
-  value: unknown,
-  delimiter: string | undefined,
-): string | undefined {
-  if (delimiter === undefined || !Array.isArray(value)) return undefined;
+// Canonical scalar text for every member of a multivalue cell. Native members
+// use the shared canonical scalar text; containers and non-finite numbers fail
+// closed so a cell is either wholly presentable or not presented at all.
+export function flatMultivalueMembers(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
   const members: string[] = [];
   for (const member of value) {
     if (member === null) {
@@ -20,5 +17,15 @@ export function flatMultivalueDisplay(
       return undefined;
     }
   }
-  return members.join(delimiter);
+  return members;
+}
+
+// Apply optional flat-display metadata without changing the authoritative
+// typed list retained by the result model.
+export function flatMultivalueDisplay(
+  value: unknown,
+  delimiter: string | undefined,
+): string | undefined {
+  if (delimiter === undefined) return undefined;
+  return flatMultivalueMembers(value)?.join(delimiter);
 }

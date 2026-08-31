@@ -219,13 +219,61 @@
   white-space: nowrap;
 }
 
-.statistics-multivalue-lines {
+/* Both multivalue presentations -- one joined string carrying its own line
+   breaks, and one block per member -- clip to the same fixed virtual row. */
+.statistics-multivalue-lines,
+.statistics-multivalue-list {
   display: block;
   line-height: 1.25;
   max-height: calc(var(--statistics-row-height, 42px) - 8px);
   max-width: 100%;
   overflow: hidden;
+}
+
+.statistics-multivalue-lines {
   white-space: pre-wrap;
+}
+
+.statistics-multivalue-item {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The overflow control is its own line in the stack, so it is a block: an
+   inline-block would add strut leading and push the members out of the clamp,
+   and a full-width button centres its label away from the members above it. */
+.statistics-multivalue-more {
+  background: transparent;
+  border: 0;
+  color: var(--fg-link);
+  display: block;
+  font-size: var(--type-xs);
+  padding: 0;
+  text-align: left;
+}
+
+.statistics-multivalue-more:hover {
+  color: var(--status-info-strong);
+  text-decoration: underline;
+}
+
+.statistics-multivalue-dialog-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.statistics-multivalue-dialog-list li {
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--type-md);
+  overflow-wrap: anywhere;
+  padding: var(--space-2) 0;
+}
+
+.statistics-multivalue-dialog-list li:last-child {
+  border-bottom: 0;
 }
 
 .statistics-scroll-hint {
