@@ -125,7 +125,7 @@ func TestCompositeCompletedPublicationFailureProjectsTerminalStorageFailure(t *t
 	publication.mu.Unlock()
 	if len(projected) != 1 || projected[0].State != StateFailed ||
 		projected[0].Failure == nil || projected[0].Failure.Code != FailureResultsNotPersisted ||
-		projected[0].Failure.Message != resultsNotPersistedMessage {
+		projected[0].Failure.Message != ResultsNotPersistedMessage {
 		t.Fatalf("terminal metadata compensation = %#v", projected)
 	}
 	if len(publicationJobs) != 2 || publicationJobs[0].State != StateCompleted ||
@@ -160,7 +160,7 @@ func TestCompositeCompletedPublicationFailureExplainsUnsupportedFilesystem(t *te
 		t.Fatalf("terminal metadata compensation = %#v", projected)
 	}
 	failure := projected[0].Failure
-	if failure.Code != FailureResultsNotPersisted || failure.Message != resultsNotPersistedUnsupportedMessage {
+	if failure.Code != FailureResultsNotPersisted || failure.Message != ResultsNotPersistedUnsupportedFilesystemMessage {
 		t.Fatalf("compensation failure = %#v", failure)
 	}
 	for _, leaked := range []string{"/var/lib", "nfs", "invalid argument", "EINVAL"} {
@@ -173,23 +173,42 @@ func TestCompositeCompletedPublicationFailureExplainsUnsupportedFilesystem(t *te
 	}
 }
 
+func TestSafeResultsNotPersistedMessageOnlyReturnsConstants(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		stored string
+		want   string
+	}{
+		{stored: ResultsNotPersistedMessage, want: ResultsNotPersistedMessage},
+		{stored: ResultsNotPersistedUnsupportedFilesystemMessage, want: ResultsNotPersistedUnsupportedFilesystemMessage},
+		{stored: "", want: ResultsNotPersistedMessage},
+		{stored: "rename /var/lib/state: invalid argument", want: ResultsNotPersistedMessage},
+	} {
+		got := SafeResultsNotPersistedMessage(Failure{Code: FailureResultsNotPersisted, Message: testCase.stored})
+		if got != testCase.want {
+			t.Fatalf("SafeResultsNotPersistedMessage(%q) = %q, want %q", testCase.stored, got, testCase.want)
+		}
+	}
+}
+
 func TestResultPublicationCompensationMessagesStayClientSafe(t *testing.T) {
 	t.Parallel()
 
 	generic := resultPublicationCompensation(Job{ID: "job", State: StateCompleted, RowCount: 3}, errors.New("disk full"))
 	if generic.State != StateFailed || generic.RowCount != 0 || generic.Failure == nil ||
-		generic.Failure.Code != FailureResultsNotPersisted || generic.Failure.Message != resultsNotPersistedMessage {
+		generic.Failure.Code != FailureResultsNotPersisted || generic.Failure.Message != ResultsNotPersistedMessage {
 		t.Fatalf("generic compensation = %#v", generic)
 	}
 	if strings.Contains(generic.Failure.Message, "disk full") {
 		t.Fatalf("generic compensation leaked the cause: %q", generic.Failure.Message)
 	}
 	unsupported := resultPublicationCompensation(Job{ID: "job", State: StateCompleted}, ErrResultStorageUnsupported)
-	if unsupported.Failure == nil || unsupported.Failure.Message != resultsNotPersistedUnsupportedMessage {
+	if unsupported.Failure == nil || unsupported.Failure.Message != ResultsNotPersistedUnsupportedFilesystemMessage {
 		t.Fatalf("unsupported compensation = %#v", unsupported)
 	}
 	nilCause := resultPublicationCompensation(Job{ID: "job", State: StateCompleted}, nil)
-	if nilCause.Failure == nil || nilCause.Failure.Message != resultsNotPersistedMessage {
+	if nilCause.Failure == nil || nilCause.Failure.Message != ResultsNotPersistedMessage {
 		t.Fatalf("nil-cause compensation = %#v", nilCause)
 	}
 }

@@ -41,7 +41,7 @@ func TestGetSearchResultsExplainsDiscardedCompletedResults(t *testing.T) {
 	job.RowCount = 0
 	job.Failure = &searchjobs.Failure{
 		Code:    searchjobs.FailureResultsNotPersisted,
-		Message: "Search completed, but its results could not be persisted to retained storage.",
+		Message: searchjobs.ResultsNotPersistedMessage,
 	}
 	artifacts := &launchSearchArtifacts{record: searchartifacts.Record{
 		Job: job, State: searchartifacts.StateFailed, Visibility: searchartifacts.VisibilityPrivate,

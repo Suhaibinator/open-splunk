@@ -190,14 +190,31 @@ func (journal *CompositeJournal) finalizeCompleted(
 }
 
 // Client-safe explanations for a discarded completed result. They name the
-// class of storage fault without paths, filesystem types, or syscall text.
+// class of storage fault without paths, filesystem types, or syscall text, and
+// they are the only texts a FailureResultsNotPersisted failure may carry to a
+// client (see SafeResultsNotPersistedMessage).
 const (
-	resultsNotPersistedMessage = "Search completed, but its results could not be persisted to retained storage. " +
+	// ResultsNotPersistedMessage explains a discarded result without a known
+	// filesystem cause.
+	ResultsNotPersistedMessage = "Search completed, but its results could not be persisted to retained storage. " +
 		"Run the search again once storage is healthy."
-	resultsNotPersistedUnsupportedMessage = "Search completed, but its results could not be persisted: " +
+	// ResultsNotPersistedUnsupportedFilesystemMessage explains a discarded
+	// result whose storage refused atomic no-replace rename.
+	ResultsNotPersistedUnsupportedFilesystemMessage = "Search completed, but its results could not be persisted: " +
 		"the retained-search directory is on a filesystem that does not support atomic no-replace rename. " +
 		"The server operator must move it to a local filesystem."
 )
+
+// SafeResultsNotPersistedMessage returns the client-facing explanation for a
+// FailureResultsNotPersisted failure. Only the two constant messages above are
+// ever returned: any other stored text, such as a raw error from a future
+// producer, falls back to the generic message so it cannot reach a client.
+func SafeResultsNotPersistedMessage(failure Failure) string {
+	if failure.Message == ResultsNotPersistedUnsupportedFilesystemMessage {
+		return ResultsNotPersistedUnsupportedFilesystemMessage
+	}
+	return ResultsNotPersistedMessage
+}
 
 func resultPublicationCompensation(job Job, cause error) Job {
 	compensating := cloneJob(job)
@@ -207,9 +224,9 @@ func resultPublicationCompensation(job Job, cause error) Job {
 	compensating.RowCount = 0
 	compensating.ResultBytes = 0
 	compensating.ResultsTruncated = false
-	message := resultsNotPersistedMessage
+	message := ResultsNotPersistedMessage
 	if errors.Is(cause, ErrResultStorageUnsupported) {
-		message = resultsNotPersistedUnsupportedMessage
+		message = ResultsNotPersistedUnsupportedFilesystemMessage
 	}
 	compensating.Failure = &Failure{Code: FailureResultsNotPersisted, Message: message}
 	return compensating

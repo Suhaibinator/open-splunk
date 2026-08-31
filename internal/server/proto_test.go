@@ -201,7 +201,7 @@ func TestSearchJobProjectsDiscardedResultsAsStableWarning(t *testing.T) {
 	job.ResultBytes = 0
 	job.Failure = &searchjobs.Failure{
 		Code:    searchjobs.FailureResultsNotPersisted,
-		Message: "Search completed, but its results could not be persisted to retained storage.",
+		Message: searchjobs.ResultsNotPersistedUnsupportedFilesystemMessage,
 	}
 
 	converted, err := searchJobToProto(job, testNow)
@@ -215,11 +215,24 @@ func TestSearchJobProjectsDiscardedResultsAsStableWarning(t *testing.T) {
 	if len(warnings) != 1 || warnings[0].GetCode() != "RESULTS_NOT_PERSISTED" {
 		t.Fatalf("warnings = %+v", warnings)
 	}
-	if warnings[0].GetMessage() != job.Failure.Message {
-		t.Fatalf("warning message = %q, want the sanitized failure message", warnings[0].GetMessage())
+	if warnings[0].GetMessage() != searchjobs.ResultsNotPersistedUnsupportedFilesystemMessage {
+		t.Fatalf("warning message = %q, want the constant filesystem explanation", warnings[0].GetMessage())
 	}
 	if !warnings[0].GetOccurredAt().AsTime().Equal(job.FinishedAt) {
 		t.Fatalf("warning time = %s, want %s", warnings[0].GetOccurredAt().AsTime(), job.FinishedAt)
+	}
+
+	// Stored text that is not one of the constant messages is never echoed.
+	job.Failure = &searchjobs.Failure{
+		Code:    searchjobs.FailureResultsNotPersisted,
+		Message: "rename /var/lib/open-splunk/state/open-splunk.db.search-artifacts: invalid argument",
+	}
+	converted, err = searchJobToProto(job, testNow)
+	if err != nil {
+		t.Fatalf("searchJobToProto: %v", err)
+	}
+	if got := converted.GetWarnings()[0].GetMessage(); got != searchjobs.ResultsNotPersistedMessage {
+		t.Fatalf("raw failure text reached the warning: %q", got)
 	}
 
 	// Event-storage outages share no warning: only a discarded completed result

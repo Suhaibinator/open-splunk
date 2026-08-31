@@ -101,8 +101,10 @@ func searchJobToProto(job searchjobs.Job, now time.Time) (*opensplunk.SearchJob,
 			return nil, timestampErr
 		}
 		result.Warnings = append(result.Warnings, &opensplunk.ApiWarning{
-			Code:       "RESULTS_NOT_PERSISTED",
-			Message:    job.Failure.Message,
+			Code: "RESULTS_NOT_PERSISTED",
+			// Projected from the constant message set, never from stored text,
+			// so a future producer cannot echo a raw error to a client.
+			Message:    searchjobs.SafeResultsNotPersistedMessage(*job.Failure),
 			OccurredAt: warningTime,
 		})
 	}
