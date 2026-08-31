@@ -8,24 +8,44 @@ import (
 	"os"
 )
 
-const renameProbePrefix = ".privatefs-rename-probe-"
+// FixedNames returns a generator that yields the supplied components in order
+// and fails once they are exhausted. Stores whose directories are exact-set
+// namespaces use it to keep probe files inside names their own cleanup already
+// reclaims.
+func FixedNames(names ...string) NameGenerator {
+	index := 0
+	return func() (string, error) {
+		if index >= len(names) {
+			return "", errors.New("private filesystem fixed names are exhausted")
+		}
+		name := names[index]
+		index++
+		if err := ValidateComponent(name); err != nil {
+			return "", err
+		}
+		return name, nil
+	}
+}
 
 // ProbeRenameNoReplace proves that the filesystem behind the pinned directory
 // honors atomic no-replace rename before a store depends on it. It creates one
-// owner-private temporary file, renames it to a second unique name with the
-// same primitive every publication uses, and unlinks whatever remains. An
+// owner-private temporary file under the first generated name, renames it to
+// the next generated name with the same primitive every publication uses, and
+// unlinks whatever remains. The caller supplies the generator so that a probe
+// file orphaned by a crash between create and unlink carries a name the
+// caller's own reconciliation removes instead of one it rejects. An
 // unsupported filesystem is reported as an *UnsupportedFilesystemError that
 // names the directory and its filesystem type; any other error is a probe
 // failure and leaves the directory's contents unchanged.
-func (directory *Directory) ProbeRenameNoReplace() error {
-	return directory.probeRenameNoReplace(renameNoReplaceAt)
+func (directory *Directory) ProbeRenameNoReplace(generator NameGenerator) error {
+	return directory.probeRenameNoReplace(generator, renameNoReplaceAt)
 }
 
 // RequireRenameNoReplace runs ProbeRenameNoReplace and turns an unsupported
 // filesystem into operator guidance naming the directory's role, absolute
 // path, and filesystem type. Other probe failures are returned unchanged.
-func RequireRenameNoReplace(directory *Directory, role string) error {
-	err := directory.ProbeRenameNoReplace()
+func RequireRenameNoReplace(directory *Directory, role string, generator NameGenerator) error {
+	err := directory.ProbeRenameNoReplace(generator)
 	if err == nil {
 		return nil
 	}
@@ -36,9 +56,12 @@ func RequireRenameNoReplace(directory *Directory, role string) error {
 }
 
 func (directory *Directory) probeRenameNoReplace(
+	generator NameGenerator,
 	rename renameNoReplaceOperation,
 ) (returnedErr error) {
-	generator := RandomName(renameProbePrefix)
+	if generator == nil {
+		return errors.New("probe no-replace rename: name generator is required")
+	}
 	sourceName, file, err := directory.CreateTemporaryFile(generator)
 	if err != nil {
 		return fmt.Errorf("probe no-replace rename: %w", err)

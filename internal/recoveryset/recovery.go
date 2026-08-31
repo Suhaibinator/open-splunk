@@ -212,9 +212,12 @@ func createWithHooks(
 	}()
 	// Publication renames the staged set into place without replacement; a
 	// filesystem that refuses that primitive must be reported before any copy.
+	// The probe uses the staging name space, so a probe file orphaned by a
+	// crash is recognizable junk in the parent and never collides with a stage.
 	if err := privatefs.RequireRenameNoReplace(
 		destinationParent,
 		"recovery-set destination directory",
+		privatefs.RandomName(".deployment-recovery-set-tmp-"),
 	); err != nil {
 		return Verification{}, fmt.Errorf("create deployment recovery set: %w", err)
 	}

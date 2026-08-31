@@ -242,6 +242,10 @@ func resolvedConfig(config Config) (Config, error) {
 	return config, nil
 }
 
+// requireRetainedSearchDirectory probes with the store's own staging names so
+// a probe file orphaned by a crash between create and unlink is an ordinary
+// stale temporary file that Reconcile removes at the next start, never an
+// unexpected entry that refuses startup.
 func requireRetainedSearchDirectory(directory *privatefs.Directory) error {
-	return privatefs.RequireRenameNoReplace(directory, "retained-search directory")
+	return privatefs.RequireRenameNoReplace(directory, "retained-search directory", randomTemporaryName)
 }

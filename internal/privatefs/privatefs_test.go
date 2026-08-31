@@ -706,17 +706,75 @@ func TestProbeRenameNoReplaceSucceedsAndLeavesNoProbeFile(t *testing.T) {
 	t.Parallel()
 
 	_, directory := openTestDirectory(t)
-	if err := directory.ProbeRenameNoReplace(); err != nil {
+	if err := directory.ProbeRenameNoReplace(RandomName(".probe-")); err != nil {
 		t.Fatalf("ProbeRenameNoReplace() = %v", err)
 	}
 	if err := directory.RequireEntries(nil, 0); err != nil {
 		t.Fatalf("probe left entries behind: %v", err)
 	}
-	if err := RequireRenameNoReplace(directory, "retained-search directory"); err != nil {
+	if err := RequireRenameNoReplace(directory, "retained-search directory", RandomName(".probe-")); err != nil {
 		t.Fatalf("RequireRenameNoReplace() = %v", err)
 	}
 	if err := directory.RequireEntries(nil, 0); err != nil {
 		t.Fatalf("second probe left entries behind: %v", err)
+	}
+}
+
+func TestProbeRenameNoReplaceUsesCallerNamesAndRequiresGenerator(t *testing.T) {
+	t.Parallel()
+
+	_, directory := openTestDirectory(t)
+	if err := directory.ProbeRenameNoReplace(nil); err == nil {
+		t.Fatal("ProbeRenameNoReplace accepted a nil generator")
+	}
+	if err := directory.RequireEntries(nil, 0); err != nil {
+		t.Fatalf("nil-generator probe left entries behind: %v", err)
+	}
+
+	// A caller-supplied fixed sequence is exercised in order, so a probe file
+	// orphaned by a crash carries a name the caller's own cleanup reclaims.
+	var observed []string
+	err := directory.probeRenameNoReplace(
+		FixedNames(".stage-one", ".stage-two"),
+		func(fromDirectory int, from string, toDirectory int, to string) error {
+			observed = append(observed, from, to)
+			return renameNoReplaceAt(fromDirectory, from, toDirectory, to)
+		},
+	)
+	if err != nil {
+		t.Fatalf("fixed-name probe = %v", err)
+	}
+	if len(observed) != 2 || observed[0] != ".stage-one" || observed[1] != ".stage-two" {
+		t.Fatalf("probe names = %v, want [.stage-one .stage-two]", observed)
+	}
+	if err := directory.RequireEntries(nil, 0); err != nil {
+		t.Fatalf("fixed-name probe left entries behind: %v", err)
+	}
+
+	// Exhausting the fixed names fails the probe without leaving the source.
+	err = directory.probeRenameNoReplace(FixedNames(".only-one"), func(int, string, int, string) error {
+		return unix.EEXIST
+	})
+	if err == nil || !strings.Contains(err.Error(), "fixed names are exhausted") {
+		t.Fatalf("exhausted fixed-name probe = %v", err)
+	}
+	if err := directory.RequireEntries(nil, 0); err != nil {
+		t.Fatalf("exhausted probe left entries behind: %v", err)
+	}
+}
+
+func TestFixedNamesValidatesEveryComponent(t *testing.T) {
+	t.Parallel()
+
+	generator := FixedNames("valid-name", "bad/name")
+	if name, err := generator(); err != nil || name != "valid-name" {
+		t.Fatalf("first fixed name = %q, %v", name, err)
+	}
+	if _, err := generator(); err == nil {
+		t.Fatal("invalid fixed component was accepted")
+	}
+	if _, err := generator(); err == nil {
+		t.Fatal("exhausted generator returned a name")
 	}
 }
 
@@ -727,7 +785,7 @@ func TestProbeRenameNoReplaceReportsUnsupportedFilesystem(t *testing.T) {
 		t.Run(errno.Error(), func(t *testing.T) {
 			t.Parallel()
 			path, directory := openTestDirectory(t)
-			err := directory.probeRenameNoReplace(func(int, string, int, string) error {
+			err := directory.probeRenameNoReplace(RandomName(".probe-"), func(int, string, int, string) error {
 				return errno
 			})
 			if !errors.Is(err, ErrUnsupportedFilesystem) || !errors.Is(err, errno) {
@@ -748,7 +806,7 @@ func TestProbeRenameNoReplaceDistinguishesOtherFailures(t *testing.T) {
 	t.Parallel()
 
 	_, directory := openTestDirectory(t)
-	err := directory.probeRenameNoReplace(func(int, string, int, string) error {
+	err := directory.probeRenameNoReplace(RandomName(".probe-"), func(int, string, int, string) error {
 		return unix.EIO
 	})
 	if err == nil || errors.Is(err, ErrUnsupportedFilesystem) || !errors.Is(err, unix.EIO) {
@@ -763,7 +821,7 @@ func TestProbeRenameNoReplaceCleansUpAmbiguousOutcome(t *testing.T) {
 	t.Parallel()
 
 	_, directory := openTestDirectory(t)
-	err := directory.probeRenameNoReplace(func(fromDirectory int, from string, toDirectory int, to string) error {
+	err := directory.probeRenameNoReplace(RandomName(".probe-"), func(fromDirectory int, from string, toDirectory int, to string) error {
 		if err := renameNoReplaceAt(fromDirectory, from, toDirectory, to); err != nil {
 			return err
 		}
@@ -800,7 +858,7 @@ func TestRequireRenameNoReplaceExplainsUnsupportedFilesystem(t *testing.T) {
 	if _, ok := errors.AsType[*UnsupportedFilesystemError](wrapped); !ok {
 		t.Fatalf("wrapped guidance lost the typed error: %v", wrapped)
 	}
-	if err := RequireRenameNoReplace(directory, "retained-search directory"); err != nil {
+	if err := RequireRenameNoReplace(directory, "retained-search directory", RandomName(".probe-")); err != nil {
 		t.Fatalf("RequireRenameNoReplace on a local directory = %v", err)
 	}
 }

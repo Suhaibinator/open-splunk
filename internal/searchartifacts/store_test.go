@@ -660,6 +660,62 @@ func TestNewRefusesDirectoryWithoutNoReplaceRename(t *testing.T) {
 	}
 }
 
+func TestNewReclaimsProbeFileOrphanedByCrash(t *testing.T) {
+	t.Parallel()
+
+	// The probe names are the store's own staging names.
+	probeName, err := randomTemporaryName()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !validTemporaryName(probeName) {
+		t.Fatalf("probe name %q is not a reclaimable temporary name", probeName)
+	}
+
+	directory := filepath.Join(t.TempDir(), "search-artifacts")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(directory, probeName)
+	if err := os.WriteFile(stale, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	database, err := control.Open(context.Background(), filepath.Join(t.TempDir(), "control.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	var probedNames []string
+	store, err := New(context.Background(), Config{
+		DB: database.SQLDB(), Directory: directory, CleanupInterval: -1,
+		renameProbe: func(pinned *privatefs.Directory) error {
+			return pinned.ProbeRenameNoReplace(func() (string, error) {
+				name, err := randomTemporaryName()
+				probedNames = append(probedNames, name)
+				return name, err
+			})
+		},
+	})
+	if err != nil {
+		t.Fatalf("New with an orphaned probe file = %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if _, err := os.Lstat(stale); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("orphaned probe file survived reconciliation: %v", err)
+	}
+	if len(probedNames) < 2 {
+		t.Fatalf("probe used %d names, want at least a source and a destination", len(probedNames))
+	}
+	for _, name := range probedNames {
+		if !validTemporaryName(name) {
+			t.Fatalf("probe name %q would not be reclaimed by Reconcile", name)
+		}
+		if _, err := os.Lstat(filepath.Join(directory, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("probe name %q survived a successful probe: %v", name, err)
+		}
+	}
+}
+
 func TestTerminalResultErrorClassifiesRecords(t *testing.T) {
 	t.Parallel()
 

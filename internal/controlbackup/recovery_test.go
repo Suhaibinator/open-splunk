@@ -110,6 +110,83 @@ func TestCreateVerifyRestoreControlPlaneRoundTrip(t *testing.T) {
 	}
 }
 
+func TestBackupAndRestoreReclaimOrphanedRenameProbeFiles(t *testing.T) {
+	t.Parallel()
+
+	fixture := newRecoveryFixture(t)
+	artifactSource := filepath.Join(filepath.Dir(fixture.sourceDatabase), "retained-results")
+	if err := os.Mkdir(artifactSource, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactSource, searchArtifactLockFilename), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	artifactName := searchArtifactPrefix + strings.Repeat("3", sha256.Size*2) + searchArtifactSuffix
+	if err := os.WriteFile(filepath.Join(artifactSource, artifactName), []byte("rows"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The live store's startup probe and interrupted publications both leave
+	// staging-format files; a backup of the live directory skips them.
+	staleSourceProbe := filepath.Join(artifactSource, ".search-result-"+strings.Repeat("ab", 16)+".partial")
+	if err := os.WriteFile(staleSourceProbe, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	create := fixture.createOptions()
+	create.SearchArtifactDirectory = artifactSource
+	manifest, err := Create(t.Context(), create)
+	if err != nil {
+		t.Fatalf("Create with a stale source probe file = %v", err)
+	}
+	if manifest.SearchArtifacts == nil || manifest.SearchArtifacts.FileCount != 1 {
+		t.Fatalf("manifest search artifacts = %#v, want exactly the published member", manifest.SearchArtifacts)
+	}
+	assertExactRecoveryDirectory(t, filepath.Join(fixture.bundle, searchArtifactsFilename), []string{artifactName})
+	if _, err := os.Lstat(staleSourceProbe); err != nil {
+		t.Fatalf("backup removed the live store's staging file: %v", err)
+	}
+
+	restore := fixture.restoreOptions()
+	externalArtifactParent := privateTestDirectory(t)
+	restore.SearchArtifactDirectory = filepath.Join(externalArtifactParent, "restored-results")
+	// A crash between the restore probe's create and unlink leaves one of the
+	// plan's own stage names in the control-plane destination and one of the
+	// derived probe names in the external artifact parent.
+	destinationDirectory := filepath.Dir(restore.DatabasePath)
+	stageNames := restoreStageNames(manifest.RecoverySetID)
+	staleDestinationProbe := filepath.Join(destinationDirectory, stageNames[1])
+	if err := os.WriteFile(staleDestinationProbe, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	artifactProbeNames := restoreProbeNames(".restore-" + manifest.RecoverySetID + "-search-artifacts")
+	staleArtifactProbe := filepath.Join(externalArtifactParent, artifactProbeNames[0])
+	if err := os.WriteFile(staleArtifactProbe, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := PreflightRestore(t.Context(), restore); err != nil {
+		t.Fatalf("PreflightRestore with stale probe files = %v", err)
+	}
+	if err := Restore(t.Context(), restore); err != nil {
+		t.Fatalf("Restore with stale probe files = %v", err)
+	}
+	for _, stale := range []string{staleDestinationProbe, staleArtifactProbe} {
+		if _, err := os.Lstat(stale); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("stale probe file %q survived restore: %v", filepath.Base(stale), err)
+		}
+	}
+	for _, name := range append(append([]string(nil), stageNames...), artifactProbeNames...) {
+		for _, parent := range []string{destinationDirectory, externalArtifactParent} {
+			if _, err := os.Lstat(filepath.Join(parent, name)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("probe or stage name %q remains in %q after restore: %v", name, parent, err)
+			}
+		}
+	}
+	assertExactRecoveryDirectory(t, restore.SearchArtifactDirectory, []string{artifactName})
+	if err := Restore(t.Context(), restore); err != nil {
+		t.Fatalf("second Restore after a complete restore = %v", err)
+	}
+}
+
 func TestCreateVerifyRestoreIncludesSearchArtifacts(t *testing.T) {
 	t.Parallel()
 

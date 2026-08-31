@@ -21,10 +21,12 @@ func filesystemFromStatfs(stat *unix.Statfs_t) Filesystem {
 }
 
 // statfsMagic normalizes the kernel's word-sized f_type to the 32-bit magic
-// the constants are defined in. The field is signed and its width follows the
-// architecture, so magics above 0x7fffffff arrive negative on 32-bit targets.
-func statfsMagic[T ~int32 | ~int64](raw T) uint32 {
-	return safecast.MustConv[uint32](int64(raw) & math.MaxUint32)
+// the constants are defined in. The field's signedness and width follow the
+// architecture (int64, int32, or uint32 on s390x), so magics above 0x7fffffff
+// arrive negative on signed 32-bit targets; widening through uint64 keeps the
+// low 32 bits intact in every case.
+func statfsMagic[T ~int32 | ~int64 | ~uint32 | ~uint64](raw T) uint32 {
+	return safecast.MustConv[uint32](uint64(raw) & math.MaxUint32)
 }
 
 func filesystemFromMagic(magic uint32) Filesystem {
