@@ -30,6 +30,7 @@ import { categoricalActivation } from "../categorical-interaction";
 import { COMPACT_NUMBER_FORMAT, NUMBER_FORMAT } from "../constants";
 import { formatExactNumericText } from "../formatters";
 import type { ChartStyle, LegendPosition } from "../model";
+import { describeTimechartCoverage, type TimechartCoverage } from "../timechart-series";
 
 interface VisualizationPanelProps {
   chartStyle: ChartStyle;
@@ -40,6 +41,8 @@ interface VisualizationPanelProps {
   showDataLabels: boolean;
   statisticsDimension: string;
   statisticsRows: WorkspaceStatistic[];
+  /** Which buckets of a server time-series result are plotted; null outside backend timecharts. */
+  timechartCoverage: TimechartCoverage | null;
   timelinePoints: TimelinePoint[];
   onApplyPivot: (fieldName: string, fieldValue: DemoScalar, mode: PivotMode) => void;
   onChartStyleChange: (style: ChartStyle) => void;
@@ -579,6 +582,7 @@ export function VisualizationPanel({
   showDataLabels,
   statisticsDimension,
   statisticsRows,
+  timechartCoverage,
   timelinePoints,
   onApplyPivot,
   onChartStyleChange,
@@ -642,6 +646,15 @@ export function VisualizationPanel({
           <div className="result-title-line">
             <h2>{resolvedChartTitle.trim() || "Untitled visualization"}</h2>
             {isPreview ? <span className="preview-context-badge"><i aria-hidden="true" /> Live preview</span> : null}
+            {!isPreview && isTimechartResult && timechartCoverage !== null && timechartCoverage.status !== "complete" ? (
+              <span
+                className={`badge ${timechartCoverage.status === "loading" ? "badge--info" : "badge--warning"}`}
+                data-testid="timechart-coverage-badge"
+                data-coverage={timechartCoverage.status}
+              >
+                {timechartCoverage.status === "loading" ? "Loading buckets" : "Incomplete"}
+              </span>
+            ) : null}
           </div>
           <p>{isPreview
             ? `${isTimechartResult
@@ -650,7 +663,9 @@ export function VisualizationPanel({
                 ? "The chart updates as result rows arrive. Categories, values, and ordering remain provisional."
                 : "Waiting for a preview result shape that can be charted."}${previewTruncated ? " The preview limit was reached; the final chart may include additional data." : ""}`
             : isTimechartResult
-              ? `Timechart across the submitted search range.${hasApproximateCoordinates ? " The plotted scale is approximate for values beyond the browser’s exact integer range; hover or focus a point for its exact server value." : ""}`
+              ? `${timechartCoverage === null
+                ? "Timechart across the submitted search range."
+                : describeTimechartCoverage(timechartCoverage, timelinePoints.at(-1)?.label ?? null)}${hasApproximateCoordinates ? " The plotted scale is approximate for values beyond the browser’s exact integer range; hover or focus a point for its exact server value." : ""}`
               : hasCategoricalChart
                 ? backendCategoricalResult
                   ? `${categoricalSeries.length === 1 ? categoricalSeries[0].label : `${categoricalSeries.length} complete series`} grouped by ${statisticsDimension}.${statisticsRows.length > displayedStatisticsRows.length ? ` Showing the top ${displayedStatisticsRows.length} of ${statisticsRows.length} categories.` : ""}${hasApproximateCoordinates ? " The plotted scale is approximate for values beyond the browser’s exact integer range; exact server values appear on hover or focus." : ""}`

@@ -173,6 +173,12 @@ import {
   serializeRawPageForClipboard,
 } from "./search-workspace/event-page-controls";
 import {
+  completeTimechartCoverage,
+  describeTimechartStatisticsPage,
+  loadTimechartBuckets,
+  type TimechartCoverage,
+} from "./search-workspace/timechart-series";
+import {
   COMPLETIONS,
   DEFAULT_QUERY,
   EVENT_EXPORT_FIELDS,
@@ -298,6 +304,26 @@ interface BackendResultPage {
   totalSize?: number;
   totalSizeExact: boolean;
   snapshotComplete: boolean;
+}
+
+/** One validated result page as the server returned it, before cursor bookkeeping. */
+interface BackendResultPageResponse {
+  schema: ResultSchema;
+  rows: ResultRow[];
+  rawNextPageToken: string | null;
+  totalSize?: number;
+  totalSizeExact: boolean;
+  snapshotComplete: boolean;
+}
+
+/**
+ * The visualization's time-series input. Statistics stay one server page; the
+ * chart walks every bucket page of the same retained snapshot (up to a cap).
+ */
+interface BackendChartSeries {
+  searchJobId: string;
+  points: TimelinePoint[];
+  coverage: TimechartCoverage;
 }
 
 type BackendPreviewStatus =
@@ -707,6 +733,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const [backendStatistics, setBackendStatistics] = useState<WorkspaceStatistic[]>([]);
   const [backendStatisticsTable, setBackendStatisticsTable] = useState<WorkspaceStatisticsTable | null>(null);
   const [backendTimeline, setBackendTimeline] = useState<TimelinePoint[]>([]);
+  const [backendChartSeries, setBackendChartSeries] = useState<BackendChartSeries | null>(null);
   const [backendEventCount, setBackendEventCount] = useState(0);
   const [backendPrimaryCountLabel, setBackendPrimaryCountLabel] = useState<"events" | "rows">("events");
   const [backendPrimaryCountPrefix, setBackendPrimaryCountPrefix] = useState<"" | "≈" | "≥">("");
@@ -825,6 +852,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const searchLaunchRef = useRef(false);
   const backendAbortRef = useRef<AbortController | null>(null);
   const backendPageAbortRef = useRef<AbortController | null>(null);
+  const backendChartSeriesAbortRef = useRef<AbortController | null>(null);
   const backendMetadataAbortRef = useRef<AbortController | null>(null);
   const backendFieldCatalogAbortRef = useRef<AbortController | null>(null);
   const backendFieldCatalogNextPageTokenRef = useRef<string | null>(null);
@@ -1130,6 +1158,17 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     backendResultSchema,
     timelinePoints,
   ]);
+  // The chart plots the walked bucket series when one exists; the Statistics
+  // table and timeline selection stay bound to the single server page.
+  const chartSeriesActive = backendEnabled
+    && !backendDisplayingPreview
+    && backendResultKind === ResultSetKind.RESULT_SET_KIND_TIME_SERIES;
+  const chartTimelinePoints = chartSeriesActive && backendChartSeries !== null
+    ? backendChartSeries.points
+    : timelinePoints;
+  const timechartCoverage: TimechartCoverage | null = chartSeriesActive
+    ? backendChartSeries?.coverage ?? completeTimechartCoverage(timelinePoints.length)
+    : null;
   const statisticsRows: WorkspaceStatistic[] = backendEnabled
     ? displayedBackendResults?.statistics ?? backendStatistics
     : DEMO_STATISTICS;
@@ -1523,15 +1562,20 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       backendResultTotalRows !== null && !backendResultTotalExact
         ? `The server reports at least ${NUMBER_FORMAT.format(backendResultTotalRows)} retained rows.`
         : undefined,
-      backendResultKind !== ResultSetKind.RESULT_SET_KIND_EVENTS
+      backendResultKind === ResultSetKind.RESULT_SET_KIND_TIME_SERIES
         && (backendHasNextPage || eventPage > 1)
-        ? `Statistics and visualization show server page ${NUMBER_FORMAT.format(eventPage)}; add an SPL sort for global ordering.`
-        : undefined,
+        ? describeTimechartStatisticsPage(eventPage, backendChartSeries?.coverage ?? null)
+        : backendResultKind !== ResultSetKind.RESULT_SET_KIND_EVENTS
+          && backendResultKind !== ResultSetKind.RESULT_SET_KIND_TIME_SERIES
+          && (backendHasNextPage || eventPage > 1)
+          ? `Statistics and visualization show server page ${NUMBER_FORMAT.format(eventPage)}; add an SPL sort for global ordering.`
+          : undefined,
       backendExpiresAt === null
         ? undefined
         : `Results are retained until ${backendExpiresAt.toLocaleString()}.`,
     ]);
   }, [
+    backendChartSeries,
     backendEnabled,
     backendExpiresAt,
     backendNotices,
@@ -1992,6 +2036,9 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     setBackendStatistics([]);
     setBackendStatisticsTable(null);
     setBackendTimeline([]);
+    backendChartSeriesAbortRef.current?.abort();
+    backendChartSeriesAbortRef.current = null;
+    setBackendChartSeries(null);
   }
 
   function resetBackendResultState() {
@@ -2168,6 +2215,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       clearTimers();
       backendAbortRef.current?.abort();
       backendPageAbortRef.current?.abort();
+      backendChartSeriesAbortRef.current?.abort();
       backendMetadataAbortRef.current?.abort();
       backendFieldCatalogAbortRef.current?.abort();
       backendFieldSummaryAbortRef.current?.abort();
@@ -2787,36 +2835,28 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     setBackendSnapshotComplete(page.snapshotComplete);
   }
 
-  async function fetchBackendResultPage(
+  async function requestBackendResultPage(
     job: SearchJob,
-    pageNumber: number,
-    requestedPageSize: number,
-    bootstrap: BackendBootstrapState,
-    signal: AbortSignal,
-    generation: number,
-  ): Promise<BackendResultPage> {
-    if (generationRef.current !== generation || backendJobIdRef.current !== job.searchJobId) {
-      throw new DOMException("Search was superseded.", "AbortError");
-    }
-    const pageSize = normalizedBackendPageSize(requestedPageSize, bootstrap);
-    const cacheKey = `${pageSize}:${pageNumber}`;
-    const cached = backendResultPagesRef.current.get(cacheKey);
-    if (cached !== undefined) {
-      backendResultPagesRef.current.delete(cacheKey);
-      backendResultPagesRef.current.set(cacheKey, cached);
-      applyBackendResultPage(cached);
-      return cached;
-    }
-    if (!backendPageTokensRef.current.has(cacheKey)) {
-      throw new Error("That result page cannot be opened until the preceding cursor page has loaded.");
-    }
-    const pageToken = backendPageTokensRef.current.get(cacheKey);
+    {
+      pageSize,
+      pageToken,
+      includeTotalSize,
+      signal,
+      generation,
+    }: {
+      pageSize: number;
+      pageToken: string | undefined;
+      includeTotalSize: boolean;
+      signal: AbortSignal;
+      generation: number;
+    },
+  ): Promise<BackendResultPageResponse> {
     const response = await apiClient.search.results({
       searchJobId: job.searchJobId,
       page: {
         pageSize,
         pageToken,
-        includeTotalSize: pageNumber === 1,
+        includeTotalSize,
       },
       columns: [],
       allowPartialResults: false,
@@ -2853,9 +2893,126 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     }
     backendAuthoritativeResultSchemaRef.current = schema;
     const totalSize = resultPage.page?.totalSize;
+    return {
+      schema,
+      rows: resultPage.rows,
+      rawNextPageToken: resultPage.page?.nextPageToken?.trim() || null,
+      totalSize: totalSize === undefined ? undefined : Math.min(Number.MAX_SAFE_INTEGER, Number(totalSize)),
+      totalSizeExact: (resultPage.page?.totalSizeExact ?? false)
+        && (totalSize === undefined || totalSize <= BigInt(Number.MAX_SAFE_INTEGER)),
+      snapshotComplete: resultPage.snapshotComplete,
+    };
+  }
+
+  /**
+   * Walks the remaining time-series pages for the visualization. The Statistics
+   * table keeps showing one server page; the chart must not, because a
+   * chronological page of zero-filled buckets reads as "no data" when every
+   * event sits on a later page.
+   */
+  function startBackendChartSeries(
+    job: SearchJob,
+    firstPage: BackendResultPage,
+    pageSize: number,
+    generation: number,
+  ) {
+    backendChartSeriesAbortRef.current?.abort();
+    backendChartSeriesAbortRef.current = null;
+    if (firstPage.schema.resultKind !== ResultSetKind.RESULT_SET_KIND_TIME_SERIES) return;
+    if (firstPage.nextPageToken === undefined) {
+      setBackendChartSeries(null);
+      return;
+    }
+    const controller = new AbortController();
+    backendChartSeriesAbortRef.current = controller;
+    const bucketWidthMs = timechartSpanMilliseconds(job.definition?.spl ?? submittedQuery) ?? undefined;
+    const isCurrent = () => !controller.signal.aborted
+      && generationRef.current === generation
+      && backendJobIdRef.current === job.searchJobId;
+    const publish = (rows: ResultRow[], coverage: TimechartCoverage) => {
+      if (!isCurrent()) return;
+      setBackendChartSeries({
+        searchJobId: job.searchJobId,
+        points: adaptSearchResults(firstPage.schema, rows, bucketWidthMs).timeline,
+        coverage,
+      });
+    };
+    void loadTimechartBuckets({
+      firstPage: {
+        rows: firstPage.rows,
+        nextPageToken: firstPage.nextPageToken,
+        totalSize: firstPage.totalSize ?? null,
+        totalSizeExact: firstPage.totalSizeExact,
+      },
+      fetchPage: async (pageToken) => {
+        const page = await requestBackendResultPage(job, {
+          pageSize,
+          pageToken,
+          includeTotalSize: false,
+          signal: controller.signal,
+          generation,
+        });
+        return { rows: page.rows, nextPageToken: page.rawNextPageToken };
+      },
+      onProgress: (load) => publish(load.rows, load.coverage),
+      signal: controller.signal,
+    }).then((load) => {
+      publish(load.rows, load.coverage);
+      if (load.error !== undefined && isCurrent()) {
+        setBackendNotices((current) => appendUniqueMessage(
+          current,
+          `The visualization stops at ${NUMBER_FORMAT.format(load.rows.length)} timechart buckets: ${
+            load.error instanceof Error ? load.error.message : "the remaining buckets could not be loaded."
+          }`,
+        ));
+      }
+    }).catch((error: unknown) => {
+      if (!isCurrent() || (error instanceof DOMException && error.name === "AbortError")) return;
+      setBackendNotices((current) => appendUniqueMessage(
+        current,
+        error instanceof Error
+          ? `The visualization could not load the remaining timechart buckets: ${error.message}`
+          : "The visualization could not load the remaining timechart buckets.",
+      ));
+    }).finally(() => {
+      if (backendChartSeriesAbortRef.current === controller) backendChartSeriesAbortRef.current = null;
+    });
+  }
+
+  async function fetchBackendResultPage(
+    job: SearchJob,
+    pageNumber: number,
+    requestedPageSize: number,
+    bootstrap: BackendBootstrapState,
+    signal: AbortSignal,
+    generation: number,
+  ): Promise<BackendResultPage> {
+    if (generationRef.current !== generation || backendJobIdRef.current !== job.searchJobId) {
+      throw new DOMException("Search was superseded.", "AbortError");
+    }
+    const pageSize = normalizedBackendPageSize(requestedPageSize, bootstrap);
+    const cacheKey = `${pageSize}:${pageNumber}`;
+    const cached = backendResultPagesRef.current.get(cacheKey);
+    if (cached !== undefined) {
+      backendResultPagesRef.current.delete(cacheKey);
+      backendResultPagesRef.current.set(cacheKey, cached);
+      applyBackendResultPage(cached);
+      return cached;
+    }
+    if (!backendPageTokensRef.current.has(cacheKey)) {
+      throw new Error("That result page cannot be opened until the preceding cursor page has loaded.");
+    }
+    const pageToken = backendPageTokensRef.current.get(cacheKey);
+    const response = await requestBackendResultPage(job, {
+      pageSize,
+      pageToken,
+      includeTotalSize: pageNumber === 1,
+      signal,
+      generation,
+    });
+    const { schema, rawNextPageToken, totalSize } = response;
     let nextPageToken: string | undefined;
     const nextPageKey = `${pageSize}:${pageNumber + 1}`;
-    const rawNextPageToken = resultPage.page?.nextPageToken?.trim() || null;
     const knownNextPageToken = backendPageTokensRef.current.get(nextPageKey);
     if (backendPageTokensRef.current.has(nextPageKey)) {
       if (rawNextPageToken === knownNextPageToken) {
@@ -2898,12 +3055,11 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     }
     const page: BackendResultPage = {
       schema,
-      rows: resultPage.rows,
+      rows: response.rows,
       nextPageToken,
-      totalSize: totalSize === undefined ? undefined : Math.min(Number.MAX_SAFE_INTEGER, Number(totalSize)),
-      totalSizeExact: (resultPage.page?.totalSizeExact ?? false)
-        && (totalSize === undefined || totalSize <= BigInt(Number.MAX_SAFE_INTEGER)),
-      snapshotComplete: resultPage.snapshotComplete,
+      totalSize,
+      totalSizeExact: response.totalSizeExact,
+      snapshotComplete: response.snapshotComplete,
     };
     backendResultPagesRef.current.set(cacheKey, page);
     while (backendResultPagesRef.current.size > MAX_CACHED_RESULT_PAGES) {
@@ -2937,7 +3093,8 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     setBackendResultPageSize(pageSize);
     backendPageTokensRef.current.set(`${pageSize}:1`, undefined);
     backendPageStartsRef.current.set(`${pageSize}:1`, 1);
-    await fetchBackendResultPage(job, 1, pageSize, bootstrap, signal, generation);
+    const firstPage = await fetchBackendResultPage(job, 1, pageSize, bootstrap, signal, generation);
+    startBackendChartSeries(job, firstPage, pageSize, generation);
   }
 
   async function fetchAuthoritativeBackendMetadata(
@@ -4070,6 +4227,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     const shouldCancelSupersededJob = supersededJobId !== null && isRunning;
     backendAbortRef.current?.abort();
     backendPageAbortRef.current?.abort();
+    backendChartSeriesAbortRef.current?.abort();
     backendMetadataAbortRef.current?.abort();
     backendFieldSummaryAbortRef.current?.abort();
     backendSocketRef.current?.dispose();
@@ -4433,6 +4591,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       const generation = ++generationRef.current;
       backendAbortRef.current?.abort();
       backendPageAbortRef.current?.abort();
+      backendChartSeriesAbortRef.current?.abort();
       backendSocketRef.current?.dispose();
       backendSocketRef.current = null;
       void apiClient.search.cancel({ searchJobId, reason: undefined })
@@ -5230,6 +5389,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     clearTimers();
     backendAbortRef.current?.abort();
     backendPageAbortRef.current?.abort();
+    backendChartSeriesAbortRef.current?.abort();
     backendMetadataAbortRef.current?.abort();
     backendFieldSummaryAbortRef.current?.abort();
     backendSocketRef.current?.dispose();
@@ -6170,6 +6330,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       generationRef.current += 1;
       backendAbortRef.current?.abort();
       backendPageAbortRef.current?.abort();
+      backendChartSeriesAbortRef.current?.abort();
       backendMetadataAbortRef.current?.abort();
       backendFieldSummaryAbortRef.current?.abort();
       backendSocketRef.current?.dispose();
@@ -7173,7 +7334,8 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           previewTruncated={backendPreviewDisplay?.snapshot.truncated === true}
           statisticsDimension={statisticsDimension}
           statisticsRows={statisticsRows}
-          timelinePoints={timelinePoints}
+          timechartCoverage={timechartCoverage}
+          timelinePoints={chartTimelinePoints}
           onApplyPivot={(field, value, mode) => applyPivot(field, value, mode)}
           onChartStyleChange={setChartStyle}
           onChartTitleChange={setChartTitle}
