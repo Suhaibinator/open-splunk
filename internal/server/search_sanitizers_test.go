@@ -1,13 +1,10 @@
 package server
 
 import (
-	"errors"
-	"net/http"
 	"slices"
 	"strings"
 	"testing"
 
-	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 )
 
@@ -15,25 +12,6 @@ import (
 // sanitizers read.
 func sanitizerTestHandler() *apiHandler {
 	return &apiHandler{maximumPageSize: 100}
-}
-
-// assertSanitizedBadRequest asserts the exact 400 message a route sanitizer
-// promises, so the HTTP suites keep specifying the wire contract.
-func assertSanitizedBadRequest(t *testing.T, err error, message string) {
-	t.Helper()
-	var httpErr *router.HTTPError
-	if !errors.As(err, &httpErr) {
-		t.Fatalf("error = %T %v, want *router.HTTPError", err, err)
-	}
-	if httpErr.StatusCode != http.StatusBadRequest || httpErr.Message != message {
-		t.Fatalf(
-			"error = %d %q, want %d %q",
-			httpErr.StatusCode,
-			httpErr.Message,
-			http.StatusBadRequest,
-			message,
-		)
-	}
 }
 
 func TestSanitizeGetSystemBootstrapRequestTrimsPreferredAppID(t *testing.T) {
@@ -90,7 +68,7 @@ func TestSanitizeValidateSearchRequestRejectsPresentationMetadata(t *testing.T) 
 				t.Context(),
 				&opensplunk.ValidateSearchRequest{Definition: definition},
 			)
-			assertSanitizedBadRequest(t, err, "search presentation metadata is not supported")
+			assertSanitizerRejection(t, err, "search presentation metadata is not supported")
 		})
 	}
 }
@@ -148,7 +126,7 @@ func TestSanitizeCreateSearchJobRequestRejectsUnsupportedOptions(t *testing.T) {
 			t.Parallel()
 
 			_, err := sanitizeCreateSearchJobRequest(t.Context(), test.request)
-			assertSanitizedBadRequest(t, err, test.wantMessage)
+			assertSanitizerRejection(t, err, test.wantMessage)
 		})
 	}
 }
@@ -231,7 +209,7 @@ func TestSanitizeGetSearchJobRequest(t *testing.T) {
 
 			got, err := sanitizeGetSearchJobRequest(t.Context(), test.request)
 			if test.wantMessage != "" {
-				assertSanitizedBadRequest(t, err, test.wantMessage)
+				assertSanitizerRejection(t, err, test.wantMessage)
 				return
 			}
 			if err != nil {
@@ -331,7 +309,7 @@ func TestSanitizeListSearchJobsRequestRejectsInvalidFilters(t *testing.T) {
 			t.Parallel()
 
 			_, err := sanitizerTestHandler().sanitizeListSearchJobsRequest(t.Context(), test.request)
-			assertSanitizedBadRequest(t, err, test.wantMessage)
+			assertSanitizerRejection(t, err, test.wantMessage)
 		})
 	}
 }
@@ -372,7 +350,7 @@ func TestSanitizeGetSearchResultsRequest(t *testing.T) {
 
 			got, err := sanitizerTestHandler().sanitizeGetSearchResultsRequest(t.Context(), test.request)
 			if test.wantMessage != "" {
-				assertSanitizedBadRequest(t, err, test.wantMessage)
+				assertSanitizerRejection(t, err, test.wantMessage)
 				return
 			}
 			if err != nil {
@@ -421,7 +399,7 @@ func TestSanitizeCancelSearchJobRequest(t *testing.T) {
 
 			got, err := sanitizeCancelSearchJobRequest(t.Context(), test.request)
 			if test.wantMessage != "" {
-				assertSanitizedBadRequest(t, err, test.wantMessage)
+				assertSanitizerRejection(t, err, test.wantMessage)
 				return
 			}
 			if err != nil {
@@ -539,7 +517,7 @@ func TestSanitizeListSearchJobsRequestRejectsPageBeforeFilters(t *testing.T) {
 			t.Parallel()
 
 			_, err := sanitizerTestHandler().sanitizeListSearchJobsRequest(t.Context(), test.request)
-			assertSanitizedBadRequest(t, err, test.wantMessage)
+			assertSanitizerRejection(t, err, test.wantMessage)
 		})
 	}
 }
@@ -581,7 +559,7 @@ func TestSanitizeGetSearchResultsRequestBoundsPaging(t *testing.T) {
 				request,
 			)
 			if test.wantMessage != "" {
-				assertSanitizedBadRequest(t, err, test.wantMessage)
+				assertSanitizerRejection(t, err, test.wantMessage)
 				return
 			}
 			if err != nil {

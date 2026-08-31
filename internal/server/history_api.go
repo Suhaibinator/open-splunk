@@ -220,7 +220,10 @@ func cloneSearchHistoryEntry(input *opensplunk.SearchHistoryEntry) (*opensplunk.
 	if encodedSize == 0 || encodedSize > maximumHistoryEntryBytes {
 		return nil, errors.New("search history service returned an invalid entry")
 	}
-	if err := protostrict.RejectUnknownFields(input.ProtoReflect(), "request"); err != nil {
+	if err := protostrict.RejectUnknownFields(
+		input.ProtoReflect(),
+		"search history service returned an entry that",
+	); err != nil {
 		return nil, err
 	}
 	if id, err := historySearchJobID(input.GetSearchJobId()); err != nil || id != input.GetSearchJobId() {

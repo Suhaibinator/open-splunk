@@ -86,9 +86,10 @@ func boundedListPageResponse(
 }
 
 // boundedListPageRequest applies the shared bounded paging predicate: the
-// per-service maximum, the default page size, nested unknown-field rejection,
-// and bounded page-token validation. The noun prefixes every error message so
-// each endpoint keeps its own wording.
+// per-service maximum, the default page size, and bounded page-token
+// validation. Unknown fields are tolerated, as everywhere else on a served
+// route. The noun prefixes every error message so each endpoint keeps its own
+// wording.
 func (handler *apiHandler) boundedListPageRequest(
 	page *opensplunk.PageRequest,
 	noun string,
@@ -99,9 +100,6 @@ func (handler *apiHandler) boundedListPageRequest(
 	pageSize := min(defaultPageSize, maximumPageSize)
 	if page == nil {
 		return pageSize, "", false, nil
-	}
-	if len(page.ProtoReflect().GetUnknown()) != 0 {
-		return 0, "", false, badRequestError(noun + " page request is invalid")
 	}
 	includeTotal := page.GetIncludeTotalSize()
 	if page.PageSize != nil {
@@ -120,6 +118,58 @@ func (handler *apiHandler) boundedListPageRequest(
 		}
 	}
 	return pageSize, pageToken, includeTotal, nil
+}
+
+// sanitizedListPage resolves a bounded list page envelope through
+// boundedListPageRequest and writes the effective size, token and total flag
+// back into it, so every paged route hands its handler a page it can read
+// straight off the request instead of re-deriving the default, the maximum and
+// the token bound. The returned pointer is the one the request now carries and
+// the result is stable under a second sanitize.
+func (handler *apiHandler) sanitizedListPage(
+	page *opensplunk.PageRequest,
+	noun string,
+	defaultPageSize uint32,
+	serviceMaximum uint32,
+) (*opensplunk.PageRequest, error) {
+	pageSize, pageToken, includeTotal, err := handler.boundedListPageRequest(
+		page,
+		noun,
+		defaultPageSize,
+		serviceMaximum,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return resolvedListPage(page, pageSize, pageToken, includeTotal), nil
+}
+
+// resolvedListPage writes an already-resolved envelope back into page in place,
+// allocating a PageRequest only when the request omitted one. The routes whose
+// page bounds are not boundedListPageRequest's - the search job, export, saved
+// search and search history lists - resolve with their own helper and land the
+// result here. A zero pageSize leaves page_size absent rather than writing a
+// zero the services would reject: that is the getSearchResults contract, where
+// an omitted size still means "the service default".
+func resolvedListPage(
+	page *opensplunk.PageRequest,
+	pageSize uint32,
+	pageToken string,
+	includeTotal bool,
+) *opensplunk.PageRequest {
+	if page == nil {
+		page = &opensplunk.PageRequest{}
+	}
+	page.PageSize = nil
+	if pageSize != 0 {
+		page.PageSize = new(pageSize)
+	}
+	page.PageToken = nil
+	if pageToken != "" {
+		page.PageToken = new(pageToken)
+	}
+	page.IncludeTotalSize = includeTotal
+	return page
 }
 
 func validBoundedListPageToken(

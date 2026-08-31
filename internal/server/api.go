@@ -206,10 +206,7 @@ func (handler *apiHandler) createSearchJob(request *http.Request, input *openspl
 			input,
 		)
 	default:
-		resolved, err = handler.resolveSearchDefinition(
-			input.GetDefinition(),
-			func(*opensplunk.SearchDefinition) error { return nil },
-		)
+		resolved, err = handler.resolveSearchDefinition(input.GetDefinition())
 		if err == nil {
 			resolved.AppID, source, err = handler.resolveSearchJobSource(
 				request.Context(),
@@ -317,10 +314,7 @@ func (handler *apiHandler) resolveSavedSearchLaunch(
 		trusted.GetDefinition().GetSearch() == nil {
 		return resolvedSearchDefinition{}, searchjobs.JobSource{}, internalError()
 	}
-	resolved, err := handler.resolveSearchDefinition(
-		trusted.GetDefinition().GetSearch(),
-		func(*opensplunk.SearchDefinition) error { return nil },
-	)
+	resolved, err := handler.resolveSearchDefinition(trusted.GetDefinition().GetSearch())
 	if err != nil || resolved.AppID != savedSearchAppID(trusted) {
 		return resolvedSearchDefinition{}, searchjobs.JobSource{}, internalError()
 	}
@@ -721,7 +715,6 @@ type resolvedSearchDefinition struct {
 
 func (handler *apiHandler) resolveSearchDefinition(
 	definition *opensplunk.SearchDefinition,
-	rejectUnsupported func(*opensplunk.SearchDefinition) error,
 ) (resolvedSearchDefinition, error) {
 	if definition == nil {
 		return resolvedSearchDefinition{}, badRequestError("search definition is required")
@@ -732,9 +725,6 @@ func (handler *apiHandler) resolveSearchDefinition(
 	}
 	if strings.IndexByte(source, 0) >= 0 {
 		return resolvedSearchDefinition{}, badRequestError("SPL cannot contain NUL bytes")
-	}
-	if err := rejectUnsupported(definition); err != nil {
-		return resolvedSearchDefinition{}, badRequestError(err.Error())
 	}
 	resolvedRange, err := resolveSearchTimeRange(definition.GetTimeRange(), handler.now())
 	if err != nil {

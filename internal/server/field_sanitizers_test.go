@@ -1,7 +1,6 @@
 package server
 
 import (
-	"net/http"
 	"testing"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
@@ -96,7 +95,7 @@ func TestSanitizeListSearchFieldsRequestTrimsAndClampsTheRequest(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			sanitized, err := newFieldSanitizerHandler().sanitizeListSearchFieldsRequest(t.Context(), test.request)
 			if test.wantErr != "" {
-				assertSanitizerHTTPError(t, err, http.StatusBadRequest, test.wantErr)
+				assertSanitizerRejection(t, err, test.wantErr)
 				return
 			}
 			if err != nil {
@@ -119,21 +118,24 @@ func TestSanitizeListSearchFieldsRequestTrimsAndClampsTheRequest(t *testing.T) {
 	}
 }
 
-func TestSanitizeListSearchFieldsRequestDiscardsUnknownFields(t *testing.T) {
+func TestSanitizeListSearchFieldsRequestToleratesUnknownFields(t *testing.T) {
+	topLevel := futureProtobufField("future-field-list")
+	nested := futureProtobufField("future-field-page")
 	request := &opensplunk.ListSearchFieldsRequest{
 		SearchJobId: "job",
 		Page:        &opensplunk.PageRequest{},
 	}
-	request.ProtoReflect().SetUnknown(futureProtobufField("future-field-list"))
-	request.Page.ProtoReflect().SetUnknown(futureProtobufField("future-field-page"))
+	request.ProtoReflect().SetUnknown(topLevel)
+	request.Page.ProtoReflect().SetUnknown(nested)
 	sanitized, err := newFieldSanitizerHandler().sanitizeListSearchFieldsRequest(t.Context(), request)
 	if err != nil {
 		t.Fatalf("sanitize = %v", err)
 	}
-	if len(sanitized.ProtoReflect().GetUnknown()) != 0 ||
-		len(sanitized.GetPage().ProtoReflect().GetUnknown()) != 0 {
-		t.Fatalf("unknown fields survived sanitization")
+	if sanitized.GetSearchJobId() != "job" {
+		t.Fatalf("search job ID = %q, want %q", sanitized.GetSearchJobId(), "job")
 	}
+	assertUnknownFieldTolerated(t, sanitized, topLevel)
+	assertUnknownFieldTolerated(t, sanitized.GetPage(), nested)
 }
 
 func TestSanitizeGetSearchFieldSummaryRequestBoundsItsInputs(t *testing.T) {
@@ -192,7 +194,7 @@ func TestSanitizeGetSearchFieldSummaryRequestBoundsItsInputs(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			sanitized, err := newFieldSanitizerHandler().sanitizeGetSearchFieldSummaryRequest(t.Context(), test.request)
 			if test.wantErr != "" {
-				assertSanitizerHTTPError(t, err, http.StatusBadRequest, test.wantErr)
+				assertSanitizerRejection(t, err, test.wantErr)
 				return
 			}
 			if err != nil {

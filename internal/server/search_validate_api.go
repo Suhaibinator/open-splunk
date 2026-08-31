@@ -15,10 +15,7 @@ func (handler *apiHandler) validateSearch(
 	request *http.Request,
 	input *opensplunk.ValidateSearchRequest,
 ) (*opensplunk.ValidateSearchResponse, error) {
-	resolved, err := handler.resolveSearchDefinition(
-		input.GetDefinition(),
-		func(*opensplunk.SearchDefinition) error { return nil },
-	)
+	resolved, err := handler.resolveSearchDefinition(input.GetDefinition())
 	if err != nil {
 		return nil, err
 	}

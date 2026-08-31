@@ -11,43 +11,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/searchjobproto"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
-	"google.golang.org/protobuf/encoding/protowire"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/structpb"
 )
-
-func TestDiscardUnknownProtoFieldsIsRecursive(t *testing.T) {
-	t.Parallel()
-
-	request, err := structpb.NewStruct(map[string]any{
-		"nested": []any{"known", true},
-	})
-	if err != nil {
-		t.Fatalf("create request: %v", err)
-	}
-	want := proto.Clone(request)
-	unknown := protowire.AppendVarint(
-		protowire.AppendTag(nil, 2_047, protowire.VarintType),
-		1,
-	)
-	request.ProtoReflect().SetUnknown(unknown)
-	nested := request.GetFields()["nested"]
-	nested.ProtoReflect().SetUnknown(unknown)
-	list := nested.GetListValue()
-	list.ProtoReflect().SetUnknown(unknown)
-	list.GetValues()[0].ProtoReflect().SetUnknown(unknown)
-
-	got, err := discardUnknownProtoFields(t.Context(), request)
-	if err != nil {
-		t.Fatalf("sanitize request: %v", err)
-	}
-	if got != request {
-		t.Fatal("sanitizer replaced the decoded request")
-	}
-	if !proto.Equal(got, want) {
-		t.Fatalf("sanitized request = %v, want %v", got, want)
-	}
-}
 
 func TestValueToProtoPreservesEverySupportedKind(t *testing.T) {
 	decimal, err := searchjobs.DecimalValue("-12345678901234567890.00100")

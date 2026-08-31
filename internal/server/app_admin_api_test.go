@@ -1055,7 +1055,7 @@ func TestAppAdministrationRequestBoundaryOrderAndExactness(t *testing.T) {
 	}
 }
 
-func TestAppAdministrationDiscardsUnknownFieldsRecursively(t *testing.T) {
+func TestAppAdministrationToleratesUnknownFieldsRecursively(t *testing.T) {
 	t.Parallel()
 
 	record := appAdministrationFixture(

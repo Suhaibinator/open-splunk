@@ -11,8 +11,9 @@ import (
 func TestSanitizeGetHECOperationalSnapshotRequest(t *testing.T) {
 	t.Parallel()
 
+	unknown := []byte{0xf8, 0x3f, 0x01}
 	request := &opensplunk.GetHECOperationalSnapshotRequest{}
-	request.ProtoReflect().SetUnknown([]byte{0xf8, 0x3f, 0x01})
+	request.ProtoReflect().SetUnknown(unknown)
 
 	sanitized, err := sanitizeGetHECOperationalSnapshotRequest(
 		context.Background(),
@@ -24,24 +25,10 @@ func TestSanitizeGetHECOperationalSnapshotRequest(t *testing.T) {
 	if sanitized != request {
 		t.Fatal("sanitizer returned a different request pointer")
 	}
-	if len(sanitized.ProtoReflect().GetUnknown()) != 0 {
-		t.Fatal("sanitizer retained unknown fields")
+	assertUnknownFieldTolerated(t, sanitized, unknown)
+	want := &opensplunk.GetHECOperationalSnapshotRequest{}
+	want.ProtoReflect().SetUnknown(unknown)
+	if !proto.Equal(sanitized, want) {
+		t.Fatalf("sanitized request = %v, want %v", sanitized, want)
 	}
-	if !proto.Equal(
-		sanitized,
-		&opensplunk.GetHECOperationalSnapshotRequest{},
-	) {
-		t.Fatalf("sanitized request = %v, want empty", sanitized)
-	}
-}
-
-func TestSanitizeGetHECOperationalSnapshotRequestRejectsMissingBody(t *testing.T) {
-	t.Parallel()
-
-	var request *opensplunk.GetHECOperationalSnapshotRequest
-	_, err := sanitizeGetHECOperationalSnapshotRequest(
-		context.Background(),
-		request,
-	)
-	assertSanitizerRejection(t, err, "request body is required")
 }

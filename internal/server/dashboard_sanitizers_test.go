@@ -1,12 +1,9 @@
 package server
 
 import (
-	"errors"
-	"net/http"
 	"strings"
 	"testing"
 
-	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 )
 
@@ -14,16 +11,6 @@ const dashboardSanitizerOwnerID = "owner-dashboard-sanitizer"
 
 func dashboardSanitizerHandler() *apiHandler {
 	return &apiHandler{ownerID: dashboardSanitizerOwnerID}
-}
-
-func assertDashboardSanitizerRejection(t *testing.T, err error, message string) {
-	t.Helper()
-	var httpErr *router.HTTPError
-	if !errors.As(err, &httpErr) ||
-		httpErr.StatusCode != http.StatusBadRequest ||
-		httpErr.Message != message {
-		t.Fatalf("error = %T %v, want bad request %q", err, err, message)
-	}
 }
 
 func dashboardSanitizerDefinition() *opensplunk.DashboardDefinition {
@@ -68,7 +55,7 @@ func TestSanitizeGetDashboardRequestBoundsTheIdentifier(t *testing.T) {
 				t.Fatalf("sanitizer returned %p, want %p", got, request)
 			}
 			if test.message != "" {
-				assertDashboardSanitizerRejection(t, err, test.message)
+				assertSanitizerRejection(t, err, test.message)
 				return
 			}
 			if err != nil {
@@ -81,18 +68,20 @@ func TestSanitizeGetDashboardRequestBoundsTheIdentifier(t *testing.T) {
 	}
 }
 
-func TestSanitizeGetDashboardRequestDiscardsUnknownFields(t *testing.T) {
+func TestSanitizeGetDashboardRequestToleratesUnknownFields(t *testing.T) {
 	t.Parallel()
 
+	unknown := futureProtobufField("future-dashboard")
 	request := &opensplunk.GetDashboardRequest{DashboardId: "dash-1"}
-	request.ProtoReflect().SetUnknown(futureProtobufField("future-dashboard"))
+	request.ProtoReflect().SetUnknown(unknown)
 	got, err := sanitizeGetDashboardRequest(t.Context(), request)
 	if err != nil {
 		t.Fatalf("sanitize = %v", err)
 	}
-	if len(got.ProtoReflect().GetUnknown()) != 0 {
-		t.Fatalf("unknown fields survived: %x", got.ProtoReflect().GetUnknown())
+	if got.GetDashboardId() != "dash-1" {
+		t.Fatalf("dashboard ID = %q, want %q", got.GetDashboardId(), "dash-1")
 	}
+	assertUnknownFieldTolerated(t, got, unknown)
 }
 
 func TestSanitizeListDashboardsRequestBoundsTheAppFilter(t *testing.T) {
@@ -117,7 +106,7 @@ func TestSanitizeListDashboardsRequestBoundsTheAppFilter(t *testing.T) {
 			request := &opensplunk.ListDashboardsRequest{AppIdFilter: test.filter}
 			got, err := sanitizeListDashboardsRequest(t.Context(), request)
 			if test.message != "" {
-				assertDashboardSanitizerRejection(t, err, test.message)
+				assertSanitizerRejection(t, err, test.message)
 				return
 			}
 			if err != nil {
@@ -183,7 +172,7 @@ func TestSanitizeCreateDashboardRequestBoundsTheDefinition(t *testing.T) {
 				t.Fatalf("sanitizer returned %p, want %p", got, request)
 			}
 			if test.message != "" {
-				assertDashboardSanitizerRejection(t, err, test.message)
+				assertSanitizerRejection(t, err, test.message)
 				return
 			}
 			if err != nil {
@@ -280,7 +269,7 @@ func TestSanitizeUpdateDashboardRequestBoundsIdentityAndVersion(t *testing.T) {
 				t.Fatalf("sanitizer returned %p, want %p", got, test.request)
 			}
 			if test.message != "" {
-				assertDashboardSanitizerRejection(t, err, test.message)
+				assertSanitizerRejection(t, err, test.message)
 				return
 			}
 			if err != nil {
@@ -319,7 +308,7 @@ func TestSanitizeDeleteDashboardRequestBoundsIdentityAndVersion(t *testing.T) {
 
 			_, err := sanitizeDeleteDashboardRequest(t.Context(), test.request)
 			if test.message != "" {
-				assertDashboardSanitizerRejection(t, err, test.message)
+				assertSanitizerRejection(t, err, test.message)
 				return
 			}
 			if err != nil {
@@ -357,7 +346,7 @@ func TestSanitizeRunDashboardPanelRequestBoundsBothIdentifiers(t *testing.T) {
 			}
 			got, err := sanitizeRunDashboardPanelRequest(t.Context(), request)
 			if test.message != "" {
-				assertDashboardSanitizerRejection(t, err, test.message)
+				assertSanitizerRejection(t, err, test.message)
 				return
 			}
 			if err != nil {

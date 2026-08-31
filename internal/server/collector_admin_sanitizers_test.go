@@ -1,12 +1,9 @@
 package server
 
 import (
-	"errors"
-	"net/http"
 	"strings"
 	"testing"
 
-	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -14,16 +11,6 @@ import (
 
 func collectorSanitizerHandler() *apiHandler {
 	return &apiHandler{maximumPageSize: collectorfleet.MaximumCollectorListPageSize}
-}
-
-func assertCollectorSanitizerRejection(t *testing.T, err error, message string) {
-	t.Helper()
-	var httpErr *router.HTTPError
-	if !errors.As(err, &httpErr) ||
-		httpErr.StatusCode != http.StatusBadRequest ||
-		httpErr.Message != message {
-		t.Fatalf("error = %T %v, want bad request %q", err, err, message)
-	}
 }
 
 func collectorSanitizerUpdate() *opensplunk.UpdateCollectorRequest {
@@ -129,7 +116,7 @@ func TestSanitizeListCollectorsRequestBoundsEveryFilter(t *testing.T) {
 				t.Fatalf("sanitizer returned %p, want %p", got, test.request)
 			}
 			if test.message != "" {
-				assertCollectorSanitizerRejection(t, err, test.message)
+				assertSanitizerRejection(t, err, test.message)
 				return
 			}
 			if err != nil {
@@ -171,12 +158,14 @@ func TestSanitizeListCollectorsRequestTrimsTheTextFilter(t *testing.T) {
 	}
 }
 
-func TestSanitizeListCollectorsRequestDiscardsUnknownFields(t *testing.T) {
+func TestSanitizeListCollectorsRequestToleratesUnknownFields(t *testing.T) {
 	t.Parallel()
 
+	topLevel := futureProtobufField("future-collector")
+	nested := futureProtobufField("future-page")
 	request := &opensplunk.ListCollectorsRequest{Page: &opensplunk.PageRequest{}}
-	request.ProtoReflect().SetUnknown(futureProtobufField("future-collector"))
-	request.Page.ProtoReflect().SetUnknown(futureProtobufField("future-page"))
+	request.ProtoReflect().SetUnknown(topLevel)
+	request.Page.ProtoReflect().SetUnknown(nested)
 	got, err := collectorSanitizerHandler().sanitizeListCollectorsRequest(
 		t.Context(),
 		request,
@@ -184,10 +173,11 @@ func TestSanitizeListCollectorsRequestDiscardsUnknownFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sanitize = %v", err)
 	}
-	if len(got.ProtoReflect().GetUnknown()) != 0 ||
-		len(got.GetPage().ProtoReflect().GetUnknown()) != 0 {
-		t.Fatal("unknown fields survived the collector list sanitizer")
+	if got != request || got.GetPage() != request.GetPage() {
+		t.Fatal("sanitizer replaced the decoded request")
 	}
+	assertUnknownFieldTolerated(t, got, topLevel)
+	assertUnknownFieldTolerated(t, got.GetPage(), nested)
 }
 
 func TestSanitizeGetCollectorRequestBoundsTheIdentifier(t *testing.T) {
@@ -219,7 +209,7 @@ func TestSanitizeGetCollectorRequestBoundsTheIdentifier(t *testing.T) {
 				t.Fatalf("sanitizer returned %p, want %p", got, request)
 			}
 			if test.message != "" {
-				assertCollectorSanitizerRejection(t, err, test.message)
+				assertSanitizerRejection(t, err, test.message)
 				return
 			}
 			if err != nil {
@@ -279,7 +269,7 @@ func TestSanitizeUpdateCollectorRequestEnforcesAnExactMask(t *testing.T) {
 				t.Fatalf("sanitizer returned %p, want %p", got, test.request)
 			}
 			if test.message != "" {
-				assertCollectorSanitizerRejection(t, err, test.message)
+				assertSanitizerRejection(t, err, test.message)
 				return
 			}
 			if err != nil {
@@ -339,7 +329,7 @@ func TestSanitizeSetCollectorEnabledRequestBoundsIdentityAndVersion(t *testing.T
 				t.Fatalf("sanitizer returned %p, want %p", got, test.request)
 			}
 			if test.message != "" {
-				assertCollectorSanitizerRejection(t, err, test.message)
+				assertSanitizerRejection(t, err, test.message)
 				return
 			}
 			if err != nil {

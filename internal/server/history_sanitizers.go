@@ -15,13 +15,9 @@ import (
 )
 
 func sanitizeGetSearchHistoryEntryRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.GetSearchHistoryEntryRequest,
 ) (*opensplunk.GetSearchHistoryEntryRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	searchJobID, err := historySearchJobID(request.GetSearchJobId())
 	if err != nil {
 		return request, badRequestError(err.Error())
@@ -35,16 +31,22 @@ func sanitizeGetSearchHistoryEntryRequest(
 // clamps the page size to the transport row cap, deduplicates and sorts the
 // state filters, and truncates both instants to the stored precision.
 func (handler *apiHandler) sanitizeListSearchHistoryRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.ListSearchHistoryRequest,
 ) (*opensplunk.ListSearchHistoryRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
+	pageSize, pageToken, includeTotal, err := handler.pageRequest(request.GetPage())
 	if err != nil {
-		return request, err
-	}
-	if err := handler.sanitizeSearchHistoryPage(request); err != nil {
 		return request, badRequestError(err.Error())
 	}
+	if pageSize == 0 {
+		pageSize = int(min(maximumHistoryRowsPerResponse, handler.maximumPageSize))
+	}
+	request.Page = resolvedListPage(
+		request.GetPage(),
+		safecast.MustConv[uint32](min(pageSize, int(maximumHistoryRowsPerResponse))),
+		pageToken,
+		includeTotal,
+	)
 	if err := sanitizeSearchHistoryFilter(request.GetFilter()); err != nil {
 		return request, badRequestError(err.Error())
 	}
@@ -55,13 +57,9 @@ func (handler *apiHandler) sanitizeListSearchHistoryRequest(
 }
 
 func sanitizeDeleteSearchHistoryEntryRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.DeleteSearchHistoryEntryRequest,
 ) (*opensplunk.DeleteSearchHistoryEntryRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	searchJobID, err := historySearchJobID(request.GetSearchJobId())
 	if err != nil {
 		return request, badRequestError(err.Error())
@@ -71,13 +69,9 @@ func sanitizeDeleteSearchHistoryEntryRequest(
 }
 
 func sanitizeClearSearchHistoryRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.ClearSearchHistoryRequest,
 ) (*opensplunk.ClearSearchHistoryRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	if request.GetConfirmation() != clearSearchHistoryConfirmation {
 		return request, badRequestError(fmt.Sprintf("confirmation must be exactly %q", clearSearchHistoryConfirmation))
 	}
@@ -85,32 +79,6 @@ func sanitizeClearSearchHistoryRequest(
 		return request, badRequestError(err.Error())
 	}
 	return request, nil
-}
-
-// sanitizeSearchHistoryPage gives the request a page whose size is always
-// present, positive, and no larger than the transport row cap, so the handler
-// never has to re-derive an effective page size.
-func (handler *apiHandler) sanitizeSearchHistoryPage(request *opensplunk.ListSearchHistoryRequest) error {
-	pageSize, pageToken, _, err := handler.pageRequest(request.GetPage())
-	if err != nil {
-		return err
-	}
-	if pageSize == 0 {
-		pageSize = int(min(maximumHistoryRowsPerResponse, handler.maximumPageSize))
-	}
-	pageSize = min(pageSize, int(maximumHistoryRowsPerResponse))
-
-	page := request.GetPage()
-	if page == nil {
-		page = &opensplunk.PageRequest{}
-		request.Page = page
-	}
-	page.PageSize = new(safecast.MustConv[uint32](pageSize))
-	page.PageToken = nil
-	if pageToken != "" {
-		page.PageToken = &pageToken
-	}
-	return nil
 }
 
 // sanitizeSearchHistoryFilter normalizes the optional filter in place: bounded

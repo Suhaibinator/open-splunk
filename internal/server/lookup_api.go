@@ -281,9 +281,10 @@ func boundedLookupDefinitionRepeatedShape(definition *opensplunk.LookupDefinitio
 			len(selector.GetSourcetypePatterns()) <= knowledge.MaximumSelectorPatternsPerDimension
 }
 
-// rejectUnknownLookupDefinition prevents a newer client's persisted semantic
-// fields from being silently discarded while retaining forward compatibility
-// for unknown request-envelope fields.
+// rejectUnknownLookupDefinition draws the line the envelope does not: a
+// definition carrying fields this server does not define is refused rather than
+// persisted with bytes it cannot validate. Unknown request-envelope fields stay
+// tolerated.
 func rejectUnknownLookupDefinition(definition *opensplunk.LookupDefinition) error {
 	if definition == nil {
 		return nil

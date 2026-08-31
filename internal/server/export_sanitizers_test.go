@@ -65,7 +65,7 @@ func TestSanitizeCreateExportJobRequest(t *testing.T) {
 			t.Parallel()
 
 			_, err := sanitizeCreateExportJobRequest(t.Context(), test.request)
-			assertSanitizedBadRequest(t, err, test.wantMessage)
+			assertSanitizerRejection(t, err, test.wantMessage)
 		})
 	}
 
@@ -107,7 +107,7 @@ func TestSanitizeGetExportJobRequest(t *testing.T) {
 
 			got, err := sanitizeGetExportJobRequest(t.Context(), test.request)
 			if test.wantMessage != "" {
-				assertSanitizedBadRequest(t, err, test.wantMessage)
+				assertSanitizerRejection(t, err, test.wantMessage)
 				return
 			}
 			if err != nil {
@@ -238,7 +238,7 @@ func TestSanitizeListExportJobsRequestRejectsPageBeforeFilters(t *testing.T) {
 				t.Context(),
 				test.request,
 			)
-			assertSanitizedBadRequest(t, err, test.wantMessage)
+			assertSanitizerRejection(t, err, test.wantMessage)
 		})
 	}
 }
@@ -288,7 +288,7 @@ func TestSanitizeListExportJobsRequestRejectsInvalidFilters(t *testing.T) {
 			t.Parallel()
 
 			_, err := sanitizerTestHandler().sanitizeListExportJobsRequest(t.Context(), test.request)
-			assertSanitizedBadRequest(t, err, test.wantMessage)
+			assertSanitizerRejection(t, err, test.wantMessage)
 		})
 	}
 }
@@ -329,7 +329,7 @@ func TestSanitizeCancelExportJobRequest(t *testing.T) {
 
 			got, err := sanitizeCancelExportJobRequest(t.Context(), test.request)
 			if test.wantMessage != "" {
-				assertSanitizedBadRequest(t, err, test.wantMessage)
+				assertSanitizerRejection(t, err, test.wantMessage)
 				return
 			}
 			if err != nil {

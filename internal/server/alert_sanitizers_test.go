@@ -265,15 +265,17 @@ func TestSanitizeAlertDefinitionLeavesAnAcceptedDefinitionUnchanged(t *testing.T
 	}
 }
 
-func TestSanitizeAlertRequestsDiscardUnknownFields(t *testing.T) {
+func TestSanitizeAlertRequestsTolerateUnknownFields(t *testing.T) {
 	t.Parallel()
+	unknown := futureProtobufField("future-alert-field")
 	request := &opensplunk.GetAlertRequest{AlertId: "alert-1"}
-	request.ProtoReflect().SetUnknown(futureProtobufField("future-alert-field"))
+	request.ProtoReflect().SetUnknown(unknown)
 	sanitized, err := sanitizeGetAlertRequest(t.Context(), request)
 	if err != nil {
 		t.Fatalf("sanitizeGetAlertRequest() error = %v", err)
 	}
-	if len(sanitized.ProtoReflect().GetUnknown()) != 0 {
-		t.Fatal("sanitizer kept a field unknown to this server")
+	if sanitized.GetAlertId() != "alert-1" {
+		t.Fatalf("alert ID = %q, want %q", sanitized.GetAlertId(), "alert-1")
 	}
+	assertUnknownFieldTolerated(t, sanitized, unknown)
 }

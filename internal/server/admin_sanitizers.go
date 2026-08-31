@@ -11,12 +11,9 @@ import (
 // does not honor. The definition itself is converted, and validated against the
 // clock, by indexDefinitionFromProto.
 func sanitizeCreateIndexRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.CreateIndexRequest,
 ) (*opensplunk.CreateIndexRequest, error) {
-	if _, err := discardUnknownProtoFields(ctx, request); err != nil {
-		return request, err
-	}
 	if request.ClientRequestId != nil {
 		return request, badRequestError(
 			"client request idempotency is not supported",
@@ -26,12 +23,9 @@ func sanitizeCreateIndexRequest(
 }
 
 func sanitizeGetIndexRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.GetIndexRequest,
 ) (*opensplunk.GetIndexRequest, error) {
-	if _, err := discardUnknownProtoFields(ctx, request); err != nil {
-		return request, err
-	}
 	selector, err := sanitizedIndexSelector(request.GetSelector())
 	if err != nil {
 		return request, err
@@ -47,12 +41,9 @@ func sanitizeGetIndexRequest(
 // with indexStateFilterOrder, indexSortByOrDefault and adminPageProjection,
 // none of which can fail.
 func (handler *apiHandler) sanitizeListIndexesRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.ListIndexesRequest,
 ) (*opensplunk.ListIndexesRequest, error) {
-	if _, err := discardUnknownProtoFields(ctx, request); err != nil {
-		return request, err
-	}
 	if err := handler.sanitizeAdminListPage(
 		request.GetPage(),
 		maximumIndexRowsPerResponse,
@@ -79,12 +70,9 @@ func (handler *apiHandler) sanitizeListIndexesRequest(
 }
 
 func sanitizeUpdateIndexRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.UpdateIndexRequest,
 ) (*opensplunk.UpdateIndexRequest, error) {
-	if _, err := discardUnknownProtoFields(ctx, request); err != nil {
-		return request, err
-	}
 	if err := administrationExpectedVersion(
 		request.GetExpectedVersion(),
 	); err != nil {
@@ -99,12 +87,9 @@ func sanitizeUpdateIndexRequest(
 }
 
 func sanitizeSetIndexStateRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.SetIndexStateRequest,
 ) (*opensplunk.SetIndexStateRequest, error) {
-	if _, err := discardUnknownProtoFields(ctx, request); err != nil {
-		return request, err
-	}
 	if err := administrationExpectedVersion(
 		request.GetExpectedVersion(),
 	); err != nil {
@@ -132,12 +117,9 @@ func sanitizeSetIndexStateRequest(
 // dependencies still answers "physical index data deletion is not available"
 // rather than leaking a version complaint about a mode it cannot serve.
 func sanitizeDeleteIndexRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.DeleteIndexRequest,
 ) (*opensplunk.DeleteIndexRequest, error) {
-	if _, err := discardUnknownProtoFields(ctx, request); err != nil {
-		return request, err
-	}
 	if err := administrationExpectedVersion(
 		request.GetExpectedVersion(),
 	); err != nil {
@@ -167,12 +149,9 @@ func sanitizeDeleteIndexRequest(
 }
 
 func sanitizeGetIndexStatsRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.GetIndexStatsRequest,
 ) (*opensplunk.GetIndexStatsRequest, error) {
-	if _, err := discardUnknownProtoFields(ctx, request); err != nil {
-		return request, err
-	}
 	selector, err := sanitizedIndexSelector(request.GetSelector())
 	if err != nil {
 		return request, err
@@ -186,12 +165,9 @@ func sanitizeGetIndexStatsRequest(
 // the handler forwards page_size unchanged. The requested time range still
 // resolves against the handler clock.
 func (handler *apiHandler) sanitizeListIndexFieldsRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.ListIndexFieldsRequest,
 ) (*opensplunk.ListIndexFieldsRequest, error) {
-	if _, err := discardUnknownProtoFields(ctx, request); err != nil {
-		return request, err
-	}
 	selector, err := sanitizedIndexSelector(request.GetSelector())
 	if err != nil {
 		return request, err
@@ -217,12 +193,9 @@ func (handler *apiHandler) sanitizeListIndexFieldsRequest(
 // idempotency envelope is unsupported and the definition is converted by
 // tokenDefinitionFromProto.
 func sanitizeCreateIngestionTokenRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.CreateIngestionTokenRequest,
 ) (*opensplunk.CreateIngestionTokenRequest, error) {
-	if _, err := discardUnknownProtoFields(ctx, request); err != nil {
-		return request, err
-	}
 	if request.ClientRequestId != nil {
 		return request, badRequestError(
 			"client request idempotency is not supported",
@@ -232,12 +205,9 @@ func sanitizeCreateIngestionTokenRequest(
 }
 
 func sanitizeGetIngestionTokenRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.GetIngestionTokenRequest,
 ) (*opensplunk.GetIngestionTokenRequest, error) {
-	if _, err := discardUnknownProtoFields(ctx, request); err != nil {
-		return request, err
-	}
 	id, err := sanitizedIngestionTokenID(request.GetIngestionTokenId())
 	if err != nil {
 		return request, err
@@ -250,12 +220,9 @@ func sanitizeGetIngestionTokenRequest(
 // sanitizeListIndexesRequest and additionally canonicalises the index-name
 // filter.
 func (handler *apiHandler) sanitizeListIngestionTokensRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.ListIngestionTokensRequest,
 ) (*opensplunk.ListIngestionTokensRequest, error) {
-	if _, err := discardUnknownProtoFields(ctx, request); err != nil {
-		return request, err
-	}
 	if err := handler.sanitizeAdminListPage(
 		request.GetPage(),
 		maximumTokenRowsPerResponse,
@@ -289,12 +256,9 @@ func (handler *apiHandler) sanitizeListIngestionTokensRequest(
 }
 
 func sanitizeUpdateIngestionTokenRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.UpdateIngestionTokenRequest,
 ) (*opensplunk.UpdateIngestionTokenRequest, error) {
-	if _, err := discardUnknownProtoFields(ctx, request); err != nil {
-		return request, err
-	}
 	id, err := sanitizedIngestionTokenID(request.GetIngestionTokenId())
 	if err != nil {
 		return request, err
@@ -309,12 +273,9 @@ func sanitizeUpdateIngestionTokenRequest(
 }
 
 func sanitizeSetIngestionTokenEnabledRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.SetIngestionTokenEnabledRequest,
 ) (*opensplunk.SetIngestionTokenEnabledRequest, error) {
-	if _, err := discardUnknownProtoFields(ctx, request); err != nil {
-		return request, err
-	}
 	id, err := sanitizedIngestionTokenID(request.GetIngestionTokenId())
 	if err != nil {
 		return request, err
@@ -331,12 +292,9 @@ func sanitizeSetIngestionTokenEnabledRequest(
 // sanitizeRevokeIngestionTokenRequest rejects the revocation reason, which this
 // API version accepts on the wire but does not persist.
 func sanitizeRevokeIngestionTokenRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.RevokeIngestionTokenRequest,
 ) (*opensplunk.RevokeIngestionTokenRequest, error) {
-	if _, err := discardUnknownProtoFields(ctx, request); err != nil {
-		return request, err
-	}
 	id, err := sanitizedIngestionTokenID(request.GetIngestionTokenId())
 	if err != nil {
 		return request, err

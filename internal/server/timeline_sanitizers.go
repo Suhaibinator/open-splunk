@@ -7,13 +7,9 @@ import (
 )
 
 func (handler *apiHandler) sanitizeGetSearchTimelineRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.GetSearchTimelineRequest,
 ) (*opensplunk.GetSearchTimelineRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	searchJobID, present := trimmedRequiredSearchJobID(request.GetSearchJobId())
 	if !present {
 		return request, badRequestError("search job ID is required")

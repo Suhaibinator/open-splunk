@@ -14,13 +14,9 @@ import (
 // sanitizeGetSystemBootstrapRequest trims the preferred app ID so the handler
 // matches it against the app catalog exactly as the catalog stores it.
 func sanitizeGetSystemBootstrapRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.GetSystemBootstrapRequest,
 ) (*opensplunk.GetSystemBootstrapRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	if request.PreferredAppId != nil {
 		request.PreferredAppId = new(strings.TrimSpace(request.GetPreferredAppId()))
 	}
@@ -32,13 +28,9 @@ func sanitizeGetSystemBootstrapRequest(
 // of the definition is resolved against the current server time, so it stays
 // with the handler.
 func sanitizeValidateSearchRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.ValidateSearchRequest,
 ) (*opensplunk.ValidateSearchRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	if err := rejectUnsupportedSearchDefinitionFields(request.GetDefinition()); err != nil {
 		return request, badRequestError(err.Error())
 	}
@@ -49,13 +41,9 @@ func sanitizeValidateSearchRequest(
 // all three creation origins (ad hoc, saved-search launch, and history rerun)
 // before any of them reaches storage.
 func sanitizeCreateSearchJobRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.CreateSearchJobRequest,
 ) (*opensplunk.CreateSearchJobRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	if request.ClientRequestId != nil {
 		return request, badRequestError("client request idempotency is not supported")
 	}
@@ -79,13 +67,9 @@ func rejectUnsupportedSearchDefinitionFields(definition *opensplunk.SearchDefini
 }
 
 func sanitizeGetSearchJobRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.GetSearchJobRequest,
 ) (*opensplunk.GetSearchJobRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	request.SearchJobId = strings.TrimSpace(request.GetSearchJobId())
 	if request.GetSearchJobId() == "" {
 		return request, badRequestError("search job ID is required")
@@ -102,20 +86,17 @@ func sanitizeGetSearchJobRequest(
 // trimmed and bounded. An empty text filter is dropped so the handler never
 // builds a matcher that accepts everything. Page errors precede filter errors.
 func (handler *apiHandler) sanitizeListSearchJobsRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.ListSearchJobsRequest,
 ) (*opensplunk.ListSearchJobsRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	pageSize, pageToken, includeTotal, err := handler.searchJobListPageRequest(
 		request.GetPage(),
 	)
 	if err != nil {
 		return request, badRequestError(err.Error())
 	}
-	request.Page = resolvedPageRequest(
+	request.Page = resolvedListPage(
+		request.GetPage(),
 		safecast.MustConv[uint32](pageSize),
 		pageToken,
 		includeTotal,
@@ -173,13 +154,9 @@ func searchJobListStateFilters(input []opensplunk.SearchJobState) ([]opensplunk.
 // zero still means "the service default" on this route — and only bounds it and
 // canonicalises the page token.
 func (handler *apiHandler) sanitizeGetSearchResultsRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.GetSearchResultsRequest,
 ) (*opensplunk.GetSearchResultsRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	request.SearchJobId = strings.TrimSpace(request.GetSearchJobId())
 	if request.GetSearchJobId() == "" {
 		return request, badRequestError("search job ID is required")
@@ -190,15 +167,19 @@ func (handler *apiHandler) sanitizeGetSearchResultsRequest(
 	if len(request.GetColumns()) != 0 {
 		return request, badRequestError("result column projection is not supported")
 	}
-	_, pageToken, _, err := handler.pageRequest(request.GetPage())
+	pageSize, pageToken, includeTotal, err := handler.pageRequest(request.GetPage())
 	if err != nil {
 		return request, badRequestError(err.Error())
 	}
+	// An omitted page stays omitted here: this route reads a zero page size as
+	// the service default, so there is nothing to write back.
 	if request.Page != nil {
-		request.Page.PageToken = nil
-		if pageToken != "" {
-			request.Page.PageToken = new(pageToken)
-		}
+		resolvedListPage(
+			request.Page,
+			safecast.MustConv[uint32](pageSize),
+			pageToken,
+			includeTotal,
+		)
 	}
 	return request, nil
 }
@@ -206,13 +187,9 @@ func (handler *apiHandler) sanitizeGetSearchResultsRequest(
 // sanitizeCancelSearchJobRequest drops a whitespace-only reason rather than
 // rejecting it, so the handler sees either no reason at all or a 400.
 func sanitizeCancelSearchJobRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.CancelSearchJobRequest,
 ) (*opensplunk.CancelSearchJobRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	request.SearchJobId = strings.TrimSpace(request.GetSearchJobId())
 	if request.GetSearchJobId() == "" {
 		return request, badRequestError("search job ID is required")
@@ -222,22 +199,4 @@ func sanitizeCancelSearchJobRequest(
 	}
 	request.Reason = nil
 	return request, nil
-}
-
-// resolvedPageRequest rebuilds the page envelope from the values a page helper
-// resolved, so the handler reads the effective size and token straight off the
-// request instead of resolving them a second time.
-func resolvedPageRequest(
-	pageSize uint32,
-	pageToken string,
-	includeTotal bool,
-) *opensplunk.PageRequest {
-	page := &opensplunk.PageRequest{
-		PageSize:         new(pageSize),
-		IncludeTotalSize: includeTotal,
-	}
-	if pageToken != "" {
-		page.PageToken = new(pageToken)
-	}
-	return page
 }

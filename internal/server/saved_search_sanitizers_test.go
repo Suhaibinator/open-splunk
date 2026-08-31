@@ -32,7 +32,7 @@ func TestSanitizeCreateSavedSearchRequest(t *testing.T) {
 			t.Parallel()
 
 			_, err := sanitizeCreateSavedSearchRequest(t.Context(), test.request)
-			assertSanitizedBadRequest(t, err, test.wantMessage)
+			assertSanitizerRejection(t, err, test.wantMessage)
 		})
 	}
 
@@ -81,7 +81,7 @@ func TestSanitizeGetSavedSearchRequest(t *testing.T) {
 
 			got, err := sanitizeGetSavedSearchRequest(t.Context(), test.request)
 			if test.wantMessage != "" {
-				assertSanitizedBadRequest(t, err, test.wantMessage)
+				assertSanitizerRejection(t, err, test.wantMessage)
 				return
 			}
 			if err != nil {
@@ -212,7 +212,7 @@ func TestSanitizeListSavedSearchesRequestRejectsPageBeforeFilters(t *testing.T) 
 				t.Context(),
 				test.request,
 			)
-			assertSanitizedBadRequest(t, err, test.wantMessage)
+			assertSanitizerRejection(t, err, test.wantMessage)
 		})
 	}
 }
@@ -272,7 +272,7 @@ func TestSanitizeListSavedSearchesRequestRejectsInvalidFilters(t *testing.T) {
 			t.Parallel()
 
 			_, err := sanitizerTestHandler().sanitizeListSavedSearchesRequest(t.Context(), test.request)
-			assertSanitizedBadRequest(t, err, test.wantMessage)
+			assertSanitizerRejection(t, err, test.wantMessage)
 		})
 	}
 }
@@ -331,7 +331,7 @@ func TestSanitizeUpdateSavedSearchRequest(t *testing.T) {
 			t.Parallel()
 
 			_, err := sanitizeUpdateSavedSearchRequest(t.Context(), test.request)
-			assertSanitizedBadRequest(t, err, test.wantMessage)
+			assertSanitizerRejection(t, err, test.wantMessage)
 		})
 	}
 
@@ -403,7 +403,7 @@ func TestSanitizeDuplicateSavedSearchRequest(t *testing.T) {
 			t.Parallel()
 
 			_, err := sanitizeDuplicateSavedSearchRequest(t.Context(), test.request)
-			assertSanitizedBadRequest(t, err, test.wantMessage)
+			assertSanitizerRejection(t, err, test.wantMessage)
 		})
 	}
 
@@ -448,7 +448,7 @@ func TestSanitizeDeleteSavedSearchRequest(t *testing.T) {
 			t.Parallel()
 
 			_, err := sanitizeDeleteSavedSearchRequest(t.Context(), test.request)
-			assertSanitizedBadRequest(t, err, test.wantMessage)
+			assertSanitizerRejection(t, err, test.wantMessage)
 		})
 	}
 

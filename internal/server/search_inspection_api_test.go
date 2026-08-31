@@ -493,15 +493,14 @@ func TestSearchInspectionRejectsMalformedRequestsBeforeServiceWork(
 ) {
 	t.Parallel()
 
+	unknownBytes := protowire.AppendVarint(
+		protowire.AppendTag(nil, 99, protowire.VarintType),
+		1,
+	)
 	unknown := &opensplunk.InspectSearchJobRequest{
 		SearchJobId: "inspection-job",
 	}
-	unknown.ProtoReflect().SetUnknown(
-		protowire.AppendVarint(
-			protowire.AppendTag(nil, 99, protowire.VarintType),
-			1,
-		),
-	)
+	unknown.ProtoReflect().SetUnknown(unknownBytes)
 	tests := []struct {
 		name string
 		// An accepted request must survive the route sanitizer and reach the
@@ -509,7 +508,6 @@ func TestSearchInspectionRejectsMalformedRequestsBeforeServiceWork(
 		accepted bool
 		request  *opensplunk.InspectSearchJobRequest
 	}{
-		{name: "nil"},
 		{name: "empty", request: &opensplunk.InspectSearchJobRequest{}},
 		{
 			name: "padded",
@@ -573,8 +571,8 @@ func TestSearchInspectionRejectsMalformedRequestsBeforeServiceWork(
 			if err != nil {
 				t.Fatalf("sanitize = %v", err)
 			}
-			if len(sanitized.ProtoReflect().GetUnknown()) != 0 {
-				t.Fatalf("unknown field survived sanitization")
+			if test.request == unknown {
+				assertUnknownFieldTolerated(t, sanitized, unknownBytes)
 			}
 			response, err := handler.inspectSearchJob(httpRequest, sanitized)
 			if err != nil || response == nil {

@@ -1,25 +1,12 @@
 package server
 
 import (
-	"errors"
-	"net/http"
 	"slices"
 	"strings"
 	"testing"
 
-	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 )
-
-func assertAppSanitizerRejection(t *testing.T, err error, message string) {
-	t.Helper()
-	var httpErr *router.HTTPError
-	if !errors.As(err, &httpErr) ||
-		httpErr.StatusCode != http.StatusBadRequest ||
-		httpErr.Message != message {
-		t.Fatalf("error = %T %v, want bad request %q", err, err, message)
-	}
-}
 
 func appSanitizerSelector() *opensplunk.AppSelector {
 	return &opensplunk.AppSelector{
@@ -161,7 +148,7 @@ func TestSanitizeCreateAppRequestRejectsUnsupportedShapes(t *testing.T) {
 			t.Parallel()
 
 			_, err := sanitizeCreateAppRequest(t.Context(), test.request)
-			assertAppSanitizerRejection(t, err, test.message)
+			assertSanitizerRejection(t, err, test.message)
 		})
 	}
 }
@@ -219,7 +206,7 @@ func TestSanitizeGetAppRequestRequiresOneCanonicalSelector(t *testing.T) {
 				t.Fatalf("sanitizer returned %p, want %p", got, request)
 			}
 			if test.message != "" {
-				assertAppSanitizerRejection(t, err, test.message)
+				assertSanitizerRejection(t, err, test.message)
 				return
 			}
 			if err != nil {
@@ -292,7 +279,7 @@ func TestSanitizeListAppsRequestBoundsTokenAndFilters(t *testing.T) {
 				t.Fatalf("sanitizer returned %p, want %p", got, test.request)
 			}
 			if test.message != "" {
-				assertAppSanitizerRejection(t, err, test.message)
+				assertSanitizerRejection(t, err, test.message)
 				return
 			}
 			if err != nil {
@@ -372,7 +359,7 @@ func TestSanitizeUpdateAppRequestRequiresVersionAndDefinition(t *testing.T) {
 
 			_, err := sanitizeUpdateAppRequest(t.Context(), test.request)
 			if test.message != "" {
-				assertAppSanitizerRejection(t, err, test.message)
+				assertSanitizerRejection(t, err, test.message)
 				return
 			}
 			if err != nil {
@@ -409,7 +396,7 @@ func TestSanitizeSetAppStateRequestRequiresSelectorAndVersion(t *testing.T) {
 
 			_, err := sanitizeSetAppStateRequest(t.Context(), test.request)
 			if test.message != "" {
-				assertAppSanitizerRejection(t, err, test.message)
+				assertSanitizerRejection(t, err, test.message)
 				return
 			}
 			if err != nil {
@@ -475,7 +462,7 @@ func TestSanitizeDeleteAppRequestRequiresACanonicalConfirmation(t *testing.T) {
 
 			_, err := sanitizeDeleteAppRequest(t.Context(), test.request)
 			if test.message != "" {
-				assertAppSanitizerRejection(t, err, test.message)
+				assertSanitizerRejection(t, err, test.message)
 				return
 			}
 			if err != nil {
@@ -485,18 +472,21 @@ func TestSanitizeDeleteAppRequestRequiresACanonicalConfirmation(t *testing.T) {
 	}
 }
 
-func TestSanitizeAppRequestsDiscardUnknownFields(t *testing.T) {
+func TestSanitizeAppRequestsTolerateUnknownFields(t *testing.T) {
 	t.Parallel()
 
+	topLevel := futureProtobufField("future-app")
+	nested := futureProtobufField("future-selector")
 	request := &opensplunk.GetAppRequest{Selector: appSanitizerSelector()}
-	request.ProtoReflect().SetUnknown(futureProtobufField("future-app"))
-	request.Selector.ProtoReflect().SetUnknown(futureProtobufField("future-selector"))
+	request.ProtoReflect().SetUnknown(topLevel)
+	request.Selector.ProtoReflect().SetUnknown(nested)
 	got, err := sanitizeGetAppRequest(t.Context(), request)
 	if err != nil {
 		t.Fatalf("sanitize = %v", err)
 	}
-	if len(got.ProtoReflect().GetUnknown()) != 0 ||
-		len(got.GetSelector().ProtoReflect().GetUnknown()) != 0 {
-		t.Fatal("unknown fields survived the app get sanitizer")
+	if got.GetSelector().GetAppId() != "app-1" {
+		t.Fatalf("app ID = %q, want %q", got.GetSelector().GetAppId(), "app-1")
 	}
+	assertUnknownFieldTolerated(t, got, topLevel)
+	assertUnknownFieldTolerated(t, got.GetSelector(), nested)
 }

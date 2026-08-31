@@ -244,7 +244,7 @@ func TestSearchHistoryRoutesValidateBeforeStoreCalls(t *testing.T) {
 	}
 }
 
-func TestSearchHistoryRoutesDiscardUnknownFieldsRecursively(t *testing.T) {
+func TestSearchHistoryRoutesTolerateUnknownFieldsRecursively(t *testing.T) {
 	store := &fakeSearchHistory{listFn: func(
 		_ context.Context,
 		_ searchhistory.AccessScope,

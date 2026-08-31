@@ -13,8 +13,8 @@ import (
 )
 
 // This file holds one sanitizer per collector administration route, in
-// route-registration order. Every sanitizer first discards fields unknown to
-// this server, then normalizes and bounds the request in place, so a collector
+// route-registration order. Every sanitizer normalizes and bounds the request
+// in place - unknown fields are tolerated, as protobuf decoding does - so a collector
 // handler only ever sees a canonical message: a collector ID that is a valid
 // token identifier, a positive expected version, an exact single-path update
 // mask, and list filters that already fit the fleet catalog's bounds. Mapping
@@ -26,13 +26,9 @@ import (
 // form. A request that carries a continuation token reports every failure as
 // an invalid page token so an opaque cursor never explains itself.
 func (handler *apiHandler) sanitizeListCollectorsRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.ListCollectorsRequest,
 ) (*opensplunk.ListCollectorsRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	if err := handler.boundCollectorListFilters(request); err != nil {
 		if request.GetPage() != nil && request.GetPage().PageToken != nil {
 			return request, badRequestError("page token is invalid")
@@ -43,13 +39,9 @@ func (handler *apiHandler) sanitizeListCollectorsRequest(
 }
 
 func sanitizeGetCollectorRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.GetCollectorRequest,
 ) (*opensplunk.GetCollectorRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	collectorID, err := canonicalCollectorID(request.GetCollectorId())
 	if err != nil {
 		return request, badRequestError("collector ID is invalid")
@@ -59,13 +51,9 @@ func sanitizeGetCollectorRequest(
 }
 
 func sanitizeUpdateCollectorRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.UpdateCollectorRequest,
 ) (*opensplunk.UpdateCollectorRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	collectorID, expectedVersion, displayName, err :=
 		normalizeCollectorDisplayNameUpdate(request)
 	if err != nil {
@@ -78,13 +66,9 @@ func sanitizeUpdateCollectorRequest(
 }
 
 func sanitizeSetCollectorEnabledRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.SetCollectorEnabledRequest,
 ) (*opensplunk.SetCollectorEnabledRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	collectorID, err := canonicalCollectorID(request.GetCollectorId())
 	if err != nil {
 		return request, badRequestError("collector ID is invalid")

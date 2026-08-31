@@ -7,11 +7,11 @@ import (
 )
 
 // sanitizeGetHECOperationalSnapshotRequest states the whole request contract for
-// the operational snapshot: it is unparameterised, so the only guarantee the
-// handler needs is a decoded body whose unknown fields have been discarded.
+// the operational snapshot: it is unparameterised, so there is nothing to
+// enforce and nothing to normalize, and unknown fields are tolerated.
 func sanitizeGetHECOperationalSnapshotRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.GetHECOperationalSnapshotRequest,
 ) (*opensplunk.GetHECOperationalSnapshotRequest, error) {
-	return discardUnknownProtoFields(ctx, request)
+	return request, nil
 }

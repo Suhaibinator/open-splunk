@@ -7,9 +7,11 @@ import (
 )
 
 // This file holds one sanitizer per lookup-management route, in route
-// registration order. Unknown protobuf fields in a request envelope are
-// tolerated; unknown fields inside a persisted lookup definition are rejected so
-// a newer client's semantics are never silently dropped.
+// registration order. Unknown protobuf fields in a request envelope are neither
+// stripped nor rejected: protobuf decoding ignores them and the sanitizer leaves
+// the decoded message as-is. Inside a persisted lookup definition they are
+// rejected instead - a definition carrying fields this server does not define is
+// refused rather than persisted with bytes it cannot validate.
 //
 // Lookup request semantics — identifiers, versions, paging, CSV, state
 // transitions — are lookupservice's single authority, and it re-validates every

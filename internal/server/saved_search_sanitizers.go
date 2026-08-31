@@ -72,13 +72,9 @@ func validateSavedSearchUpdateMask(input *fieldmaskpb.FieldMask) error {
 }
 
 func sanitizeCreateSavedSearchRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.CreateSavedSearchRequest,
 ) (*opensplunk.CreateSavedSearchRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	if request.ClientRequestId != nil {
 		return request, badRequestError("client request idempotency is not supported")
 	}
@@ -89,13 +85,9 @@ func sanitizeCreateSavedSearchRequest(
 }
 
 func sanitizeGetSavedSearchRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.GetSavedSearchRequest,
 ) (*opensplunk.GetSavedSearchRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	id, err := savedSearchID(request.GetSavedSearchId())
 	if err != nil {
 		return request, badRequestError(err.Error())
@@ -110,20 +102,16 @@ func sanitizeGetSavedSearchRequest(
 // are deduplicated, and the sort intent is checked against the supported
 // enumerations. Page errors precede filter errors.
 func (handler *apiHandler) sanitizeListSavedSearchesRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.ListSavedSearchesRequest,
 ) (*opensplunk.ListSavedSearchesRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	pageSize, pageToken, includeTotal, err := handler.savedSearchPageRequest(
 		request.GetPage(),
 	)
 	if err != nil {
 		return request, badRequestError(err.Error())
 	}
-	request.Page = resolvedPageRequest(pageSize, pageToken, includeTotal)
+	request.Page = resolvedListPage(request.GetPage(), pageSize, pageToken, includeTotal)
 	appIDFilter, err := optionalBoundedString(
 		request.AppIdFilter,
 		maximumSavedSearchAppIDBytes,
@@ -157,13 +145,9 @@ func (handler *apiHandler) sanitizeListSavedSearchesRequest(
 }
 
 func sanitizeUpdateSavedSearchRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.UpdateSavedSearchRequest,
 ) (*opensplunk.UpdateSavedSearchRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	id, err := savedSearchID(request.GetSavedSearchId())
 	if err != nil {
 		return request, badRequestError(err.Error())
@@ -182,13 +166,9 @@ func sanitizeUpdateSavedSearchRequest(
 }
 
 func sanitizeDuplicateSavedSearchRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.DuplicateSavedSearchRequest,
 ) (*opensplunk.DuplicateSavedSearchRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	if request.ClientRequestId != nil {
 		return request, badRequestError("client request idempotency is not supported")
 	}
@@ -221,13 +201,9 @@ func sanitizeDuplicateSavedSearchRequest(
 }
 
 func sanitizeDeleteSavedSearchRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.DeleteSavedSearchRequest,
 ) (*opensplunk.DeleteSavedSearchRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	id, err := savedSearchID(request.GetSavedSearchId())
 	if err != nil {
 		return request, badRequestError(err.Error())
