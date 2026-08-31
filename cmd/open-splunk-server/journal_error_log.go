@@ -10,9 +10,10 @@ import (
 	"go.uber.org/zap"
 )
 
-// journalErrorRepeatWindow bounds how often one unchanged journal root cause
-// is logged again. A broken retained-search directory fails every search the
-// same way; one line per window with a repeat count keeps the log readable.
+// journalErrorRepeatWindow bounds how often one unchanged publication root
+// cause is logged again. A broken retained-search directory fails every
+// search the same way; one line per window with a repeat count keeps the log
+// readable.
 const journalErrorRepeatWindow = 5 * time.Minute
 
 const (
@@ -21,11 +22,12 @@ const (
 )
 
 // journalErrorLogger reports search-job journal failures. An artifact
-// publication failure means a completed search lost its results, so it is an
-// error; metadata-only projection failures remain warnings. Repeats of the same
-// root cause (same operation and same cause text, which for filesystem faults
-// includes the directory) are suppressed for journalErrorRepeatWindow and
-// summarized on the next distinct or post-window entry.
+// publication failure (finalize_results) means a completed search lost its
+// results, so it is logged at error level; every other journal failure is a
+// warning and is never suppressed. Repeated publication failures with the same
+// root cause (same cause text, which for filesystem faults includes the
+// directory) are suppressed for journalErrorRepeatWindow; the suppressed count
+// is reported on the next logged entry and by Flush at shutdown.
 type journalErrorLogger struct {
 	logger *zap.Logger
 	now    func() time.Time
@@ -33,6 +35,7 @@ type journalErrorLogger struct {
 
 	mu         sync.Mutex
 	lastKey    string
+	lastJobID  string
 	lastLogged time.Time
 	suppressed uint64
 }
@@ -55,53 +58,68 @@ func (reporter *journalErrorLogger) Report(err error) {
 	if err == nil {
 		return
 	}
-	key, operation, jobID, publication := journalErrorIdentity(err)
-	now := reporter.now()
+	journalErr, ok := errors.AsType[*searchjobs.JournalError](err)
+	if !ok || journalErr == nil {
+		reporter.logger.Warn("persist search-job history", zap.Error(err))
+		return
+	}
+	fields := []zap.Field{
+		zap.Error(err),
+		zap.String("journal_operation", journalErr.Operation.String()),
+		zap.String("cause_class", journalErrorCauseClass(err)),
+	}
+	if journalErr.JobID != "" {
+		fields = append(fields, zap.String("job_id", journalErr.JobID))
+	}
+	if journalErr.Operation != searchjobs.JournalOperationFinalizeResults {
+		reporter.logger.Warn("persist search-job history", fields...)
+		return
+	}
 
+	key := ""
+	if journalErr.Err != nil {
+		key = journalErr.Err.Error()
+	}
+	now := reporter.now()
 	reporter.mu.Lock()
 	if key == reporter.lastKey && now.Sub(reporter.lastLogged) < reporter.window {
 		reporter.suppressed++
+		reporter.lastJobID = journalErr.JobID
 		reporter.mu.Unlock()
 		return
 	}
 	suppressed := reporter.suppressed
 	reporter.lastKey = key
+	reporter.lastJobID = journalErr.JobID
 	reporter.lastLogged = now
 	reporter.suppressed = 0
 	reporter.mu.Unlock()
 
-	fields := []zap.Field{
-		zap.Error(err),
-		zap.String("journal_operation", operation),
-		zap.String("cause_class", journalErrorCauseClass(err)),
-	}
-	if jobID != "" {
-		fields = append(fields, zap.String("job_id", jobID))
-	}
 	if suppressed > 0 {
 		fields = append(fields, zap.Uint64("suppressed_repeats", suppressed))
 	}
-	if publication {
-		reporter.logger.Error("publish retained search results", fields...)
-		return
-	}
-	reporter.logger.Warn("persist search-job history", fields...)
+	reporter.logger.Error("publish retained search results", fields...)
 }
 
-// journalErrorIdentity derives the suppression key and log fields. The key
-// excludes the job ID so that one root cause failing every job collapses.
-func journalErrorIdentity(err error) (key string, operation string, jobID string, publication bool) {
-	journalErr, ok := errors.AsType[*searchjobs.JournalError](err)
-	if !ok || journalErr == nil {
-		return err.Error(), "", "", false
+// Flush reports publication failures that were suppressed inside the current
+// window and never summarized because no later entry was logged. It is called
+// once at shutdown after the search manager has stopped.
+func (reporter *journalErrorLogger) Flush() {
+	reporter.mu.Lock()
+	suppressed := reporter.suppressed
+	key := reporter.lastKey
+	lastJobID := reporter.lastJobID
+	reporter.suppressed = 0
+	reporter.mu.Unlock()
+	if suppressed == 0 {
+		return
 	}
-	operation = journalErr.Operation.String()
-	cause := ""
-	if journalErr.Err != nil {
-		cause = journalErr.Err.Error()
-	}
-	publication = journalErr.Operation == searchjobs.JournalOperationFinalizeResults
-	return operation + "\x00" + cause, operation, journalErr.JobID, publication
+	reporter.logger.Error(
+		"publish retained search results: repeated failures were suppressed",
+		zap.Uint64("suppressed_repeats", suppressed),
+		zap.String("last_job_id", lastJobID),
+		zap.String("cause", key),
+	)
 }
 
 func journalErrorCauseClass(err error) string {

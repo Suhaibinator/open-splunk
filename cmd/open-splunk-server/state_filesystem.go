@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"io/fs"
 	"path/filepath"
 
 	"github.com/Suhaibinator/open-splunk/internal/privatefs"
@@ -39,6 +41,11 @@ func logControlDatabaseFilesystem(
 		return
 	}
 	filesystem, err := describe(directory)
+	if errors.Is(err, fs.ErrNotExist) {
+		// A directory that does not exist yet cannot be on the wrong filesystem;
+		// control.Open reports the missing path with its own error.
+		return
+	}
 	if err != nil {
 		logger.Warn("inspect control database filesystem", zap.String("path", directory), zap.Error(err))
 		return

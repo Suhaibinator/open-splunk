@@ -710,6 +710,9 @@ func runWithOptions(config options) error {
 		return err
 	}
 	journalErrors := newJournalErrorLogger(logger, time.Now, journalErrorRepeatWindow)
+	// Registered before the manager's close so LIFO shutdown summarizes any
+	// suppressed publication failures after the last journal callback.
+	defer journalErrors.Flush()
 	jobs, err := searchjobs.New(searchjobs.Config{
 		Executor:          executor,
 		Snapshotter:       visibilitySnapshotter{sequencer: sequencer},

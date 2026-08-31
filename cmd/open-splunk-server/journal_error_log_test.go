@@ -116,20 +116,20 @@ func TestJournalErrorLoggerSuppressesRepeatedRootCause(t *testing.T) {
 		t.Fatalf("post-window line = %v", lines[1])
 	}
 
-	// A different root cause is never suppressed, even inside the window.
+	// A different publication root cause is never suppressed inside the window.
 	reporter.Report(&searchjobs.JournalError{
-		Operation: searchjobs.JournalOperationFinalize,
+		Operation: searchjobs.JournalOperationFinalizeResults,
 		JobID:     "search_other",
-		State:     searchjobs.StateFailed,
-		Err:       errors.New("database is locked"),
+		State:     searchjobs.StateCompleted,
+		Err:       errors.New("artifact capacity is exhausted"),
 	})
 	lines = decodeJournalErrorLines(t, output)
 	if len(lines) != 3 {
 		t.Fatalf("distinct cause produced %d lines, want 3", len(lines))
 	}
-	if lines[2]["level"] != "warn" || lines[2]["msg"] != "persist search-job history" ||
-		lines[2]["journal_operation"] != "finalize" || lines[2]["cause_class"] != journalCauseOther {
-		t.Fatalf("metadata journal failure line = %v", lines[2])
+	if lines[2]["level"] != "error" || lines[2]["job_id"] != "search_other" ||
+		lines[2]["cause_class"] != journalCauseOther {
+		t.Fatalf("distinct publication failure line = %v", lines[2])
 	}
 	if _, suppressed := lines[2]["suppressed_repeats"]; suppressed {
 		t.Fatalf("distinct cause carried a suppressed count: %v", lines[2])
@@ -139,6 +139,65 @@ func TestJournalErrorLoggerSuppressesRepeatedRootCause(t *testing.T) {
 	reporter.Report(unsupportedPublicationError("search_again"))
 	if lines = decodeJournalErrorLines(t, output); len(lines) != 4 || lines[3]["job_id"] != "search_again" {
 		t.Fatalf("cause change did not reset suppression: %d lines", len(lines))
+	}
+}
+
+func TestJournalErrorLoggerNeverSuppressesMetadataJournalFailures(t *testing.T) {
+	t.Parallel()
+
+	logger, output := newJournalErrorTestLogger()
+	reporter := newJournalErrorLogger(logger, func() time.Time { return time.Unix(1_700_000_000, 0) }, time.Hour)
+	for index := range 3 {
+		reporter.Report(&searchjobs.JournalError{
+			Operation: searchjobs.JournalOperationFinalize,
+			JobID:     fmt.Sprintf("search_%d", index),
+			State:     searchjobs.StateFailed,
+			Err:       errors.New("database is locked"),
+		})
+	}
+	lines := decodeJournalErrorLines(t, output)
+	if len(lines) != 3 {
+		t.Fatalf("metadata journal failures produced %d lines, want 3", len(lines))
+	}
+	for index, line := range lines {
+		if line["level"] != "warn" || line["msg"] != "persist search-job history" ||
+			line["journal_operation"] != "finalize" || line["job_id"] != fmt.Sprintf("search_%d", index) {
+			t.Fatalf("metadata journal failure line = %v", line)
+		}
+		if _, suppressed := line["suppressed_repeats"]; suppressed {
+			t.Fatalf("metadata journal failure carried a suppressed count: %v", line)
+		}
+	}
+}
+
+func TestJournalErrorLoggerFlushReportsSuppressedRepeatsAtShutdown(t *testing.T) {
+	t.Parallel()
+
+	logger, output := newJournalErrorTestLogger()
+	reporter := newJournalErrorLogger(logger, func() time.Time { return time.Unix(1_700_000_000, 0) }, time.Hour)
+	reporter.Flush()
+	if output.Len() != 0 {
+		t.Fatalf("flush without suppressed repeats produced output: %s", output.String())
+	}
+	for index := range 5 {
+		reporter.Report(unsupportedPublicationError(fmt.Sprintf("search_%d", index)))
+	}
+	reporter.Flush()
+	lines := decodeJournalErrorLines(t, output)
+	if len(lines) != 2 {
+		t.Fatalf("report+flush produced %d lines, want 2", len(lines))
+	}
+	summary := lines[1]
+	if summary["level"] != "error" || summary["suppressed_repeats"] != float64(4) ||
+		summary["last_job_id"] != "search_4" {
+		t.Fatalf("flush summary = %v", summary)
+	}
+	if cause, _ := summary["cause"].(string); !strings.Contains(cause, "nfs") {
+		t.Fatalf("flush summary cause = %q", cause)
+	}
+	reporter.Flush()
+	if len(decodeJournalErrorLines(t, output)) != 2 {
+		t.Fatal("second flush reported the same repeats again")
 	}
 }
 
@@ -154,8 +213,11 @@ func TestJournalErrorLoggerHandlesNilAndNonJournalErrors(t *testing.T) {
 	reporter.Report(errors.New("opaque journal fault"))
 	reporter.Report(errors.New("opaque journal fault"))
 	lines := decodeJournalErrorLines(t, output)
-	if len(lines) != 1 || lines[0]["level"] != "warn" || lines[0]["journal_operation"] != "" {
+	if len(lines) != 2 || lines[0]["level"] != "warn" || lines[0]["msg"] != "persist search-job history" {
 		t.Fatalf("non-journal error lines = %v", lines)
+	}
+	if _, operation := lines[0]["journal_operation"]; operation {
+		t.Fatalf("non-journal error carried a journal operation: %v", lines[0])
 	}
 	if reporter.window != journalErrorRepeatWindow {
 		t.Fatalf("default window = %s, want %s", reporter.window, journalErrorRepeatWindow)

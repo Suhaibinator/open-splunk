@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/privatefs"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"golang.org/x/sys/unix"
 )
 
 func decodeSingleLogLine(t *testing.T, output *bytes.Buffer) map[string]any {
@@ -75,6 +77,19 @@ func TestLogControlDatabaseFilesystemStaysQuietOnLocalMounts(t *testing.T) {
 	logControlDatabaseFilesystem(logger, describe, "/var/lib/open-splunk/state/open-splunk.db")
 	if output.Len() != 0 {
 		t.Fatalf("local filesystem produced output: %s", output.String())
+	}
+
+	// A directory that does not exist yet (first start) is silently skipped.
+	missing := func(string) (privatefs.Filesystem, error) {
+		return privatefs.Filesystem{}, fmt.Errorf("inspect filesystem: %w", unix.ENOENT)
+	}
+	logControlDatabaseFilesystem(logger, missing, "/var/lib/open-splunk/new-state/open-splunk.db")
+	if output.Len() != 0 {
+		t.Fatalf("missing directory produced output: %s", output.String())
+	}
+	logControlDatabaseFilesystem(logger, nil, filepath.Join(t.TempDir(), "absent", "open-splunk.db"))
+	if output.Len() != 0 {
+		t.Fatalf("real missing directory produced output: %s", output.String())
 	}
 
 	// A failed inspection is a warning, never an error and never a crash.
