@@ -458,6 +458,9 @@ const (
 	SearchFailureCode_SEARCH_FAILURE_CODE_EXECUTION           SearchFailureCode = 9
 	SearchFailureCode_SEARCH_FAILURE_CODE_INTERNAL            SearchFailureCode = 10
 	SearchFailureCode_SEARCH_FAILURE_CODE_RESULT_EXPIRED      SearchFailureCode = 11
+	// Execution completed, but the exact result artifact could not be persisted
+	// to retained storage, so the computed rows were discarded.
+	SearchFailureCode_SEARCH_FAILURE_CODE_RESULTS_NOT_PERSISTED SearchFailureCode = 12
 )
 
 // Enum value maps for SearchFailureCode.
@@ -475,20 +478,22 @@ var (
 		9:  "SEARCH_FAILURE_CODE_EXECUTION",
 		10: "SEARCH_FAILURE_CODE_INTERNAL",
 		11: "SEARCH_FAILURE_CODE_RESULT_EXPIRED",
+		12: "SEARCH_FAILURE_CODE_RESULTS_NOT_PERSISTED",
 	}
 	SearchFailureCode_value = map[string]int32{
-		"SEARCH_FAILURE_CODE_UNSPECIFIED":         0,
-		"SEARCH_FAILURE_CODE_INVALID_SPL":         1,
-		"SEARCH_FAILURE_CODE_UNSUPPORTED_SPL":     2,
-		"SEARCH_FAILURE_CODE_INVALID_TIME_RANGE":  3,
-		"SEARCH_FAILURE_CODE_INDEX_NOT_FOUND":     4,
-		"SEARCH_FAILURE_CODE_INDEX_FORBIDDEN":     5,
-		"SEARCH_FAILURE_CODE_RESOURCE_LIMIT":      6,
-		"SEARCH_FAILURE_CODE_TIMEOUT":             7,
-		"SEARCH_FAILURE_CODE_STORAGE_UNAVAILABLE": 8,
-		"SEARCH_FAILURE_CODE_EXECUTION":           9,
-		"SEARCH_FAILURE_CODE_INTERNAL":            10,
-		"SEARCH_FAILURE_CODE_RESULT_EXPIRED":      11,
+		"SEARCH_FAILURE_CODE_UNSPECIFIED":           0,
+		"SEARCH_FAILURE_CODE_INVALID_SPL":           1,
+		"SEARCH_FAILURE_CODE_UNSUPPORTED_SPL":       2,
+		"SEARCH_FAILURE_CODE_INVALID_TIME_RANGE":    3,
+		"SEARCH_FAILURE_CODE_INDEX_NOT_FOUND":       4,
+		"SEARCH_FAILURE_CODE_INDEX_FORBIDDEN":       5,
+		"SEARCH_FAILURE_CODE_RESOURCE_LIMIT":        6,
+		"SEARCH_FAILURE_CODE_TIMEOUT":               7,
+		"SEARCH_FAILURE_CODE_STORAGE_UNAVAILABLE":   8,
+		"SEARCH_FAILURE_CODE_EXECUTION":             9,
+		"SEARCH_FAILURE_CODE_INTERNAL":              10,
+		"SEARCH_FAILURE_CODE_RESULT_EXPIRED":        11,
+		"SEARCH_FAILURE_CODE_RESULTS_NOT_PERSISTED": 12,
 	}
 )
 
@@ -1547,7 +1552,7 @@ const file_open_splunk_search_proto_rawDesc = "" +
 	"!SEARCH_EXECUTION_PHASE_OPTIMIZING\x10\x04\x12$\n" +
 	" SEARCH_EXECUTION_PHASE_EXECUTING\x10\x05\x120\n" +
 	",SEARCH_EXECUTION_PHASE_MATERIALIZING_RESULTS\x10\x06\x12#\n" +
-	"\x1fSEARCH_EXECUTION_PHASE_COMPLETE\x10\a*\xe7\x03\n" +
+	"\x1fSEARCH_EXECUTION_PHASE_COMPLETE\x10\a*\x96\x04\n" +
 	"\x11SearchFailureCode\x12#\n" +
 	"\x1fSEARCH_FAILURE_CODE_UNSPECIFIED\x10\x00\x12#\n" +
 	"\x1fSEARCH_FAILURE_CODE_INVALID_SPL\x10\x01\x12'\n" +
@@ -1561,7 +1566,8 @@ const file_open_splunk_search_proto_rawDesc = "" +
 	"\x1dSEARCH_FAILURE_CODE_EXECUTION\x10\t\x12 \n" +
 	"\x1cSEARCH_FAILURE_CODE_INTERNAL\x10\n" +
 	"\x12&\n" +
-	"\"SEARCH_FAILURE_CODE_RESULT_EXPIRED\x10\vBCZAgithub.com/Suhaibinator/open-splunk/gen/go/open_splunk;opensplunkb\x06proto3"
+	"\"SEARCH_FAILURE_CODE_RESULT_EXPIRED\x10\v\x12-\n" +
+	")SEARCH_FAILURE_CODE_RESULTS_NOT_PERSISTED\x10\fBCZAgithub.com/Suhaibinator/open-splunk/gen/go/open_splunk;opensplunkb\x06proto3"
 
 var (
 	file_open_splunk_search_proto_rawDescOnce sync.Once

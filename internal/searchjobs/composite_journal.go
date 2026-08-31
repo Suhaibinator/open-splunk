@@ -162,7 +162,10 @@ func (journal *CompositeJournal) finalizeCompleted(
 		// must not remain an externally queued durable job. Project a terminal,
 		// sanitized storage failure only after publication has failed. This wakes
 		// scheduled consumers without claiming unavailable results completed.
-		compensating := resultPublicationCompensation(job)
+		compensating := resultPublicationCompensation(
+			job,
+			errors.Join(outcome.Finalize, outcome.Results),
+		)
 		for _, target := range journal.journals {
 			err := invokeJournal(func() error {
 				return target.Finalize(ctx, cloneJob(compensating))
@@ -186,7 +189,17 @@ func (journal *CompositeJournal) finalizeCompleted(
 	return outcome
 }
 
-func resultPublicationCompensation(job Job) Job {
+// Client-safe explanations for a discarded completed result. They name the
+// class of storage fault without paths, filesystem types, or syscall text.
+const (
+	resultsNotPersistedMessage = "Search completed, but its results could not be persisted to retained storage. " +
+		"Run the search again once storage is healthy."
+	resultsNotPersistedUnsupportedMessage = "Search completed, but its results could not be persisted: " +
+		"the retained-search directory is on a filesystem that does not support atomic no-replace rename. " +
+		"The server operator must move it to a local filesystem."
+)
+
+func resultPublicationCompensation(job Job, cause error) Job {
 	compensating := cloneJob(job)
 	compensating.State = StateFailed
 	incrementJobVersion(&compensating)
@@ -194,9 +207,11 @@ func resultPublicationCompensation(job Job) Job {
 	compensating.RowCount = 0
 	compensating.ResultBytes = 0
 	compensating.ResultsTruncated = false
-	compensating.Failure = &Failure{
-		Code: FailureStorageUnavailable, Message: "retained search results are unavailable",
+	message := resultsNotPersistedMessage
+	if errors.Is(cause, ErrResultStorageUnsupported) {
+		message = resultsNotPersistedUnsupportedMessage
 	}
+	compensating.Failure = &Failure{Code: FailureResultsNotPersisted, Message: message}
 	return compensating
 }
 

@@ -88,6 +88,24 @@ func searchJobToProto(job searchjobs.Job, now time.Time) (*opensplunk.SearchJob,
 		result.Failure = searchjobproto.Failure(*job.Failure)
 		result.Diagnostics = searchjobproto.Diagnostics(job.Failure.Diagnostics)
 	}
+	if job.Failure != nil && job.Failure.Code == searchjobs.FailureResultsNotPersisted {
+		// The search itself succeeded; surface the discarded artifact as a
+		// stable-code notice so clients can distinguish it from an executor
+		// failure and from a job that is still finalizing.
+		occurredAt := job.FinishedAt
+		if occurredAt.IsZero() {
+			occurredAt = now.Round(0).UTC()
+		}
+		warningTime, timestampErr := validTimestamp(occurredAt)
+		if timestampErr != nil {
+			return nil, timestampErr
+		}
+		result.Warnings = append(result.Warnings, &opensplunk.ApiWarning{
+			Code:       "RESULTS_NOT_PERSISTED",
+			Message:    job.Failure.Message,
+			OccurredAt: warningTime,
+		})
+	}
 	if job.ResultsTruncated {
 		occurredAt := job.FinishedAt
 		if occurredAt.IsZero() {

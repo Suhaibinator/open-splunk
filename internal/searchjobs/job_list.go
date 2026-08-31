@@ -459,6 +459,8 @@ func safeJobListFailureMessage(failure Failure) string {
 		return "search execution timed out"
 	case FailureStorageUnavailable:
 		return "search storage is unavailable"
+	case FailureResultsNotPersisted:
+		return "search results could not be persisted"
 	case FailureExecution:
 		return "search execution failed"
 	default:

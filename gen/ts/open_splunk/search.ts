@@ -451,6 +451,11 @@ export enum SearchFailureCode {
   SEARCH_FAILURE_CODE_EXECUTION = 9,
   SEARCH_FAILURE_CODE_INTERNAL = 10,
   SEARCH_FAILURE_CODE_RESULT_EXPIRED = 11,
+  /**
+   * SEARCH_FAILURE_CODE_RESULTS_NOT_PERSISTED - Execution completed, but the exact result artifact could not be persisted
+   * to retained storage, so the computed rows were discarded.
+   */
+  SEARCH_FAILURE_CODE_RESULTS_NOT_PERSISTED = 12,
   UNRECOGNIZED = -1,
 }
 
@@ -492,6 +497,9 @@ export function searchFailureCodeFromJSON(object: any): SearchFailureCode {
     case 11:
     case "SEARCH_FAILURE_CODE_RESULT_EXPIRED":
       return SearchFailureCode.SEARCH_FAILURE_CODE_RESULT_EXPIRED;
+    case 12:
+    case "SEARCH_FAILURE_CODE_RESULTS_NOT_PERSISTED":
+      return SearchFailureCode.SEARCH_FAILURE_CODE_RESULTS_NOT_PERSISTED;
     case -1:
     case "UNRECOGNIZED":
     default:
@@ -525,6 +533,8 @@ export function searchFailureCodeToJSON(object: SearchFailureCode): string {
       return "SEARCH_FAILURE_CODE_INTERNAL";
     case SearchFailureCode.SEARCH_FAILURE_CODE_RESULT_EXPIRED:
       return "SEARCH_FAILURE_CODE_RESULT_EXPIRED";
+    case SearchFailureCode.SEARCH_FAILURE_CODE_RESULTS_NOT_PERSISTED:
+      return "SEARCH_FAILURE_CODE_RESULTS_NOT_PERSISTED";
     case SearchFailureCode.UNRECOGNIZED:
     default:
       return "UNRECOGNIZED";

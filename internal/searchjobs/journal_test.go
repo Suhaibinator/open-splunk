@@ -822,7 +822,7 @@ func TestCompletedResultPublicationFailureProjectsTerminalStorageFailure(t *test
 	waitForState(t, manager, created.ID, StateCompleted)
 	select {
 	case job := <-projected:
-		if job.State != StateFailed || job.Failure == nil || job.Failure.Code != FailureStorageUnavailable ||
+		if job.State != StateFailed || job.Failure == nil || job.Failure.Code != FailureResultsNotPersisted ||
 			job.Schema != nil || job.RowCount != 0 || job.ResultBytes != 0 {
 			t.Fatalf("terminal publication projection = %#v", job)
 		}
