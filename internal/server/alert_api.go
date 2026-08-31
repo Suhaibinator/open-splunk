@@ -41,66 +41,73 @@ type alertRunCursor struct {
 	AlertID    string `json:"alert_id"`
 }
 
-func (handler *apiHandler) alertRoutes(noAuth router.AuthLevel, maximumRequestBytes, smallRequestBytes int64) []protobufRouteDefinition {
-	return []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.CreateAlertRequest, *opensplunk.CreateAlertResponse]{
+func (handler *apiHandler) alertRoutes(noAuth router.AuthLevel, maximumRequestBytes, smallRequestBytes int64) []router.RouteDefinition {
+	return []router.RouteDefinition{
+		router.RouteConfig[*opensplunk.CreateAlertRequest, *opensplunk.CreateAlertResponse]{
 			Path: "/alerts/create", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.CreateAlertRequest, *opensplunk.CreateAlertResponse](), Handler: handler.createAlert,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.GetAlertRequest, *opensplunk.GetAlertResponse]{
+			Sanitizer: sanitizeCreateAlertRequest,
+		},
+		router.RouteConfig[*opensplunk.GetAlertRequest, *opensplunk.GetAlertResponse]{
 			Path: "/alerts/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.GetAlertRequest, *opensplunk.GetAlertResponse](), Handler: handler.getAlert,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.ListAlertsRequest, *opensplunk.ListAlertsResponse]{
+			Sanitizer: sanitizeGetAlertRequest,
+		},
+		router.RouteConfig[*opensplunk.ListAlertsRequest, *opensplunk.ListAlertsResponse]{
 			Path: "/alerts/list", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.ListAlertsRequest, *opensplunk.ListAlertsResponse](), Handler: handler.listAlerts,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.UpdateAlertRequest, *opensplunk.UpdateAlertResponse]{
+			Sanitizer: handler.sanitizeListAlertsRequest,
+		},
+		router.RouteConfig[*opensplunk.UpdateAlertRequest, *opensplunk.UpdateAlertResponse]{
 			Path: "/alerts/update", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.UpdateAlertRequest, *opensplunk.UpdateAlertResponse](), Handler: handler.updateAlert,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.SetAlertEnabledRequest, *opensplunk.SetAlertEnabledResponse]{
+			Sanitizer: sanitizeUpdateAlertRequest,
+		},
+		router.RouteConfig[*opensplunk.SetAlertEnabledRequest, *opensplunk.SetAlertEnabledResponse]{
 			Path: "/alerts/state/set", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.SetAlertEnabledRequest, *opensplunk.SetAlertEnabledResponse](), Handler: handler.setAlertEnabled,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.DeleteAlertRequest, *opensplunk.DeleteAlertResponse]{
+			Sanitizer: sanitizeSetAlertEnabledRequest,
+		},
+		router.RouteConfig[*opensplunk.DeleteAlertRequest, *opensplunk.DeleteAlertResponse]{
 			Path: "/alerts/delete", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.DeleteAlertRequest, *opensplunk.DeleteAlertResponse](), Handler: handler.deleteAlert,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.RunAlertRequest, *opensplunk.RunAlertResponse]{
+			Sanitizer: sanitizeDeleteAlertRequest,
+		},
+		router.RouteConfig[*opensplunk.RunAlertRequest, *opensplunk.RunAlertResponse]{
 			Path: "/alerts/run", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.RunAlertRequest, *opensplunk.RunAlertResponse](), Handler: handler.runAlert,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.TestAlertWebhookRequest, *opensplunk.TestAlertWebhookResponse]{
+			Sanitizer: sanitizeRunAlertRequest,
+		},
+		router.RouteConfig[*opensplunk.TestAlertWebhookRequest, *opensplunk.TestAlertWebhookResponse]{
 			Path: "/alerts/webhook/test", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.TestAlertWebhookRequest, *opensplunk.TestAlertWebhookResponse](), Handler: handler.testAlertWebhook,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.RotateAlertSecretRequest, *opensplunk.RotateAlertSecretResponse]{
+			Sanitizer: sanitizeTestAlertWebhookRequest,
+		},
+		router.RouteConfig[*opensplunk.RotateAlertSecretRequest, *opensplunk.RotateAlertSecretResponse]{
 			Path: "/alerts/secret/rotate", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.RotateAlertSecretRequest, *opensplunk.RotateAlertSecretResponse](), Handler: handler.rotateAlertSecret,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.ListAlertRunsRequest, *opensplunk.ListAlertRunsResponse]{
+			Sanitizer: sanitizeRotateAlertSecretRequest,
+		},
+		router.RouteConfig[*opensplunk.ListAlertRunsRequest, *opensplunk.ListAlertRunsResponse]{
 			Path: "/alerts/runs/list", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.ListAlertRunsRequest, *opensplunk.ListAlertRunsResponse](), Handler: handler.listAlertRuns,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-		}),
+			Sanitizer: handler.sanitizeListAlertRunsRequest,
+		},
 	}
 }
 
 func (handler *apiHandler) createAlert(request *http.Request, input *opensplunk.CreateAlertRequest) (*opensplunk.CreateAlertResponse, error) {
-	definition, webhookURL, err := alertDefinitionFromProto(input.GetDefinition(), true)
-	if err != nil {
-		return nil, badRequestError(err.Error())
-	}
+	definition, webhookURL := alertDefinitionFromProto(input.GetDefinition())
 	issued, err := handler.alertService.Create(request.Context(), alerts.CreateInput{
 		OwnerID: handler.ownerID, ClientRequestID: input.GetClientRequestId(), Definition: definition, WebhookURL: webhookURL,
 	})
@@ -123,15 +130,11 @@ func (handler *apiHandler) getAlert(request *http.Request, input *opensplunk.Get
 }
 
 func (handler *apiHandler) listAlerts(request *http.Request, input *opensplunk.ListAlertsRequest) (*opensplunk.ListAlertsResponse, error) {
-	pageSize, pageToken, includeTotal, err := handler.boundedListPageRequest(input.GetPage(), "alert", defaultAlertPageSize, alerts.MaximumAlertsPerOwner)
-	if err != nil {
-		return nil, err
-	}
-	appFilter := strings.TrimSpace(input.GetAppIdFilter())
-	textFilter := strings.ToLower(strings.TrimSpace(input.GetTextFilter()))
-	if len(appFilter) > 128 || len(textFilter) > 256 {
-		return nil, badRequestError("alert filters are too long")
-	}
+	pageSize := input.GetPage().GetPageSize()
+	pageToken := input.GetPage().GetPageToken()
+	includeTotal := input.GetPage().GetIncludeTotalSize()
+	appFilter := input.GetAppIdFilter()
+	textFilter := input.GetTextFilter()
 	cursor := alertListCursor{AppFilter: appFilter, TextFilter: textFilter}
 	if pageToken != "" {
 		if err := cursorcodec.Decode(handler.adminCursorKey[:], alertListCursorDomain, alertCursorVersion, maximumAlertPageTokenBytes, pageToken, &cursor); err != nil || cursor.AppFilter != appFilter || cursor.TextFilter != textFilter {
@@ -182,13 +185,7 @@ func (handler *apiHandler) listAlerts(request *http.Request, input *opensplunk.L
 }
 
 func (handler *apiHandler) updateAlert(request *http.Request, input *opensplunk.UpdateAlertRequest) (*opensplunk.UpdateAlertResponse, error) {
-	if input.GetUpdateMask() != nil && len(input.GetUpdateMask().GetPaths()) != 0 {
-		return nil, badRequestError("partial alert updates are not supported")
-	}
-	definition, webhookURL, err := alertDefinitionFromProto(input.GetDefinition(), false)
-	if err != nil {
-		return nil, badRequestError(err.Error())
-	}
+	definition, webhookURL := alertDefinitionFromProto(input.GetDefinition())
 	updated, err := handler.alertService.Update(request.Context(), alerts.UpdateInput{
 		ID: input.GetAlertId(), OwnerID: handler.ownerID, ExpectedVersion: input.GetExpectedVersion(),
 		Definition: definition, WebhookURL: webhookURL,
@@ -216,7 +213,7 @@ func (handler *apiHandler) setAlertEnabled(request *http.Request, input *openspl
 }
 
 func (handler *apiHandler) deleteAlert(request *http.Request, input *opensplunk.DeleteAlertRequest) (*opensplunk.DeleteAlertResponse, error) {
-	id := strings.TrimSpace(input.GetAlertId())
+	id := input.GetAlertId()
 	err := handler.alertService.Delete(request.Context(), handler.ownerID, id, input.GetExpectedVersion())
 	if mapped := mapAlertCallError(request.Context(), err); mapped != nil {
 		return nil, mapped
@@ -228,11 +225,7 @@ func (handler *apiHandler) runAlert(request *http.Request, input *opensplunk.Run
 	if handler.alertCoordinator == nil {
 		return nil, unavailableError("alert run-now service is unavailable")
 	}
-	id := strings.TrimSpace(input.GetAlertId())
-	if id == "" {
-		return nil, badRequestError("alert ID is required")
-	}
-	run, err := handler.alertCoordinator.RunNow(request.Context(), handler.ownerID, id)
+	run, err := handler.alertCoordinator.RunNow(request.Context(), handler.ownerID, input.GetAlertId())
 	if mapped := mapAlertCallError(request.Context(), err); mapped != nil {
 		return nil, mapped
 	}
@@ -298,14 +291,10 @@ func (handler *apiHandler) rotateAlertSecret(request *http.Request, input *opens
 }
 
 func (handler *apiHandler) listAlertRuns(request *http.Request, input *opensplunk.ListAlertRunsRequest) (*opensplunk.ListAlertRunsResponse, error) {
-	pageSize, pageToken, includeTotal, err := handler.boundedListPageRequest(input.GetPage(), "alert run", defaultAlertPageSize, alerts.MaximumRunHistory)
-	if err != nil {
-		return nil, err
-	}
-	id := strings.TrimSpace(input.GetAlertId())
-	if id == "" {
-		return nil, badRequestError("alert ID is required")
-	}
+	pageSize := input.GetPage().GetPageSize()
+	pageToken := input.GetPage().GetPageToken()
+	includeTotal := input.GetPage().GetIncludeTotalSize()
+	id := input.GetAlertId()
 	cursor := alertRunCursor{AlertID: id}
 	if pageToken != "" {
 		if err := cursorcodec.Decode(handler.adminCursorKey[:], alertRunCursorDomain, alertCursorVersion, maximumAlertPageTokenBytes, pageToken, &cursor); err != nil || cursor.AlertID != id {
@@ -375,53 +364,35 @@ func (handler *apiHandler) listAlertRuns(request *http.Request, input *opensplun
 	return &opensplunk.ListAlertRunsResponse{Runs: result, Page: page}, nil
 }
 
-func alertDefinitionFromProto(input *opensplunk.AlertDefinition, requireWebhookURL bool) (alerts.Definition, string, error) {
-	if input == nil || input.GetSearch() == nil || input.GetSearch().GetTimeRange() == nil || input.GetCondition() == nil || input.GetWebhook() == nil {
-		return alerts.Definition{}, "", errors.New("complete alert definition is required")
-	}
-	if requireWebhookURL && input.GetWebhook().Url == nil {
-		return alerts.Definition{}, "", errors.New("webhook URL is required")
-	}
+// alertDefinitionFromProto converts a definition sanitizeAlertDefinition has
+// already accepted. That sanitizer proved the nested messages exist, the enums
+// map, the index scope and application are canonical, and the visualization
+// marshals, so nothing here can fail and the conversion only fills in the
+// alert defaults the request left absent.
+func alertDefinitionFromProto(input *opensplunk.AlertDefinition) (alerts.Definition, string) {
 	search := input.GetSearch()
-	preferredResultTab, err := alertResultTabFromProto(search.GetPreferredResultTab())
-	if err != nil {
-		return alerts.Definition{}, "", err
-	}
-	condition, err := alertConditionFromProto(input.GetCondition())
-	if err != nil {
-		return alerts.Definition{}, "", err
-	}
-	indexScope, err := normalizeRequestedIndexes(search.GetIndexScope())
-	if err != nil || len(indexScope) == 0 || !slices.Equal(indexScope, search.GetIndexScope()) {
-		return alerts.Definition{}, "", errors.New("alert index scope must be nonempty and canonical")
-	}
-	appID, err := normalizeSearchAppID(search.GetAppId())
-	if err != nil || appID != search.GetAppId() {
-		return alerts.Definition{}, "", errors.New("alert application is invalid")
-	}
+	preferredResultTab, _ := alertResultTabFromProto(search.GetPreferredResultTab())
+	condition, _ := alertConditionFromProto(input.GetCondition())
 	searchTimezone := search.GetTimeRange().GetTimezone()
 	if searchTimezone == "" {
 		searchTimezone = input.GetTimezone()
 	}
 	visualization := []byte(nil)
 	if search.GetVisualization() != nil {
-		visualization, err = proto.Marshal(search.GetVisualization())
-		if err != nil {
-			return alerts.Definition{}, "", errors.New("alert visualization is invalid")
-		}
+		visualization, _ = proto.Marshal(search.GetVisualization())
 	}
 	sampleRows := alerts.DefaultSampleRows
 	if input.GetWebhook().SampleRowCount != nil {
 		sampleRows = int(input.GetWebhook().GetSampleRowCount())
 	}
 	return alerts.Definition{
-		Name: input.GetName(), Description: input.GetDescription(), Application: appID,
+		Name: input.GetName(), Description: input.GetDescription(), Application: search.GetAppId(),
 		SPL: search.GetSpl(), Earliest: search.GetTimeRange().GetEarliest(), Latest: search.GetTimeRange().GetLatest(), SearchTimezone: searchTimezone,
 		Cron: input.GetCron(), Timezone: input.GetTimezone(), Condition: condition,
 		SampleRows: sampleRows, DispatchTTL: input.GetDispatchTtl(), WebhookTTL: input.GetWebhook().GetTtl(),
-		IndexScope: indexScope, Visualization: visualization,
+		IndexScope: slices.Clone(search.GetIndexScope()), Visualization: visualization,
 		SelectedFields: append([]string(nil), search.GetSelectedFields()...), PreferredResultTab: preferredResultTab,
-	}, input.GetWebhook().GetUrl(), nil
+	}, input.GetWebhook().GetUrl()
 }
 
 func alertConditionFromProto(input *opensplunk.AlertCondition) (alerts.Condition, error) {

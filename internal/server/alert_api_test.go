@@ -153,10 +153,11 @@ func TestAlertSummaryProjectionKeepsIndependentEvaluationAndDeliveryTimes(t *tes
 	evaluatedAt := time.Date(2026, time.August, 29, 1, 3, 0, 0, time.UTC)
 	deliveredAt := evaluatedAt.Add(-time.Minute)
 	createdAt := deliveredAt.Add(-time.Hour)
-	definition, _, err := alertDefinitionFromProto(alertAPITestDefinition("Errors", "https://hooks.example.com/alerts"), true)
-	if err != nil {
-		t.Fatalf("alertDefinitionFromProto() error = %v", err)
+	accepted := alertAPITestDefinition("Errors", "https://hooks.example.com/alerts")
+	if err := sanitizeAlertDefinition(accepted, true); err != nil {
+		t.Fatalf("sanitizeAlertDefinition() error = %v", err)
 	}
+	definition, _ := alertDefinitionFromProto(accepted)
 	projected, err := alertSummaryToProto(alerts.AlertSummary{
 		ID: "alert-1", OwnerID: "owner-1", Version: 4, State: alerts.AlertEnabled,
 		Definition: definition, WebhookHostname: "hooks.example.com", SecretGeneration: 2,
@@ -180,10 +181,10 @@ func TestAlertDefinitionPreservesIndependentSearchAndScheduleTimezones(t *testin
 	searchTimezone := "Pacific/Chatham"
 	input.Search.TimeRange.Timezone = &searchTimezone
 	input.Timezone = "America/Los_Angeles"
-	definition, _, err := alertDefinitionFromProto(input, true)
-	if err != nil {
-		t.Fatalf("alertDefinitionFromProto() error = %v", err)
+	if err := sanitizeAlertDefinition(input, true); err != nil {
+		t.Fatalf("sanitizeAlertDefinition() error = %v", err)
 	}
+	definition, _ := alertDefinitionFromProto(input)
 	if definition.SearchTimezone != searchTimezone || definition.Timezone != input.Timezone {
 		t.Fatalf("definition timezones = search %q, schedule %q", definition.SearchTimezone, definition.Timezone)
 	}
@@ -200,16 +201,22 @@ func TestAlertDefinitionDefaultsOnlyAbsentWebhookSampleRows(t *testing.T) {
 	t.Parallel()
 	absent := alertAPITestDefinition("Absent sample", "https://hooks.example.com/alerts")
 	absent.Webhook.SampleRowCount = nil
-	definition, _, err := alertDefinitionFromProto(absent, true)
-	if err != nil || definition.SampleRows != alerts.DefaultSampleRows {
-		t.Fatalf("absent sample rows = %d, %v", definition.SampleRows, err)
+	if err := sanitizeAlertDefinition(absent, true); err != nil {
+		t.Fatalf("sanitizeAlertDefinition(absent) error = %v", err)
+	}
+	definition, _ := alertDefinitionFromProto(absent)
+	if definition.SampleRows != alerts.DefaultSampleRows {
+		t.Fatalf("absent sample rows = %d", definition.SampleRows)
 	}
 
 	explicitZero := alertAPITestDefinition("Zero sample", "https://hooks.example.com/alerts")
 	explicitZero.Webhook.SampleRowCount = proto.Uint32(0)
-	definition, _, err = alertDefinitionFromProto(explicitZero, true)
-	if err != nil || definition.SampleRows != 0 {
-		t.Fatalf("explicit zero sample rows = %d, %v", definition.SampleRows, err)
+	if err := sanitizeAlertDefinition(explicitZero, true); err != nil {
+		t.Fatalf("sanitizeAlertDefinition(explicit zero) error = %v", err)
+	}
+	definition, _ = alertDefinitionFromProto(explicitZero)
+	if definition.SampleRows != 0 {
+		t.Fatalf("explicit zero sample rows = %d", definition.SampleRows)
 	}
 	projected, err := alertDefinitionToProto(definition, "hooks.example.com", 1, time.Now())
 	if err != nil || projected.GetWebhook().SampleRowCount == nil || projected.GetWebhook().GetSampleRowCount() != 0 {
@@ -295,7 +302,11 @@ func TestAlertAPIListRunsProjectsCurrentRetainedResultState(t *testing.T) {
 		},
 	}}
 
-	response, err := handler.listAlertRuns(request, &opensplunk.ListAlertRunsRequest{AlertId: snapshot.AlertID})
+	runsRequest, err := handler.sanitizeListAlertRunsRequest(request.Context(), &opensplunk.ListAlertRunsRequest{AlertId: snapshot.AlertID})
+	if err != nil {
+		t.Fatalf("sanitizeListAlertRunsRequest() error = %v", err)
+	}
+	response, err := handler.listAlertRuns(request, runsRequest)
 	if err != nil {
 		t.Fatalf("listAlertRuns() error = %v", err)
 	}
@@ -309,7 +320,7 @@ func TestAlertAPIListRunsProjectsCurrentRetainedResultState(t *testing.T) {
 	}
 
 	handler.searchArtifacts = &batchListSearchArtifacts{records: map[string]searchartifacts.Record{}}
-	response, err = handler.listAlertRuns(request, &opensplunk.ListAlertRunsRequest{AlertId: snapshot.AlertID})
+	response, err = handler.listAlertRuns(request, runsRequest)
 	if err != nil || response.GetRuns()[0].GetRetainedResultStatus() != opensplunk.RetainedResultStatus_RETAINED_RESULT_STATUS_EXPIRED ||
 		!response.GetRuns()[0].GetSearchJobExpiresAt().AsTime().Equal(initialExpiry) {
 		t.Fatalf("expired retained result projection = %+v, %v", response.GetRuns(), err)
@@ -437,7 +448,11 @@ func TestAlertAPIRunNowUsesCoordinatorAndProjectsRun(t *testing.T) {
 		ResultCount: 0, ResultCountExact: true,
 	}}
 	handler := &apiHandler{alertCoordinator: coordinator, ownerID: "owner-1"}
-	response, err := handler.runAlert(httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/alerts/run", nil), &opensplunk.RunAlertRequest{AlertId: " alert-1 "})
+	runRequest, err := sanitizeRunAlertRequest(context.Background(), &opensplunk.RunAlertRequest{AlertId: " alert-1 "})
+	if err != nil {
+		t.Fatalf("sanitizeRunAlertRequest() error = %v", err)
+	}
+	response, err := handler.runAlert(httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/alerts/run", nil), runRequest)
 	if err != nil {
 		t.Fatalf("runAlert() error = %v", err)
 	}

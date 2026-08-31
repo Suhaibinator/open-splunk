@@ -60,6 +60,60 @@ func TestHandlerPassesConfiguredLoggerToSRouter(t *testing.T) {
 	}
 }
 
+// TestRegisteredProtobufRoutesAllDeclareASanitizer replaces the compile-time
+// wrapper that used to force every protobuf route through one sanitizer. Each
+// route now names its own Sanitizer in its RouteConfig literal, and SRouter
+// warns at registration when a typed route leaves it nil. The Config below
+// enables every route group the in-package fakes can stand up; knowledge,
+// lookup, alert, scheduled-report, index-administration and ingestion-token
+// routes need real services and are covered by their own handler tests.
+func TestRegisteredProtobufRoutesAllDeclareASanitizer(t *testing.T) {
+	t.Parallel()
+
+	core, observed := observer.New(zapcore.WarnLevel)
+	handler := newTestHandler(t, Config{
+		Logger:                   zap.New(core),
+		SearchJobs:               &fakeSearchJobs{},
+		Indexes:                  fakeIndexCatalog{},
+		RuntimeReadiness:         &fakeRuntimeReadiness{},
+		HECOperations:            &staticHECOperationalSnapshotter{},
+		AuditEvents:              &fakeAuditEvents{},
+		SearchAttemptAuditEvents: &fakeSearchAttemptAudit{},
+		ServerSettings:           newFakeServerSettings(),
+		CollectorAdmin:           &fakeCollectorAdministration{},
+		AppAdmin:                 &fakeAppAdministration{},
+		Dashboards:               &fakeDashboards{},
+		SearchHistory:            &fakeSearchHistory{},
+		Exports:                  &fakeExports{},
+		SearchTimelines:          &fakeSearchTimelines{maximum: 1_000},
+		SearchInspections:        &fakeSearchInspections{},
+		SearchFields:             &fakeSearchFields{maximumFields: 100, maximumPage: 10, maximumSummary: 20},
+		SearchSuggestions:        &fakeSearchSuggestions{maximum: 10},
+		BrowserAuthenticator:     testSearchInspectionAuthenticator(t),
+		AppCursorKey:             appAdministrationCursorKey,
+		WebUI:                    testUI(),
+	})
+
+	// SRouter compiles its route tree on the first request, and that is when it
+	// inspects each route's Sanitizer. Bootstrap sits outside the browser gate,
+	// so this one request builds every registered group.
+	response := postProtoHeaders(
+		t,
+		handler,
+		"/api/system/bootstrap",
+		&opensplunk.GetSystemBootstrapRequest{},
+		map[string]string{"Host": "example.com"},
+	)
+	if response.Code != http.StatusOK {
+		t.Fatalf("bootstrap status = %d, want %d", response.Code, http.StatusOK)
+	}
+	for _, entry := range observed.All() {
+		if entry.Message == "Route registered without sanitizer function" {
+			t.Fatalf("protobuf route registered without a sanitizer: %v", entry.ContextMap())
+		}
+	}
+}
+
 // TestSRouterLoggerSamplesRepeatedErrors pins the sampling applied to SRouter's
 // child logger. SRouter logs every HTTPError at Error level, client 4xx
 // included, so an unauthenticated scanner would otherwise write one unsampled

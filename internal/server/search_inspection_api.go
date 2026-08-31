@@ -23,9 +23,9 @@ const maximumSearchInspectionResponseBytes = 8 << 20
 func (handler *apiHandler) searchInspectionRoutes(
 	noAuth router.AuthLevel,
 	smallRequestBytes int64,
-) []protobufRouteDefinition {
-	return []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute(router.RouteConfig[
+) []router.RouteDefinition {
+	return []router.RouteDefinition{
+		router.RouteConfig[
 			*opensplunk.InspectSearchJobRequest,
 			*serializedSearchInspectionResponse,
 		]{
@@ -38,7 +38,8 @@ func (handler *apiHandler) searchInspectionRoutes(
 			Overrides: sroutercommon.RouteOverrides{
 				MaxBodySize: smallRequestBytes,
 			},
-		}),
+			Sanitizer: sanitizeInspectSearchJobRequest,
+		},
 	}
 }
 
@@ -49,11 +50,6 @@ func (handler *apiHandler) inspectSearchJob(
 	access, err := handler.searchInspectionAccess(request)
 	if err != nil {
 		return nil, err
-	}
-	if input == nil ||
-		len(input.ProtoReflect().GetUnknown()) != 0 ||
-		!validSearchInspectionJobID(input.GetSearchJobId()) {
-		return nil, badRequestError("search inspection request is invalid")
 	}
 	if handler.searchInspections == nil {
 		return nil, unavailableError("search inspection service is unavailable")
@@ -75,7 +71,7 @@ func (handler *apiHandler) inspectSearchJob(
 		}
 	}()
 
-	jobID := strings.Clone(input.GetSearchJobId())
+	jobID := input.GetSearchJobId()
 	result, operationErr := handler.searchInspections.Inspect(
 		request.Context(),
 		access,

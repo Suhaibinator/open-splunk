@@ -1678,72 +1678,85 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 	deadlineMiddleware := withSynchronousDeadline(routeTimeout)
 	smallRequestBytes := min(maximumRequestBytes, maximumSmallRequestBytes)
 
-	routes := []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.GetSystemBootstrapRequest, *opensplunk.GetSystemBootstrapResponse]{
+	routes := []router.RouteDefinition{
+		router.RouteConfig[*opensplunk.GetSystemBootstrapRequest, *opensplunk.GetSystemBootstrapResponse]{
 			Path: "/system/bootstrap", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.GetSystemBootstrapRequest, *opensplunk.GetSystemBootstrapResponse](), Handler: handler.getSystemBootstrap,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.ValidateSearchRequest, *opensplunk.ValidateSearchResponse]{
+			Sanitizer: sanitizeGetSystemBootstrapRequest,
+		},
+		router.RouteConfig[*opensplunk.ValidateSearchRequest, *opensplunk.ValidateSearchResponse]{
 			Path: "/search/validate", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.ValidateSearchRequest, *opensplunk.ValidateSearchResponse](), Handler: handler.validateSearch,
 			SourceType: router.Body,
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.CreateSearchJobRequest, *opensplunk.CreateSearchJobResponse]{
+			Sanitizer:  sanitizeValidateSearchRequest,
+		},
+		router.RouteConfig[*opensplunk.CreateSearchJobRequest, *opensplunk.CreateSearchJobResponse]{
 			Path: "/search/jobs/create", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.CreateSearchJobRequest, *opensplunk.CreateSearchJobResponse](), Handler: handler.createSearchJob,
 			SourceType: router.Body,
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.GetSearchJobRequest, *opensplunk.GetSearchJobResponse]{
+			Sanitizer:  sanitizeCreateSearchJobRequest,
+		},
+		router.RouteConfig[*opensplunk.GetSearchJobRequest, *opensplunk.GetSearchJobResponse]{
 			Path: "/search/jobs/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.GetSearchJobRequest, *opensplunk.GetSearchJobResponse](), Handler: handler.getSearchJob,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.ListSearchJobsRequest, *serializedSearchJobListResponse]{
+			Sanitizer: sanitizeGetSearchJobRequest,
+		},
+		router.RouteConfig[*opensplunk.ListSearchJobsRequest, *serializedSearchJobListResponse]{
 			Path: searchJobsListRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedSearchJobListCodec(), Handler: handler.listSearchJobs,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.GetSearchResultsRequest, *serializedSearchResultsResponse]{
+			Sanitizer: handler.sanitizeListSearchJobsRequest,
+		},
+		router.RouteConfig[*opensplunk.GetSearchResultsRequest, *serializedSearchResultsResponse]{
 			Path: "/search/jobs/results", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedSearchResultsCodec(), Handler: handler.getSearchResults,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.CancelSearchJobRequest, *opensplunk.CancelSearchJobResponse]{
+			Sanitizer: handler.sanitizeGetSearchResultsRequest,
+		},
+		router.RouteConfig[*opensplunk.CancelSearchJobRequest, *opensplunk.CancelSearchJobResponse]{
 			Path: "/search/jobs/cancel", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.CancelSearchJobRequest, *opensplunk.CancelSearchJobResponse](), Handler: handler.cancelSearchJob,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.CreateSavedSearchRequest, *opensplunk.CreateSavedSearchResponse]{
+			Sanitizer: sanitizeCancelSearchJobRequest,
+		},
+		router.RouteConfig[*opensplunk.CreateSavedSearchRequest, *opensplunk.CreateSavedSearchResponse]{
 			Path: "/saved-searches/create", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.CreateSavedSearchRequest, *opensplunk.CreateSavedSearchResponse](), Handler: handler.createSavedSearch,
 			SourceType: router.Body,
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.GetSavedSearchRequest, *opensplunk.GetSavedSearchResponse]{
+			Sanitizer:  sanitizeCreateSavedSearchRequest,
+		},
+		router.RouteConfig[*opensplunk.GetSavedSearchRequest, *opensplunk.GetSavedSearchResponse]{
 			Path: "/saved-searches/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.GetSavedSearchRequest, *opensplunk.GetSavedSearchResponse](), Handler: handler.getSavedSearch,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.ListSavedSearchesRequest, *serializedSavedSearchListResponse]{
+			Sanitizer: sanitizeGetSavedSearchRequest,
+		},
+		router.RouteConfig[*opensplunk.ListSavedSearchesRequest, *serializedSavedSearchListResponse]{
 			Path: "/saved-searches/list", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedSavedSearchListCodec(), Handler: handler.listSavedSearches,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.UpdateSavedSearchRequest, *opensplunk.UpdateSavedSearchResponse]{
+			Sanitizer: handler.sanitizeListSavedSearchesRequest,
+		},
+		router.RouteConfig[*opensplunk.UpdateSavedSearchRequest, *opensplunk.UpdateSavedSearchResponse]{
 			Path: "/saved-searches/update", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.UpdateSavedSearchRequest, *opensplunk.UpdateSavedSearchResponse](), Handler: handler.updateSavedSearch,
 			SourceType: router.Body,
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.DuplicateSavedSearchRequest, *opensplunk.DuplicateSavedSearchResponse]{
+			Sanitizer:  sanitizeUpdateSavedSearchRequest,
+		},
+		router.RouteConfig[*opensplunk.DuplicateSavedSearchRequest, *opensplunk.DuplicateSavedSearchResponse]{
 			Path: "/saved-searches/duplicate", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.DuplicateSavedSearchRequest, *opensplunk.DuplicateSavedSearchResponse](), Handler: handler.duplicateSavedSearch,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.DeleteSavedSearchRequest, *opensplunk.DeleteSavedSearchResponse]{
+			Sanitizer: sanitizeDuplicateSavedSearchRequest,
+		},
+		router.RouteConfig[*opensplunk.DeleteSavedSearchRequest, *opensplunk.DeleteSavedSearchResponse]{
 			Path: "/saved-searches/delete", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.DeleteSavedSearchRequest, *opensplunk.DeleteSavedSearchResponse](), Handler: handler.deleteSavedSearch,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-		}),
+			Sanitizer: sanitizeDeleteSavedSearchRequest,
+		},
 	}
 	if handler.dashboards != nil {
 		routes = append(routes, handler.dashboardRoutes(noAuth, smallRequestBytes)...)
@@ -1832,26 +1845,30 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 	}
 	if handler.exports != nil {
 		routes = append(routes,
-			newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.CreateExportJobRequest, *opensplunk.CreateExportJobResponse]{
+			router.RouteConfig[*opensplunk.CreateExportJobRequest, *opensplunk.CreateExportJobResponse]{
 				Path: "/search/exports/create", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 				Codec: codec.NewProtoCodec[*opensplunk.CreateExportJobRequest, *opensplunk.CreateExportJobResponse](), Handler: handler.createExportJob,
 				SourceType: router.Body,
-			}),
-			newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.GetExportJobRequest, *opensplunk.GetExportJobResponse]{
+				Sanitizer:  sanitizeCreateExportJobRequest,
+			},
+			router.RouteConfig[*opensplunk.GetExportJobRequest, *opensplunk.GetExportJobResponse]{
 				Path: "/search/exports/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 				Codec: codec.NewProtoCodec[*opensplunk.GetExportJobRequest, *opensplunk.GetExportJobResponse](), Handler: handler.getExportJob,
 				SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			}),
-			newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.ListExportJobsRequest, *serializedExportListResponse]{
+				Sanitizer: sanitizeGetExportJobRequest,
+			},
+			router.RouteConfig[*opensplunk.ListExportJobsRequest, *serializedExportListResponse]{
 				Path: exportJobsListRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 				Codec: newSerializedExportListCodec(), Handler: handler.listExportJobs,
 				SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			}),
-			newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.CancelExportJobRequest, *opensplunk.CancelExportJobResponse]{
+				Sanitizer: handler.sanitizeListExportJobsRequest,
+			},
+			router.RouteConfig[*opensplunk.CancelExportJobRequest, *opensplunk.CancelExportJobResponse]{
 				Path: "/search/exports/cancel", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 				Codec: codec.NewProtoCodec[*opensplunk.CancelExportJobRequest, *opensplunk.CancelExportJobResponse](), Handler: handler.cancelExportJob,
 				SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			}),
+				Sanitizer: sanitizeCancelExportJobRequest,
+			},
 		)
 	}
 	apiRouter := router.NewRouter[string, struct{}](router.RouterConfig{
@@ -1866,7 +1883,7 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 	apiRouter.Group(apiPathPrefix).
 		Auth(noAuth).
 		Use(disableAPICaching, protobufMiddleware, requestMiddleware, deadlineMiddleware).
-		Route(unwrapProtobufRoutes(routes)...)
+		Route(routes...)
 	if handler.exports != nil {
 		apiRouter.Group("/api").
 			Auth(noAuth).

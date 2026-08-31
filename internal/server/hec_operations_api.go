@@ -101,9 +101,9 @@ func hecOperationalSnapshotToProto(
 func (handler *apiHandler) hecOperationalRoutes(
 	noAuth router.AuthLevel,
 	smallRequestBytes int64,
-) []protobufRouteDefinition {
-	return []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute(router.RouteConfig[
+) []router.RouteDefinition {
+	return []router.RouteDefinition{
+		router.RouteConfig[
 			*opensplunk.GetHECOperationalSnapshotRequest,
 			*opensplunk.GetHECOperationalSnapshotResponse,
 		]{
@@ -114,6 +114,7 @@ func (handler *apiHandler) hecOperationalRoutes(
 			Handler:    handler.getHECOperationalSnapshot,
 			SourceType: router.Body,
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-		}),
+			Sanitizer:  sanitizeGetHECOperationalSnapshotRequest,
+		},
 	}
 }

@@ -205,22 +205,6 @@ func TestPreviewKnowledgeObjectRequestCodecRawLimitBodyCloseAndDetachment(t *tes
 	}
 }
 
-func TestPreviewKnowledgeObjectRequestSanitizerPreservesUnknownAuthorities(t *testing.T) {
-	request := &opensplunk.PreviewKnowledgeObjectRequest{
-		Definition: validateTestDefinition("unknowns"),
-		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"field_alias"}},
-	}
-	request.ProtoReflect().SetUnknown(validateTestVarintField(100, 1))
-	request.UpdateMask.ProtoReflect().SetUnknown(validateTestVarintField(101, 2))
-	request.Definition.GetFieldAlias().ProtoReflect().SetUnknown(validateTestVarintField(102, 3))
-	got, err := forwardCompatibleProtoSanitizer(t.Context(), request)
-	if err != nil || got != request || len(got.ProtoReflect().GetUnknown()) == 0 ||
-		len(got.GetUpdateMask().ProtoReflect().GetUnknown()) == 0 ||
-		len(got.GetDefinition().GetFieldAlias().ProtoReflect().GetUnknown()) == 0 {
-		t.Fatalf("Preview sanitizer changed unknown authorities: %v / %v", got, err)
-	}
-}
-
 func TestPreviewKnowledgeObjectRequestCodecCapsAndSkipsRepeatedCandidateFields(t *testing.T) {
 	codec := newPreviewKnowledgeObjectRequestCodec()
 	selectorPayload := bytes.Repeat(validateTestBytesField(1, nil), 1_000_000)

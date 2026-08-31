@@ -36,28 +36,13 @@ func (handler *apiHandler) listSearchJobs(
 	request *http.Request,
 	input *opensplunk.ListSearchJobsRequest,
 ) (*serializedSearchJobListResponse, error) {
-	if err := validateSearchJobListRequest(input); err != nil {
-		return nil, badRequestError(err.Error())
-	}
-	pageSize, pageToken, includeTotal, err := handler.searchJobListPageRequest(input.GetPage())
-	if err != nil {
-		return nil, badRequestError(err.Error())
-	}
-	states, err := searchJobListStateFilters(input.GetStateFilters())
-	if err != nil {
-		return nil, badRequestError(err.Error())
-	}
-	appID, err := optionalBoundedString(input.AppIdFilter, maximumSavedSearchAppIDBytes, "app ID filter")
-	if err != nil {
-		return nil, badRequestError(err.Error())
-	}
-	text, err := optionalBoundedString(input.TextFilter, maximumSearchJobListFilterTextBytes, "text filter")
-	if err != nil {
-		return nil, badRequestError(err.Error())
-	}
-	if text != nil && *text == "" {
-		text = nil
-	}
+	requestPage := input.GetPage()
+	pageSize := int(requestPage.GetPageSize())
+	pageToken := requestPage.GetPageToken()
+	includeTotal := requestPage.GetIncludeTotalSize()
+	states := input.GetStateFilters()
+	appID := input.AppIdFilter
+	text := input.TextFilter
 	var textMatcher *asciifold.Matcher
 	if text != nil {
 		matcher := asciifold.New(*text)
@@ -530,26 +515,6 @@ func (handler *apiHandler) searchJobListPageRequest(page *opensplunk.PageRequest
 	return min(pageSize, maximumSearchJobListRows), pageToken, includeTotal, nil
 }
 
-func searchJobListStateFilters(input []opensplunk.SearchJobState) ([]opensplunk.SearchJobState, error) {
-	if len(input) > maximumSearchJobListStateFilters {
-		return nil, errors.New("state filters cannot contain more than 16 values")
-	}
-	result := make([]opensplunk.SearchJobState, 0, len(input))
-	seen := make(map[opensplunk.SearchJobState]struct{}, len(input))
-	for _, state := range input {
-		if _, managerState := searchJobListManagerState(state); !managerState && state != opensplunk.SearchJobState_SEARCH_JOB_STATE_INTERRUPTED {
-			return nil, errors.New("state filter is invalid or unsupported")
-		}
-		if _, exists := seen[state]; exists {
-			continue
-		}
-		seen[state] = struct{}{}
-		result = append(result, state)
-	}
-	slices.Sort(result)
-	return result, nil
-}
-
 func searchJobListManagerState(input opensplunk.SearchJobState) (searchjobs.State, bool) {
 	switch input {
 	case opensplunk.SearchJobState_SEARCH_JOB_STATE_QUEUED:
@@ -635,17 +600,6 @@ func searchJobListPageResponse(
 		includeTotal,
 		maximumSearchJobListPageTokenBytes,
 	)
-}
-
-func validateSearchJobListRequest(input *opensplunk.ListSearchJobsRequest) error {
-	if input == nil {
-		return errors.New("search job list request is required")
-	}
-	if len(input.ProtoReflect().GetUnknown()) != 0 ||
-		input.GetPage() != nil && len(input.GetPage().ProtoReflect().GetUnknown()) != 0 {
-		return errors.New("search job list request is invalid")
-	}
-	return nil
 }
 
 func validSearchJobListFailure(state searchjobs.State, failure *searchjobs.Failure) bool {

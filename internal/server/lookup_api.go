@@ -82,43 +82,50 @@ func (handler *apiHandler) lookupManagementConfigured() bool {
 	return handler != nil && !isNilDependency(handler.lookupManagement) && handler.lookupManagement.Ready()
 }
 
-func (handler *apiHandler) lookupManagementRoutes(noAuth router.AuthLevel) []protobufRouteDefinition {
-	return []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.CreateLookupRequest, *serializedCreateLookupResponse]{
+func (handler *apiHandler) lookupManagementRoutes(noAuth router.AuthLevel) []router.RouteDefinition {
+	return []router.RouteDefinition{
+		router.RouteConfig[*opensplunk.CreateLookupRequest, *serializedCreateLookupResponse]{
 			Path: lookupCreateRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newLookupBoundedCodec(codec.NewProtoCodec[*opensplunk.CreateLookupRequest, *opensplunk.CreateLookupResponse](), "create"), Handler: handler.createLookup,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumLookupMutationRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.GetLookupRequest, *serializedGetLookupResponse]{
+			Sanitizer: sanitizeCreateLookupRequest,
+		},
+		router.RouteConfig[*opensplunk.GetLookupRequest, *serializedGetLookupResponse]{
 			Path: lookupGetRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newLookupBoundedCodec(codec.NewProtoCodec[*opensplunk.GetLookupRequest, *opensplunk.GetLookupResponse](), "get"), Handler: handler.getLookup,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumLookupSmallRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.ListLookupsRequest, *serializedListLookupsResponse]{
+			Sanitizer: sanitizeGetLookupRequest,
+		},
+		router.RouteConfig[*opensplunk.ListLookupsRequest, *serializedListLookupsResponse]{
 			Path: lookupListRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newLookupBoundedCodec(codec.NewProtoCodec[*opensplunk.ListLookupsRequest, *opensplunk.ListLookupsResponse](), "list"), Handler: handler.listLookups,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumLookupSmallRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.ReplaceLookupRequest, *serializedReplaceLookupResponse]{
+			Sanitizer: sanitizeListLookupsRequest,
+		},
+		router.RouteConfig[*opensplunk.ReplaceLookupRequest, *serializedReplaceLookupResponse]{
 			Path: lookupReplaceRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newLookupBoundedCodec(codec.NewProtoCodec[*opensplunk.ReplaceLookupRequest, *opensplunk.ReplaceLookupResponse](), "replace"), Handler: handler.replaceLookup,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumLookupMutationRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.SetLookupStateRequest, *serializedSetLookupStateResponse]{
+			Sanitizer: sanitizeReplaceLookupRequest,
+		},
+		router.RouteConfig[*opensplunk.SetLookupStateRequest, *serializedSetLookupStateResponse]{
 			Path: lookupSetStateRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newLookupBoundedCodec(codec.NewProtoCodec[*opensplunk.SetLookupStateRequest, *opensplunk.SetLookupStateResponse](), "set state"), Handler: handler.setLookupState,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumLookupSmallRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.DeleteLookupRequest, *serializedDeleteLookupResponse]{
+			Sanitizer: sanitizeSetLookupStateRequest,
+		},
+		router.RouteConfig[*opensplunk.DeleteLookupRequest, *serializedDeleteLookupResponse]{
 			Path: lookupDeleteRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newLookupBoundedCodec(codec.NewProtoCodec[*opensplunk.DeleteLookupRequest, *opensplunk.DeleteLookupResponse](), "delete"), Handler: handler.deleteLookup,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumLookupSmallRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.PreviewLookupRequest, *serializedPreviewLookupResponse]{
+			Sanitizer: sanitizeDeleteLookupRequest,
+		},
+		router.RouteConfig[*opensplunk.PreviewLookupRequest, *serializedPreviewLookupResponse]{
 			Path: lookupPreviewRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newLookupBoundedCodec(codec.NewProtoCodec[*opensplunk.PreviewLookupRequest, *opensplunk.PreviewLookupResponse](), "preview"), Handler: handler.previewLookup,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumLookupMutationRequestBytes},
-		}),
+			Sanitizer: sanitizePreviewLookupRequest,
+		},
 	}
 }
 
@@ -274,9 +281,10 @@ func boundedLookupDefinitionRepeatedShape(definition *opensplunk.LookupDefinitio
 			len(selector.GetSourcetypePatterns()) <= knowledge.MaximumSelectorPatternsPerDimension
 }
 
-// rejectUnknownLookupDefinition prevents a newer client's persisted semantic
-// fields from being silently discarded while retaining forward compatibility
-// for unknown request-envelope fields.
+// rejectUnknownLookupDefinition draws the line the envelope does not: a
+// definition carrying fields this server does not define is refused rather than
+// persisted with bytes it cannot validate. Unknown request-envelope fields stay
+// tolerated.
 func rejectUnknownLookupDefinition(definition *opensplunk.LookupDefinition) error {
 	if definition == nil {
 		return nil

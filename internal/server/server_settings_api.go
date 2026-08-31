@@ -18,18 +18,20 @@ import (
 func (handler *apiHandler) serverSettingsRoutes(
 	noAuth router.AuthLevel,
 	maximumRequestBytes int64,
-) []protobufRouteDefinition {
-	return []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.GetServerSettingsRequest, *opensplunk.GetServerSettingsResponse]{
+) []router.RouteDefinition {
+	return []router.RouteDefinition{
+		router.RouteConfig[*opensplunk.GetServerSettingsRequest, *opensplunk.GetServerSettingsResponse]{
 			Path: "/server/settings/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.GetServerSettingsRequest, *opensplunk.GetServerSettingsResponse](), Handler: handler.getServerSettings,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.UpdateServerSettingsRequest, *opensplunk.UpdateServerSettingsResponse]{
+			Sanitizer: sanitizeGetServerSettingsRequest,
+		},
+		router.RouteConfig[*opensplunk.UpdateServerSettingsRequest, *opensplunk.UpdateServerSettingsResponse]{
 			Path: "/server/settings/update", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.UpdateServerSettingsRequest, *opensplunk.UpdateServerSettingsResponse](), Handler: handler.updateServerSettings,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumRequestBytes},
-		}),
+			Sanitizer: sanitizeUpdateServerSettingsRequest,
+		},
 	}
 }
 
@@ -48,10 +50,7 @@ func (handler *apiHandler) updateServerSettings(
 	request *http.Request,
 	input *opensplunk.UpdateServerSettingsRequest,
 ) (*opensplunk.UpdateServerSettingsResponse, error) {
-	limits, err := searchLimitsFromProto(input.GetLimits())
-	if err != nil {
-		return nil, router.NewHTTPError(http.StatusBadRequest, "search limits are invalid")
-	}
+	limits := searchLimitsPolicy(input.GetLimits())
 	current, err := handler.serverSettings.Update(request.Context(), input.GetExpectedVersion(), limits)
 	if err != nil {
 		switch {
@@ -113,7 +112,14 @@ func searchLimitsFromProto(value *opensplunk.SearchLimits) (searchlimits.Policy,
 	if err := value.GetResultRetention().CheckValid(); err != nil {
 		return searchlimits.Policy{}, err
 	}
-	result := searchlimits.Policy{
+	result := searchLimitsPolicy(value)
+	return result, searchlimits.Validate(result)
+}
+
+// searchLimitsPolicy converts a policy message that sanitizeUpdateServerSettingsRequest
+// has already proved complete and in range, so the conversion cannot fail.
+func searchLimitsPolicy(value *opensplunk.SearchLimits) searchlimits.Policy {
+	return searchlimits.Policy{
 		MaxRuntime:          value.GetMaximumRuntime().AsDuration(),
 		MaxMemoryBytes:      value.GetMaximumMemoryBytes(),
 		MaxRowsToRead:       value.GetMaximumRowsToRead(),
@@ -126,5 +132,4 @@ func searchLimitsFromProto(value *opensplunk.SearchLimits) (searchlimits.Policy,
 		MaxConcurrent:       value.GetMaximumConcurrentSearches(),
 		ResultRetention:     value.GetResultRetention().AsDuration(),
 	}
-	return result, searchlimits.Validate(result)
 }

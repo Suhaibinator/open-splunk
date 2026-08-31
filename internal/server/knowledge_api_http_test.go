@@ -267,7 +267,7 @@ func newKnowledgeHTTPHandler(
 // production API router.
 func newKnowledgeHTTPRouter(handler *apiHandler) http.Handler {
 	noAuth := router.NoAuth
-	routes := unwrapProtobufRoutes(handler.knowledgeManagementRoutes(noAuth))
+	routes := handler.knowledgeManagementRoutes(noAuth)
 	inner := router.NewRouter[string, struct{}](router.RouterConfig{
 		ServiceName:       "open-splunk-knowledge-http-test",
 		GlobalTimeout:     0,
@@ -662,7 +662,7 @@ func TestKnowledgeHTTPUserIsRejectedBeforeMalformedBodyDecode(t *testing.T) {
 	}
 }
 
-func TestKnowledgeHTTPDefinitionUnknownFieldsAreRejectedButOuterUnknownsAreDiscarded(
+func TestKnowledgeHTTPDefinitionAndEnvelopeUnknownFieldsAreRejected(
 	t *testing.T,
 ) {
 	t.Parallel()
@@ -721,17 +721,14 @@ func TestKnowledgeHTTPDefinitionUnknownFieldsAreRejectedButOuterUnknownsAreDisca
 		}
 	})
 
-	t.Run("outer and non-definition nested unknowns are discarded", func(t *testing.T) {
+	// The envelope unknown is the catalog's rejection, not the sanitizer's: the
+	// UI ships inside this binary, so an unknown envelope field is a bug or a
+	// hand-crafted request, and a mutation is refused rather than persisted with
+	// bytes this server cannot validate.
+	t.Run("outer and non-definition nested unknowns are rejected", func(t *testing.T) {
 		appender := &knowledgeBoundaryAppender{}
 		apps := knowledgeHTTPApps()
-		writer := &knowledgeHTTPWriter{
-			createFn: func(_ context.Context, _ knowledgecatalog.WriteScope, request *opensplunk.CreateKnowledgeObjectRequest) (*opensplunk.CreateKnowledgeObjectResponse, error) {
-				if len(request.ProtoReflect().GetUnknown()) != 0 {
-					t.Fatal("outer request unknown fields reached Writer")
-				}
-				return &opensplunk.CreateKnowledgeObjectResponse{KnowledgeObject: knowledgeHTTPProtoObject(t), TenantCatalogRevision: 1, TenantCatalogStateToken: bytes.Repeat([]byte{1}, 32)}, nil
-			},
-		}
+		writer := &knowledgeHTTPWriter{}
 		_, httpHandler := newKnowledgeHTTPHandler(t, auth.BrowserRoleAdministrator, &knowledgeHTTPCatalog{}, writer, apps, appender)
 		request := &opensplunk.CreateKnowledgeObjectRequest{
 			Definition:      knowledgeHTTPDefinition(opensplunk.SharingScope_SHARING_SCOPE_PRIVATE),
@@ -740,8 +737,16 @@ func TestKnowledgeHTTPDefinitionUnknownFieldsAreRejectedButOuterUnknownsAreDisca
 		}
 		addKnowledgeHTTPUnknown(request)
 		response := knowledgeHTTPPost(t, httpHandler, knowledgeObjectsCreatePath, request)
-		if response.Code != http.StatusOK || writer.callCounts() != [4]int{1, 0, 0, 0} || len(appender.snapshot()) != 0 {
-			t.Fatalf("status=%d body=%q writer=%v attempts=%+v", response.Code, response.Body.String(), writer.callCounts(), appender.snapshot())
+		calls := appender.snapshot()
+		// The app scope is resolved exactly once here, unlike the two definition
+		// cases above: the sanitizer refuses a definition unknown before any app
+		// lookup, while an envelope unknown is the catalog's refusal, which by
+		// design is judged only after the caller's app scope is known.
+		if response.Code != http.StatusBadRequest || writer.callCounts() != [4]int{} ||
+			apps.callCount() != 1 || len(calls) != 1 ||
+			calls[0].definition.Action != knowledgeattemptaudit.ActionCreate ||
+			calls[0].definition.Reason != knowledgeattemptaudit.ReasonInvalidDefinition {
+			t.Fatalf("status=%d body=%q writer=%v apps=%d attempts=%+v", response.Code, response.Body.String(), writer.callCounts(), apps.callCount(), calls)
 		}
 	})
 }

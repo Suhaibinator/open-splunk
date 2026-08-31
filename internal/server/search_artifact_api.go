@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/Suhaibinator/SRouter/pkg/codec"
@@ -32,30 +31,33 @@ type searchArtifactCursor struct {
 	Offset     uint64 `json:"offset"`
 }
 
-func (handler *apiHandler) searchArtifactRoutes(noAuth router.AuthLevel, smallRequestBytes int64) []protobufRouteDefinition {
-	return []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.GetSearchJobSettingsRequest, *opensplunk.GetSearchJobSettingsResponse]{
+func (handler *apiHandler) searchArtifactRoutes(noAuth router.AuthLevel, smallRequestBytes int64) []router.RouteDefinition {
+	return []router.RouteDefinition{
+		router.RouteConfig[*opensplunk.GetSearchJobSettingsRequest, *opensplunk.GetSearchJobSettingsResponse]{
 			Path: "/search/jobs/settings/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.GetSearchJobSettingsRequest, *opensplunk.GetSearchJobSettingsResponse](), Handler: handler.getSearchJobSettings,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.UpdateSearchJobSettingsRequest, *opensplunk.UpdateSearchJobSettingsResponse]{
+			Sanitizer: sanitizeGetSearchJobSettingsRequest,
+		},
+		router.RouteConfig[*opensplunk.UpdateSearchJobSettingsRequest, *opensplunk.UpdateSearchJobSettingsResponse]{
 			Path: "/search/jobs/settings/update", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.UpdateSearchJobSettingsRequest, *opensplunk.UpdateSearchJobSettingsResponse](), Handler: handler.updateSearchJobSettings,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.ShareSearchJobRequest, *opensplunk.ShareSearchJobResponse]{
+			Sanitizer: sanitizeUpdateSearchJobSettingsRequest,
+		},
+		router.RouteConfig[*opensplunk.ShareSearchJobRequest, *opensplunk.ShareSearchJobResponse]{
 			Path: "/search/jobs/share", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.ShareSearchJobRequest, *opensplunk.ShareSearchJobResponse](), Handler: handler.shareSearchJob,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-		}),
+			Sanitizer: sanitizeShareSearchJobRequest,
+		},
 	}
 }
 
 func (handler *apiHandler) getSearchJobSettings(request *http.Request, input *opensplunk.GetSearchJobSettingsRequest) (*opensplunk.GetSearchJobSettingsResponse, error) {
-	record, err := handler.retainedRecord(request.Context(), input.GetSearchJobId(), searchartifacts.AccessRefresh)
+	record, err := handler.searchArtifacts.Get(request.Context(), handler.accessScope(), input.GetSearchJobId(), searchartifacts.AccessRefresh)
 	if err != nil {
-		return nil, err
+		return nil, mapSearchArtifactError(err)
 	}
 	projected, err := retainedSearchJobToProto(record, handler.now())
 	if err != nil {
@@ -65,15 +67,7 @@ func (handler *apiHandler) getSearchJobSettings(request *http.Request, input *op
 }
 
 func (handler *apiHandler) updateSearchJobSettings(request *http.Request, input *opensplunk.UpdateSearchJobSettingsRequest) (*opensplunk.UpdateSearchJobSettingsResponse, error) {
-	id := strings.TrimSpace(input.GetSearchJobId())
-	if id == "" || input.GetExpectedStateVersion() == 0 {
-		return nil, badRequestError("search job ID and expected state version are required")
-	}
-	settings, err := retainedSettingsFromProto(input.GetVisibility(), input.GetRetentionClass())
-	if err != nil {
-		return nil, badRequestError(err.Error())
-	}
-	record, err := handler.searchArtifacts.UpdateSettingsExpected(request.Context(), handler.accessScope(), id, settings, input.GetExpectedStateVersion())
+	record, err := handler.searchArtifacts.UpdateSettingsExpected(request.Context(), handler.accessScope(), input.GetSearchJobId(), retainedSettings(input.GetVisibility()), input.GetExpectedStateVersion())
 	if err != nil {
 		return nil, mapSearchArtifactError(err)
 	}
@@ -85,11 +79,7 @@ func (handler *apiHandler) updateSearchJobSettings(request *http.Request, input 
 }
 
 func (handler *apiHandler) shareSearchJob(request *http.Request, input *opensplunk.ShareSearchJobRequest) (*opensplunk.ShareSearchJobResponse, error) {
-	id := strings.TrimSpace(input.GetSearchJobId())
-	if id == "" || input.GetExpectedStateVersion() == 0 {
-		return nil, badRequestError("search job ID and expected state version are required")
-	}
-	record, err := handler.searchArtifacts.ShareExpected(request.Context(), handler.accessScope(), id, input.GetExpectedStateVersion())
+	record, err := handler.searchArtifacts.ShareExpected(request.Context(), handler.accessScope(), input.GetSearchJobId(), input.GetExpectedStateVersion())
 	if err != nil {
 		return nil, mapSearchArtifactError(err)
 	}
@@ -100,29 +90,14 @@ func (handler *apiHandler) shareSearchJob(request *http.Request, input *opensplu
 	return &opensplunk.ShareSearchJobResponse{SearchJob: projected}, nil
 }
 
-func retainedSettingsFromProto(visibility opensplunk.SearchJobVisibility, retention opensplunk.SearchJobRetentionClass) (searchartifacts.Settings, error) {
-	switch {
-	case visibility == opensplunk.SearchJobVisibility_SEARCH_JOB_VISIBILITY_PRIVATE &&
-		retention == opensplunk.SearchJobRetentionClass_SEARCH_JOB_RETENTION_CLASS_MANUAL:
-		return searchartifacts.Settings{Visibility: searchartifacts.VisibilityPrivate, RetentionClass: searchartifacts.RetentionManual, Lifetime: searchretention.ManualLifetime}, nil
-	case visibility == opensplunk.SearchJobVisibility_SEARCH_JOB_VISIBILITY_EVERYONE &&
-		retention == opensplunk.SearchJobRetentionClass_SEARCH_JOB_RETENTION_CLASS_SHARED:
-		return searchartifacts.Settings{Visibility: searchartifacts.VisibilityEveryone, RetentionClass: searchartifacts.RetentionShared, Lifetime: searchretention.SharedLifetime}, nil
-	default:
-		return searchartifacts.Settings{}, errors.New("visibility and retention class combination is invalid")
+// retainedSettings projects the visibility a sanitized update request asked
+// for. requestableRetainedSettings has already rejected every pair but the two
+// below, so the retention class and lifetime follow from the visibility alone.
+func retainedSettings(visibility opensplunk.SearchJobVisibility) searchartifacts.Settings {
+	if visibility == opensplunk.SearchJobVisibility_SEARCH_JOB_VISIBILITY_EVERYONE {
+		return searchartifacts.Settings{Visibility: searchartifacts.VisibilityEveryone, RetentionClass: searchartifacts.RetentionShared, Lifetime: searchretention.SharedLifetime}
 	}
-}
-
-func (handler *apiHandler) retainedRecord(ctx context.Context, id string, mode searchartifacts.AccessMode) (searchartifacts.Record, error) {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return searchartifacts.Record{}, badRequestError("search job ID is required")
-	}
-	record, err := handler.searchArtifacts.Get(ctx, handler.accessScope(), id, mode)
-	if err != nil {
-		return searchartifacts.Record{}, mapSearchArtifactError(err)
-	}
-	return record, nil
+	return searchartifacts.Settings{Visibility: searchartifacts.VisibilityPrivate, RetentionClass: searchartifacts.RetentionManual, Lifetime: searchretention.ManualLifetime}
 }
 
 func retainedSearchJobToProto(record searchartifacts.Record, now time.Time) (*opensplunk.SearchJob, error) {

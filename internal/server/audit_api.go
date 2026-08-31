@@ -25,9 +25,9 @@ const (
 func (handler *apiHandler) auditEventRoutes(
 	noAuth router.AuthLevel,
 	smallRequestBytes int64,
-) []protobufRouteDefinition {
-	return []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute(router.RouteConfig[
+) []router.RouteDefinition {
+	return []router.RouteDefinition{
+		router.RouteConfig[
 			*opensplunk.ListAuditEventsRequest,
 			*serializedAuditEventListResponse,
 		]{
@@ -40,7 +40,8 @@ func (handler *apiHandler) auditEventRoutes(
 			Overrides: sroutercommon.RouteOverrides{
 				MaxBodySize: smallRequestBytes,
 			},
-		}),
+			Sanitizer: handler.sanitizeListAuditEventsRequest,
+		},
 	}
 }
 
@@ -55,10 +56,7 @@ func (handler *apiHandler) listAuditEvents(
 	if handler.auditEvents == nil {
 		return nil, unavailableError("audit event service is unavailable")
 	}
-	listRequest, err := handler.auditListRequest(input)
-	if err != nil {
-		return nil, err
-	}
+	listRequest := auditListRequest(input)
 	if err := auditListContextError(request.Context()); err != nil {
 		return nil, err
 	}
@@ -112,81 +110,38 @@ func (handler *apiHandler) administratorAuditTenantAccess(
 	return principal.TenantID(), nil
 }
 
-func (handler *apiHandler) auditListRequest(
+// auditListRequest projects a request that sanitizeListAuditEventsRequest has
+// already validated and resolved, so every conversion below is total.
+func auditListRequest(
 	input *opensplunk.ListAuditEventsRequest,
-) (audit.ListRequest, error) {
-	if input == nil || len(input.ProtoReflect().GetUnknown()) != 0 {
-		return audit.ListRequest{}, badRequestError(
-			"audit event list request is invalid",
-		)
-	}
-	pageSize, pageToken, includeTotal, err := handler.boundedListPageRequest(
-		input.Page,
-		"audit event",
-		defaultAuditListPageSize,
-		audit.MaximumListPageSize,
-	)
-	if err != nil {
-		return audit.ListRequest{}, err
-	}
-
-	if len(input.GetActionFilters()) > audit.MaximumActionFilters {
-		return audit.ListRequest{}, badRequestError(
-			"audit event action filters are invalid",
-		)
-	}
+) audit.ListRequest {
+	page := input.GetPage()
 	actions := make([]audit.Action, 0, len(input.GetActionFilters()))
-	seenActions := make(map[audit.Action]struct{}, len(input.GetActionFilters()))
 	for _, value := range input.GetActionFilters() {
-		action, ok := auditActionFromProto(value)
-		if !ok {
-			return audit.ListRequest{}, badRequestError(
-				"audit event action filter is invalid",
-			)
-		}
-		if _, duplicate := seenActions[action]; duplicate {
-			return audit.ListRequest{}, badRequestError(
-				"audit event action filter is duplicated",
-			)
-		}
-		seenActions[action] = struct{}{}
+		action, _ := auditActionFromProto(value)
 		actions = append(actions, action)
 	}
 
 	var actorID *string
 	if input.ActorIdFilter != nil {
-		value := input.GetActorIdFilter()
-		if strings.TrimSpace(value) != value || validateBoundedIdentifier(
-			value,
-			maximumAuditActorIDBytes,
-			false,
-		) != nil {
-			return audit.ListRequest{}, badRequestError(
-				"audit event actor filter is invalid",
-			)
-		}
-		actorID = new(strings.Clone(value))
+		actorID = new(input.GetActorIdFilter())
 	}
 
 	var targetKind *audit.TargetKind
 	if input.TargetKindFilter != nil {
-		value, ok := auditTargetKindFromProto(input.GetTargetKindFilter())
-		if !ok {
-			return audit.ListRequest{}, badRequestError(
-				"audit event target filter is invalid",
-			)
-		}
+		value, _ := auditTargetKindFromProto(input.GetTargetKindFilter())
 		targetKind = &value
 	}
 
 	return audit.ListRequest{
-		PageSize:      pageSize,
-		PageToken:     strings.Clone(pageToken),
+		PageSize: page.GetPageSize(),
+		// The token outlives the decoded request inside the ledger call.
+		PageToken:     strings.Clone(page.GetPageToken()),
 		ActionFilters: actions,
 		ActorID:       actorID,
 		TargetKind:    targetKind,
-		IncludeTotal:  includeTotal,
-	}, nil
+		IncludeTotal:  page.GetIncludeTotalSize(),
+	}
 }
 
 func auditListPageToProto(

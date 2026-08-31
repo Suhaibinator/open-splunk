@@ -150,10 +150,16 @@ func TestSavedSearchRoutesRoundTripProtobuf(t *testing.T) {
 		if scope.OwnerID != ownerID || definition.GetOwnerId() != ownerID || definition.GetSearch().GetAppId() != appID {
 			t.Fatalf("create scope/definition = %+v / %+v", scope, definition)
 		}
-		if len(definition.ProtoReflect().GetUnknown()) != 0 ||
-			len(definition.GetSearch().ProtoReflect().GetUnknown()) != 0 {
-			t.Fatalf("create retained unknown fields: %+v", definition)
-		}
+		assertUnknownFieldTolerated(
+			t,
+			definition,
+			futureProtobufField("future-saved-search-definition"),
+		)
+		assertUnknownFieldTolerated(
+			t,
+			definition.GetSearch(),
+			futureProtobufField("future-search-definition"),
+		)
 		definition.Name = "service-mutated-input"
 		return created, nil
 	}
@@ -188,10 +194,21 @@ func TestSavedSearchRoutesRoundTripProtobuf(t *testing.T) {
 		if mask == nil || len(mask.Paths) != 1 || mask.Paths[0] != "definition.name" {
 			t.Fatalf("update mask = %+v", mask)
 		}
-		if len(definition.ProtoReflect().GetUnknown()) != 0 ||
-			len(definition.GetSearch().ProtoReflect().GetUnknown()) != 0 ||
-			len(mask.ProtoReflect().GetUnknown()) != 0 {
-			t.Fatalf("update retained unknown fields: definition=%+v mask=%+v", definition, mask)
+		assertUnknownFieldTolerated(
+			t,
+			definition,
+			futureProtobufField("future-saved-search-update-definition"),
+		)
+		assertUnknownFieldTolerated(
+			t,
+			definition.GetSearch(),
+			futureProtobufField("future-saved-search-update-search"),
+		)
+		// cloneSavedSearchUpdateMask hands the store a fresh mask carrying only
+		// the requested paths, so the caller's unknown mask bytes stop at that
+		// clone rather than being stripped by the route sanitizer.
+		if len(mask.ProtoReflect().GetUnknown()) != 0 {
+			t.Fatalf("update mask clone carried unknown fields: %+v", mask)
 		}
 		mask.Paths[0] = "service-mutated-mask"
 		return updated, nil

@@ -27,9 +27,9 @@ const (
 func (handler *apiHandler) searchAttemptAuditRoutes(
 	noAuth router.AuthLevel,
 	smallRequestBytes int64,
-) []protobufRouteDefinition {
-	return []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute(router.RouteConfig[
+) []router.RouteDefinition {
+	return []router.RouteDefinition{
+		router.RouteConfig[
 			*opensplunk.ListSearchAttemptAuditEventsRequest,
 			*serializedSearchAttemptAuditListResponse,
 		]{
@@ -42,7 +42,8 @@ func (handler *apiHandler) searchAttemptAuditRoutes(
 			Overrides: sroutercommon.RouteOverrides{
 				MaxBodySize: smallRequestBytes,
 			},
-		}),
+			Sanitizer: handler.sanitizeListSearchAttemptAuditEventsRequest,
+		},
 	}
 }
 
@@ -57,10 +58,7 @@ func (handler *apiHandler) listSearchAttemptAuditEvents(
 	if handler.searchAttemptAuditEvents == nil {
 		return nil, unavailableError("search attempt audit service is unavailable")
 	}
-	listRequest, err := handler.searchAttemptAuditListRequest(input)
-	if err != nil {
-		return nil, err
-	}
+	listRequest := searchAttemptAuditListRequest(input)
 	if err := searchAttemptAuditContextError(request.Context()); err != nil {
 		return nil, err
 	}
@@ -111,63 +109,26 @@ func (handler *apiHandler) listSearchAttemptAuditEvents(
 	}, nil
 }
 
-func (handler *apiHandler) searchAttemptAuditListRequest(
+// searchAttemptAuditListRequest projects a request that
+// sanitizeListSearchAttemptAuditEventsRequest has already validated and
+// resolved.
+func searchAttemptAuditListRequest(
 	input *opensplunk.ListSearchAttemptAuditEventsRequest,
-) (searchaudit.ListRequest, error) {
-	if input == nil || len(input.ProtoReflect().GetUnknown()) != 0 {
-		return searchaudit.ListRequest{}, badRequestError(
-			"search attempt audit list request is invalid",
-		)
+) searchaudit.ListRequest {
+	page := input.GetPage()
+	result := searchaudit.ListRequest{
+		PageSize: page.GetPageSize(),
+		// The token outlives the decoded request inside the ledger call.
+		PageToken:    strings.Clone(page.GetPageToken()),
+		IncludeTotal: page.GetIncludeTotalSize(),
 	}
-	pageSize, pageToken, includeTotal, err := handler.boundedListPageRequest(
-		input.Page,
-		"search attempt audit",
-		defaultSearchAttemptAuditListPageSize,
-		searchaudit.MaximumListPageSize,
-	)
-	if err != nil {
-		return searchaudit.ListRequest{}, err
+	if input.ActorIdFilter != nil {
+		result.ActorID = new(input.GetActorIdFilter())
 	}
-
-	actorID, err := optionalSearchAttemptAuditFilter(
-		input.ActorIdFilter,
-		"search attempt audit actor filter is invalid",
-	)
-	if err != nil {
-		return searchaudit.ListRequest{}, err
+	if input.OwnerIdFilter != nil {
+		result.OwnerID = new(input.GetOwnerIdFilter())
 	}
-	ownerID, err := optionalSearchAttemptAuditFilter(
-		input.OwnerIdFilter,
-		"search attempt audit owner filter is invalid",
-	)
-	if err != nil {
-		return searchaudit.ListRequest{}, err
-	}
-	return searchaudit.ListRequest{
-		PageSize:     pageSize,
-		PageToken:    strings.Clone(pageToken),
-		IncludeTotal: includeTotal,
-		ActorID:      actorID,
-		OwnerID:      ownerID,
-	}, nil
-}
-
-func optionalSearchAttemptAuditFilter(
-	input *string,
-	message string,
-) (*string, error) {
-	if input == nil {
-		return nil, nil
-	}
-	value := *input
-	if strings.TrimSpace(value) != value || validateBoundedIdentifier(
-		value,
-		maximumSearchAttemptAuditIdentityBytes,
-		false,
-	) != nil {
-		return nil, badRequestError(message)
-	}
-	return new(strings.Clone(value)), nil
+	return result
 }
 
 func searchAttemptAuditListPageToProto(

@@ -169,89 +169,101 @@ func replaysUnavailableActiveMutations(writer KnowledgeWriter) bool {
 
 func (handler *apiHandler) knowledgeManagementRoutes(
 	noAuth router.AuthLevel,
-) []protobufRouteDefinition {
-	routes := []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.CreateKnowledgeObjectRequest, *serializedCreateKnowledgeObjectResponse]{
+) []router.RouteDefinition {
+	routes := []router.RouteDefinition{
+		router.RouteConfig[*opensplunk.CreateKnowledgeObjectRequest, *serializedCreateKnowledgeObjectResponse]{
 			Path: knowledgeObjectsCreateRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedCreateKnowledgeObjectCodec(), Handler: handler.createKnowledgeObject,
 			SourceType: router.Body,
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeMutationRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.GetKnowledgeObjectRequest, *serializedGetKnowledgeObjectResponse]{
+			Sanitizer:  sanitizeCreateKnowledgeObjectRequest,
+		},
+		router.RouteConfig[*opensplunk.GetKnowledgeObjectRequest, *serializedGetKnowledgeObjectResponse]{
 			Path: knowledgeObjectsGetRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedGetKnowledgeObjectCodec(), Handler: handler.getKnowledgeObject,
 			SourceType: router.Body,
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.ListKnowledgeObjectsRequest, *serializedListKnowledgeObjectsResponse]{
+			Sanitizer:  sanitizeGetKnowledgeObjectRequest,
+		},
+		router.RouteConfig[*opensplunk.ListKnowledgeObjectsRequest, *serializedListKnowledgeObjectsResponse]{
 			Path: knowledgeObjectsListRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedListKnowledgeObjectsCodec(), Handler: handler.listKnowledgeObjects,
 			SourceType: router.Body,
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.ListKnowledgeObjectDependenciesRequest, *serializedListKnowledgeObjectDependenciesResponse]{
+			Sanitizer:  sanitizeListKnowledgeObjectsRequest,
+		},
+		router.RouteConfig[*opensplunk.ListKnowledgeObjectDependenciesRequest, *serializedListKnowledgeObjectDependenciesResponse]{
 			Path: knowledgeObjectsDependenciesRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedListKnowledgeObjectDependenciesCodec(), Handler: handler.listKnowledgeObjectDependencies,
 			SourceType: router.Body,
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.ListKnowledgeObjectDependentsRequest, *serializedListKnowledgeObjectDependentsResponse]{
+			Sanitizer:  sanitizeListKnowledgeObjectDependenciesRequest,
+		},
+		router.RouteConfig[*opensplunk.ListKnowledgeObjectDependentsRequest, *serializedListKnowledgeObjectDependentsResponse]{
 			Path: knowledgeObjectsDependentsRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedListKnowledgeObjectDependentsCodec(), Handler: handler.listKnowledgeObjectDependents,
 			SourceType: router.Body,
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.ValidateKnowledgeObjectRequest, *serializedValidateKnowledgeObjectResponse]{
+			Sanitizer:  sanitizeListKnowledgeObjectDependentsRequest,
+		},
+		router.RouteConfig[*opensplunk.ValidateKnowledgeObjectRequest, *serializedValidateKnowledgeObjectResponse]{
 			Path: knowledgeObjectsValidateRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newValidateKnowledgeObjectCodec(), Handler: handler.validateKnowledgeObject,
 			SourceType: router.Body,
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeMutationRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.UpdateKnowledgeObjectRequest, *serializedUpdateKnowledgeObjectResponse]{
+			Sanitizer:  sanitizeValidateKnowledgeObjectRequest,
+		},
+		router.RouteConfig[*opensplunk.UpdateKnowledgeObjectRequest, *serializedUpdateKnowledgeObjectResponse]{
 			Path: knowledgeObjectsUpdateRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedUpdateKnowledgeObjectCodec(), Handler: handler.updateKnowledgeObject,
 			SourceType: router.Body,
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeMutationRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.SetKnowledgeObjectStateRequest, *serializedSetKnowledgeObjectStateResponse]{
+			Sanitizer:  sanitizeUpdateKnowledgeObjectRequest,
+		},
+		router.RouteConfig[*opensplunk.SetKnowledgeObjectStateRequest, *serializedSetKnowledgeObjectStateResponse]{
 			Path: knowledgeObjectsSetStateRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedSetKnowledgeObjectStateCodec(), Handler: handler.setKnowledgeObjectState,
 			SourceType: router.Body,
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.DeleteKnowledgeObjectRequest, *serializedDeleteKnowledgeObjectResponse]{
+			Sanitizer:  sanitizeSetKnowledgeObjectStateRequest,
+		},
+		router.RouteConfig[*opensplunk.DeleteKnowledgeObjectRequest, *serializedDeleteKnowledgeObjectResponse]{
 			Path: knowledgeObjectsDeleteRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedDeleteKnowledgeObjectCodec(), Handler: handler.deleteKnowledgeObject,
 			SourceType: router.Body,
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
-		}),
+			Sanitizer:  sanitizeDeleteKnowledgeObjectRequest,
+		},
 	}
 	if handler.knowledgePreviewConfigured() {
 		routes = append(
 			routes,
-			newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.PreviewKnowledgeObjectRequest, *serializedPreviewKnowledgeObjectResponse]{
+			router.RouteConfig[*opensplunk.PreviewKnowledgeObjectRequest, *serializedPreviewKnowledgeObjectResponse]{
 				Path: knowledgeObjectsPreviewRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 				Codec: newPreviewKnowledgeObjectRequestCodec(), Handler: handler.previewKnowledgeObject,
 				SourceType: router.Body,
 				Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeMutationRequestBytes},
-			}),
+				Sanitizer:  sanitizePreviewKnowledgeObjectRequest,
+			},
 		)
 	}
 	if _, ready := readyKnowledgeQuarantine(handler.knowledgeWriter); ready {
 		routes = append(
 			routes,
-			newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.PrepareKnowledgeObjectQuarantineRequest, *serializedPrepareKnowledgeObjectQuarantineResponse]{
+			router.RouteConfig[*opensplunk.PrepareKnowledgeObjectQuarantineRequest, *serializedPrepareKnowledgeObjectQuarantineResponse]{
 				Path: knowledgeObjectsQuarantinePrepareRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 				Codec: newSerializedPrepareKnowledgeObjectQuarantineCodec(), Handler: handler.prepareKnowledgeObjectQuarantine,
 				SourceType: router.Body,
 				Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
-			}),
-			newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.QuarantineKnowledgeObjectRequest, *serializedQuarantineKnowledgeObjectResponse]{
+				Sanitizer:  sanitizePrepareKnowledgeObjectQuarantineRequest,
+			},
+			router.RouteConfig[*opensplunk.QuarantineKnowledgeObjectRequest, *serializedQuarantineKnowledgeObjectResponse]{
 				Path: knowledgeObjectsQuarantineRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 				Codec: newSerializedQuarantineKnowledgeObjectCodec(), Handler: handler.quarantineKnowledgeObject,
 				SourceType: router.Body,
 				Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
-			}),
+				Sanitizer:  sanitizeQuarantineKnowledgeObjectRequest,
+			},
 		)
 	}
 	return routes
@@ -380,13 +392,9 @@ func (handler *apiHandler) getKnowledgeObject(
 	request *http.Request,
 	input *opensplunk.GetKnowledgeObjectRequest,
 ) (*serializedGetKnowledgeObjectResponse, error) {
+	// sanitizeGetKnowledgeObjectRequest already bounded the identity and version.
 	submitted, ok := cloneKnowledgeMessage(input)
-	if !ok ||
-		!validKnowledgeIdentity(
-			submitted.GetKnowledgeObjectId(),
-			maximumKnowledgeObjectIDBytes,
-		) || submitted.Version != nil &&
-		(submitted.GetVersion() == 0 || submitted.GetVersion() > math.MaxInt64) {
+	if !ok {
 		return nil, handler.rejectKnowledgeRequest(
 			request,
 			knowledgeattemptaudit.ReasonInvalidDefinition,
@@ -482,14 +490,7 @@ func (handler *apiHandler) listKnowledgeObjects(
 	request *http.Request,
 	input *opensplunk.ListKnowledgeObjectsRequest,
 ) (*serializedListKnowledgeObjectsResponse, error) {
-	if !knowledgeListRequestPreflight(input) {
-		return nil, handler.rejectKnowledgeRequest(
-			request,
-			knowledgeattemptaudit.ReasonInvalidDefinition,
-			badRequestError("knowledge list request is invalid"),
-			nil,
-		)
-	}
+	// sanitizeListKnowledgeObjectsRequest already ran the request preflight.
 	release, ok := handler.acquireSerialization()
 	if !ok {
 		return nil, handler.rejectKnowledgeRequest(
@@ -1571,10 +1572,14 @@ func validKnowledgeIdentity(value string, maximumBytes int) bool {
 	return true
 }
 
+// knowledgeListRequest converts an accepted list request. Every filter bound
+// and the page envelope are the route sanitizer's authority
+// (sanitizeListKnowledgeObjectsRequest runs knowledgeListRequestPreflight), so
+// this only maps the enumerations it has to translate.
 func knowledgeListRequest(
 	input *opensplunk.ListKnowledgeObjectsRequest,
 ) (knowledgecatalog.ListRequest, error) {
-	if !knowledgeListRequestPreflight(input) {
+	if input == nil {
 		return knowledgecatalog.ListRequest{}, control.ErrInvalidArgument
 	}
 	request := knowledgecatalog.ListRequest{}

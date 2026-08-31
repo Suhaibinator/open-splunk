@@ -203,59 +203,6 @@ func TestLookupHandlerRejectsInvalidTrustedProjection(t *testing.T) {
 	}
 }
 
-func TestLookupDefinitionSanitizerRejectsUnknownSemanticsBeforePersistence(t *testing.T) {
-	wrappers := []struct {
-		name string
-		run  func(*opensplunk.LookupDefinition) error
-	}{
-		{"create", func(definition *opensplunk.LookupDefinition) error {
-			_, err := forwardCompatibleProtoSanitizer(t.Context(), &opensplunk.CreateLookupRequest{Definition: definition})
-			return err
-		}},
-		{"replace", func(definition *opensplunk.LookupDefinition) error {
-			_, err := forwardCompatibleProtoSanitizer(t.Context(), &opensplunk.ReplaceLookupRequest{Definition: definition})
-			return err
-		}},
-		{"preview", func(definition *opensplunk.LookupDefinition) error {
-			_, err := forwardCompatibleProtoSanitizer(t.Context(), &opensplunk.PreviewLookupRequest{Definition: definition})
-			return err
-		}},
-	}
-	for _, wrapper := range wrappers {
-		t.Run(wrapper.name, func(t *testing.T) {
-			definition := lookupHTTPDefinition("catalog")
-			addKnowledgeHTTPUnknown(definition.GetOutputMappings()[0])
-			if err := wrapper.run(definition); err == nil || !strings.Contains(err.Error(), "unsupported fields") {
-				t.Fatalf("sanitize unknown lookup definition error = %v", err)
-			}
-			if len(definition.GetOutputMappings()[0].ProtoReflect().GetUnknown()) == 0 {
-				t.Fatal("rejected lookup definition was mutated")
-			}
-		})
-	}
-
-	oversized := lookupHTTPDefinition("catalog")
-	oversized.KeyMappings = make([]*opensplunk.LookupFieldMapping, 5)
-	oversized.KeyMappings[0] = &opensplunk.LookupFieldMapping{}
-	addKnowledgeHTTPUnknown(oversized.KeyMappings[0])
-	if _, err := forwardCompatibleProtoSanitizer(t.Context(), &opensplunk.CreateLookupRequest{Definition: oversized}); err == nil ||
-		!strings.Contains(err.Error(), "entry limit") {
-		t.Fatalf("sanitize oversized definition error = %v", err)
-	}
-	if len(oversized.KeyMappings[0].ProtoReflect().GetUnknown()) == 0 {
-		t.Fatal("shape preflight traversed the oversized definition")
-	}
-
-	envelope := &opensplunk.CreateLookupRequest{Definition: lookupHTTPDefinition("catalog"), CsvData: []byte("id,value\n")}
-	addKnowledgeHTTPUnknown(envelope)
-	if _, err := forwardCompatibleProtoSanitizer(t.Context(), envelope); err != nil {
-		t.Fatalf("sanitize future request envelope: %v", err)
-	}
-	if len(envelope.ProtoReflect().GetUnknown()) != 0 {
-		t.Fatal("future request envelope field was not discarded")
-	}
-}
-
 func TestLookupTrustedProjectionValidationPinsBoundsAndLifecycle(t *testing.T) {
 	scope := lookupservice.Scope{TenantID: knowledgeBoundaryTenantID, OwnerID: knowledgeBoundaryOwnerID}
 	projection := lookupHTTPProjection(scope, "lookup-1", lookupHTTPDefinition("catalog"), 1, opensplunk.LookupState_LOOKUP_STATE_ACTIVE)

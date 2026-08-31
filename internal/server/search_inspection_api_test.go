@@ -493,20 +493,21 @@ func TestSearchInspectionRejectsMalformedRequestsBeforeServiceWork(
 ) {
 	t.Parallel()
 
+	unknownBytes := protowire.AppendVarint(
+		protowire.AppendTag(nil, 99, protowire.VarintType),
+		1,
+	)
 	unknown := &opensplunk.InspectSearchJobRequest{
 		SearchJobId: "inspection-job",
 	}
-	unknown.ProtoReflect().SetUnknown(
-		protowire.AppendVarint(
-			protowire.AppendTag(nil, 99, protowire.VarintType),
-			1,
-		),
-	)
+	unknown.ProtoReflect().SetUnknown(unknownBytes)
 	tests := []struct {
-		name    string
-		request *opensplunk.InspectSearchJobRequest
+		name string
+		// An accepted request must survive the route sanitizer and reach the
+		// inspection service exactly once, under the ID the caller sent.
+		accepted bool
+		request  *opensplunk.InspectSearchJobRequest
 	}{
-		{name: "nil"},
 		{name: "empty", request: &opensplunk.InspectSearchJobRequest{}},
 		{
 			name: "padded",
@@ -535,31 +536,56 @@ func TestSearchInspectionRejectsMalformedRequestsBeforeServiceWork(
 				),
 			},
 		},
-		{name: "unknown field", request: unknown},
+		{name: "unknown field", accepted: true, request: unknown},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			service := &fakeSearchInspections{}
+			service := &fakeSearchInspections{
+				result: validServerSearchInspectionResult(t),
+			}
 			handler := directSearchInspectionAPIHandler(t, service, 1)
-			response, err := handler.inspectSearchJob(
-				inspectionRequestWithPrincipal(
+			httpRequest := inspectionRequestWithPrincipal(
+				t,
+				context.Background(),
+				browserGatePrincipal(
 					t,
-					context.Background(),
-					browserGatePrincipal(
-						t,
-						browserGateTenantID,
-						browserGateOwnerID,
-						auth.BrowserRoleAdministrator,
-					),
+					browserGateTenantID,
+					browserGateOwnerID,
+					auth.BrowserRoleAdministrator,
 				),
+			)
+			sanitized, err := sanitizeInspectSearchJobRequest(
+				httpRequest.Context(),
 				test.request,
 			)
-			assertHTTPErrorStatus(t, err, http.StatusBadRequest)
-			if response != nil || service.callCount() != 0 {
+			if !test.accepted {
+				assertHTTPErrorStatus(t, err, http.StatusBadRequest)
+				if service.callCount() != 0 {
+					t.Fatalf(
+						"malformed request reached service %d times",
+						service.callCount(),
+					)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("sanitize = %v", err)
+			}
+			if test.request == unknown {
+				assertUnknownFieldTolerated(t, sanitized, unknownBytes)
+			}
+			response, err := handler.inspectSearchJob(httpRequest, sanitized)
+			if err != nil || response == nil {
+				t.Fatalf("inspect = %#v / %v", response, err)
+			}
+			response.release()
+			_, inspected := service.lastCall()
+			if service.callCount() != 1 ||
+				inspected.SearchJobID != "inspection-job" {
 				t.Fatalf(
-					"malformed request response/calls = %#v/%d",
-					response,
+					"service calls/request = %d / %#v",
 					service.callCount(),
+					inspected,
 				)
 			}
 		})

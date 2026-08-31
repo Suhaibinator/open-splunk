@@ -24,35 +24,32 @@ type searchArtifactMetadataBatchInspector interface {
 	InspectMany(context.Context, searchjobs.AccessScope, []string) (map[string]searchartifacts.Record, error)
 }
 
-func (handler *apiHandler) scheduledReportRoutes(noAuth router.AuthLevel, smallRequestBytes int64) []protobufRouteDefinition {
-	return []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.SetSavedSearchScheduleRequest, *opensplunk.SetSavedSearchScheduleResponse]{
+func (handler *apiHandler) scheduledReportRoutes(noAuth router.AuthLevel, smallRequestBytes int64) []router.RouteDefinition {
+	return []router.RouteDefinition{
+		router.RouteConfig[*opensplunk.SetSavedSearchScheduleRequest, *opensplunk.SetSavedSearchScheduleResponse]{
 			Path: "/saved-searches/schedule/set", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.SetSavedSearchScheduleRequest, *opensplunk.SetSavedSearchScheduleResponse](), Handler: handler.setSavedSearchSchedule,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.RunSavedSearchRequest, *opensplunk.RunSavedSearchResponse]{
+			Sanitizer: sanitizeSetSavedSearchScheduleRequest,
+		},
+		router.RouteConfig[*opensplunk.RunSavedSearchRequest, *opensplunk.RunSavedSearchResponse]{
 			Path: "/saved-searches/run", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.RunSavedSearchRequest, *opensplunk.RunSavedSearchResponse](), Handler: handler.runSavedSearch,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.ListScheduledSearchRunsRequest, *opensplunk.ListScheduledSearchRunsResponse]{
+			Sanitizer: sanitizeRunSavedSearchRequest,
+		},
+		router.RouteConfig[*opensplunk.ListScheduledSearchRunsRequest, *opensplunk.ListScheduledSearchRunsResponse]{
 			Path: "/saved-searches/runs/list", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.ListScheduledSearchRunsRequest, *opensplunk.ListScheduledSearchRunsResponse](), Handler: handler.listScheduledSearchRuns,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-		}),
+			Sanitizer: handler.sanitizeListScheduledSearchRunsRequest,
+		},
 	}
 }
 
 func (handler *apiHandler) setSavedSearchSchedule(request *http.Request, input *opensplunk.SetSavedSearchScheduleRequest) (*opensplunk.SetSavedSearchScheduleResponse, error) {
-	id, err := savedSearchID(input.GetSavedSearchId())
-	if err != nil || input.GetExpectedVersion() == 0 || input.GetSchedule() == nil {
-		return nil, badRequestError("saved search ID, expected version, and schedule are required")
-	}
+	id := input.GetSavedSearchId()
 	schedule := input.GetSchedule()
-	if schedule.GetConfigVersion() != 0 && schedule.GetConfigVersion() != input.GetExpectedScheduleVersion() {
-		return nil, badRequestError("schedule config version must match expected schedule version")
-	}
 	record, err := handler.savedSearches.Get(request.Context(), handler.savedSearchScope(), id)
 	if mapped := mapSavedSearchCallError(request.Context(), err); mapped != nil {
 		return nil, mapped
@@ -75,12 +72,8 @@ func (handler *apiHandler) setSavedSearchSchedule(request *http.Request, input *
 }
 
 func (handler *apiHandler) runSavedSearch(request *http.Request, input *opensplunk.RunSavedSearchRequest) (*opensplunk.RunSavedSearchResponse, error) {
-	id, err := savedSearchID(input.GetSavedSearchId())
-	if err != nil {
-		return nil, badRequestError(err.Error())
-	}
 	run, err := handler.scheduledReports.RunNowOrOneOff(
-		request.Context(), handler.ownerID, handler.tenantID, id,
+		request.Context(), handler.ownerID, handler.tenantID, input.GetSavedSearchId(),
 		scheduledreports.DefaultOneOffSchedulePeriod,
 	)
 	if err != nil {
@@ -90,18 +83,10 @@ func (handler *apiHandler) runSavedSearch(request *http.Request, input *opensplu
 }
 
 func (handler *apiHandler) listScheduledSearchRuns(request *http.Request, input *opensplunk.ListScheduledSearchRunsRequest) (*opensplunk.ListScheduledSearchRunsResponse, error) {
-	id, err := savedSearchID(input.GetSavedSearchId())
-	if err != nil {
-		return nil, badRequestError(err.Error())
-	}
-	pageSize, pageToken, includeTotal, err := handler.boundedListPageRequest(
-		input.GetPage(), "scheduled run", scheduledReportRunPageSize,
-		scheduledReportRunPageSize,
-	)
-	if err != nil {
-		return nil, err
-	}
-	result, err := handler.scheduledReports.ListRunPage(request.Context(), handler.ownerID, id, scheduledreports.RunPageRequest{
+	pageSize := input.GetPage().GetPageSize()
+	pageToken := input.GetPage().GetPageToken()
+	includeTotal := input.GetPage().GetIncludeTotalSize()
+	result, err := handler.scheduledReports.ListRunPage(request.Context(), handler.ownerID, input.GetSavedSearchId(), scheduledreports.RunPageRequest{
 		Limit: int(pageSize), PageToken: pageToken, IncludeTotal: includeTotal,
 	})
 	if err != nil {

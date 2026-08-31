@@ -63,7 +63,7 @@ func (handler *apiHandler) getSystemBootstrap(request *http.Request, input *open
 	if !appExists(apps, selectedAppID) {
 		selectedAppID = ""
 	}
-	preferredAppID := strings.TrimSpace(input.GetPreferredAppId())
+	preferredAppID := input.GetPreferredAppId()
 	if preferredAppID != "" && appExists(apps, preferredAppID) {
 		selectedAppID = preferredAppID
 	}
@@ -206,9 +206,7 @@ func (handler *apiHandler) createSearchJob(request *http.Request, input *openspl
 			input,
 		)
 	default:
-		resolved, err = handler.resolveSearchDefinition(input.GetDefinition(), func(definition *opensplunk.SearchDefinition) error {
-			return rejectUnsupportedCreateFields(input, definition)
-		})
+		resolved, err = handler.resolveSearchDefinition(input.GetDefinition())
 		if err == nil {
 			resolved.AppID, source, err = handler.resolveSearchJobSource(
 				request.Context(),
@@ -296,9 +294,6 @@ func (handler *apiHandler) resolveSavedSearchLaunch(
 	ctx context.Context,
 	input *opensplunk.CreateSearchJobRequest,
 ) (resolvedSearchDefinition, searchjobs.JobSource, error) {
-	if err := rejectUnsupportedCreateFields(input, nil); err != nil {
-		return resolvedSearchDefinition{}, searchjobs.JobSource{}, badRequestError(err.Error())
-	}
 	sourceInput := input.GetSource()
 	if sourceInput.GetOrigin() != opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH ||
 		sourceInput.SavedSearchId == nil || sourceInput.HistorySearchId != nil ||
@@ -319,17 +314,11 @@ func (handler *apiHandler) resolveSavedSearchLaunch(
 		trusted.GetDefinition().GetSearch() == nil {
 		return resolvedSearchDefinition{}, searchjobs.JobSource{}, internalError()
 	}
-	resolved, err := handler.resolveSearchDefinition(
-		trusted.GetDefinition().GetSearch(),
-		func(*opensplunk.SearchDefinition) error { return nil },
-	)
+	resolved, err := handler.resolveSearchDefinition(trusted.GetDefinition().GetSearch())
 	if err != nil || resolved.AppID != savedSearchAppID(trusted) {
 		return resolvedSearchDefinition{}, searchjobs.JobSource{}, internalError()
 	}
 	if client := input.GetDefinition(); client != nil {
-		if err := rejectUnsupportedSearchDefinitionFields(client); err != nil {
-			return resolvedSearchDefinition{}, searchjobs.JobSource{}, badRequestError(err.Error())
-		}
 		clientApp, appErr := normalizeSearchAppID(client.GetAppId())
 		if appErr != nil {
 			return resolvedSearchDefinition{}, searchjobs.JobSource{},
@@ -366,10 +355,6 @@ func (handler *apiHandler) resolveHistoryRerun(
 	if input.GetDefinition() != nil {
 		return resolvedSearchDefinition{}, searchjobs.JobSource{},
 			badRequestError("history rerun cannot include a client search definition")
-	}
-	if err := rejectUnsupportedCreateFields(input, nil); err != nil {
-		return resolvedSearchDefinition{}, searchjobs.JobSource{},
-			badRequestError(err.Error())
 	}
 	source := input.GetSource()
 	if source == nil || source.GetOrigin() != opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN ||
@@ -553,13 +538,7 @@ func activeHistoryRerunAppExists(
 }
 
 func (handler *apiHandler) getSearchJob(request *http.Request, input *opensplunk.GetSearchJobRequest) (*opensplunk.GetSearchJobResponse, error) {
-	id := strings.TrimSpace(input.GetSearchJobId())
-	if id == "" {
-		return nil, badRequestError("search job ID is required")
-	}
-	if input.GetIncludePlan() || input.GetIncludeGeneratedSql() {
-		return nil, badRequestError("plan inspection is not supported by this API version")
-	}
+	id := input.GetSearchJobId()
 	job, err := handler.jobs.GetFor(handler.accessScope(), id)
 	if contextErr := requestContextFailure(request.Context(), err); contextErr != nil {
 		return nil, contextErr
@@ -607,20 +586,11 @@ func (handler *apiHandler) getSearchJob(request *http.Request, input *opensplunk
 }
 
 func (handler *apiHandler) getSearchResults(request *http.Request, input *opensplunk.GetSearchResultsRequest) (*serializedSearchResultsResponse, error) {
-	id := strings.TrimSpace(input.GetSearchJobId())
-	if id == "" {
-		return nil, badRequestError("search job ID is required")
-	}
-	if input.GetAllowPartialResults() {
-		return nil, badRequestError("partial search results are not supported")
-	}
-	if len(input.GetColumns()) != 0 {
-		return nil, badRequestError("result column projection is not supported")
-	}
-	pageSize, pageToken, includeTotal, err := handler.pageRequest(input.GetPage())
-	if err != nil {
-		return nil, badRequestError(err.Error())
-	}
+	id := input.GetSearchJobId()
+	requestPage := input.GetPage()
+	pageSize := int(requestPage.GetPageSize())
+	pageToken := requestPage.GetPageToken()
+	includeTotal := requestPage.GetIncludeTotalSize()
 	job, err := handler.jobs.GetFor(handler.accessScope(), id)
 	if contextErr := requestContextFailure(request.Context(), err); contextErr != nil {
 		return nil, contextErr
@@ -697,13 +667,7 @@ func (handler *apiHandler) getSearchResults(request *http.Request, input *opensp
 }
 
 func (handler *apiHandler) cancelSearchJob(request *http.Request, input *opensplunk.CancelSearchJobRequest) (*opensplunk.CancelSearchJobResponse, error) {
-	id := strings.TrimSpace(input.GetSearchJobId())
-	if id == "" {
-		return nil, badRequestError("search job ID is required")
-	}
-	if strings.TrimSpace(input.GetReason()) != "" {
-		return nil, badRequestError("cancellation reasons are not supported")
-	}
+	id := input.GetSearchJobId()
 	// CancelFor has no context parameter, so reject a request that is already
 	// canceled before crossing the mutation boundary. Once CancelFor returns
 	// nil, the cancellation is authoritative and must not be rewritten as a
@@ -751,7 +715,6 @@ type resolvedSearchDefinition struct {
 
 func (handler *apiHandler) resolveSearchDefinition(
 	definition *opensplunk.SearchDefinition,
-	rejectUnsupported func(*opensplunk.SearchDefinition) error,
 ) (resolvedSearchDefinition, error) {
 	if definition == nil {
 		return resolvedSearchDefinition{}, badRequestError("search definition is required")
@@ -762,9 +725,6 @@ func (handler *apiHandler) resolveSearchDefinition(
 	}
 	if strings.IndexByte(source, 0) >= 0 {
 		return resolvedSearchDefinition{}, badRequestError("SPL cannot contain NUL bytes")
-	}
-	if err := rejectUnsupported(definition); err != nil {
-		return resolvedSearchDefinition{}, badRequestError(err.Error())
 	}
 	resolvedRange, err := resolveSearchTimeRange(definition.GetTimeRange(), handler.now())
 	if err != nil {
@@ -877,25 +837,6 @@ func isSearchableIndexRecord(record control.Index, requestedName string) bool {
 	return record.State == control.IndexStateActive &&
 		record.Definition.SearchEnabled &&
 		record.Definition.Name == requestedName
-}
-
-func rejectUnsupportedCreateFields(input *opensplunk.CreateSearchJobRequest, definition *opensplunk.SearchDefinition) error {
-	if input.ClientRequestId != nil {
-		return errors.New("client request idempotency is not supported")
-	}
-	if options := input.GetOptions(); options != nil {
-		if options.GetEnableFieldDiscovery() || options.GetEnableTimeline() {
-			return errors.New("eager field discovery and timeline options are not supported; request those analyses through their dedicated APIs")
-		}
-	}
-	return rejectUnsupportedSearchDefinitionFields(definition)
-}
-
-func rejectUnsupportedSearchDefinitionFields(definition *opensplunk.SearchDefinition) error {
-	if definition.GetPreferredResultTab() != opensplunk.SearchResultTab_SEARCH_RESULT_TAB_UNSPECIFIED || len(definition.GetSelectedFields()) != 0 || definition.GetVisualization() != nil {
-		return errors.New("search presentation metadata is not supported")
-	}
-	return nil
 }
 
 func (handler *apiHandler) pageRequest(page *opensplunk.PageRequest) (int, string, bool, error) {

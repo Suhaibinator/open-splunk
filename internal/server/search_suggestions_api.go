@@ -46,9 +46,9 @@ const (
 func (handler *apiHandler) searchSuggestionRoutes(
 	noAuth router.AuthLevel,
 	smallRequestBytes int64,
-) []protobufRouteDefinition {
-	return []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute(router.RouteConfig[
+) []router.RouteDefinition {
+	return []router.RouteDefinition{
+		router.RouteConfig[
 			*opensplunk.GetSearchSuggestionsRequest,
 			*serializedSearchSuggestionsResponse,
 		]{
@@ -56,7 +56,8 @@ func (handler *apiHandler) searchSuggestionRoutes(
 			Codec: newSerializedSearchSuggestionsCodec(), Handler: handler.getSearchSuggestions,
 			SourceType: router.Body,
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-		}),
+			Sanitizer:  handler.sanitizeGetSearchSuggestionsRequest,
+		},
 	}
 }
 
@@ -64,28 +65,8 @@ func (handler *apiHandler) getSearchSuggestions(
 	request *http.Request,
 	input *opensplunk.GetSearchSuggestionsRequest,
 ) (*serializedSearchSuggestionsResponse, error) {
-	if input == nil {
-		return nil, badRequestError("search suggestion request is required")
-	}
 	source := input.GetSpl()
-	if len(source) > spl.MaximumSuggestionSourceBytes {
-		return nil, router.NewHTTPError(
-			http.StatusRequestEntityTooLarge,
-			"search suggestion source is too large",
-		)
-	}
-	if !utf8.ValidString(source) || strings.IndexByte(source, 0) >= 0 {
-		return nil, badRequestError("search suggestion source is invalid")
-	}
-	cursor := input.GetCursorByteOffset()
-	if cursor > uint64(len(source)) {
-		return nil, badRequestError("cursor byte offset is outside the search source")
-	}
-
-	cursorOffset := safecast.MustConv[int](cursor)
-	if cursorOffset < len(source) && !utf8.RuneStart(source[cursorOffset]) {
-		return nil, badRequestError("cursor byte offset must be on a UTF-8 boundary")
-	}
+	cursorOffset := safecast.MustConv[int](input.GetCursorByteOffset())
 
 	maximumResponseSuggestions := min(
 		handler.maximumSuggestions,
@@ -93,15 +74,8 @@ func (handler *apiHandler) getSearchSuggestions(
 	)
 	var maximum *uint32
 	if input.MaxSuggestions != nil {
-		value := input.GetMaxSuggestions()
-		if value == 0 || value > handler.maximumSuggestions {
-			return nil, badRequestError("maximum suggestions is outside the supported range")
-		}
-		maximum = &value
-		maximumResponseSuggestions = value
-	}
-	if _, err := normalizeSearchAppID(input.GetAppId()); err != nil {
-		return nil, badRequestError("search app ID is invalid")
+		maximum = new(input.GetMaxSuggestions())
+		maximumResponseSuggestions = *maximum
 	}
 	resolvedRange, err := resolveSearchTimeRange(input.GetTimeRange(), handler.now())
 	if err != nil {

@@ -32,8 +32,9 @@ func (handler *apiHandler) prepareKnowledgeObjectQuarantine(
 			release()
 		}
 	}()
+	// sanitizePrepareKnowledgeObjectQuarantineRequest already bounded the identity.
 	submitted, ok := cloneKnowledgeMessage(input)
-	if !ok || !validKnowledgeIdentity(submitted.GetKnowledgeObjectId(), maximumKnowledgeObjectIDBytes) {
+	if !ok {
 		return nil, handler.rejectKnowledgeRequest(
 			request,
 			knowledgeattemptaudit.ReasonInvalidDefinition,

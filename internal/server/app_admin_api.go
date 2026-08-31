@@ -25,22 +25,22 @@ import (
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
-	"github.com/Suhaibinator/open-splunk/internal/protostrict"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 )
 
 const (
-	defaultAppAdministrationPageSize    = 50
-	maximumAppAdministrationRows        = 64
-	maximumAppAdministrationResponse    = 8 << 20
-	maximumAppAdministrationIDBytes     = 128
-	maximumAppAdministrationSlugBytes   = 128
-	maximumAppAdministrationDisplayName = 255
-	maximumAppAdministrationDescription = 16 << 10
-	maximumAppAdministrationTextFilter  = 255
-	maximumAppAdministrationIndexes     = 128
-	maximumAppAdministrationPageCursor  = 2 << 10
-	appAdministrationCursorVersion      = 1
+	defaultAppAdministrationPageSize     = 50
+	maximumAppAdministrationRows         = 64
+	maximumAppAdministrationResponse     = 8 << 20
+	maximumAppAdministrationIDBytes      = 128
+	maximumAppAdministrationSlugBytes    = 128
+	maximumAppAdministrationDisplayName  = 255
+	maximumAppAdministrationDescription  = 16 << 10
+	maximumAppAdministrationTextFilter   = 255
+	maximumAppAdministrationStateFilters = 2
+	maximumAppAdministrationIndexes      = 128
+	maximumAppAdministrationPageCursor   = 2 << 10
+	appAdministrationCursorVersion       = 1
 )
 
 var (
@@ -160,9 +160,9 @@ func (handler *apiHandler) appAdministrationRoutes(
 	noAuth router.AuthLevel,
 	requestBytes int64,
 	smallRequestBytes int64,
-) []protobufRouteDefinition {
-	return []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute(router.RouteConfig[
+) []router.RouteDefinition {
+	return []router.RouteDefinition{
+		router.RouteConfig[
 			*opensplunk.CreateAppRequest,
 			*serializedCreateAppResponse,
 		]{
@@ -173,8 +173,9 @@ func (handler *apiHandler) appAdministrationRoutes(
 			Handler:    handler.createApp,
 			SourceType: router.Body,
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: requestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[
+			Sanitizer:  sanitizeCreateAppRequest,
+		},
+		router.RouteConfig[
 			*opensplunk.GetAppRequest,
 			*serializedGetAppResponse,
 		]{
@@ -185,8 +186,9 @@ func (handler *apiHandler) appAdministrationRoutes(
 			Handler:    handler.getApp,
 			SourceType: router.Body,
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[
+			Sanitizer:  sanitizeGetAppRequest,
+		},
+		router.RouteConfig[
 			*opensplunk.ListAppsRequest,
 			*serializedListAppsResponse,
 		]{
@@ -197,8 +199,9 @@ func (handler *apiHandler) appAdministrationRoutes(
 			Handler:    handler.listApps,
 			SourceType: router.Body,
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[
+			Sanitizer:  sanitizeListAppsRequest,
+		},
+		router.RouteConfig[
 			*opensplunk.UpdateAppRequest,
 			*serializedUpdateAppResponse,
 		]{
@@ -209,8 +212,9 @@ func (handler *apiHandler) appAdministrationRoutes(
 			Handler:    handler.updateApp,
 			SourceType: router.Body,
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: requestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[
+			Sanitizer:  sanitizeUpdateAppRequest,
+		},
+		router.RouteConfig[
 			*opensplunk.SetAppStateRequest,
 			*serializedSetAppStateResponse,
 		]{
@@ -221,8 +225,9 @@ func (handler *apiHandler) appAdministrationRoutes(
 			Handler:    handler.setAppState,
 			SourceType: router.Body,
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[
+			Sanitizer:  sanitizeSetAppStateRequest,
+		},
+		router.RouteConfig[
 			*opensplunk.DeleteAppRequest,
 			*serializedDeleteAppResponse,
 		]{
@@ -233,7 +238,8 @@ func (handler *apiHandler) appAdministrationRoutes(
 			Handler:    handler.deleteApp,
 			SourceType: router.Body,
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-		}),
+			Sanitizer:  sanitizeDeleteAppRequest,
+		},
 	}
 }
 
@@ -245,19 +251,10 @@ func (handler *apiHandler) createApp(
 	if err != nil {
 		return nil, err
 	}
-	if invalidAppAdministrationRequest(input) {
-		return nil, badRequestError("app request is invalid")
-	}
 	if handler.appAdmin == nil {
 		return nil, unavailableError("app service is unavailable")
 	}
-	if input.ClientRequestId != nil {
-		return nil, badRequestError("client request idempotency is not supported")
-	}
-	definition, err := handler.appAdministrationDefinition(input.GetDefinition())
-	if err != nil {
-		return nil, badRequestError("app definition is invalid")
-	}
+	definition := canonicalAppAdministrationDefinition(input.GetDefinition())
 	if err := appAdministrationContextError(request.Context()); err != nil {
 		return nil, err
 	}
@@ -317,16 +314,10 @@ func (handler *apiHandler) getApp(
 	if err != nil {
 		return nil, err
 	}
-	if invalidAppAdministrationRequest(input) {
-		return nil, badRequestError("app request is invalid")
-	}
 	if handler.appAdmin == nil {
 		return nil, unavailableError("app service is unavailable")
 	}
-	selector, err := appAdministrationSelector(input.GetSelector())
-	if err != nil {
-		return nil, badRequestError("app selector is invalid")
-	}
+	selector := canonicalAppAdministrationSelector(input.GetSelector())
 	if err := appAdministrationContextError(request.Context()); err != nil {
 		return nil, err
 	}
@@ -378,9 +369,6 @@ func (handler *apiHandler) listApps(
 	scope, err := handler.appAdministrationAccess(request)
 	if err != nil {
 		return nil, err
-	}
-	if invalidAppAdministrationRequest(input) {
-		return nil, badRequestError("app request is invalid")
 	}
 	if handler.appAdmin == nil {
 		return nil, unavailableError("app service is unavailable")
@@ -440,22 +428,10 @@ func (handler *apiHandler) updateApp(
 	if err != nil {
 		return nil, err
 	}
-	if invalidAppAdministrationRequest(input) {
-		return nil, badRequestError("app request is invalid")
-	}
 	if handler.appAdmin == nil {
 		return nil, unavailableError("app service is unavailable")
 	}
-	selector, err := appAdministrationSelector(input.GetSelector())
-	if err != nil {
-		return nil, badRequestError("app selector is invalid")
-	}
-	if err := administrationExpectedVersion(input.GetExpectedVersion()); err != nil {
-		return nil, badRequestError("app expected version is invalid")
-	}
-	if input.GetDefinition() == nil {
-		return nil, badRequestError("app definition is invalid")
-	}
+	selector := canonicalAppAdministrationSelector(input.GetSelector())
 	if err := appAdministrationContextError(request.Context()); err != nil {
 		return nil, err
 	}
@@ -534,19 +510,10 @@ func (handler *apiHandler) setAppState(
 	if err != nil {
 		return nil, err
 	}
-	if invalidAppAdministrationRequest(input) {
-		return nil, badRequestError("app request is invalid")
-	}
 	if handler.appAdmin == nil {
 		return nil, unavailableError("app service is unavailable")
 	}
-	selector, err := appAdministrationSelector(input.GetSelector())
-	if err != nil {
-		return nil, badRequestError("app selector is invalid")
-	}
-	if err := administrationExpectedVersion(input.GetExpectedVersion()); err != nil {
-		return nil, badRequestError("app expected version is invalid")
-	}
+	selector := canonicalAppAdministrationSelector(input.GetSelector())
 	state, err := appAdministrationStateFromProto(input.GetState())
 	if err != nil {
 		return nil, badRequestError("app state is invalid")
@@ -619,24 +586,11 @@ func (handler *apiHandler) deleteApp(
 	if err != nil {
 		return nil, err
 	}
-	if invalidAppAdministrationRequest(input) {
-		return nil, badRequestError("app request is invalid")
-	}
 	if handler.appAdmin == nil {
 		return nil, unavailableError("app service is unavailable")
 	}
-	selector, err := appAdministrationSelector(input.GetSelector())
-	if err != nil {
-		return nil, badRequestError("app selector is invalid")
-	}
-	if err := administrationExpectedVersion(input.GetExpectedVersion()); err != nil {
-		return nil, badRequestError("app expected version is invalid")
-	}
+	selector := canonicalAppAdministrationSelector(input.GetSelector())
 	confirmation := input.GetConfirmationSlug()
-	if canonical, err := normalizeAppAdministrationSlug(confirmation); err != nil ||
-		canonical != confirmation {
-		return nil, badRequestError("app delete confirmation is invalid")
-	}
 	if err := appAdministrationContextError(request.Context()); err != nil {
 		return nil, err
 	}
@@ -747,40 +701,6 @@ func (handler *apiHandler) beginAppAdministrationMutation(
 	return current, release, nil
 }
 
-func invalidAppAdministrationRequest(message proto.Message) bool {
-	return isNilDependency(message) ||
-		protostrict.ContainsUnknown(message.ProtoReflect())
-}
-
-func appAdministrationSelector(
-	input *opensplunk.AppSelector,
-) (AppAdministrationSelector, error) {
-	if input == nil {
-		return AppAdministrationSelector{}, errors.New("selector is required")
-	}
-	switch selected := input.GetSelector().(type) {
-	case *opensplunk.AppSelector_AppId:
-		appID := strings.TrimSpace(selected.AppId)
-		if appID != selected.AppId ||
-			validateBoundedIdentifier(
-				appID,
-				maximumAppAdministrationIDBytes,
-				false,
-			) != nil {
-			return AppAdministrationSelector{}, errors.New("app ID is invalid")
-		}
-		return AppAdministrationSelector{AppID: strings.Clone(appID)}, nil
-	case *opensplunk.AppSelector_Slug:
-		slug, err := normalizeAppAdministrationSlug(selected.Slug)
-		if err != nil || slug != selected.Slug {
-			return AppAdministrationSelector{}, errors.New("app slug is invalid")
-		}
-		return AppAdministrationSelector{Slug: strings.Clone(slug)}, nil
-	default:
-		return AppAdministrationSelector{}, errors.New("selector is required")
-	}
-}
-
 func normalizeAppAdministrationSlug(input string) (string, error) {
 	slug := strings.ToLower(strings.TrimSpace(input))
 	if len(slug) == 0 ||
@@ -799,7 +719,7 @@ func normalizeAppAdministrationSlug(input string) (string, error) {
 	return slug, nil
 }
 
-func (handler *apiHandler) appAdministrationDefinition(
+func appAdministrationDefinition(
 	input *opensplunk.AppDefinition,
 ) (AppAdministrationDefinition, error) {
 	if input == nil {
@@ -827,7 +747,7 @@ func (handler *apiHandler) appAdministrationDefinition(
 	if err != nil {
 		return AppAdministrationDefinition{}, err
 	}
-	defaultRange, err := handler.normalizeAppAdministrationTimeRange(
+	defaultRange, err := normalizeAppAdministrationTimeRange(
 		input.GetDefaultTimeRange(),
 	)
 	if err != nil {
@@ -897,7 +817,7 @@ func normalizeAppAdministrationIndexes(input []string) ([]string, error) {
 	return result, nil
 }
 
-func (handler *apiHandler) normalizeAppAdministrationTimeRange(
+func normalizeAppAdministrationTimeRange(
 	input *opensplunk.TimeRangeSpec,
 ) (*AppAdministrationTimeRange, error) {
 	if input == nil {
@@ -976,7 +896,7 @@ func (handler *apiHandler) applyAppAdministrationUpdate(
 	if full {
 		cloned := proto.Clone(input).(*opensplunk.AppDefinition)
 		cloned.Slug = strings.Clone(current.Slug)
-		return handler.appAdministrationDefinition(cloned)
+		return appAdministrationDefinition(cloned)
 	}
 
 	result := cloneAppAdministrationDefinition(current)
@@ -996,7 +916,7 @@ func (handler *apiHandler) applyAppAdministrationUpdate(
 			)
 		case "default_time_range":
 			result.DefaultTimeRange, err =
-				handler.normalizeAppAdministrationTimeRange(
+				normalizeAppAdministrationTimeRange(
 					input.GetDefaultTimeRange(),
 				)
 		}
@@ -1040,18 +960,13 @@ func cloneAppAdministrationListRequest(
 	return result
 }
 
+// appAdministrationListRequest converts a request the route sanitizer has
+// already bounded. What remains depends on server state: the configured page
+// capacity, the enumeration mappings, and whether a well-formed continuation
+// token still matches this tenant's filters.
 func (handler *apiHandler) appAdministrationListRequest(
 	input *opensplunk.ListAppsRequest,
 ) (AppAdministrationListRequest, error) {
-	if page := input.GetPage(); page != nil && page.PageToken != nil {
-		rawToken := page.GetPageToken()
-		if rawToken == "" ||
-			strings.TrimSpace(rawToken) != rawToken ||
-			len(rawToken) > maximumPageTokenBytes {
-			return AppAdministrationListRequest{},
-				ErrAppAdministrationInvalidPageToken
-		}
-	}
 	pageSize, pageToken, includeTotal, err := handler.pageRequest(
 		input.GetPage(),
 	)
@@ -1072,12 +987,7 @@ func (handler *apiHandler) appAdministrationListRequest(
 	if err != nil {
 		return AppAdministrationListRequest{}, err
 	}
-	textFilter, err := normalizeAppAdministrationTextFilter(
-		input.TextFilter,
-	)
-	if err != nil {
-		return AppAdministrationListRequest{}, err
-	}
+	textFilter := strings.Clone(input.GetTextFilter())
 	sortBy, descending, err := normalizeAppAdministrationSort(
 		input.GetSortBy(),
 		input.GetSortDirection(),
@@ -1259,9 +1169,6 @@ func signAppAdministrationCursor(key, payload []byte) []byte {
 func normalizeAppAdministrationStateFilters(
 	input []opensplunk.AppState,
 ) ([]AppAdministrationState, error) {
-	if len(input) > 2 {
-		return nil, errors.New("too many app state filters")
-	}
 	result := make([]AppAdministrationState, 0, len(input))
 	for _, state := range input {
 		converted, err := appAdministrationStateFromProto(state)
@@ -1272,22 +1179,6 @@ func normalizeAppAdministrationStateFilters(
 	}
 	slices.Sort(result)
 	return slices.Compact(result), nil
-}
-
-func normalizeAppAdministrationTextFilter(input *string) (string, error) {
-	if input == nil {
-		return "", nil
-	}
-	value := strings.TrimSpace(*input)
-	if validateAdminText(
-		value,
-		maximumAppAdministrationTextFilter,
-		true,
-		false,
-	) != nil {
-		return "", errors.New("text filter is invalid")
-	}
-	return value, nil
 }
 
 func normalizeAppAdministrationSort(
@@ -1420,7 +1311,7 @@ func (handler *apiHandler) appAdministrationDefinitionToProto(
 		return nil, errors.New("app default indexes are invalid")
 	}
 	rangeProto := appAdministrationTimeRangeToProto(input.DefaultTimeRange)
-	normalizedRange, err := handler.normalizeAppAdministrationTimeRange(
+	normalizedRange, err := normalizeAppAdministrationTimeRange(
 		rangeProto,
 	)
 	if err != nil ||

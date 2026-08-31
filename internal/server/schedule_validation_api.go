@@ -14,21 +14,21 @@ import (
 
 var errScheduleValidationProjection = errors.New("schedule-validation projection is unsupported")
 
-func (handler *apiHandler) scheduleValidationRoutes(noAuth router.AuthLevel, smallRequestBytes int64) []protobufRouteDefinition {
-	return []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.ValidateScheduleRequest, *opensplunk.ValidateScheduleResponse]{
+func (handler *apiHandler) scheduleValidationRoutes(noAuth router.AuthLevel, smallRequestBytes int64) []router.RouteDefinition {
+	return []router.RouteDefinition{
+		router.RouteConfig[*opensplunk.ValidateScheduleRequest, *opensplunk.ValidateScheduleResponse]{
 			Path: "/schedules/validate", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.ValidateScheduleRequest, *opensplunk.ValidateScheduleResponse](), Handler: handler.validateSchedule,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-		}),
+			Sanitizer: sanitizeValidateScheduleRequest,
+		},
 	}
 }
 
 func (handler *apiHandler) validateSchedule(_ *http.Request, input *opensplunk.ValidateScheduleRequest) (*opensplunk.ValidateScheduleResponse, error) {
-	mode, err := scheduleValidationMode(input.GetMode())
-	if err != nil {
-		return nil, err
-	}
+	// sanitizeValidateScheduleRequest rejected every mode this mapping cannot
+	// express, so the conversion here cannot fail.
+	mode, _ := scheduleValidationMode(input.GetMode())
 	result, validationErr := schedulevalidation.ValidateAt(schedulevalidation.Input{
 		Mode:        mode,
 		Cron:        input.GetCron(),

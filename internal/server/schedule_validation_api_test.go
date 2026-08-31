@@ -67,8 +67,12 @@ func TestValidateScheduleAcceptsDSTPeriodRetention(t *testing.T) {
 
 func TestValidateScheduleRejectsUnknownMode(t *testing.T) {
 	t.Parallel()
-	handler := &apiHandler{now: time.Now}
-	if _, err := handler.validateSchedule(nil, &opensplunk.ValidateScheduleRequest{}); err == nil {
+	if _, err := sanitizeValidateScheduleRequest(t.Context(), &opensplunk.ValidateScheduleRequest{}); err == nil {
 		t.Fatal("expected unspecified mode to fail")
+	}
+	if _, err := sanitizeValidateScheduleRequest(t.Context(), &opensplunk.ValidateScheduleRequest{
+		Mode: opensplunk.ScheduleValidationMode(127),
+	}); err == nil {
+		t.Fatal("expected an unsupported mode to fail")
 	}
 }

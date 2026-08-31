@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/Suhaibinator/SRouter/pkg/router"
@@ -18,12 +17,6 @@ import (
 const exportDownloadPath = "/api/search/exports/download"
 
 func (handler *apiHandler) createExportJob(request *http.Request, input *opensplunk.CreateExportJobRequest) (*opensplunk.CreateExportJobResponse, error) {
-	if input == nil || input.GetDefinition() == nil {
-		return nil, badRequestError("export definition is required")
-	}
-	if input.ClientRequestId != nil {
-		return nil, badRequestError("client request idempotency is not supported")
-	}
 	definition, err := exportRequestFromProto(input.GetDefinition())
 	if err != nil {
 		return nil, badRequestError(err.Error())
@@ -40,13 +33,7 @@ func (handler *apiHandler) createExportJob(request *http.Request, input *openspl
 }
 
 func (handler *apiHandler) getExportJob(request *http.Request, input *opensplunk.GetExportJobRequest) (*opensplunk.GetExportJobResponse, error) {
-	if input == nil {
-		return nil, badRequestError("export job request is required")
-	}
-	id := strings.TrimSpace(input.GetExportJobId())
-	if id == "" {
-		return nil, badRequestError("export job ID is required")
-	}
+	id := input.GetExportJobId()
 	job, err := handler.exports.Get(request.Context(), handler.accessScope(), id)
 	if callErr := mapExportCallError(request.Context(), err); callErr != nil {
 		return nil, callErr
@@ -75,16 +62,7 @@ func (handler *apiHandler) getExportJob(request *http.Request, input *opensplunk
 }
 
 func (handler *apiHandler) cancelExportJob(request *http.Request, input *opensplunk.CancelExportJobRequest) (*opensplunk.CancelExportJobResponse, error) {
-	if input == nil {
-		return nil, badRequestError("export cancellation request is required")
-	}
-	id := strings.TrimSpace(input.GetExportJobId())
-	if id == "" {
-		return nil, badRequestError("export job ID is required")
-	}
-	if strings.TrimSpace(input.GetReason()) != "" {
-		return nil, badRequestError("cancellation reasons are not supported")
-	}
+	id := input.GetExportJobId()
 	job, err := handler.exports.Cancel(request.Context(), handler.accessScope(), id)
 	if callErr := mapExportCallError(request.Context(), err); callErr != nil {
 		return nil, callErr
@@ -97,18 +75,8 @@ func (handler *apiHandler) cancelExportJob(request *http.Request, input *openspl
 }
 
 func exportRequestFromProto(definition *opensplunk.ExportDefinition) (exportjobs.CreateRequest, error) {
-	searchJobID := strings.TrimSpace(definition.GetSearchJobId())
-	if searchJobID == "" {
-		return exportjobs.CreateRequest{}, errors.New("search job ID is required")
-	}
-	if definition.RowLimit != nil && definition.GetRowLimit() == 0 {
-		return exportjobs.CreateRequest{}, errors.New("row limit must be positive when supplied")
-	}
-	if definition.ByteLimit != nil && definition.GetByteLimit() == 0 {
-		return exportjobs.CreateRequest{}, errors.New("byte limit must be positive when supplied")
-	}
 	result := exportjobs.CreateRequest{
-		SearchJobID: searchJobID,
+		SearchJobID: definition.GetSearchJobId(),
 		Columns:     slices.Clone(definition.GetColumns()),
 		RowLimit:    definition.GetRowLimit(),
 		ByteLimit:   definition.GetByteLimit(),

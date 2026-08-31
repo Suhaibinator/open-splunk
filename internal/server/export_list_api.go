@@ -11,7 +11,6 @@ import (
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
-	"github.com/Suhaibinator/open-splunk/internal/protostrict"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -26,23 +25,12 @@ func (handler *apiHandler) listExportJobs(
 	request *http.Request,
 	input *opensplunk.ListExportJobsRequest,
 ) (*serializedExportListResponse, error) {
-	if err := validateExportListRequest(input); err != nil {
-		return nil, badRequestError(err.Error())
-	}
-	pageSize, pageToken, includeTotal, err := handler.exportListPageRequest(
-		input.GetPage(),
-	)
-	if err != nil {
-		return nil, badRequestError(err.Error())
-	}
-	states, err := exportListStateFilters(input.GetStateFilters())
-	if err != nil {
-		return nil, badRequestError(err.Error())
-	}
-	searchJobID, err := exportListSearchJobIDFilter(input.SearchJobIdFilter)
-	if err != nil {
-		return nil, badRequestError(err.Error())
-	}
+	requestPage := input.GetPage()
+	pageSize := int(requestPage.GetPageSize())
+	pageToken := requestPage.GetPageToken()
+	includeTotal := requestPage.GetIncludeTotalSize()
+	states := exportListStateFilters(input.GetStateFilters())
+	searchJobID := input.SearchJobIdFilter
 	if err := exportListRequestContextError(request.Context()); err != nil {
 		return nil, err
 	}
@@ -168,27 +156,18 @@ func (handler *apiHandler) exportListPageRequest(
 	return pageSize, pageToken, includeTotal, nil
 }
 
+// exportListStateFilters converts the sanitized filter set. The route sanitizer
+// has already rejected every value this binary cannot serve and removed the
+// duplicates, so this is a conversion, not a validation.
 func exportListStateFilters(
 	input []opensplunk.ExportJobState,
-) ([]exportjobs.State, error) {
-	if len(input) > maximumExportListStateFilters {
-		return nil, errors.New("state filters contain too many values")
-	}
-	result := make([]exportjobs.State, 0, len(input))
-	seen := make(map[exportjobs.State]struct{}, len(input))
-	for _, state := range input {
-		converted, ok := exportListState(state)
-		if !ok {
-			return nil, errors.New("state filter is invalid or unsupported")
-		}
-		if _, exists := seen[converted]; exists {
-			continue
-		}
-		seen[converted] = struct{}{}
-		result = append(result, converted)
+) []exportjobs.State {
+	result := make([]exportjobs.State, len(input))
+	for index, state := range input {
+		result[index], _ = exportListState(state)
 	}
 	slices.Sort(result)
-	return result, nil
+	return result
 }
 
 func exportListState(
@@ -210,18 +189,6 @@ func exportListState(
 	default:
 		return exportjobs.StateInvalid, false
 	}
-}
-
-func exportListSearchJobIDFilter(input *string) (*string, error) {
-	if input == nil {
-		return nil, nil
-	}
-	value := *input
-	if !exportjobs.ValidSearchJobID(value) {
-		return nil, errors.New("search job ID filter is invalid")
-	}
-	result := strings.Clone(value)
-	return &result, nil
 }
 
 func validExportListJob(
@@ -268,18 +235,6 @@ func exportListPageResponse(
 		includeTotal,
 		maximumExportListPageTokenBytes,
 	)
-}
-
-func validateExportListRequest(
-	input *opensplunk.ListExportJobsRequest,
-) error {
-	if input == nil {
-		return errors.New("export list request is required")
-	}
-	if protostrict.ContainsUnknown(input.ProtoReflect()) {
-		return errors.New("export list request is invalid")
-	}
-	return nil
 }
 
 func mapExportListCallError(ctx context.Context, operationErr error) error {
