@@ -20,16 +20,15 @@ func (handler *apiHandler) scheduleValidationRoutes(noAuth router.AuthLevel, sma
 			Path: "/schedules/validate", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.ValidateScheduleRequest, *opensplunk.ValidateScheduleResponse](), Handler: handler.validateSchedule,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: discardUnknownProtoFields,
+			Sanitizer: sanitizeValidateScheduleRequest,
 		},
 	}
 }
 
 func (handler *apiHandler) validateSchedule(_ *http.Request, input *opensplunk.ValidateScheduleRequest) (*opensplunk.ValidateScheduleResponse, error) {
-	mode, err := scheduleValidationMode(input.GetMode())
-	if err != nil {
-		return nil, err
-	}
+	// sanitizeValidateScheduleRequest rejected every mode this mapping cannot
+	// express, so the conversion here cannot fail.
+	mode, _ := scheduleValidationMode(input.GetMode())
 	result, validationErr := schedulevalidation.ValidateAt(schedulevalidation.Input{
 		Mode:        mode,
 		Cron:        input.GetCron(),
