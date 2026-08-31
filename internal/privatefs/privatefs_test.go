@@ -633,7 +633,7 @@ func TestRenameNoReplaceFailureClassificationDrivesOutcomeAndPublicError(t *test
 			name:          "unsupported",
 			err:           unix.ENOSYS,
 			wantClass:     renameNoReplaceFailureUnsupported,
-			wantPublicErr: ErrUnsupportedPlatform,
+			wantPublicErr: ErrUnsupportedFilesystem,
 			wantUnchanged: true,
 		},
 		{
@@ -645,16 +645,192 @@ func TestRenameNoReplaceFailureClassificationDrivesOutcomeAndPublicError(t *test
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
+			_, directory := openTestDirectory(t)
 			if got := classifyRenameNoReplaceFailure(testCase.err); got != testCase.wantClass {
 				t.Fatalf("failure class = %d, want %d", got, testCase.wantClass)
 			}
 			if got := definitivelyUnchangedRenameError(testCase.err); got != testCase.wantUnchanged {
 				t.Fatalf("definitively unchanged = %t, want %t", got, testCase.wantUnchanged)
 			}
-			if err := renameNoReplaceError("destination", testCase.err); !errors.Is(err, testCase.wantPublicErr) {
+			if err := renameNoReplaceError(directory, "destination", testCase.err); !errors.Is(err, testCase.wantPublicErr) {
 				t.Fatalf("public error = %v, want errors.Is(_, %v)", err, testCase.wantPublicErr)
 			}
 		})
+	}
+}
+
+func TestRenameNoReplaceUnsupportedErrorNamesDirectoryAndFilesystem(t *testing.T) {
+	t.Parallel()
+
+	path, directory := openTestDirectory(t)
+	err := renameNoReplaceError(directory, "destination", unix.EINVAL)
+	unsupported, ok := errors.AsType[*UnsupportedFilesystemError](err)
+	if !ok {
+		t.Fatalf("unsupported rename error = %T (%v), want *UnsupportedFilesystemError", err, err)
+	}
+	if unsupported.Directory != path || unsupported.Operation != "no-replace rename" {
+		t.Fatalf("unsupported rename error = %#v", unsupported)
+	}
+	if unsupported.Filesystem == "" {
+		t.Fatal("unsupported rename error omitted the filesystem type")
+	}
+	if !errors.Is(err, ErrUnsupportedFilesystem) || !errors.Is(err, unix.EINVAL) {
+		t.Fatalf("errors.Is chain broken for %v", err)
+	}
+	if strings.Contains(err.Error(), "platform") {
+		t.Fatalf("error text blames the platform: %q", err.Error())
+	}
+	for _, want := range []string{
+		"private filesystem operation is unsupported by the filesystem",
+		"no-replace rename in " + path,
+		unsupported.Filesystem,
+		"invalid argument",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q lacks %q", err.Error(), want)
+		}
+	}
+	guidance := unsupported.Guidance("retained-search directory")
+	want := "retained-search directory " + path + " is on " + unsupported.Filesystem +
+		", which does not support atomic no-replace rename; place it on a local filesystem (ext4, xfs, btrfs)"
+	if guidance != want {
+		t.Fatalf("guidance = %q, want %q", guidance, want)
+	}
+	nameless := &UnsupportedFilesystemError{Operation: "no-replace rename", Directory: path, Err: unix.EINVAL}
+	if got := nameless.Guidance("backup destination"); !strings.Contains(got, "is on a filesystem that does not support atomic no-replace rename") {
+		t.Fatalf("nameless guidance = %q", got)
+	}
+}
+
+func TestProbeRenameNoReplaceSucceedsAndLeavesNoProbeFile(t *testing.T) {
+	t.Parallel()
+
+	_, directory := openTestDirectory(t)
+	if err := directory.ProbeRenameNoReplace(); err != nil {
+		t.Fatalf("ProbeRenameNoReplace() = %v", err)
+	}
+	if err := directory.RequireEntries(nil, 0); err != nil {
+		t.Fatalf("probe left entries behind: %v", err)
+	}
+	if err := RequireRenameNoReplace(directory, "retained-search directory"); err != nil {
+		t.Fatalf("RequireRenameNoReplace() = %v", err)
+	}
+	if err := directory.RequireEntries(nil, 0); err != nil {
+		t.Fatalf("second probe left entries behind: %v", err)
+	}
+}
+
+func TestProbeRenameNoReplaceReportsUnsupportedFilesystem(t *testing.T) {
+	t.Parallel()
+
+	for _, errno := range []unix.Errno{unix.EINVAL, unix.ENOSYS, unix.ENOTSUP} {
+		t.Run(errno.Error(), func(t *testing.T) {
+			t.Parallel()
+			path, directory := openTestDirectory(t)
+			err := directory.probeRenameNoReplace(func(int, string, int, string) error {
+				return errno
+			})
+			if !errors.Is(err, ErrUnsupportedFilesystem) || !errors.Is(err, errno) {
+				t.Fatalf("probe error = %v, want unsupported filesystem wrapping %v", err, errno)
+			}
+			unsupported, ok := errors.AsType[*UnsupportedFilesystemError](err)
+			if !ok || unsupported.Directory != path || unsupported.Filesystem == "" {
+				t.Fatalf("probe error = %T %#v, want directory %q with a filesystem name", err, unsupported, path)
+			}
+			if entriesErr := directory.RequireEntries(nil, 0); entriesErr != nil {
+				t.Fatalf("unsupported probe left entries behind: %v", entriesErr)
+			}
+		})
+	}
+}
+
+func TestProbeRenameNoReplaceDistinguishesOtherFailures(t *testing.T) {
+	t.Parallel()
+
+	_, directory := openTestDirectory(t)
+	err := directory.probeRenameNoReplace(func(int, string, int, string) error {
+		return unix.EIO
+	})
+	if err == nil || errors.Is(err, ErrUnsupportedFilesystem) || !errors.Is(err, unix.EIO) {
+		t.Fatalf("probe error = %v, want EIO that is not an unsupported filesystem", err)
+	}
+	if entriesErr := directory.RequireEntries(nil, 0); entriesErr != nil {
+		t.Fatalf("failed probe left entries behind: %v", entriesErr)
+	}
+}
+
+func TestProbeRenameNoReplaceCleansUpAmbiguousOutcome(t *testing.T) {
+	t.Parallel()
+
+	_, directory := openTestDirectory(t)
+	err := directory.probeRenameNoReplace(func(fromDirectory int, from string, toDirectory int, to string) error {
+		if err := renameNoReplaceAt(fromDirectory, from, toDirectory, to); err != nil {
+			return err
+		}
+		return unix.EIO
+	})
+	if err == nil || !errors.Is(err, unix.EIO) {
+		t.Fatalf("probe error = %v, want EIO", err)
+	}
+	if entriesErr := directory.RequireEntries(nil, 0); entriesErr != nil {
+		t.Fatalf("committed-then-failed probe left entries behind: %v", entriesErr)
+	}
+}
+
+func TestRequireRenameNoReplaceExplainsUnsupportedFilesystem(t *testing.T) {
+	t.Parallel()
+
+	path, directory := openTestDirectory(t)
+	unsupported := &UnsupportedFilesystemError{
+		Operation:  "no-replace rename",
+		Directory:  path,
+		Filesystem: "nfs",
+		Err:        unix.EINVAL,
+	}
+	guidance := unsupported.Guidance("retained-search directory")
+	want := "retained-search directory " + path +
+		" is on nfs, which does not support atomic no-replace rename; place it on a local filesystem (ext4, xfs, btrfs)"
+	if guidance != want {
+		t.Fatalf("guidance = %q, want %q", guidance, want)
+	}
+	wrapped := fmt.Errorf("%s: %w", guidance, unsupported)
+	if !errors.Is(wrapped, ErrUnsupportedFilesystem) {
+		t.Fatalf("wrapped guidance lost the sentinel: %v", wrapped)
+	}
+	if _, ok := errors.AsType[*UnsupportedFilesystemError](wrapped); !ok {
+		t.Fatalf("wrapped guidance lost the typed error: %v", wrapped)
+	}
+	if err := RequireRenameNoReplace(directory, "retained-search directory"); err != nil {
+		t.Fatalf("RequireRenameNoReplace on a local directory = %v", err)
+	}
+}
+
+func TestDescribeFilesystemReportsLocalTemporaryDirectory(t *testing.T) {
+	t.Parallel()
+
+	path, directory := openTestDirectory(t)
+	byPath, err := DescribeFilesystem(path)
+	if err != nil {
+		t.Fatalf("DescribeFilesystem(%q) = %v", path, err)
+	}
+	byDescriptor, err := directory.Filesystem()
+	if err != nil {
+		t.Fatalf("Directory.Filesystem() = %v", err)
+	}
+	if byPath != byDescriptor {
+		t.Fatalf("path filesystem %#v != descriptor filesystem %#v", byPath, byDescriptor)
+	}
+	if byPath.Name == "" || byPath.Remote {
+		t.Fatalf("temporary directory filesystem = %#v, want a named local filesystem", byPath)
+	}
+	if _, err := DescribeFilesystem(filepath.Join(path, "missing")); err == nil {
+		t.Fatal("DescribeFilesystem accepted a missing path")
+	}
+	if err := directory.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := directory.Filesystem(); !errors.Is(err, ErrClosed) {
+		t.Fatalf("closed Directory.Filesystem() = %v, want ErrClosed", err)
 	}
 }
 
