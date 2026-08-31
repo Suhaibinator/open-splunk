@@ -24,11 +24,16 @@ import {
 
 import { NUMBER_FORMAT } from "../constants";
 import { AppIcon } from "../../_components/app-icon";
+import { Modal } from "../../_components/modal";
 import { formatGroupedNumericText } from "../formatters";
 import type { MenuName, StatsDensity } from "../model";
 import {
   StatsFlatMultivalueValue,
+  StatsMultivalueList,
   statsFlatMultivalueDisplay,
+  statsMultivalueLineMembers,
+  statsMultivalueTitle,
+  statsMultivalueVisibleMemberCount,
 } from "../statistics-multivalue";
 import {
   statsSparklineSegments,
@@ -247,6 +252,11 @@ export function StatisticsPanel({
     VIRTUAL_TABLE_VIEWPORT_HEIGHT - STATISTICS_HEADER_HEIGHT,
   );
   const [timechartSeriesSort, setTimechartSeriesSort] = useState<TimechartSeriesSort | null>(null);
+  const [multivalueDialog, setMultivalueDialog] = useState<{
+    label: string;
+    fieldName: string;
+    members: string[];
+  } | null>(null);
   const tableShellRef = useRef<HTMLDivElement>(null);
   const hasExplicitTimechartSeries = timelinePoints.some(
     (point) => Object.keys(point.series ?? {}).length > 0,
@@ -350,6 +360,7 @@ export function StatisticsPanel({
     const shell = tableShellRef.current;
     if (shell !== null) shell.scrollTop = 0;
     setVerticalScrollTop(0);
+    setMultivalueDialog(null);
   }, [
     genericStatsSort,
     pageNumber,
@@ -606,6 +617,37 @@ export function StatisticsPanel({
                       >
                         {genericStatisticsTable.columns.map((column) => {
                           const value = row.values[column.key] ?? null;
+                          // An invisible delimiter stacks its members instead of
+                          // joining them; LIST columns are never pivotable, so
+                          // this branch owns the whole cell.
+                          const members = statsMultivalueLineMembers(
+                            value,
+                            column.flatMultivalueDelimiter,
+                          );
+                          if (members !== undefined) {
+                            return (
+                              <td
+                                className={column.numeric ? "numeric-cell" : undefined}
+                                key={column.key}
+                                title={statsMultivalueTitle(members)}
+                                style={{ maxWidth: 420, overflow: "hidden" }}
+                              >
+                                <StatsMultivalueList
+                                  fieldName={column.fieldName}
+                                  members={members}
+                                  visibleMemberCount={statsMultivalueVisibleMemberCount(
+                                    statsDensity,
+                                    members.length,
+                                  )}
+                                  onShowAll={() => setMultivalueDialog({
+                                    label: column.label,
+                                    fieldName: column.fieldName,
+                                    members,
+                                  })}
+                                />
+                              </td>
+                            );
+                          }
                           const formatted = renderGenericValue(value, column);
                           const rendered = (
                             <StatsFlatMultivalueValue
@@ -705,6 +747,19 @@ export function StatisticsPanel({
           ? <><span>{displayedRange} · {totalDescription}</span><span>{genericStatsSort === null ? "Server-provided row order" : `Sorted by ${genericStatisticsTable.columns.find((column) => column.key === genericStatsSort.key)?.label ?? genericStatsSort.key} · ${genericStatsSort.direction === "desc" ? "descending" : "ascending"}`} · values retain server types</span></>
           : <><span>{displayedRange} · {totalDescription}</span><span>Sorted by {statsSort.key === "avgDuration" ? "avg(duration_ms)" : statsSort.key === "level" ? statisticsDimension : statsSort.key} · {statsSort.direction === "desc" ? "descending" : "ascending"}</span></>}
       </footer>
+      {multivalueDialog !== null ? (
+        <Modal
+          title={multivalueDialog.label}
+          subtitle={`${NUMBER_FORMAT.format(multivalueDialog.members.length)} values`}
+          onClose={() => setMultivalueDialog(null)}
+        >
+          <ul className="statistics-multivalue-dialog-list">
+            {multivalueDialog.members.map((member, index) => (
+              <li key={`${index.toString()}-${member}`}>{member}</li>
+            ))}
+          </ul>
+        </Modal>
+      ) : null}
     </section>
   );
 }

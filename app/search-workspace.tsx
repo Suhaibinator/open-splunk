@@ -165,7 +165,7 @@ import { SearchComposer } from "./search-workspace/components/search-composer";
 import { InactiveResultTabPanels } from "./search-workspace/components/inactive-result-tab-panels";
 import { SearchSharingDialog } from "./search-workspace/components/search-sharing-dialog";
 import { WorkspaceDialogs } from "./search-workspace/components/workspace-dialogs";
-import { serializeRowsForClipboard } from "./search-workspace/clipboard-export";
+import { serializeRowsAsJsonLinesForClipboard, serializeRowsForClipboard } from "./search-workspace/clipboard-export";
 import {
   collapsePageEvents,
   expandPageEvents,
@@ -5941,7 +5941,9 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       return;
     }
     await copyText(
-      serializeRowsForClipboard(exportFields, exportFieldLabels, rows),
+      exportFormat === "jsonl"
+        ? serializeRowsAsJsonLinesForClipboard(exportFields, rows)
+        : serializeRowsForClipboard(exportFields, exportFieldLabels, rows),
       `Copied ${NUMBER_FORMAT.format(rows.length)} ${rows.length === 1 ? "row" : "rows"} from this page.`,
     );
   }

@@ -40,6 +40,14 @@ async function contentWidth(page: Page, selector: string): Promise<number> {
   }, selector);
 }
 
+async function contentHeight(page: Page, selector: string): Promise<number> {
+  return page.evaluate((target) => {
+    const element = document.querySelector(target);
+    if (element === null) throw new Error(`fixture is missing ${target}`);
+    return element.getBoundingClientRect().height;
+  }, selector);
+}
+
 // Focus the control the way a keyboard user reaches it: Chromium only matches
 // :focus-visible once the last interaction was a key press.
 async function expectKeyboardFocusRing(page: Page, selector: string): Promise<void> {
@@ -531,6 +539,22 @@ const statisticsMarkup = `
   </tbody>
 </table>`;
 
+// The stacked presentation mirrors the panel: the cell carries the inline
+// `max-width`/`overflow` the table cell renders with, and each member is its
+// own line inside the fixed-height row.
+const statisticsListMember = `/api/v1/${"resource-segment/".repeat(24)}index`;
+const statisticsListMarkup = `
+<table class="statistics-table statistics-table--fixed">
+  <tbody>
+    <tr class="statistics-plain-row">
+      <td style="max-width: 420px; overflow: hidden">alpha</td>
+    </tr>
+    <tr class="statistics-list-row">
+      <td style="max-width: 420px; overflow: hidden"><span class="statistics-multivalue-list"><span class="statistics-multivalue-item">${statisticsListMember}</span><span class="statistics-multivalue-item">${statisticsListMember}-two</span><button class="statistics-multivalue-more" type="button" aria-haspopup="dialog" aria-label="Show all 5 values for path">+3 more</button></span></td>
+    </tr>
+  </tbody>
+</table>`;
+
 test.describe("statistics multivalue contracts", () => {
   test("multiline cells stay inside the fixed virtual row height", async ({ page }) => {
     await mount(page, statisticsMarkup, DESKTOP_WIDTH);
@@ -556,6 +580,44 @@ test.describe("statistics multivalue contracts", () => {
       element.style.setProperty("--statistics-row-height", "52px");
     });
     await expect(lines).toHaveCSS("max-height", "44px");
+  });
+
+  test("stacked multivalue cells clip per line and keep the row height", async ({ page }) => {
+    await mount(page, statisticsListMarkup, DESKTOP_WIDTH);
+
+    const list = page.locator(".statistics-multivalue-list");
+    await expect(list).toHaveCSS("display", "block");
+    await expect(list).toHaveCSS("overflow-x", "hidden");
+    await expect(list).toHaveCSS("overflow-y", "hidden");
+    // calc(var(--statistics-row-height, 42px) - 8px) with the default row height.
+    await expect(list).toHaveCSS("max-height", "34px");
+
+    // Each member is its own clipped line rather than one joined string.
+    const item = page.locator(".statistics-multivalue-item").first();
+    await expect(item).toHaveCSS("display", "block");
+    await expect(item).toHaveCSS("white-space", "nowrap");
+    await expect(item).toHaveCSS("overflow-x", "hidden");
+    await expect(item).toHaveCSS("text-overflow", "ellipsis");
+    const itemOverflow = await item.evaluate((element) => ({
+      client: element.clientWidth,
+      scroll: element.scrollWidth,
+    }));
+    expect(itemOverflow.scroll).toBeGreaterThan(itemOverflow.client);
+
+    // Two members plus the overflow button must not grow the virtual row past
+    // the row token every other row is measured against.
+    const [listRow, plainRow] = await Promise.all([
+      contentHeight(page, ".statistics-list-row"),
+      contentHeight(page, ".statistics-plain-row"),
+    ]);
+    expect(listRow).toBeCloseTo(plainRow, 0);
+    expect(listRow).toBeLessThanOrEqual(42);
+
+    // The clamp tracks the row-height token rather than a hard-coded height.
+    await page.locator(".statistics-table").evaluate((element: HTMLElement) => {
+      element.style.setProperty("--statistics-row-height", "52px");
+    });
+    await expect(list).toHaveCSS("max-height", "44px");
   });
 });
 
