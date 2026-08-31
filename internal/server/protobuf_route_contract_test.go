@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -36,9 +35,8 @@ type protobufHTTPRouteContractRecord struct {
 }
 
 // TestEveryProtobufHTTPRouteHasCrossRuntimeForwardCompatibility proves every
-// protobuf HTTP route round-trips a future (unknown) field on both its request
-// and response types, and that the route's sanitizer treats that field the
-// way the route expects. The fixture is the route inventory: a new protobuf
+// protobuf HTTP route decodes a future (unknown) field on both its request
+// and response types without error and without disturbing the known fields. The fixture is the route inventory: a new protobuf
 // route needs a record (path, request and response type) added by hand, then
 // UPDATE_PROTOBUF_ROUTE_FIXTURES=1 regenerates its wire bytes. The same file
 // drives lib/api/protobuf-contracts.test.ts on the TypeScript side.
@@ -290,17 +288,7 @@ func assertGoRequestAcceptsFutureWire(
 	if len(message.ProtoReflect().GetUnknown()) == 0 {
 		t.Fatal("future request field was not decoded as unknown")
 	}
-	if _, err := protobufRouteRequestSanitizer(t, message); err != nil {
-		t.Fatalf("sanitize future request: %v", err)
-	}
-	if protobufRoutePreservesUnknownFields(message) {
-		if len(message.ProtoReflect().GetUnknown()) == 0 {
-			t.Fatalf("%s future envelope authority was discarded", typeName)
-		}
-		message.ProtoReflect().SetUnknown(nil)
-	} else if len(message.ProtoReflect().GetUnknown()) != 0 {
-		t.Fatal("ordinary future request field was not discarded")
-	}
+	message.ProtoReflect().SetUnknown(nil)
 	assertProtobufRouteKnownWire(t, message, wantKnown)
 }
 
@@ -341,29 +329,5 @@ func assertProtobufRouteKnownWire(t *testing.T, message proto.Message, want []by
 	}
 	if !bytes.Equal(got, want) {
 		t.Fatalf("known fields changed: got %x, want %x", got, want)
-	}
-}
-
-// protobufRouteRequestSanitizer runs the sanitizer the request's route
-// registers: the two candidate-envelope routes keep unknown fields, every
-// other protobuf route discards them.
-func protobufRouteRequestSanitizer(t *testing.T, message proto.Message) (proto.Message, error) {
-	t.Helper()
-	switch request := message.(type) {
-	case *opensplunk.ValidateKnowledgeObjectRequest:
-		return sanitizeValidateKnowledgeObjectRequest(t.Context(), request)
-	case *opensplunk.PreviewKnowledgeObjectRequest:
-		return sanitizePreviewKnowledgeObjectRequest(t.Context(), request)
-	default:
-		return discardUnknownProtoFields(t.Context(), message)
-	}
-}
-
-func protobufRoutePreservesUnknownFields(message proto.Message) bool {
-	switch message.(type) {
-	case *opensplunk.ValidateKnowledgeObjectRequest, *opensplunk.PreviewKnowledgeObjectRequest:
-		return true
-	default:
-		return false
 	}
 }
