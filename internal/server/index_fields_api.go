@@ -16,9 +16,6 @@ func (handler *apiHandler) listIndexFields(
 	request *http.Request,
 	input *opensplunk.ListIndexFieldsRequest,
 ) (*serializedIndexFieldsResponse, error) {
-	if input == nil {
-		return nil, badRequestError("index field request is required")
-	}
 	record, err := handler.resolveIndex(
 		request.Context(),
 		input.GetSelector(),
@@ -49,16 +46,9 @@ func (handler *apiHandler) listIndexFields(
 	if page := input.GetPage(); page != nil {
 		includeTotal = page.GetIncludeTotalSize()
 		if page.PageSize != nil {
-			pageSize := page.GetPageSize()
-			if pageSize == 0 || pageSize > handler.maximumPageSize {
-				return nil, badRequestError(
-					"index field page size is outside the supported range",
-				)
-			}
-			// page_size is a requested maximum. The field service may enforce
-			// a lower endpoint-specific bound than the browser-wide limit.
-			pageSize = min(pageSize, handler.maxIndexFieldPageSize)
-			analysisRequest.PageSize = &pageSize
+			// sanitizeListIndexFieldsRequest already bounded the requested
+			// maximum and lowered it to the field service's own limit.
+			analysisRequest.PageSize = new(page.GetPageSize())
 		}
 		// A page token is authenticated opaque service output. Preserve every
 		// byte so whitespace cannot become an alternate accepted spelling.

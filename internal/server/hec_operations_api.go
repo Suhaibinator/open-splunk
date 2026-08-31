@@ -114,7 +114,7 @@ func (handler *apiHandler) hecOperationalRoutes(
 			Handler:    handler.getHECOperationalSnapshot,
 			SourceType: router.Body,
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer:  discardUnknownProtoFields,
+			Sanitizer:  sanitizeGetHECOperationalSnapshotRequest,
 		},
 	}
 }
