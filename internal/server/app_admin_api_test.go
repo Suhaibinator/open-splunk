@@ -1285,54 +1285,28 @@ func TestAppAdministrationTimeRangePreservesIndependentPresence(
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			earlyHandler := &apiHandler{
-				now: func() time.Time {
-					return time.Date(
-						2000,
-						time.January,
-						1,
-						0,
-						0,
-						0,
-						0,
-						time.UTC,
-					)
-				},
-			}
-			lateHandler := &apiHandler{
-				now: func() time.Time {
-					return time.Date(
-						2099,
-						time.July,
-						1,
-						0,
-						0,
-						0,
-						0,
-						time.UTC,
-					)
-				},
-			}
-			early, earlyErr := earlyHandler.normalizeAppAdministrationTimeRange(
+			// Normalization reads no clock, so a repeated call must
+			// return the same detached range.
+			first, firstErr := normalizeAppAdministrationTimeRange(
 				test.input,
 			)
-			late, lateErr := lateHandler.normalizeAppAdministrationTimeRange(
+			second, secondErr := normalizeAppAdministrationTimeRange(
 				test.input,
 			)
-			if earlyErr != nil ||
-				lateErr != nil ||
-				!reflect.DeepEqual(early, test.want) ||
-				!reflect.DeepEqual(late, test.want) {
+			if firstErr != nil ||
+				secondErr != nil ||
+				!reflect.DeepEqual(first, test.want) ||
+				!reflect.DeepEqual(second, test.want) {
 				t.Fatalf(
 					"ranges = %#v/%v and %#v/%v, want %#v",
-					early,
-					earlyErr,
-					late,
-					lateErr,
+					first,
+					firstErr,
+					second,
+					secondErr,
 					test.want,
 				)
 			}
-			roundTrip := appAdministrationTimeRangeToProto(early)
+			roundTrip := appAdministrationTimeRangeToProto(first)
 			if (test.input == nil) != (roundTrip == nil) ||
 				(test.input != nil &&
 					!proto.Equal(test.input, roundTrip)) {
@@ -1645,7 +1619,7 @@ func TestAppAdministrationDescriptionCanonicalizesEmptyToAbsent(
 			t.Fatalf("normalize description(%v) = %v, %v", input, normalized, err)
 		}
 	}
-	definition, err := handler.appAdministrationDefinition(
+	definition, err := appAdministrationDefinition(
 		&opensplunk.AppDefinition{
 			Slug:        "empty-description",
 			DisplayName: "Empty Description",

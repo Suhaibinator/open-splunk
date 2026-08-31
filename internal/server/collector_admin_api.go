@@ -8,7 +8,6 @@ import (
 	"slices"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/Suhaibinator/SRouter/pkg/codec"
@@ -57,7 +56,7 @@ func (handler *apiHandler) collectorAdministrationRoutes(
 			Overrides: sroutercommon.RouteOverrides{
 				MaxBodySize: requestBytes,
 			},
-			Sanitizer: discardUnknownProtoFields,
+			Sanitizer: handler.sanitizeListCollectorsRequest,
 		},
 		router.RouteConfig[
 			*opensplunk.GetCollectorRequest,
@@ -72,7 +71,7 @@ func (handler *apiHandler) collectorAdministrationRoutes(
 			Overrides: sroutercommon.RouteOverrides{
 				MaxBodySize: requestBytes,
 			},
-			Sanitizer: discardUnknownProtoFields,
+			Sanitizer: sanitizeGetCollectorRequest,
 		},
 		router.RouteConfig[
 			*opensplunk.UpdateCollectorRequest,
@@ -87,7 +86,7 @@ func (handler *apiHandler) collectorAdministrationRoutes(
 			Overrides: sroutercommon.RouteOverrides{
 				MaxBodySize: requestBytes,
 			},
-			Sanitizer: discardUnknownProtoFields,
+			Sanitizer: sanitizeUpdateCollectorRequest,
 		},
 		router.RouteConfig[
 			*opensplunk.SetCollectorEnabledRequest,
@@ -102,7 +101,7 @@ func (handler *apiHandler) collectorAdministrationRoutes(
 			Overrides: sroutercommon.RouteOverrides{
 				MaxBodySize: requestBytes,
 			},
-			Sanitizer: discardUnknownProtoFields,
+			Sanitizer: sanitizeSetCollectorEnabledRequest,
 		},
 	}
 }
@@ -114,9 +113,6 @@ func (handler *apiHandler) listCollectors(
 	scope, err := handler.collectorAdministrationAccess(request)
 	if err != nil {
 		return nil, err
-	}
-	if invalidAppAdministrationRequest(input) {
-		return nil, badRequestError("collector request is invalid")
 	}
 	if handler.collectorAdmin == nil {
 		return nil, unavailableError("collector service is unavailable")
@@ -181,16 +177,10 @@ func (handler *apiHandler) getCollector(
 	if err != nil {
 		return nil, err
 	}
-	if invalidAppAdministrationRequest(input) {
-		return nil, badRequestError("collector request is invalid")
-	}
 	if handler.collectorAdmin == nil {
 		return nil, unavailableError("collector service is unavailable")
 	}
-	collectorID, err := canonicalCollectorID(input.GetCollectorId())
-	if err != nil {
-		return nil, badRequestError("collector ID is invalid")
-	}
+	collectorID := strings.Clone(input.GetCollectorId())
 	if err := collectorAdministrationContextError(request.Context()); err != nil {
 		return nil, err
 	}
@@ -243,17 +233,12 @@ func (handler *apiHandler) updateCollector(
 	if err != nil {
 		return nil, err
 	}
-	if invalidAppAdministrationRequest(input) {
-		return nil, badRequestError("collector request is invalid")
-	}
 	if handler.collectorAdmin == nil {
 		return nil, unavailableError("collector service is unavailable")
 	}
-	collectorID, expectedVersion, displayName, err :=
-		normalizeCollectorDisplayNameUpdate(input)
-	if err != nil {
-		return nil, badRequestError("collector update is invalid")
-	}
+	collectorID := strings.Clone(input.GetCollectorId())
+	expectedVersion := input.GetExpectedVersion()
+	displayName := cloneOptionalString(input.DisplayName)
 	receivedAt, err := handler.collectorAdministrationNow()
 	if err != nil {
 		return nil, internalError()
@@ -321,20 +306,11 @@ func (handler *apiHandler) setCollectorEnabled(
 	if err != nil {
 		return nil, err
 	}
-	if invalidAppAdministrationRequest(input) {
-		return nil, badRequestError("collector request is invalid")
-	}
 	if handler.collectorAdmin == nil {
 		return nil, unavailableError("collector service is unavailable")
 	}
-	collectorID, err := canonicalCollectorID(input.GetCollectorId())
-	if err != nil {
-		return nil, badRequestError("collector ID is invalid")
-	}
-	expectedVersion, err := collectorExpectedVersion(input.GetExpectedVersion())
-	if err != nil {
-		return nil, badRequestError("collector expected version is invalid")
-	}
+	collectorID := strings.Clone(input.GetCollectorId())
+	expectedVersion := input.GetExpectedVersion()
 	state, err := collectorAdministrativeStateFromProto(
 		input.GetAdministrativeState(),
 	)
@@ -409,14 +385,12 @@ func (handler *apiHandler) collectorAdministrationAccess(
 	}, nil
 }
 
+// collectorAdministrationListRequest converts a request the route sanitizer
+// has already bounded. Only the enumeration mappings can still fail, and only
+// the server's own page capacity is checked here.
 func (handler *apiHandler) collectorAdministrationListRequest(
 	input *opensplunk.ListCollectorsRequest,
 ) (collectorfleet.ListRequest, error) {
-	if input == nil {
-		return collectorfleet.ListRequest{}, errors.New(
-			"collector list request is required",
-		)
-	}
 	pageSize := min(
 		collectorfleet.MaximumCollectorListPageSize,
 		handler.maximumPageSize,
@@ -431,31 +405,11 @@ func (handler *apiHandler) collectorAdministrationListRequest(
 	if page := input.GetPage(); page != nil {
 		includeTotal = page.GetIncludeTotalSize()
 		if page.PageSize != nil {
-			if page.GetPageSize() == 0 || page.GetPageSize() > pageSize {
-				return collectorfleet.ListRequest{}, errors.New(
-					"collector page size is invalid",
-				)
-			}
 			pageSize = page.GetPageSize()
 		}
 		if page.PageToken != nil {
 			pageToken = page.GetPageToken()
-			if pageToken == "" ||
-				len(pageToken) >
-					collectorfleet.MaximumCollectorListCursorBytes ||
-				!utf8.ValidString(pageToken) ||
-				strings.TrimSpace(pageToken) != pageToken {
-				return collectorfleet.ListRequest{}, errors.New(
-					"collector page token is invalid",
-				)
-			}
 		}
-	}
-	if len(input.GetStateFilters()) >
-		collectorfleet.MaximumCollectorListStateFilters {
-		return collectorfleet.ListRequest{}, errors.New(
-			"too many collector state filters",
-		)
 	}
 	stateFilters := make(
 		[]collectorfleet.ConnectionState,
@@ -472,16 +426,6 @@ func (handler *apiHandler) collectorAdministrationListRequest(
 	slices.Sort(stateFilters)
 	stateFilters = slices.Compact(stateFilters)
 
-	indexName, err := canonicalCollectorIndexFilter(
-		input.IndexNameFilter,
-	)
-	if err != nil {
-		return collectorfleet.ListRequest{}, err
-	}
-	text, err := normalizeCollectorTextFilter(input.TextFilter)
-	if err != nil {
-		return collectorfleet.ListRequest{}, err
-	}
 	sortBy, err := collectorSortFromProto(input.GetSortBy())
 	if err != nil {
 		return collectorfleet.ListRequest{}, err
@@ -497,102 +441,11 @@ func (handler *apiHandler) collectorAdministrationListRequest(
 		PageToken:       strings.Clone(pageToken),
 		IncludeTotal:    includeTotal,
 		StateFilters:    stateFilters,
-		IndexNameFilter: indexName,
-		TextFilter:      text,
+		IndexNameFilter: cloneOptionalString(input.IndexNameFilter),
+		TextFilter:      cloneOptionalString(input.TextFilter),
 		SortBy:          sortBy,
 		Direction:       direction,
 	}, nil
-}
-
-func normalizeCollectorDisplayNameUpdate(
-	input *opensplunk.UpdateCollectorRequest,
-) (string, uint64, *string, error) {
-	if input == nil {
-		return "", 0, nil, errors.New("collector update is required")
-	}
-	collectorID, err := canonicalCollectorID(input.GetCollectorId())
-	if err != nil {
-		return "", 0, nil, err
-	}
-	expectedVersion, err := collectorExpectedVersion(input.GetExpectedVersion())
-	if err != nil {
-		return "", 0, nil, err
-	}
-	if input.GetUpdateMask() == nil ||
-		!input.GetUpdateMask().IsValid(input) ||
-		len(input.GetUpdateMask().GetPaths()) != 1 ||
-		input.GetUpdateMask().GetPaths()[0] != "display_name" {
-		return "", 0, nil, errors.New("collector update mask is invalid")
-	}
-	displayName, err := normalizeCollectorDisplayName(input.DisplayName)
-	if err != nil {
-		return "", 0, nil, err
-	}
-	return collectorID, expectedVersion, displayName, nil
-}
-
-func canonicalCollectorID(input string) (string, error) {
-	if !validTokenCollectorID(input) {
-		return "", errors.New("collector ID is invalid")
-	}
-	return strings.Clone(input), nil
-}
-
-func collectorExpectedVersion(input uint64) (uint64, error) {
-	if err := administrationExpectedVersion(input); err != nil {
-		return 0, errors.New("collector expected version is invalid")
-	}
-	return input, nil
-}
-
-func normalizeCollectorDisplayName(input *string) (*string, error) {
-	if input == nil {
-		return nil, nil
-	}
-	value := strings.TrimSpace(*input)
-	if validateAdminText(
-		value,
-		maximumCollectorDisplayNameBytes,
-		false,
-		false,
-	) != nil {
-		return nil, errors.New("collector display name is invalid")
-	}
-	return new(strings.Clone(value)), nil
-}
-
-func canonicalCollectorIndexFilter(input *string) (*string, error) {
-	if input == nil {
-		return nil, nil
-	}
-	canonical, err := control.NormalizeIndexName(*input)
-	if err != nil || canonical != *input {
-		return nil, errors.New("collector index filter is invalid")
-	}
-	return new(strings.Clone(canonical)), nil
-}
-
-func normalizeCollectorTextFilter(input *string) (*string, error) {
-	if input == nil {
-		return nil, nil
-	}
-	if len(*input) > collectorfleet.MaximumCollectorListTextBytes ||
-		!utf8.ValidString(*input) {
-		return nil, errors.New("collector text filter is invalid")
-	}
-	for _, character := range *input {
-		if unicode.IsControl(character) {
-			return nil, errors.New("collector text filter is invalid")
-		}
-	}
-	value := strings.TrimSpace(*input)
-	if len(value) > collectorfleet.MaximumCollectorListTextBytes {
-		return nil, errors.New("collector text filter is invalid")
-	}
-	if value == "" {
-		return nil, nil
-	}
-	return new(strings.Clone(value)), nil
 }
 
 func collectorConnectionStateFromProto(
