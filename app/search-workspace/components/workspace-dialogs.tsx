@@ -775,7 +775,7 @@ export function WorkspaceDialogs({
                   {maximumBytes === null ? null : <> · {maximumBytes} byte limit</>}
                 </small>
               </div>
-              <p className="workspace-dialog-clipboard-hint"><AppIcon name="copy" size="sm" /> Copy page uses the displayed rows and selected columns, formatted as a tab-separated table.</p>
+              <p className="workspace-dialog-clipboard-hint"><AppIcon name="copy" size="sm" /> Copy page uses the displayed rows and selected columns, formatted as {exportState.format === "jsonl" ? "JSON Lines" : "a tab-separated table"}.</p>
               {exportPending ? (
                 <div className="workspace-dialog-export-progress">
                   <progress aria-label="Server export progress" max={100} value={percentComplete ?? undefined} />

@@ -17,3 +17,12 @@ export function serializeRowsForClipboard(
     ...rows.map((row) => fields.map((field) => escapeClipboardCell(row[field])).join("\t")),
   ].join("\r\n");
 }
+
+export function serializeRowsAsJsonLinesForClipboard(
+  fields: string[],
+  rows: Record<string, unknown>[],
+): string {
+  return rows
+    .map((row) => JSON.stringify(Object.fromEntries(fields.map((field) => [field, row[field] ?? null]))))
+    .join("\n");
+}
