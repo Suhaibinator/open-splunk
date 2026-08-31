@@ -27,9 +27,9 @@ const (
 func (handler *apiHandler) searchAttemptAuditRoutes(
 	noAuth router.AuthLevel,
 	smallRequestBytes int64,
-) []protobufRouteDefinition {
-	return []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute(router.RouteConfig[
+) []router.RouteDefinition {
+	return []router.RouteDefinition{
+		router.RouteConfig[
 			*opensplunk.ListSearchAttemptAuditEventsRequest,
 			*serializedSearchAttemptAuditListResponse,
 		]{
@@ -42,7 +42,8 @@ func (handler *apiHandler) searchAttemptAuditRoutes(
 			Overrides: sroutercommon.RouteOverrides{
 				MaxBodySize: smallRequestBytes,
 			},
-		}),
+			Sanitizer: discardUnknownProtoFields,
+		},
 	}
 }
 

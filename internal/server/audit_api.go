@@ -25,9 +25,9 @@ const (
 func (handler *apiHandler) auditEventRoutes(
 	noAuth router.AuthLevel,
 	smallRequestBytes int64,
-) []protobufRouteDefinition {
-	return []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute(router.RouteConfig[
+) []router.RouteDefinition {
+	return []router.RouteDefinition{
+		router.RouteConfig[
 			*opensplunk.ListAuditEventsRequest,
 			*serializedAuditEventListResponse,
 		]{
@@ -40,7 +40,8 @@ func (handler *apiHandler) auditEventRoutes(
 			Overrides: sroutercommon.RouteOverrides{
 				MaxBodySize: smallRequestBytes,
 			},
-		}),
+			Sanitizer: discardUnknownProtoFields,
+		},
 	}
 }
 

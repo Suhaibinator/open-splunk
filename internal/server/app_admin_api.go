@@ -160,9 +160,9 @@ func (handler *apiHandler) appAdministrationRoutes(
 	noAuth router.AuthLevel,
 	requestBytes int64,
 	smallRequestBytes int64,
-) []protobufRouteDefinition {
-	return []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute(router.RouteConfig[
+) []router.RouteDefinition {
+	return []router.RouteDefinition{
+		router.RouteConfig[
 			*opensplunk.CreateAppRequest,
 			*serializedCreateAppResponse,
 		]{
@@ -173,8 +173,9 @@ func (handler *apiHandler) appAdministrationRoutes(
 			Handler:    handler.createApp,
 			SourceType: router.Body,
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: requestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[
+			Sanitizer:  discardUnknownProtoFields,
+		},
+		router.RouteConfig[
 			*opensplunk.GetAppRequest,
 			*serializedGetAppResponse,
 		]{
@@ -185,8 +186,9 @@ func (handler *apiHandler) appAdministrationRoutes(
 			Handler:    handler.getApp,
 			SourceType: router.Body,
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[
+			Sanitizer:  discardUnknownProtoFields,
+		},
+		router.RouteConfig[
 			*opensplunk.ListAppsRequest,
 			*serializedListAppsResponse,
 		]{
@@ -197,8 +199,9 @@ func (handler *apiHandler) appAdministrationRoutes(
 			Handler:    handler.listApps,
 			SourceType: router.Body,
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[
+			Sanitizer:  discardUnknownProtoFields,
+		},
+		router.RouteConfig[
 			*opensplunk.UpdateAppRequest,
 			*serializedUpdateAppResponse,
 		]{
@@ -209,8 +212,9 @@ func (handler *apiHandler) appAdministrationRoutes(
 			Handler:    handler.updateApp,
 			SourceType: router.Body,
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: requestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[
+			Sanitizer:  discardUnknownProtoFields,
+		},
+		router.RouteConfig[
 			*opensplunk.SetAppStateRequest,
 			*serializedSetAppStateResponse,
 		]{
@@ -221,8 +225,9 @@ func (handler *apiHandler) appAdministrationRoutes(
 			Handler:    handler.setAppState,
 			SourceType: router.Body,
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[
+			Sanitizer:  discardUnknownProtoFields,
+		},
+		router.RouteConfig[
 			*opensplunk.DeleteAppRequest,
 			*serializedDeleteAppResponse,
 		]{
@@ -233,7 +238,8 @@ func (handler *apiHandler) appAdministrationRoutes(
 			Handler:    handler.deleteApp,
 			SourceType: router.Body,
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-		}),
+			Sanitizer:  discardUnknownProtoFields,
+		},
 	}
 }
 

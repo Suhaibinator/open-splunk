@@ -42,9 +42,9 @@ const (
 func (handler *apiHandler) collectorAdministrationRoutes(
 	noAuth router.AuthLevel,
 	requestBytes int64,
-) []protobufRouteDefinition {
-	return []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute(router.RouteConfig[
+) []router.RouteDefinition {
+	return []router.RouteDefinition{
+		router.RouteConfig[
 			*opensplunk.ListCollectorsRequest,
 			*serializedListCollectorsResponse,
 		]{
@@ -57,8 +57,9 @@ func (handler *apiHandler) collectorAdministrationRoutes(
 			Overrides: sroutercommon.RouteOverrides{
 				MaxBodySize: requestBytes,
 			},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[
+			Sanitizer: discardUnknownProtoFields,
+		},
+		router.RouteConfig[
 			*opensplunk.GetCollectorRequest,
 			*serializedGetCollectorResponse,
 		]{
@@ -71,8 +72,9 @@ func (handler *apiHandler) collectorAdministrationRoutes(
 			Overrides: sroutercommon.RouteOverrides{
 				MaxBodySize: requestBytes,
 			},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[
+			Sanitizer: discardUnknownProtoFields,
+		},
+		router.RouteConfig[
 			*opensplunk.UpdateCollectorRequest,
 			*serializedUpdateCollectorResponse,
 		]{
@@ -85,8 +87,9 @@ func (handler *apiHandler) collectorAdministrationRoutes(
 			Overrides: sroutercommon.RouteOverrides{
 				MaxBodySize: requestBytes,
 			},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[
+			Sanitizer: discardUnknownProtoFields,
+		},
+		router.RouteConfig[
 			*opensplunk.SetCollectorEnabledRequest,
 			*serializedSetCollectorEnabledResponse,
 		]{
@@ -99,7 +102,8 @@ func (handler *apiHandler) collectorAdministrationRoutes(
 			Overrides: sroutercommon.RouteOverrides{
 				MaxBodySize: requestBytes,
 			},
-		}),
+			Sanitizer: discardUnknownProtoFields,
+		},
 	}
 }
 

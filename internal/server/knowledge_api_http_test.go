@@ -267,7 +267,7 @@ func newKnowledgeHTTPHandler(
 // production API router.
 func newKnowledgeHTTPRouter(handler *apiHandler) http.Handler {
 	noAuth := router.NoAuth
-	routes := unwrapProtobufRoutes(handler.knowledgeManagementRoutes(noAuth))
+	routes := handler.knowledgeManagementRoutes(noAuth)
 	inner := router.NewRouter[string, struct{}](router.RouterConfig{
 		ServiceName:       "open-splunk-knowledge-http-test",
 		GlobalTimeout:     0,

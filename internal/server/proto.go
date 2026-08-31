@@ -6,7 +6,6 @@ import (
 	"slices"
 	"time"
 
-	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobproto"
@@ -200,74 +199,16 @@ func optionalString(value string) *string {
 	return new(value)
 }
 
-// protobufRouteDefinition keeps protobuf routes behind the constructor that
-// installs the version-skew boundary. The unexported wrapper prevents another
-// package from supplying an untracked SRouter definition to the protobuf route
-// set.
-type protobufRouteDefinition struct {
-	definition router.RouteDefinition
-}
-
-func newForwardCompatibleProtoRoute[Request proto.Message, Response any](
-	config router.RouteConfig[Request, Response],
-) protobufRouteDefinition {
-	config.Sanitizer = forwardCompatibleProtoSanitizer[Request]
-	return protobufRouteDefinition{
-		definition: config,
-	}
-}
-
-func unwrapProtobufRoutes(routes []protobufRouteDefinition) []router.RouteDefinition {
-	definitions := make([]router.RouteDefinition, len(routes))
-	for index := range routes {
-		definitions[index] = routes[index].definition
-	}
-	return definitions
-}
-
-// forwardCompatibleProtoSanitizer discards fields unknown to this server before
-// request validation or persistence. Create and update knowledge requests are
-// the exception: unknown fields inside their persisted definitions are rejected
-// before ordinary unknown fields are cleared. SRouter has already enforced the
-// raw body limit, so discarded bytes still consume the caller's request budget.
-func forwardCompatibleProtoSanitizer[T proto.Message](_ context.Context, request T) (T, error) {
+// discardUnknownProtoFields is the default protobuf route sanitizer. It drops
+// every field unknown to this server, recursively, before request validation
+// or persistence sees the message. SRouter has already enforced the raw body
+// limit, so discarded bytes still consume the caller's request budget. Routes
+// whose requests carry a persisted definition wrap this with a rejection check
+// instead (see sanitizeCreateKnowledgeObjectRequest and sanitizeCreateLookupRequest).
+func discardUnknownProtoFields[T proto.Message](_ context.Context, request T) (T, error) {
 	if isNilDependency(request) {
-		return request, nil
+		return request, badRequestError("request body is required")
 	}
-	switch knowledgeRequest := any(request).(type) {
-	case *opensplunk.CreateKnowledgeObjectRequest:
-		if err := rejectUnknownKnowledgeDefinition(knowledgeRequest.GetDefinition()); err != nil {
-			return request, err
-		}
-	case *opensplunk.UpdateKnowledgeObjectRequest:
-		if err := rejectUnknownKnowledgeDefinition(knowledgeRequest.GetDefinition()); err != nil {
-			return request, err
-		}
-	case *opensplunk.ValidateKnowledgeObjectRequest:
-		// Validate distinguishes unknown request and mask fields (envelope
-		// errors) from unknown applied-definition fields (in-band candidate
-		// invalidity). Its dedicated decoder has already projected updates and
-		// bounded dangerous repetitions, so no generic clearing is safe here.
-		return request, nil
-	case *opensplunk.PreviewKnowledgeObjectRequest:
-		// Preview shares Validate's candidate-envelope unknown authority. Its
-		// request-only decoder applies the same bounded update projection before
-		// this sanitizer can ever be used by a future route.
-		return request, nil
-	case *opensplunk.CreateLookupRequest:
-		if err := rejectUnknownLookupDefinition(knowledgeRequest.GetDefinition()); err != nil {
-			return request, err
-		}
-	case *opensplunk.ReplaceLookupRequest:
-		if err := rejectUnknownLookupDefinition(knowledgeRequest.GetDefinition()); err != nil {
-			return request, err
-		}
-	case *opensplunk.PreviewLookupRequest:
-		if err := rejectUnknownLookupDefinition(knowledgeRequest.GetDefinition()); err != nil {
-			return request, err
-		}
-	}
-
 	pending := []protoreflect.Message{request.ProtoReflect()}
 	for len(pending) != 0 {
 		last := len(pending) - 1

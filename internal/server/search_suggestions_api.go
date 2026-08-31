@@ -46,9 +46,9 @@ const (
 func (handler *apiHandler) searchSuggestionRoutes(
 	noAuth router.AuthLevel,
 	smallRequestBytes int64,
-) []protobufRouteDefinition {
-	return []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute(router.RouteConfig[
+) []router.RouteDefinition {
+	return []router.RouteDefinition{
+		router.RouteConfig[
 			*opensplunk.GetSearchSuggestionsRequest,
 			*serializedSearchSuggestionsResponse,
 		]{
@@ -56,7 +56,8 @@ func (handler *apiHandler) searchSuggestionRoutes(
 			Codec: newSerializedSearchSuggestionsCodec(), Handler: handler.getSearchSuggestions,
 			SourceType: router.Body,
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-		}),
+			Sanitizer:  discardUnknownProtoFields,
+		},
 	}
 }
 

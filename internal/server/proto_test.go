@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobproto"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -17,30 +16,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-func TestUnwrapProtobufRoutesIsAnExactProjection(t *testing.T) {
-	t.Parallel()
-
-	first := &router.RouteConfigBase{Path: "/first"}
-	second := &router.RouteConfigBase{Path: "/second"}
-	routes := []protobufRouteDefinition{
-		{definition: first},
-		{definition: second},
-	}
-
-	got := unwrapProtobufRoutes(routes)
-	if len(got) != len(routes) {
-		t.Fatalf("unwrapped route count = %d, want %d", len(got), len(routes))
-	}
-	if got[0] != first || got[1] != second {
-		t.Fatalf("unwrapped routes = %#v, want the two input definitions in order", got)
-	}
-	routes[0].definition = second
-	if got[0] != first {
-		t.Fatal("unwrapped route slice aliases its wrapper input")
-	}
-}
-
-func TestForwardCompatibleProtoSanitizerDiscardsUnknownFieldsRecursively(t *testing.T) {
+func TestDiscardUnknownProtoFieldsIsRecursive(t *testing.T) {
 	t.Parallel()
 
 	request, err := structpb.NewStruct(map[string]any{
@@ -61,7 +37,7 @@ func TestForwardCompatibleProtoSanitizerDiscardsUnknownFieldsRecursively(t *test
 	list.ProtoReflect().SetUnknown(unknown)
 	list.GetValues()[0].ProtoReflect().SetUnknown(unknown)
 
-	got, err := forwardCompatibleProtoSanitizer(t.Context(), request)
+	got, err := discardUnknownProtoFields(t.Context(), request)
 	if err != nil {
 		t.Fatalf("sanitize request: %v", err)
 	}

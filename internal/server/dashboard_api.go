@@ -288,32 +288,38 @@ func mapDashboardCallError(request *http.Request, operationErr error) error {
 	}
 }
 
-func (handler *apiHandler) dashboardRoutes(noAuth router.AuthLevel, smallRequestBytes int64) []protobufRouteDefinition {
-	return []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.CreateDashboardRequest, *opensplunk.CreateDashboardResponse]{
+func (handler *apiHandler) dashboardRoutes(noAuth router.AuthLevel, smallRequestBytes int64) []router.RouteDefinition {
+	return []router.RouteDefinition{
+		router.RouteConfig[*opensplunk.CreateDashboardRequest, *opensplunk.CreateDashboardResponse]{
 			Path: "/dashboards/create", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.CreateDashboardRequest, *opensplunk.CreateDashboardResponse](), Handler: handler.createDashboard, SourceType: router.Body,
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.GetDashboardRequest, *opensplunk.GetDashboardResponse]{
+			Sanitizer: discardUnknownProtoFields,
+		},
+		router.RouteConfig[*opensplunk.GetDashboardRequest, *opensplunk.GetDashboardResponse]{
 			Path: "/dashboards/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.GetDashboardRequest, *opensplunk.GetDashboardResponse](), Handler: handler.getDashboard, SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.ListDashboardsRequest, *serializedDashboardListResponse]{
+			Sanitizer: discardUnknownProtoFields,
+		},
+		router.RouteConfig[*opensplunk.ListDashboardsRequest, *serializedDashboardListResponse]{
 			Path: "/dashboards/list", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedDashboardListCodec(), Handler: handler.listDashboards, SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.UpdateDashboardRequest, *opensplunk.UpdateDashboardResponse]{
+			Sanitizer: discardUnknownProtoFields,
+		},
+		router.RouteConfig[*opensplunk.UpdateDashboardRequest, *opensplunk.UpdateDashboardResponse]{
 			Path: "/dashboards/update", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.UpdateDashboardRequest, *opensplunk.UpdateDashboardResponse](), Handler: handler.updateDashboard, SourceType: router.Body,
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.DeleteDashboardRequest, *opensplunk.DeleteDashboardResponse]{
+			Sanitizer: discardUnknownProtoFields,
+		},
+		router.RouteConfig[*opensplunk.DeleteDashboardRequest, *opensplunk.DeleteDashboardResponse]{
 			Path: "/dashboards/delete", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.DeleteDashboardRequest, *opensplunk.DeleteDashboardResponse](), Handler: handler.deleteDashboard, SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-		}),
-		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.RunDashboardPanelRequest, *opensplunk.RunDashboardPanelResponse]{
+			Sanitizer: discardUnknownProtoFields,
+		},
+		router.RouteConfig[*opensplunk.RunDashboardPanelRequest, *opensplunk.RunDashboardPanelResponse]{
 			Path: "/dashboards/panels/run", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.RunDashboardPanelRequest, *opensplunk.RunDashboardPanelResponse](), Handler: handler.runDashboardPanel, SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-		}),
+			Sanitizer: discardUnknownProtoFields,
+		},
 	}
 }
 

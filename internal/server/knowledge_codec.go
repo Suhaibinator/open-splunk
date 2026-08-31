@@ -1,6 +1,8 @@
 package server
 
 import (
+	"context"
+
 	"github.com/Suhaibinator/SRouter/pkg/codec"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"google.golang.org/protobuf/proto"
@@ -193,6 +195,31 @@ func newKnowledgeBoundedProtoCodec[Request any, Message proto.Message](
 			sizeError:    "knowledge " + operation + " response exceeds its byte limit",
 		},
 	)
+}
+
+// sanitizeCreateKnowledgeObjectRequest rejects unknown fields inside the persisted
+// definition, so a newer client's semantics are never silently dropped, and
+// then discards unknown fields from the rest of the request envelope.
+func sanitizeCreateKnowledgeObjectRequest(
+	ctx context.Context,
+	request *opensplunk.CreateKnowledgeObjectRequest,
+) (*opensplunk.CreateKnowledgeObjectRequest, error) {
+	if err := rejectUnknownKnowledgeDefinition(request.GetDefinition()); err != nil {
+		return request, err
+	}
+	return discardUnknownProtoFields(ctx, request)
+}
+
+// sanitizeUpdateKnowledgeObjectRequest mirrors sanitizeCreateKnowledgeObjectRequest
+// for updates.
+func sanitizeUpdateKnowledgeObjectRequest(
+	ctx context.Context,
+	request *opensplunk.UpdateKnowledgeObjectRequest,
+) (*opensplunk.UpdateKnowledgeObjectRequest, error) {
+	if err := rejectUnknownKnowledgeDefinition(request.GetDefinition()); err != nil {
+		return request, err
+	}
+	return discardUnknownProtoFields(ctx, request)
 }
 
 func rejectUnknownKnowledgeDefinition(

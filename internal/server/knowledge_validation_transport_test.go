@@ -395,7 +395,7 @@ func TestValidateKnowledgeObjectSanitizerPreservesUnknownAuthorities(t *testing.
 	request.ProtoReflect().SetUnknown(validateTestVarintField(100, 1))
 	request.UpdateMask.ProtoReflect().SetUnknown(validateTestVarintField(101, 2))
 	request.Definition.GetFieldAlias().ProtoReflect().SetUnknown(validateTestVarintField(102, 3))
-	got, err := forwardCompatibleProtoSanitizer(t.Context(), request)
+	got, err := sanitizeValidateKnowledgeObjectRequest(t.Context(), request)
 	if err != nil || got != request || len(got.ProtoReflect().GetUnknown()) == 0 ||
 		len(got.GetUpdateMask().ProtoReflect().GetUnknown()) == 0 ||
 		len(got.GetDefinition().GetFieldAlias().ProtoReflect().GetUnknown()) == 0 {
