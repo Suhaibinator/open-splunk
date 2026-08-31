@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -50,9 +51,6 @@ var savedSearchUpdatePaths = map[string]struct{}{
 }
 
 func (handler *apiHandler) createSavedSearch(request *http.Request, input *opensplunk.CreateSavedSearchRequest) (*opensplunk.CreateSavedSearchResponse, error) {
-	if input.ClientRequestId != nil {
-		return nil, badRequestError("client request idempotency is not supported")
-	}
 	definition, err := handler.savedSearchDefinition(input.GetDefinition())
 	if err != nil {
 		return nil, badRequestError(err.Error())
@@ -72,10 +70,7 @@ func (handler *apiHandler) createSavedSearch(request *http.Request, input *opens
 }
 
 func (handler *apiHandler) getSavedSearch(request *http.Request, input *opensplunk.GetSavedSearchRequest) (*opensplunk.GetSavedSearchResponse, error) {
-	id, err := savedSearchID(input.GetSavedSearchId())
-	if err != nil {
-		return nil, badRequestError(err.Error())
-	}
+	id := input.GetSavedSearchId()
 	record, err := handler.savedSearches.Get(request.Context(), handler.savedSearchScope(), id)
 	if err := mapSavedSearchCallError(request.Context(), err); err != nil {
 		return nil, err
@@ -98,25 +93,13 @@ func (handler *apiHandler) getSavedSearch(request *http.Request, input *opensplu
 }
 
 func (handler *apiHandler) listSavedSearches(request *http.Request, input *opensplunk.ListSavedSearchesRequest) (*serializedSavedSearchListResponse, error) {
-	pageSize, pageToken, includeTotal, err := handler.savedSearchPageRequest(input.GetPage())
-	if err != nil {
-		return nil, badRequestError(err.Error())
-	}
-	appIDFilter, err := optionalBoundedString(input.AppIdFilter, maximumSavedSearchAppIDBytes, "app ID filter")
-	if err != nil {
-		return nil, badRequestError(err.Error())
-	}
-	textFilter, err := optionalBoundedString(input.TextFilter, maximumSavedSearchFilterBytes, "text filter")
-	if err != nil {
-		return nil, badRequestError(err.Error())
-	}
-	sharingScopes, err := savedSearchSharingScopes(input.GetSharingScopeFilters())
-	if err != nil {
-		return nil, badRequestError(err.Error())
-	}
-	if err := validateSavedSearchSort(input.GetSortBy(), input.GetSortDirection()); err != nil {
-		return nil, badRequestError(err.Error())
-	}
+	requestPage := input.GetPage()
+	pageSize := requestPage.GetPageSize()
+	pageToken := requestPage.GetPageToken()
+	includeTotal := requestPage.GetIncludeTotalSize()
+	appIDFilter := input.AppIdFilter
+	textFilter := input.TextFilter
+	sharingScopes := input.GetSharingScopeFilters()
 
 	release, acquired := handler.acquireSerialization()
 	if !acquired {
@@ -211,21 +194,12 @@ func (handler *apiHandler) listSavedSearches(request *http.Request, input *opens
 }
 
 func (handler *apiHandler) updateSavedSearch(request *http.Request, input *opensplunk.UpdateSavedSearchRequest) (*opensplunk.UpdateSavedSearchResponse, error) {
-	id, err := savedSearchID(input.GetSavedSearchId())
-	if err != nil {
-		return nil, badRequestError(err.Error())
-	}
-	if err := administrationExpectedVersion(input.GetExpectedVersion()); err != nil {
-		return nil, badRequestError(err.Error())
-	}
+	id := input.GetSavedSearchId()
 	definition, err := handler.savedSearchDefinition(input.GetDefinition())
 	if err != nil {
 		return nil, badRequestError(err.Error())
 	}
-	updateMask, err := cloneSavedSearchUpdateMask(input.GetUpdateMask())
-	if err != nil {
-		return nil, badRequestError(err.Error())
-	}
+	updateMask := cloneSavedSearchUpdateMask(input.GetUpdateMask())
 	record, err := handler.savedSearches.Update(request.Context(), handler.savedSearchScope(), id, input.GetExpectedVersion(), definition, updateMask)
 	if err := mapSavedSearchCallError(request.Context(), err); err != nil {
 		return nil, err
@@ -245,24 +219,9 @@ func (handler *apiHandler) updateSavedSearch(request *http.Request, input *opens
 }
 
 func (handler *apiHandler) duplicateSavedSearch(request *http.Request, input *opensplunk.DuplicateSavedSearchRequest) (*opensplunk.DuplicateSavedSearchResponse, error) {
-	if input.ClientRequestId != nil {
-		return nil, badRequestError("client request idempotency is not supported")
-	}
-	id, err := savedSearchID(input.GetSavedSearchId())
-	if err != nil {
-		return nil, badRequestError(err.Error())
-	}
-	newName := strings.TrimSpace(input.GetNewName())
-	if newName == "" {
-		return nil, badRequestError("new name is required")
-	}
-	if err := validateBoundedIdentifier(newName, maximumSavedSearchNameBytes, false); err != nil {
-		return nil, badRequestError("new name is invalid")
-	}
-	destinationAppID, err := optionalBoundedString(input.DestinationAppId, maximumSavedSearchAppIDBytes, "destination app ID")
-	if err != nil {
-		return nil, badRequestError(err.Error())
-	}
+	id := input.GetSavedSearchId()
+	newName := input.GetNewName()
+	destinationAppID := input.DestinationAppId
 	record, err := handler.savedSearches.Duplicate(request.Context(), handler.savedSearchScope(), id, newName, destinationAppID)
 	if err := mapSavedSearchCallError(request.Context(), err); err != nil {
 		return nil, err
@@ -281,14 +240,8 @@ func (handler *apiHandler) duplicateSavedSearch(request *http.Request, input *op
 }
 
 func (handler *apiHandler) deleteSavedSearch(request *http.Request, input *opensplunk.DeleteSavedSearchRequest) (*opensplunk.DeleteSavedSearchResponse, error) {
-	id, err := savedSearchID(input.GetSavedSearchId())
-	if err != nil {
-		return nil, badRequestError(err.Error())
-	}
-	if err := administrationExpectedVersion(input.GetExpectedVersion()); err != nil {
-		return nil, badRequestError(err.Error())
-	}
-	err = handler.savedSearches.Delete(request.Context(), handler.savedSearchScope(), id, input.GetExpectedVersion())
+	id := input.GetSavedSearchId()
+	err := handler.savedSearches.Delete(request.Context(), handler.savedSearchScope(), id, input.GetExpectedVersion())
 	if err := mapSavedSearchCallError(request.Context(), err); err != nil {
 		return nil, err
 	}
@@ -300,6 +253,9 @@ func (handler *apiHandler) savedSearchScope() savedobjects.AccessScope {
 }
 
 func (handler *apiHandler) savedSearchDefinition(input *opensplunk.SavedSearchDefinition) (*opensplunk.SavedSearchDefinition, error) {
+	// The route sanitizers reject a missing definition before this runs. The
+	// guard survives so a direct caller reaches a 400 rather than dereferencing
+	// a nil definition below.
 	if input == nil {
 		return nil, errors.New("saved search definition is required")
 	}
@@ -412,65 +368,11 @@ func validateBoundedIdentifier(value string, maximumBytes int, allowEmpty bool) 
 	return nil
 }
 
-func savedSearchSharingScopes(input []opensplunk.SharingScope) ([]opensplunk.SharingScope, error) {
-	if len(input) > 3 {
-		return nil, errors.New("sharing scope filters contain too many values")
-	}
-	result := make([]opensplunk.SharingScope, 0, len(input))
-	seen := make(map[opensplunk.SharingScope]struct{}, len(input))
-	for _, scope := range input {
-		switch scope {
-		case opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
-			opensplunk.SharingScope_SHARING_SCOPE_APP,
-			opensplunk.SharingScope_SHARING_SCOPE_GLOBAL:
-		default:
-			return nil, errors.New("sharing scope filter is invalid")
-		}
-		if _, exists := seen[scope]; exists {
-			continue
-		}
-		seen[scope] = struct{}{}
-		result = append(result, scope)
-	}
-	return result, nil
-}
-
-func validateSavedSearchSort(sortBy opensplunk.SavedSearchSortBy, direction opensplunk.SortDirection) error {
-	switch sortBy {
-	case opensplunk.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_UNSPECIFIED,
-		opensplunk.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_NAME,
-		opensplunk.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_CREATED_AT,
-		opensplunk.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_UPDATED_AT:
-	default:
-		return errors.New("saved search sort is invalid")
-	}
-	switch direction {
-	case opensplunk.SortDirection_SORT_DIRECTION_UNSPECIFIED,
-		opensplunk.SortDirection_SORT_DIRECTION_ASCENDING,
-		opensplunk.SortDirection_SORT_DIRECTION_DESCENDING:
-		return nil
-	default:
-		return errors.New("sort direction is invalid")
-	}
-}
-
-func cloneSavedSearchUpdateMask(input *fieldmaskpb.FieldMask) (*fieldmaskpb.FieldMask, error) {
+func cloneSavedSearchUpdateMask(input *fieldmaskpb.FieldMask) *fieldmaskpb.FieldMask {
 	if input == nil {
-		return nil, nil
+		return nil
 	}
-	result := &fieldmaskpb.FieldMask{Paths: make([]string, len(input.GetPaths()))}
-	seen := make(map[string]struct{}, len(input.GetPaths()))
-	for index, path := range input.GetPaths() {
-		if _, allowed := savedSearchUpdatePaths[path]; !allowed {
-			return nil, fmt.Errorf("update mask path %q is not supported", path)
-		}
-		if _, duplicate := seen[path]; duplicate {
-			return nil, fmt.Errorf("update mask path %q is duplicated", path)
-		}
-		seen[path] = struct{}{}
-		result.Paths[index] = path
-	}
-	return result, nil
+	return &fieldmaskpb.FieldMask{Paths: slices.Clone(input.GetPaths())}
 }
 
 func savedSearchAppID(record *opensplunk.SavedSearch) string {

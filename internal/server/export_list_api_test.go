@@ -228,7 +228,12 @@ func TestExportListAllowsPageSizeAndTotalOptionToChangeOnContinuation(t *testing
 
 func TestExportListRejectsInvalidRequestBeforeService(t *testing.T) {
 	invalidUTF8SearchID := string([]byte{0xff})
-	if _, err := exportListSearchJobIDFilter(&invalidUTF8SearchID); err == nil {
+	if _, err := sanitizerTestHandler().sanitizeListExportJobsRequest(
+		t.Context(),
+		&opensplunk.ListExportJobsRequest{
+			SearchJobIdFilter: &invalidUTF8SearchID,
+		},
+	); err == nil {
 		t.Fatal("invalid UTF-8 search job filter was accepted")
 	}
 

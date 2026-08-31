@@ -17,7 +17,7 @@ func (handler *apiHandler) validateSearch(
 ) (*opensplunk.ValidateSearchResponse, error) {
 	resolved, err := handler.resolveSearchDefinition(
 		input.GetDefinition(),
-		rejectUnsupportedSearchDefinitionFields,
+		func(*opensplunk.SearchDefinition) error { return nil },
 	)
 	if err != nil {
 		return nil, err
