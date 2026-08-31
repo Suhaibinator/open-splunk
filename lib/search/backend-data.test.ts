@@ -1130,3 +1130,45 @@ test("timechart keeps siblings when a runtime series is named count", () => {
     WARN: 0,
   }]);
 });
+
+test("time-series rows concatenated across server pages adapt as one contiguous bucket series", () => {
+  const schema: ResultSchema = {
+    schemaId: "paged-timechart-v1",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_TIME_SERIES,
+    columns: [
+      column("_time", ValueType.VALUE_TYPE_TIMESTAMP, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_EVENT_TIME),
+      column("Failed to login user", ValueType.VALUE_TYPE_UINT64, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_METRIC),
+      column("worker lane drain failed", ValueType.VALUE_TYPE_UINT64, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_METRIC),
+    ],
+  };
+  const spanMs = 5 * 60_000;
+  const start = Date.parse("2026-08-24T07:10:00Z");
+  const pageSize = 1_000;
+  const totalBuckets = 2_017;
+  // Every event sits after the first page; page 1 is nothing but zero-filled buckets.
+  const bucketRow = (index: number): ResultRow => row(`bucket-${index}`, BigInt(index), [
+    timestampValue(new Date(start + index * spanMs).toISOString()),
+    uint64Value(index === 1_500 ? 5n : 0n),
+    uint64Value(index === 2_016 ? 1n : 0n),
+  ]);
+  const pages = [0, 1, 2].map((page) => Array.from(
+    { length: Math.min(pageSize, totalBuckets - page * pageSize) },
+    (_, offset) => bucketRow(page * pageSize + offset),
+  ));
+
+  const firstPageOnly = adaptSearchResults(schema, pages[0], spanMs).timeline;
+  assert.equal(firstPageOnly.length, pageSize);
+  assert.equal(firstPageOnly.reduce((sum, point) => sum + point.count, 0), 0);
+
+  const complete = adaptSearchResults(schema, pages.flat(), spanMs).timeline;
+  assert.equal(complete.length, totalBuckets);
+  assert.equal(complete.reduce((sum, point) => sum + point.count, 0), 6);
+  assert.deepEqual(complete[1_500].series, { "Failed to login user": 5, "worker lane drain failed": 0 });
+  assert.deepEqual(complete[2_016].series, { "Failed to login user": 0, "worker lane drain failed": 1 });
+  // Bucket edges chain across the page boundary instead of restarting at each page.
+  assert.equal(complete[pageSize - 1].latest, complete[pageSize].earliest);
+  assert.equal(complete[pageSize].earliest, new Date(start + pageSize * spanMs).toISOString());
+  assert.equal(complete.at(-1)?.latest, new Date(start + totalBuckets * spanMs).toISOString());
+  assert.deepEqual(timechartValueFields(complete, schema), ["Failed to login user", "worker lane drain failed"]);
+});

@@ -57,6 +57,7 @@ const testFiles = [
   path.join("app", "search-workspace", "statistics-sparkline.test.ts"),
   path.join("app", "search-workspace", "statistics-multivalue.test.ts"),
   path.join("app", "search-workspace", "time-range.test.ts"),
+  path.join("app", "search-workspace", "timechart-series.test.ts"),
   path.join("app", "search-workspace", "use-search-sharing.test.ts"),
   path.join("app", "search-workspace", "workspace-utils.test.ts"),
   path.join("app", "search-workspace", "virtual-table.test.ts"),
