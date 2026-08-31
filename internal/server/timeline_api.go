@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/Suhaibinator/SRouter/pkg/codec"
@@ -22,36 +21,20 @@ func (handler *apiHandler) searchTimelineRoutes(noAuth router.AuthLevel, smallRe
 			Path: "/search/jobs/timeline", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedSearchTimelineCodec(), Handler: handler.getSearchTimeline,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: discardUnknownProtoFields,
+			Sanitizer: handler.sanitizeGetSearchTimelineRequest,
 		},
 	}
 }
 
 func (handler *apiHandler) getSearchTimeline(request *http.Request, input *opensplunk.GetSearchTimelineRequest) (*serializedSearchTimelineResponse, error) {
-	if input == nil {
-		return nil, badRequestError("timeline request is required")
-	}
-	searchJobID := strings.TrimSpace(input.GetSearchJobId())
-	if searchJobID == "" {
-		return nil, badRequestError("search job ID is required")
-	}
-
-	analysisRequest := searchanalysis.Request{SearchJobID: searchJobID}
+	analysisRequest := searchanalysis.Request{SearchJobID: input.GetSearchJobId()}
 	maximumResponseBuckets := handler.maximumTimelineBuckets
 	if input.MaxBuckets != nil {
-		maximum := input.GetMaxBuckets()
-		if maximum == 0 || maximum > handler.maximumTimelineBuckets {
-			return nil, badRequestError("maximum buckets is outside the supported range")
-		}
-		analysisRequest.MaxBuckets = &maximum
-		maximumResponseBuckets = maximum
+		analysisRequest.MaxBuckets = new(input.GetMaxBuckets())
+		maximumResponseBuckets = input.GetMaxBuckets()
 	}
 	if preferred := input.GetPreferredBucketWidth(); preferred != nil {
-		if err := preferred.CheckValid(); err != nil || preferred.GetSeconds() <= 0 || preferred.GetNanos() != 0 {
-			return nil, badRequestError("preferred bucket width must be a positive whole number of seconds")
-		}
-		seconds := preferred.GetSeconds()
-		analysisRequest.PreferredBucketWidthSeconds = &seconds
+		analysisRequest.PreferredBucketWidthSeconds = new(preferred.GetSeconds())
 	}
 
 	release, acquired := handler.acquireSerialization()

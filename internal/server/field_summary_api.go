@@ -7,7 +7,6 @@ import (
 	"math"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"fortio.org/safecast"
@@ -26,31 +25,12 @@ type searchFieldSummaryValueIdentity struct {
 }
 
 func (handler *apiHandler) getSearchFieldSummary(request *http.Request, input *opensplunk.GetSearchFieldSummaryRequest) (*serializedSearchFieldSummaryResponse, error) {
-	if input == nil {
-		return nil, badRequestError("search field summary request is required")
-	}
-	searchJobID := strings.TrimSpace(input.GetSearchJobId())
-	if searchJobID == "" {
-		return nil, badRequestError("search job ID is required")
-	}
-	// Field names are exact, case-sensitive catalog output. In particular,
-	// trimming would make an actual leading/trailing-space field unreachable
-	// and could turn a malformed request into a different valid field.
-	fieldName := input.GetFieldName()
-	if fieldName == "" {
-		return nil, badRequestError("search field name is required")
-	}
-
 	analysisRequest := searchanalysis.GetFieldSummaryRequest{
-		SearchJobID: searchJobID,
-		FieldName:   fieldName,
+		SearchJobID: input.GetSearchJobId(),
+		FieldName:   input.GetFieldName(),
 	}
 	if input.MaxValues != nil {
-		maximumValues := input.GetMaxValues()
-		if maximumValues == 0 || maximumValues > handler.maximumFieldSummaryValues {
-			return nil, badRequestError("search field summary value limit is outside the supported range")
-		}
-		analysisRequest.MaxValues = &maximumValues
+		analysisRequest.MaxValues = new(input.GetMaxValues())
 	}
 
 	result, err := handler.searchFields.GetFieldSummary(request.Context(), handler.accessScope(), analysisRequest)
