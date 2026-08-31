@@ -4,17 +4,21 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/featureops"
+	"github.com/Suhaibinator/open-splunk/internal/privatefs"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
+	"golang.org/x/sys/unix"
 )
 
 type testClock struct{ now time.Time }
@@ -420,15 +424,21 @@ func TestCapacityRejectsWithoutEvictingUnexpiredArtifact(t *testing.T) {
 	failed.RowCount = 0
 	failed.ResultBytes = 0
 	failed.Failure = &searchjobs.Failure{
-		Code: searchjobs.FailureStorageUnavailable, Message: "retained search results are unavailable",
+		Code: searchjobs.FailureResultsNotPersisted, Message: "results were not persisted",
 	}
 	if err := store.Finalize(context.Background(), failed); err != nil {
 		t.Fatalf("terminal publication compensation error = %v", err)
 	}
 	record, err = store.Get(ctx, testAccess(), job.ID, AccessInspect)
 	if err != nil || record.State != StateFailed || record.ArtifactPresent ||
-		record.Job.Failure == nil || record.Job.Failure.Code != searchjobs.FailureStorageUnavailable {
+		record.Job.Failure == nil || record.Job.Failure.Code != searchjobs.FailureResultsNotPersisted {
 		t.Fatalf("terminal publication compensation = %#v, %v", record, err)
+	}
+	if terminalErr := TerminalResultError(record); !errors.Is(terminalErr, ErrResultsNotPersisted) {
+		t.Fatalf("TerminalResultError(compensated) = %v, want ErrResultsNotPersisted", terminalErr)
+	}
+	if _, acquireErr := store.Acquire(ctx, testAccess(), job.ID); !errors.Is(acquireErr, ErrResultsNotPersisted) {
+		t.Fatalf("Acquire after publication failure = %v, want ErrResultsNotPersisted", acquireErr)
 	}
 	rejected := metrics.Snapshot().Counter(
 		featureops.FeatureDurableArtifacts,
@@ -600,6 +610,93 @@ func TestExclusiveDirectoryLock(t *testing.T) {
 	_, err = New(ctx, Config{DB: database.SQLDB(), Directory: directory, Clock: clock.Now, CleanupInterval: -1})
 	if !errors.Is(err, ErrDirectoryInUse) {
 		t.Fatalf("second New error = %v", err)
+	}
+}
+
+func TestNewRefusesDirectoryWithoutNoReplaceRename(t *testing.T) {
+	t.Parallel()
+
+	directory := filepath.Join(t.TempDir(), "search-artifacts")
+	database, err := control.Open(context.Background(), filepath.Join(t.TempDir(), "control.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	var probed string
+	unsupported := &privatefs.UnsupportedFilesystemError{
+		Operation: "no-replace rename", Directory: directory, Filesystem: "nfs", Err: unix.EINVAL,
+	}
+	probe := func(pinned *privatefs.Directory) error {
+		probed = pinned.Path()
+		return fmt.Errorf("%s: %w", unsupported.Guidance("retained-search directory"), unsupported)
+	}
+	_, err = New(context.Background(), Config{
+		DB: database.SQLDB(), Directory: directory, CleanupInterval: -1, renameProbe: probe,
+	})
+	if err == nil {
+		t.Fatal("New accepted a directory that cannot publish artifacts")
+	}
+	if !errors.Is(err, privatefs.ErrUnsupportedFilesystem) {
+		t.Fatalf("New error = %v, want ErrUnsupportedFilesystem", err)
+	}
+	absolute, absErr := filepath.Abs(directory)
+	if absErr != nil {
+		t.Fatal(absErr)
+	}
+	if probed != absolute {
+		t.Fatalf("probe ran against %q, want the opened store directory %q", probed, absolute)
+	}
+	want := "open search artifact store: retained-search directory " + directory +
+		" is on nfs, which does not support atomic no-replace rename; place it on a local filesystem (ext4, xfs, btrfs)"
+	if !strings.HasPrefix(err.Error(), want) {
+		t.Fatalf("New error = %q, want prefix %q", err.Error(), want)
+	}
+	// The refused store must release its exclusive lock so a corrected
+	// configuration or a later process can open the directory.
+	clock := &testClock{now: time.Now()}
+	store := openTestStore(t, database.SQLDB(), directory, clock, DefaultMaximumBytes)
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTerminalResultErrorClassifiesRecords(t *testing.T) {
+	t.Parallel()
+
+	notPersisted := Record{State: StateFailed, Job: searchjobs.Job{Failure: &searchjobs.Failure{Code: searchjobs.FailureResultsNotPersisted}}}
+	if err := TerminalResultError(notPersisted); !errors.Is(err, ErrResultsNotPersisted) {
+		t.Fatalf("not persisted = %v", err)
+	}
+	executionFailed := Record{State: StateFailed, Job: searchjobs.Job{Failure: &searchjobs.Failure{Code: searchjobs.FailureStorageUnavailable}}}
+	if err := TerminalResultError(executionFailed); !errors.Is(err, ErrResultsUnavailable) || errors.Is(err, ErrResultsNotPersisted) {
+		t.Fatalf("execution failure = %v", err)
+	}
+	if err := TerminalResultError(Record{State: StateFailed}); !errors.Is(err, ErrResultsUnavailable) {
+		t.Fatalf("failed without failure = %v", err)
+	}
+	for _, state := range []State{StateCanceled, StateInterrupted} {
+		if err := TerminalResultError(Record{State: state}); !errors.Is(err, ErrResultsUnavailable) {
+			t.Fatalf("state %v = %v", state, err)
+		}
+	}
+	for _, state := range []State{StateQueued, StateRunning, StateCompleted, StateExpired} {
+		if err := TerminalResultError(Record{State: state}); err != nil {
+			t.Fatalf("state %v = %v, want nil", state, err)
+		}
+	}
+}
+
+func TestPublicationErrorWrapsUnsupportedFilesystem(t *testing.T) {
+	t.Parallel()
+
+	unsupported := &privatefs.UnsupportedFilesystemError{Operation: "no-replace rename", Directory: "/state", Err: unix.EINVAL}
+	wrapped := publicationError(fmt.Errorf("rename: %w", unsupported))
+	if !errors.Is(wrapped, searchjobs.ErrResultStorageUnsupported) || !errors.Is(wrapped, privatefs.ErrUnsupportedFilesystem) {
+		t.Fatalf("publicationError(unsupported) = %v", wrapped)
+	}
+	other := errors.New("disk full")
+	if got := publicationError(other); !errors.Is(got, other) || errors.Is(got, searchjobs.ErrResultStorageUnsupported) {
+		t.Fatalf("publicationError(other) = %v", got)
 	}
 }
 

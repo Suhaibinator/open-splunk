@@ -92,6 +92,14 @@ func New(ctx context.Context, config Config) (*Store, error) {
 		_ = directory.Close()
 		return nil, fmt.Errorf("open search artifact store: %w", err)
 	}
+	// Every publication depends on atomic no-replace rename, which the Linux
+	// NFS client and other network filesystems refuse. Fail at startup with the
+	// directory and filesystem named instead of losing every search result.
+	if err := resolved.renameProbe(directory); err != nil {
+		_ = lock.Close()
+		_ = directory.Close()
+		return nil, fmt.Errorf("open search artifact store: %w", err)
+	}
 	workerContext, cancel := context.WithCancel(context.Background())
 	var listCursorKey [sha256.Size]byte
 	if _, err := rand.Read(listCursorKey[:]); err != nil {
@@ -355,7 +363,7 @@ func (store *Store) PersistResults(
 		return Record{}, ErrConflict
 	}
 	if err := store.directory.RenameNoReplace(temporaryName, store.directory, fileName); err != nil {
-		return Record{}, err
+		return Record{}, publicationError(err)
 	}
 	published = true
 	if err := store.directory.Sync(); err != nil {
@@ -456,6 +464,10 @@ func (store *Store) Acquire(
 	}
 	record, name, digest, err := store.recordLocked(ctx, access, jobID, AccessInspect)
 	if err != nil {
+		store.mu.Unlock()
+		return nil, err
+	}
+	if err := TerminalResultError(record); err != nil {
 		store.mu.Unlock()
 		return nil, err
 	}
@@ -961,6 +973,15 @@ func validSettings(settings Settings) bool {
 
 func validLifetime(lifetime time.Duration) bool {
 	return lifetime > 0 && lifetime <= searchretention.MaximumLifetime
+}
+
+// publicationError classifies a failed artifact rename so the search manager
+// can explain an unsupported filesystem to the client without learning paths.
+func publicationError(err error) error {
+	if errors.Is(err, privatefs.ErrUnsupportedFilesystem) {
+		return fmt.Errorf("%w: %w", searchjobs.ErrResultStorageUnsupported, err)
+	}
+	return err
 }
 
 func publicationPending(record Record) bool {

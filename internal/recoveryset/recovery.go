@@ -210,6 +210,14 @@ func createWithHooks(
 	defer func() {
 		returnedErr = errors.Join(returnedErr, destinationParent.Close())
 	}()
+	// Publication renames the staged set into place without replacement; a
+	// filesystem that refuses that primitive must be reported before any copy.
+	if err := privatefs.RequireRenameNoReplace(
+		destinationParent,
+		"recovery-set destination directory",
+	); err != nil {
+		return Verification{}, fmt.Errorf("create deployment recovery set: %w", err)
+	}
 	archiveRoot, err := openArchiveDirectory(
 		options.ArchiveRoot,
 		options.ArchiveOwnership,

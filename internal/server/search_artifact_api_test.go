@@ -2,11 +2,13 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/searchartifacts"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -14,6 +16,74 @@ import (
 
 func TestSearchArtifactVersionConflictMapsToHTTPConflict(t *testing.T) {
 	assertHTTPErrorStatus(t, mapSearchArtifactError(searchartifacts.ErrConflict), http.StatusConflict)
+}
+
+func assertConflictMessage(t *testing.T, err error, message string) {
+	t.Helper()
+	var httpErr *router.HTTPError
+	if !errors.As(err, &httpErr) || httpErr.StatusCode != http.StatusConflict || httpErr.Message != message {
+		t.Fatalf("error = %T %v, want HTTP 409 %q", err, err, message)
+	}
+}
+
+func TestSearchArtifactTerminalResultErrorsMapToDistinctStableMessages(t *testing.T) {
+	t.Parallel()
+	assertConflictMessage(t, mapSearchArtifactError(searchartifacts.ErrNotReady), "search results are not ready")
+	assertConflictMessage(t, mapSearchArtifactError(searchartifacts.ErrResultsUnavailable), "search results are unavailable")
+	assertConflictMessage(t, mapSearchArtifactError(searchartifacts.ErrResultsNotPersisted), "search results were not persisted")
+}
+
+func TestGetSearchResultsExplainsDiscardedCompletedResults(t *testing.T) {
+	t.Parallel()
+	job := completeJob("results-not-persisted")
+	job.State = searchjobs.StateFailed
+	job.Schema = nil
+	job.RowCount = 0
+	job.Failure = &searchjobs.Failure{
+		Code:    searchjobs.FailureResultsNotPersisted,
+		Message: "Search completed, but its results could not be persisted to retained storage.",
+	}
+	artifacts := &launchSearchArtifacts{record: searchartifacts.Record{
+		Job: job, State: searchartifacts.StateFailed, Visibility: searchartifacts.VisibilityPrivate,
+		RetentionClass: searchartifacts.RetentionManual, Lifetime: 10 * time.Minute,
+		ExpiresAt: testNow.Add(10 * time.Minute),
+	}}
+	live := completeJob("results-not-persisted")
+	jobs := &fakeSearchJobs{getJob: live, resultsPage: searchjobs.ResultPage{
+		Rows: []searchjobs.ResultRow{{Ordinal: 0, Values: []searchjobs.Value{searchjobs.StringValue("must-not-leak")}}},
+	}}
+	handler := &apiHandler{
+		jobs: jobs, searchArtifacts: artifacts, tenantID: "tenant-1", ownerID: "owner-1",
+		now: func() time.Time { return testNow },
+	}
+	_, err := handler.getSearchResults(
+		httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/search/jobs/results", nil),
+		&opensplunk.GetSearchResultsRequest{SearchJobId: job.ID},
+	)
+	assertConflictMessage(t, err, "search results were not persisted")
+	if jobs.resultsID != "" {
+		t.Fatalf("in-memory results were exposed after publication failure: %q", jobs.resultsID)
+	}
+
+	// The job projection carries the same explanation as a stable-code warning
+	// so the client can show it beside the terminal state.
+	response, err := handler.getSearchJob(
+		httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/search/jobs/get", nil),
+		&opensplunk.GetSearchJobRequest{SearchJobId: job.ID},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projected := response.GetSearchJob()
+	if projected.GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_FAILED ||
+		projected.GetFailure().GetCode() != opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_RESULTS_NOT_PERSISTED ||
+		projected.GetRetainedResultStatus() != opensplunk.RetainedResultStatus_RETAINED_RESULT_STATUS_MISSING {
+		t.Fatalf("discarded-result projection = %+v", projected)
+	}
+	if warnings := projected.GetWarnings(); len(warnings) != 1 || warnings[0].GetCode() != "RESULTS_NOT_PERSISTED" ||
+		warnings[0].GetMessage() != job.Failure.Message {
+		t.Fatalf("discarded-result warnings = %+v", projected.GetWarnings())
+	}
 }
 
 func TestRetainedSearchJobClassProjectionIsExhaustive(t *testing.T) {
@@ -154,7 +224,9 @@ func TestGetSearchResultsRejectsTerminalDurablePublicationFailure(t *testing.T) 
 		httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/search/jobs/results", nil),
 		&opensplunk.GetSearchResultsRequest{SearchJobId: job.ID},
 	)
-	assertHTTPErrorStatus(t, err, http.StatusConflict)
+	// A failed record without a discarded-result failure is permanently
+	// unavailable, which is distinct from a job that is still finalizing.
+	assertConflictMessage(t, err, "search results are unavailable")
 	if jobs.resultsID != "" {
 		t.Fatalf("in-memory results were exposed after durable publication failure: %q", jobs.resultsID)
 	}

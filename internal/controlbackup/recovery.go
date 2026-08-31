@@ -288,6 +288,14 @@ func createWithHooks(
 	defer func() {
 		returnedErr = errors.Join(returnedErr, destinationParent.Close())
 	}()
+	// Publication renames the staged bundle into place without replacement; a
+	// filesystem that refuses that primitive must be reported before any copy.
+	if err := privatefs.RequireRenameNoReplace(
+		destinationParent,
+		"backup destination directory",
+	); err != nil {
+		return Manifest{}, fmt.Errorf("create control-plane backup: %w", err)
+	}
 
 	masterKey, err := readSourceMasterKey(ctx, options.MasterKeyPath)
 	if err != nil {
@@ -1128,6 +1136,14 @@ func openRestorePlan(
 			returnedErr = errors.Join(returnedErr, destination.Close())
 		}
 	}()
+	// Every restored member is published by no-replace rename; refuse a
+	// destination whose filesystem cannot provide it before staging any file.
+	if err := privatefs.RequireRenameNoReplace(
+		destination,
+		"restore destination directory",
+	); err != nil {
+		return restorePlan{}, fmt.Errorf("%s: %w", errorPrefix, err)
+	}
 	source, err := privatefs.OpenDirectory(options.Source)
 	if err != nil {
 		return restorePlan{}, fmt.Errorf("%s: %s: %w", errorPrefix, sourceOpenAction, err)
@@ -1179,6 +1195,13 @@ func openRestorePlan(
 		if os.SameFile(sourceInfo, artifactInfo) || os.SameFile(destinationInfo, artifactInfo) {
 			_ = artifactDestination.Close()
 			return restorePlan{}, errors.New(errorPrefix + ": search-artifact destination must be a distinct directory")
+		}
+		if probeErr := privatefs.RequireRenameNoReplace(
+			artifactDestination,
+			"search-artifact restore destination directory",
+		); probeErr != nil {
+			_ = artifactDestination.Close()
+			return restorePlan{}, fmt.Errorf("%s: %w", errorPrefix, probeErr)
 		}
 		plan.artifactDestination = artifactDestination
 	}
