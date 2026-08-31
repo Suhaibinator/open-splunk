@@ -267,6 +267,7 @@ func runWithOptions(config options) error {
 	startupContext, cancelStartup := context.WithTimeout(context.Background(), startupTimeout)
 	defer cancelStartup()
 
+	logControlDatabaseFilesystem(logger, nil, config.controlDBPath)
 	controlDB, err := control.Open(startupContext, config.controlDBPath)
 	if err != nil {
 		return fmt.Errorf("open control plane: %w", err)
@@ -708,15 +709,14 @@ func runWithOptions(config options) error {
 	if err != nil {
 		return err
 	}
+	journalErrors := newJournalErrorLogger(logger, time.Now, journalErrorRepeatWindow)
 	jobs, err := searchjobs.New(searchjobs.Config{
 		Executor:          executor,
 		Snapshotter:       visibilitySnapshotter{sequencer: sequencer},
 		Journal:           jobJournal,
 		KnowledgeResolver: knowledgeManagement.resolver,
 		LookupResolver:    knowledgeManagement.lookupResolver,
-		OnJournalError: func(err error) {
-			logger.Warn("persist search-job history", zap.Error(err))
-		},
+		OnJournalError:    journalErrors.Report,
 		OnFailure: func(notification searchjobs.FailureNotification) {
 			logSearchFailure(logger, notification)
 		},
