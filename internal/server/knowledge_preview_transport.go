@@ -41,17 +41,6 @@ func newPreviewKnowledgeObjectRequestCodec() *previewKnowledgeObjectRequestCodec
 	return &previewKnowledgeObjectRequestCodec{}
 }
 
-// sanitizePreviewKnowledgeObjectRequest deliberately keeps unknown fields.
-// Preview shares Validate's candidate-envelope unknown authority: the codec
-// above applies the same bounded update projection, so unknown fields are
-// judged by the handler rather than cleared here.
-func sanitizePreviewKnowledgeObjectRequest(
-	_ context.Context,
-	request *opensplunk.PreviewKnowledgeObjectRequest,
-) (*opensplunk.PreviewKnowledgeObjectRequest, error) {
-	return request, nil
-}
-
 func (*previewKnowledgeObjectRequestCodec) NewRequest() *opensplunk.PreviewKnowledgeObjectRequest {
 	return &opensplunk.PreviewKnowledgeObjectRequest{}
 }

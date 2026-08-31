@@ -29,18 +29,6 @@ func newValidateKnowledgeObjectCodec() *validateKnowledgeObjectCodec {
 	return &validateKnowledgeObjectCodec{}
 }
 
-// sanitizeValidateKnowledgeObjectRequest deliberately keeps unknown fields.
-// Validate distinguishes unknown request and mask fields (envelope errors)
-// from unknown applied-definition fields (in-band candidate invalidity). The
-// codec above has already projected updates and bounded dangerous
-// repetitions, so no generic clearing is safe here.
-func sanitizeValidateKnowledgeObjectRequest(
-	_ context.Context,
-	request *opensplunk.ValidateKnowledgeObjectRequest,
-) (*opensplunk.ValidateKnowledgeObjectRequest, error) {
-	return request, nil
-}
-
 func (*validateKnowledgeObjectCodec) NewRequest() *opensplunk.ValidateKnowledgeObjectRequest {
 	return &opensplunk.ValidateKnowledgeObjectRequest{}
 }
