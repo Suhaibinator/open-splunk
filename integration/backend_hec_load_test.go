@@ -815,19 +815,23 @@ func TestBackendHECDurableLoad(t *testing.T) {
 			t.Errorf("unpause ClickHouse during HEC load cleanup: %v", err)
 		}
 	})
-	if err := waitUntilBackendHECLoad(ctx, loadStarted.Add(plan.OutageAfter+plan.OutageDuration)); err != nil {
-		t.Fatal(err)
-	}
-	outageSnapshot, err := readBackendHECLoadOperations(
+	outageEnds := loadStarted.Add(plan.OutageAfter + plan.OutageDuration)
+	outageSnapshot := waitForBackendHECLoadOutageBacklog(
+		t,
 		ctx,
 		httpClient,
 		baseURL,
 		administratorToken,
+		serverProcess,
+		loadDone,
+		outageEnds,
+		protectedValues...,
 	)
-	if err != nil {
-		t.Fatalf("read HEC operations during ClickHouse outage: %v", err)
+	// Hold the pause for the rest of the planned outage so recovery and every
+	// later assertion still observe the full configured window.
+	if err := waitUntilBackendHECLoad(ctx, outageEnds); err != nil {
+		t.Fatal(err)
 	}
-	backendHECLoadRequireBoundedBacklog(t, outageSnapshot)
 
 	recoveryStarted := time.Now()
 	backendHECDocker(t, ctx, "unpause", clickHouse.Name)
@@ -1748,20 +1752,120 @@ func readBackendHECLoadOperations(
 	return &response, nil
 }
 
-func backendHECLoadRequireBoundedBacklog(
-	t *testing.T,
+// backendHECLoadBacklogOverMaximum reports the first backlog maximum a
+// snapshot breaks. These bounds must hold at every instant of the outage, so
+// any observation that breaks one is terminal.
+func backendHECLoadBacklogOverMaximum(
 	snapshot *opensplunk.GetHECOperationalSnapshotResponse,
-) {
-	t.Helper()
+) string {
 	durable := snapshot.GetDurable()
-	acknowledgments := snapshot.GetAcknowledgments()
-	if durable.GetPendingOutboxReservations() == 0 ||
-		durable.GetPendingOutboxReservations() > backendHECLoadMaximumPending ||
-		durable.GetPendingOutboxBytes() == 0 ||
-		durable.GetPendingOutboxBytes() > backendHECLoadMaximumPendingBytes ||
-		acknowledgments.GetPendingRows() == 0 ||
-		durable.GetRetainedRequests() > 100_000 {
-		t.Fatalf("HEC outage backlog is outside bounds: %+v", snapshot)
+	switch {
+	case durable.GetPendingOutboxReservations() > backendHECLoadMaximumPending:
+		return fmt.Sprintf(
+			"pending outbox reservations %d > %d",
+			durable.GetPendingOutboxReservations(),
+			backendHECLoadMaximumPending,
+		)
+	case durable.GetPendingOutboxBytes() > backendHECLoadMaximumPendingBytes:
+		return fmt.Sprintf(
+			"pending outbox bytes %d > %d",
+			durable.GetPendingOutboxBytes(),
+			backendHECLoadMaximumPendingBytes,
+		)
+	case durable.GetRetainedRequests() > 100_000:
+		return fmt.Sprintf("retained requests %d > 100000", durable.GetRetainedRequests())
+	}
+	return ""
+}
+
+// backendHECLoadBacklogUnproven reports why a snapshot does not yet show
+// accepted traffic accumulating as a durable backlog, or "" once it does.
+// Each quantity is a live race between arriving requests and the reconciler,
+// so the outage window is polled until one snapshot carries all of them.
+func backendHECLoadBacklogUnproven(
+	snapshot *opensplunk.GetHECOperationalSnapshotResponse,
+) string {
+	durable := snapshot.GetDurable()
+	switch {
+	case durable.GetPendingOutboxReservations() == 0:
+		return "no pending outbox reservation"
+	case durable.GetPendingOutboxBytes() == 0:
+		return "no pending outbox bytes"
+	case snapshot.GetAcknowledgments().GetPendingRows() == 0:
+		return "no pending acknowledgment rows"
+	}
+	return ""
+}
+
+// waitForBackendHECLoadOutageBacklog proves that accepted traffic accumulates
+// as a bounded durable backlog while ClickHouse is paused. It polls from the
+// pause until the outage window closes and returns the first snapshot that
+// carries the whole backlog inside the maxima; the maxima themselves are
+// enforced on every polled snapshot, not only the returned one.
+func waitForBackendHECLoadOutageBacklog(
+	t *testing.T,
+	ctx context.Context,
+	client *http.Client,
+	baseURL string,
+	administratorToken string,
+	server *managedProcess,
+	load <-chan backendHECLoadResult,
+	deadline time.Time,
+	protectedValues ...string,
+) *opensplunk.GetHECOperationalSnapshotResponse {
+	t.Helper()
+	waitContext, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	var last *opensplunk.GetHECOperationalSnapshotResponse
+	var lastErr error
+	unproven := "no snapshot was read"
+	for {
+		select {
+		case result := <-load:
+			// Traffic is planned to outlive the outage. A generator that already
+			// stopped leaves an empty backlog behind, so report its own failure
+			// instead of the absence it causes.
+			t.Fatalf(
+				"HEC load traffic ended inside the ClickHouse outage window: %v; small={%s}; full={%s}",
+				result.err,
+				result.small.summary(time.Since(result.startedAt)),
+				result.full.summary(time.Since(result.startedAt)),
+			)
+		default:
+		}
+		last, lastErr = readBackendHECLoadOperations(
+			waitContext,
+			client,
+			baseURL,
+			administratorToken,
+		)
+		if lastErr == nil {
+			if exceeded := backendHECLoadBacklogOverMaximum(last); exceeded != "" {
+				t.Fatalf("HEC outage backlog is outside bounds: %s: %+v", exceeded, last)
+			}
+			if unproven = backendHECLoadBacklogUnproven(last); unproven == "" {
+				return last
+			}
+		}
+		if server.Exited() {
+			t.Fatalf(
+				"server exited during the ClickHouse outage: %v\nlogs:\n%s",
+				server.Err(),
+				redactForFailure(server.Logs(), protectedValues...),
+			)
+		}
+		select {
+		case <-waitContext.Done():
+			t.Fatalf(
+				"HEC outage backlog never became a bounded durable backlog: %s (last error %v, snapshot %+v)",
+				unproven,
+				lastErr,
+				last,
+			)
+		case <-ticker.C:
+		}
 	}
 }
 
