@@ -1,31 +1,16 @@
 package server
 
 import (
-	"errors"
 	"math"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/Suhaibinator/SRouter/pkg/router"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 )
-
-// assertSanitizerHTTPError checks the exact status and message a sanitizer
-// rejection carries, because those messages are the endpoint's public contract.
-func assertSanitizerHTTPError(t *testing.T, err error, status int, message string) {
-	t.Helper()
-	var httpErr *router.HTTPError
-	if !errors.As(err, &httpErr) {
-		t.Fatalf("error = %T %v, want *router.HTTPError", err, err)
-	}
-	if httpErr.StatusCode != status || httpErr.Message != message {
-		t.Fatalf("error = %d %q, want %d %q", httpErr.StatusCode, httpErr.Message, status, message)
-	}
-}
 
 func TestSanitizeSearchHistoryEntryRequestsTrimAndBoundTheJobID(t *testing.T) {
 	tests := []struct {
@@ -62,8 +47,8 @@ func TestSanitizeSearchHistoryEntryRequestsTrimAndBoundTheJobID(t *testing.T) {
 				&opensplunk.DeleteSearchHistoryEntryRequest{SearchJobId: test.id},
 			)
 			if test.wantErr != "" {
-				assertSanitizerHTTPError(t, err, 400, test.wantErr)
-				assertSanitizerHTTPError(t, deleteErr, 400, test.wantErr)
+				assertSanitizerRejection(t, err, test.wantErr)
+				assertSanitizerRejection(t, deleteErr, test.wantErr)
 				return
 			}
 			if err != nil || deleteErr != nil {
@@ -76,19 +61,26 @@ func TestSanitizeSearchHistoryEntryRequestsTrimAndBoundTheJobID(t *testing.T) {
 	}
 }
 
-func TestSanitizeSearchHistoryRequestsDiscardUnknownFields(t *testing.T) {
+func TestSanitizeSearchHistoryRequestsTolerateUnknownFields(t *testing.T) {
+	topLevel := futureProtobufField("future-history-list")
+	nested := futureProtobufField("future-history-filter")
 	request := &opensplunk.ListSearchHistoryRequest{Filter: &opensplunk.SearchHistoryFilter{}}
-	request.ProtoReflect().SetUnknown(futureProtobufField("future-history-list"))
-	request.Filter.ProtoReflect().SetUnknown(futureProtobufField("future-history-filter"))
+	request.ProtoReflect().SetUnknown(topLevel)
+	request.Filter.ProtoReflect().SetUnknown(nested)
 	handler := &apiHandler{maximumPageSize: 20}
 	sanitized, err := handler.sanitizeListSearchHistoryRequest(t.Context(), request)
 	if err != nil {
 		t.Fatalf("sanitize = %v", err)
 	}
-	if len(sanitized.ProtoReflect().GetUnknown()) != 0 ||
-		len(sanitized.GetFilter().ProtoReflect().GetUnknown()) != 0 {
-		t.Fatalf("unknown fields survived sanitization")
+	if sanitized.GetPage().GetPageSize() != maximumHistoryRowsPerResponse {
+		t.Fatalf(
+			"page size = %d, want %d",
+			sanitized.GetPage().GetPageSize(),
+			maximumHistoryRowsPerResponse,
+		)
 	}
+	assertUnknownFieldTolerated(t, sanitized, topLevel)
+	assertUnknownFieldTolerated(t, sanitized.GetFilter(), nested)
 }
 
 func TestSanitizeListSearchHistoryRequestNormalizesPaging(t *testing.T) {
@@ -154,7 +146,7 @@ func TestSanitizeListSearchHistoryRequestNormalizesPaging(t *testing.T) {
 				&opensplunk.ListSearchHistoryRequest{Page: test.page},
 			)
 			if test.wantErr != "" {
-				assertSanitizerHTTPError(t, err, 400, test.wantErr)
+				assertSanitizerRejection(t, err, test.wantErr)
 				return
 			}
 			if err != nil {
@@ -201,7 +193,7 @@ func TestSanitizeListSearchHistoryRequestValidatesSortMetadata(t *testing.T) {
 				&opensplunk.ListSearchHistoryRequest{SortBy: test.sortBy, SortDirection: test.direction},
 			)
 			if test.wantErr != "" {
-				assertSanitizerHTTPError(t, err, 400, test.wantErr)
+				assertSanitizerRejection(t, err, test.wantErr)
 				return
 			}
 			if err != nil {
@@ -347,7 +339,7 @@ func TestSanitizeSearchHistoryFilterRejectsOutOfBoundsValues(t *testing.T) {
 				t.Context(),
 				&opensplunk.ListSearchHistoryRequest{Filter: listFilter},
 			)
-			assertSanitizerHTTPError(t, listErr, 400, test.wantErr)
+			assertSanitizerRejection(t, listErr, test.wantErr)
 			_, clearErr := sanitizeClearSearchHistoryRequest(
 				t.Context(),
 				&opensplunk.ClearSearchHistoryRequest{
@@ -355,7 +347,7 @@ func TestSanitizeSearchHistoryFilterRejectsOutOfBoundsValues(t *testing.T) {
 					Filter:       clearFilter,
 				},
 			)
-			assertSanitizerHTTPError(t, clearErr, 400, test.wantErr)
+			assertSanitizerRejection(t, clearErr, test.wantErr)
 		})
 	}
 }
@@ -378,7 +370,7 @@ func TestSanitizeClearSearchHistoryRequestRequiresTheExactConfirmation(t *testin
 				&opensplunk.ClearSearchHistoryRequest{Confirmation: test.confirmation},
 			)
 			if test.wantErr {
-				assertSanitizerHTTPError(t, err, 400, `confirmation must be exactly "CLEAR SEARCH HISTORY"`)
+				assertSanitizerRejection(t, err, `confirmation must be exactly "CLEAR SEARCH HISTORY"`)
 				return
 			}
 			if err != nil || sanitized.GetConfirmation() != clearSearchHistoryConfirmation {

@@ -6,8 +6,6 @@ import (
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 // This file holds one sanitizer per knowledge-management route, in route
@@ -16,13 +14,14 @@ import (
 // and before the handler, and a returned error becomes the route's HTTP
 // rejection.
 //
-// Unknown protobuf fields are tolerated on the read routes: protobuf-go already
-// ignores them on decode, so a newer client's extra envelope fields cost
-// nothing. The five mutation routes are different in both directions. Unknown
-// fields inside a persisted definition are rejected, so a newer client's
-// semantics are never silently dropped; unknown fields anywhere else in a
-// mutation envelope are cleared, because the catalog digests a mutation request
-// deterministically and rejects any request carrying one.
+// Unknown protobuf fields are never stripped. The UI client ships inside this
+// server binary, so client and server can never skew: an unknown field is a bug
+// or a hand-crafted request. On the read routes it is neither stripped nor
+// rejected - protobuf decoding ignores it and the sanitizer leaves the decoded
+// message as-is. The five mutation routes reject it instead: a definition
+// carrying fields this server does not define is refused rather than persisted
+// with bytes it cannot validate, and knowledgecatalog refuses the rest of the
+// envelope when it digests the request.
 //
 // Mutation request shape (create, update, set-state, delete, quarantine) is the
 // knowledge catalog's authority, and the HTTP preflight tests pin that it is
@@ -31,8 +30,8 @@ import (
 
 // sanitizeCreateKnowledgeObjectRequest rejects unknown fields inside the
 // persisted definition, bounding its repeated entries before any reflection
-// walk so a hostile definition cannot amplify the traversal, and then clears
-// unknown fields from the surviving envelope.
+// walk so a hostile definition cannot amplify the traversal. Unknown fields
+// elsewhere in the envelope are the catalog's rejection to make.
 func sanitizeCreateKnowledgeObjectRequest(
 	_ context.Context,
 	request *opensplunk.CreateKnowledgeObjectRequest,
@@ -40,7 +39,6 @@ func sanitizeCreateKnowledgeObjectRequest(
 	if err := rejectUnknownKnowledgeDefinition(request.GetDefinition()); err != nil {
 		return request, err
 	}
-	clearKnowledgeMutationUnknownFields(request)
 	return request, nil
 }
 
@@ -127,30 +125,28 @@ func sanitizeUpdateKnowledgeObjectRequest(
 	if err := rejectUnknownKnowledgeDefinition(request.GetDefinition()); err != nil {
 		return request, err
 	}
-	clearKnowledgeMutationUnknownFields(request)
 	return request, nil
 }
 
-// sanitizeSetKnowledgeObjectStateRequest only clears unknown envelope fields.
+// sanitizeSetKnowledgeObjectStateRequest deliberately enforces nothing.
 // Identity, expected version, state, and client request identity are one
 // indivisible mutation shape owned by
 // knowledgecatalog.ValidateSetKnowledgeObjectStateRequest, which must run after
-// the caller's app scope is resolved.
+// the caller's app scope is resolved, and which rejects unknown envelope
+// fields itself.
 func sanitizeSetKnowledgeObjectStateRequest(
 	_ context.Context,
 	request *opensplunk.SetKnowledgeObjectStateRequest,
 ) (*opensplunk.SetKnowledgeObjectStateRequest, error) {
-	clearKnowledgeMutationUnknownFields(request)
 	return request, nil
 }
 
-// sanitizeDeleteKnowledgeObjectRequest only clears unknown envelope fields, for
-// the same reason as sanitizeSetKnowledgeObjectStateRequest.
+// sanitizeDeleteKnowledgeObjectRequest deliberately enforces nothing, for the
+// same reason as sanitizeSetKnowledgeObjectStateRequest.
 func sanitizeDeleteKnowledgeObjectRequest(
 	_ context.Context,
 	request *opensplunk.DeleteKnowledgeObjectRequest,
 ) (*opensplunk.DeleteKnowledgeObjectRequest, error) {
-	clearKnowledgeMutationUnknownFields(request)
 	return request, nil
 }
 
@@ -185,62 +181,15 @@ func sanitizePrepareKnowledgeObjectQuarantineRequest(
 	return request, nil
 }
 
-// sanitizeQuarantineKnowledgeObjectRequest only clears unknown envelope fields.
-// The execute envelope is otherwise a recovery token plus a client request
+// sanitizeQuarantineKnowledgeObjectRequest deliberately enforces nothing.
+// The execute envelope is a recovery token plus a client request
 // identity, and knowledgecatalog.ValidateQuarantineKnowledgeObjectRequest owns
 // both after the caller's app scope is resolved.
 func sanitizeQuarantineKnowledgeObjectRequest(
 	_ context.Context,
 	request *opensplunk.QuarantineKnowledgeObjectRequest,
 ) (*opensplunk.QuarantineKnowledgeObjectRequest, error) {
-	clearKnowledgeMutationUnknownFields(request)
 	return request, nil
-}
-
-// clearKnowledgeMutationUnknownFields drops every unknown field from a mutation
-// request, recursively. It is not forward-compatibility housekeeping: the
-// catalog digests a mutation request with deterministic marshaling and rejects
-// any request that still carries an unknown field, so without this a newer
-// client's harmless extra envelope field would fail the whole mutation. Create
-// and update must reject unknown fields inside their persisted definition
-// before calling it, or the rejection would be cleared away first.
-func clearKnowledgeMutationUnknownFields(request proto.Message) {
-	if isNilDependency(request) {
-		return
-	}
-	pending := []protoreflect.Message{request.ProtoReflect()}
-	for len(pending) != 0 {
-		last := len(pending) - 1
-		message := pending[last]
-		pending = pending[:last]
-		if !message.IsValid() {
-			continue
-		}
-		message.SetUnknown(nil)
-		message.Range(func(field protoreflect.FieldDescriptor, value protoreflect.Value) bool {
-			switch {
-			case field.IsMap():
-				if field.MapValue().Message() == nil {
-					return true
-				}
-				value.Map().Range(func(_ protoreflect.MapKey, item protoreflect.Value) bool {
-					pending = append(pending, item.Message())
-					return true
-				})
-			case field.IsList():
-				if field.Message() == nil {
-					return true
-				}
-				list := value.List()
-				for index := range list.Len() {
-					pending = append(pending, list.Get(index).Message())
-				}
-			case field.Message() != nil:
-				pending = append(pending, value.Message())
-			}
-			return true
-		})
-	}
 }
 
 // validKnowledgeGraphRequestShape is the shared dependency and dependent

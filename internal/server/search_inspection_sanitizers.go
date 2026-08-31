@@ -13,13 +13,9 @@ import (
 // for it. The accepted ID is cloned off the decode buffer before the handler
 // carries it into service and response state.
 func sanitizeInspectSearchJobRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.InspectSearchJobRequest,
 ) (*opensplunk.InspectSearchJobRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	if !validSearchInspectionJobID(request.GetSearchJobId()) {
 		return request, badRequestError("search inspection request is invalid")
 	}

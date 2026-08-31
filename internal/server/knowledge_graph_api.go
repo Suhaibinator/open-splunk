@@ -127,10 +127,7 @@ func serveKnowledgeGraph[Request proto.Message, Response proto.Message](
 		return nil, invalidRequest()
 	}
 	objectID, version, pageRequest := fields(submitted)
-	graphRequest, err := knowledgeGraphListRequest(objectID, version, pageRequest)
-	if err != nil {
-		return nil, invalidRequest()
-	}
+	graphRequest := knowledgeGraphListRequest(objectID, version, pageRequest)
 	page, authorized, binding, err := handler.listKnowledgeGraph(
 		request,
 		graphRequest,
@@ -164,37 +161,30 @@ func serveKnowledgeGraph[Request proto.Message, Response proto.Message](
 	}, nil
 }
 
+// knowledgeGraphListRequest converts an accepted dependency or dependent list
+// request. The root identity, the optional version and the page envelope are the
+// route sanitizer's authority (validKnowledgeGraphRequestShape), so this is a
+// conversion, not a validation.
 func knowledgeGraphListRequest(
 	objectID string,
 	version *uint64,
 	page *opensplunk.PageRequest,
-) (knowledgecatalog.DependencyListRequest, error) {
-	if !validKnowledgeIdentity(objectID, maximumKnowledgeObjectIDBytes) ||
-		version != nil && (*version == 0 || *version > math.MaxInt64) {
-		return knowledgecatalog.DependencyListRequest{}, control.ErrInvalidArgument
-	}
+) knowledgecatalog.DependencyListRequest {
 	result := knowledgecatalog.DependencyListRequest{
 		KnowledgeObjectID: strings.Clone(objectID),
 		Version:           cloneOptionalUint64(version),
 	}
 	if page == nil {
-		return result, nil
+		return result
 	}
 	if page.PageSize != nil {
 		result.PageSize = page.GetPageSize()
 	}
 	if page.PageToken != nil {
-		if !validBoundedListPageToken(
-			page.GetPageToken(),
-			maximumKnowledgePageTokenBytes,
-			true,
-		) {
-			return knowledgecatalog.DependencyListRequest{}, control.ErrInvalidArgument
-		}
 		result.PageToken = strings.Clone(page.GetPageToken())
 	}
 	result.IncludeTotal = page.GetIncludeTotalSize()
-	return result, nil
+	return result
 }
 
 func cloneKnowledgeGraphListRequest(

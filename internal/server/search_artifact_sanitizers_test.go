@@ -1,7 +1,6 @@
 package server
 
 import (
-	"net/http"
 	"testing"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
@@ -27,7 +26,7 @@ func TestSanitizeGetSearchJobSettingsRequestTrimsAndRequiresTheJobID(t *testing.
 				&opensplunk.GetSearchJobSettingsRequest{SearchJobId: test.id},
 			)
 			if test.wantErr != "" {
-				assertSanitizerHTTPError(t, err, http.StatusBadRequest, test.wantErr)
+				assertSanitizerRejection(t, err, test.wantErr)
 				return
 			}
 			if err != nil || sanitized.GetSearchJobId() != test.want {
@@ -113,7 +112,7 @@ func TestSanitizeUpdateSearchJobSettingsRequestBoundsIdentityAndSettings(t *test
 		t.Run(test.name, func(t *testing.T) {
 			sanitized, err := sanitizeUpdateSearchJobSettingsRequest(t.Context(), test.request)
 			if test.wantErr != "" {
-				assertSanitizerHTTPError(t, err, http.StatusBadRequest, test.wantErr)
+				assertSanitizerRejection(t, err, test.wantErr)
 				return
 			}
 			if err != nil || sanitized.GetSearchJobId() != test.wantID {
@@ -174,7 +173,7 @@ func TestSanitizeShareSearchJobRequestRequiresIdentityAndVersion(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			sanitized, err := sanitizeShareSearchJobRequest(t.Context(), test.request)
 			if test.wantErr != "" {
-				assertSanitizerHTTPError(t, err, http.StatusBadRequest, test.wantErr)
+				assertSanitizerRejection(t, err, test.wantErr)
 				return
 			}
 			if err != nil || sanitized.GetSearchJobId() != test.wantID {
@@ -184,28 +183,34 @@ func TestSanitizeShareSearchJobRequestRequiresIdentityAndVersion(t *testing.T) {
 	}
 }
 
-func TestSanitizeSearchArtifactRequestsDiscardUnknownFields(t *testing.T) {
+func TestSanitizeSearchArtifactRequestsTolerateUnknownFields(t *testing.T) {
+	getUnknown := futureProtobufField("future-settings-get")
 	get := &opensplunk.GetSearchJobSettingsRequest{SearchJobId: "job-1"}
-	get.ProtoReflect().SetUnknown(futureProtobufField("future-settings-get"))
+	get.ProtoReflect().SetUnknown(getUnknown)
 	sanitizedGet, err := sanitizeGetSearchJobSettingsRequest(t.Context(), get)
-	if err != nil || len(sanitizedGet.ProtoReflect().GetUnknown()) != 0 {
+	if err != nil || sanitizedGet.GetSearchJobId() != "job-1" {
 		t.Fatalf("get sanitize = %v", err)
 	}
+	assertUnknownFieldTolerated(t, sanitizedGet, getUnknown)
+	shareUnknown := futureProtobufField("future-share")
 	share := &opensplunk.ShareSearchJobRequest{SearchJobId: "job-1", ExpectedStateVersion: 1}
-	share.ProtoReflect().SetUnknown(futureProtobufField("future-share"))
+	share.ProtoReflect().SetUnknown(shareUnknown)
 	sanitizedShare, err := sanitizeShareSearchJobRequest(t.Context(), share)
-	if err != nil || len(sanitizedShare.ProtoReflect().GetUnknown()) != 0 {
+	if err != nil || sanitizedShare.GetSearchJobId() != "job-1" {
 		t.Fatalf("share sanitize = %v", err)
 	}
+	assertUnknownFieldTolerated(t, sanitizedShare, shareUnknown)
+	updateUnknown := futureProtobufField("future-settings-update")
 	update := &opensplunk.UpdateSearchJobSettingsRequest{
 		SearchJobId:          "job-1",
 		ExpectedStateVersion: 1,
 		Visibility:           opensplunk.SearchJobVisibility_SEARCH_JOB_VISIBILITY_EVERYONE,
 		RetentionClass:       opensplunk.SearchJobRetentionClass_SEARCH_JOB_RETENTION_CLASS_SHARED,
 	}
-	update.ProtoReflect().SetUnknown(futureProtobufField("future-settings-update"))
+	update.ProtoReflect().SetUnknown(updateUnknown)
 	sanitizedUpdate, err := sanitizeUpdateSearchJobSettingsRequest(t.Context(), update)
-	if err != nil || len(sanitizedUpdate.ProtoReflect().GetUnknown()) != 0 {
+	if err != nil || sanitizedUpdate.GetSearchJobId() != "job-1" {
 		t.Fatalf("update sanitize = %v", err)
 	}
+	assertUnknownFieldTolerated(t, sanitizedUpdate, updateUnknown)
 }

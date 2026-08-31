@@ -19,13 +19,9 @@ import (
 // and the index scope stay in the handler: resolving them needs the clock and
 // the index catalog.
 func (handler *apiHandler) sanitizeGetSearchSuggestionsRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.GetSearchSuggestionsRequest,
 ) (*opensplunk.GetSearchSuggestionsRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	source := request.GetSpl()
 	if len(source) > spl.MaximumSuggestionSourceBytes {
 		return request, router.NewHTTPError(

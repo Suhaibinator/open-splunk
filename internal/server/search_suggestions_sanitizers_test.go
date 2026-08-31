@@ -171,15 +171,17 @@ func TestSanitizeGetSearchSuggestionsRequestLeavesAnAbsentAppIDAbsent(t *testing
 	}
 }
 
-func TestSanitizeGetSearchSuggestionsRequestDiscardsUnknownFields(t *testing.T) {
+func TestSanitizeGetSearchSuggestionsRequestToleratesUnknownFields(t *testing.T) {
+	unknown := futureProtobufField("future-suggestions")
 	request := &opensplunk.GetSearchSuggestionsRequest{Spl: "index=main"}
-	request.ProtoReflect().SetUnknown(futureProtobufField("future-suggestions"))
+	request.ProtoReflect().SetUnknown(unknown)
 	handler := &apiHandler{maximumSuggestions: 10}
 	sanitized, err := handler.sanitizeGetSearchSuggestionsRequest(t.Context(), request)
 	if err != nil {
 		t.Fatalf("sanitize = %v", err)
 	}
-	if len(sanitized.ProtoReflect().GetUnknown()) != 0 {
-		t.Fatalf("unknown fields survived sanitization")
+	if sanitized.GetSpl() != "index=main" {
+		t.Fatalf("SPL = %q, want %q", sanitized.GetSpl(), "index=main")
 	}
+	assertUnknownFieldTolerated(t, sanitized, unknown)
 }

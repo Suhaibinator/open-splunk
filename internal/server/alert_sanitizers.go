@@ -16,22 +16,14 @@ const (
 	maximumAlertTextFilterBytes = 256
 )
 
-func sanitizeCreateAlertRequest(ctx context.Context, request *opensplunk.CreateAlertRequest) (*opensplunk.CreateAlertRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
+func sanitizeCreateAlertRequest(_ context.Context, request *opensplunk.CreateAlertRequest) (*opensplunk.CreateAlertRequest, error) {
 	if err := sanitizeAlertDefinition(request.GetDefinition(), true); err != nil {
 		return request, err
 	}
 	return request, nil
 }
 
-func sanitizeGetAlertRequest(ctx context.Context, request *opensplunk.GetAlertRequest) (*opensplunk.GetAlertRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
+func sanitizeGetAlertRequest(_ context.Context, request *opensplunk.GetAlertRequest) (*opensplunk.GetAlertRequest, error) {
 	id, err := sanitizedAlertID(request.GetAlertId())
 	if err != nil {
 		return request, err
@@ -40,12 +32,8 @@ func sanitizeGetAlertRequest(ctx context.Context, request *opensplunk.GetAlertRe
 	return request, nil
 }
 
-func (handler *apiHandler) sanitizeListAlertsRequest(ctx context.Context, request *opensplunk.ListAlertsRequest) (*opensplunk.ListAlertsRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
-	page, err := handler.sanitizedAlertFamilyPage(request.GetPage(), "alert", defaultAlertPageSize, alerts.MaximumAlertsPerOwner)
+func (handler *apiHandler) sanitizeListAlertsRequest(_ context.Context, request *opensplunk.ListAlertsRequest) (*opensplunk.ListAlertsRequest, error) {
+	page, err := handler.sanitizedListPage(request.GetPage(), "alert", defaultAlertPageSize, alerts.MaximumAlertsPerOwner)
 	if err != nil {
 		return request, err
 	}
@@ -60,11 +48,7 @@ func (handler *apiHandler) sanitizeListAlertsRequest(ctx context.Context, reques
 	return request, nil
 }
 
-func sanitizeUpdateAlertRequest(ctx context.Context, request *opensplunk.UpdateAlertRequest) (*opensplunk.UpdateAlertRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
+func sanitizeUpdateAlertRequest(_ context.Context, request *opensplunk.UpdateAlertRequest) (*opensplunk.UpdateAlertRequest, error) {
 	id, err := sanitizedAlertID(request.GetAlertId())
 	if err != nil {
 		return request, err
@@ -79,11 +63,7 @@ func sanitizeUpdateAlertRequest(ctx context.Context, request *opensplunk.UpdateA
 	return request, nil
 }
 
-func sanitizeSetAlertEnabledRequest(ctx context.Context, request *opensplunk.SetAlertEnabledRequest) (*opensplunk.SetAlertEnabledRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
+func sanitizeSetAlertEnabledRequest(_ context.Context, request *opensplunk.SetAlertEnabledRequest) (*opensplunk.SetAlertEnabledRequest, error) {
 	id, err := sanitizedAlertID(request.GetAlertId())
 	if err != nil {
 		return request, err
@@ -92,11 +72,7 @@ func sanitizeSetAlertEnabledRequest(ctx context.Context, request *opensplunk.Set
 	return request, nil
 }
 
-func sanitizeDeleteAlertRequest(ctx context.Context, request *opensplunk.DeleteAlertRequest) (*opensplunk.DeleteAlertRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
+func sanitizeDeleteAlertRequest(_ context.Context, request *opensplunk.DeleteAlertRequest) (*opensplunk.DeleteAlertRequest, error) {
 	id, err := sanitizedAlertID(request.GetAlertId())
 	if err != nil {
 		return request, err
@@ -105,11 +81,7 @@ func sanitizeDeleteAlertRequest(ctx context.Context, request *opensplunk.DeleteA
 	return request, nil
 }
 
-func sanitizeRunAlertRequest(ctx context.Context, request *opensplunk.RunAlertRequest) (*opensplunk.RunAlertRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
+func sanitizeRunAlertRequest(_ context.Context, request *opensplunk.RunAlertRequest) (*opensplunk.RunAlertRequest, error) {
 	id, err := sanitizedAlertID(request.GetAlertId())
 	if err != nil {
 		return request, err
@@ -118,11 +90,7 @@ func sanitizeRunAlertRequest(ctx context.Context, request *opensplunk.RunAlertRe
 	return request, nil
 }
 
-func sanitizeTestAlertWebhookRequest(ctx context.Context, request *opensplunk.TestAlertWebhookRequest) (*opensplunk.TestAlertWebhookRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
+func sanitizeTestAlertWebhookRequest(_ context.Context, request *opensplunk.TestAlertWebhookRequest) (*opensplunk.TestAlertWebhookRequest, error) {
 	id, err := sanitizedAlertID(request.GetAlertId())
 	if err != nil {
 		return request, err
@@ -131,11 +99,7 @@ func sanitizeTestAlertWebhookRequest(ctx context.Context, request *opensplunk.Te
 	return request, nil
 }
 
-func sanitizeRotateAlertSecretRequest(ctx context.Context, request *opensplunk.RotateAlertSecretRequest) (*opensplunk.RotateAlertSecretRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
+func sanitizeRotateAlertSecretRequest(_ context.Context, request *opensplunk.RotateAlertSecretRequest) (*opensplunk.RotateAlertSecretRequest, error) {
 	id, err := sanitizedAlertID(request.GetAlertId())
 	if err != nil {
 		return request, err
@@ -144,12 +108,8 @@ func sanitizeRotateAlertSecretRequest(ctx context.Context, request *opensplunk.R
 	return request, nil
 }
 
-func (handler *apiHandler) sanitizeListAlertRunsRequest(ctx context.Context, request *opensplunk.ListAlertRunsRequest) (*opensplunk.ListAlertRunsRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
-	page, err := handler.sanitizedAlertFamilyPage(request.GetPage(), "alert run", defaultAlertPageSize, alerts.MaximumRunHistory)
+func (handler *apiHandler) sanitizeListAlertRunsRequest(_ context.Context, request *opensplunk.ListAlertRunsRequest) (*opensplunk.ListAlertRunsRequest, error) {
+	page, err := handler.sanitizedListPage(request.GetPage(), "alert run", defaultAlertPageSize, alerts.MaximumRunHistory)
 	if err != nil {
 		return request, err
 	}
@@ -207,26 +167,4 @@ func sanitizeAlertDefinition(definition *opensplunk.AlertDefinition, requireWebh
 		}
 	}
 	return nil
-}
-
-// sanitizedAlertFamilyPage resolves the effective page request for the three
-// paged routes in this family - alert list, alert run list and scheduled-report
-// run list - so their handlers read the bounded page size, token and total flag
-// straight off the request instead of re-deriving them. The resolved message is
-// stable under a second sanitize.
-func (handler *apiHandler) sanitizedAlertFamilyPage(
-	page *opensplunk.PageRequest,
-	noun string,
-	defaultPageSize uint32,
-	serviceMaximum uint32,
-) (*opensplunk.PageRequest, error) {
-	pageSize, pageToken, includeTotal, err := handler.boundedListPageRequest(page, noun, defaultPageSize, serviceMaximum)
-	if err != nil {
-		return nil, err
-	}
-	resolved := &opensplunk.PageRequest{PageSize: &pageSize, IncludeTotalSize: includeTotal}
-	if pageToken != "" {
-		resolved.PageToken = &pageToken
-	}
-	return resolved, nil
 }

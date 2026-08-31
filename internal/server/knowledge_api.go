@@ -1572,10 +1572,14 @@ func validKnowledgeIdentity(value string, maximumBytes int) bool {
 	return true
 }
 
+// knowledgeListRequest converts an accepted list request. Every filter bound
+// and the page envelope are the route sanitizer's authority
+// (sanitizeListKnowledgeObjectsRequest runs knowledgeListRequestPreflight), so
+// this only maps the enumerations it has to translate.
 func knowledgeListRequest(
 	input *opensplunk.ListKnowledgeObjectsRequest,
 ) (knowledgecatalog.ListRequest, error) {
-	if !knowledgeListRequestPreflight(input) {
+	if input == nil {
 		return knowledgecatalog.ListRequest{}, control.ErrInvalidArgument
 	}
 	request := knowledgecatalog.ListRequest{}

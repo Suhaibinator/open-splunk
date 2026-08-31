@@ -56,10 +56,10 @@ func TestLookupDefinitionSanitizerRejectsUnknownSemanticsBeforePersistence(t *te
 	if _, err := sanitizeCreateLookupRequest(t.Context(), envelope); err != nil {
 		t.Fatalf("sanitize future request envelope: %v", err)
 	}
-	// A newer client's unknown envelope field is tolerated rather than stripped;
-	// lookupservice never digests the request envelope deterministically.
+	// An unknown envelope field is neither stripped nor rejected; lookupservice
+	// never digests the request envelope deterministically.
 	if len(envelope.ProtoReflect().GetUnknown()) == 0 {
-		t.Fatal("tolerated request envelope field was discarded")
+		t.Fatal("tolerated request envelope field did not survive the sanitizer")
 	}
 }
 
@@ -169,7 +169,7 @@ func TestLookupSanitizersTolerateUnknownEnvelopeFields(t *testing.T) {
 				t.Fatalf("sanitize %s request with unknown envelope field: %v", test.name, err)
 			}
 			if len(got.ProtoReflect().GetUnknown()) == 0 {
-				t.Fatalf("%s sanitizer discarded a tolerated envelope field", test.name)
+				t.Fatalf("%s sanitizer did not leave a tolerated envelope field as-is", test.name)
 			}
 		})
 	}

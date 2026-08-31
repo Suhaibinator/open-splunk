@@ -11,13 +11,9 @@ import (
 // field service cannot serve: a request valid under the advertised browser-wide
 // limit comes back as a shorter page with a continuation.
 func (handler *apiHandler) sanitizeListSearchFieldsRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.ListSearchFieldsRequest,
 ) (*opensplunk.ListSearchFieldsRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	searchJobID, present := trimmedRequiredSearchJobID(request.GetSearchJobId())
 	if !present {
 		return request, badRequestError("search job ID is required")
@@ -41,13 +37,9 @@ func (handler *apiHandler) sanitizeListSearchFieldsRequest(
 }
 
 func (handler *apiHandler) sanitizeGetSearchFieldSummaryRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.GetSearchFieldSummaryRequest,
 ) (*opensplunk.GetSearchFieldSummaryRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	searchJobID, present := trimmedRequiredSearchJobID(request.GetSearchJobId())
 	if !present {
 		return request, badRequestError("search job ID is required")

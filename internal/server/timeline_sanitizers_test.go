@@ -2,7 +2,6 @@ package server
 
 import (
 	"math"
-	"net/http"
 	"testing"
 
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -89,7 +88,7 @@ func TestSanitizeGetSearchTimelineRequestBoundsBucketOptions(t *testing.T) {
 			handler := &apiHandler{maximumTimelineBuckets: 10}
 			sanitized, err := handler.sanitizeGetSearchTimelineRequest(t.Context(), test.request)
 			if test.wantErr != "" {
-				assertSanitizerHTTPError(t, err, http.StatusBadRequest, test.wantErr)
+				assertSanitizerRejection(t, err, test.wantErr)
 				return
 			}
 			if err != nil {
@@ -102,15 +101,17 @@ func TestSanitizeGetSearchTimelineRequestBoundsBucketOptions(t *testing.T) {
 	}
 }
 
-func TestSanitizeGetSearchTimelineRequestDiscardsUnknownFields(t *testing.T) {
+func TestSanitizeGetSearchTimelineRequestToleratesUnknownFields(t *testing.T) {
+	unknown := futureProtobufField("future-timeline")
 	request := &opensplunk.GetSearchTimelineRequest{SearchJobId: "job"}
-	request.ProtoReflect().SetUnknown(futureProtobufField("future-timeline"))
+	request.ProtoReflect().SetUnknown(unknown)
 	handler := &apiHandler{maximumTimelineBuckets: 10}
 	sanitized, err := handler.sanitizeGetSearchTimelineRequest(t.Context(), request)
 	if err != nil {
 		t.Fatalf("sanitize = %v", err)
 	}
-	if len(sanitized.ProtoReflect().GetUnknown()) != 0 {
-		t.Fatalf("unknown fields survived sanitization")
+	if sanitized.GetSearchJobId() != "job" {
+		t.Fatalf("job ID = %q, want %q", sanitized.GetSearchJobId(), "job")
 	}
+	assertUnknownFieldTolerated(t, sanitized, unknown)
 }

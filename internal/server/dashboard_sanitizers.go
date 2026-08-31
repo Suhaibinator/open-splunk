@@ -10,20 +10,16 @@ import (
 )
 
 // This file holds one sanitizer per dashboard route, in route-registration
-// order. Every sanitizer first discards fields unknown to this server, then
-// normalizes and bounds the request so a dashboard handler only ever sees a
+// order. Every sanitizer normalizes and bounds the request - unknown fields are
+// tolerated, as protobuf decoding does - so a dashboard handler only ever sees a
 // canonical message: identifiers are trimmed and bounded, expected versions
 // are positive, and a supplied definition fits its byte budget and carries a
 // canonical app ID with a search definition on every panel.
 
 func (handler *apiHandler) sanitizeCreateDashboardRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.CreateDashboardRequest,
 ) (*opensplunk.CreateDashboardRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	if err := handler.sanitizeDashboardDefinition(request.GetDefinition()); err != nil {
 		return request, err
 	}
@@ -31,13 +27,9 @@ func (handler *apiHandler) sanitizeCreateDashboardRequest(
 }
 
 func sanitizeGetDashboardRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.GetDashboardRequest,
 ) (*opensplunk.GetDashboardRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	id, err := dashboardID(request.GetDashboardId())
 	if err != nil {
 		return request, badRequestError(err.Error())
@@ -47,13 +39,9 @@ func sanitizeGetDashboardRequest(
 }
 
 func sanitizeListDashboardsRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.ListDashboardsRequest,
 ) (*opensplunk.ListDashboardsRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	if request.AppIdFilter == nil {
 		return request, nil
 	}
@@ -66,13 +54,9 @@ func sanitizeListDashboardsRequest(
 }
 
 func (handler *apiHandler) sanitizeUpdateDashboardRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.UpdateDashboardRequest,
 ) (*opensplunk.UpdateDashboardRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	id, err := dashboardID(request.GetDashboardId())
 	if err != nil {
 		return request, badRequestError(err.Error())
@@ -88,13 +72,9 @@ func (handler *apiHandler) sanitizeUpdateDashboardRequest(
 }
 
 func sanitizeDeleteDashboardRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.DeleteDashboardRequest,
 ) (*opensplunk.DeleteDashboardRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	id, err := dashboardID(request.GetDashboardId())
 	if err != nil {
 		return request, badRequestError(err.Error())
@@ -107,13 +87,9 @@ func sanitizeDeleteDashboardRequest(
 }
 
 func sanitizeRunDashboardPanelRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.RunDashboardPanelRequest,
 ) (*opensplunk.RunDashboardPanelRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	id, err := dashboardID(request.GetDashboardId())
 	if err != nil {
 		return request, badRequestError(err.Error())

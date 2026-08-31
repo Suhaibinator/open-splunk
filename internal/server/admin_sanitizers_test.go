@@ -8,18 +8,6 @@ import (
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 )
 
-// assertSanitizerRejection compares a sanitizer rejection to the badRequestError
-// the handler used to return for the same request shape.
-func assertSanitizerRejection(t *testing.T, err error, message string) {
-	t.Helper()
-	if err == nil {
-		t.Fatalf("sanitize error = nil, want %q", message)
-	}
-	if want := badRequestError(message).Error(); err.Error() != want {
-		t.Fatalf("sanitize error = %q, want %q", err.Error(), want)
-	}
-}
-
 func adminSanitizerHandler() *apiHandler {
 	return &apiHandler{
 		maximumPageSize:       defaultMaximumPageSize,
@@ -150,10 +138,6 @@ func TestSanitizeCreateIndexRequest(t *testing.T) {
 		err,
 		"client request idempotency is not supported",
 	)
-
-	var missing *opensplunk.CreateIndexRequest
-	_, err = sanitizeCreateIndexRequest(context.Background(), missing)
-	assertSanitizerRejection(t, err, "request body is required")
 }
 
 func TestSanitizeGetIndexRequest(t *testing.T) {
@@ -911,94 +895,6 @@ func TestSanitizeListIngestionTokensRequest(t *testing.T) {
 					test.wantIndexName,
 				)
 			}
-		})
-	}
-}
-
-func TestAdminSanitizersRejectMissingBody(t *testing.T) {
-	t.Parallel()
-
-	handler := adminSanitizerHandler()
-	ctx := context.Background()
-	checks := []struct {
-		name string
-		call func() error
-	}{
-		{"get index", func() error {
-			var request *opensplunk.GetIndexRequest
-			_, err := sanitizeGetIndexRequest(ctx, request)
-			return err
-		}},
-		{"list indexes", func() error {
-			var request *opensplunk.ListIndexesRequest
-			_, err := handler.sanitizeListIndexesRequest(ctx, request)
-			return err
-		}},
-		{"update index", func() error {
-			var request *opensplunk.UpdateIndexRequest
-			_, err := sanitizeUpdateIndexRequest(ctx, request)
-			return err
-		}},
-		{"set index state", func() error {
-			var request *opensplunk.SetIndexStateRequest
-			_, err := sanitizeSetIndexStateRequest(ctx, request)
-			return err
-		}},
-		{"delete index", func() error {
-			var request *opensplunk.DeleteIndexRequest
-			_, err := sanitizeDeleteIndexRequest(ctx, request)
-			return err
-		}},
-		{"index stats", func() error {
-			var request *opensplunk.GetIndexStatsRequest
-			_, err := sanitizeGetIndexStatsRequest(ctx, request)
-			return err
-		}},
-		{"index fields", func() error {
-			var request *opensplunk.ListIndexFieldsRequest
-			_, err := handler.sanitizeListIndexFieldsRequest(ctx, request)
-			return err
-		}},
-		{"create token", func() error {
-			var request *opensplunk.CreateIngestionTokenRequest
-			_, err := sanitizeCreateIngestionTokenRequest(ctx, request)
-			return err
-		}},
-		{"get token", func() error {
-			var request *opensplunk.GetIngestionTokenRequest
-			_, err := sanitizeGetIngestionTokenRequest(ctx, request)
-			return err
-		}},
-		{"list tokens", func() error {
-			var request *opensplunk.ListIngestionTokensRequest
-			_, err := handler.sanitizeListIngestionTokensRequest(ctx, request)
-			return err
-		}},
-		{"update token", func() error {
-			var request *opensplunk.UpdateIngestionTokenRequest
-			_, err := sanitizeUpdateIngestionTokenRequest(ctx, request)
-			return err
-		}},
-		{"set token enabled", func() error {
-			var request *opensplunk.SetIngestionTokenEnabledRequest
-			_, err := sanitizeSetIngestionTokenEnabledRequest(ctx, request)
-			return err
-		}},
-		{"revoke token", func() error {
-			var request *opensplunk.RevokeIngestionTokenRequest
-			_, err := sanitizeRevokeIngestionTokenRequest(ctx, request)
-			return err
-		}},
-	}
-
-	for _, check := range checks {
-		t.Run(check.name, func(t *testing.T) {
-			t.Parallel()
-			assertSanitizerRejection(
-				t,
-				check.call(),
-				"request body is required",
-			)
 		})
 	}
 }

@@ -11,11 +11,7 @@ import (
 // version and a schedule body - and keeps the two schedule versions consistent:
 // a schedule that names its own config version must name the one the caller
 // expects, so the handler never reconciles them against the store.
-func sanitizeSetSavedSearchScheduleRequest(ctx context.Context, request *opensplunk.SetSavedSearchScheduleRequest) (*opensplunk.SetSavedSearchScheduleRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
+func sanitizeSetSavedSearchScheduleRequest(_ context.Context, request *opensplunk.SetSavedSearchScheduleRequest) (*opensplunk.SetSavedSearchScheduleRequest, error) {
 	id, err := savedSearchID(request.GetSavedSearchId())
 	if err != nil || request.GetExpectedVersion() == 0 || request.GetSchedule() == nil {
 		return request, badRequestError("saved search ID, expected version, and schedule are required")
@@ -28,11 +24,7 @@ func sanitizeSetSavedSearchScheduleRequest(ctx context.Context, request *openspl
 	return request, nil
 }
 
-func sanitizeRunSavedSearchRequest(ctx context.Context, request *opensplunk.RunSavedSearchRequest) (*opensplunk.RunSavedSearchRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
+func sanitizeRunSavedSearchRequest(_ context.Context, request *opensplunk.RunSavedSearchRequest) (*opensplunk.RunSavedSearchRequest, error) {
 	id, err := savedSearchID(request.GetSavedSearchId())
 	if err != nil {
 		return request, badRequestError(err.Error())
@@ -41,17 +33,13 @@ func sanitizeRunSavedSearchRequest(ctx context.Context, request *opensplunk.RunS
 	return request, nil
 }
 
-func (handler *apiHandler) sanitizeListScheduledSearchRunsRequest(ctx context.Context, request *opensplunk.ListScheduledSearchRunsRequest) (*opensplunk.ListScheduledSearchRunsRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
+func (handler *apiHandler) sanitizeListScheduledSearchRunsRequest(_ context.Context, request *opensplunk.ListScheduledSearchRunsRequest) (*opensplunk.ListScheduledSearchRunsRequest, error) {
 	id, err := savedSearchID(request.GetSavedSearchId())
 	if err != nil {
 		return request, badRequestError(err.Error())
 	}
 	request.SavedSearchId = id
-	page, err := handler.sanitizedAlertFamilyPage(
+	page, err := handler.sanitizedListPage(
 		request.GetPage(), "scheduled run", scheduledReportRunPageSize, scheduledReportRunPageSize,
 	)
 	if err != nil {
@@ -61,11 +49,7 @@ func (handler *apiHandler) sanitizeListScheduledSearchRunsRequest(ctx context.Co
 	return request, nil
 }
 
-func sanitizeValidateScheduleRequest(ctx context.Context, request *opensplunk.ValidateScheduleRequest) (*opensplunk.ValidateScheduleRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
+func sanitizeValidateScheduleRequest(_ context.Context, request *opensplunk.ValidateScheduleRequest) (*opensplunk.ValidateScheduleRequest, error) {
 	if _, err := scheduleValidationMode(request.GetMode()); err != nil {
 		return request, err
 	}

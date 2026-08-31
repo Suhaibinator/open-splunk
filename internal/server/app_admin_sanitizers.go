@@ -10,8 +10,8 @@ import (
 )
 
 // This file holds one sanitizer per app administration route, in
-// route-registration order. Every sanitizer first discards fields unknown to
-// this server, then normalizes and bounds the request in place, so an app
+// route-registration order. Every sanitizer normalizes and bounds the request
+// in place - unknown fields are tolerated, as protobuf decoding does - so an app
 // handler only ever sees a canonical message: exactly one selector key that is
 // already trimmed and bounded, a positive expected version, and a create
 // definition whose slug, display name, description and default indexes are
@@ -22,13 +22,9 @@ import (
 // sanitizeCreateAppRequest rejects idempotency keys this server does not
 // implement, then bounds and canonicalizes the definition it will persist.
 func sanitizeCreateAppRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.CreateAppRequest,
 ) (*opensplunk.CreateAppRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	if request.ClientRequestId != nil {
 		return request, badRequestError("client request idempotency is not supported")
 	}
@@ -41,13 +37,9 @@ func sanitizeCreateAppRequest(
 }
 
 func sanitizeGetAppRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.GetAppRequest,
 ) (*opensplunk.GetAppRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	if err := validAppAdministrationSelector(request.GetSelector()); err != nil {
 		return request, err
 	}
@@ -59,13 +51,9 @@ func sanitizeGetAppRequest(
 // form. Whether a well-formed token still matches this tenant's filters and
 // catalog revision is stored state and stays in the handler.
 func sanitizeListAppsRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.ListAppsRequest,
 ) (*opensplunk.ListAppsRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	if page := request.GetPage(); page != nil && page.PageToken != nil {
 		token := page.GetPageToken()
 		if token == "" ||
@@ -89,13 +77,9 @@ func sanitizeListAppsRequest(
 }
 
 func sanitizeUpdateAppRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.UpdateAppRequest,
 ) (*opensplunk.UpdateAppRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	if err := validAppAdministrationSelector(request.GetSelector()); err != nil {
 		return request, err
 	}
@@ -109,13 +93,9 @@ func sanitizeUpdateAppRequest(
 }
 
 func sanitizeSetAppStateRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.SetAppStateRequest,
 ) (*opensplunk.SetAppStateRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	if err := validAppAdministrationSelector(request.GetSelector()); err != nil {
 		return request, err
 	}
@@ -129,13 +109,9 @@ func sanitizeSetAppStateRequest(
 // Whether it names the app being deleted depends on the stored record and
 // stays in the handler, next to the archived-state and version rules.
 func sanitizeDeleteAppRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.DeleteAppRequest,
 ) (*opensplunk.DeleteAppRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	if err := validAppAdministrationSelector(request.GetSelector()); err != nil {
 		return request, err
 	}

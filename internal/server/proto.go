@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"errors"
 	"slices"
 	"time"
@@ -11,7 +10,6 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/searchjobproto"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -197,51 +195,4 @@ func optionalString(value string) *string {
 		return nil
 	}
 	return new(value)
-}
-
-// discardUnknownProtoFields is the default protobuf route sanitizer. It drops
-// every field unknown to this server, recursively, before request validation
-// or persistence sees the message. SRouter has already enforced the raw body
-// limit, so discarded bytes still consume the caller's request budget. Routes
-// whose requests carry a persisted definition wrap this with a rejection check
-// instead (see sanitizeCreateKnowledgeObjectRequest and sanitizeCreateLookupRequest).
-func discardUnknownProtoFields[T proto.Message](_ context.Context, request T) (T, error) {
-	if isNilDependency(request) {
-		return request, badRequestError("request body is required")
-	}
-	pending := []protoreflect.Message{request.ProtoReflect()}
-	for len(pending) != 0 {
-		last := len(pending) - 1
-		message := pending[last]
-		pending = pending[:last]
-		if !message.IsValid() {
-			continue
-		}
-
-		message.SetUnknown(nil)
-		message.Range(func(field protoreflect.FieldDescriptor, value protoreflect.Value) bool {
-			switch {
-			case field.IsMap():
-				if field.MapValue().Message() == nil {
-					return true
-				}
-				value.Map().Range(func(_ protoreflect.MapKey, item protoreflect.Value) bool {
-					pending = append(pending, item.Message())
-					return true
-				})
-			case field.IsList():
-				if field.Message() == nil {
-					return true
-				}
-				list := value.List()
-				for index := 0; index < list.Len(); index++ {
-					pending = append(pending, list.Get(index).Message())
-				}
-			case field.Message() != nil:
-				pending = append(pending, value.Message())
-			}
-			return true
-		})
-	}
-	return request, nil
 }

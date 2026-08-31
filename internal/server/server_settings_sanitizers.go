@@ -7,13 +7,13 @@ import (
 )
 
 // sanitizeGetServerSettingsRequest states the whole request contract for reading
-// server settings: the read is unparameterised, so the handler only needs a
-// decoded body whose unknown fields have been discarded.
+// server settings: the read is unparameterised, so there is nothing to enforce
+// and nothing to normalize, and unknown fields are tolerated.
 func sanitizeGetServerSettingsRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.GetServerSettingsRequest,
 ) (*opensplunk.GetServerSettingsRequest, error) {
-	return discardUnknownProtoFields(ctx, request)
+	return request, nil
 }
 
 // sanitizeUpdateServerSettingsRequest guarantees the handler a complete and
@@ -21,12 +21,9 @@ func sanitizeGetServerSettingsRequest(
 // bound satisfies searchlimits.Validate. The handler therefore converts the
 // message without a failure path and only maps store-side rejections.
 func sanitizeUpdateServerSettingsRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.UpdateServerSettingsRequest,
 ) (*opensplunk.UpdateServerSettingsRequest, error) {
-	if _, err := discardUnknownProtoFields(ctx, request); err != nil {
-		return request, err
-	}
 	if _, err := searchLimitsFromProto(request.GetLimits()); err != nil {
 		return request, badRequestError("search limits are invalid")
 	}

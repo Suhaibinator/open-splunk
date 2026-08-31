@@ -129,7 +129,7 @@ func (handler *apiHandler) runDashboardPanel(request *http.Request, input *opens
 	if selected == nil {
 		return nil, router.NewHTTPError(http.StatusNotFound, "dashboard panel not found")
 	}
-	resolved, err := handler.resolveSearchDefinition(selected.GetSearch(), func(*opensplunk.SearchDefinition) error { return nil })
+	resolved, err := handler.resolveSearchDefinition(selected.GetSearch())
 	if err != nil || resolved.AppID != trusted.GetDefinition().GetAppId() {
 		return nil, internalError()
 	}
@@ -172,7 +172,7 @@ func (handler *apiHandler) dashboardDefinition(request *http.Request, input *ope
 		return nil, err
 	}
 	for _, panel := range definition.GetPanels() {
-		resolved, err := handler.resolveSearchDefinition(panel.GetSearch(), func(*opensplunk.SearchDefinition) error { return nil })
+		resolved, err := handler.resolveSearchDefinition(panel.GetSearch())
 		if err != nil {
 			return nil, err
 		}

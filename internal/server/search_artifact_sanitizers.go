@@ -7,13 +7,9 @@ import (
 )
 
 func sanitizeGetSearchJobSettingsRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.GetSearchJobSettingsRequest,
 ) (*opensplunk.GetSearchJobSettingsRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	searchJobID, present := trimmedRequiredSearchJobID(request.GetSearchJobId())
 	if !present {
 		return request, badRequestError("search job ID is required")
@@ -23,13 +19,9 @@ func sanitizeGetSearchJobSettingsRequest(
 }
 
 func sanitizeUpdateSearchJobSettingsRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.UpdateSearchJobSettingsRequest,
 ) (*opensplunk.UpdateSearchJobSettingsRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	searchJobID, present := trimmedRequiredSearchJobID(request.GetSearchJobId())
 	if !present || request.GetExpectedStateVersion() == 0 {
 		return request, badRequestError("search job ID and expected state version are required")
@@ -42,13 +34,9 @@ func sanitizeUpdateSearchJobSettingsRequest(
 }
 
 func sanitizeShareSearchJobRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.ShareSearchJobRequest,
 ) (*opensplunk.ShareSearchJobRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	searchJobID, present := trimmedRequiredSearchJobID(request.GetSearchJobId())
 	if !present || request.GetExpectedStateVersion() == 0 {
 		return request, badRequestError("search job ID and expected state version are required")

@@ -4,12 +4,9 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
-import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
+import { BinaryReader } from "@bufbuild/protobuf/wire";
 
-import * as openSplunk from "@/gen/ts/index.open_splunk";
 import { WebhookAlertAction } from "@/gen/ts/open_splunk/alert";
-import { AppSelector } from "@/gen/ts/open_splunk/app";
-import { GetAppRequest } from "@/gen/ts/open_splunk/app_api";
 import { DiagnosticSeverity, SharingScope } from "@/gen/ts/open_splunk/common";
 import {
   FieldExtractionDefinition,
@@ -40,31 +37,6 @@ import {
   ValidateKnowledgeObjectResponse,
 } from "@/gen/ts/open_splunk/knowledge_api";
 import { SearchJob } from "@/gen/ts/open_splunk/search";
-import { GetSystemBootstrapResponse } from "@/gen/ts/open_splunk/system_api";
-import { openSplunkRoutes } from "@/lib/api/routes";
-
-interface ProtobufRouteContractRecord {
-  path: string;
-  requestType: string;
-  responseType: string;
-  requestKnownWire: string;
-  requestFutureWire: string;
-  responseKnownWire: string;
-  responseFutureWire: string;
-}
-
-interface ProtobufRouteContractFixture {
-  version: number;
-  futureFieldNumber: number;
-  routes: ProtobufRouteContractRecord[];
-}
-
-const runtimeMessageCodecs: Readonly<Record<string, unknown>> = { ...openSplunk };
-
-interface RuntimeMessageCodec {
-  encode(message: unknown, writer?: BinaryWriter): BinaryWriter;
-  decode(input: Uint8Array): unknown;
-}
 
 interface FieldExtractionWireContract {
   name: "regex" | "json";
@@ -163,12 +135,6 @@ interface KnowledgeManagementDependencyWireFixture {
   dependentsResponseWireHex: string;
 }
 
-const routeFixture = JSON.parse(
-  readFileSync(
-    path.join(process.cwd(), "testdata", "protobuf-http-route-contracts.json"),
-    "utf8",
-  ),
-) as ProtobufRouteContractFixture;
 const fieldExtractionFixture = JSON.parse(
   readFileSync(
     path.join(process.cwd(), "testdata", "knowledge-field-extraction-wire.json"),
@@ -193,8 +159,6 @@ const knowledgeManagementDependencyWireFixture = JSON.parse(
     "utf8",
   ),
 ) as KnowledgeManagementDependencyWireFixture;
-const futureFieldTag = (routeFixture.futureFieldNumber << 3) | 2;
-
 test("webhook sample-row presence preserves explicit zero on field 2", () => {
   const omitted = WebhookAlertAction.encode(
     WebhookAlertAction.fromPartial({}),
@@ -279,130 +243,6 @@ function knowledgeSnapshotSummaryFromContract(
     objectsTruncated: contract.objectsTruncated ?? false,
   });
 }
-
-function registeredRoutePaths(value: unknown): string[] {
-  if (value === null || typeof value !== "object") {
-    return [];
-  }
-
-  if ("path" in value && typeof value.path === "string") {
-    return [value.path];
-  }
-
-  return Object.values(value).flatMap(registeredRoutePaths);
-}
-
-function runtimeMessageCodec(typeName: string): RuntimeMessageCodec {
-  const candidate = runtimeMessageCodecs[typeName];
-  assert.ok(candidate !== null && typeof candidate === "object", `${typeName} codec is missing`);
-  const codec = candidate as Partial<RuntimeMessageCodec>;
-  assert.equal(typeof codec.encode, "function", `${typeName}.encode is missing`);
-  assert.equal(typeof codec.decode, "function", `${typeName}.decode is missing`);
-  return codec as RuntimeMessageCodec;
-}
-
-function assertRuntimeWireContract(
-  typeName: string,
-  pathName: string,
-  direction: "request" | "response",
-  knownBase64: string,
-  futureBase64: string,
-): void {
-  const codec = runtimeMessageCodec(typeName);
-  const known = Buffer.from(knownBase64, "base64");
-  const future = Buffer.from(futureBase64, "base64");
-
-  const decodedKnown = codec.decode(known);
-  if (known.length === 0) {
-    assert.deepEqual(
-      decodedKnown,
-      {},
-      `${typeName} may use an empty known fixture only for a fieldless message`,
-    );
-  }
-  assert.deepEqual(
-    codec.decode(codec.encode(decodedKnown).finish()),
-    decodedKnown,
-    `${typeName} did not preserve its known fields through a TypeScript round trip`,
-  );
-
-  const decodedFuture = codec.decode(future);
-  assert.deepEqual(
-    decodedFuture,
-    decodedKnown,
-    `${typeName} changed its known fields while discarding its future field`,
-  );
-
-  const producedFuture = new BinaryWriter()
-    .raw(known)
-    .uint32(futureFieldTag)
-    .string(`future:${pathName}:${direction}`)
-    .finish();
-  assert.deepEqual(
-    Buffer.from(producedFuture),
-    future,
-    `${typeName} future fixture is not TypeScript-reproducible`,
-  );
-}
-
-test("every protobuf HTTP route round-trips generated TypeScript messages against its wire fixture", () => {
-  assert.equal(routeFixture.version, 1);
-  assert.equal(routeFixture.routes.length, 97);
-  assert.equal(new Set(routeFixture.routes.map((route) => route.path)).size, 97);
-
-  for (const route of routeFixture.routes) {
-    assertRuntimeWireContract(
-      route.requestType,
-      route.path,
-      "request",
-      route.requestKnownWire,
-      route.requestFutureWire,
-    );
-    assertRuntimeWireContract(
-      route.responseType,
-      route.path,
-      "response",
-      route.responseKnownWire,
-      route.responseFutureWire,
-    );
-  }
-});
-
-test("the browser client registers every protobuf HTTP route exposed by the backend", () => {
-  const backendPaths = routeFixture.routes.map((route) => route.path).toSorted();
-  const browserPaths = registeredRoutePaths(openSplunkRoutes).toSorted();
-
-  assert.deepEqual(browserPaths, backendPaths);
-});
-
-test("generated protobuf request decoders ignore unknown fields recursively", () => {
-  const selector = AppSelector.encode({
-    selector: { $case: "appId", value: "app-current" },
-  });
-  selector.uint32(futureFieldTag).string("future-selector-field");
-
-  const request = new BinaryWriter();
-  request.uint32(10).bytes(selector.finish());
-  request.uint32(futureFieldTag).string("future-request-field");
-
-  assert.deepEqual(GetAppRequest.decode(request.finish()), {
-    selector: {
-      selector: { $case: "appId", value: "app-current" },
-    },
-  });
-});
-
-test("generated protobuf response decoders retain known fields alongside unknown fields", () => {
-  const response = GetSystemBootstrapResponse.encode(
-    GetSystemBootstrapResponse.fromPartial({
-      searchWebsocketPath: "/api/search/ws",
-    }),
-  );
-  response.uint32(futureFieldTag).string("future-response-field");
-
-  const decoded = GetSystemBootstrapResponse.decode(response.finish());
-  assert.equal(decoded.searchWebsocketPath, "/api/search/ws");
-});
 
 test("generated field extraction definitions match shared Go wire goldens", () => {
   assert.equal(fieldExtractionFixture.version, 1);

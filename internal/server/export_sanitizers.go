@@ -15,13 +15,9 @@ import (
 // definition. The format options stay with the handler, which converts the
 // oneof into the service request in the same pass that validates it.
 func sanitizeCreateExportJobRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.CreateExportJobRequest,
 ) (*opensplunk.CreateExportJobRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	definition := request.GetDefinition()
 	if definition == nil {
 		return request, badRequestError("export definition is required")
@@ -43,13 +39,9 @@ func sanitizeCreateExportJobRequest(
 }
 
 func sanitizeGetExportJobRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.GetExportJobRequest,
 ) (*opensplunk.GetExportJobRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	request.ExportJobId = strings.TrimSpace(request.GetExportJobId())
 	if request.GetExportJobId() == "" {
 		return request, badRequestError("export job ID is required")
@@ -61,20 +53,17 @@ func sanitizeGetExportJobRequest(
 // configured maximum page size, deduplicates the state filters and bounds the
 // search-job filter. Page errors precede filter errors.
 func (handler *apiHandler) sanitizeListExportJobsRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.ListExportJobsRequest,
 ) (*opensplunk.ListExportJobsRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	pageSize, pageToken, includeTotal, err := handler.exportListPageRequest(
 		request.GetPage(),
 	)
 	if err != nil {
 		return request, badRequestError(err.Error())
 	}
-	request.Page = resolvedPageRequest(
+	request.Page = resolvedListPage(
+		request.GetPage(),
 		safecast.MustConv[uint32](pageSize),
 		pageToken,
 		includeTotal,
@@ -117,13 +106,9 @@ func normalizeExportListStateFilters(
 // sanitizeCancelExportJobRequest drops a whitespace-only reason rather than
 // rejecting it, so the handler sees either no reason at all or a 400.
 func sanitizeCancelExportJobRequest(
-	ctx context.Context,
+	_ context.Context,
 	request *opensplunk.CancelExportJobRequest,
 ) (*opensplunk.CancelExportJobRequest, error) {
-	request, err := discardUnknownProtoFields(ctx, request)
-	if err != nil {
-		return request, err
-	}
 	request.ExportJobId = strings.TrimSpace(request.GetExportJobId())
 	if request.GetExportJobId() == "" {
 		return request, badRequestError("export job ID is required")

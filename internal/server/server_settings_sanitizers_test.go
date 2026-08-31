@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"testing"
 
@@ -14,8 +15,9 @@ import (
 func TestSanitizeGetServerSettingsRequest(t *testing.T) {
 	t.Parallel()
 
+	unknown := []byte{0xf8, 0x3f, 0x01}
 	request := &opensplunk.GetServerSettingsRequest{}
-	request.ProtoReflect().SetUnknown([]byte{0xf8, 0x3f, 0x01})
+	request.ProtoReflect().SetUnknown(unknown)
 	sanitized, err := sanitizeGetServerSettingsRequest(
 		context.Background(),
 		request,
@@ -23,13 +25,9 @@ func TestSanitizeGetServerSettingsRequest(t *testing.T) {
 	if err != nil || sanitized != request {
 		t.Fatalf("sanitize response/error = %v/%v", sanitized, err)
 	}
-	if len(sanitized.ProtoReflect().GetUnknown()) != 0 {
-		t.Fatal("sanitizer retained unknown fields")
+	if !bytes.Equal(sanitized.ProtoReflect().GetUnknown(), unknown) {
+		t.Fatal("sanitizer did not tolerate the unknown field")
 	}
-
-	var missing *opensplunk.GetServerSettingsRequest
-	_, err = sanitizeGetServerSettingsRequest(context.Background(), missing)
-	assertSanitizerRejection(t, err, "request body is required")
 }
 
 func supportedSearchLimits() *opensplunk.SearchLimits {
@@ -119,15 +117,4 @@ func TestSanitizeUpdateServerSettingsRequest(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestSanitizeUpdateServerSettingsRequestRejectsMissingBody(t *testing.T) {
-	t.Parallel()
-
-	var request *opensplunk.UpdateServerSettingsRequest
-	_, err := sanitizeUpdateServerSettingsRequest(
-		context.Background(),
-		request,
-	)
-	assertSanitizerRejection(t, err, "request body is required")
 }

@@ -223,17 +223,6 @@ func TestSanitizeListAuditEventsRequestDefaultsThePage(t *testing.T) {
 	}
 }
 
-func TestSanitizeListAuditEventsRequestRejectsMissingBody(t *testing.T) {
-	t.Parallel()
-
-	var request *opensplunk.ListAuditEventsRequest
-	_, err := auditSanitizerHandler().sanitizeListAuditEventsRequest(
-		context.Background(),
-		request,
-	)
-	assertSanitizerRejection(t, err, "request body is required")
-}
-
 func TestSanitizeListSearchAttemptAuditEventsRequest(t *testing.T) {
 	t.Parallel()
 
@@ -355,16 +344,4 @@ func TestSanitizeListSearchAttemptAuditEventsRequestProjectsFilters(t *testing.T
 		listRequest.OwnerID == nil || *listRequest.OwnerID != owner {
 		t.Fatalf("projected request = %+v", listRequest)
 	}
-}
-
-func TestSanitizeListSearchAttemptAuditEventsRequestRejectsMissingBody(t *testing.T) {
-	t.Parallel()
-
-	var request *opensplunk.ListSearchAttemptAuditEventsRequest
-	_, err := auditSanitizerHandler().
-		sanitizeListSearchAttemptAuditEventsRequest(
-			context.Background(),
-			request,
-		)
-	assertSanitizerRejection(t, err, "request body is required")
 }
