@@ -2,8 +2,6 @@ package server
 
 import (
 	"context"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -14,9 +12,8 @@ import (
 
 func TestSetSavedSearchScheduleRejectsContradictoryConfigVersions(t *testing.T) {
 	t.Parallel()
-	handler := &apiHandler{ownerID: "owner-1"}
-	_, err := handler.setSavedSearchSchedule(
-		httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/saved-searches/schedule/set", nil),
+	_, err := sanitizeSetSavedSearchScheduleRequest(
+		context.Background(),
 		&opensplunk.SetSavedSearchScheduleRequest{
 			SavedSearchId:           "saved-1",
 			ExpectedVersion:         4,
@@ -27,7 +24,7 @@ func TestSetSavedSearchScheduleRejectsContradictoryConfigVersions(t *testing.T) 
 		},
 	)
 	if err == nil {
-		t.Fatal("setSavedSearchSchedule() accepted contradictory config versions")
+		t.Fatal("sanitizeSetSavedSearchScheduleRequest() accepted contradictory config versions")
 	}
 }
 
