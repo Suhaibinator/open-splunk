@@ -1159,6 +1159,8 @@ func TestCompletionCatalogCoversSupportedFixedCommandsAndFunctions(t *testing.T)
 		"isnotnull", "coalesce", "lower", "upper", "len", "length", "round",
 		"ceil", "ceiling", "floor", "mvcount", "mvsort", "split", "mvappend",
 		"mvdedup", "mvindex", "mvjoin", "mvzip", "mvfind", "match", "like", "substr",
+		"abs", "sqrt", "exp", "ln", "log", "pow", "pi", "trim", "ltrim", "rtrim",
+		"urldecode", "md5", "sha1", "sha256", "sha512", "nullif", "typeof", "cidrmatch",
 	}
 	gotFunctions := make([]string, 0, len(completionCatalog.Functions))
 	for _, function := range completionCatalog.Functions {

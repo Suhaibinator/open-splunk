@@ -779,6 +779,23 @@ const (
 	ScalarFunctionMVJoin
 	ScalarFunctionMVZip
 	ScalarFunctionMVFind
+	ScalarFunctionAbs
+	ScalarFunctionSqrt
+	ScalarFunctionExp
+	ScalarFunctionLn
+	ScalarFunctionLog
+	ScalarFunctionPow
+	ScalarFunctionPi
+	ScalarFunctionTrim
+	ScalarFunctionLTrim
+	ScalarFunctionRTrim
+	ScalarFunctionURLDecode
+	ScalarFunctionMD5
+	ScalarFunctionSHA1
+	ScalarFunctionSHA256
+	ScalarFunctionSHA512
+	ScalarFunctionTypeOf
+	ScalarFunctionCIDRMatch
 	ScalarFunctionCount
 )
 
@@ -787,7 +804,7 @@ const (
 func (function ScalarFunction) ReturnsBoolean() bool {
 	switch function {
 	case ScalarFunctionIsNull, ScalarFunctionIsNotNull, ScalarFunctionMatch,
-		ScalarFunctionLike:
+		ScalarFunctionLike, ScalarFunctionCIDRMatch:
 		return true
 	default:
 		return false

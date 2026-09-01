@@ -68,13 +68,22 @@ func TestBuildEvalToStringRejectsForgedArityEnumAndTypedNil(t *testing.T) {
 			code: "SPL_INVALID_EVAL_ARITY",
 		},
 		{
-			name: "two arguments",
+			name: "three arguments",
+			expression: &spl.ScalarCallExpr{
+				Function:  spl.ScalarFunctionToString,
+				Arguments: []spl.ScalarExpr{argument(), argument(), argument()},
+				Range:     sourceRange,
+			},
+			code: "SPL_INVALID_EVAL_ARITY",
+		},
+		{
+			name: "non-literal format",
 			expression: &spl.ScalarCallExpr{
 				Function:  spl.ScalarFunctionToString,
 				Arguments: []spl.ScalarExpr{argument(), argument()},
 				Range:     sourceRange,
 			},
-			code: "SPL_INVALID_EVAL_ARITY",
+			code: "SPL_UNSUPPORTED_TOSTRING_FORMAT",
 		},
 		{
 			name: "typed nil argument",

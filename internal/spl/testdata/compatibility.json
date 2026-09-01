@@ -4023,6 +4023,305 @@
           "expect": {
             "diagnostic": "SPL_UNSUPPORTED_EVAL_EXPRESSION"
           }
+        },
+        {
+          "name": "nullif keeps a fixed-kind operand",
+          "source": "index=main | eval cleaned=nullif(host, \"-\"), text=nullif(tostring(status), \"-\")",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "nullif inherits the if branch rule for a dynamic operand",
+          "source": "index=main | eval cleaned=nullif(status, \"-\")",
+          "expect": {
+            "diagnostic_phase": "compile",
+            "diagnostic": "SPL_UNSUPPORTED_IF_BRANCH_TYPE"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-MATH-001",
+      "summary": "Numeric functions share the arithmetic operand model and return null outside their domain.",
+      "cases": [
+        {
+          "name": "absolute value",
+          "expression": "abs(-2.5)",
+          "expect": {
+            "value": {
+              "double": 2.5
+            }
+          }
+        },
+        {
+          "name": "square root",
+          "expression": "sqrt(16)",
+          "expect": {
+            "value": {
+              "double": 4
+            }
+          }
+        },
+        {
+          "name": "negative square root is null",
+          "expression": "sqrt(-1)",
+          "expect": {
+            "value": {
+              "null": true
+            }
+          }
+        },
+        {
+          "name": "natural and base-10 logarithm",
+          "expression": "ln(1)+log(1000)",
+          "expect": {
+            "value": {
+              "double": 3
+            }
+          }
+        },
+        {
+          "name": "explicit base",
+          "expression": "log(8, 2)",
+          "expect": {
+            "value": {
+              "double": 3
+            }
+          }
+        },
+        {
+          "name": "non-positive logarithm is null",
+          "expression": "ln(0)",
+          "expect": {
+            "value": {
+              "null": true
+            }
+          }
+        },
+        {
+          "name": "base one is null",
+          "expression": "log(8, 1)",
+          "expect": {
+            "value": {
+              "null": true
+            }
+          }
+        },
+        {
+          "name": "power and constant",
+          "expression": "pow(2, 10)",
+          "expect": {
+            "value": {
+              "double": 1024
+            }
+          }
+        },
+        {
+          "name": "whole pack parses",
+          "source": "index=main | eval a=abs(bytes), s=sqrt(bytes), e=exp(1), l=ln(bytes), l10=log(bytes), lb=log(bytes, 2), p=pow(bytes, 2), circle=pi()*pow(radius, 2)",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "Boolean operand excluded",
+          "source": "index=main | eval value=abs(isnull(bytes))",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_EVAL_EXPRESSION"
+          }
+        },
+        {
+          "name": "numeric-looking fixed String excluded",
+          "source": "index=main | eval value=sqrt(\"16\")",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_ARITHMETIC_VALUE_TYPE"
+          }
+        },
+        {
+          "name": "pi takes no arguments",
+          "source": "index=main | eval value=pi(1)",
+          "expect": {
+            "diagnostic": "SPL_INVALID_EVAL_ARITY"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-TEXT-TRANSFORM-001",
+      "summary": "Trim, URL-decode, and digest functions transform bounded Strings and String multivalue members.",
+      "cases": [
+        {
+          "name": "default trim strips spaces and tabs",
+          "source": "index=main | eval value=trim(message), left=ltrim(message), right=rtrim(message)",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "literal trim characters",
+          "source": "index=main | eval value=trim(message, \"-_\")",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "trim characters must be a quoted literal",
+          "source": "index=main | eval value=trim(message, host)",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_TRIM_CHARACTERS"
+          }
+        },
+        {
+          "name": "empty trim characters rejected",
+          "source": "index=main | eval value=rtrim(message, \"\")",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_TRIM_CHARACTERS"
+          }
+        },
+        {
+          "name": "url decode and digests",
+          "source": "index=main | eval decoded=urldecode(uri), m=md5(message), s1=sha1(message), s2=sha256(message), s5=sha512(message)",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "per-member multivalue transform",
+          "source": "index=main | eval members=trim(split(message, \",\")), digests=sha256(split(message, \",\"))",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "Boolean input excluded",
+          "source": "index=main | eval value=md5(isnull(message))",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_EVAL_EXPRESSION"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-TYPEOF-001",
+      "summary": "typeof names the value type as Number, String, Boolean, or Invalid, resolving fixed kinds statically.",
+      "cases": [
+        {
+          "name": "fixed String, time, Boolean, and null",
+          "source": "index=main | eval s=typeof(host), n=typeof(_time), b=typeof(isnull(host)), invalid=typeof(null)",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "literal kinds",
+          "source": "index=main | eval s=typeof(\"abc\"), n=typeof(5)",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "dynamic field classified at runtime",
+          "source": "index=main | eval kind=typeof(payload.value)",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "exactly one argument",
+          "source": "index=main | eval kind=typeof(host, _time)",
+          "expect": {
+            "diagnostic": "SPL_INVALID_EVAL_ARITY"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-CIDRMATCH-001",
+      "summary": "cidrmatch tests an IPv4 or IPv6 address against a quoted literal CIDR block.",
+      "cases": [
+        {
+          "name": "where predicate",
+          "source": "index=main | where cidrmatch(\"10.0.0.0/8\", client_ip)",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "conditional consumption",
+          "source": "index=main | eval zone=if(cidrmatch(\"2001:db8::/32\", client_ip), \"lab\", \"other\")",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "direct assignment rejected",
+          "source": "index=main | eval inside=cidrmatch(\"10.0.0.0/8\", client_ip)",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_EVAL_EXPRESSION"
+          }
+        },
+        {
+          "name": "prefix must be a quoted literal",
+          "source": "index=main | where cidrmatch(network, client_ip)",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_CIDR_PREFIX"
+          }
+        },
+        {
+          "name": "malformed prefix rejected",
+          "source": "index=main | where cidrmatch(\"10.0.0.0/33\", client_ip)",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_CIDR_PREFIX"
+          }
+        },
+        {
+          "name": "Boolean address excluded",
+          "source": "index=main | where cidrmatch(\"10.0.0.0/8\", isnull(client_ip))",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_EVAL_EXPRESSION"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-TOSTRING-FORMAT-001",
+      "summary": "tostring renders numbers with the quoted commas or duration format and rejects every other format.",
+      "cases": [
+        {
+          "name": "commas and duration",
+          "source": "index=main | eval pretty=tostring(bytes, \"commas\"), elapsed=tostring(duration, \"duration\")",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "Boolean keeps the default rendering",
+          "source": "index=main | eval flag=tostring(isnull(bytes), \"commas\")",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "hex format rejected",
+          "source": "index=main | eval value=tostring(bytes, \"hex\")",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_TOSTRING_FORMAT"
+          }
+        },
+        {
+          "name": "format must be a quoted literal",
+          "source": "index=main | eval value=tostring(bytes, commas)",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_TOSTRING_FORMAT"
+          }
+        },
+        {
+          "name": "at most two arguments",
+          "source": "index=main | eval value=tostring(bytes, \"commas\", 2)",
+          "expect": {
+            "diagnostic": "SPL_INVALID_EVAL_ARITY"
+          }
         }
       ]
     },

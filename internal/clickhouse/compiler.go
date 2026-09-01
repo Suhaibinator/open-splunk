@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/netip"
 	"reflect"
 	"regexp"
 	"slices"
@@ -128,6 +129,20 @@ const (
 	// maxCompiledToStringScalarSQLBytes independently bounds default scalar
 	// conversion. Dynamic input is bound once, so nested calls grow linearly.
 	maxCompiledToStringScalarSQLBytes = 64 << 10
+	// maxCompiledTextTransformScalarSQLBytes independently bounds each
+	// trim/urldecode/digest expression. Like case conversion, the lowering
+	// references its input exactly once, so nested calls grow linearly.
+	maxCompiledTextTransformScalarSQLBytes = 64 << 10
+	// maxCompiledTypeOfScalarSQLBytes independently bounds typeof; Dynamic
+	// input is bound once, so nested calls grow linearly.
+	maxCompiledTypeOfScalarSQLBytes = 64 << 10
+	// maxCompiledCIDRMatchScalarSQLBytes independently bounds cidrmatch; the
+	// address is bound once and the prefix is a parameter.
+	maxCompiledCIDRMatchScalarSQLBytes = 64 << 10
+	// maxCompiledToStringFormatScalarSQLBytes independently bounds the
+	// "commas" and "duration" tostring formats. The numeric input is bound
+	// once, so nested calls grow linearly.
+	maxCompiledToStringFormatScalarSQLBytes = 64 << 10
 	// maxCompiledConcatenationScalarSQLBytes independently bounds one flattened
 	// period-concatenation expression. Every operand is emitted once and the
 	// parser caps operand count, so the check is incremental and linear.
@@ -9692,6 +9707,27 @@ func compileScalarValue(expression plan.ScalarExpression, state compileState) (c
 			return compileCoalesceScalar(expression, state)
 		case plan.ScalarFunctionLower, plan.ScalarFunctionUpper:
 			return compileTextCaseScalar(expression, state)
+		case plan.ScalarFunctionTrim,
+			plan.ScalarFunctionLTrim,
+			plan.ScalarFunctionRTrim,
+			plan.ScalarFunctionURLDecode,
+			plan.ScalarFunctionMD5,
+			plan.ScalarFunctionSHA1,
+			plan.ScalarFunctionSHA256,
+			plan.ScalarFunctionSHA512:
+			return compileTextTransformScalar(expression, state)
+		case plan.ScalarFunctionTypeOf:
+			return compileTypeOfScalar(expression, state)
+		case plan.ScalarFunctionCIDRMatch:
+			return compileCIDRMatchScalar(expression, state)
+		case plan.ScalarFunctionAbs,
+			plan.ScalarFunctionSqrt,
+			plan.ScalarFunctionExp,
+			plan.ScalarFunctionLn,
+			plan.ScalarFunctionLog,
+			plan.ScalarFunctionPow,
+			plan.ScalarFunctionPi:
+			return compileMathScalar(expression, state)
 		case plan.ScalarFunctionLength:
 			return compileTextLengthScalar(expression, state)
 		case plan.ScalarFunctionSubstring:
@@ -12149,7 +12185,6 @@ func validatePredicateScalarStructure(expression plan.ScalarExpression) error {
 		case plan.ScalarFunctionNow:
 			hasExactArity = true
 		case plan.ScalarFunctionToNumber,
-			plan.ScalarFunctionToString,
 			plan.ScalarFunctionIsNull,
 			plan.ScalarFunctionIsNotNull,
 			plan.ScalarFunctionLower,
@@ -12161,6 +12196,20 @@ func validatePredicateScalarStructure(expression plan.ScalarExpression) error {
 			plan.ScalarFunctionMVSort:
 			expectedArguments = 1
 			hasExactArity = true
+		case plan.ScalarFunctionToString:
+			if len(expression.Arguments) < 1 || len(expression.Arguments) > 2 {
+				return errors.New(
+					"compile ClickHouse predicate: tostring requires one or two arguments",
+				)
+			}
+			if len(expression.Arguments) == 2 {
+				format, ok := scalarQuotedStringLiteral(expression.Arguments[1])
+				if !ok || !slices.Contains(spl.SupportedToStringFormats, format) {
+					return errors.New(
+						"compile ClickHouse predicate: tostring format must be a supported quoted string literal",
+					)
+				}
+			}
 		case plan.ScalarFunctionMVDedup:
 			expectedArguments = 1
 			hasExactArity = true
@@ -12223,6 +12272,63 @@ func validatePredicateScalarStructure(expression plan.ScalarExpression) error {
 			if _, ok := scalarQuotedStringLiteral(expression.Arguments[1]); !ok {
 				return errors.New(
 					"compile ClickHouse predicate: mvfind regular expression must be a quoted string literal",
+				)
+			}
+		case plan.ScalarFunctionAbs,
+			plan.ScalarFunctionSqrt,
+			plan.ScalarFunctionExp,
+			plan.ScalarFunctionLn,
+			plan.ScalarFunctionURLDecode,
+			plan.ScalarFunctionMD5,
+			plan.ScalarFunctionSHA1,
+			plan.ScalarFunctionSHA256,
+			plan.ScalarFunctionSHA512,
+			plan.ScalarFunctionTypeOf:
+			expectedArguments = 1
+			hasExactArity = true
+		case plan.ScalarFunctionPow:
+			expectedArguments = 2
+			hasExactArity = true
+		case plan.ScalarFunctionPi:
+			hasExactArity = true
+		case plan.ScalarFunctionLog:
+			if len(expression.Arguments) < 1 || len(expression.Arguments) > 2 {
+				return errors.New(
+					"compile ClickHouse predicate: log requires one or two arguments",
+				)
+			}
+		case plan.ScalarFunctionTrim,
+			plan.ScalarFunctionLTrim,
+			plan.ScalarFunctionRTrim:
+			if len(expression.Arguments) < 1 || len(expression.Arguments) > 2 {
+				return errors.New(
+					"compile ClickHouse predicate: trim requires one or two arguments",
+				)
+			}
+			if len(expression.Arguments) == 2 {
+				characters, ok := scalarQuotedStringLiteral(expression.Arguments[1])
+				if !ok || characters == "" || !utf8.ValidString(characters) ||
+					len(characters) > spl.MaximumTrimCharactersBytes {
+					return errors.New(
+						"compile ClickHouse predicate: trim characters must be a bounded non-empty quoted UTF-8 string literal",
+					)
+				}
+			}
+		case plan.ScalarFunctionCIDRMatch:
+			if len(expression.Arguments) != 2 {
+				return errors.New(
+					"compile ClickHouse predicate: cidrmatch requires exactly two arguments",
+				)
+			}
+			prefix, ok := scalarQuotedStringLiteral(expression.Arguments[0])
+			if !ok {
+				return errors.New(
+					"compile ClickHouse predicate: cidrmatch prefix must be a quoted string literal",
+				)
+			}
+			if _, err := netip.ParsePrefix(prefix); err != nil {
+				return errors.New(
+					"compile ClickHouse predicate: cidrmatch prefix must be a CIDR block",
 				)
 			}
 		case plan.ScalarFunctionMatch:
@@ -13020,160 +13126,6 @@ func compileLikeScalar(
 	)
 }
 
-func compileTextCaseScalar(
-	expression *plan.ScalarCallExpression,
-	state compileState,
-) (compiledScalar, error) {
-	functionName := "lower"
-	clickHouseFunction := "lowerUTF8"
-	if expression.Function == plan.ScalarFunctionUpper {
-		functionName = "upper"
-		clickHouseFunction = "upperUTF8"
-	}
-	input, err := compileUnaryNonBooleanScalarInput(expression, state, functionName)
-	if err != nil {
-		return compiledScalar{}, err
-	}
-
-	valueSQL := ""
-	valueArgs := append([]any(nil), input.valueArgs...)
-	existsSQL := "1"
-	var existsArgs []any
-	presentSQL := ""
-	resultKind := fieldKindString
-	dynamicDomain := dynamicScalarDomainAny
-	requiresRuntimeValidation := input.requiresRuntimeValidation
-	switch input.kind {
-	case fieldKindDynamic:
-		// Dynamic event fields can be either scalar String or Splunk
-		// multivalue Array(String). Bind the input once through a single-element
-		// higher-order expression so nested calls grow linearly instead of
-		// duplicating the complete child SQL in each runtime-type branch.
-		valueSQL = "arrayElement(arrayMap(value -> multiIf(" +
-			"dynamicType(value) = 'String', " +
-			"CAST(" + clickHouseFunction +
-			"(dynamicElement(value, 'String')) AS Dynamic), " +
-			"dynamicType(value) = 'Array(String)', " +
-			"CAST(arrayMap(element -> " + clickHouseFunction +
-			"(element), dynamicElement(value, 'Array(String)')) AS Dynamic), " +
-			"dynamicType(value) = 'Array(Dynamic)' AND " +
-			"arrayAll(element -> dynamicType(element) = 'String', " +
-			"dynamicElement(value, 'Array(Dynamic)')), " +
-			"CAST(arrayMap(element -> " + clickHouseFunction +
-			"(assumeNotNull(dynamicElement(element, 'String'))), " +
-			"dynamicElement(value, 'Array(Dynamic)')) AS Dynamic), " +
-			"CAST(NULL AS Dynamic)), [" + input.valueSQL + "]), 1)"
-		resultKind = fieldKindDynamic
-		dynamicDomain = dynamicScalarDomainText
-	case fieldKindStringArray:
-		// A fixed Array(String) can originate from an aggregate over _raw.
-		// Bind it once and validate every member before calling the UTF-8
-		// function; invalid arrays become the canonical empty/absent MV value.
-		mapped := "arrayMap(element -> " + clickHouseFunction +
-			"(element), values)"
-		body := "if(arrayAll(element -> isValidUTF8(element), values), " +
-			mapped + ", CAST([], 'Array(String)'))"
-		if input.optionalMultivaluePresentSQL != "" {
-			// New native String arrays are sealed and share the 1,000-member /
-			// 1-MiB contract. Unicode case conversion can expand UTF-8 bytes,
-			// so validate the mapped payload before publishing it as sealed.
-			body = bindSQLExpressions(
-				[]string{"mapped"},
-				[]string{mapped},
-				stringMVLimitsGuardSQL(
-					"mapped",
-					"arrayExists(element -> NOT isValidUTF8(element), values)",
-				),
-			)
-			existsSQL, existsArgs = scalarExistsSQL(input)
-			presentSQL = input.optionalMultivaluePresentSQL
-			requiresRuntimeValidation = true
-			markNativeMVRuntimeValidation(state)
-		}
-		valueSQL = "arrayElement(arrayMap(values -> " + body + ", [" +
-			input.valueSQL + "]), 1)"
-		resultKind = fieldKindStringArray
-	case fieldKindDynamicArray:
-		normalized, normalizeErr := compileNativeMVState(input, false)
-		if normalizeErr != nil {
-			return compiledScalar{}, normalizeErr
-		}
-		stateAlias := "__os_text_case_mv_state"
-		valuesAlias := "__os_text_case_mv_values"
-		mappedAlias := "__os_text_case_mv_mapped"
-		values := "tupleElement(" + stateAlias + ", 1)"
-		mapped := "arrayMap(element -> CAST(" + clickHouseFunction +
-			"(assumeNotNull(dynamicElement(element, 'String'))) AS Dynamic), " +
-			valuesAlias + ")"
-		invalid := "tupleElement(" + stateAlias + ", 4) != 0 OR " +
-			"arrayExists(element -> dynamicType(element) != 'String', " + valuesAlias + ")"
-		body := bindSQLExpressions(
-			[]string{mappedAlias},
-			[]string{mapped},
-			nativeMVPreflightSQL(
-				mappedAlias,
-				invalid,
-				"length("+mappedAlias+")",
-				nativeMVArrayPayloadBytesSQL(mappedAlias),
-				emptyNativeMVSQL(),
-			),
-		)
-		body = bindSQLExpressions([]string{valuesAlias}, []string{values}, body)
-		valueSQL = bindSQLExpressions(
-			[]string{stateAlias},
-			[]string{normalized.sql},
-			body,
-		)
-		valueArgs = append([]any(nil), normalized.args...)
-		existsSQL, presentSQL, existsArgs = nativeMVPreservedStateSQL(input, normalized)
-		resultKind = fieldKindDynamicArray
-		dynamicDomain = dynamicScalarDomainText
-		requiresRuntimeValidation = true
-		markNativeMVRuntimeValidation(state)
-	case fieldKindString, fieldKindInvalid:
-		inputSQL, inputArgs := compiledTextEligibleStringScalar(input)
-		valueArgs = inputArgs
-		valueSQL = clickHouseFunction + "(" + inputSQL + ")"
-	default:
-		return compiledScalar{}, &plan.Diagnostic{
-			Code: "SPL_UNSUPPORTED_TEXT_CASE_VALUE_TYPE",
-			Message: fmt.Sprintf(
-				"%s requires a String or multivalue String input",
-				functionName,
-			),
-			Range: expression.Range,
-		}
-	}
-	if len(valueSQL) > maxCompiledTextCaseScalarSQLBytes {
-		return compiledScalar{}, &plan.Diagnostic{
-			Code: "SPL_QUERY_TOO_COMPLEX",
-			Message: fmt.Sprintf(
-				"%s scalar SQL exceeds %d bytes",
-				functionName,
-				maxCompiledTextCaseScalarSQLBytes,
-			),
-			Range: expression.Range,
-		}
-	}
-	maxStringBytes := saturatingStringByteProduct(compiledScalarStringByteBound(input), 4)
-	if isNativeMultivalueKind(resultKind) && presentSQL != "" {
-		maxStringBytes = min(maxStringBytes, uint64(spl.MaximumNativeMVPayloadBytes))
-	}
-	return compiledScalar{
-		valueSQL:                     valueSQL,
-		valueArgs:                    valueArgs,
-		maxStringBytes:               maxStringBytes,
-		existsSQL:                    existsSQL,
-		existsArgs:                   existsArgs,
-		optionalMultivaluePresentSQL: presentSQL,
-		dynamicDomain:                dynamicDomain,
-		kind:                         resultKind,
-		alwaysNull:                   input.alwaysNull,
-		materializeForPredicate:      input.materializeForPredicate,
-		requiresRuntimeValidation:    requiresRuntimeValidation,
-	}, nil
-}
-
 func compileTextLengthScalar(
 	expression *plan.ScalarCallExpression,
 	state compileState,
@@ -13621,6 +13573,9 @@ func compileToStringScalar(
 	expression *plan.ScalarCallExpression,
 	state compileState,
 ) (compiledScalar, error) {
+	if expression != nil && len(expression.Arguments) == 2 {
+		return compileToStringFormatScalar(expression, state)
+	}
 	input, err := compileUnaryScalarInput(expression, state, "tostring")
 	if err != nil {
 		return compiledScalar{}, err
@@ -14765,6 +14720,20 @@ func scalarExpressionRequiresNativeMVValidation(
 			// open-Dynamic mvsort through a materialized validation fence. Nested
 			// native producers are found by the recursive argument walk below.
 			if len(expression.Arguments) == 1 &&
+				sealedNativeMVFieldExpression(expression.Arguments[0], state) {
+				return true
+			}
+		case plan.ScalarFunctionTrim,
+			plan.ScalarFunctionLTrim,
+			plan.ScalarFunctionRTrim,
+			plan.ScalarFunctionURLDecode,
+			plan.ScalarFunctionMD5,
+			plan.ScalarFunctionSHA1,
+			plan.ScalarFunctionSHA256,
+			plan.ScalarFunctionSHA512:
+			// Per-member text transforms follow the lower/upper rule; the
+			// optional trim character set is a literal and never a list.
+			if len(expression.Arguments) >= 1 &&
 				sealedNativeMVFieldExpression(expression.Arguments[0], state) {
 				return true
 			}
@@ -26344,6 +26313,33 @@ func quoteIdentifier(identifier string) string {
 		}
 	}
 	quoted.WriteByte('"')
+	return quoted.String()
+}
+
+// quoteStringLiteral renders text as a single-quoted ClickHouse string literal
+// for the few server functions that require a constant argument (trim
+// characters). Values that can be bound stay bound; this is reserved for
+// validated, size-bounded, valid UTF-8 text. Quotes, backslashes, driver bind
+// metacharacters, and control bytes become \xHH escapes so the literal never
+// closes early, never reads as a bind marker, and survives every SQL formatter.
+func quoteStringLiteral(text string) string {
+	const hexadecimal = "0123456789ABCDEF"
+	var quoted strings.Builder
+	quoted.Grow(len(text) + 2)
+	quoted.WriteByte('\'')
+	for index := 0; index < len(text); index++ {
+		value := text[index]
+		switch {
+		case value == '\\', value == '\'', value == '?', value == '$', value == '{', value == '}',
+			value < 0x20, value == 0x7f:
+			quoted.WriteString(`\x`)
+			quoted.WriteByte(hexadecimal[value>>4])
+			quoted.WriteByte(hexadecimal[value&0x0f])
+		default:
+			quoted.WriteByte(value)
+		}
+	}
+	quoted.WriteByte('\'')
 	return quoted.String()
 }
 

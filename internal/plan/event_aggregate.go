@@ -354,7 +354,24 @@ func validEventAggregateScalarFunction(function ScalarFunction) bool {
 		ScalarFunctionMVIndex,
 		ScalarFunctionMVJoin,
 		ScalarFunctionMVZip,
-		ScalarFunctionMVFind:
+		ScalarFunctionMVFind,
+		ScalarFunctionAbs,
+		ScalarFunctionSqrt,
+		ScalarFunctionExp,
+		ScalarFunctionLn,
+		ScalarFunctionLog,
+		ScalarFunctionPow,
+		ScalarFunctionPi,
+		ScalarFunctionTrim,
+		ScalarFunctionLTrim,
+		ScalarFunctionRTrim,
+		ScalarFunctionURLDecode,
+		ScalarFunctionMD5,
+		ScalarFunctionSHA1,
+		ScalarFunctionSHA256,
+		ScalarFunctionSHA512,
+		ScalarFunctionTypeOf,
+		ScalarFunctionCIDRMatch:
 		return true
 	default:
 		return false

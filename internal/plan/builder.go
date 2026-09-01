@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/netip"
 	"reflect"
 	"slices"
 	"sort"
@@ -2916,6 +2917,77 @@ func splQuotedStringLiteral(
 	return literal, sourceRange, true
 }
 
+// validateSPLToStringFormat requires the tostring format to be one of the
+// quoted literals with an exact lowering; the parser enforces the same set so
+// this only guards constructed plans.
+func validateSPLToStringFormat(expression spl.ScalarExpr, fallbackRange spl.Range) error {
+	literal, sourceRange, ok := splQuotedStringLiteral(expression, fallbackRange)
+	if !ok || !slices.Contains(spl.SupportedToStringFormats, literal.Value.Text) {
+		return &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_TOSTRING_FORMAT",
+			Message: `tostring supports only the quoted "commas" and "duration" formats`,
+			Range:   sourceRange,
+		}
+	}
+	return nil
+}
+
+// validateSPLTrimCharacters requires the explicit trim character set to be a
+// bounded non-empty valid UTF-8 quoted literal.
+func validateSPLTrimCharacters(
+	function string,
+	expression spl.ScalarExpr,
+	fallbackRange spl.Range,
+) error {
+	literal, sourceRange, ok := splQuotedStringLiteral(expression, fallbackRange)
+	if !ok {
+		return &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_TRIM_CHARACTERS",
+			Message: function + " characters must be a quoted string literal",
+			Range:   sourceRange,
+		}
+	}
+	if literal.Value.Text == "" || !utf8.ValidString(literal.Value.Text) {
+		return &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_TRIM_CHARACTERS",
+			Message: function + " characters must be a non-empty valid UTF-8 string",
+			Range:   literal.Range,
+		}
+	}
+	if len(literal.Value.Text) > spl.MaximumTrimCharactersBytes {
+		return &Diagnostic{
+			Code: "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf(
+				"%s characters exceed the %d-byte limit",
+				function,
+				spl.MaximumTrimCharactersBytes,
+			),
+			Range: literal.Range,
+		}
+	}
+	return nil
+}
+
+// validateSPLCIDRPrefix requires the cidrmatch prefix literal to parse as an
+// IPv4 or IPv6 CIDR block; the caller has already proven it is a quoted literal.
+func validateSPLCIDRPrefix(expression spl.ScalarExpr) error {
+	literal, ok := expression.(*spl.ScalarLiteralExpr)
+	if !ok || literal == nil {
+		return &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_CIDR_PREFIX",
+			Message: "cidrmatch prefix must be a quoted string literal",
+		}
+	}
+	if _, err := netip.ParsePrefix(literal.Value.Text); err != nil {
+		return &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_CIDR_PREFIX",
+			Message: "cidrmatch prefix must be an IPv4 or IPv6 CIDR block such as 10.0.0.0/8",
+			Range:   literal.Range,
+		}
+	}
+	return nil
+}
+
 func validateSPLMVDelimiter(
 	function string,
 	expression spl.ScalarExpr,
@@ -3930,7 +4002,7 @@ var scalarFunctionSpecs = map[spl.ScalarFunction]scalarFunctionSpec{
 	spl.ScalarFunctionStrptime:     {name: "strptime", plan: ScalarFunctionStrptime, arguments: 2, exactArity: true},
 	spl.ScalarFunctionRelativeTime: {name: "relative_time", plan: ScalarFunctionRelativeTime, arguments: 2, exactArity: true},
 	spl.ScalarFunctionToNumber:     {name: "tonumber", plan: ScalarFunctionToNumber, arguments: 1, exactArity: true},
-	spl.ScalarFunctionToString:     {name: "tostring", plan: ScalarFunctionToString, arguments: 1, exactArity: true},
+	spl.ScalarFunctionToString:     {name: "tostring", plan: ScalarFunctionToString},
 	spl.ScalarFunctionRound:        {name: "round", plan: ScalarFunctionRound},
 	spl.ScalarFunctionCeil:         {name: "ceil", plan: ScalarFunctionCeil, arguments: 1, exactArity: true},
 	spl.ScalarFunctionFloor:        {name: "floor", plan: ScalarFunctionFloor, arguments: 1, exactArity: true},
@@ -3953,6 +4025,23 @@ var scalarFunctionSpecs = map[spl.ScalarFunction]scalarFunctionSpec{
 	spl.ScalarFunctionMVJoin:       {name: "mvjoin", plan: ScalarFunctionMVJoin, arguments: 2, exactArity: true},
 	spl.ScalarFunctionMVZip:        {name: "mvzip", plan: ScalarFunctionMVZip},
 	spl.ScalarFunctionMVFind:       {name: "mvfind", plan: ScalarFunctionMVFind, arguments: 2, exactArity: true},
+	spl.ScalarFunctionAbs:          {name: "abs", plan: ScalarFunctionAbs, arguments: 1, exactArity: true},
+	spl.ScalarFunctionSqrt:         {name: "sqrt", plan: ScalarFunctionSqrt, arguments: 1, exactArity: true},
+	spl.ScalarFunctionExp:          {name: "exp", plan: ScalarFunctionExp, arguments: 1, exactArity: true},
+	spl.ScalarFunctionLn:           {name: "ln", plan: ScalarFunctionLn, arguments: 1, exactArity: true},
+	spl.ScalarFunctionLog:          {name: "log", plan: ScalarFunctionLog},
+	spl.ScalarFunctionPow:          {name: "pow", plan: ScalarFunctionPow, arguments: 2, exactArity: true},
+	spl.ScalarFunctionPi:           {name: "pi", plan: ScalarFunctionPi, arguments: 0, exactArity: true},
+	spl.ScalarFunctionTrim:         {name: "trim", plan: ScalarFunctionTrim},
+	spl.ScalarFunctionLTrim:        {name: "ltrim", plan: ScalarFunctionLTrim},
+	spl.ScalarFunctionRTrim:        {name: "rtrim", plan: ScalarFunctionRTrim},
+	spl.ScalarFunctionURLDecode:    {name: "urldecode", plan: ScalarFunctionURLDecode, arguments: 1, exactArity: true},
+	spl.ScalarFunctionMD5:          {name: "md5", plan: ScalarFunctionMD5, arguments: 1, exactArity: true},
+	spl.ScalarFunctionSHA1:         {name: "sha1", plan: ScalarFunctionSHA1, arguments: 1, exactArity: true},
+	spl.ScalarFunctionSHA256:       {name: "sha256", plan: ScalarFunctionSHA256, arguments: 1, exactArity: true},
+	spl.ScalarFunctionSHA512:       {name: "sha512", plan: ScalarFunctionSHA512, arguments: 1, exactArity: true},
+	spl.ScalarFunctionTypeOf:       {name: "typeof", plan: ScalarFunctionTypeOf, arguments: 1, exactArity: true},
+	spl.ScalarFunctionCIDRMatch:    {name: "cidrmatch", plan: ScalarFunctionCIDRMatch, arguments: 2, exactArity: true},
 }
 
 func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpression, error) {
@@ -4176,6 +4265,18 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 					Range:   expression.Range,
 				}
 			}
+		case spl.ScalarFunctionToString,
+			spl.ScalarFunctionLog,
+			spl.ScalarFunctionTrim,
+			spl.ScalarFunctionLTrim,
+			spl.ScalarFunctionRTrim:
+			if len(expression.Arguments) < 1 || len(expression.Arguments) > 2 {
+				return nil, &Diagnostic{
+					Code:    "SPL_INVALID_EVAL_ARITY",
+					Message: functionName + " requires one or two arguments",
+					Range:   expression.Range,
+				}
+			}
 		}
 		if hasExactArity && len(expression.Arguments) != expectedArguments {
 			argumentNoun := "arguments"
@@ -4205,7 +4306,15 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 			expression.Function == spl.ScalarFunctionLower ||
 			expression.Function == spl.ScalarFunctionUpper ||
 			expression.Function == spl.ScalarFunctionMVSort ||
-			expression.Function == spl.ScalarFunctionLength {
+			expression.Function == spl.ScalarFunctionLength ||
+			expression.Function == spl.ScalarFunctionTrim ||
+			expression.Function == spl.ScalarFunctionLTrim ||
+			expression.Function == spl.ScalarFunctionRTrim ||
+			expression.Function == spl.ScalarFunctionURLDecode ||
+			expression.Function == spl.ScalarFunctionMD5 ||
+			expression.Function == spl.ScalarFunctionSHA1 ||
+			expression.Function == spl.ScalarFunctionSHA256 ||
+			expression.Function == spl.ScalarFunctionSHA512 {
 			for _, argument := range expression.Arguments {
 				if splScalarMayReturnBooleanFunction(argument) {
 					return nil, &Diagnostic{
@@ -4252,6 +4361,72 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 					Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
 					Message: numericFunctionName + " cannot consume a Boolean result",
 					Range:   expression.Arguments[0].SourceRange(),
+				}
+			}
+		}
+		switch expression.Function {
+		case spl.ScalarFunctionAbs,
+			spl.ScalarFunctionSqrt,
+			spl.ScalarFunctionExp,
+			spl.ScalarFunctionLn,
+			spl.ScalarFunctionLog,
+			spl.ScalarFunctionPow:
+			// Math functions share the arithmetic operand model: Boolean and
+			// statically non-numeric operands are rejected before lowering so
+			// the diagnostic names the operand rather than the SQL shape.
+			for _, argument := range expression.Arguments {
+				if splScalarMayReturnBooleanFunction(argument) {
+					return nil, &Diagnostic{
+						Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+						Message: functionName + " cannot consume a Boolean result",
+						Range:   argument.SourceRange(),
+					}
+				}
+				if splScalarHasStaticallyUnsupportedArithmeticType(argument) {
+					return nil, &Diagnostic{
+						Code:    "SPL_UNSUPPORTED_ARITHMETIC_VALUE_TYPE",
+						Message: functionName + " cannot consume the statically known operand type",
+						Range:   splScalarExpressionRange(argument, expression.Range),
+					}
+				}
+			}
+		case spl.ScalarFunctionCIDRMatch:
+			if _, prefixRange, ok := splQuotedStringLiteral(
+				expression.Arguments[0],
+				expression.Range,
+			); !ok {
+				return nil, &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_CIDR_PREFIX",
+					Message: "cidrmatch prefix must be a quoted string literal",
+					Range:   prefixRange,
+				}
+			}
+			if err := validateSPLCIDRPrefix(expression.Arguments[0]); err != nil {
+				return nil, err
+			}
+			if splScalarMayReturnBooleanFunction(expression.Arguments[1]) {
+				return nil, &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+					Message: "cidrmatch cannot consume a Boolean result",
+					Range:   expression.Arguments[1].SourceRange(),
+				}
+			}
+		case spl.ScalarFunctionToString:
+			if len(expression.Arguments) == 2 {
+				if err := validateSPLToStringFormat(expression.Arguments[1], expression.Range); err != nil {
+					return nil, err
+				}
+			}
+		case spl.ScalarFunctionTrim,
+			spl.ScalarFunctionLTrim,
+			spl.ScalarFunctionRTrim:
+			if len(expression.Arguments) == 2 {
+				if err := validateSPLTrimCharacters(
+					functionName,
+					expression.Arguments[1],
+					expression.Range,
+				); err != nil {
+					return nil, err
 				}
 			}
 		}
@@ -4750,7 +4925,16 @@ func splScalarHasStaticallyUnsupportedArithmeticType(
 			spl.ScalarFunctionSubstring,
 			spl.ScalarFunctionToString,
 			spl.ScalarFunctionStrftime,
-			spl.ScalarFunctionConcat:
+			spl.ScalarFunctionConcat,
+			spl.ScalarFunctionTrim,
+			spl.ScalarFunctionLTrim,
+			spl.ScalarFunctionRTrim,
+			spl.ScalarFunctionURLDecode,
+			spl.ScalarFunctionMD5,
+			spl.ScalarFunctionSHA1,
+			spl.ScalarFunctionSHA256,
+			spl.ScalarFunctionSHA512,
+			spl.ScalarFunctionTypeOf:
 			return true
 		case spl.ScalarFunctionMVIndex:
 			return len(expression.Arguments) == 3
