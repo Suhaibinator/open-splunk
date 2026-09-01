@@ -249,7 +249,7 @@ collector_id          stable security identity
 .collector.lock       single-process lock
 wal/                  durable unacknowledged batches
 checkpoints/          per-file terminal positions
-dead-letter.jsonl     permanently rejected events
+dead-letter.jsonl     permanently rejected durable events
 dead-letter.jsonl.N   bounded rotated dead-letter backups
 ```
 
@@ -264,6 +264,12 @@ Dead letters contain sensitive full events and remain owner-only. Alert on
 growth, fix the token/index/schema/size cause, and use an explicitly reviewed
 external replay process if resubmission is appropriate. Removing a dead letter
 does not mean it was ingested.
+
+Decode and framing failures occur before WAL append and are not dead-lettered.
+Malformed NDJSON, invalid canonical values/timestamps, and oversized framed
+records are logged and counted as dropped before a later valid record can
+advance the checkpoint. See
+[Decode, framing, and recovery](collector-configuration.md#decode-framing-and-recovery).
 
 ## Restart, backup, and token rotation
 

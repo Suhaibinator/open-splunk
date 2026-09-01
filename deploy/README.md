@@ -8,6 +8,12 @@ migration container.
 Open Splunk always owns a dedicated database named `open_splunk`. Existing
 databases such as `logs` are not read, migrated, or modified.
 
+The supplied service publishes its plaintext HTTP listener on every host
+interface. This is also the HEC transport when HEC is enabled. Use
+`127.0.0.1:${OPEN_SPLUNK_DEPLOY_HTTP_PORT:-8080}:8080` as the port mapping for
+host-local access, or configure direct HTTP TLS/a controlled TLS reverse proxy
+before exposing the service to another network.
+
 ## Requirements
 
 - Docker with Compose v2;
@@ -334,6 +340,15 @@ connections to `open_splunk`. Later starts apply only pending migrations.
 
 If ClickHouse is not ready yet, the server exits without reporting readiness;
 the `restart: unless-stopped` policy retries startup.
+
+## Health and readiness
+
+`GET /healthz` checks only that the HTTP process can answer and returns
+`200 ok`. `GET /readyz` also checks runtime readiness and ClickHouse, returning
+`503 not ready` until dependencies are usable. Both are uncached plaintext
+responses. The supplied container healthcheck invokes the server's restricted
+loopback-only `healthcheck` subcommand against `/readyz`; use readiness, not
+liveness, for rollout and traffic admission.
 
 ## Startup errors
 

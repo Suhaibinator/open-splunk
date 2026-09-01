@@ -63,9 +63,11 @@ Run it with the same configuration, environment, user, state directory, and
 source mounts as the service, then verify a real connection by looking for
 `collector stream ready` and a fresh server-side collector heartbeat.
 
-The redacted summary currently shows whether TLS is enabled, the CA path, and
-the server name, but omits `server.tls.allow_insecure_remote`. Inspect the
-deployed YAML separately when auditing plaintext exceptions.
+The redacted summary never prints token contents. It does print paths, TLS
+metadata, matched-file counts, and configured input/static-field metadata, so
+treat it as deployment configuration rather than public support output. It
+omits `server.tls.allow_insecure_remote`; inspect the deployed YAML separately
+when auditing plaintext exceptions.
 
 ## Environment substitution
 
@@ -190,7 +192,7 @@ alphanumeric; later characters may also contain `.`, `_`, `:`, and `-`.
 | `source` | string | Input `id` | Source metadata, valid UTF-8 without control characters, at most 4,096 bytes. |
 | `sourcetype` | string | Input `format` | Sourcetype metadata, valid UTF-8 without control characters, at most 255 bytes. |
 | `host` | string | OS hostname | Host metadata, valid UTF-8 without control characters, at most 255 bytes. Set it explicitly for sidecars and containers. |
-| `fields` | string map | Empty | Trusted static metadata attached to every event. `service` populates canonical service metadata; other keys become dynamic string fields. At most 1,024 fields. |
+| `fields` | string map | Empty | Trusted static metadata attached to every event. `service` populates canonical service metadata; other keys become dynamic string fields. At most 1,024 fields. Names and values must be valid UTF-8, and their aggregate bytes for one input cannot exceed the maximum event size. All input registrations together must fit the collector-hello snapshot bound. |
 | `max_event_bytes` | byte size | `1MiB` | Maximum bytes in one framed event, excluding the final line delimiter. Zero selects the default; the hard maximum is 1 MiB. Oversized records are rejected rather than truncated into valid events. |
 | `poll_interval` | duration | `250ms` | File discovery and tailing cadence. Zero selects the default; a nonzero value must be at least 10 ms. |
 | `multiline` | mapping | Disabled | Enables multiline framing with the fields below. |
@@ -204,13 +206,29 @@ their checkpoints have advanced.
 
 | Field | Type | Default | Requirements and behavior |
 |---|---|---|---|
-| `line_start_pattern` | regular expression | Required | A physical line matching this Go regular expression starts a new logical event; following nonmatching lines continue it. |
+| `line_start_pattern` | regular expression | Required | A physical line matching this Go regular expression starts a new logical event; following nonmatching lines continue it. The pattern is limited to 16 KiB. |
 | `max_lines` | integer | `0` | Maximum physical lines in an event, from 0 through 1,048,576. Zero is unbounded until a new start line or `max_event_bytes`. |
 | `flush_after` | duration | `5s` | Flushes an incomplete event after reader inactivity. A nonzero value must be at least 10 ms. |
 
 Lines before the first matching start line form their own event. If a multiline
 event exceeds `max_event_bytes`, its continuation is discarded until the next
 matching start line.
+
+### Decode, framing, and recovery
+
+Decode and framing failures happen before WAL append. Malformed NDJSON,
+invalid canonical values or timestamps, and oversized framed records are
+logged and skipped; they are not written to `dead-letter.jsonl`. Later valid
+records can advance the source checkpoint beyond them, so collector state
+cannot recover those bytes after source retention removes them. The warning is
+`skipping undecodable record` with source coordinates, and heartbeat dropped-
+event counters include these records. Use `raw` for non-JSON or binary-shaped
+input and alert on the warning and counter.
+
+Dead-letter files instead contain durable batches that the server permanently
+rejects, plus locally oversized records that had already crossed the durable
+queue boundary. They are not a catch-all for every source record the collector
+could not decode.
 
 ## `processors` reference
 

@@ -11,10 +11,10 @@ the server over an authenticated bidirectional gRPC stream.
 
 | Component | Responsibility |
 | --- | --- |
-| `open-splunk-server` | HTTPS/API serving, browser assets, authentication, catalogs, search jobs, native and HEC admission, audit, recovery, and reconciliation |
+| `open-splunk-server` | HTTPS/API serving, browser assets, authentication, catalogs, search jobs, schedules, webhook alerts, native and HEC admission, audit, recovery, and reconciliation |
 | `open-splunk-collector` | file discovery and tailing, canonical event construction, WAL/checkpoints, retry, pacing, and dead letters |
 | Browser application | same-origin administration, search, analytics, and dashboard UI using generated protobuf codecs |
-| SQLite | indexes, apps, tokens, collectors, saved searches, dashboards, jobs/history, knowledge, lookup metadata, audit journals, quotas, visibility reservations, outbox, and recovery authority |
+| SQLite | indexes, apps, tokens, collectors, server settings, saved and scheduled searches, alerts, dashboards, jobs/history, knowledge, lookup metadata, audit journals, quotas, visibility reservations, outbox, and recovery authority |
 | ClickHouse | immutable event rows, expiration metadata, field metadata, and bounded SPL query execution |
 
 The Next.js application is statically exported and embedded in the Go server.
@@ -65,6 +65,15 @@ Search follows this sequence:
    the retained job authority. A history rerun is new admission under current
    authorization and current knowledge; historical metadata is provenance only.
 
+Scheduled reports and alerts reuse that admission path. A scheduler persists
+each occurrence claim and snapshots the saved definition, schedule period, and
+retention policy before launching a job. Report runs retain result authority;
+sharing is permitted only after a complete, unexpired artifact exists. An alert
+evaluates only an exact result (or a provable lower-bound condition), extends
+the job retention before delivery, and signs one bounded HTTPS webhook attempt.
+Schedules, sharing, alert state, encrypted destinations, signing-key
+generations, run history, and feature-operation audit records remain in SQLite.
+
 ## Persistence boundary
 
 Database migration numbers, entity revisions, catalog revisions, and private
@@ -83,9 +92,12 @@ backup to one generation so restore cannot mix branches.
 
 ## Security and bounded execution
 
-- Secrets are accepted only at their transport boundary, removed before normal
-  handling, returned only when a token is created, and never written to audit,
-  metrics, cursors, snapshots, or event provenance.
+- Secrets are accepted only at their transport boundary and removed before
+  normal handling. One-time plaintexts are returned only by the operation that
+  creates or rotates them, including ingestion tokens, alert signing keys, and
+  short-lived export grants. Alert endpoints and signing keys are encrypted at
+  rest. Secrets are never written to audit, metrics, cursors, snapshots, or
+  event provenance.
 - Audited control-plane mutation families use optimistic concurrency and commit
   their success audit record in the same SQLite transaction.
 - Unknown or malformed persisted authority fails startup or the protected

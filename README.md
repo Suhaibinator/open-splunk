@@ -102,8 +102,9 @@ make build
 plugin versions; generated files are never edited manually.
 
 `make build` exports the backend-mode UI, generates/verifies the embedded asset
-manifest, and links one build identity into server, collector, and log
-generator. The resulting development binary still requires an existing
+manifest, and links one build identity into the server and collector. Build the
+test/benchmark log generator separately with `make build-loggen`. The resulting
+development server still requires an existing
 ClickHouse with the single account described in
 [`deploy/README.md`](deploy/README.md). Its relevant flags are shown by
 `./build/open-splunk-server -help`. Direct `go build` is only a compile check.
@@ -148,9 +149,10 @@ service, follow [Deployment](deploy/README.md).
 
 The backend includes protobuf HTTP, authenticated native gRPC ingestion, the
 optional HEC facade, collector WAL/tailing, SQLite control plane, ClickHouse
-event storage, bounded jobs/exports, saved searches and dashboards, field
-knowledge, immutable CSV lookups, auditing, and the cumulative authored SPL
-profile documented in [SPL](docs/spl.md).
+event storage, bounded jobs/exports, durable result sharing, saved and scheduled
+searches, webhook alerts, dashboards, field knowledge, immutable CSV lookups,
+auditing, and the cumulative authored SPL profile documented in
+[SPL](docs/spl.md).
 
 The v0 contract supports persisted state only with the same exact release or
 source revision. Retaining data across arbitrary versions or source revisions
@@ -171,10 +173,12 @@ down rather than implied by module order or by the bundler. Every rule is plain
 CSS with feature-prefixed, kebab-case class names — there are no CSS modules
 and no second way to scope a rule.
 
-Colour, spacing, radius, type, stacking, elevation and motion are named by
-tokens in `app/styles/tokens-color.css` and `app/styles/tokens-scale.css`, and
-only those two files are meant to carry a literal. **Recolouring the product is
-an edit to the token files, not a search across the rules.**
+Colour, typography, scale radii, page stacking, complete shadows, and motion are
+named by tokens in `app/styles/tokens-color.css` and
+`app/styles/tokens-scale.css`. A checked exception ledger records the few
+intentional component literals used for circular radii, composed shadow parts,
+and local stacking. **Recolouring the product is an edit to the token files, not
+a search across the rules.**
 
 Three gates keep that true, because almost none of it is visible to a compiler:
 `npm run test:frontend` runs the structural invariants in
@@ -214,8 +218,9 @@ slow-client gates.
 Start with the [documentation index](docs/README.md). Topic-specific references
 are grouped below:
 
-- Core contracts: [Architecture](docs/architecture.md), [API](docs/api.md), and
-  [SPL](docs/spl.md).
+- Core contracts: [Architecture](docs/architecture.md), [API](docs/api.md),
+  [SPL](docs/spl.md), and
+  [search sharing, schedules, and alerts](docs/search-sharing-alerts.md).
 - Data and ingestion: [Knowledge and lookups](docs/knowledge.md),
   [native ingestion](docs/ingestion.md),
   [collector configuration](docs/collector-configuration.md),

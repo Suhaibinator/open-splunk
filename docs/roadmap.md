@@ -58,7 +58,9 @@ checkpoints, and migration history are not retained here.
 
 - Multi-user RBAC, role grants, cross-app permissions, and current-policy
   disclosure checks throughout the browser and retained-product surfaces.
-- Authentication/search/export activity families and external audit archival.
+- Authentication activity, export activity, terminal search outcomes, and
+  external audit archival. Search admission attempts already have a durable
+  bounded journal.
 - Secret rotation and workload identity integrations beyond local bearer-token
   administration.
 - Add client-generated ingestion-token IDs as the exact create fence. The

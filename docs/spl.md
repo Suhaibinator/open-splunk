@@ -44,6 +44,28 @@ query-memory, scan, duration, row, and result-byte budgets apply independently.
 Crossing a source-derived structural limit reports `SPL_QUERY_TOO_COMPLEX`;
 data-derived hard-limit failures are atomic and redact backend details.
 
+The default server admission policy is intentionally finite:
+
+| Resource | Default |
+| --- | ---: |
+| Job runtime | 2 minutes |
+| Query memory | 1 GiB |
+| Scanned rows | 250 million |
+| Scanned bytes | 64 GiB |
+| Grouped rows | 10,001 |
+| Query threads | 4 |
+| Retained rows per job | 10,000 |
+| Retained bytes per job | 64 MiB |
+| Retained bytes across jobs | 512 MiB |
+| Concurrent jobs | 4 |
+| Manual result retention | 10 minutes |
+
+Administrators can inspect and update the policy through Server settings. A
+newly admitted job captures the current policy; changing settings does not
+rewrite the limits already attached to a running or retained job. The API
+validates the current supported ranges, so clients should use the returned
+settings rather than assuming these defaults are permanent.
+
 The semantic rule inventory is:
 
 | Rule | Contract |

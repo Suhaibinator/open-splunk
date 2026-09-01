@@ -13,17 +13,26 @@ tables are not wire contracts.
 
 Every route in this table is `POST` beneath `/api` and uses
 `application/x-protobuf` for successful request and response bodies. Non-2xx
-responses use the bounded SRouter/go-common error shape. Unknown `/api/`
-paths are API 404s and never fall through to the static application.
+responses are JSON with `Content-Type: application/json` and the bounded shape
+`{"error":{"message":"..."}}`; responses carry `Cache-Control: no-store`.
+Unknown `/api/` paths are API 404s and never fall through to the static
+application.
+
+Within a table row, an abbreviated path such as `/get` inherits the family
+prefix from the first path in that row. Paths that repeat `/search` or another
+family prefix are already complete relative to `/api`.
 
 | Family | Relative paths |
 | --- | --- |
 | System | `/system/bootstrap` |
-| Search jobs | `/search/jobs/create`, `/get`, `/list`, `/results`, `/fields/list`, `/field-summary`, `/timeline`, `/cancel`, `/inspect` |
-| Search tools | `/search/validate`, `/search/suggestions` |
+| Server settings | `/server/settings/get`, `/update` |
+| Search jobs | `/search/jobs/create`, `/get`, `/list`, `/results`, `/fields/list`, `/field-summary`, `/timeline`, `/cancel`, `/share`, `/inspect` |
+| Search tools | `/search/validate`, `/search/suggestions`, `/search/jobs/settings/get`, `/search/jobs/settings/update` |
 | History | `/search/history/get`, `/list`, `/delete`, `/clear` |
 | Exports | `/search/exports/create`, `/get`, `/list`, `/cancel` |
-| Saved searches | `/saved-searches/create`, `/get`, `/list`, `/update`, `/duplicate`, `/delete` |
+| Saved searches | `/saved-searches/create`, `/get`, `/list`, `/update`, `/duplicate`, `/delete`, `/schedule/set`, `/run`, `/runs/list` |
+| Schedule tools | `/schedules/validate` |
+| Alerts | `/alerts/create`, `/get`, `/list`, `/update`, `/state/set`, `/delete`, `/run`, `/webhook/test`, `/secret/rotate`, `/runs/list` |
 | Dashboards | `/dashboards/create`, `/get`, `/list`, `/update`, `/delete`, `/panels/run` |
 | Indexes | `/indexes/create`, `/get`, `/list`, `/update`, `/state/set`, `/delete`, `/stats/get`, `/fields/list` |
 | Apps | `/apps/create`, `/get`, `/list`, `/update`, `/state/set`, `/delete` |
@@ -33,6 +42,14 @@ paths are API 404s and never fall through to the static application.
 | Lookups | `/knowledge/lookups/create`, `/get`, `/list`, `/replace`, `/state/set`, `/delete`, `/preview` |
 | Audit | `/audit/events/list`, `/audit/search-attempts/list` |
 | HEC administration | `/hec/operations/get` |
+
+Administrative families require `Authorization: Bearer <administrator-token>`.
+They include apps, indexes, collectors, ingestion tokens, knowledge and lookup
+management, audit, HEC operations, server settings, search inspection, and
+alerts. Missing or invalid credentials return 401 with
+`WWW-Authenticate: Bearer realm="open-splunk-admin"`. Browser search, saved
+search, dashboard, history, and export routes use the fixed trusted single-user
+scope advertised by bootstrap; request fields are not an authority boundary.
 
 Bootstrap is the capability authority. It reports build identity, including the
 product version when present, the source revision, and the capabilities
@@ -92,6 +109,17 @@ bearer grant are returned by the export API. The token belongs in the
 `Authorization` header, never a query string.
 
 HEC is bounded JSON rather than protobuf and is documented in [HEC](hec.md).
+
+## Process probes
+
+`GET /healthz` is process liveness. It returns `200`, `text/plain`, and `ok\n`
+while the HTTP process can serve requests. `GET /readyz` also checks runtime
+readiness, including ClickHouse reachability; it returns the same success body
+or `503` with `not ready\n`. Both responses are `Cache-Control: no-store`.
+
+The `open-splunk-server healthcheck` subcommand accepts only a strict loopback
+IP URL whose path is exactly `/healthz` or `/readyz`; the supplied Compose
+healthcheck uses `/readyz`.
 
 ## Development rules
 
