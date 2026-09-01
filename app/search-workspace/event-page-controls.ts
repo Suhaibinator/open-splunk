@@ -56,11 +56,11 @@ export function planResultPageWalk(
   requestedPage: number,
   reachableCeiling: number,
   maximumWalk: number,
-): { startPage: number; targetPage: number; capped: boolean } {
+): { startPage: number; targetPage: number } {
   const requested = Math.max(1, requestedPage);
   const startPage = Math.max(1, Math.min(requested, reachableCeiling));
   const targetPage = Math.min(requested, startPage + Math.max(0, maximumWalk));
-  return { startPage, targetPage, capped: targetPage < requested };
+  return { startPage, targetPage };
 }
 
 export const BASE_EVENT_PAGE_SIZES = [10, 20, 50, 100, 500] as const;

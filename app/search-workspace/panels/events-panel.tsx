@@ -236,7 +236,7 @@ export function EventsPanel({
     ) {
       showToast(
         backendHasNextPage
-          ? "Choose a page of 1 or more."
+          ? "Choose a whole page number of 1 or more."
           : `Choose a page from 1 to ${NUMBER_FORMAT.format(pageCount)}.`,
         "warning",
       );
