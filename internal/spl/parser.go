@@ -4635,6 +4635,10 @@ func (p *parser) parseDedupCommand(name token) (Command, error) {
 	return command, nil
 }
 
+// parseLimitCommand accepts the positional count form and the labeled
+// limit=N form; both are the same bounded row selection. The predicate
+// form and the keeplast/null options remain unsupported because they need
+// a per-row eval guard rather than a fixed count.
 func (p *parser) parseLimitCommand(name string, nameToken token) (Command, error) {
 	count := uint64(10)
 	end := nameToken.sourceRange.End
@@ -4642,6 +4646,17 @@ func (p *parser) parseLimitCommand(name string, nameToken token) (Command, error
 		tok := p.current()
 		if tok.kind != tokenWord {
 			return nil, p.errorAtCurrent("SPL_INVALID_ARGUMENT", fmt.Sprintf("%s count must be a positive integer", name))
+		}
+		if p.nextIs(tokenEqual) {
+			if !strings.EqualFold(tok.text, "limit") {
+				return nil, p.errorAtCurrent("SPL_UNSUPPORTED_ARGUMENT", fmt.Sprintf("unsupported %s argument %q", name, tok.text))
+			}
+			p.advance()
+			p.advance()
+			tok = p.current()
+			if tok.kind != tokenWord {
+				return nil, p.errorAtCurrent("SPL_INVALID_ARGUMENT", fmt.Sprintf("%s limit must be a positive integer", name))
+			}
 		}
 		parsed, err := strconv.ParseUint(tok.text, 10, 64)
 		if err != nil || parsed == 0 {

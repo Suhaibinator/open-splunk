@@ -503,6 +503,25 @@
       }
     },
     {
+      "id": "head.limit-option",
+      "command": "head",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/head",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "head limit=20",
+        "verified_on": "2026-09-01"
+      },
+      "query": "index=main | head limit=20",
+      "expect": {
+        "commands": ["head"],
+        "facets": {
+          "count": "20"
+        }
+      }
+    },
+    {
       "id": "tail.count",
       "command": "tail",
       "source": {

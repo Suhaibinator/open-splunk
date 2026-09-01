@@ -103,6 +103,67 @@ func TestParseProjectionSortAndLimits(t *testing.T) {
 	}
 }
 
+func TestParseLimitCommandsAcceptLabeledLimit(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		source string
+		name   string
+		count  uint64
+		end    int
+	}{
+		{source: `index=main | head limit=20`, name: "head", count: 20, end: 26},
+		{source: `index=main | head LIMIT=1`, name: "head", count: 1, end: 25},
+		{source: `index=main | tail limit=7`, name: "tail", count: 7, end: 25},
+		{source: `index=main | tail`, name: "tail", count: 10, end: 17},
+	}
+	for _, test := range tests {
+		t.Run(test.source, func(t *testing.T) {
+			t.Parallel()
+			query, err := Parse(test.source)
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			command, ok := query.Commands[0].(*LimitCommand)
+			if !ok || command.Name() != test.name || command.Count != test.count {
+				t.Fatalf("command = %#v, want %s %d", query.Commands[0], test.name, test.count)
+			}
+			if command.Range.Start.Offset != 13 || command.Range.End.Offset != test.end {
+				t.Fatalf("range = %#v, want 13..%d", command.Range, test.end)
+			}
+		})
+	}
+}
+
+func TestParseLimitCommandsRejectPredicatesAndOptions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		source string
+		code   string
+	}{
+		{source: `index=main | head limit=0`, code: "SPL_INVALID_ARGUMENT"},
+		{source: `index=main | head limit=-1`, code: "SPL_INVALID_ARGUMENT"},
+		{source: `index=main | head limit=`, code: "SPL_INVALID_ARGUMENT"},
+		{source: `index=main | head limit="5"`, code: "SPL_INVALID_ARGUMENT"},
+		{source: `index=main | tail limit=5.5`, code: "SPL_INVALID_ARGUMENT"},
+		{source: `index=main | head 5 limit=5`, code: "SPL_UNSUPPORTED_ARGUMENT"},
+		{source: `index=main | head limit=5 5`, code: "SPL_UNSUPPORTED_ARGUMENT"},
+		{source: `index=main | head limit=5 keeplast=true`, code: "SPL_UNSUPPORTED_ARGUMENT"},
+		{source: `index=main | head keeplast=true`, code: "SPL_UNSUPPORTED_ARGUMENT"},
+		{source: `index=main | head null=true limit=5`, code: "SPL_UNSUPPORTED_ARGUMENT"},
+		{source: `index=main | head status=200`, code: "SPL_UNSUPPORTED_ARGUMENT"},
+		{source: `index=main | head status>200`, code: "SPL_INVALID_ARGUMENT"},
+		{source: `index=main | head (status=200)`, code: "SPL_INVALID_ARGUMENT"},
+	}
+	for _, test := range tests {
+		t.Run(test.source, func(t *testing.T) {
+			t.Parallel()
+			assertParseDiagnosticCode(t, test.source, test.code)
+		})
+	}
+}
+
 func TestParseSortSupportsOfficialSpacedDirectionPrefixes(t *testing.T) {
 	t.Parallel()
 

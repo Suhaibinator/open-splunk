@@ -250,7 +250,7 @@ The cumulative command surface is:
 | `rename` | exact source/destination pairs |
 | `sort` | bounded exact typed keys, labeled or positional limits, and terminal reversal (`SPL-SORT-001`) |
 | `dedup` | global first-N retention by exact key tuple |
-| `head`, `tail` | bounded row selection; `tail` publishes reversed selection order |
+| `head`, `tail` | bounded row selection by positional count or `limit=N`; `tail` publishes reversed selection order |
 | `stats` | bounded transforming aggregation and grouping |
 | `eventstats` | bounded row-preserving aggregate attachment |
 | `streamstats` | bounded ordered running aggregates |
