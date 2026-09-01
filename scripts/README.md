@@ -21,8 +21,11 @@ otherwise.
 | `make release` | Reproduce versionless archives from one clean committed source revision. |
 | `make oci` | Reproduce local server and collector images from one clean committed source revision. |
 
-`make clean` currently delegates only to `go clean`; it does not remove
-`build/`, `out/`, generated protobufs, caches, or development data.
+`make clean` runs `go clean`, removes repository build/UI/test outputs
+(`build/`, `.next/`, `out/`, `test-results/`, and `coverage.out`) and local tool
+caches (`.cache/` and `node_modules/.cache/`), then restores the tracked
+`out/.gitkeep` export placeholder. It preserves dependencies, generated
+protobufs, and development data.
 
 `npm run test:frontend` is a hardcoded runner. A new `*.test.ts(x)` or
 `scripts/*.test.mjs` file does not run until it is added to

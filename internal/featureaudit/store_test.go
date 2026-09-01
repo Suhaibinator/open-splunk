@@ -104,6 +104,68 @@ func TestStorePersistsImmutableEventsAcrossRestart(t *testing.T) {
 	}
 }
 
+func TestFeatureAuditRollsOldestEventAtRetentionLimit(t *testing.T) {
+	ctx := t.Context()
+	database, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	if _, err := database.SQLDB().ExecContext(ctx, `
+		INSERT INTO feature_operation_audit_tenant_state (
+			tenant_id, first_sequence, next_sequence, retained_count,
+			last_occurred_at_unix_micro
+		) VALUES ('tenant-roll', 1, 1, 0, NULL);
+		WITH RECURSIVE sequence(value) AS (
+			VALUES (1)
+			UNION ALL
+			SELECT value + 1 FROM sequence WHERE value < 100001
+		)
+		INSERT INTO feature_operation_audit_events (
+			tenant_id, sequence, occurred_at_unix_micro,
+			feature, operation, outcome, items, bytes
+		)
+		SELECT 'tenant-roll', value, value, 3, 14, 1, 0, 0
+		FROM sequence;
+	`); err != nil {
+		t.Fatalf("seed rolling retention boundary: %v", err)
+	}
+	var first, next, retained, minimum, maximum int64
+	if err := database.SQLDB().QueryRowContext(ctx, `
+		SELECT state.first_sequence, state.next_sequence, state.retained_count,
+			MIN(event.sequence), MAX(event.sequence)
+		FROM feature_operation_audit_tenant_state AS state
+		JOIN feature_operation_audit_events AS event
+		  ON event.tenant_id = state.tenant_id
+		WHERE state.tenant_id = 'tenant-roll'
+	`).Scan(&first, &next, &retained, &minimum, &maximum); err != nil {
+		t.Fatal(err)
+	}
+	if first != 2 || next != 100002 || retained != MaximumEventsPerTenant ||
+		minimum != 2 || maximum != 100001 {
+		t.Fatalf(
+			"rolling state = first:%d next:%d retained:%d range:%d-%d",
+			first, next, retained, minimum, maximum,
+		)
+	}
+	store, err := New(ctx, database, Options{
+		TenantID: "tenant-roll",
+		Clock: fixedClock{
+			now: time.UnixMicro(100002).UTC(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("reopen rolled store: %v", err)
+	}
+	record, err := store.Append(ctx, featureops.Event{
+		Feature: featureops.FeatureAlerts, Operation: featureops.OperationDelivery,
+		Outcome: featureops.OutcomeSucceeded,
+	})
+	if err != nil || record.Sequence != 100002 {
+		t.Fatalf("append after roll = (%#v, %v)", record, err)
+	}
+}
+
 func TestStoreInitializesTenantStateOnceOnFirstCommittedEvent(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()

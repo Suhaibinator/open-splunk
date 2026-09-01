@@ -206,5 +206,10 @@ func allKnownAuditActions() []Action {
 		ActionKnowledgeObjectDisable,
 		ActionKnowledgeObjectDelete,
 		ActionServerSettingsUpdate,
+		ActionLookupCreate,
+		ActionLookupReplace,
+		ActionLookupEnable,
+		ActionLookupDisable,
+		ActionLookupDelete,
 	}
 }

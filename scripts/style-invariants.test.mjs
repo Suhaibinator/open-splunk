@@ -1498,11 +1498,12 @@ const MODAL_MODULE = "app/_components/modal";
  * The namespaces the colocated feature stylesheets own.
  *
  * One prefix per file under `app/` that is not the shared layer. They are
- * listed rather than derived because the list is the claim: a sixth feature
+ * listed rather than derived because the list is the claim: another feature
  * stylesheet has to be added here for its classes to be checked at all, and
  * that is a deliberate one-line edit rather than something a glob does quietly.
  */
 const FEATURE_PREFIXES = [
+  "alerts-",
   "analytics-",
   "operations-",
   "reports-",

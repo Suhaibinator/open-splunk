@@ -36,11 +36,16 @@ type runtimeKnowledgeManagement struct {
 	lookupResolver   *runtimeLookupSearchResolver
 }
 
+type knowledgeAuditAppender interface {
+	audit.TransactionAppender
+	lookupcatalog.MutationAuditAppender
+}
+
 func newRuntimeKnowledgeManagement(
 	ctx context.Context,
 	database *control.DB,
 	masterKeyPath string,
-	auditAppender audit.TransactionAppender,
+	auditAppender knowledgeAuditAppender,
 ) (runtimeKnowledgeManagement, error) {
 	if ctx == nil || database == nil || database.GORMDB() == nil ||
 		database.SQLDB() == nil || nilcheck.IsNil(auditAppender) {
@@ -119,7 +124,7 @@ func newRuntimeKnowledgeManagement(
 	lookupCatalog, err := lookupcatalog.New(
 		database,
 		lookupAssets,
-		lookupcatalog.Options{},
+		lookupcatalog.Options{AuditAppender: auditAppender},
 	)
 	if err != nil {
 		return runtimeKnowledgeManagement{}, fmt.Errorf(

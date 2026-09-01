@@ -285,11 +285,9 @@ described in full under
 - **Responsive ownership, one-of-each-primitive, and reachability** — every
   rule still has a caller, in every global stylesheet. The other
   direction is narrower: a class the markup asks for is checked against the
-  stylesheets only when it carries one of the five registered feature prefixes
-  (`analytics-`, `operations-`, `reports-`, `visualization-`,
-  `workspace-dialog-`). The newer `alerts-` namespace is not yet registered, so
-  reverse markup-to-CSS coverage does not currently report an undefined alert
-  class. [Theming](../docs/theming.md#guardrails-what-holds-this-in-place)
+  stylesheets only when it carries one of the six registered feature prefixes
+  (`alerts-`, `analytics-`, `operations-`, `reports-`, `visualization-`,
+  `workspace-dialog-`). [Theming](../docs/theming.md#guardrails-what-holds-this-in-place)
   explains the required registration rule.
 - **The parsers underneath**, pinned against the shapes that have already
   fooled a simpler implementation.

@@ -51,12 +51,13 @@ type fileDeadLetterSink struct {
 // deadLetterLine is the on-disk JSON shape. Event holds the protojson-encoded
 // LogEvent as a raw message so it is not re-encoded by encoding/json.
 type deadLetterLine struct {
-	BatchID       string          `json:"batch_id"`
-	BatchSequence uint64          `json:"batch_sequence"`
-	Code          string          `json:"code"`
-	Reason        string          `json:"reason,omitempty"`
-	RejectedAt    time.Time       `json:"rejected_at"`
-	Event         json.RawMessage `json:"event,omitempty"`
+	BatchID       string                `json:"batch_id"`
+	BatchSequence uint64                `json:"batch_sequence"`
+	Code          string                `json:"code"`
+	Reason        string                `json:"reason,omitempty"`
+	RejectedAt    time.Time             `json:"rejected_at"`
+	Event         json.RawMessage       `json:"event,omitempty"`
+	SourceRecord  *RejectedSourceRecord `json:"source_record,omitempty"`
 }
 
 // NewFileDeadLetterSink opens or creates an unbounded JSONL dead-letter file at
@@ -245,6 +246,7 @@ func encodeDeadLetterRecord(record DeadLetterRecord) ([]byte, error) {
 		Code:          record.Code,
 		Reason:        record.Reason,
 		RejectedAt:    record.RejectedAt.UTC(),
+		SourceRecord:  record.SourceRecord,
 	}
 	if record.Event != nil {
 		encoded, err := (protojson.MarshalOptions{}).Marshal(record.Event)

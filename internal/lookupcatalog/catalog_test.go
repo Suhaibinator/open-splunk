@@ -26,6 +26,52 @@ type observingRepository struct {
 	signaled        atomic.Bool
 }
 
+type failingLookupAuditAppender struct{ err error }
+
+func (appender failingLookupAuditAppender) AppendLookupMutationInTransaction(
+	context.Context,
+	MutationTransaction,
+	string,
+	MutationAuditEvent,
+) error {
+	return appender.err
+}
+
+func TestCatalogAuditFailureRollsBackLookupMutation(t *testing.T) {
+	database, assets, appIDs := newCatalogHarness(t)
+	asset := publishCatalogAsset(t, assets, "service_id,owner\napi,alice\n")
+	auditErr := errors.New("audit unavailable")
+	catalog, err := New(database, assets, Options{
+		IDGenerator:   func() (string, error) { return "lookup-rollback", nil },
+		AuditAppender: failingLookupAuditAppender{err: auditErr},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalog.Create(t.Context(), CreateRequest{
+		TenantID: "tenant-lookups", OwnerID: "owner-lookups",
+		Definition: catalogDefinition(
+			appIDs[0], "rollback", opensplunk.SharingScope_SHARING_SCOPE_APP, false,
+		),
+		Asset: asset,
+	}); !errors.Is(err, auditErr) {
+		t.Fatalf("Create() error = %v, want audit failure", err)
+	}
+	var definitions, versions int
+	if err := database.SQLDB().QueryRowContext(t.Context(), `
+		SELECT
+			(SELECT count(*) FROM knowledge_lookup_definitions
+			 WHERE tenant_id = 'tenant-lookups'),
+			(SELECT count(*) FROM knowledge_lookup_definition_versions
+			 WHERE tenant_id = 'tenant-lookups')
+	`).Scan(&definitions, &versions); err != nil {
+		t.Fatal(err)
+	}
+	if definitions != 0 || versions != 0 {
+		t.Fatalf("rolled-back lookup rows = definitions:%d versions:%d", definitions, versions)
+	}
+}
+
 func (repository *observingRepository) GetVersion(
 	ctx context.Context,
 	ref lookupasset.VersionRef,

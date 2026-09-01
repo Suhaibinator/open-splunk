@@ -36,37 +36,40 @@ func validateStartupIntegrity(ctx context.Context, database *sql.DB) error {
 		SELECT EXISTS (
 			SELECT 1
 			FROM feature_operation_audit_tenant_state AS state
-			WHERE state.event_count <> (
+			WHERE state.retained_count <> (
 				SELECT COUNT(*)
 				FROM feature_operation_audit_events AS event
 				WHERE event.tenant_id = state.tenant_id
 			)
 			OR (
-				state.event_count = 0
+				state.retained_count = 0
 				AND (
+					state.first_sequence <> 1
+					OR
 					state.next_sequence <> 1
 					OR state.last_occurred_at_unix_micro IS NOT NULL
 				)
 			)
 			OR (
-				state.event_count > 0
+				state.retained_count > 0
 				AND (
-					state.next_sequence <> state.event_count + 1
+					state.next_sequence - state.first_sequence
+						<> state.retained_count
 					OR (
 						SELECT MIN(event.sequence)
 						FROM feature_operation_audit_events AS event
 						WHERE event.tenant_id = state.tenant_id
-					) <> 1
+					) <> state.first_sequence
 					OR (
 						SELECT MAX(event.sequence)
 						FROM feature_operation_audit_events AS event
 						WHERE event.tenant_id = state.tenant_id
-					) <> state.event_count
+					) <> state.next_sequence - 1
 					OR state.last_occurred_at_unix_micro <> (
 						SELECT event.occurred_at_unix_micro
 						FROM feature_operation_audit_events AS event
 						WHERE event.tenant_id = state.tenant_id
-						  AND event.sequence = state.event_count
+						  AND event.sequence = state.next_sequence - 1
 					)
 				)
 			)
@@ -86,7 +89,7 @@ func validateStartupIntegrity(ctx context.Context, database *sql.DB) error {
 			   OR event.items < 0
 			   OR event.bytes < 0
 			   OR (
-					event.sequence > 1
+					event.sequence > state.first_sequence
 					AND (
 						previous.sequence IS NULL
 						OR event.occurred_at_unix_micro

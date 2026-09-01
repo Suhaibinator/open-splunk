@@ -233,3 +233,6 @@ test: docs-check lint
 
 clean:
 	$(GO_TOOL_ENV) go clean
+	rm -rf -- build .cache .next node_modules/.cache out test-results coverage.out
+	mkdir -p out
+	touch out/.gitkeep

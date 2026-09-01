@@ -121,6 +121,12 @@ const mutationActionContracts: ReadonlyArray<readonly [
   [AuditAction.AUDIT_ACTION_KNOWLEDGE_OBJECT_ENABLE, AuditTargetKind.AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT, 2n],
   [AuditAction.AUDIT_ACTION_KNOWLEDGE_OBJECT_DISABLE, AuditTargetKind.AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT, 2n],
   [AuditAction.AUDIT_ACTION_KNOWLEDGE_OBJECT_DELETE, AuditTargetKind.AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT, 2n],
+  [AuditAction.AUDIT_ACTION_SERVER_SETTINGS_UPDATE, AuditTargetKind.AUDIT_TARGET_KIND_SERVER_SETTINGS, 1n],
+  [AuditAction.AUDIT_ACTION_LOOKUP_CREATE, AuditTargetKind.AUDIT_TARGET_KIND_LOOKUP, 1n],
+  [AuditAction.AUDIT_ACTION_LOOKUP_REPLACE, AuditTargetKind.AUDIT_TARGET_KIND_LOOKUP, 2n],
+  [AuditAction.AUDIT_ACTION_LOOKUP_ENABLE, AuditTargetKind.AUDIT_TARGET_KIND_LOOKUP, 2n],
+  [AuditAction.AUDIT_ACTION_LOOKUP_DISABLE, AuditTargetKind.AUDIT_TARGET_KIND_LOOKUP, 2n],
+  [AuditAction.AUDIT_ACTION_LOOKUP_DELETE, AuditTargetKind.AUDIT_TARGET_KIND_LOOKUP, 2n],
 ];
 
 function eventForContract(
@@ -163,7 +169,7 @@ test("mutation audit requests preserve exact filters and opaque pagination", () 
 });
 
 test("mutation audit exposes the complete ordered taxonomy without correlating independent filters", () => {
-  assert.equal(mutationAuditActionOptions.length, 24);
+  assert.equal(mutationAuditActionOptions.length, 30);
   assert.deepEqual(
     mutationAuditActionOptions.map((option) => option.value),
     mutationActionContracts.map(([action]) => action),
@@ -171,17 +177,17 @@ test("mutation audit exposes the complete ordered taxonomy without correlating i
   assert.deepEqual(
     mutationAuditActionOptions.slice(-6).map((option) => option.label),
     [
-      "Knowledge object · create",
-      "Knowledge object · update",
-      "Knowledge object · scope change",
-      "Knowledge object · enable",
-      "Knowledge object · disable",
-      "Knowledge object · delete",
+      "Server settings · update",
+      "Lookup · create",
+      "Lookup · replace",
+      "Lookup · enable",
+      "Lookup · disable",
+      "Lookup · delete",
     ],
   );
   assert.deepEqual(mutationAuditTargetOptions.at(-1), {
-    value: AuditTargetKind.AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT,
-    label: "Knowledge object",
+    value: AuditTargetKind.AUDIT_TARGET_KIND_LOOKUP,
+    label: "Lookup",
   });
 
   assert.deepEqual(buildMutationAuditRequest({
@@ -201,12 +207,12 @@ test("mutation adapter accepts every exact action-target contract and returns a 
   const firstSourceDate = sourceEvents[0]!.occurredAt!;
   Object.assign(sourceEvents[0]!, { arbitraryPayload: "must not cross the adapter" });
   const result = await listMutationAuditEvents(
-    mutationClient(sourceEvents, { totalSize: 24n, totalSizeExact: true }),
+    mutationClient(sourceEvents, { totalSize: 30n, totalSizeExact: true }),
     { actions: [] },
-    { pageSize: 24 },
+    { pageSize: 30 },
   );
 
-  assert.equal(result.items.length, 24);
+  assert.equal(result.items.length, 30);
   assert.notEqual(result.items[0], sourceEvents[0]);
   assert.notEqual(result.items[0]!.occurredAt, firstSourceDate);
   assert.doesNotMatch(JSON.stringify(Object.keys(result.items[0]!).toSorted()), /arbitraryPayload/);
@@ -253,13 +259,15 @@ test("mutation adapter enforces every action version boundary", async () => {
     AuditAction.AUDIT_ACTION_SAVED_SEARCH_CREATE,
     AuditAction.AUDIT_ACTION_SAVED_SEARCH_DUPLICATE,
     AuditAction.AUDIT_ACTION_KNOWLEDGE_OBJECT_CREATE,
+    AuditAction.AUDIT_ACTION_LOOKUP_CREATE,
   ]);
   await Promise.all(mutationActionContracts.map(async ([action, targetKind]) => {
     const invalidVersion = exactOne.has(action)
       ? 2n
       : action === AuditAction.AUDIT_ACTION_INDEX_DELETE_DATA
         ? 2n
-        : action === AuditAction.AUDIT_ACTION_SAVED_SEARCH_DELETE
+        : action === AuditAction.AUDIT_ACTION_SAVED_SEARCH_DELETE ||
+            action === AuditAction.AUDIT_ACTION_SERVER_SETTINGS_UPDATE
           ? 0n
           : 1n;
     await assert.rejects(

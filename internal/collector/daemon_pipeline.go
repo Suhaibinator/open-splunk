@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"go.uber.org/zap"
@@ -112,14 +113,27 @@ func (b *pendingBatch) split() (*pendingBatch, *pendingBatch) {
 // readInput consumes one input's RawEvents, decoding and processing each and
 // forwarding survivors to the batcher. It returns when the input's Events
 // channel closes (its Manager stopped) or ctx is canceled. Decode failures and
-// policy drops are handled here, never propagated as fatal.
-func (d *Daemon) readInput(ctx context.Context, ir *inputRuntime, processed chan<- processedEvent) {
+// policy drops are handled here. A failed durable recovery write is fatal so a
+// source record can never be skipped without an artifact.
+func (d *Daemon) readInput(
+	ctx context.Context,
+	ir *inputRuntime,
+	processed chan<- processedEvent,
+) error {
 	for raw := range ir.manager.Events() {
 		if raw.IsDurabilityBarrier() {
 			select {
 			case processed <- processedEvent{durabilityBarrier: raw}:
 			case <-ctx.Done():
-				return
+				return ctx.Err()
+			}
+			continue
+		}
+		if raw.RejectionCode != "" {
+			if err := d.recordSourceFailure(
+				ir.id, raw, raw.RejectionCode, "framing_error",
+			); err != nil {
+				return err
 			}
 			continue
 		}
@@ -136,7 +150,11 @@ func (d *Daemon) readInput(ctx context.Context, ir *inputRuntime, processed chan
 		}
 		event, err := ir.decoder.Decode(raw.Bytes, pos, d.now())
 		if err != nil {
-			d.recordDecodeFailure(ir.id, raw.Source, len(raw.Bytes))
+			if writeErr := d.recordSourceFailure(
+				ir.id, raw, "DECODE_ERROR", "decode_error",
+			); writeErr != nil {
+				return writeErr
+			}
 			continue
 		}
 		// Sanitize direct policies and the exact origins of rename values that
@@ -169,15 +187,50 @@ func (d *Daemon) readInput(ctx context.Context, ir *inputRuntime, processed chan
 		select {
 		case processed <- pe:
 		case <-ctx.Done():
-			return
+			return ctx.Err()
 		}
 	}
+	return nil
+}
+
+func (d *Daemon) recordSourceFailure(
+	inputID string,
+	raw input.RawEvent,
+	code string,
+	reason string,
+) error {
+	record := sender.DeadLetterRecord{
+		Code: code, RejectedAt: d.now().UTC(),
+		SourceRecord: &sender.RejectedSourceRecord{
+			InputID: inputID, FileIdentity: raw.Source.Identity.String(),
+			SourcePath: raw.Source.Path, StartOffset: raw.Source.StartOffset,
+			EndOffset: raw.Source.EndOffset, LineNumber: raw.Source.LineNumber,
+			NextLineNumber:   raw.Source.NextLineNumber,
+			GuardFingerprint: raw.Source.GuardFingerprint,
+			GuardLength:      raw.Source.GuardLength,
+			Bytes:            slices.Clone(raw.Bytes), Truncated: raw.Truncated,
+		},
+	}
+	if err := d.deadLetter.WriteRecords([]sender.DeadLetterRecord{record}); err != nil {
+		return fmt.Errorf("persist %s recovery artifact: %w", reason, err)
+	}
+	d.recordDecodeFailure(inputID, raw.Source, len(raw.Bytes), reason)
+	return nil
 }
 
 // recordDecodeFailure counts and logs a skipped record per the decode-failure
 // policy. Neither the raw payload nor the decoder error is logged: structural
 // errors can contain attacker-controlled JSON field names.
-func (d *Daemon) recordDecodeFailure(inputID string, src input.SourceRef, n int) {
+func (d *Daemon) recordDecodeFailure(
+	inputID string,
+	src input.SourceRef,
+	n int,
+	reasons ...string,
+) {
+	reason := "decode_error"
+	if len(reasons) == 1 {
+		reason = reasons[0]
+	}
 	d.decodeFailures.Add(1)
 	d.log.Warn("skipping undecodable record",
 		zap.String("input", inputID),
@@ -186,7 +239,7 @@ func (d *Daemon) recordDecodeFailure(inputID string, src input.SourceRef, n int)
 		zap.Uint64("end_offset", src.EndOffset),
 		zap.Uint64("line", src.LineNumber),
 		zap.Int("record_bytes", n),
-		zap.String("reason", "decode_error"),
+		zap.String("reason", reason),
 	)
 }
 

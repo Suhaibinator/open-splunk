@@ -13,9 +13,8 @@ import (
 )
 
 const (
-	// MaximumEventsPerTenant is the permanent, fail-closed ceiling for the
-	// append-only operational journal. Existing events are never discarded to
-	// make room for new ones.
+	// MaximumEventsPerTenant is the rolling retention bound for the operational
+	// journal. Appending beyond it atomically prunes the oldest retained event.
 	MaximumEventsPerTenant = 100_000
 	// MaximumListPageSize bounds an internal diagnostic traversal.
 	MaximumListPageSize = 200

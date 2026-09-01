@@ -80,7 +80,8 @@ type manager struct {
 	// cancellation handoff.
 	afterRetireCancelObserver func(tailerPollObservation)
 
-	events chan RawEvent
+	events           chan RawEvent
+	rejectionHandler RejectionHandler
 	// stagedTransaction is a fixed-capacity manager-wide permit pool. A tailer
 	// holds one permit from snapshot allocation through validation and
 	// publication, bounding aggregate staged memory even while the shared event

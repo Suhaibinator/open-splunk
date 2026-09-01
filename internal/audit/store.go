@@ -177,6 +177,15 @@ func (store *Store) AppendInTransaction(
 	if database.Error != nil {
 		return Event{}, mapStoreError(ctx, "bind audit append transaction", database.Error)
 	}
+	return store.appendWithDatabase(ctx, database, tenantID, definition)
+}
+
+func (store *Store) appendWithDatabase(
+	ctx context.Context,
+	database *gorm.DB,
+	tenantID string,
+	definition SuccessfulEvent,
+) (Event, error) {
 
 	state, err := ensureTenantState(database, tenantID)
 	if err != nil {

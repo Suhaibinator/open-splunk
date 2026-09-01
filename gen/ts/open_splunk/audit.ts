@@ -120,6 +120,11 @@ export enum AuditAction {
   AUDIT_ACTION_KNOWLEDGE_OBJECT_DISABLE = 23,
   AUDIT_ACTION_KNOWLEDGE_OBJECT_DELETE = 24,
   AUDIT_ACTION_SERVER_SETTINGS_UPDATE = 25,
+  AUDIT_ACTION_LOOKUP_CREATE = 26,
+  AUDIT_ACTION_LOOKUP_REPLACE = 27,
+  AUDIT_ACTION_LOOKUP_ENABLE = 28,
+  AUDIT_ACTION_LOOKUP_DISABLE = 29,
+  AUDIT_ACTION_LOOKUP_DELETE = 30,
   UNRECOGNIZED = -1,
 }
 
@@ -203,6 +208,21 @@ export function auditActionFromJSON(object: any): AuditAction {
     case 25:
     case "AUDIT_ACTION_SERVER_SETTINGS_UPDATE":
       return AuditAction.AUDIT_ACTION_SERVER_SETTINGS_UPDATE;
+    case 26:
+    case "AUDIT_ACTION_LOOKUP_CREATE":
+      return AuditAction.AUDIT_ACTION_LOOKUP_CREATE;
+    case 27:
+    case "AUDIT_ACTION_LOOKUP_REPLACE":
+      return AuditAction.AUDIT_ACTION_LOOKUP_REPLACE;
+    case 28:
+    case "AUDIT_ACTION_LOOKUP_ENABLE":
+      return AuditAction.AUDIT_ACTION_LOOKUP_ENABLE;
+    case 29:
+    case "AUDIT_ACTION_LOOKUP_DISABLE":
+      return AuditAction.AUDIT_ACTION_LOOKUP_DISABLE;
+    case 30:
+    case "AUDIT_ACTION_LOOKUP_DELETE":
+      return AuditAction.AUDIT_ACTION_LOOKUP_DELETE;
     case -1:
     case "UNRECOGNIZED":
     default:
@@ -264,6 +284,16 @@ export function auditActionToJSON(object: AuditAction): string {
       return "AUDIT_ACTION_KNOWLEDGE_OBJECT_DELETE";
     case AuditAction.AUDIT_ACTION_SERVER_SETTINGS_UPDATE:
       return "AUDIT_ACTION_SERVER_SETTINGS_UPDATE";
+    case AuditAction.AUDIT_ACTION_LOOKUP_CREATE:
+      return "AUDIT_ACTION_LOOKUP_CREATE";
+    case AuditAction.AUDIT_ACTION_LOOKUP_REPLACE:
+      return "AUDIT_ACTION_LOOKUP_REPLACE";
+    case AuditAction.AUDIT_ACTION_LOOKUP_ENABLE:
+      return "AUDIT_ACTION_LOOKUP_ENABLE";
+    case AuditAction.AUDIT_ACTION_LOOKUP_DISABLE:
+      return "AUDIT_ACTION_LOOKUP_DISABLE";
+    case AuditAction.AUDIT_ACTION_LOOKUP_DELETE:
+      return "AUDIT_ACTION_LOOKUP_DELETE";
     case AuditAction.UNRECOGNIZED:
     default:
       return "UNRECOGNIZED";
@@ -278,6 +308,7 @@ export enum AuditTargetKind {
   AUDIT_TARGET_KIND_SAVED_SEARCH = 4,
   AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT = 5,
   AUDIT_TARGET_KIND_SERVER_SETTINGS = 6,
+  AUDIT_TARGET_KIND_LOOKUP = 7,
   UNRECOGNIZED = -1,
 }
 
@@ -304,6 +335,9 @@ export function auditTargetKindFromJSON(object: any): AuditTargetKind {
     case 6:
     case "AUDIT_TARGET_KIND_SERVER_SETTINGS":
       return AuditTargetKind.AUDIT_TARGET_KIND_SERVER_SETTINGS;
+    case 7:
+    case "AUDIT_TARGET_KIND_LOOKUP":
+      return AuditTargetKind.AUDIT_TARGET_KIND_LOOKUP;
     case -1:
     case "UNRECOGNIZED":
     default:
@@ -327,6 +361,8 @@ export function auditTargetKindToJSON(object: AuditTargetKind): string {
       return "AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT";
     case AuditTargetKind.AUDIT_TARGET_KIND_SERVER_SETTINGS:
       return "AUDIT_TARGET_KIND_SERVER_SETTINGS";
+    case AuditTargetKind.AUDIT_TARGET_KIND_LOOKUP:
+      return "AUDIT_TARGET_KIND_LOOKUP";
     case AuditTargetKind.UNRECOGNIZED:
     default:
       return "UNRECOGNIZED";

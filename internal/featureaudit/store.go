@@ -20,9 +20,10 @@ var requiredTriggers = [...]string{
 	"feature_operation_audit_state_transition_is_valid",
 	"feature_operation_audit_state_delete_is_forbidden",
 	"feature_operation_audit_event_insert_requires_current_state",
-	"feature_operation_audit_event_advances_tenant_state",
+	"feature_operation_audit_event_advances_and_prunes_tenant_state",
 	"feature_operation_audit_event_update_is_forbidden",
-	"feature_operation_audit_event_delete_is_forbidden",
+	"feature_operation_audit_event_delete_requires_rolling_prune",
+	"feature_operation_audit_event_prune_advances_tenant_state",
 }
 
 type systemClock struct{}
@@ -141,29 +142,33 @@ func (store *Store) Append(ctx context.Context, event featureops.Event) (Record,
 	if !store.stateInitialized {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO feature_operation_audit_tenant_state (
-				tenant_id, next_sequence, event_count, last_occurred_at_unix_micro
-			) VALUES (?, 1, 0, NULL)
+				tenant_id, first_sequence, next_sequence, retained_count,
+				last_occurred_at_unix_micro
+			) VALUES (?, 1, 1, 0, NULL)
 			ON CONFLICT (tenant_id) DO NOTHING
 		`, store.tenantID); err != nil {
 			return Record{}, fmt.Errorf("prepare feature audit tenant state: %w", err)
 		}
 	}
+	var first int64
 	var sequence int64
 	var count int64
 	var last sql.NullInt64
 	if err := tx.QueryRowContext(ctx, `
-		SELECT next_sequence, event_count, last_occurred_at_unix_micro
+		SELECT first_sequence, next_sequence, retained_count,
+			last_occurred_at_unix_micro
 		FROM feature_operation_audit_tenant_state
 		WHERE tenant_id = ?
-	`, store.tenantID).Scan(&sequence, &count, &last); err != nil {
+	`, store.tenantID).Scan(&first, &sequence, &count, &last); err != nil {
 		return Record{}, fmt.Errorf("read feature audit tenant state: %w", err)
 	}
-	if sequence != count+1 || count < 0 || count > MaximumEventsPerTenant {
+	if first < 1 || sequence-first != count || count < 0 ||
+		count > MaximumEventsPerTenant {
 		return Record{}, ErrCorrupt
 	}
-	if count == MaximumEventsPerTenant {
+	if sequence == math.MaxInt64 {
 		return Record{}, fmt.Errorf(
-			"%w: feature audit tenant has reached its event limit",
+			"%w: feature audit tenant has exhausted its sequence domain",
 			control.ErrCapacityExceeded,
 		)
 	}
@@ -203,17 +208,28 @@ func (store *Store) Append(ctx context.Context, event featureops.Event) (Record,
 	); err != nil {
 		return Record{}, fmt.Errorf("append feature audit event: %w", err)
 	}
+	var advancedFirst int64
 	var advancedSequence int64
 	var advancedCount int64
 	var advancedTime int64
 	if err := tx.QueryRowContext(ctx, `
-		SELECT next_sequence, event_count, last_occurred_at_unix_micro
+		SELECT first_sequence, next_sequence, retained_count,
+			last_occurred_at_unix_micro
 		FROM feature_operation_audit_tenant_state
 		WHERE tenant_id = ?
-	`, store.tenantID).Scan(&advancedSequence, &advancedCount, &advancedTime); err != nil {
+	`, store.tenantID).Scan(
+		&advancedFirst, &advancedSequence, &advancedCount, &advancedTime,
+	); err != nil {
 		return Record{}, fmt.Errorf("verify feature audit tenant state: %w", err)
 	}
-	if advancedSequence != sequence+1 || advancedCount != count+1 ||
+	expectedFirst := first
+	expectedCount := count + 1
+	if expectedCount > MaximumEventsPerTenant {
+		expectedFirst++
+		expectedCount = MaximumEventsPerTenant
+	}
+	if advancedFirst != expectedFirst || advancedSequence != sequence+1 ||
+		advancedCount != expectedCount ||
 		advancedTime != occurredAt.UnixMicro() {
 		return Record{}, ErrCorrupt
 	}

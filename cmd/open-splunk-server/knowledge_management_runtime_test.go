@@ -458,6 +458,73 @@ func TestRuntimeLookupManagementAndSearchResolutionShareOneCatalog(t *testing.T)
 			secondProvenance,
 		)
 	}
+
+	scope := lookupservice.Scope{
+		TenantID: runtimeKnowledgeTestTenant, OwnerID: runtimeKnowledgeTestOwner,
+	}
+	lookupID := created.GetLookup().GetLookupId()
+	version := uint64(2)
+	for _, state := range []opensplunk.LookupState{
+		opensplunk.LookupState_LOOKUP_STATE_DISABLED,
+		opensplunk.LookupState_LOOKUP_STATE_ACTIVE,
+		opensplunk.LookupState_LOOKUP_STATE_DISABLED,
+	} {
+		response, stateErr := runtime.lookupManagement.SetState(
+			t.Context(),
+			scope,
+			&opensplunk.SetLookupStateRequest{
+				LookupId: lookupID, ExpectedVersion: version, State: state,
+			},
+		)
+		if stateErr != nil {
+			t.Fatalf("set runtime lookup state %s: %v", state, stateErr)
+		}
+		version = response.GetLookup().GetVersion()
+	}
+	if _, err := runtime.lookupManagement.Delete(
+		t.Context(),
+		scope,
+		&opensplunk.DeleteLookupRequest{
+			LookupId: lookupID, ExpectedVersion: version,
+			ConfirmationName: "service_owners",
+		},
+	); err != nil {
+		t.Fatalf("delete runtime lookup: %v", err)
+	}
+
+	rows, err := database.SQLDB().QueryContext(t.Context(), `
+		SELECT action, target_id, target_version
+		FROM audit_events
+		WHERE tenant_id = ? AND target_kind = 'lookup'
+		ORDER BY sequence ASC`, runtimeKnowledgeTestTenant)
+	if err != nil {
+		t.Fatalf("list runtime lookup audit: %v", err)
+	}
+	defer rows.Close()
+	wantActions := []string{
+		"lookup.create", "lookup.replace", "lookup.disable",
+		"lookup.enable", "lookup.disable", "lookup.delete",
+	}
+	for index, wantAction := range wantActions {
+		if !rows.Next() {
+			t.Fatalf("lookup audit stopped before action %q", wantAction)
+		}
+		var action, targetID string
+		var targetVersion uint64
+		if err := rows.Scan(&action, &targetID, &targetVersion); err != nil {
+			t.Fatal(err)
+		}
+		if action != wantAction || targetID != lookupID ||
+			targetVersion != uint64(index+1) {
+			t.Fatalf(
+				"lookup audit[%d] = (%q, %q, %d)",
+				index, action, targetID, targetVersion,
+			)
+		}
+	}
+	if rows.Next() {
+		t.Fatal("lookup audit contains an unexpected extra event")
+	}
 }
 
 func TestConfigureRuntimeKnowledgeManagementIsAtomicAndNarrow(t *testing.T) {
@@ -995,7 +1062,7 @@ func TestNewRuntimeKnowledgeManagementRejectsMissingAuditAppender(t *testing.T) 
 	defer func() { _ = database.Close() }()
 	keyPath := filepath.Join(directory, "server.key")
 	var typedNilAudit *audit.Store
-	for _, appender := range []audit.TransactionAppender{nil, typedNilAudit} {
+	for _, appender := range []knowledgeAuditAppender{nil, typedNilAudit} {
 		_, err = newRuntimeKnowledgeManagement(
 			t.Context(),
 			database,

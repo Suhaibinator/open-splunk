@@ -39,8 +39,8 @@ func TestOpenConfiguresSQLiteAndAppliesMigrations(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema migrations: %v", err)
 	}
-	if migrationCount != 6 {
-		t.Fatalf("schema migration count = %d, want 6", migrationCount)
+	if migrationCount != 8 {
+		t.Fatalf("schema migration count = %d, want 8", migrationCount)
 	}
 
 	// Foreign keys are connection-local in SQLite. Force database/sql to open
@@ -88,8 +88,8 @@ func TestOpenConfiguresSQLiteAndAppliesMigrations(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema migrations after reopen: %v", err)
 	}
-	if migrationCount != 6 {
-		t.Fatalf("schema migration count after reopen = %d, want 6", migrationCount)
+	if migrationCount != 8 {
+		t.Fatalf("schema migration count after reopen = %d, want 8", migrationCount)
 	}
 }
 
@@ -581,6 +581,8 @@ func TestServerSettingsMigrationPreservesExistingAuditLedger(t *testing.T) {
 		"0004_saved_search_schedules.sql",
 		"0005_alerts.sql",
 		"0006_feature_operation_audit.sql",
+		"0007_lookup_mutation_audit.sql",
+		"0008_rolling_feature_operation_audit.sql",
 	}
 	if strings.Join(ledger, ",") != strings.Join(wantLedger, ",") {
 		t.Fatalf("post-upgrade migration ledger = %v, want %v", ledger, wantLedger)
@@ -924,8 +926,8 @@ func TestConcurrentOpenSerializesMigrationStartup(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatalf("count schema migrations: %v", err)
 	}
-	if count != 6 {
-		t.Fatalf("schema migration count = %d, want 6", count)
+	if count != 8 {
+		t.Fatalf("schema migration count = %d, want 8", count)
 	}
 }
 

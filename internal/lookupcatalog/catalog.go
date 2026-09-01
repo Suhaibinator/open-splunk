@@ -65,8 +65,9 @@ var (
 type IDGenerator func() (string, error)
 
 type Options struct {
-	Clock       func() time.Time
-	IDGenerator IDGenerator
+	Clock         func() time.Time
+	IDGenerator   IDGenerator
+	AuditAppender MutationAuditAppender
 }
 
 type Catalog struct {
@@ -74,6 +75,7 @@ type Catalog struct {
 	assets   lookupasset.Repository
 	clock    func() time.Time
 	newID    IDGenerator
+	audit    MutationAuditAppender
 }
 
 func New(database *control.DB, assets lookupasset.Repository, options Options) (*Catalog, error) {
@@ -94,7 +96,56 @@ func New(database *control.DB, assets lookupasset.Repository, options Options) (
 			return "luk_" + base64.RawURLEncoding.EncodeToString(value), nil
 		}
 	}
-	return &Catalog{database: database.SQLDB(), assets: assets, clock: clock, newID: newID}, nil
+	return &Catalog{
+		database: database.SQLDB(), assets: assets, clock: clock, newID: newID,
+		audit: options.AuditAppender,
+	}, nil
+}
+
+// MutationTransaction is the same caller-owned transaction authority used by
+// atomic lookup publication. Audit appenders must never commit or roll it back.
+type MutationTransaction = lookupasset.PublicationTransaction
+
+// MutationAuditEvent is the fixed, payload-free successful lookup mutation
+// projection. Action values intentionally match the public audit taxonomy.
+type MutationAuditEvent struct {
+	OccurredAt    time.Time
+	Action        string
+	LookupID      string
+	LookupVersion uint64
+}
+
+// MutationAuditAppender atomically appends one successful lookup mutation.
+type MutationAuditAppender interface {
+	AppendLookupMutationInTransaction(
+		context.Context,
+		MutationTransaction,
+		string,
+		MutationAuditEvent,
+	) error
+}
+
+func (catalog *Catalog) appendMutationAudit(
+	ctx context.Context,
+	transaction MutationTransaction,
+	tenantID string,
+	occurredAt time.Time,
+	lookupID string,
+	lookupVersion uint64,
+	action string,
+) error {
+	if catalog.audit == nil {
+		return nil
+	}
+	return catalog.audit.AppendLookupMutationInTransaction(
+		ctx,
+		transaction,
+		tenantID,
+		MutationAuditEvent{
+			OccurredAt: occurredAt, Action: action,
+			LookupID: lookupID, LookupVersion: lookupVersion,
+		},
+	)
 }
 
 type CreateRequest struct {
@@ -364,6 +415,11 @@ func (catalog *Catalog) CreatePublished(
 			now,
 		)
 		if createErr == nil {
+			if auditErr := catalog.appendMutationAudit(
+				ctx, transaction, request.TenantID, now, lookupID, 1, "lookup.create",
+			); auditErr != nil {
+				return nil, auditErr
+			}
 			return created, nil
 		}
 		if !errors.Is(createErr, ErrConflict) {
@@ -391,6 +447,11 @@ func (catalog *Catalog) createRows(ctx context.Context, tenantID, ownerID, looku
 		now,
 	)
 	if err != nil {
+		return nil, err
+	}
+	if err := catalog.appendMutationAudit(
+		ctx, tx, tenantID, now, lookupID, 1, "lookup.create",
+	); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -491,6 +552,17 @@ func (catalog *Catalog) Replace(ctx context.Context, request ReplaceRequest) (*o
 	if err != nil {
 		return nil, err
 	}
+	if err := catalog.appendMutationAudit(
+		ctx,
+		tx,
+		request.TenantID,
+		replaced.GetUpdatedAt().AsTime(),
+		request.LookupID,
+		replaced.GetVersion(),
+		"lookup.replace",
+	); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit lookup replacement: %w", err)
 	}
@@ -533,7 +605,7 @@ func (catalog *Catalog) ReplacePublished(
 	if err != nil {
 		return nil, err
 	}
-	return replaceRowsInTransaction(
+	replaced, err := replaceRowsInTransaction(
 		ctx,
 		transaction,
 		request,
@@ -542,6 +614,21 @@ func (catalog *Catalog) ReplacePublished(
 		asset,
 		now,
 	)
+	if err != nil {
+		return nil, err
+	}
+	if err := catalog.appendMutationAudit(
+		ctx,
+		transaction,
+		request.TenantID,
+		replaced.GetUpdatedAt().AsTime(),
+		request.LookupID,
+		replaced.GetVersion(),
+		"lookup.replace",
+	); err != nil {
+		return nil, err
+	}
+	return replaced, nil
 }
 
 func replaceRowsInTransaction(
@@ -868,6 +955,17 @@ func (catalog *Catalog) SetState(ctx context.Context, request StateRequest) (*op
 	}
 	if changed, changedErr := result.RowsAffected(); changedErr != nil || changed != 1 {
 		return nil, ErrCorrupt
+	}
+	if err := catalog.appendMutationAudit(
+		ctx,
+		tx,
+		request.TenantID,
+		now,
+		request.LookupID,
+		version,
+		"lookup."+strings.ToLower(mutationKind),
+	); err != nil {
+		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit lookup state transition: %w", err)
