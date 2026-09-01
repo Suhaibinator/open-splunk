@@ -177,6 +177,24 @@ test("Back restores the previous draft without a new run, and Forward runs the l
   await expect(page).toHaveURL(/[?&]run=1(?:&|$)/u);
 });
 
+test("Escape with nothing open cancels the running search", async ({ page }) => {
+  await openSeededWorkspace(page);
+  const runButton = page.getByTestId("run-search");
+  await expect(runButton).not.toHaveAttribute("aria-keyshortcuts", "Escape");
+
+  await focusEditorEnd(page);
+  await page.keyboard.press("Control+Enter");
+  await expect(runButton).toHaveAttribute("aria-label", "Cancel search");
+  await expect(runButton).toHaveAttribute("aria-keyshortcuts", "Escape");
+  await expect(page.getByTestId("completion-menu")).toHaveCount(0);
+
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("toast")).toContainText("Search canceled.");
+  await expect(runButton).toHaveAttribute("aria-label", "Run search");
+  await expect(page.getByTestId("job-strip")).toContainText("Canceled");
+  await expect(page.getByTestId("search-input")).toBeFocused();
+});
+
 test("arrow keys move the selected result tab and focus follows it", async ({ page }) => {
   await openSeededWorkspace(page);
   const events = page.getByTestId("result-tab-events");

@@ -298,6 +298,7 @@ export function SearchComposer({
           variant={isRunning && !launchPending ? "danger" : "primary"}
           data-testid="run-search"
           aria-label={launchPending ? "Opening persisted search" : isRunning ? "Cancel search" : "Run search"}
+          aria-keyshortcuts={isRunning && !launchPending ? "Escape" : undefined}
           disabled={launchPending || (!isRunning && runDisabledReason !== null)}
           title={!isRunning && runDisabledReason !== null ? runDisabledReason : undefined}
           onClick={(event) => {

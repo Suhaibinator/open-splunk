@@ -1004,6 +1004,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   ) => boolean>(() => false);
   const searchRunnerRef = useRef<(queryText: string, range?: TimeRange) => void>(() => undefined);
   const abandonDisplayedJobRef = useRef<(nextRange: TimeRange) => void>(() => undefined);
+  const cancelSearchRef = useRef<() => void>(() => undefined);
   const timelineZoomParentRef = useRef<TimeRange | null>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLPreElement>(null);
@@ -2774,6 +2775,9 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     setExpandedEvents(new Set());
   }, [currentResultPageSize, eventPage]);
 
+  // Escape closes the topmost transient surface; with nothing open it
+  // cancels the running search, so a stray run is a keystroke away from
+  // stopping without reaching for the mouse.
   useEffect(() => {
     function closeTransientUi(event: globalThis.KeyboardEvent) {
       if (event.key !== "Escape") return;
@@ -2781,11 +2785,12 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       else if (modal !== null) setModal(null);
       else if (activeField !== null) setActiveField(null);
       else if (menu !== null) setMenu(null);
-      else setCompletionOpen(false);
+      else if (completionOpen) setCompletionOpen(false);
+      else if (isRunning && !persistedLaunchPending) cancelSearchRef.current();
     }
     window.addEventListener("keydown", closeTransientUi);
     return () => window.removeEventListener("keydown", closeTransientUi);
-  }, [activeField, menu, modal]);
+  }, [activeField, completionOpen, isRunning, menu, modal, persistedLaunchPending]);
 
   useEffect(() => {
     if (menu === null) return;
@@ -4809,6 +4814,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     ]);
     showToast("Search canceled.", "warning");
   }
+  cancelSearchRef.current = cancelSearch;
 
   function openJobInspector() {
     setModal("inspect");
@@ -4888,6 +4894,9 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         return;
       case "close-completions":
         event.preventDefault();
+        // Escape that closed the popup is spent; only an Escape with nothing
+        // open reaches the window listener that cancels the search.
+        if (completionOpen) event.stopPropagation();
         setCompletionOpen(false);
         return;
       case "move-completion":
