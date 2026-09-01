@@ -6,6 +6,7 @@ import type { PivotMode } from "@/lib/search/query-pivots";
 import { installModalSurface } from "../../_components/modal-surface";
 import { AppIcon } from "../../_components/app-icon";
 import { COMPACT_NUMBER_FORMAT, NUMBER_FORMAT } from "../constants";
+import { eventPageSizeOptions } from "../event-page-controls";
 import { formatExactInteger, formatExactNumericText } from "../formatters";
 import type { EventDisplay, MenuName, TimelineDisplay } from "../model";
 import {
@@ -40,7 +41,7 @@ interface EventsPanelProps {
   isPreview: boolean;
   menu: MenuName | null;
   maximumEventPageSize: number | null;
-  maximumReachablePage: number;
+  pageCount: number;
   pagedResultEvents: DemoEvent[];
   previewTruncated: boolean;
   resultEvents: DemoEvent[];
@@ -153,7 +154,7 @@ export function EventsPanel({
   isPreview,
   menu,
   maximumEventPageSize,
-  maximumReachablePage,
+  pageCount,
   pagedResultEvents,
   previewTruncated,
   resultEvents,
@@ -206,13 +207,7 @@ export function EventsPanel({
   const visibleInterestingFields = showAllFields || fieldFilter.trim().length > 0 ? matchingInterestingFields : matchingInterestingFields.slice(0, 8);
   const activeFieldData = fields.find((field) => field.name === activeField) ?? null;
   const firstPivotableFieldValue = activeFieldData?.values.find((value) => value.pivotable !== false);
-  const eventPageSizeOptions = [...new Set([
-    10,
-    20,
-    50,
-    ...(maximumEventPageSize === null ? [] : [maximumEventPageSize]),
-    eventPageSize,
-  ])].filter((size) => size > 0).toSorted((left, right) => left - right);
+  const pageSizeOptions = eventPageSizeOptions(maximumEventPageSize, eventPageSize);
   const pageEventIds = pagedResultEvents.map((event) => event.id);
   const expandedPageEventCount = pageEventIds.filter((eventId) => expandedEvents.has(eventId)).length;
   const pageStart = pagedResultEvents.length === 0 ? 0 : eventPageStart;
@@ -237,9 +232,14 @@ export function EventsPanel({
     if (
       !Number.isSafeInteger(requestedPage)
       || requestedPage < 1
-      || requestedPage > maximumReachablePage
+      || (requestedPage > pageCount && !backendHasNextPage)
     ) {
-      showToast(`Choose a page from 1 to ${NUMBER_FORMAT.format(maximumReachablePage)}.`, "warning");
+      showToast(
+        backendHasNextPage
+          ? "Choose a whole page number of 1 or more."
+          : `Choose a page from 1 to ${NUMBER_FORMAT.format(pageCount)}.`,
+        "warning",
+      );
       setPageJumpDraft({ page: eventPage, value: String(eventPage) });
       return;
     }
@@ -588,7 +588,7 @@ export function EventsPanel({
                   <button type="button" aria-haspopup="menu" aria-expanded={menu === "event-page-size"} disabled={eventPageLoading} onClick={() => setMenu(menu === "event-page-size" ? null : "event-page-size")}>{eventPageSize} Per Page <AppIcon name="chevron-down" size="xs" /></button>
                   {menu === "event-page-size" ? (
                     <div className="floating-menu result-control-menu page-size-menu" role="menu" aria-label="Events per page">
-                      {eventPageSizeOptions.map((size) => {
+                      {pageSizeOptions.map((size) => {
                         const unavailable = maximumEventPageSize !== null && size > maximumEventPageSize;
                         return (
                           <button
@@ -632,19 +632,19 @@ export function EventsPanel({
                     aria-label="Event page number"
                     type="number"
                     min={1}
-                    max={maximumReachablePage}
+                    max={backendHasNextPage ? undefined : pageCount}
                     step={1}
                     value={pageJumpValue}
                     disabled={eventPageLoading}
                     onChange={(event) => setPageJumpDraft({ page: eventPage, value: event.target.value })}
                   />
-                  <span>of {NUMBER_FORMAT.format(maximumReachablePage)}</span>
+                  <span>of {NUMBER_FORMAT.format(pageCount)}</span>
                   <button type="submit" disabled={eventPageLoading}>Go</button>
                 </form>
                 <button
                   type="button"
-                  disabled={eventPageLoading || (backendEnabled ? !backendHasNextPage : eventPage === maximumReachablePage)}
-                  onClick={() => setEventPage((current) => backendEnabled ? current + 1 : Math.min(maximumReachablePage, current + 1))}
+                  disabled={eventPageLoading || (backendEnabled ? !backendHasNextPage : eventPage === pageCount)}
+                  onClick={() => setEventPage((current) => backendEnabled ? current + 1 : Math.min(pageCount, current + 1))}
                 >Next <AppIcon name="chevron-right" size="xs" /></button>
               </nav>}
             </div>
