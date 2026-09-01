@@ -49,6 +49,20 @@ export function resultPageCount(
   return Math.max(floor, Math.ceil(totalRows / pageSize));
 }
 
+// Where a page jump must start following cursors, and how far one jump may go. Cursor keys are
+// contiguous from page 1, so the furthest reachable page bounds the start directly; maximumWalk
+// caps a single jump so a far page cannot fan out into one request per page crossed.
+export function planResultPageWalk(
+  requestedPage: number,
+  reachableCeiling: number,
+  maximumWalk: number,
+): { startPage: number; targetPage: number; capped: boolean } {
+  const requested = Math.max(1, requestedPage);
+  const startPage = Math.max(1, Math.min(requested, reachableCeiling));
+  const targetPage = Math.min(requested, startPage + Math.max(0, maximumWalk));
+  return { startPage, targetPage, capped: targetPage < requested };
+}
+
 export const BASE_EVENT_PAGE_SIZES = [10, 20, 50, 100, 500] as const;
 
 export function eventPageSizeOptions(

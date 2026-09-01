@@ -6,6 +6,7 @@ import {
   eventPageSizeOptions,
   expandPageEvents,
   maximumReachableResultPage,
+  planResultPageWalk,
   resultPageCount,
   serializeRawPageForClipboard,
 } from "./event-page-controls";
@@ -60,4 +61,37 @@ test("events-per-page options add the server maximum without displacing the base
   assert.deepEqual(eventPageSizeOptions(null, 20), [10, 20, 50, 100, 500]);
   assert.deepEqual(eventPageSizeOptions(1_000, 250), [10, 20, 50, 100, 250, 500, 1_000]);
   assert.deepEqual(eventPageSizeOptions(0, 20), [10, 20, 50, 100, 500]);
+});
+
+test("a live next-page cursor outranks a total that implies fewer pages", () => {
+  // The in-memory result manager also bounds a page by bytes, so a page can hold fewer rows than
+  // the page size and more pages exist than the reported total implies. Callers pass the floor as
+  // eventPage + 1 whenever the server still offers a next cursor.
+  assert.equal(resultPageCount(95, 10, 11), 11);
+  assert.equal(resultPageCount(5_000, 500, 11), 11);
+  // Without a next cursor on the last page the arithmetic still stands.
+  assert.equal(resultPageCount(5_000, 500, 10), 10);
+});
+
+test("a page jump starts at the furthest cursored page and walks forward to the target", () => {
+  // Page 1 loaded, cursor known for page 2: reaching page 7 follows cursors 2 through 7.
+  assert.deepEqual(planResultPageWalk(7, 2, 25), { startPage: 2, targetPage: 7, capped: false });
+  // Paging back to an already-cursored page is a single hop, served from cache.
+  assert.deepEqual(planResultPageWalk(3, 9, 25), { startPage: 3, targetPage: 3, capped: false });
+  // Next from the furthest loaded page is one hop.
+  assert.deepEqual(planResultPageWalk(10, 9, 25), { startPage: 9, targetPage: 10, capped: false });
+  assert.deepEqual(planResultPageWalk(1, 1, 25), { startPage: 1, targetPage: 1, capped: false });
+});
+
+test("a page jump follows at most the permitted number of cursors and reports the cap", () => {
+  assert.deepEqual(planResultPageWalk(500, 2, 25), { startPage: 2, targetPage: 27, capped: true });
+  // Exactly at the cap is not capped; one page beyond it is.
+  assert.deepEqual(planResultPageWalk(27, 2, 25), { startPage: 2, targetPage: 27, capped: false });
+  assert.deepEqual(planResultPageWalk(28, 2, 25), { startPage: 2, targetPage: 27, capped: true });
+});
+
+test("a page jump never starts below page one or above the requested page", () => {
+  assert.deepEqual(planResultPageWalk(0, 5, 25), { startPage: 1, targetPage: 1, capped: false });
+  assert.deepEqual(planResultPageWalk(-3, 5, 25), { startPage: 1, targetPage: 1, capped: false });
+  assert.deepEqual(planResultPageWalk(4, 0, 25), { startPage: 1, targetPage: 4, capped: false });
 });

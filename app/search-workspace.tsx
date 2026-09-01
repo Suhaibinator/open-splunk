@@ -170,6 +170,7 @@ import {
   collapsePageEvents,
   expandPageEvents,
   maximumReachableResultPage,
+  planResultPageWalk,
   resultPageCount,
   serializeRawPageForClipboard,
 } from "./search-workspace/event-page-controls";
@@ -884,6 +885,8 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const backendAuthoritativeResultSchemaRef = useRef<ResultSchema | null>(null);
   const backendPageTokensRef = useRef<Map<string, string | undefined>>(new Map());
   const backendPageStartsRef = useRef<Map<string, number>>(new Map());
+  // Cache key of the result page currently rendered, so page-cache eviction can spare it.
+  const displayedResultPageKeyRef = useRef<string | null>(null);
   const backendResultPageTokensSeenRef = useRef<Set<string>>(new Set());
   const backendPageSizeRef = useRef(20);
   const backendAuthoritativeFieldsRef = useRef(false);
@@ -1266,11 +1269,14 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     backendPageTokensRef.current.keys(),
     currentResultPageSize,
   );
+  // A page can hold fewer rows than the page size, because the in-memory result manager also
+  // bounds a page by bytes. The reported total then implies fewer pages than the cursor chain
+  // actually yields, so a live next-page cursor is authoritative over the arithmetic.
   const eventPageCount = backendEnabled
     ? resultPageCount(
       backendResultTotalRows,
       currentResultPageSize,
-      Math.max(eventPage, loadedResultPageCeiling),
+      Math.max(backendHasNextPage ? eventPage + 1 : eventPage, loadedResultPageCeiling),
     )
     : Math.max(1, Math.ceil(pageableEventCount / currentResultPageSize));
   const eventPageStart = backendEnabled
@@ -2057,6 +2063,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     setEventPageLoading(false);
     backendProgressRevisionRef.current = null;
     backendResultPagesRef.current.clear();
+    displayedResultPageKeyRef.current = null;
     backendAuthoritativeResultSchemaRef.current = null;
     backendPageTokensRef.current.clear();
     backendPageStartsRef.current.clear();
@@ -3010,7 +3017,10 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     if (cached !== undefined) {
       backendResultPagesRef.current.delete(cacheKey);
       backendResultPagesRef.current.set(cacheKey, cached);
-      if (apply) applyBackendResultPage(cached);
+      if (apply) {
+        displayedResultPageKeyRef.current = cacheKey;
+        applyBackendResultPage(cached);
+      }
       return cached;
     }
     if (!backendPageTokensRef.current.has(cacheKey)) {
@@ -3076,17 +3086,25 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       snapshotComplete: response.snapshotComplete,
     };
     backendResultPagesRef.current.set(cacheKey, page);
+    // A cursor walk inserts one entry per page it crosses, which can exceed the cache. Keep the
+    // displayed page resident so an interrupted walk cannot evict the rows still on screen and
+    // strand their recorded row start.
+    const displayedKey = displayedResultPageKeyRef.current;
     while (backendResultPagesRef.current.size > MAX_CACHED_RESULT_PAGES) {
-      const oldestKey = backendResultPagesRef.current.keys().next().value;
-      if (oldestKey === undefined) break;
-      backendResultPagesRef.current.delete(oldestKey);
+      const evictable = [...backendResultPagesRef.current.keys()]
+        .find((key) => key !== displayedKey && key !== cacheKey);
+      if (evictable === undefined) break;
+      backendResultPagesRef.current.delete(evictable);
     }
     if (page.nextPageToken !== undefined) {
       backendPageTokensRef.current.set(`${pageSize}:${pageNumber + 1}`, page.nextPageToken);
       const currentStart = backendPageStartsRef.current.get(cacheKey) ?? 1;
       backendPageStartsRef.current.set(`${pageSize}:${pageNumber + 1}`, currentStart + page.rows.length);
     }
-    if (apply) applyBackendResultPage(page);
+    if (apply) {
+      displayedResultPageKeyRef.current = cacheKey;
+      applyBackendResultPage(page);
+    }
     return page;
   }
 
@@ -4947,15 +4965,15 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     const pageSize = backendPageSizeRef.current;
     if (!backendEnabled || job === null || bootstrap === null || phase !== "completed") return;
     const requestedPage = Math.max(1, pageNumber);
-    // Walk forward from the furthest already-cursored page at or before the target.
-    let startPage = requestedPage;
-    while (startPage > 1 && !openableResultPage(pageSize, startPage)) startPage -= 1;
+    const { startPage, targetPage } = planResultPageWalk(
+      requestedPage,
+      maximumReachableResultPage(backendPageTokensRef.current.keys(), pageSize),
+      MAX_SEQUENTIAL_PAGE_WALK,
+    );
     if (!openableResultPage(pageSize, startPage)) {
       showToast("Load the preceding result page before following its cursor.", "warning");
       return;
     }
-    const walkLimit = startPage + MAX_SEQUENTIAL_PAGE_WALK;
-    const targetPage = Math.min(requestedPage, walkLimit);
     backendPageAbortRef.current?.abort();
     const controller = new AbortController();
     backendPageAbortRef.current = controller;
@@ -4971,12 +4989,13 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         generation,
       );
       if (generationRef.current !== generation || backendJobIdRef.current !== job.searchJobId) return;
+      displayedResultPageKeyRef.current = `${pageSize}:${landedPage}`;
       applyBackendResultPage(landedResult);
       setEventPage(landedPage);
       if (landedPage < requestedPage) {
         showToast(
           chainEnded
-            ? `Only ${NUMBER_FORMAT.format(landedPage)} result ${landedPage === 1 ? "page is" : "pages are"} available. Showing the last one.`
+            ? `No result page follows page ${NUMBER_FORMAT.format(landedPage)}. Showing that page.`
             : `A page jump follows at most ${NUMBER_FORMAT.format(MAX_SEQUENTIAL_PAGE_WALK)} cursors at a time. Showing page ${NUMBER_FORMAT.format(landedPage)}.`,
           "warning",
         );
@@ -5019,6 +5038,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     backendPageSizeRef.current = pageSize;
     setBackendResultPageSize(pageSize);
     backendResultPagesRef.current.clear();
+    displayedResultPageKeyRef.current = null;
     backendPageTokensRef.current.clear();
     backendPageStartsRef.current.clear();
     backendResultPageTokensSeenRef.current.clear();
