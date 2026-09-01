@@ -84,6 +84,7 @@ const testFiles = [
   path.join("lib", "search", "server-scheduled-reports.test.ts"),
   path.join("lib", "search", "example-drafts.test.ts"),
   path.join("lib", "search", "launch-url.test.ts"),
+  path.join("lib", "search", "search-launch-state.test.ts"),
   path.join("lib", "search", "server-jobs.test.ts"),
   path.join("lib", "search", "server-job-settings.test.ts"),
   path.join("lib", "search", "query-pivots.test.ts"),

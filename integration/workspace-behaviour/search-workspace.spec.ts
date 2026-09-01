@@ -138,6 +138,45 @@ test("choosing a preset in the time picker updates the range the next run submit
   await expect(page.getByTestId("job-time-range")).toHaveText("Last 4 hours");
 });
 
+test("Back restores the previous draft without a new run, and Forward runs the launch again", async ({ page }) => {
+  await openSeededWorkspace(page, { earliest: "-7d", latest: "now" });
+  const editor = page.getByTestId("search-input");
+  const runButton = page.getByTestId("run-search");
+  const jobStrip = page.getByTestId("job-strip");
+  const progress = page.getByLabel("Search progress");
+  await expect(page).toHaveURL(/run=0/u);
+  await expect(jobStrip).toHaveClass(/is-closed/u);
+
+  await focusEditorEnd(page);
+  await page.keyboard.type("\n| stats count");
+  await page.keyboard.press("Control+Enter");
+  await expect(runButton).toHaveAttribute("aria-label", "Cancel search");
+  await expect(runButton).toHaveAttribute("aria-label", "Run search");
+  await expect(page).toHaveURL(/[?&]q=index%3Dmain%0A%7C\+stats\+count(?:&|$)/u);
+  await expect(page).toHaveURL(/[?&]run=1(?:&|$)/u);
+  await expect(jobStrip).not.toHaveClass(/is-closed/u);
+  await expect(progress).toHaveJSProperty("value", 100);
+
+  await page.goBack();
+  await expect(page).toHaveURL(/[?&]q=index%3Dmain(?:&|$)/u);
+  await expect(page).toHaveURL(/[?&]run=0(?:&|$)/u);
+  await expect(editor).toHaveValue(SEEDED_QUERY);
+  await expect(page.getByTestId("time-range-button")).toContainText("Last 7 days");
+  await expect(jobStrip).toHaveClass(/is-closed/u);
+  await expect(jobStrip).toHaveAttribute("aria-busy", "false");
+  await expect(progress).toHaveJSProperty("value", 0);
+  await expect(runButton).toHaveAttribute("aria-label", "Run search");
+
+  // The demo has no retained job to reopen, so a run entry runs again in place.
+  await page.goForward();
+  await expect(editor).toHaveValue(`${SEEDED_QUERY}\n| stats count`);
+  await expect(runButton).toHaveAttribute("aria-label", "Cancel search");
+  await expect(runButton).toHaveAttribute("aria-label", "Run search");
+  await expect(jobStrip).not.toHaveClass(/is-closed/u);
+  await expect(page).toHaveURL(/[?&]q=index%3Dmain%0A%7C\+stats\+count(?:&|$)/u);
+  await expect(page).toHaveURL(/[?&]run=1(?:&|$)/u);
+});
+
 test("arrow keys move the selected result tab and focus follows it", async ({ page }) => {
   await openSeededWorkspace(page);
   const events = page.getByTestId("result-tab-events");
