@@ -6,7 +6,7 @@ require (
 	fortio.org/safecast v1.2.0
 	github.com/ClickHouse/ch-go v0.74.0
 	github.com/ClickHouse/clickhouse-go/v2 v2.48.0
-	github.com/Suhaibinator/SRouter v1.6.3
+	github.com/Suhaibinator/SRouter v1.7.0
 	github.com/ebitengine/purego v0.10.2
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
