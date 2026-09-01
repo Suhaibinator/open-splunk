@@ -29,8 +29,17 @@ forces backend UI mode, and verifies embedded assets and linked binary build
 identity before atomic publication under `build/`.
 
 `make oci` applies the same source-revision discipline to local server and
-collector images. These local targets verify reproducibility and never
-authenticate to or push to a registry.
+collector images. Invoke it with the exact current revision as well:
+
+```sh
+OPEN_SPLUNK_SOURCE_REVISION="$(git rev-parse HEAD)" \
+make oci
+```
+
+It defaults to distinct local server/collector image names tagged with that
+revision on `linux/amd64`; explicit image names and `linux/arm64` are supported
+through the documented environment controls. These local targets verify
+reproducibility and never authenticate to or push to a registry.
 
 ## Official publication
 

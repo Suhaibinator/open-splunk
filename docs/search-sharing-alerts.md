@@ -7,10 +7,12 @@ artifacts. This matches the three link types exposed by the Search workspace:
 - A query link carries SPL and time-range intent and creates a new job when run.
 - A job link opens one exact retained result. It never silently reruns a search.
 
-Manual jobs have a ten-minute sliding lifetime. Sharing a job changes its
-visibility to Everyone and its sliding lifetime to seven days. Reads of the job
-or its results refresh the deadline; listings and maintenance do not. An
-expired link returns an explicit expired state and can be rerun only by an
+Manual jobs have a ten-minute sliding lifetime. Only a completed, unexpired job
+with its retained result artifact can be shared. Pending, failed, canceled,
+interrupted, missing, and expired jobs are not shareable. Sharing changes the
+job's visibility to Everyone and its sliding lifetime to seven days. Reads of
+the job or its results refresh the deadline; listings and maintenance do not.
+An expired link returns an explicit expired state and can be rerun only by an
 operator action. Search history remains separate metadata with its existing
 30-day default retention and never extends a result artifact.
 
@@ -46,8 +48,9 @@ without hiding an older result-bearing run.
 Alerts are separate persisted objects with their own version, schedule,
 condition, encrypted destination, signing-secret generation, enabled state,
 and run history. A new alert starts disabled and returns a generated 32-byte
-HMAC secret exactly once. A configured public base URL is required before the
-alert can be enabled.
+HMAC key exactly once, encoded as unpadded base64url. Decode that value before
+using it as the HMAC key; the displayed string bytes are not the key. A
+configured public base URL is required before the alert can be enabled.
 
 Alert creation accepts a client request ID. Retrying the same byte-equivalent
 definition with that ID returns the existing alert without revealing the
@@ -68,11 +71,34 @@ proved are indeterminate and do not deliver. Failed, canceled, expired, or
 interrupted searches never deliver.
 
 A triggered alert extends its job lifetime to the longer of `dispatch.ttl` and
-the webhook TTL, whose default is `10p`, before delivery. The JSON body is
-bounded to 64 KiB by removing trailing sample rows, then signed over the exact
-serialized bytes as `HMAC-SHA256(timestamp + "." + body)`. Delivery is one
+the webhook TTL, whose default is `10p`, before delivery. Delivery is one
 best-effort HTTPS POST with a ten-second timeout, no proxy, no redirects, no
 retry, and a bounded response read. Any 2xx response succeeds.
+
+### Webhook receiver contract
+
+The request body is JSON schema version 1. `event_type` is
+`alert.triggered` for a scheduled delivery or `alert.test` for a test. The body
+also includes alert, alert-run, and search-job IDs; alert name and application;
+scheduled, started, finished, and delivery times; missed-occurrence count;
+operator, threshold, exactness-aware result count, result schema, sample rows,
+search/sample truncation flags, and the retained-results URL. Sample output is
+five rows by default, at most ten, and may be zero. The complete body is bounded
+to 64 KiB by dropping trailing sample rows and setting `sample_truncated`.
+
+Verify the request against the exact received body bytes:
+
+1. Read `Open-Splunk-Alert-Timestamp` as Unix seconds and reject stale values
+   according to the receiver's replay policy.
+2. Decode the issued secret with unpadded base64url.
+3. Compute HMAC-SHA256 over the ASCII timestamp, one period, and the exact body
+   bytes: `timestamp + "." + body`.
+4. Hex-encode the digest and compare it in constant time with
+   `Open-Splunk-Alert-Signature`, whose value is `v1=<lowercase-hex>`.
+
+`Open-Splunk-Alert-Id` and `Open-Splunk-Alert-Delivery-Id` identify the alert
+and unique delivery. Do not parse and reserialize the body before signature
+verification.
 
 Destinations reject credentials, fragments, plaintext HTTP, redirects, DNS
 rebinding, and unapproved private, loopback, or link-local addresses. Public

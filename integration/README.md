@@ -228,8 +228,9 @@ bodies, declaration order — so any tokenising or reformatting pass broke it
 without changing a rendered pixel. The spec instead loads the stylesheets into
 Chromium against fixture markup that mirrors the production DOM and reads
 resolved values through `getComputedStyle` at the 1280, 980, 760, and 480 pixel
-breakpoints — plus 1000, 900, 500 and 450, which are inside the five bands
-Phase 4's breakpoint folds changed.
+breakpoints, plus interior widths at 1000, 900, 500, and 450 pixels. This checks
+both the canonical boundary and a representative point inside each responsive
+band.
 
 "The stylesheets", plural: `style-contracts/application-stylesheets.ts` injects each
 file `app/styles/index.css` imports, in that file's order, because `setContent`
@@ -237,10 +238,10 @@ cannot resolve an `@import` inside an injected `<style>` and would otherwise
 render every `var()` as its fallback and every rule as nothing at all. The list
 is read out of `index.css` rather than restated, and
 `scripts/style-invariants.test.mjs` asserts that it still is — and that every
-stylesheet under `app/` is in it. That assertion *runs* the harness's own
+stylesheet under `app/` is in it. The assertion runs the harness's own
 `importedStylesheets` body and compares its result with `index.css`, rather than
-re-implementing the parse: re-implementing it compared `index.css` with itself,
-and a harness injecting 25 of the 26 shipped sheets kept the whole suite green.
+implementing a second parser that could agree with itself while omitting a
+shipped stylesheet.
 
 The colocated feature stylesheets ride along in that list. The fixtures here
 mount the shared primitives, and every feature class carries its own prefix, so
@@ -284,11 +285,12 @@ described in full under
 - **Responsive ownership, one-of-each-primitive, and reachability** — every
   rule still has a caller, in every global stylesheet. The other
   direction is narrower: a class the markup asks for is checked against the
-  stylesheets only when it carries one of the five colocated feature prefixes
+  stylesheets only when it carries one of the five registered feature prefixes
   (`analytics-`, `operations-`, `reports-`, `visualization-`,
-  `workspace-dialog-`), so an unstyled class outside those five is not
-  reported. [Theming](../docs/theming.md#guardrails-what-holds-this-in-place)
-  explains why and what it costs.
+  `workspace-dialog-`). The newer `alerts-` namespace is not yet registered, so
+  reverse markup-to-CSS coverage does not currently report an undefined alert
+  class. [Theming](../docs/theming.md#guardrails-what-holds-this-in-place)
+  explains the required registration rule.
 - **The parsers underneath**, pinned against the shapes that have already
   fooled a simpler implementation.
 

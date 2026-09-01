@@ -20,9 +20,10 @@ go build ./... && go vet ./... && go test ./...
 ```
 
 - `npm run lint` includes `lint:css` (stylelint, errors). Go lint in CI is `golangci-lint` pinned in `.github/workflows/ci.yml` — run it with `GOOS=linux` and uncapped issue counts.
+- Install the pinned browser once with `npx --no-install playwright install chromium` before `npm run test:contracts`.
 - `scripts/test-frontend.mjs` has a **hardcoded** test list; a new `*.test.ts(x)` or `scripts/*.test.mjs` runs only if added there.
 - `scripts/check-docs.mjs` allow-lists `docs/*.md`; register a new doc in both lists or `check:docs` fails.
-- Integration suites are gated by env: `OPEN_SPLUNK_BACKEND_INTEGRATION=1`, `OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1`, `OPEN_SPLUNK_OCI_INTEGRATION=1`, `OPEN_SPLUNK_HEC_SLOW_CLIENT=1` (need Docker). Run the one your change touches.
+- Integration suites are gated by env: `OPEN_SPLUNK_DEVELOPMENT_INTEGRATION=1`, `OPEN_SPLUNK_BACKEND_INTEGRATION=1`, `OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1`, `OPEN_SPLUNK_OCI_INTEGRATION=1`, `OPEN_SPLUNK_BACKEND_LOAD=1`, `OPEN_SPLUNK_HEC_LOAD=1`, `OPEN_SPLUNK_HEC_SOAK=1`, and `OPEN_SPLUNK_HEC_SLOW_CLIENT=1` (need Docker). Run the one your change touches; see `integration/README.md` and `docs/hec.md` for exact commands.
 - Verification means executed commands with output, not code reading.
 
 ## Code and repo hygiene

@@ -8,6 +8,13 @@ HEC is disabled by default and is registered only as a complete JSON, raw,
 acknowledgment, health, token-purpose, durable-staging, reconciliation,
 recovery, metrics, and shutdown family.
 
+> **Deployment warning:** HEC shares the server HTTP listener. The supplied
+> Compose service publishes that listener from `0.0.0.0:8080` without direct
+> TLS. If HEC is enabled unchanged, token-bearing HEC traffic is plaintext on
+> every network that can reach the published host port. Bind the published port
+> to `127.0.0.1` for host-local use, or put the complete listener behind a
+> controlled TLS boundary before enabling HEC.
+
 HEC uses the native ingestion authority described in [Ingestion](ingestion.md).
 It cannot select a tenant, grant an index, write directly to ClickHouse, or
 represent an HTTP client as a native collector. Public responses, logs,
@@ -222,6 +229,9 @@ Principal hard ceilings are:
 | Resource | Ceiling |
 | --- | ---: |
 | compressed/decompressed/normalized request | 8 MiB each |
+| HEC-consumed header values, aggregate | 8 KiB |
+| request target and query | 8 KiB |
+| ACK request body | 64 KiB |
 | events per request | 1,000 |
 | normalized event | 1 MiB |
 | JSON nesting / values / members | 16 / 16,384 / 4,096 |
@@ -248,11 +258,20 @@ deployment, persist this before recreating the server:
 OPEN_SPLUNK_SERVER_HEC_ENABLED=true
 ```
 
-Production must use HTTPS. Plain HTTP is accepted only by explicit loopback
-development mode. The default Compose listener is loopback-bound; remote HEC
-requires a reviewed HTTPS exposure or TLS reverse proxy that forwards the
-`/services/collector` namespace unchanged and preserves header/body limits and
-timeouts. Do not add plaintext 8088 or CORS.
+The HTTP server accepts plaintext whenever its TLS certificate and key are
+absent; it does not restrict plaintext to loopback. The supplied Compose service
+listens on `0.0.0.0:8080` and publishes `${OPEN_SPLUNK_DEPLOY_HTTP_PORT:-8080}`
+on every host interface. For host-local use, change the port mapping to:
+
+```yaml
+ports:
+  - "127.0.0.1:${OPEN_SPLUNK_DEPLOY_HTTP_PORT:-8080}:8080"
+```
+
+Remote HEC requires direct server HTTPS or a controlled TLS reverse proxy that
+forwards `/services/collector` unchanged and preserves header/body limits and
+timeouts. The browser Host/Origin policy is not a transport boundary for HEC.
+Do not add plaintext 8088 or CORS.
 
 Create an immutable HEC-purpose token in Administration, select allowed active
 indexes, optional defaults/constraints/rates, and choose ACK mode. Store the

@@ -1,9 +1,15 @@
 # Auditing
 
-Open Splunk keeps successful mutations from explicitly enumerated control-plane
-families and high-volume search admissions in separate bounded SQLite journals.
-Neither journal stores request bodies, credentials, SPL, generated SQL, event
-payloads, definition bodies, or free-form backend errors.
+Open Splunk uses separate bounded SQLite surfaces because their retention and
+failure behavior differ. None stores request bodies, credentials, SPL,
+generated SQL, event payloads, definition bodies, or free-form backend errors.
+
+| Surface | Purpose | Retention at capacity | Failure behavior | Public listing |
+| --- | --- | --- | --- | --- |
+| Successful mutations | Security-relevant committed control-plane changes | Stops at 100,000 per tenant | Mutation rolls back/fails closed | Administrator API |
+| Rejected knowledge attempts and recovery | Privileged rejections and protective quarantine | Attempts roll; recovery uses a separate lifetime reserve | Rejection is exposed only after append | Internal/recovery authority |
+| Search attempts | Payload-free durable job admissions | Rolls at configured ceiling, default 100,000 | Admission rolls back/fails closed | Administrator API |
+| Feature operations | Sharing, retained artifacts, schedules, and alerts | Stops at 100,000 per tenant | Committed feature operation remains; warning/health records the missed append | Internal diagnostics |
 
 `SERVER_FEATURE_AUDIT_SEARCH` advertises the mutation journal list service.
 `SERVER_FEATURE_SEARCH_ATTEMPT_AUDIT` advertises the search-attempt list
@@ -13,18 +19,21 @@ from the authenticated principal.
 ## Successful mutation journal
 
 The immutable taxonomy covers successful mutations to ingestion tokens,
-indexes, apps, saved searches, knowledge objects, and lookups. Representative
-actions are:
+indexes, apps, saved searches, knowledge objects, and server settings.
+Representative actions are:
 
 - `ingestion_token.create`, `.update`, and `.revoke`;
 - `index.create`, `.update`, `.activate`, `.archive`,
   `.delete_keep_data`, and `.delete_data`;
 - `app.create`, `.update`, `.activate`, `.archive`, and `.delete`;
 - `saved_search.create`, `.update`, `.duplicate`, and `.delete`;
-- knowledge `create`, `update`, `scope_change`, `enable`, `disable`,
-  `quarantine`, and `delete`; and
-- lookup asset/definition create, replace/update, lifecycle, and delete
-  actions defined by the protobuf enums.
+- knowledge `create`, `update`, `scope_change`, `enable`, `disable`, and
+  `delete`; and
+- `server_settings.update` for the search-limits policy.
+
+Protective knowledge quarantine belongs to the separate recovery journal.
+Lookup mutations currently have no action or target in this successful-
+mutation taxonomy.
 
 An action is bound to its fixed target kind and actor domain. System and
 browser-administrator actors may perform administrative work; a browser user
@@ -139,11 +148,27 @@ and the first page's retained range. Appends that do not evict that range cannot
 enter the traversal; eviction invalidates continuation rather than returning
 an incomplete historical snapshot.
 
+## Feature-operation journal
+
+Durable result admission, sharing and retention, scheduled-report claims and
+lifecycle, and alert evaluation/delivery emit identity-free records. A record
+contains only closed feature, operation, and outcome enums plus aggregate item
+and byte counts. It cannot contain SPL, object IDs, endpoints, hostnames, or
+secrets.
+
+The journal is append-only and stops at 100,000 events per tenant. Startup
+verifies its integrity. Unlike the successful-mutation and search-attempt
+journals, observation is best-effort: failure to append does not roll back the
+feature operation that already committed. The server increments bounded
+failure health and emits a category-only warning. Current traversal is for
+internal diagnostics; there is no public listing or export API.
+
 ## Operator behavior
 
-Treat mutation-journal capacity as a service-capacity alert. Search attempts
-are deliberately rolling and should be exported to an external audit system if
-longer retention is required. A restore must use one coordinated recovery set.
+Treat mutation- and feature-journal capacity as service-capacity alerts. Search
+attempts are deliberately rolling and should be exported to an external audit
+system if longer retention is required. A restore must use one coordinated
+recovery set.
 Private format counters and high-water identities must match the running source
 contract; unrecognized journals or cursors fail closed and are never rewritten.
 

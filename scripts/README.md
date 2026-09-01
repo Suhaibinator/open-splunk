@@ -1,23 +1,80 @@
-# Build scripts
+# Build and validation automation
 
-Protobuf generation, reproducible artifact builds, migration checks, and
-packaging automation belong here. Artifact automation must build the Next.js
-static export before compiling `open-splunk-server`.
+Use the root Make/npm workflows rather than invoking implementation scripts
+directly. The wrappers pin tool inputs, environment, ordering, and output
+checks; files in this directory are internal automation unless this page says
+otherwise.
 
-`compile-protos.sh` implements `make proto`. Invoke the Make target so the public developer workflow remains stable.
+## Developer workflows
 
-`check-docs.mjs` implements `make docs-check`. It validates local Markdown
-targets and heading anchors across the owned documentation set and rejects
-retired pre-release version tokens, versioned protobuf/API/HEC identifiers,
-release-era SPL rule IDs, versioned document names, and public version-floor
-language. Negative-support fixtures outside the owned Markdown files remain
-available to protocol tests without weakening the documentation contract.
+| Command | Purpose |
+| --- | --- |
+| `make proto-tools` | Install pinned frontend and protobuf tools. |
+| `make dev-clickhouse` / `make dev-down` | Start or stop reusable development ClickHouse. |
+| `make run` | Build the embedded backend-mode UI/server and run the development server. |
+| `make proto` | Lint and regenerate all Go and TypeScript protobuf output. |
+| `make build` | Build the UI-backed server and native collector. |
+| `make build-loggen` | Build the separate test/benchmark log generator. |
+| `make docs-check` | Validate the owned Markdown set, links, anchors, and documentation naming rules. |
+| `make lint` | Run frontend/TypeScript/CSS lint. |
+| `make test` | Run docs, lint, Go, frontend, Playwright contract, and typecheck gates. |
+| `make release` | Reproduce versionless archives from one clean committed source revision. |
+| `make oci` | Reproduce local server and collector images from one clean committed source revision. |
 
-The scalar-String `stats min`/`max` ClickHouse microbenchmark is an opt-in Go
-benchmark because it starts a disposable container. It compares the production
-guarded-Array and scalar-tuple SQL helpers over the same generated corpus and
-reports client time plus server duration, average/peak memory, and rows read
-from `system.query_log`:
+`make clean` currently delegates only to `go clean`; it does not remove
+`build/`, `out/`, generated protobufs, caches, or development data.
+
+`npm run test:frontend` is a hardcoded runner. A new `*.test.ts(x)` or
+`scripts/*.test.mjs` file does not run until it is added to
+`scripts/test-frontend.mjs`. Playwright contracts require the pinned Chromium
+runtime, installed once with:
+
+```sh
+npx --no-install playwright install chromium
+```
+
+## Script ownership
+
+| Script | Role |
+| --- | --- |
+| `compile-protos.sh` | Full deterministic protobuf generation behind `make proto`. |
+| `build-ui.mjs` / `build-ui-output.mjs` | Static Next.js export and embedded-asset manifest validation. |
+| `run-development.sh` | Sanitized native development-server launch. |
+| `check-docs.mjs` | Owned-document, link, anchor, and wording validation. |
+| `test-frontend.mjs` | Explicit frontend/unit/style test dispatcher. |
+| `style-inventory.mjs` | Shared CSS parser/inventory used by styling tests. |
+| `materialize-git-snapshot.mjs` | Clean committed-tree materialization for reproducible artifacts. |
+| `build-release.sh` | Cross-platform archive construction and identity verification. |
+| `build-oci.sh` | Local OCI build/identity/architecture verification. |
+| `publish-release.sh` | CI-only GHCR and GitHub Release publication. |
+| `run-go-race-shard.sh` | CI race-test sharding with explicit package coverage. |
+| `verify-elf-architecture.mjs` | Linux ELF target verification. |
+| `strict-json.mjs` | Duplicate-key-rejecting JSON support for build checks. |
+
+The `*.test.mjs` files exercise their corresponding automation without
+publishing artifacts. JSON styling ledgers are described in
+[Theming](../docs/theming.md#guardrails-what-holds-this-in-place).
+
+## Reproducible artifacts
+
+Both local artifact paths require a clean committed tree and the exact full
+lowercase HEAD hash:
+
+```sh
+OPEN_SPLUNK_SOURCE_REVISION="$(git rev-parse HEAD)" make release
+OPEN_SPLUNK_SOURCE_REVISION="$(git rev-parse HEAD)" make oci
+```
+
+The OCI path defaults to local images tagged with that revision on
+`linux/amd64`. `OPEN_SPLUNK_SERVER_IMAGE`,
+`OPEN_SPLUNK_COLLECTOR_IMAGE`, and `OPEN_SPLUNK_OCI_PLATFORM=linux/arm64`
+select explicit local outputs. These commands never push. Official publication
+is CI-only; see [Releasing](../docs/releasing.md).
+
+## Opt-in ClickHouse benchmarks
+
+The guarded scalar-String stats-extrema lowering benchmark uses a 2,000,000-row
+default corpus:
 
 ```sh
 OPEN_SPLUNK_CLICKHOUSE_BENCHMARK=1 \
@@ -25,53 +82,20 @@ OPEN_SPLUNK_CLICKHOUSE_BENCHMARK=1 \
   -bench '^BenchmarkStatsExtremaLowering$' -benchtime=7x -count=1 -v
 ```
 
-The default corpus has 2,000,000 rows and uses the repository-pinned
-ClickHouse image. Set `OPEN_SPLUNK_STATS_EXTREMA_BENCH_ROWS` for a deliberate
-corpus-size change or `OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE` for an explicit image
-comparison. This is deliberately a helper-level lowering microbenchmark;
-compiler alias/state reuse and downstream key cleanup are covered separately
-by compiler assertions and pinned `EXPLAIN` tests. Benchmark output is
-evidence, not a timing gate.
+Set `OPEN_SPLUNK_STATS_EXTREMA_BENCH_ROWS` to change its corpus size.
 
-`style-invariants.test.mjs` is every structural invariant of the styling layer,
-in one file of nine sections: the token layer and its naming grammar, the
-literal ledger, one entry point and one cascade order, where a responsive rule
-lives, one implementation of each primitive, class reachability (total from
-rule to markup, and from markup back to rule only for the five colocated feature
-prefixes `FEATURE_PREFIXES` lists), and pins on the parsers underneath. None of
-it is visible to a compiler, a lint count or a screenshot.
-[Theming](../docs/theming.md#guardrails-what-holds-this-in-place) describes each
-section and what it can see.
+The production-shaped authored-expression benchmark compares the complete
+parser/planner/compiler/executor path with parameterized control SQL over a
+100,000-row default corpus:
 
-`style-inventory.mjs` does all the reading and parsing, and is a library rather
-than a test file so the suite can assert on stylesheet structure without opening
-a stylesheet itself — which is one of the invariants it enforces.
+```sh
+OPEN_SPLUNK_CLICKHOUSE_BENCHMARK=1 \
+  go test ./internal/queryexec -run '^$' \
+  -bench '^BenchmarkAuthoredExpressionExecution$' \
+  -benchtime=7x -count=3 -benchmem -v
+```
 
-`style-guardrails.test.mjs` guards the guardrails. Half of it pins the wiring —
-that `npm run lint` still chains `lint:css` over the whole layer, that no rule
-in `.stylelintrc.json` is set to null or downgraded by a `defaultSeverity`, that
-the two documented exemptions name exactly the files they document, and that CI
-still runs all three gates — because unwiring any of those makes the phase bar
-false while every other test stays green. The other half covers the four
-spellings a value can take where the property that names it never appears: a
-size or a face inside the `font` shorthand, a step inside an `@container` query,
-a colour keyword inside another function's parentheses, and a colour in an
-inline `style`, which is the one place that outranks the whole stylesheet layer.
-
-Three JSON ledgers record what the suite deliberately allows, each compared
-against the tree in both directions so that paying a row off fails as loudly as
-adding an unrecorded one:
-
-- `css-literal-debt.json` — every colour and scale literal outside the token
-  layer.
-- `css-retired-classes.json` — the classes the consolidation deleted and the
-  primitive that replaced each. Nothing in the toolchain reports an unmatched
-  class, so this is the only place a deletion that outran its markup shows up.
-- `css-dynamic-classes.json` — global classes that only ever exist at runtime.
-
-Repeated declaration blocks have no ledger or exemption: four or more
-identical declarations in the same at-rule context must be consolidated.
-
-`safety-net.test.mjs` checks that the frontend safety net cannot stop running
-unnoticed: every unit test file is named in this directory's hardcoded runner
-list, and every listed test file still exists.
+Set `OPEN_SPLUNK_AUTHORED_EXPRESSION_BENCH_ROWS` within its documented test
+range to change that corpus. Both benchmarks use the repository-pinned
+ClickHouse digest unless `OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE` explicitly selects
+another canonical digest. Results are evidence, not release timing gates.
