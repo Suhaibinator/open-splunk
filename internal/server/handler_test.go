@@ -31,18 +31,21 @@ import (
 
 var testNow = time.Date(2026, 7, 22, 12, 0, 0, 123_000_000, time.UTC)
 
-func TestHandlerPassesConfiguredLoggerToSRouter(t *testing.T) {
+func TestHandlerPassesConfiguredLoggerAndBuildIDToSRouter(t *testing.T) {
 	t.Parallel()
 
-	// SRouter v1.6.3 logs expected client failures, including this 404, at
+	// SRouter v1.7.0 logs expected client failures, including this 404, at
 	// Info level. Observe that level so this test continues to verify the
-	// configured logger is passed through to SRouter.
+	// configured logger and build identity are passed through to SRouter.
 	core, observed := observer.New(zapcore.InfoLevel)
+	build := validServerBuildMetadata(t)
+	build.ProductVersion = new("0.4.5")
 	handler := newTestHandler(t, Config{
 		Logger:     zap.New(core),
 		SearchJobs: &fakeSearchJobs{getErr: searchjobs.ErrNotFound},
 		Indexes:    fakeIndexCatalog{},
 		WebUI:      testUI(),
+		Bootstrap:  BootstrapConfig{Build: build},
 	})
 	response := postProtoHeaders(
 		t,
@@ -57,6 +60,27 @@ func TestHandlerPassesConfiguredLoggerToSRouter(t *testing.T) {
 	}
 	if observed.Len() == 0 {
 		t.Fatal("configured logger did not receive SRouter error")
+	}
+	for _, entry := range observed.All() {
+		if entry.ContextMap()["build_id"] == build.GetProductVersion() {
+			return
+		}
+	}
+	t.Fatal("SRouter error did not include the configured build identity")
+}
+
+func TestSRouterDependenciesUseSourceRevisionWithoutProductVersion(t *testing.T) {
+	t.Parallel()
+
+	build := validServerBuildMetadata(t)
+	dependencies := (&apiHandler{
+		bootstrap: BootstrapConfig{Build: build},
+	}).srouterDependencies()
+	if dependencies.BuildID == nil {
+		t.Fatal("SRouter build identity provider is nil")
+	}
+	if got := dependencies.BuildID(); got != build.GetSourceRevision() {
+		t.Fatalf("SRouter build identity = %q, want source revision %q", got, build.GetSourceRevision())
 	}
 }
 

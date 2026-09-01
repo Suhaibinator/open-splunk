@@ -1668,6 +1668,18 @@ func newSRouterLogger(logger *zap.Logger) *zap.Logger {
 	}))
 }
 
+func (handler *apiHandler) srouterDependencies() router.RouterDependencies[string, struct{}] {
+	dependencies := router.RouterDependencies[string, struct{}]{}
+	if handler.bootstrap.Build != nil {
+		buildID := handler.bootstrap.Build.GetProductVersion()
+		if buildID == "" {
+			buildID = handler.bootstrap.Build.GetSourceRevision()
+		}
+		dependencies.BuildID = func() string { return buildID }
+	}
+	return dependencies
+}
+
 func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout time.Duration) http.Handler {
 	// NewHandler substitutes a no-op logger for a nil Config.Logger, so this is
 	// always non-nil.
@@ -1879,7 +1891,7 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 		// context deadline so http.Server.Shutdown owns every handler lifetime.
 		GlobalTimeout:     0,
 		GlobalMaxBodySize: maximumRequestBytes,
-	}, nil, nil)
+	}, handler.srouterDependencies())
 	apiRouter.Group(apiPathPrefix).
 		Auth(noAuth).
 		Use(disableAPICaching, protobufMiddleware, requestMiddleware, deadlineMiddleware).

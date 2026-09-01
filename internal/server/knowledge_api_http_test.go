@@ -272,7 +272,7 @@ func newKnowledgeHTTPRouter(handler *apiHandler) http.Handler {
 		ServiceName:       "open-splunk-knowledge-http-test",
 		GlobalTimeout:     0,
 		GlobalMaxBodySize: maximumKnowledgeMutationRequestBytes,
-	}, nil, nil)
+	}, handler.srouterDependencies())
 	inner.Group("/api").
 		Auth(noAuth).
 		Use(
