@@ -149,10 +149,14 @@ import {
   applyDiagnosticFix,
   completionContextAt,
   getQueryDiagnostic,
-  isCursorInQuotedValue,
   type SplDiagnostic,
   utf16OffsetsForUtf8ByteOffsets,
 } from "@/lib/search/spl-editor";
+import {
+  editorKeyIntent,
+  insertCompletionIntoQuery,
+  nextCompletionIndex,
+} from "@/lib/search/spl-editor-interaction";
 
 import { AppIcon, type AppIconName } from "./_components/app-icon";
 import { StatusDot, statusClassName } from "./_components/status";
@@ -4742,47 +4746,44 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   }
 
   function handleEditorKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-      event.preventDefault();
-      if (backendWorkspaceTransitionBlocked()) return;
-      if (runDisabledReason !== null) {
-        showToast(runDisabledReason, "warning");
+    const intent = editorKeyIntent(event, {
+      query,
+      caret: event.currentTarget.selectionStart,
+      completionOpen,
+      completionCount: filteredCompletions.length,
+    });
+    switch (intent.kind) {
+      case "run":
+        event.preventDefault();
+        if (backendWorkspaceTransitionBlocked()) return;
+        if (runDisabledReason !== null) {
+          showToast(runDisabledReason, "warning");
+          return;
+        }
+        if (dirty) timelineZoomParentRef.current = null;
+        runSearch();
         return;
-      }
-      if (dirty) timelineZoomParentRef.current = null;
-      runSearch();
-      return;
-    }
-    if (event.ctrlKey && event.key === " ") {
-      event.preventDefault();
-      const caret = event.currentTarget.selectionStart;
-      if (isCursorInQuotedValue(query, caret)) {
+      case "open-completions":
+        event.preventDefault();
+        setEditorCaret(intent.caret);
+        setCompletionIndex(0);
+        setCompletionOpen(true);
+        return;
+      case "close-completions":
+        event.preventDefault();
         setCompletionOpen(false);
         return;
-      }
-      setEditorCaret(caret);
-      setCompletionIndex(0);
-      setCompletionOpen(true);
-      return;
-    }
-    if (!completionOpen) return;
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-      event.preventDefault();
-      if (filteredCompletions.length === 0) return;
-      setCompletionIndex((current) => {
-        const delta = event.key === "ArrowDown" ? 1 : -1;
-        return (current + delta + filteredCompletions.length) % filteredCompletions.length;
-      });
-      return;
-    }
-    if ((event.key === "Enter" || event.key === "Tab") && filteredCompletions.length > 0) {
-      event.preventDefault();
-      insertCompletion(filteredCompletions[completionIndex] ?? filteredCompletions[0]);
-      return;
-    }
-    if (event.key === "Escape") {
-      event.preventDefault();
-      setCompletionOpen(false);
+      case "move-completion":
+        event.preventDefault();
+        if (filteredCompletions.length === 0) return;
+        setCompletionIndex((current) => nextCompletionIndex(current, intent.delta, filteredCompletions.length));
+        return;
+      case "accept-completion":
+        event.preventDefault();
+        insertCompletion(filteredCompletions[completionIndex] ?? filteredCompletions[0]);
+        return;
+      case "ignore":
+        return;
     }
   }
 
@@ -4791,40 +4792,20 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     replaceStart?: number;
     replaceEnd?: number;
   }) {
-    const { insertion } = completion;
     const editor = editorRef.current;
     const selectionStart = editor?.selectionStart ?? editorCaret;
     const selectionEnd = editor?.selectionEnd ?? selectionStart;
-    if (isCursorInQuotedValue(query, selectionStart)) {
+    const edited = insertCompletionIntoQuery(query, selectionStart, selectionEnd, completion);
+    if (edited === null) {
       setCompletionOpen(false);
       return;
     }
-    const context = completionContextAt(query, selectionStart);
-    let nextQuery: string;
-    let nextCaret: number;
 
-    if (completion.replaceStart !== undefined && completion.replaceEnd !== undefined) {
-      const replaceStart = Math.max(0, Math.min(query.length, completion.replaceStart));
-      const replaceEnd = Math.max(replaceStart, Math.min(query.length, completion.replaceEnd));
-      nextQuery = `${query.slice(0, replaceStart)}${insertion}${query.slice(replaceEnd)}`;
-      nextCaret = replaceStart + insertion.length;
-    } else if (context !== null) {
-      nextQuery = `${query.slice(0, context.fragmentStart)}${insertion}${query.slice(Math.max(context.fragmentEnd, selectionEnd))}`;
-      nextCaret = context.fragmentStart + insertion.length;
-    } else {
-      const before = query.slice(0, selectionStart);
-      const after = query.slice(selectionEnd);
-      const separator = before.length === 0 || before.endsWith("\n") ? "" : "\n";
-      const inserted = `${separator}| ${insertion}`;
-      nextQuery = `${before}${inserted}${after}`;
-      nextCaret = before.length + inserted.length;
-    }
-
-    setQuery(nextQuery);
+    setQuery(edited.query);
     backendHistoryRerunRef.current = null;
-    setEditorCaret(nextCaret);
+    setEditorCaret(edited.caret);
     setCompletionOpen(false);
-    focusEditor(nextCaret);
+    focusEditor(edited.caret);
   }
 
   function handleEditorChange(event: ChangeEvent<HTMLTextAreaElement>) {

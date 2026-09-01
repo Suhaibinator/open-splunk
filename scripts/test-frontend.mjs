@@ -87,6 +87,7 @@ const testFiles = [
   path.join("lib", "search", "query-pivots.test.ts"),
   path.join("lib", "search", "saved-search-names.test.ts"),
   path.join("lib", "search", "spl-editor.test.ts"),
+  path.join("lib", "search", "spl-editor-interaction.test.ts"),
   path.join("lib", "search", "spl-syntax.test.ts"),
   path.join("lib", "search", "server-inspection.test.ts"),
   path.join("lib", "search", "streamstats-surface.test.ts"),
