@@ -44,11 +44,15 @@ test("Ctrl+Space opens the command menu and Enter inserts the highlighted comman
   await page.keyboard.press("Control+Space");
   const menu = page.getByTestId("completion-menu");
   await expect(menu).toBeVisible();
-  await expect(menu.locator("[data-highlighted=true]")).toHaveCount(1);
+  await expect(menu).toHaveRole("listbox");
+  await expect(menu.locator("[aria-selected=\"true\"]")).toHaveCount(1);
+  await expect(page.getByTestId("search-input")).toHaveAttribute("aria-activedescendant", "spl-completion-0");
 
   await page.keyboard.press("ArrowDown");
-  const highlighted = menu.locator("[data-highlighted=true]");
+  const highlighted = menu.locator("[aria-selected=\"true\"]");
   await expect(highlighted).toHaveId("spl-completion-1");
+  await expect(highlighted).toHaveRole("option");
+  await expect(page.getByTestId("search-input")).toHaveAttribute("aria-activedescendant", "spl-completion-1");
   const command = await highlighted.locator("code").innerText();
 
   await page.keyboard.press("Enter");

@@ -1,21 +1,31 @@
-import type {
-  ChangeEvent,
-  Dispatch,
-  KeyboardEvent,
-  RefObject,
-  SetStateAction,
-  UIEvent,
+import {
+  type ChangeEvent,
+  type Dispatch,
+  type KeyboardEvent,
+  type RefObject,
+  type SetStateAction,
+  type UIEvent,
+  useEffect,
 } from "react";
 
 import type { SplDiagnostic } from "@/lib/search/spl-editor";
 
+import { AppIcon } from "../../_components/app-icon";
+import {
+  COMPLETION_KIND_PRESENTATION,
+  type CompletionKind,
+  groupCompletions,
+} from "../completion-groups";
 import type { ModalName } from "../model";
 import { syntaxTokens } from "../workspace-utils";
 
 export interface CompletionItem {
+  kind: CompletionKind;
   label: string;
   insertion: string;
   detail: string;
+  /** Server relevance (0.5 any, 0.75 prefix, 1 exact); local items reuse the ladder. */
+  relevance: number;
   replaceStart?: number;
   replaceEnd?: number;
 }
@@ -27,6 +37,7 @@ export interface SearchEditorProps {
   editorFocused: boolean;
   editorLineCount: number;
   editorRef: RefObject<HTMLTextAreaElement | null>;
+  /** Already ordered by kind and relevance; `completionIndex` addresses this list. */
   filteredCompletions: CompletionItem[];
   gutterLinesRef: RefObject<HTMLDivElement | null>;
   highlightRef: RefObject<HTMLPreElement | null>;
@@ -46,6 +57,13 @@ export interface SearchEditorProps {
   onEditorScroll: (event: UIEvent<HTMLTextAreaElement>) => void;
   onInsertCompletion: (completion: CompletionItem) => void;
   onModalChange: (modal: ModalName | null) => void;
+}
+
+/** What the live region says about the highlighted suggestion. */
+function completionAnnouncement(completion: CompletionItem | undefined): string {
+  if (completion === undefined) return "First suggestion selected.";
+  const noun = COMPLETION_KIND_PRESENTATION[completion.kind].heading.toLowerCase().replace(/s$/u, "");
+  return `${completion.label}, ${noun}, selected.`;
 }
 
 /**
@@ -79,6 +97,17 @@ export function SearchEditor({
   onInsertCompletion,
   onModalChange,
 }: SearchEditorProps) {
+  const groups = groupCompletions(filteredCompletions);
+  const activeCompletionId = completionOpen && filteredCompletions.length > 0
+    ? `spl-completion-${completionIndex}`
+    : undefined;
+  // The menu scrolls once the groups outgrow it, and the keyboard walks
+  // options the pointer never hovered, so the highlighted one follows the
+  // arrow keys into view.
+  useEffect(() => {
+    if (activeCompletionId === undefined) return;
+    document.getElementById(activeCompletionId)?.scrollIntoView({ block: "nearest" });
+  }, [activeCompletionId]);
   return (
     <div
       className={`spl-editor${editorFocused ? " focused" : ""}${diagnostic === null ? "" : " has-error"}`}
@@ -94,6 +123,10 @@ export function SearchEditor({
         data-testid="search-input"
         aria-label="Search with SPL"
         aria-describedby={`${diagnostic === null ? "editor-help" : "editor-diagnostic"} spl-completion-status`}
+        aria-autocomplete="list"
+        aria-haspopup="listbox"
+        aria-controls={completionOpen ? "spl-completion-list" : undefined}
+        aria-activedescendant={activeCompletionId}
         value={query}
         disabled={launchPending}
         spellCheck={false}
@@ -121,27 +154,47 @@ export function SearchEditor({
       <span className="sr-only" id="spl-completion-status" aria-live="polite">
         {completionOpen
           ? filteredCompletions.length === 0
-            ? "No matching SPL commands."
-            : `${filteredCompletions.length} suggestions available. ${filteredCompletions[completionIndex]?.label ?? "First suggestion"} selected. Use Up and Down arrows, then Enter or Tab to insert.`
+            ? "No matching SPL suggestions."
+            : `${filteredCompletions.length} suggestions available. ${completionAnnouncement(filteredCompletions[completionIndex])} Use Up and Down arrows, then Enter or Tab to insert.`
           : historyAnnouncement ?? "Suggestions closed."}
       </span>
       {completionOpen ? (
-        <div className="completion-menu" id="spl-completion-list" data-testid="completion-menu">
-          <div className="completion-title"><span>Commands</span><small>Enter a pipeline stage</small></div>
-          {filteredCompletions.map((completion, index) => (
-            <button
-              id={`spl-completion-${index}`}
-              data-highlighted={index === completionIndex}
-              type="button"
-              key={completion.label}
-              onMouseEnter={() => onCompletionIndexChange(index)}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => onInsertCompletion(completion)}
-            >
-              <code>{completion.label}</code><span>{completion.detail}</span><kbd>{index === completionIndex ? "↵" : ""}</kbd>
-            </button>
-          ))}
-          {filteredCompletions.length === 0 ? <p className="completion-empty">No matching SPL commands</p> : null}
+        <div
+          className="completion-menu"
+          id="spl-completion-list"
+          role="listbox"
+          aria-label="SPL suggestions"
+          data-testid="completion-menu"
+        >
+          {groups.map((group) => {
+            const presentation = COMPLETION_KIND_PRESENTATION[group.kind];
+            const headingId = `spl-completion-group-${group.kind}`;
+            return (
+              <div className="completion-group" role="group" aria-labelledby={headingId} key={group.kind}>
+                <div className="completion-title" id={headingId}>
+                  <span><AppIcon name={presentation.icon} size="xs" />{presentation.heading}</span>
+                  <small>{presentation.hint}</small>
+                </div>
+                {group.items.map(({ index, item }) => (
+                  <button
+                    className="completion-option"
+                    id={`spl-completion-${index}`}
+                    role="option"
+                    aria-selected={index === completionIndex}
+                    data-kind={item.kind}
+                    type="button"
+                    key={`${item.kind}:${item.label}`}
+                    onMouseEnter={() => onCompletionIndexChange(index)}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => onInsertCompletion(item)}
+                  >
+                    <code>{item.label}</code><span>{item.detail}</span><kbd>{index === completionIndex ? "↵" : ""}</kbd>
+                  </button>
+                ))}
+              </div>
+            );
+          })}
+          {filteredCompletions.length === 0 ? <p className="completion-empty">No matching SPL suggestions</p> : null}
         </div>
       ) : null}
     </div>

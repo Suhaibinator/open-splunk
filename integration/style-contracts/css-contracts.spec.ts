@@ -1210,9 +1210,15 @@ function composerMarkup(lines: number, completionOpen = false): string {
   const query = Array.from({ length: lines }, (_, index) => (index === 0 ? "index=main" : `| stage${index}`)).join("\n");
   const gutter = Array.from({ length: Math.max(2, lines) }, (_, index) => `<span>${index + 1}</span>`).join("");
   const menu = completionOpen
-    ? `<div class="completion-menu" id="spl-completion-list">
-        <div class="completion-title"><span>Commands</span><small>Enter a pipeline stage</small></div>
-        <button type="button"><code>stats</code><span>Aggregate</span><kbd>↵</kbd></button>
+    ? `<div class="completion-menu" id="spl-completion-list" role="listbox" aria-label="SPL suggestions">
+        <div class="completion-group" role="group" aria-labelledby="spl-completion-group-command">
+          <div class="completion-title" id="spl-completion-group-command"><span>Commands</span><small>Enter a pipeline stage</small></div>
+          <button class="completion-option" id="spl-completion-0" role="option" aria-selected="true" type="button"><code>stats</code><span>Aggregate</span><kbd>↵</kbd></button>
+        </div>
+        <div class="completion-group" role="group" aria-labelledby="spl-completion-group-field">
+          <div class="completion-title" id="spl-completion-group-field"><span>Fields</span><small>Fields seen in results</small></div>
+          <button class="completion-option" id="spl-completion-1" role="option" aria-selected="false" type="button"><code>status</code><span>Field</span><kbd></kbd></button>
+        </div>
       </div>`
     : "";
   return `
@@ -1285,5 +1291,17 @@ test.describe("SPL editor auto-grow", () => {
     expect(twoLines.menuTop).toBeGreaterThanOrEqual(twoLines.editorBottom);
     const eightLines = await menuGeometry(8);
     expect(eightLines.menuTop).toBeGreaterThanOrEqual(eightLines.editorBottom);
+  });
+
+  test("the selected option is the one aria-selected names, not a private attribute", async ({ page }) => {
+    // The menu is a listbox the textarea drives through aria-activedescendant,
+    // so the highlight has to follow the same attribute assistive technology
+    // reads. A second group in the fixture checks that grouping does not
+    // change which surface the option sits on.
+    await mount(page, composerMarkup(2, true), DESKTOP_WIDTH);
+    const [selection, surface] = await resolveTokens(page, ["--selection", "--bg-surface"]);
+    await expect(page.locator("#spl-completion-0")).toHaveCSS("background-color", selection!);
+    await expect(page.locator("#spl-completion-1")).toHaveCSS("background-color", surface!);
+    expect(selection).not.toEqual(surface);
   });
 });

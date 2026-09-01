@@ -12,6 +12,7 @@ const names: AppIconName[] = [
   "download", "external-link", "file", "open", "history", "hourglass", "home",
   "info", "dashboard", "loading", "logout", "list", "menu", "minus", "more", "edit", "plus", "refresh",
   "save", "search", "settings", "share", "stop", "wrap", "trash", "warning", "users", "close", "mode",
+  "braces", "function", "quote", "tag", "terminal",
 ];
 
 test("every application icon renders a hidden, non-focusable Lucide SVG", () => {

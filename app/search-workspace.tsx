@@ -177,10 +177,16 @@ import { AlertWizard } from "./reports/alert-wizard";
 import { defaultAlertForm } from "./reports/alerts-ui-state";
 import { scheduledReportConfigurationHref } from "./reports/reports-view-state";
 import { SearchComposer } from "./search-workspace/components/search-composer";
+import type { CompletionItem } from "./search-workspace/components/search-editor";
 import { InactiveResultTabPanels } from "./search-workspace/components/inactive-result-tab-panels";
 import { SearchSharingDialog } from "./search-workspace/components/search-sharing-dialog";
 import { WorkspaceDialogs } from "./search-workspace/components/workspace-dialogs";
 import { serializeRowsAsJsonLinesForClipboard, serializeRowsForClipboard } from "./search-workspace/clipboard-export";
+import {
+  completionKindFromSuggestion,
+  localCompletionRelevance,
+  orderCompletions,
+} from "./search-workspace/completion-groups";
 import { historyRecallAnnouncement, historyRecallDirection } from "./search-workspace/editor-history-recall";
 import {
   collapsePageEvents,
@@ -782,13 +788,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const [expandedEvents, setExpandedEvents] = useState<Set<string>>(new Set());
   const [completionOpen, setCompletionOpen] = useState(false);
   const [completionIndex, setCompletionIndex] = useState(0);
-  const [backendCompletions, setBackendCompletions] = useState<Array<{
-    label: string;
-    insertion: string;
-    detail: string;
-    replaceStart?: number;
-    replaceEnd?: number;
-  }> | null>(null);
+  const [backendCompletions, setBackendCompletions] = useState<CompletionItem[] | null>(null);
   const [editorCaret, setEditorCaret] = useState(initialWorkspaceQuery.length);
   const [editorFocused, setEditorFocused] = useState(false);
   const [searchMode, setSearchMode] = useState<SearchMode>("Smart");
@@ -1086,11 +1086,15 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   }, [backendEnabled, diagnostic]);
   const completionContext = useMemo(() => completionContextAt(query, editorCaret), [editorCaret, query]);
   const filteredCompletions = useMemo(() => {
-    if (backendEnabled && backendCompletions !== null) return backendCompletions;
+    if (backendEnabled && backendCompletions !== null) return orderCompletions(backendCompletions);
     const prefix = completionContext?.prefix.toLowerCase() ?? "";
-    return prefix.length === 0
-      ? COMPLETIONS
-      : COMPLETIONS.filter((completion) => completion.label.startsWith(prefix));
+    if (prefix.length === 0) return orderCompletions(COMPLETIONS);
+    const local: CompletionItem[] = [];
+    for (const completion of COMPLETIONS) {
+      if (!completion.label.startsWith(prefix)) continue;
+      local.push({ ...completion, relevance: localCompletionRelevance(completion.label, prefix) });
+    }
+    return orderCompletions(local);
   }, [backendCompletions, backendEnabled, completionContext]);
 
   useEffect(() => {
@@ -1135,9 +1139,11 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           const start = suggestion.replacementRange?.start?.byteOffset;
           const end = suggestion.replacementRange?.end?.byteOffset;
           return {
+            kind: completionKindFromSuggestion(suggestion.kind),
             label: suggestion.label,
             insertion: suggestion.insertionText,
             detail: suggestion.detail ?? suggestion.documentation ?? "Server suggestion",
+            relevance: suggestion.relevance,
             replaceStart: start === undefined ? undefined : replacementOffsets[index * 2],
             replaceEnd: end === undefined ? undefined : replacementOffsets[index * 2 + 1],
           };

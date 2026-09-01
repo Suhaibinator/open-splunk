@@ -286,13 +286,22 @@
   border: 1px solid var(--border-strong);
   box-shadow: var(--shadow-lg);
   left: 28px;
+  max-height: 322px;
   max-width: none;
   min-width: 0;
+  overflow-y: auto;
   padding: var(--space-1) 0;
   position: absolute;
   right: -1px;
   top: calc(100% + var(--space-1));
   z-index: var(--z-dropdown);
+}
+
+/* Each kind group opens with its own heading; later headings also close the
+   group above them. */
+.completion-group + .completion-group .completion-title {
+  border-top: 1px solid var(--border-subtle);
+  margin-top: var(--space-1);
 }
 
 .completion-title {
@@ -306,11 +315,14 @@
 }
 
 .completion-title span {
+  align-items: center;
+  display: inline-flex;
   font-weight: 700;
+  gap: 6px;
   text-transform: uppercase;
 }
 
-.completion-menu > button {
+.completion-option {
   align-items: center;
   background: var(--bg-surface);
   border: 0;
@@ -323,8 +335,8 @@
   width: 100%;
 }
 
-.completion-menu > button:hover,
-.completion-menu > button[data-highlighted="true"] {
+.completion-option:hover,
+.completion-option[aria-selected="true"] {
   background: var(--selection);
 }
 
@@ -332,9 +344,12 @@
   color: var(--accent-alt);
   font-size: var(--type-md);
   font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.completion-menu > button span {
+.completion-option span {
   color: var(--fg-muted);
   font-size: var(--type-sm);
 }
@@ -695,7 +710,7 @@
     top: calc(100% + 46px + 6px + var(--space-1));
   }
 
-  .completion-menu > button {
+  .completion-option {
     gap: var(--space-2);
     grid-template-columns: 78px minmax(0, 1fr) 16px;
   }

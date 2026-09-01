@@ -1,6 +1,8 @@
 import { SPL_PIPELINE_COMMANDS } from "@/lib/search/spl-syntax";
 import { boundedIndexSearchQuery } from "@/lib/search/launch-url";
 
+import { COMPLETION_RELEVANCE } from "./completion-groups";
+import type { CompletionItem } from "./components/search-editor";
 import type { ResultTab, TimeRange } from "./model";
 
 export const DEFAULT_QUERY = boundedIndexSearchQuery("gradethis");
@@ -22,10 +24,12 @@ export const TIME_PRESETS: TimeRange[] = [
   { label: "All time", earliest: "0", latest: "now" },
 ];
 
-export const COMPLETIONS = SPL_PIPELINE_COMMANDS.map(({ name, insertion, detail }) => ({
+export const COMPLETIONS: CompletionItem[] = SPL_PIPELINE_COMMANDS.map(({ name, insertion, detail }) => ({
+  kind: "command",
   label: name,
   insertion,
   detail,
+  relevance: COMPLETION_RELEVANCE.any,
 }));
 
 export const EVENT_EXPORT_FIELDS = ["_time", "level", "logger", "message", "trace_id"];
