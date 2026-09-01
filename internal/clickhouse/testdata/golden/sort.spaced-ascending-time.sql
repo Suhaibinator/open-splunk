@@ -1,0 +1,17 @@
+-- official SPL case: sort.spaced-ascending-time
+-- source: https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/sort (Required arguments > sort-by-clause)
+-- query: index=main | sort 0 + _time
+-- output_fields: _time, _raw, index, host, source, sourcetype, service, level, message, trace_id, span_id, event_id, _indextime, fields
+-- string_or_bytes_outputs: []clickhouse.ResultStringOrBytesOutput{clickhouse.ResultStringOrBytesOutput{OutputIndex:0x1, Nullable:false}}
+-- sparse_fields: true subset=false
+-- atomic_result: false
+-- execution_authority_digest: 0fee2c22bdc6878450f5a7468f1da74467157aa169dcec8464a02e96998b8d5b
+-- args[0]: "tenant-1"
+-- args[1]: "main"
+-- args[2]: "2026-07-21 00:00:00.000000000"
+-- args[3]: "2026-07-22 00:00:00.000000000"
+-- args[4]: "2026-07-22 00:00:01.000"
+-- args[5]: "2026-07-22 00:00:01.000"
+-- args[6]: 0x49
+-- args[7]: "main"
+SELECT "_time", "_raw", "index", "host", "source", "sourcetype", "service", "level", "message", "trace_id", "span_id", "event_id", "_indextime", "__os_fields" AS "fields", "__os_field_names" AS "__os_result_field_names", toUInt8(ifNull("__os_raw_encoding" = 2, 0)) AS "__os_result_semantic_bytes_1" FROM (SELECT *, tuple(toUInt8(NOT ifNull(isNotNull("_time"), 0)), ["_time"]) AS "__os_order_2_0", "__os_sort_event_id" AS "__os_order_2_tie_0", "__os_sort_visibility_seq" AS "__os_order_2_tie_1", "__os_sort_source_identity" AS "__os_order_2_tie_2" FROM (SELECT * FROM (SELECT "event_id" AS "event_id", "index_name" AS "index", "event_time" AS "_time", "index_time" AS "_indextime", "host" AS "host", "source" AS "source", "sourcetype" AS "sourcetype", "service" AS "service", "severity" AS "severity", "level" AS "level", "body" AS "message", "raw" AS "_raw", "raw_encoding" AS "__os_raw_encoding", "trace_id" AS "trace_id", "span_id" AS "span_id", "collector_id" AS "collector_id", "batch_id" AS "batch_id", "fields" AS "__os_fields", "field_names" AS "__os_field_names", "field_types" AS "__os_field_types", "field_metadata_version" AS "__os_field_metadata_version", "event_time" AS "__os_sort_time", "event_id" AS "__os_sort_event_id", "visibility_seq" AS "__os_sort_visibility_seq", tuple("index_name", "collector_id", "batch_sequence", "batch_id") AS "__os_sort_source_identity" FROM "open_splunk"."events" WHERE "tenant_id" = ? AND "index_name" IN (?) AND "event_time" >= parseDateTime64BestEffort(?, 9, 'UTC') AND "event_time" < parseDateTime64BestEffort(?, 9, 'UTC') AND "index_time" <= parseDateTime64BestEffort(?, 3, 'UTC') AND "expires_at" > parseDateTime64BestEffort(?, 3, 'UTC') AND "visibility_seq" <= ?) AS "_stage_1" WHERE (1 AND ifNull("index" = ?, 0))) AS "_stage_2" ORDER BY tupleElement("__os_order_2_0", 1) ASC NULLS LAST, tupleElement("__os_order_2_0", 2) ASC NULLS LAST, "__os_order_2_tie_0" DESC NULLS LAST, "__os_order_2_tie_1" DESC NULLS LAST, "__os_order_2_tie_2" DESC NULLS LAST) AS "_stage_3" ORDER BY tupleElement("__os_order_2_0", 1) ASC NULLS LAST, tupleElement("__os_order_2_0", 2) ASC NULLS LAST, "__os_order_2_tie_0" DESC NULLS LAST, "__os_order_2_tie_1" DESC NULLS LAST, "__os_order_2_tie_2" DESC NULLS LAST

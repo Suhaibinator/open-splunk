@@ -1,0 +1,27 @@
+-- official SPL case: rex.named-capture
+-- source: https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/rex (Syntax)
+-- query: index=main | rex field=_raw "(?<code>[0-9]+)"
+-- output_fields: _time, _raw, index, host, source, sourcetype, service, level, message, trace_id, span_id, event_id, _indextime, code
+-- string_or_bytes_outputs: []clickhouse.ResultStringOrBytesOutput{clickhouse.ResultStringOrBytesOutput{OutputIndex:0x1, Nullable:false}}
+-- sparse_fields: false subset=false
+-- atomic_result: false
+-- execution_authority_digest: 67b739b5edf0974b57b9a2ceb2c31857e1bd233b1c4e81a96ffb29f7f1342ede
+-- args[0]: "code"
+-- args[1]: "code."
+-- args[2]: "code"
+-- args[3]: "code"
+-- args[4]: "code."
+-- args[5]: 0xb
+-- args[6]: 0x1
+-- args[7]: 0x0
+-- args[8]: "code."
+-- args[9]: "(?-s)(?P<code>[0-9]+)"
+-- args[10]: "tenant-1"
+-- args[11]: "main"
+-- args[12]: "2026-07-21 00:00:00.000000000"
+-- args[13]: "2026-07-22 00:00:00.000000000"
+-- args[14]: "2026-07-22 00:00:01.000"
+-- args[15]: "2026-07-22 00:00:01.000"
+-- args[16]: 0x49
+-- args[17]: "main"
+SELECT "_time", "_raw", "index", "host", "source", "sourcetype", "service", "level", "message", "trace_id", "span_id", "event_id", "_indextime", "code", toUInt8(ifNull("__os_raw_encoding" = 2, 0)) AS "__os_result_semantic_bytes_1" FROM (SELECT "_time", "_raw", "index", "host", "source", "sourcetype", "service", "level", "message", "trace_id", "span_id", "event_id", "_indextime", if("__os_rex_matched_2" != 0, CAST(arrayElement("__os_rex_groups_2", 1) AS Dynamic), CAST("__os_fields"."code" AS Dynamic)) AS "code", "severity", "collector_id", "batch_id", "__os_fields", "__os_field_names", "__os_field_types", "__os_field_metadata_version", "__os_raw_encoding", "__os_sort_time", "__os_sort_event_id", "__os_sort_visibility_seq", "__os_sort_source_identity", "__os_rex_captured_bytes_2", toUInt8(if("__os_rex_matched_2" != 0, 1, ifNull(((has("__os_field_names", ?)) OR (arrayExists(name -> startsWith(name, ?), "__os_field_names"))), 0))) AS "__os_rex_exists_2_0", toUInt8(if("__os_rex_matched_2" != 0, toUInt8(2), multiIf(indexOf("__os_field_names", ?) != 0, arrayElement("__os_field_types", indexOf("__os_field_names", ?)), arrayExists(name -> startsWith(name, ?), "__os_field_names"), CAST(? AS UInt8), isNull("__os_fields"."code"), CAST(? AS UInt8), CAST(? AS UInt8)))) AS "__os_rex_type_2_0", toUInt8("__os_rex_matched_2" = 0 AND (arrayExists(name -> startsWith(name, ?), "__os_field_names"))) AS "__os_rex_descendant_2_0" FROM (SELECT *, toUInt8(if("__os_rex_captured_bytes_2" > toUInt64(4194304), throwIf(toUInt8("__os_rex_captured_bytes_2" > toUInt64(4194304)), 'open-splunk: rex capture bytes exceed the per-row limit') = 0, "__os_rex_eligible_2" != 0 AND notEmpty("__os_rex_groups_2"))) AS "__os_rex_matched_2" FROM (SELECT *, arraySum(value -> toUInt64(length(value)), "__os_rex_groups_2") AS "__os_rex_captured_bytes_2" FROM (SELECT *, if("__os_rex_eligible_2" != 0, extractGroups("__os_rex_input_2", ?), CAST([], 'Array(String)')) AS "__os_rex_groups_2" FROM (SELECT *, toUInt8(ifNull((1 AND ("__os_raw_encoding" = 1) AND isNotNull("_raw") AND isValidUTF8("_raw")), 0)) AS "__os_rex_eligible_2", if("__os_rex_eligible_2" != 0, assumeNotNull("_raw"), CAST('' AS String)) AS "__os_rex_input_2" FROM (SELECT * FROM (SELECT "event_id" AS "event_id", "index_name" AS "index", "event_time" AS "_time", "index_time" AS "_indextime", "host" AS "host", "source" AS "source", "sourcetype" AS "sourcetype", "service" AS "service", "severity" AS "severity", "level" AS "level", "body" AS "message", "raw" AS "_raw", "raw_encoding" AS "__os_raw_encoding", "trace_id" AS "trace_id", "span_id" AS "span_id", "collector_id" AS "collector_id", "batch_id" AS "batch_id", "fields" AS "__os_fields", "field_names" AS "__os_field_names", "field_types" AS "__os_field_types", "field_metadata_version" AS "__os_field_metadata_version", "event_time" AS "__os_sort_time", "event_id" AS "__os_sort_event_id", "visibility_seq" AS "__os_sort_visibility_seq", tuple("index_name", "collector_id", "batch_sequence", "batch_id") AS "__os_sort_source_identity" FROM "open_splunk"."events" WHERE "tenant_id" = ? AND "index_name" IN (?) AND "event_time" >= parseDateTime64BestEffort(?, 9, 'UTC') AND "event_time" < parseDateTime64BestEffort(?, 9, 'UTC') AND "index_time" <= parseDateTime64BestEffort(?, 3, 'UTC') AND "expires_at" > parseDateTime64BestEffort(?, 3, 'UTC') AND "visibility_seq" <= ?) AS "_stage_1" WHERE (1 AND ifNull("index" = ?, 0))) AS "_stage_2") AS "_rex_input_2") AS "_rex_groups_2") AS "_rex_bytes_2") AS "_stage_3") AS "_stage_4" ORDER BY "__os_sort_time" DESC NULLS LAST, "__os_sort_event_id" DESC NULLS LAST, "__os_sort_visibility_seq" DESC NULLS LAST, "__os_sort_source_identity" DESC NULLS LAST

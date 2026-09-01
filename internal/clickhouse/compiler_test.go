@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"os"
 	"reflect"
 	"regexp"
 	"slices"
@@ -1863,19 +1862,6 @@ func TestCompileRenameDriverMetacharactersRemainQuoted(t *testing.T) {
 	}
 	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
 		t.Fatalf("placeholder count = %d, args = %d: %#v\n%s", got, want, compiled.Args, compiled.SQL)
-	}
-}
-
-func TestCompileStatsCountSQLGolden(t *testing.T) {
-	t.Parallel()
-
-	compiled := compileSPL(t, `index=gradethis | stats count AS events by level`)
-	want, err := os.ReadFile("testdata/stats_count_by.golden.sql")
-	if err != nil {
-		t.Fatalf("read golden SQL: %v", err)
-	}
-	if got := compiled.SQL; got != strings.TrimSpace(string(want)) {
-		t.Fatalf("compiled SQL differs from golden\ngot:\n%s\n\nwant:\n%s", got, want)
 	}
 }
 

@@ -1,0 +1,50 @@
+-- official SPL case: fields.internal-wildcard-exclude
+-- source: https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.4/search-commands/fields (Usage > Internal fields and Splunk Web)
+-- query: index=main | fields - _*
+-- output_fields: index, host, source, sourcetype, service, level, message, trace_id, span_id, event_id, fields
+-- sparse_fields: true subset=true
+-- atomic_result: false
+-- execution_authority_digest: d88581fc7fb3a2ca1c93c72056e37ff52d59d5f24e653d797eab502ecdc84b05
+-- args[0]: "(?s:\\A(?:_.*)\\z)"
+-- args[1]: "_indextime"
+-- args[2]: "_raw"
+-- args[3]: "_time"
+-- args[4]: "batch_id"
+-- args[5]: "collector_id"
+-- args[6]: "event_id"
+-- args[7]: "host"
+-- args[8]: "index"
+-- args[9]: "level"
+-- args[10]: "message"
+-- args[11]: "service"
+-- args[12]: "severity"
+-- args[13]: "source"
+-- args[14]: "sourcetype"
+-- args[15]: "span_id"
+-- args[16]: "trace_id"
+-- args[17]: "(?s:\\A(?:_.*)\\z)"
+-- args[18]: "_indextime"
+-- args[19]: "_raw"
+-- args[20]: "_time"
+-- args[21]: "batch_id"
+-- args[22]: "collector_id"
+-- args[23]: "event_id"
+-- args[24]: "host"
+-- args[25]: "index"
+-- args[26]: "level"
+-- args[27]: "message"
+-- args[28]: "service"
+-- args[29]: "severity"
+-- args[30]: "source"
+-- args[31]: "sourcetype"
+-- args[32]: "span_id"
+-- args[33]: "trace_id"
+-- args[34]: "tenant-1"
+-- args[35]: "main"
+-- args[36]: "2026-07-21 00:00:00.000000000"
+-- args[37]: "2026-07-22 00:00:00.000000000"
+-- args[38]: "2026-07-22 00:00:01.000"
+-- args[39]: "2026-07-22 00:00:01.000"
+-- args[40]: 0x49
+-- args[41]: "main"
+SELECT "index", "host", "source", "sourcetype", "service", "level", "message", "trace_id", "span_id", "event_id", "__os_fields" AS "fields", "__os_field_names" AS "__os_result_field_names" FROM (SELECT "index", "host", "source", "sourcetype", "service", "level", "message", "trace_id", "span_id", "event_id", "batch_id", "collector_id", "severity", "__os_fields", arrayFilter((field_name, field_type) -> (NOT (match(field_name, ?))) AND NOT (field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ?), "_stage_2"."__os_field_names", "_stage_2"."__os_field_types") AS "__os_field_names", arrayFilter((field_type, field_name) -> (NOT (match(field_name, ?))) AND NOT (field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ?), "_stage_2"."__os_field_types", "_stage_2"."__os_field_names") AS "__os_field_types", "__os_field_metadata_version", "__os_raw_encoding", "__os_sort_time", "__os_sort_event_id", "__os_sort_visibility_seq", "__os_sort_source_identity" FROM (SELECT * FROM (SELECT "event_id" AS "event_id", "index_name" AS "index", "event_time" AS "_time", "index_time" AS "_indextime", "host" AS "host", "source" AS "source", "sourcetype" AS "sourcetype", "service" AS "service", "severity" AS "severity", "level" AS "level", "body" AS "message", "raw" AS "_raw", "raw_encoding" AS "__os_raw_encoding", "trace_id" AS "trace_id", "span_id" AS "span_id", "collector_id" AS "collector_id", "batch_id" AS "batch_id", "fields" AS "__os_fields", "field_names" AS "__os_field_names", "field_types" AS "__os_field_types", "field_metadata_version" AS "__os_field_metadata_version", "event_time" AS "__os_sort_time", "event_id" AS "__os_sort_event_id", "visibility_seq" AS "__os_sort_visibility_seq", tuple("index_name", "collector_id", "batch_sequence", "batch_id") AS "__os_sort_source_identity" FROM "open_splunk"."events" WHERE "tenant_id" = ? AND "index_name" IN (?) AND "event_time" >= parseDateTime64BestEffort(?, 9, 'UTC') AND "event_time" < parseDateTime64BestEffort(?, 9, 'UTC') AND "index_time" <= parseDateTime64BestEffort(?, 3, 'UTC') AND "expires_at" > parseDateTime64BestEffort(?, 3, 'UTC') AND "visibility_seq" <= ?) AS "_stage_1" WHERE (1 AND ifNull("index" = ?, 0))) AS "_stage_2") AS "_stage_3" ORDER BY "__os_sort_time" DESC NULLS LAST, "__os_sort_event_id" DESC NULLS LAST, "__os_sort_visibility_seq" DESC NULLS LAST, "__os_sort_source_identity" DESC NULLS LAST
