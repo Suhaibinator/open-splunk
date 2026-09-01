@@ -79,3 +79,12 @@ test("Make exposes the isolated persistent development lifecycle", async () => {
   assert.match(makefile, /^run: dev-tools dev-build-server$/m);
   assert.match(makefile, /development tools are missing; run 'make proto-tools' first/);
 });
+
+test("make clean removes repository build outputs and restores the export placeholder", async () => {
+  const makefile = await readFile(path.join(workspace, "Makefile"), "utf8");
+  const clean = makefile.match(/^clean:\n(?:(?:\t|  ).*\n?)+/m)?.[0] ?? "";
+  assert.match(clean, /\$\(GO_TOOL_ENV\) go clean/);
+  assert.match(clean, /rm -rf -- build \.cache \.next node_modules\/\.cache out test-results coverage\.out/);
+  assert.match(clean, /mkdir -p out/);
+  assert.match(clean, /touch out\/\.gitkeep/);
+});

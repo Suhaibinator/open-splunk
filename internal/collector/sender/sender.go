@@ -90,10 +90,11 @@ type Options struct {
 	OnTerminalMarks func([]wal.SourceCheckpointMark) error
 }
 
-// DeadLetterRecord is one rejected event and why it was rejected, serialized as
-// a single JSON object per line in the dead-letter file.
+// DeadLetterRecord is one rejected canonical event or pre-decode source
+// artifact and why it was rejected, serialized as one JSON object per line.
 type DeadLetterRecord struct {
 	Event         *opensplunk.LogEvent
+	SourceRecord  *RejectedSourceRecord
 	BatchID       string
 	BatchSequence uint64
 	// Code is the string form of an EventRejectionCode or BatchRejectionCode.
@@ -102,7 +103,26 @@ type DeadLetterRecord struct {
 	RejectedAt time.Time
 }
 
-// DeadLetterSink durably records events the server permanently rejected.
+// RejectedSourceRecord is the bounded source artifact retained when framing or
+// decoding fails before a canonical LogEvent exists. Bytes may be a bounded
+// prefix for oversized framing failures; the exact source range remains in the
+// durable coordinates for operator recovery.
+type RejectedSourceRecord struct {
+	InputID          string `json:"input_id"`
+	FileIdentity     string `json:"file_identity"`
+	SourcePath       string `json:"source_path"`
+	StartOffset      uint64 `json:"start_offset"`
+	EndOffset        uint64 `json:"end_offset"`
+	LineNumber       uint64 `json:"line_number"`
+	NextLineNumber   uint64 `json:"next_line_number"`
+	GuardFingerprint string `json:"guard_fingerprint,omitempty"`
+	GuardLength      uint32 `json:"guard_length,omitempty"`
+	Bytes            []byte `json:"raw_bytes_base64"`
+	Truncated        bool   `json:"truncated,omitempty"`
+}
+
+// DeadLetterSink durably records terminal delivery rejections and local source
+// recovery artifacts.
 type DeadLetterSink interface {
 	// WriteRecords appends records as JSONL and flushes them to disk.
 	WriteRecords(records []DeadLetterRecord) error

@@ -9,7 +9,7 @@ generated SQL, event payloads, definition bodies, or free-form backend errors.
 | Successful mutations | Security-relevant committed control-plane changes | Stops at 100,000 per tenant | Mutation rolls back/fails closed | Administrator API |
 | Rejected knowledge attempts and recovery | Privileged rejections and protective quarantine | Attempts roll; recovery uses a separate lifetime reserve | Rejection is exposed only after append | Internal/recovery authority |
 | Search attempts | Payload-free durable job admissions | Rolls at configured ceiling, default 100,000 | Admission rolls back/fails closed | Administrator API |
-| Feature operations | Sharing, retained artifacts, schedules, and alerts | Stops at 100,000 per tenant | Committed feature operation remains; warning/health records the missed append | Internal diagnostics |
+| Feature operations | Sharing, retained artifacts, schedules, and alerts | Rolls at 100,000 per tenant | Committed feature operation remains; warning/health records storage failures | Internal diagnostics |
 
 `SERVER_FEATURE_AUDIT_SEARCH` advertises the mutation journal list service.
 `SERVER_FEATURE_SEARCH_ATTEMPT_AUDIT` advertises the search-attempt list
@@ -19,7 +19,7 @@ from the authenticated principal.
 ## Successful mutation journal
 
 The immutable taxonomy covers successful mutations to ingestion tokens,
-indexes, apps, saved searches, knowledge objects, and server settings.
+indexes, apps, saved searches, knowledge objects, lookups, and server settings.
 Representative actions are:
 
 - `ingestion_token.create`, `.update`, and `.revoke`;
@@ -29,11 +29,10 @@ Representative actions are:
 - `saved_search.create`, `.update`, `.duplicate`, and `.delete`;
 - knowledge `create`, `update`, `scope_change`, `enable`, `disable`, and
   `delete`; and
-- `server_settings.update` for the search-limits policy.
+- `server_settings.update` for the search-limits policy; and
+- lookup `create`, `replace`, `enable`, `disable`, and `delete`.
 
 Protective knowledge quarantine belongs to the separate recovery journal.
-Lookup mutations currently have no action or target in this successful-
-mutation taxonomy.
 
 An action is bound to its fixed target kind and actor domain. System and
 browser-administrator actors may perform administrative work; a browser user
@@ -156,19 +155,21 @@ contains only closed feature, operation, and outcome enums plus aggregate item
 and byte counts. It cannot contain SPL, object IDs, endpoints, hostnames, or
 secrets.
 
-The journal is append-only and stops at 100,000 events per tenant. Startup
-verifies its integrity. Unlike the successful-mutation and search-attempt
-journals, observation is best-effort: failure to append does not roll back the
-feature operation that already committed. The server increments bounded
-failure health and emits a category-only warning. Current traversal is for
-internal diagnostics; there is no public listing or export API.
+The journal retains the newest 100,000 events per tenant. Appending the next
+monotonic sequence atomically prunes the oldest retained row; retained rows
+remain immutable and startup verifies the exact contiguous range. Unlike the
+successful-mutation and search-attempt journals, observation is best-effort:
+failure to append does not roll back the feature operation that already
+committed. The server increments bounded failure health and emits a
+category-only warning. Current traversal is for internal diagnostics; there is
+no public listing or export API.
 
 ## Operator behavior
 
-Treat mutation- and feature-journal capacity as service-capacity alerts. Search
-attempts are deliberately rolling and should be exported to an external audit
-system if longer retention is required. A restore must use one coordinated
-recovery set.
+Treat mutation-journal capacity as a service-capacity alert. Search attempts
+and feature operations are deliberately rolling and should be exported to an
+external audit system if longer retention is required. A restore must use one
+coordinated recovery set.
 Private format counters and high-water identities must match the running source
 contract; unrecognized journals or cursors fail closed and are never rewritten.
 

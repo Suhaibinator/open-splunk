@@ -3,6 +3,7 @@ package collector
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -1418,6 +1419,85 @@ func TestDaemonDecodeFailurePolicy(t *testing.T) {
 	}
 	if got := d.localDroppedEvents(); got != 1 {
 		t.Fatalf("localDroppedEvents = %d, want 1", got)
+	}
+	contents, err := os.ReadFile(filepath.Join(stateDir, deadLetterFile))
+	if err != nil {
+		t.Fatalf("read decode recovery artifact: %v", err)
+	}
+	var artifact struct {
+		Code         string                      `json:"code"`
+		SourceRecord sender.RejectedSourceRecord `json:"source_record"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(contents), &artifact); err != nil {
+		t.Fatalf("decode recovery artifact: %v", err)
+	}
+	if artifact.Code != "DECODE_ERROR" ||
+		artifact.SourceRecord.InputID != "app" ||
+		artifact.SourceRecord.SourcePath != logPath ||
+		string(artifact.SourceRecord.Bytes) != "{ this is not valid json" ||
+		artifact.SourceRecord.StartOffset == artifact.SourceRecord.EndOffset {
+		t.Fatalf("decode recovery artifact = %#v", artifact)
+	}
+}
+
+func TestDaemonFramingFailureCreatesDurableRecoveryArtifact(t *testing.T) {
+	t.Parallel()
+	stateDir := t.TempDir()
+	logDir := t.TempDir()
+	logPath := filepath.Join(logDir, "app.log")
+	writeFile(t, logPath, strings.Repeat("x", 128)+"\n{\"message\":\"good\"}\n")
+
+	cfg := newTestConfig(
+		t, stateDir, filepath.Join(logDir, "*.log"),
+		filepath.Join(stateDir, "token"),
+	)
+	cfg.Inputs[0].MaxEventBytes = 32
+	d, err := New(
+		cfg, WithLogger(discardLogger()), WithCollectorID("cid"),
+		WithInstanceID("iid"),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	d.batchLinger = 15 * time.Millisecond
+	d.drainWindow = 50 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() { runErr <- d.Run(ctx) }()
+
+	waitFor(t, 3*time.Second, "valid event queued", func() bool {
+		return d.queue.Stats().QueuedEvents == 1
+	})
+	waitFor(t, 2*time.Second, "framing failure counted", func() bool {
+		return d.DecodeFailures() == 1
+	})
+	cancel()
+	if err := <-runErr; err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	contents, err := os.ReadFile(filepath.Join(stateDir, deadLetterFile))
+	if err != nil {
+		t.Fatalf("read framing recovery artifact: %v", err)
+	}
+	var artifact struct {
+		Code         string                      `json:"code"`
+		SourceRecord sender.RejectedSourceRecord `json:"source_record"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(contents), &artifact); err != nil {
+		t.Fatalf("framing recovery artifact: %v", err)
+	}
+	if artifact.Code != "FRAMING_EVENT_TOO_LARGE" ||
+		artifact.SourceRecord.InputID != "app" ||
+		artifact.SourceRecord.SourcePath != logPath ||
+		string(artifact.SourceRecord.Bytes) != strings.Repeat("x", 32) ||
+		!artifact.SourceRecord.Truncated ||
+		artifact.SourceRecord.StartOffset != 0 ||
+		artifact.SourceRecord.EndOffset != 129 ||
+		artifact.SourceRecord.LineNumber != 1 ||
+		artifact.SourceRecord.NextLineNumber != 2 {
+		t.Fatalf("framing recovery artifact = %#v", artifact)
 	}
 }
 

@@ -87,14 +87,12 @@ const (
 //
 // # Decode-failure policy
 //
-// A record that fails to decode (malformed JSON, an out-of-range timestamp, an
-// oversized line) is neither fatal nor silently dropped: it is logged at Warn
-// with the input id and durable source position, counted (see
-// [Daemon.DecodeFailures]), and skipped. The raw payload is never logged — only
-// its byte length — because a source line may carry secret material. A skipped
-// record does not advance a checkpoint by itself; its position is covered when a
-// later event from the same file is durably appended, or it is re-read (and
-// re-skipped, idempotently) after a restart.
+// A record that fails framing or decoding is synchronously fsynced to the
+// sensitive dead-letter journal with its source coordinates and bounded raw
+// bytes before it is skipped. The raw payload is never logged. If the recovery
+// artifact cannot be persisted, the source checkpoint remains unchanged;
+// decode recovery stops the pipeline and framing recovery retries through the
+// input manager's health/error loop.
 type Daemon struct {
 	log *zap.Logger
 	now func() time.Time
@@ -395,6 +393,20 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 		drainWindow:        defaultDrainWindow,
 		lastOffsets:        make(map[inputFileKey]uint64),
 	}
+	for _, runtimeInput := range inputs {
+		inputID := runtimeInput.id
+		if err := input.SetRejectionHandler(
+			runtimeInput.manager,
+			func(_ context.Context, raw input.RawEvent) error {
+				return d.recordSourceFailure(
+					inputID, raw, raw.RejectionCode, "framing_error",
+				)
+			},
+		); err != nil {
+			_ = deadLetter.Close()
+			return fail(fmt.Errorf("collector: configure framing recovery: %w", err))
+		}
+	}
 	daemonRuntime = d
 	return d, nil
 }
@@ -445,12 +457,15 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 
 	processed := make(chan processedEvent)
+	readerErrCh := make(chan error, len(d.inputs))
 	var readWG sync.WaitGroup
 	for _, ir := range d.inputs {
 		readWG.Add(1)
 		go func(ir *inputRuntime) {
 			defer readWG.Done()
-			d.readInput(pipeCtx, ir, processed)
+			if err := d.readInput(pipeCtx, ir, processed); isRealError(err) {
+				readerErrCh <- err
+			}
 		}(ir)
 	}
 	go func() {
@@ -475,6 +490,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 		if isRealError(err) {
 			runErr = err
 			d.log.Error("batcher terminated", zap.Error(err))
+		}
+	case err := <-readerErrCh:
+		if isRealError(err) {
+			runErr = err
+			d.log.Error("input reader terminated", zap.Error(err))
 		}
 	case err := <-senderErrCh:
 		senderDone = true

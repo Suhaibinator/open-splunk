@@ -374,6 +374,16 @@ func auditActionFromProto(value opensplunk.AuditAction) (audit.Action, bool) {
 		return audit.ActionKnowledgeObjectDelete, true
 	case opensplunk.AuditAction_AUDIT_ACTION_SERVER_SETTINGS_UPDATE:
 		return audit.ActionServerSettingsUpdate, true
+	case opensplunk.AuditAction_AUDIT_ACTION_LOOKUP_CREATE:
+		return audit.ActionLookupCreate, true
+	case opensplunk.AuditAction_AUDIT_ACTION_LOOKUP_REPLACE:
+		return audit.ActionLookupReplace, true
+	case opensplunk.AuditAction_AUDIT_ACTION_LOOKUP_ENABLE:
+		return audit.ActionLookupEnable, true
+	case opensplunk.AuditAction_AUDIT_ACTION_LOOKUP_DISABLE:
+		return audit.ActionLookupDisable, true
+	case opensplunk.AuditAction_AUDIT_ACTION_LOOKUP_DELETE:
+		return audit.ActionLookupDelete, true
 	default:
 		return "", false
 	}
@@ -431,6 +441,16 @@ func auditActionToProto(value audit.Action) (opensplunk.AuditAction, bool) {
 		return opensplunk.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_DELETE, true
 	case audit.ActionServerSettingsUpdate:
 		return opensplunk.AuditAction_AUDIT_ACTION_SERVER_SETTINGS_UPDATE, true
+	case audit.ActionLookupCreate:
+		return opensplunk.AuditAction_AUDIT_ACTION_LOOKUP_CREATE, true
+	case audit.ActionLookupReplace:
+		return opensplunk.AuditAction_AUDIT_ACTION_LOOKUP_REPLACE, true
+	case audit.ActionLookupEnable:
+		return opensplunk.AuditAction_AUDIT_ACTION_LOOKUP_ENABLE, true
+	case audit.ActionLookupDisable:
+		return opensplunk.AuditAction_AUDIT_ACTION_LOOKUP_DISABLE, true
+	case audit.ActionLookupDelete:
+		return opensplunk.AuditAction_AUDIT_ACTION_LOOKUP_DELETE, true
 	default:
 		return opensplunk.AuditAction_AUDIT_ACTION_UNSPECIFIED, false
 	}
@@ -452,6 +472,8 @@ func auditTargetKindFromProto(
 		return audit.TargetKindKnowledgeObject, true
 	case opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_SERVER_SETTINGS:
 		return audit.TargetKindServerSettings, true
+	case opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_LOOKUP:
+		return audit.TargetKindLookup, true
 	default:
 		return "", false
 	}
@@ -473,6 +495,8 @@ func auditTargetKindToProto(
 		return opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT, true
 	case audit.TargetKindServerSettings:
 		return opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_SERVER_SETTINGS, true
+	case audit.TargetKindLookup:
+		return opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_LOOKUP, true
 	default:
 		return opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_UNSPECIFIED, false
 	}

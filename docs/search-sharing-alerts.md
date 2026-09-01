@@ -119,10 +119,11 @@ interpretation inside screens.
 
 Durable jobs, scheduled reports, and alerts emit bounded operational counters,
 identity-free log records, and a tenant-scoped immutable SQLite audit journal.
-The journal assigns a dense sequence and canonical occurrence time, persists
-across restart and coordinated control-plane recovery, rejects updates and
-deletes, and fails closed at 100,000 events without changing the feature
-operation that was already committed. Audit persistence failures emit only a
+The journal assigns a monotonic sequence and canonical occurrence time,
+persists across restart and coordinated control-plane recovery, rejects
+external updates and deletes, and atomically rolls the oldest event after
+retaining 100,000 without changing the feature operation that was already
+committed. Audit persistence failures emit only a
 fixed safe category. The closed taxonomy includes admission, sharing,
 retention, claims, lifecycle, evaluation, delivery, recovery, capacity
 rejection, and cleanup; it cannot carry SPL, object IDs, endpoints, hostnames,

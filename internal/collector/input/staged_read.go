@@ -101,6 +101,7 @@ type stagedBatch struct {
 	raw                  []byte
 	capturedGuardMatches bool
 	events               []RawEvent
+	rejections           []RawEvent
 	cursor               tailerCursor
 	pendingLen           int
 	oversize             bool
@@ -303,6 +304,9 @@ func (t *tailer) stageSnapshot(
 				return nil
 			}
 		case errors.Is(frameErr, framing.ErrEventTooLargeIncomplete):
+			if err := t.stageRejectedFrame(batch, frame); err != nil {
+				return err
+			}
 			batch.cursor.offset = frame.EndOffset
 			batch.cursor.nextLineNumber = frame.NextLineNumber
 			if t.m.cfg.Multiline {
@@ -314,6 +318,9 @@ func (t *tailer) stageSnapshot(
 			batch.oversize = true
 			return nil
 		case errors.Is(frameErr, framing.ErrEventTooLarge):
+			if err := t.stageRejectedFrame(batch, frame); err != nil {
+				return err
+			}
 			batch.cursor.offset = frame.EndOffset
 			batch.cursor.nextLineNumber = frame.NextLineNumber
 			batch.oversize = true
@@ -350,6 +357,9 @@ func (t *tailer) stageSnapshot(
 					// with that candidate still unconsumed.
 					continue
 				case errors.Is(flushErr, framing.ErrEventTooLargeIncomplete):
+					if err := t.stageRejectedFrame(batch, frame); err != nil {
+						return err
+					}
 					batch.cursor.offset = frame.EndOffset
 					batch.cursor.nextLineNumber = frame.NextLineNumber
 					if t.m.cfg.Multiline {
@@ -360,6 +370,9 @@ func (t *tailer) stageSnapshot(
 					}
 					batch.oversize = true
 				case errors.Is(flushErr, framing.ErrEventTooLarge):
+					if err := t.stageRejectedFrame(batch, frame); err != nil {
+						return err
+					}
 					batch.cursor.offset = frame.EndOffset
 					batch.cursor.nextLineNumber = frame.NextLineNumber
 					batch.oversize = true
@@ -495,6 +508,24 @@ func (t *tailer) skipMultilineOversize(
 }
 
 func (t *tailer) stageFrame(batch *stagedBatch, frame framing.Frame) error {
+	return t.stageFrameWithDisposition(batch, frame, "", false)
+}
+
+func (t *tailer) stageRejectedFrame(
+	batch *stagedBatch,
+	frame framing.Frame,
+) error {
+	return t.stageFrameWithDisposition(
+		batch, frame, "FRAMING_EVENT_TOO_LARGE", true,
+	)
+}
+
+func (t *tailer) stageFrameWithDisposition(
+	batch *stagedBatch,
+	frame framing.Frame,
+	rejectionCode string,
+	truncated bool,
+) error {
 	guardFingerprint, guardLength, err := t.guardForEvent(batch, frame.EndOffset)
 	if err != nil {
 		return err
@@ -504,8 +535,12 @@ func (t *tailer) stageFrame(batch *stagedBatch, frame framing.Frame) error {
 	if !t.lineCursorKnown {
 		lineNumber, nextLineNumber = 0, 0
 	}
-	batch.events = append(batch.events, RawEvent{
-		Bytes: payload,
+	target := &batch.events
+	if rejectionCode != "" {
+		target = &batch.rejections
+	}
+	*target = append(*target, RawEvent{
+		Bytes: payload, RejectionCode: rejectionCode, Truncated: truncated,
 		Source: SourceRef{
 			Path:             t.pathStr(),
 			Identity:         t.id,
@@ -650,6 +685,15 @@ func (t *tailer) commitBatch(ctx context.Context, batch *stagedBatch) bool {
 	if err != nil {
 		t.setReadError(err)
 		return false
+	}
+	for _, rejection := range batch.rejections {
+		if t.m.rejectionHandler == nil {
+			continue
+		}
+		if err := t.m.rejectionHandler(ctx, rejection); err != nil {
+			t.setReadError(err)
+			return false
+		}
 	}
 	t.offset = batch.cursor.offset
 	t.nextLineNumber = batch.cursor.nextLineNumber

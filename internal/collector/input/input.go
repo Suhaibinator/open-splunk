@@ -2,6 +2,7 @@ package input
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"sync"
 	"time"
@@ -93,8 +94,10 @@ type SourceRef struct {
 // reached a deliberate terminal disposition. Until then the originating
 // tailer will not persist a checkpoint for a rewritten file generation.
 type RawEvent struct {
-	Bytes  []byte
-	Source SourceRef
+	Bytes         []byte
+	Source        SourceRef
+	RejectionCode string
+	Truncated     bool
 
 	barrier *durabilityBarrier
 }
@@ -223,4 +226,19 @@ type Manager interface {
 	Health() Health
 	// Close releases resources; safe to call after Run returns.
 	Close() error
+}
+
+// RejectionHandler durably records one pre-decode framing failure. Returning
+// an error prevents the validated source cursor from advancing.
+type RejectionHandler func(context.Context, RawEvent) error
+
+// SetRejectionHandler installs the daemon-owned durable recovery boundary on a
+// concrete file manager before Run starts.
+func SetRejectionHandler(sourceManager Manager, handler RejectionHandler) error {
+	implementation, ok := sourceManager.(*manager)
+	if !ok || handler == nil {
+		return errors.New("collector/input: rejection handler is unavailable")
+	}
+	implementation.rejectionHandler = handler
+	return nil
 }

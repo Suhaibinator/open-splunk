@@ -218,17 +218,20 @@ matching start line.
 
 Decode and framing failures happen before WAL append. Malformed NDJSON,
 invalid canonical values or timestamps, and oversized framed records are
-logged and skipped; they are not written to `dead-letter.jsonl`. Later valid
-records can advance the source checkpoint beyond them, so collector state
-cannot recover those bytes after source retention removes them. The warning is
-`skipping undecodable record` with source coordinates, and heartbeat dropped-
-event counters include these records. Use `raw` for non-JSON or binary-shaped
-input and alert on the warning and counter.
+synchronously appended and fsynced to `dead-letter.jsonl` before being
+skipped. Each source artifact contains a fixed rejection code, input ID, file
+identity/path, exact offsets and physical-line coordinates, checkpoint guard,
+and base64 raw bytes. Oversized framing artifacts carry the bounded prefix and
+`truncated: true`; their exact source range identifies the complete rejected
+record. If the artifact cannot be persisted, the input cursor does not advance:
+decode recovery terminates the run, while framing recovery remains an input
+health error and retries the same source range.
 
-Dead-letter files instead contain durable batches that the server permanently
-rejects, plus locally oversized records that had already crossed the durable
-queue boundary. They are not a catch-all for every source record the collector
-could not decode.
+The warning remains payload-free (`skipping undecodable record` with source
+coordinates), and heartbeat dropped-event counters include these records. Use
+`raw` for non-JSON or binary-shaped input and alert on the warning and counter.
+Dead-letter files also contain durable batches the server permanently rejects
+and locally oversized records that had crossed the WAL boundary.
 
 ## `processors` reference
 

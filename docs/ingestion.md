@@ -265,10 +265,11 @@ growth, fix the token/index/schema/size cause, and use an explicitly reviewed
 external replay process if resubmission is appropriate. Removing a dead letter
 does not mean it was ingested.
 
-Decode and framing failures occur before WAL append and are not dead-lettered.
-Malformed NDJSON, invalid canonical values/timestamps, and oversized framed
-records are logged and counted as dropped before a later valid record can
-advance the checkpoint. See
+Decode and framing failures occur before WAL append and are synchronously
+fsynced to the sensitive dead-letter journal with bounded raw bytes and exact
+source coordinates before a later valid record can advance the checkpoint. A
+failed recovery write leaves the cursor unchanged; decode recovery stops the
+run and framing recovery keeps the input on the same retryable range. See
 [Decode, framing, and recovery](collector-configuration.md#decode-framing-and-recovery).
 
 ## Restart, backup, and token rotation

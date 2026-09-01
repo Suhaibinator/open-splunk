@@ -21,7 +21,7 @@ const (
 	MaximumListPageSize = 200
 	// MaximumActionFilters is the complete fixed action taxonomy. One list
 	// request cannot contain more distinct action filters than this bound.
-	MaximumActionFilters = 25
+	MaximumActionFilters = 30
 
 	defaultListPageSize        = 50
 	maximumTenantIDBytes       = 255
@@ -124,6 +124,11 @@ const (
 	ActionKnowledgeObjectDisable     Action = "knowledge.object.disable"
 	ActionKnowledgeObjectDelete      Action = "knowledge.object.delete"
 	ActionServerSettingsUpdate       Action = "server_settings.update"
+	ActionLookupCreate               Action = "lookup.create"
+	ActionLookupReplace              Action = "lookup.replace"
+	ActionLookupEnable               Action = "lookup.enable"
+	ActionLookupDisable              Action = "lookup.disable"
+	ActionLookupDelete               Action = "lookup.delete"
 )
 
 // Valid reports whether action belongs to the immutable audit taxonomy.
@@ -153,7 +158,12 @@ func (action Action) Valid() bool {
 		ActionKnowledgeObjectEnable,
 		ActionKnowledgeObjectDisable,
 		ActionKnowledgeObjectDelete,
-		ActionServerSettingsUpdate:
+		ActionServerSettingsUpdate,
+		ActionLookupCreate,
+		ActionLookupReplace,
+		ActionLookupEnable,
+		ActionLookupDisable,
+		ActionLookupDelete:
 		return true
 	default:
 		return false
@@ -170,6 +180,7 @@ const (
 	TargetKindSavedSearch     TargetKind = "saved_search"
 	TargetKindKnowledgeObject TargetKind = "knowledge_object"
 	TargetKindServerSettings  TargetKind = "server_settings"
+	TargetKindLookup          TargetKind = "lookup"
 )
 
 // Valid reports whether kind belongs to the audit target taxonomy.
@@ -177,7 +188,7 @@ func (kind TargetKind) Valid() bool {
 	switch kind {
 	case TargetKindIngestionToken, TargetKindIndex, TargetKindApp,
 		TargetKindSavedSearch, TargetKindKnowledgeObject,
-		TargetKindServerSettings:
+		TargetKindServerSettings, TargetKindLookup:
 		return true
 	default:
 		return false
@@ -282,7 +293,7 @@ func validActionVersion(action Action, version uint64) bool {
 	switch action {
 	case ActionIngestionTokenCreate, ActionIndexCreate, ActionAppCreate,
 		ActionSavedSearchCreate, ActionSavedSearchDuplicate,
-		ActionKnowledgeObjectCreate:
+		ActionKnowledgeObjectCreate, ActionLookupCreate:
 		return version == 1
 	case ActionIngestionTokenUpdate,
 		ActionIngestionTokenRevoke,
@@ -300,6 +311,9 @@ func validActionVersion(action Action, version uint64) bool {
 		ActionKnowledgeObjectEnable,
 		ActionKnowledgeObjectDisable,
 		ActionKnowledgeObjectDelete:
+		return version >= 2
+	case ActionLookupReplace, ActionLookupEnable, ActionLookupDisable,
+		ActionLookupDelete:
 		return version >= 2
 	case ActionSavedSearchDelete:
 		return version >= 1
@@ -345,6 +359,9 @@ func validActionTarget(action Action, targetKind TargetKind) bool {
 		return targetKind == TargetKindKnowledgeObject
 	case ActionServerSettingsUpdate:
 		return targetKind == TargetKindServerSettings
+	case ActionLookupCreate, ActionLookupReplace, ActionLookupEnable,
+		ActionLookupDisable, ActionLookupDelete:
+		return targetKind == TargetKindLookup
 	default:
 		return false
 	}
