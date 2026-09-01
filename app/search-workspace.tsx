@@ -170,6 +170,7 @@ import {
   collapsePageEvents,
   expandPageEvents,
   maximumReachableResultPage,
+  resultPageCount,
   serializeRawPageForClipboard,
 } from "./search-workspace/event-page-controls";
 import {
@@ -255,6 +256,9 @@ const TERMINAL_HISTORY_STATES = [
 ] as const;
 const DEFAULT_BACKEND_PAGE_SIZE = 1_000;
 const MAX_CACHED_RESULT_PAGES = 8;
+// Result pages are reached by following opaque server cursors, so jumping ahead costs one request
+// per page crossed. Cap a single jump so a far page cannot fan out into hundreds of requests.
+const MAX_SEQUENTIAL_PAGE_WALK = 25;
 const MAXIMUM_READABLE_DUPLICATE_NAME_ATTEMPTS = 8;
 const MAXIMUM_RANDOM_DUPLICATE_NAME_ATTEMPTS = 3;
 const REST_RECOVERY_DELAYS_MS = [1_500, 2_500, 5_000, 10_000] as const;
@@ -1256,10 +1260,17 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     ? backendResultTotalRows ?? resultEvents.length + (backendHasNextPage ? backendResultPageSize : 0)
     : visibleEventCount;
   const currentResultPageSize = backendEnabled ? backendResultPageSize : eventPageSize;
-  const maximumReachableEventPage = backendEnabled
-    ? Math.max(
-      eventPage,
-      maximumReachableResultPage(backendPageTokensRef.current.keys(), currentResultPageSize),
+  // The furthest page whose cursor has already been observed. Paging past it means walking the
+  // cursor chain forward one request at a time, so it is the starting point for a page jump.
+  const loadedResultPageCeiling = maximumReachableResultPage(
+    backendPageTokensRef.current.keys(),
+    currentResultPageSize,
+  );
+  const eventPageCount = backendEnabled
+    ? resultPageCount(
+      backendResultTotalRows,
+      currentResultPageSize,
+      Math.max(eventPage, loadedResultPageCeiling),
     )
     : Math.max(1, Math.ceil(pageableEventCount / currentResultPageSize));
   const eventPageStart = backendEnabled
@@ -2637,8 +2648,8 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   }, [filteredCompletions.length]);
 
   useEffect(() => {
-    setEventPage((current) => Math.min(current, maximumReachableEventPage));
-  }, [maximumReachableEventPage]);
+    setEventPage((current) => Math.min(current, eventPageCount));
+  }, [eventPageCount]);
 
   useEffect(() => {
     setExpandedEvents(new Set());
@@ -2986,6 +2997,9 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     bootstrap: BackendBootstrapState,
     signal: AbortSignal,
     generation: number,
+    // Intermediate pages of a cursor walk are fetched only to record the next cursor; rendering
+    // them would flash every crossed page through the events table.
+    apply = true,
   ): Promise<BackendResultPage> {
     if (generationRef.current !== generation || backendJobIdRef.current !== job.searchJobId) {
       throw new DOMException("Search was superseded.", "AbortError");
@@ -2996,7 +3010,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     if (cached !== undefined) {
       backendResultPagesRef.current.delete(cacheKey);
       backendResultPagesRef.current.set(cacheKey, cached);
-      applyBackendResultPage(cached);
+      if (apply) applyBackendResultPage(cached);
       return cached;
     }
     if (!backendPageTokensRef.current.has(cacheKey)) {
@@ -3072,7 +3086,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       const currentStart = backendPageStartsRef.current.get(cacheKey) ?? 1;
       backendPageStartsRef.current.set(`${pageSize}:${pageNumber + 1}`, currentStart + page.rows.length);
     }
-    applyBackendResultPage(page);
+    if (apply) applyBackendResultPage(page);
     return page;
   }
 
@@ -4894,33 +4908,78 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     );
   }
 
+  function openableResultPage(pageSize: number, pageNumber: number): boolean {
+    return backendPageTokensRef.current.has(`${pageSize}:${pageNumber}`)
+      || backendResultPagesRef.current.has(`${pageSize}:${pageNumber}`);
+  }
+
+  // Follows the result cursor one page at a time from pageNumber up to targetPage. The steps are
+  // inherently sequential: each page's cursor is only known once the page before it has answered.
+  async function walkResultCursorPages(
+    job: SearchJob,
+    bootstrap: BackendBootstrapState,
+    pageSize: number,
+    pageNumber: number,
+    targetPage: number,
+    signal: AbortSignal,
+    generation: number,
+  ): Promise<{ page: number; result: BackendResultPage; chainEnded: boolean }> {
+    const result = await fetchBackendResultPage(
+      job,
+      pageNumber,
+      pageSize,
+      bootstrap,
+      signal,
+      generation,
+      false,
+    );
+    // The chain ends here, either because these are the last results or because the cursor
+    // diverged and paging beyond it was stopped.
+    if (result.nextPageToken === undefined) return { page: pageNumber, result, chainEnded: true };
+    if (pageNumber >= targetPage) return { page: pageNumber, result, chainEnded: false };
+    return walkResultCursorPages(job, bootstrap, pageSize, pageNumber + 1, targetPage, signal, generation);
+  }
+
   async function openBackendEventPage(pageNumber: number) {
     const job = backendJobRef.current;
     const bootstrap = backendBootstrapRef.current;
     const generation = generationRef.current;
     const pageSize = backendPageSizeRef.current;
     if (!backendEnabled || job === null || bootstrap === null || phase !== "completed") return;
-    const targetPage = Math.max(1, pageNumber);
-    if (!backendPageTokensRef.current.has(`${pageSize}:${targetPage}`)
-      && !backendResultPagesRef.current.has(`${pageSize}:${targetPage}`)) {
+    const requestedPage = Math.max(1, pageNumber);
+    // Walk forward from the furthest already-cursored page at or before the target.
+    let startPage = requestedPage;
+    while (startPage > 1 && !openableResultPage(pageSize, startPage)) startPage -= 1;
+    if (!openableResultPage(pageSize, startPage)) {
       showToast("Load the preceding result page before following its cursor.", "warning");
       return;
     }
+    const walkLimit = startPage + MAX_SEQUENTIAL_PAGE_WALK;
+    const targetPage = Math.min(requestedPage, walkLimit);
     backendPageAbortRef.current?.abort();
     const controller = new AbortController();
     backendPageAbortRef.current = controller;
     setEventPageLoading(true);
     try {
-      await fetchBackendResultPage(
+      const { page: landedPage, result: landedResult, chainEnded } = await walkResultCursorPages(
         job,
-        targetPage,
-        pageSize,
         bootstrap,
+        pageSize,
+        startPage,
+        targetPage,
         controller.signal,
         generation,
       );
-      if (generationRef.current === generation && backendJobIdRef.current === job.searchJobId) {
-        setEventPage(targetPage);
+      if (generationRef.current !== generation || backendJobIdRef.current !== job.searchJobId) return;
+      applyBackendResultPage(landedResult);
+      setEventPage(landedPage);
+      if (landedPage < requestedPage) {
+        showToast(
+          chainEnded
+            ? `Only ${NUMBER_FORMAT.format(landedPage)} result ${landedPage === 1 ? "page is" : "pages are"} available. Showing the last one.`
+            : `A page jump follows at most ${NUMBER_FORMAT.format(MAX_SEQUENTIAL_PAGE_WALK)} cursors at a time. Showing page ${NUMBER_FORMAT.format(landedPage)}.`,
+          "warning",
+        );
       }
     } catch (error) {
       if (controller.signal.aborted || generationRef.current !== generation) return;
@@ -7227,7 +7286,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           maximumEventPageSize={backendEnabled && backendBootstrapRef.current !== null
             ? backendMaximumPageSize(backendBootstrapRef.current)
             : null}
-          maximumReachablePage={maximumReachableEventPage}
+          pageCount={eventPageCount}
           pagedResultEvents={pagedResultEvents}
           previewTruncated={backendPreviewDisplay?.snapshot.truncated === true}
           resultEvents={resultEvents}
