@@ -90,7 +90,6 @@ export function SearchEditor({
         aria-describedby={`${diagnostic === null ? "editor-help" : "editor-diagnostic"} spl-completion-status`}
         value={query}
         disabled={launchPending}
-        rows={2}
         spellCheck={false}
         autoCapitalize="off"
         autoComplete="off"

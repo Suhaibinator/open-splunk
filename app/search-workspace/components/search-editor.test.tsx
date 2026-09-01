@@ -45,6 +45,12 @@ test("the editor describes itself through the help strip and the completion live
   assert.match(markup, /Suggestions closed\./u);
 });
 
+test("the textarea leaves its height to the stylesheet's auto-grow rules", () => {
+  // A `rows` attribute would give the control an intrinsic height that fights
+  // the in-flow highlight mirror `.spl-editor` is sized by.
+  assert.doesNotMatch(render(), /<textarea[^>]*\brows=/u);
+});
+
 test("a diagnostic redirects the description to the diagnostic strip", () => {
   const markup = render({
     diagnostic: { kind: "unclosed-quote", token: "\"", message: "Bad", line: 1, column: 1, suggestion: "Fix it" },

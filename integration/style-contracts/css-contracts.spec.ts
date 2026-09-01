@@ -1205,3 +1205,85 @@ test.describe("field validation contracts", () => {
     expect(error).not.toEqual(muted);
   });
 });
+
+function composerMarkup(lines: number, completionOpen = false): string {
+  const query = Array.from({ length: lines }, (_, index) => (index === 0 ? "index=main" : `| stage${index}`)).join("\n");
+  const gutter = Array.from({ length: Math.max(2, lines) }, (_, index) => `<span>${index + 1}</span>`).join("");
+  const menu = completionOpen
+    ? `<div class="completion-menu" id="spl-completion-list">
+        <div class="completion-title"><span>Commands</span><small>Enter a pipeline stage</small></div>
+        <button type="button"><code>stats</code><span>Aggregate</span><kbd>↵</kbd></button>
+      </div>`
+    : "";
+  return `
+    <section class="search-composer">
+      <div class="spl-editor">
+        <div class="editor-gutter" aria-hidden="true"><div class="editor-gutter-lines">${gutter}</div></div>
+        <pre class="editor-highlight" aria-hidden="true">${query}</pre>
+        <textarea aria-label="Search with SPL">${query}</textarea>
+        <div class="editor-meta" id="editor-help"><span>SPL</span><span>Ctrl+Space for commands</span><span>⌘↵ to run</span></div>
+        ${menu}
+      </div>
+      <div class="time-picker-wrap">
+        <button class="time-range-button" type="button"><span></span><span><small>Time range</small><strong>Last 24 hours</strong></span><span></span></button>
+      </div>
+      <button class="button button--primary run-button" type="button"><span>⌕</span><strong>Search</strong></button>
+    </section>`;
+}
+
+test.describe("SPL editor auto-grow", () => {
+  test("the editor grows with the query up to its cap while the buttons keep their height", async ({ page }) => {
+    // One line still fills the two-line composer row.
+    await mount(page, composerMarkup(1), DESKTOP_WIDTH);
+    expect(await contentHeight(page, ".spl-editor")).toBeCloseTo(62, 0);
+    expect(await contentHeight(page, ".time-range-button")).toBeCloseTo(62, 0);
+    expect(await contentHeight(page, ".run-button")).toBeCloseTo(62, 0);
+
+    // Eight lines: 8 × 22px line height + 16px padding + 2px border.
+    await mount(page, composerMarkup(8), DESKTOP_WIDTH);
+    const eightLines = await contentHeight(page, ".spl-editor");
+    expect(eightLines).toBeCloseTo(194, 0);
+    expect(await contentHeight(page, ".spl-editor textarea")).toBeCloseTo(eightLines - 2, 0);
+    expect(await contentHeight(page, ".editor-gutter")).toBeCloseTo(eightLines - 2, 0);
+    expect(await contentHeight(page, ".time-range-button")).toBeCloseTo(62, 0);
+    expect(await contentHeight(page, ".run-button")).toBeCloseTo(62, 0);
+
+    // Thirty lines hit --search-editor-max-height and the mirror scrolls.
+    await mount(page, composerMarkup(30), DESKTOP_WIDTH);
+    const capped = await page.locator(".spl-editor").evaluate((element) => {
+      const mirror = element.querySelector(".editor-highlight");
+      if (!(mirror instanceof HTMLElement)) throw new Error("fixture is missing the highlight mirror");
+      return {
+        cap: Number.parseFloat(globalThis.getComputedStyle(element).getPropertyValue("--search-editor-max-height")),
+        editorHeight: element.getBoundingClientRect().height,
+        mirrorHeight: mirror.getBoundingClientRect().height,
+        mirrorOverflows: mirror.scrollHeight > mirror.clientHeight,
+      };
+    });
+    expect(capped.cap).toBeGreaterThan(eightLines);
+    expect(capped.mirrorHeight).toBeCloseTo(capped.cap, 0);
+    expect(capped.editorHeight).toBeCloseTo(capped.cap + 2, 0);
+    expect(capped.mirrorOverflows).toBe(true);
+    expect(await contentHeight(page, ".time-range-button")).toBeCloseTo(62, 0);
+    expect(await contentHeight(page, ".run-button")).toBeCloseTo(62, 0);
+  });
+
+  test("the completion menu opens below the grown editor rather than over its last lines", async ({ page }) => {
+    const menuGeometry = async (lines: number) => {
+      await mount(page, composerMarkup(lines, true), DESKTOP_WIDTH);
+      return page.locator(".spl-editor").evaluate((element) => {
+        const menu = element.querySelector(".completion-menu");
+        if (menu === null) throw new Error("fixture is missing the completion menu");
+        return {
+          editorBottom: element.getBoundingClientRect().bottom,
+          menuTop: menu.getBoundingClientRect().top,
+        };
+      });
+    };
+
+    const twoLines = await menuGeometry(2);
+    expect(twoLines.menuTop).toBeGreaterThanOrEqual(twoLines.editorBottom);
+    const eightLines = await menuGeometry(8);
+    expect(eightLines.menuTop).toBeGreaterThanOrEqual(eightLines.editorBottom);
+  });
+});

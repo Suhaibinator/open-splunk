@@ -139,6 +139,18 @@ knob beside the component, give it a shipped fallback, and register it in the
 structural invariant rather than treating arbitrary custom properties as a new
 token lane.
 
+The knobs that exist today:
+
+- `--chart-height`, `--chart-plot-min-height`, `--chart-stroke-width`,
+  `--chart-x-axis-height`, `--chart-x-axis-type`, `--chart-y-axis-width` on an
+  operations-dashboard panel size the shared line chart it hosts.
+- `--pulse-ring-core` on the backend preview pulse composes its ring shadow.
+- `--search-editor-max-height` on `.spl-editor` caps how tall the SPL editor
+  grows with its query (it is sized by its in-flow highlight mirror and never
+  shorter than the two-line 62px composer row). Set it on the container to
+  give a host a shorter or taller editor; the two composer buttons keep their
+  own height either way.
+
 ## How to make a visual change
 
 1. Find the semantic role, primitive, or owning feature from the cascade table.

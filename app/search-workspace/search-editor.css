@@ -114,6 +114,7 @@
 }
 
 .search-composer {
+  align-items: start;
   background: var(--bg-surface);
   display: grid;
   grid-template-columns: minmax(420px, 1fr) 210px 86px;
@@ -122,11 +123,17 @@
   z-index: var(--z-sticky);
 }
 
+/* The editor is sized by its highlight mirror, which stays in flow and grows
+   with the query up to --search-editor-max-height; the textarea and gutter are
+   absolutely positioned over it. The knob is a component interface a host may
+   set on this container (see docs/theming.md), not a theme token. */
 .spl-editor {
+  --search-editor-max-height: 302px;
+
   background: var(--bg-surface);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm) 0 0 var(--radius-sm);
-  height: 62px;
+  min-height: 62px;
   min-width: 0;
   position: relative;
 }
@@ -144,10 +151,10 @@
 .editor-gutter {
   background: var(--bg-subtle);
   border-right: 1px solid var(--border);
+  bottom: 0;
   color: var(--fg-faint);
   font-family: var(--font-mono);
   font-size: var(--type-xs);
-  height: 60px;
   left: 0;
   line-height: 22px;
   overflow: hidden;
@@ -176,22 +183,22 @@
   font-family: var(--font-mono);
   font-size: var(--type-md);
   font-variant-ligatures: none;
-  height: 60px;
-  inset: 0;
   letter-spacing: -0.01em;
   line-height: 22px;
   margin: 0;
   overflow: auto;
   overflow-wrap: break-word;
   padding: var(--space-2) 94px var(--space-2) var(--space-8);
-  position: absolute;
   tab-size: 2;
   white-space: pre-wrap;
 }
 
 .editor-highlight {
   color: var(--fg-strong);
+  max-height: var(--search-editor-max-height);
+  min-height: 60px;
   pointer-events: none;
+  position: relative;
   scrollbar-width: none;
 }
 
@@ -204,7 +211,9 @@
   background: transparent;
   caret-color: var(--fg-strong);
   color: transparent;
+  inset: 0;
   outline: 0;
+  position: absolute;
   resize: none;
   z-index: 3;
 }
@@ -282,7 +291,7 @@
   padding: var(--space-1) 0;
   position: absolute;
   right: -1px;
-  top: 64px;
+  top: calc(100% + var(--space-1));
   z-index: var(--z-dropdown);
 }
 
@@ -663,13 +672,11 @@
   .spl-editor {
     border-radius: var(--radius-sm);
     grid-column: 1 / -1;
-    height: 76px;
+    min-height: 76px;
   }
 
-  .spl-editor .editor-gutter,
-  .spl-editor .editor-highlight,
-  .spl-editor textarea {
-    height: 74px;
+  .spl-editor .editor-highlight {
+    min-height: 74px;
   }
 
   .spl-editor .editor-highlight,
@@ -678,12 +685,14 @@
     padding-bottom: var(--space-6);
   }
 
+  /* The editor spans the row above the 46px buttons, so the menu clears that
+     row (button, 6px grid gap) as well as the editor itself. */
   .completion-menu {
     left: -1px;
     max-width: none;
     min-width: 0;
     right: -1px;
-    top: 130px;
+    top: calc(100% + 46px + 6px + var(--space-1));
   }
 
   .completion-menu > button {
