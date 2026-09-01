@@ -18,6 +18,12 @@ function pageEvents(startRow: number, count: number): DemoEvent[] {
   }));
 }
 
+function pageJumpInput(markup: string): string {
+  const input = /<input id="event-page-number"[^>]*>/u.exec(markup);
+  assert.notEqual(input, null, "the page jump input should be rendered");
+  return input?.[0] ?? "";
+}
+
 function renderEventsFooter(overrides: {
   backendResultTotalRows: number | null;
   eventPage: number;
@@ -25,13 +31,14 @@ function renderEventsFooter(overrides: {
   pageCount: number;
   menu?: MenuName | null;
   maximumEventPageSize?: number | null;
+  backendHasNextPage?: boolean;
 }): string {
   const events = pageEvents((overrides.eventPage - 1) * overrides.eventPageSize + 1, overrides.eventPageSize);
   return renderToStaticMarkup(
     <EventsPanel
       activeField={null}
       backendEnabled
-      backendHasNextPage
+      backendHasNextPage={overrides.backendHasNextPage ?? true}
       backendResultTotalExact
       backendResultTotalRows={overrides.backendResultTotalRows}
       defaultQuery="index=main"
@@ -109,7 +116,6 @@ test("the events footer counts every page of the reported total, not just the cu
   assert.match(markup, /Showing 1–10/u);
   assert.match(markup, /95 results/u);
   assert.match(markup, /<span>of 10<\/span>/u);
-  assert.match(markup, /max="10"/u);
 });
 
 test("the events footer keeps the jump bound and the range aligned on a later page", () => {
@@ -151,4 +157,29 @@ test("events per page keeps sizes above a lower server maximum but disables them
   const offered = [...markup.matchAll(/<strong>(\d+) events<\/strong>/gu)].map((match) => Number(match[1]));
   assert.deepEqual(offered, [10, 20, 50, 100, 500]);
   assert.match(markup, /Above server limit/u);
+});
+
+test("the page jump is not capped by the count while the server offers a next cursor", () => {
+  // A page can hold fewer rows than the page size, so the count derived from the reported total
+  // is a lower bound. Capping the jump at it would refuse pages the cursor chain still reaches.
+  const markup = renderEventsFooter({
+    backendResultTotalRows: 5_000,
+    eventPage: 1,
+    eventPageSize: 500,
+    pageCount: 10,
+  });
+
+  assert.doesNotMatch(pageJumpInput(markup), /max="/u);
+});
+
+test("the page jump is capped by the count once the cursor chain is exhausted", () => {
+  const markup = renderEventsFooter({
+    backendResultTotalRows: 95,
+    eventPage: 10,
+    eventPageSize: 10,
+    pageCount: 10,
+    backendHasNextPage: false,
+  });
+
+  assert.match(pageJumpInput(markup), /max="10"/u);
 });

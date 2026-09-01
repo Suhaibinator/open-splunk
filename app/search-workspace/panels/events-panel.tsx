@@ -232,9 +232,14 @@ export function EventsPanel({
     if (
       !Number.isSafeInteger(requestedPage)
       || requestedPage < 1
-      || requestedPage > pageCount
+      || (requestedPage > pageCount && !backendHasNextPage)
     ) {
-      showToast(`Choose a page from 1 to ${NUMBER_FORMAT.format(pageCount)}.`, "warning");
+      showToast(
+        backendHasNextPage
+          ? "Choose a page of 1 or more."
+          : `Choose a page from 1 to ${NUMBER_FORMAT.format(pageCount)}.`,
+        "warning",
+      );
       setPageJumpDraft({ page: eventPage, value: String(eventPage) });
       return;
     }
@@ -627,7 +632,7 @@ export function EventsPanel({
                     aria-label="Event page number"
                     type="number"
                     min={1}
-                    max={pageCount}
+                    max={backendHasNextPage ? undefined : pageCount}
                     step={1}
                     value={pageJumpValue}
                     disabled={eventPageLoading}

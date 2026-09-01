@@ -1270,13 +1270,14 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     currentResultPageSize,
   );
   // A page can hold fewer rows than the page size, because the in-memory result manager also
-  // bounds a page by bytes. The reported total then implies fewer pages than the cursor chain
-  // actually yields, so a live next-page cursor is authoritative over the arithmetic.
+  // bounds a page by bytes. The count derived from the reported total is therefore a lower bound,
+  // not a maximum; the cursor ceiling raises it as pages are reached, and EventsPanel refuses to
+  // cap a page jump while the server still offers a next cursor.
   const eventPageCount = backendEnabled
     ? resultPageCount(
       backendResultTotalRows,
       currentResultPageSize,
-      Math.max(backendHasNextPage ? eventPage + 1 : eventPage, loadedResultPageCeiling),
+      Math.max(eventPage, loadedResultPageCeiling),
     )
     : Math.max(1, Math.ceil(pageableEventCount / currentResultPageSize));
   const eventPageStart = backendEnabled
