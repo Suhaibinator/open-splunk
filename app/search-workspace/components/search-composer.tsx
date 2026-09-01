@@ -17,15 +17,7 @@ import type { ModalName, TimePickerSection, TimeRange } from "../model";
 import { serverTimeRangeValidationError } from "../time-range";
 import { AppIcon, StatusIcon } from "../../_components/app-icon";
 import { Button } from "../../_components/button";
-import { syntaxTokens } from "../workspace-utils";
-
-interface CompletionItem {
-  label: string;
-  insertion: string;
-  detail: string;
-  replaceStart?: number;
-  replaceEnd?: number;
-}
+import { SearchEditor, type CompletionItem } from "./search-editor";
 
 interface SearchComposerProps {
   absoluteEnd: string;
@@ -165,67 +157,29 @@ export function SearchComposer({
   return (
     <>
       <section className="search-composer" aria-label="SPL search" aria-busy={launchPending}>
-        <div
-          className={`spl-editor${editorFocused ? " focused" : ""}${diagnostic === null ? "" : " has-error"}`}
-        >
-          <div className="editor-gutter" aria-hidden="true">
-            <div className="editor-gutter-lines" ref={gutterLinesRef}>
-              {Array.from({ length: editorLineCount }, (_, index) => <span key={index + 1}>{index + 1}</span>)}
-            </div>
-          </div>
-          <pre className="editor-highlight" ref={highlightRef} aria-hidden="true">{syntaxTokens(query)}{query.endsWith("\n") ? "\n " : null}</pre>
-          <textarea
-            ref={editorRef}
-            data-testid="search-input"
-            aria-label="Search with SPL"
-            aria-describedby={`${diagnostic === null ? "editor-help" : "editor-diagnostic"} spl-completion-status`}
-            value={query}
-            disabled={launchPending}
-            rows={2}
-            spellCheck={false}
-            autoCapitalize="off"
-            autoComplete="off"
-            onChange={onEditorChange}
-            onFocus={() => {
-              onEditorFocusedChange(true);
-              if (modal === "time") onModalChange(null);
-            }}
-            onBlur={() => window.setTimeout(() => {
-              onEditorFocusedChange(false);
-              onCompletionOpenChange(false);
-            }, 120)}
-            onKeyDown={onEditorKeyDown}
-            onScroll={onEditorScroll}
-            onSelect={(event) => onEditorCaretChange(event.currentTarget.selectionStart)}
-          />
-          <div className="editor-meta" id="editor-help"><span>SPL</span><span>Ctrl+Space for commands</span><span>⌘↵ to run</span></div>
-          <span className="sr-only" id="spl-completion-status" aria-live="polite">
-            {completionOpen
-              ? filteredCompletions.length === 0
-                ? "No matching SPL commands."
-                : `${filteredCompletions.length} suggestions available. ${filteredCompletions[completionIndex]?.label ?? "First suggestion"} selected. Use Up and Down arrows, then Enter or Tab to insert.`
-              : "Suggestions closed."}
-          </span>
-          {completionOpen ? (
-            <div className="completion-menu" id="spl-completion-list" data-testid="completion-menu">
-              <div className="completion-title"><span>Commands</span><small>Enter a pipeline stage</small></div>
-              {filteredCompletions.map((completion, index) => (
-                <button
-                  id={`spl-completion-${index}`}
-                  data-highlighted={index === completionIndex}
-                  type="button"
-                  key={completion.label}
-                  onMouseEnter={() => onCompletionIndexChange(index)}
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => onInsertCompletion(completion)}
-                >
-                  <code>{completion.label}</code><span>{completion.detail}</span><kbd>{index === completionIndex ? "↵" : ""}</kbd>
-                </button>
-              ))}
-              {filteredCompletions.length === 0 ? <p className="completion-empty">No matching SPL commands</p> : null}
-            </div>
-          ) : null}
-        </div>
+        <SearchEditor
+          completionIndex={completionIndex}
+          completionOpen={completionOpen}
+          diagnostic={diagnostic}
+          editorFocused={editorFocused}
+          editorLineCount={editorLineCount}
+          editorRef={editorRef}
+          filteredCompletions={filteredCompletions}
+          gutterLinesRef={gutterLinesRef}
+          highlightRef={highlightRef}
+          launchPending={launchPending}
+          modal={modal}
+          query={query}
+          onCompletionIndexChange={onCompletionIndexChange}
+          onCompletionOpenChange={onCompletionOpenChange}
+          onEditorCaretChange={onEditorCaretChange}
+          onEditorChange={onEditorChange}
+          onEditorFocusedChange={onEditorFocusedChange}
+          onEditorKeyDown={onEditorKeyDown}
+          onEditorScroll={onEditorScroll}
+          onInsertCompletion={onInsertCompletion}
+          onModalChange={onModalChange}
+        />
         <div className="time-picker-wrap" ref={timePickerRef}>
           <button
             ref={timeRangeButtonRef}
