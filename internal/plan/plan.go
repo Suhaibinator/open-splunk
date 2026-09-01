@@ -530,11 +530,14 @@ func (op *Sort) SourceRange() spl.Range { return op.Range }
 
 // Deduplicate retains the first Count rows for each complete key tuple. It is
 // schema preserving; missing/null handling and scalar validation are backend
-// responsibilities because open event fields are typed at runtime.
+// responsibilities because open event fields are typed at runtime. When
+// Consecutive is set, Count applies to each run of adjacent equal key tuples
+// in the established order instead of to the whole relation.
 type Deduplicate struct {
-	Count uint64
-	Keys  []FieldRef
-	Range spl.Range
+	Count       uint64
+	Keys        []FieldRef
+	Consecutive bool
+	Range       spl.Range
 }
 
 func (*Deduplicate) operator()                 {}

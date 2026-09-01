@@ -70,7 +70,7 @@ var AllowedFacets = map[string][]string{
 	"bin":         {"field", "output", "span"},
 	"bucket":      {"field", "output", "span"},
 	"chart":       {"aggregate", "over", "split_by"},
-	"dedup":       {"count", "fields"},
+	"dedup":       {"consecutive", "count", "fields", "sortby"},
 	"delta":       {"field", "output", "previous"},
 	"eval":        {"expressions", "fields"},
 	"eventstats":  {"aggregate", "group_by"},

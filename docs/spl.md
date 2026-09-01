@@ -93,6 +93,7 @@ The semantic rule inventory is:
 | `SPL-TOSTRING-FORMAT-001` | `commas` and `duration` numeric rendering |
 | `SPL-REGEX-001` | bounded row-filtering regex command |
 | `SPL-REVERSE-001` | complete established-order reversal |
+| `SPL-DEDUP-001` | ordered first-N key retention with sortby and consecutive runs |
 | `SPL-ACCUM-001` | running numeric sum |
 | `SPL-STRCAT-001` | bounded concatenation command |
 | `SPL-ADDINFO-001` | immutable admitted-search metadata |
@@ -249,7 +250,7 @@ The cumulative command surface is:
 | `fields`, `table` | exact table projection and exact/wildcard fields inclusion or exclusion |
 | `rename` | exact source/destination pairs |
 | `sort` | bounded exact typed keys, labeled or positional limits, and terminal reversal (`SPL-SORT-001`) |
-| `dedup` | global first-N retention by exact key tuple |
+| `dedup` | first-N retention by exact key tuple in the established or `sortby ±key` order; `consecutive=true` restarts the count at each run of adjacent duplicates (`SPL-DEDUP-001`) |
 | `head`, `tail` | bounded row selection by positional count or `limit=N`; `tail` publishes reversed selection order |
 | `stats` | bounded transforming aggregation and grouping |
 | `eventstats` | bounded row-preserving aggregate attachment |

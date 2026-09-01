@@ -676,41 +676,9 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			canonicalTimeAvailable = canonicalTimeAvailable && slices.Contains(command.Fields, "_time")
 			result.Operators = append(result.Operators, &Project{Mode: ProjectModeTable, Fields: fields, Range: command.Range})
 		case *spl.SortCommand:
-			keys := make([]SortKey, 0, len(command.Fields))
-			for _, field := range command.Fields {
-				fieldRange := field.FieldRange
-				if fieldRange == (spl.Range{}) {
-					fieldRange = field.Range
-				}
-				var (
-					ref      FieldRef
-					fieldErr error
-				)
-				if field.Quoted {
-					ref, fieldErr = ResolveQuotedField(field.Field, fieldRange)
-				} else {
-					ref, fieldErr = ResolveField(field.Field, fieldRange)
-				}
-				if fieldErr != nil {
-					return nil, fieldErr
-				}
-				mode := SortValueModeAuto
-				switch field.Mode {
-				case spl.SortValueModeAuto:
-				case spl.SortValueModeString:
-					mode = SortValueModeLexical
-				case spl.SortValueModeNumber:
-					mode = SortValueModeNumeric
-				case spl.SortValueModeIP:
-					mode = SortValueModeIP
-				default:
-					return nil, &Diagnostic{
-						Code:    "SPL_INVALID_QUERY",
-						Message: "sort field has an invalid value mode",
-						Range:   field.Range,
-					}
-				}
-				keys = append(keys, SortKey{Field: ref, Descending: field.Descending, Mode: mode})
+			keys, keysErr := convertSortFields(command.Fields)
+			if keysErr != nil {
+				return nil, keysErr
 			}
 			limit := command.Limit
 			if !command.LimitSpecified {
@@ -753,7 +721,23 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				}
 				keys = append(keys, key)
 			}
-			result.Operators = append(result.Operators, &Deduplicate{Count: command.Count, Keys: keys, Range: command.Range})
+			if len(command.SortBy) > 0 {
+				// sortby establishes the order dedup selects from, and that order
+				// survives as the relation's order afterwards. It is unbounded:
+				// a Splunk-style default sort limit would truncate the input
+				// before the key tuples are examined.
+				sortKeys, sortErr := convertSortFields(command.SortBy)
+				if sortErr != nil {
+					return nil, sortErr
+				}
+				result.Operators = append(result.Operators, &Sort{Keys: sortKeys, Range: command.SortByRange})
+			}
+			result.Operators = append(result.Operators, &Deduplicate{
+				Count:       command.Count,
+				Keys:        keys,
+				Consecutive: command.Consecutive,
+				Range:       command.Range,
+			})
 		case *spl.LimitCommand:
 			result.Operators = append(result.Operators, &Limit{Count: command.Count, FromEnd: command.Name() == "tail", Range: command.Range})
 		case *spl.EventStatsCommand:
@@ -5225,6 +5209,47 @@ func convertFieldsCommand(command *spl.FieldsCommand) ([]FieldRef, []ProjectFiel
 		fields = append(fields, field)
 	}
 	return fields, patterns, nil
+}
+
+// convertSortFields resolves authored sort keys for sort and dedup sortby.
+func convertSortFields(fields []spl.SortField) ([]SortKey, error) {
+	keys := make([]SortKey, 0, len(fields))
+	for _, field := range fields {
+		fieldRange := field.FieldRange
+		if fieldRange == (spl.Range{}) {
+			fieldRange = field.Range
+		}
+		var (
+			ref      FieldRef
+			fieldErr error
+		)
+		if field.Quoted {
+			ref, fieldErr = ResolveQuotedField(field.Field, fieldRange)
+		} else {
+			ref, fieldErr = ResolveField(field.Field, fieldRange)
+		}
+		if fieldErr != nil {
+			return nil, fieldErr
+		}
+		mode := SortValueModeAuto
+		switch field.Mode {
+		case spl.SortValueModeAuto:
+		case spl.SortValueModeString:
+			mode = SortValueModeLexical
+		case spl.SortValueModeNumber:
+			mode = SortValueModeNumeric
+		case spl.SortValueModeIP:
+			mode = SortValueModeIP
+		default:
+			return nil, &Diagnostic{
+				Code:    "SPL_INVALID_QUERY",
+				Message: "sort field has an invalid value mode",
+				Range:   field.Range,
+			}
+		}
+		keys = append(keys, SortKey{Field: ref, Descending: field.Descending, Mode: mode})
+	}
+	return keys, nil
 }
 
 func convertTableFields(command *spl.TableCommand) ([]FieldRef, error) {

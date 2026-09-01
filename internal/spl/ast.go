@@ -788,11 +788,16 @@ type DedupField struct {
 }
 
 // DedupCommand retains the first Count rows for each complete key tuple in
-// the ordering established by the preceding pipeline.
+// the ordering established by the preceding pipeline, or by SortBy when the
+// sortby clause is present. Consecutive restricts removal to rows whose key
+// tuple repeats the immediately preceding retained-eligible row.
 type DedupCommand struct {
-	Count  uint64
-	Fields []DedupField
-	Range  Range
+	Count       uint64
+	Fields      []DedupField
+	Consecutive bool
+	SortBy      []SortField
+	SortByRange Range
+	Range       Range
 }
 
 func (*DedupCommand) command()             {}

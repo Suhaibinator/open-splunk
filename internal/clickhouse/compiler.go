@@ -26072,10 +26072,39 @@ func compileDeduplicate(
 	if orderErr != nil {
 		return compiledRelation{}, nil, nil, 0, orderErr
 	}
+	limitBy := keyColumns
+	if operator.Consecutive {
+		// Consecutive mode retains the first Count rows of every run of equal
+		// key tuples. Eligibility is applied before the window so a row missing
+		// a key neither starts nor breaks a run, then each row learns whether
+		// its tuple repeats the previous eligible row's, and a running count
+		// of run starts labels the run that LIMIT BY bounds.
+		window := " OVER (ORDER BY " + order + " ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)"
+		repeated := make([]string, 0, len(keyColumns)+1)
+		repeated = append(repeated, "lagInFrame(toUInt8(1), 1, toUInt8(0))"+window+" != 0")
+		for _, key := range keyColumns {
+			repeated = append(repeated, "ifNull("+key+" = lagInFrame("+key+", 1, "+key+")"+window+", 0)")
+		}
+		runStart := quoteIdentifier(fmt.Sprintf("__os_dedup_run_start_%d", stage))
+		run := quoteIdentifier(fmt.Sprintf("__os_dedup_run_%d", stage))
+		additionalAliases++
+		startAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", stage+additionalAliases))
+		startSQL := "SELECT *, toUInt8(NOT (" + strings.Join(repeated, " AND ") + ")) AS " + runStart +
+			" FROM (" + deduplicated.sql + ") AS " + startAlias + " WHERE " + predicate
+		deduplicated = deduplicated.selectFrom(startSQL, operator.Range)
+		additionalAliases++
+		runAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", stage+additionalAliases))
+		runSQL := "SELECT *, sum(" + runStart + ")" + window + " AS " + run +
+			" FROM (" + deduplicated.sql + ") AS " + runAlias
+		deduplicated = deduplicated.selectFrom(runSQL, operator.Range)
+		helperColumns = append(helperColumns, runStart, run)
+		predicate = "1"
+		limitBy = []string{run}
+	}
 	additionalAliases++
 	dedupAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", stage+additionalAliases))
 	dedupSQL := "SELECT * EXCEPT (" + strings.Join(helperColumns, ", ") + ") FROM (" + deduplicated.sql + ") AS " + dedupAlias + " WHERE " + predicate +
-		" ORDER BY " + order + " LIMIT ? BY " + strings.Join(keyColumns, ", ")
+		" ORDER BY " + order + " LIMIT ? BY " + strings.Join(limitBy, ", ")
 	deduplicated = deduplicated.selectFrom(dedupSQL, operator.Range)
 	return deduplicated, prefixArgs, currentOrder, additionalAliases, nil
 }

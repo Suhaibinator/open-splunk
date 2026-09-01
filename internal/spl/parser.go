@@ -4384,47 +4384,12 @@ func (p *parser) parseSortCommand(name token) (Command, error) {
 			lastWasComma = true
 			continue
 		}
-		if p.current().kind == tokenScalarComposite {
-			prepared, err := p.prepareScalarQuotedOperand()
-			if err != nil {
-				return nil, err
-			}
-			if !prepared {
-				return nil, p.errorAtCurrent("SPL_EXPECTED_FIELD", "expected a sort field")
-			}
-		}
-		tok := p.current()
-		keyStart := tok.sourceRange.Start
-		descending := false
-		if direction, ok := sortDirectionPrefix(tok); ok {
-			descending = direction
-			prefix := tok
-			p.advance()
-			if p.atCommandEnd() || p.current().kind == tokenComma || sortTokenStartsDirection(p.current()) {
-				return nil, &Diagnostic{
-					Code:    "SPL_EXPECTED_FIELD",
-					Message: "expected a sort field after direction prefix",
-					Range:   prefix.sourceRange,
-				}
-			}
-			tok = p.current()
-		} else if tok.kind == tokenWord && len(tok.text) > 1 && (tok.text[0] == '+' || tok.text[0] == '-') {
-			descending = tok.text[0] == '-'
-			tok.text = tok.text[1:]
-			tok.sourceRange.Start = advanceSourcePosition(tok.sourceRange.Start, p.current().text[:1])
-		}
-		if tok.text == "" || sortTokenStartsDirection(tok) {
-			return nil, p.errorAtCurrent("SPL_EXPECTED_FIELD", "expected a sort field after direction prefix")
-		}
-
-		field, keyEnd, err := p.parseSortFieldValue(tok)
+		field, err := p.parseSortKey()
 		if err != nil {
 			return nil, err
 		}
-		field.Descending = descending
-		field.Range = Range{Start: keyStart, End: keyEnd}
 		command.Fields = append(command.Fields, field)
-		end = keyEnd
+		end = field.Range.End
 		lastWasComma = false
 
 		if !p.atCommandEnd() && p.current().kind == tokenWord &&
@@ -4457,6 +4422,51 @@ func (p *parser) parseSortLimit(command *SortCommand, value token) error {
 	command.Limit = limit
 	command.LimitSpecified = true
 	return nil
+}
+
+// parseSortKey consumes one [+|-]field or [+|-]mode(field) sort key. It is
+// shared by sort and dedup sortby; the caller owns separators and terminators.
+func (p *parser) parseSortKey() (SortField, error) {
+	if p.current().kind == tokenScalarComposite {
+		prepared, err := p.prepareScalarQuotedOperand()
+		if err != nil {
+			return SortField{}, err
+		}
+		if !prepared {
+			return SortField{}, p.errorAtCurrent("SPL_EXPECTED_FIELD", "expected a sort field")
+		}
+	}
+	tok := p.current()
+	keyStart := tok.sourceRange.Start
+	descending := false
+	if direction, ok := sortDirectionPrefix(tok); ok {
+		descending = direction
+		prefix := tok
+		p.advance()
+		if p.atCommandEnd() || p.current().kind == tokenComma || sortTokenStartsDirection(p.current()) {
+			return SortField{}, &Diagnostic{
+				Code:    "SPL_EXPECTED_FIELD",
+				Message: "expected a sort field after direction prefix",
+				Range:   prefix.sourceRange,
+			}
+		}
+		tok = p.current()
+	} else if tok.kind == tokenWord && len(tok.text) > 1 && (tok.text[0] == '+' || tok.text[0] == '-') {
+		descending = tok.text[0] == '-'
+		tok.text = tok.text[1:]
+		tok.sourceRange.Start = advanceSourcePosition(tok.sourceRange.Start, p.current().text[:1])
+	}
+	if tok.text == "" || sortTokenStartsDirection(tok) {
+		return SortField{}, p.errorAtCurrent("SPL_EXPECTED_FIELD", "expected a sort field after direction prefix")
+	}
+
+	field, keyEnd, err := p.parseSortFieldValue(tok)
+	if err != nil {
+		return SortField{}, err
+	}
+	field.Descending = descending
+	field.Range = Range{Start: keyStart, End: keyEnd}
+	return field, nil
 }
 
 // parseSortFieldValue consumes the field portion of one sort key. tok is a
@@ -4595,6 +4605,7 @@ func (p *parser) parseDedupCommand(name token) (Command, error) {
 
 	end := name.sourceRange.End
 	wantField := true
+	consecutiveSpecified := false
 	seen := make(map[string]struct{})
 	for !p.atCommandEnd() {
 		tok := p.current()
@@ -4610,8 +4621,47 @@ func (p *parser) parseDedupCommand(name token) (Command, error) {
 			return unsupported(tok, "dedup supports unquoted exact field names only")
 		}
 		lower := strings.ToLower(tok.text)
-		if lower == "keepempty" || lower == "consecutive" || lower == "keepevents" || lower == "sortby" {
-			return unsupported(tok, fmt.Sprintf("dedup option %q is not supported", tok.text))
+		if lower == "sortby" {
+			if len(command.Fields) == 0 {
+				return unsupported(tok, "dedup requires at least one exact field before sortby")
+			}
+			if wantField {
+				return unsupported(tok, "dedup requires an exact field before each comma")
+			}
+			p.advance()
+			sortEnd, err := p.parseDedupSortBy(command, tok)
+			if err != nil {
+				return nil, err
+			}
+			end = sortEnd
+			break
+		}
+		if p.nextIs(tokenEqual) {
+			switch lower {
+			case "consecutive":
+				if consecutiveSpecified {
+					return unsupported(tok, "dedup option \"consecutive\" is repeated")
+				}
+				p.advance()
+				p.advance()
+				value := p.current()
+				parsed, ok := parseStrictBool(value.text)
+				if value.kind != tokenWord || !ok {
+					if p.atCommandEnd() {
+						value = tok
+					}
+					return unsupported(value, "dedup consecutive must be true or false")
+				}
+				command.Consecutive = parsed
+				consecutiveSpecified = true
+				end = value.sourceRange.End
+				p.advance()
+				continue
+			case "keepempty", "keepevents":
+				return unsupported(tok, fmt.Sprintf("dedup option %q is not supported", tok.text))
+			default:
+				return unsupported(tok, fmt.Sprintf("dedup option %q is not recognized", tok.text))
+			}
 		}
 		if strings.Contains(tok.text, "*") {
 			return unsupported(tok, "dedup wildcard fields are not supported")
@@ -4633,6 +4683,64 @@ func (p *parser) parseDedupCommand(name token) (Command, error) {
 	}
 	command.Range = Range{Start: name.sourceRange.Start, End: end}
 	return command, nil
+}
+
+// parseDedupSortBy consumes the sort keys that follow the sortby keyword. The
+// clause is terminal: it runs to the end of the command, so the official
+// space-separated spelling and the comma-separated sort spelling both work.
+func (p *parser) parseDedupSortBy(command *DedupCommand, keyword token) (Position, error) {
+	unsupported := func(tok token, message string) (Position, error) {
+		return Position{}, &Diagnostic{
+			Code:        "SPL_UNSUPPORTED_DEDUP_SYNTAX",
+			Message:     message,
+			Range:       tok.sourceRange,
+			Suggestions: []string{"dedup field sortby -_time", "dedup field sortby +num(bytes), -host"},
+		}
+	}
+	if p.atCommandEnd() {
+		return unsupported(keyword, "dedup sortby requires at least one sort key")
+	}
+	seen := make(map[string]struct{})
+	lastWasComma := false
+	end := keyword.sourceRange.End
+	for !p.atCommandEnd() {
+		if p.current().kind == tokenComma {
+			if len(command.SortBy) == 0 || lastWasComma {
+				return unsupported(p.current(), "dedup sortby requires a sort key before each comma")
+			}
+			lastWasComma = true
+			p.advance()
+			continue
+		}
+		if p.current().kind == tokenWord && p.nextIs(tokenEqual) {
+			return unsupported(p.current(), "dedup options must precede sortby")
+		}
+		if p.current().kind == tokenWord &&
+			(strings.EqualFold(p.current().text, "d") || strings.EqualFold(p.current().text, "desc")) &&
+			p.index+1 < len(p.tokens) && (p.tokens[p.index+1].kind == tokenPipe || p.tokens[p.index+1].kind == tokenEOF) {
+			return unsupported(p.current(), "dedup sortby uses a + or - prefix on each key instead of a trailing desc")
+		}
+		key, err := p.parseSortKey()
+		if err != nil {
+			return Position{}, err
+		}
+		keyToken := token{sourceRange: key.Range}
+		if _, duplicate := seen[key.Field]; duplicate {
+			return unsupported(keyToken, fmt.Sprintf("dedup sortby key %q is duplicated", key.Field))
+		}
+		if len(command.SortBy) >= maxDedupFields {
+			return unsupported(keyToken, fmt.Sprintf("dedup sortby supports at most %d keys", maxDedupFields))
+		}
+		seen[key.Field] = struct{}{}
+		command.SortBy = append(command.SortBy, key)
+		end = key.Range.End
+		lastWasComma = false
+	}
+	if lastWasComma {
+		return unsupported(p.previous(), "dedup sortby cannot end with a comma")
+	}
+	command.SortByRange = Range{Start: command.SortBy[0].Range.Start, End: end}
+	return end, nil
 }
 
 // parseLimitCommand accepts the positional count form and the labeled

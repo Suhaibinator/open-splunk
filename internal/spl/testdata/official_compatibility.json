@@ -484,6 +484,50 @@
       }
     },
     {
+      "id": "dedup.sortby",
+      "command": "dedup",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/dedup",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "dedup 3 source sortby -_size",
+        "verified_on": "2026-09-01"
+      },
+      "query": "index=main | dedup 3 source sortby -_size",
+      "expect": {
+        "commands": ["dedup"],
+        "facets": {
+          "consecutive": "false",
+          "count": "3",
+          "fields": "source",
+          "sortby": "-_size"
+        }
+      }
+    },
+    {
+      "id": "dedup.consecutive",
+      "command": "dedup",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/dedup",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "dedup host consecutive=true",
+        "verified_on": "2026-09-01"
+      },
+      "query": "index=main | dedup host consecutive=true",
+      "expect": {
+        "commands": ["dedup"],
+        "facets": {
+          "consecutive": "true",
+          "count": "1",
+          "fields": "host",
+          "sortby": ""
+        }
+      }
+    },
+    {
       "id": "head.count",
       "command": "head",
       "source": {

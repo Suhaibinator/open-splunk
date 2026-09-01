@@ -624,6 +624,318 @@
         ]
       }
     },
+    "reference.dedup-consecutive": {
+      "runner": "reference",
+      "input": {
+        "schema": [
+          {
+            "name": "event_id",
+            "kind": "number",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "host",
+            "kind": "string",
+            "nullable": true,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "number": 1
+            },
+            {
+              "string": "api"
+            }
+          ],
+          [
+            {
+              "number": 2
+            },
+            {
+              "string": "api"
+            }
+          ],
+          [
+            {
+              "number": 3
+            },
+            {
+              "null": true
+            }
+          ],
+          [
+            {
+              "number": 4
+            },
+            {
+              "string": "worker"
+            }
+          ],
+          [
+            {
+              "number": 5
+            },
+            {
+              "string": "api"
+            }
+          ],
+          [
+            {
+              "number": 6
+            },
+            {
+              "missing": true
+            }
+          ],
+          [
+            {
+              "number": 7
+            },
+            {
+              "string": "worker"
+            }
+          ]
+        ]
+      },
+      "program": [
+        {
+          "op": "dedup",
+          "fields": [
+            "host"
+          ],
+          "count": 1,
+          "consecutive": true
+        }
+      ],
+      "expected": {
+        "schema": [
+          {
+            "name": "event_id",
+            "kind": "number",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "host",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "number": 1
+            },
+            {
+              "string": "api"
+            }
+          ],
+          [
+            {
+              "number": 4
+            },
+            {
+              "string": "worker"
+            }
+          ],
+          [
+            {
+              "number": 5
+            },
+            {
+              "string": "api"
+            }
+          ],
+          [
+            {
+              "number": 7
+            },
+            {
+              "string": "worker"
+            }
+          ]
+        ]
+      }
+    },
+    "reference.dedup-count-head": {
+      "runner": "reference",
+      "input": {
+        "schema": [
+          {
+            "name": "id",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "n",
+            "kind": "number",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "host",
+            "kind": "string",
+            "nullable": true,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "string": "a"
+            },
+            {
+              "number": 9
+            },
+            {
+              "string": "api"
+            }
+          ],
+          [
+            {
+              "string": "b"
+            },
+            {
+              "number": 8
+            },
+            {
+              "string": "api"
+            }
+          ],
+          [
+            {
+              "string": "c"
+            },
+            {
+              "number": 7
+            },
+            {
+              "null": true
+            }
+          ],
+          [
+            {
+              "string": "d"
+            },
+            {
+              "number": 6
+            },
+            {
+              "string": "worker"
+            }
+          ],
+          [
+            {
+              "string": "e"
+            },
+            {
+              "number": 5
+            },
+            {
+              "string": "api"
+            }
+          ],
+          [
+            {
+              "string": "f"
+            },
+            {
+              "number": 4
+            },
+            {
+              "string": "worker"
+            }
+          ],
+          [
+            {
+              "string": "g"
+            },
+            {
+              "number": 3
+            },
+            {
+              "string": "worker"
+            }
+          ]
+        ]
+      },
+      "program": [
+        {
+          "op": "dedup",
+          "fields": [
+            "host"
+          ],
+          "count": 2,
+          "consecutive": false
+        },
+        {
+          "op": "head",
+          "count": 3
+        }
+      ],
+      "expected": {
+        "schema": [
+          {
+            "name": "id",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "n",
+            "kind": "number",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "host",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "string": "a"
+            },
+            {
+              "number": 9
+            },
+            {
+              "string": "api"
+            }
+          ],
+          [
+            {
+              "string": "b"
+            },
+            {
+              "number": 8
+            },
+            {
+              "string": "api"
+            }
+          ],
+          [
+            {
+              "string": "d"
+            },
+            {
+              "number": 6
+            },
+            {
+              "string": "worker"
+            }
+          ]
+        ]
+      }
+    },
     "reference.accum-default": {
       "runner": "reference",
       "input": {
@@ -4469,6 +4781,51 @@
           "source": "index=main | reverse 2",
           "expect": {
             "diagnostic": "SPL_UNSUPPORTED_REVERSE_SYNTAX"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-DEDUP-001",
+      "summary": "Dedup retains the first N complete key tuples of the established or sortby order, restarting per run of adjacent duplicates when consecutive.",
+      "cases": [
+        {
+          "name": "consecutive runs",
+          "source": "index=main | sort 0 +event_id | dedup host consecutive=true",
+          "fixture": "reference.dedup-consecutive",
+          "expect": {
+            "parse": "accept",
+            "order": "pipeline"
+          }
+        },
+        {
+          "name": "global count before head",
+          "source": "index=main | sort 0 -n | dedup 2 host | head 3",
+          "fixture": "reference.dedup-count-head",
+          "expect": {
+            "parse": "accept",
+            "order": "pipeline"
+          }
+        },
+        {
+          "name": "sortby keys accepted",
+          "source": "index=main | dedup host, source sortby -num(bytes), +str(host), ip(client_ip)",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "trailing desc rejected",
+          "source": "index=main | dedup host sortby _time desc",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_DEDUP_SYNTAX"
+          }
+        },
+        {
+          "name": "keepempty rejected",
+          "source": "index=main | dedup host keepempty=true",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_DEDUP_SYNTAX"
           }
         }
       ]

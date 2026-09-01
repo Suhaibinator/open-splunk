@@ -394,9 +394,21 @@ func TestParseDedupRejectsUnsupportedOrAmbiguousSyntax(t *testing.T) {
 		`index=main | dedup ho*`,
 		`index=main | dedup "host"`,
 		`index=main | dedup host keepempty=true`,
-		`index=main | dedup consecutive=true host`,
 		`index=main | dedup keepevents=true host`,
-		`index=main | dedup host sortby -_time`,
+		`index=main | dedup host consecutive=yes`,
+		`index=main | dedup host consecutive=`,
+		`index=main | dedup host consecutive="true"`,
+		`index=main | dedup host consecutive=true consecutive=false`,
+		`index=main | dedup host maxfields=2`,
+		`index=main | dedup sortby -_time`,
+		`index=main | dedup host, sortby -_time`,
+		`index=main | dedup host sortby`,
+		`index=main | dedup host sortby ,`,
+		`index=main | dedup host sortby -_time,`,
+		`index=main | dedup host sortby -_time,,host`,
+		`index=main | dedup host sortby -_time -_time`,
+		`index=main | dedup host sortby -_time consecutive=true`,
+		`index=main | dedup host sortby _time desc`,
 	}
 	for _, source := range tests {
 		t.Run(source, func(t *testing.T) {
@@ -413,6 +425,115 @@ func TestParseDedupRejectsUnsupportedOrAmbiguousSyntax(t *testing.T) {
 			if diagnostic.Range.Start.Offset < 0 || diagnostic.Range.Start.Offset > len(source) || diagnostic.Range.End.Offset > len(source) {
 				t.Fatalf("diagnostic range = %#v outside source length %d", diagnostic.Range, len(source))
 			}
+		})
+	}
+}
+
+func TestParseDedupAcceptsSortByAndConsecutive(t *testing.T) {
+	t.Parallel()
+
+	type key struct {
+		field      string
+		descending bool
+		mode       SortValueMode
+	}
+	tests := []struct {
+		source      string
+		count       uint64
+		fields      []string
+		consecutive bool
+		sortBy      []key
+		sortByText  string
+		rangeEnd    int
+	}{
+		{
+			source: `index=main | dedup source sortby +_size`, count: 1, fields: []string{"source"},
+			sortBy: []key{{field: "_size", mode: SortValueModeAuto}}, sortByText: "+_size", rangeEnd: 39,
+		},
+		{
+			source: `index=main | dedup 3 source sortby -_size`, count: 3, fields: []string{"source"},
+			sortBy: []key{{field: "_size", descending: true, mode: SortValueModeAuto}}, sortByText: "-_size", rangeEnd: 41,
+		},
+		{
+			source: `index=main | dedup host, source sortby -num(bytes) +str(host), ip(client_ip)`, count: 1,
+			fields: []string{"host", "source"},
+			sortBy: []key{
+				{field: "bytes", descending: true, mode: SortValueModeNumber},
+				{field: "host", mode: SortValueModeString},
+				{field: "client_ip", mode: SortValueModeIP},
+			},
+			sortByText: "-num(bytes) +str(host), ip(client_ip)", rangeEnd: 76,
+		},
+		{
+			source: `index=main | dedup host consecutive=true`, count: 1, fields: []string{"host"}, consecutive: true, rangeEnd: 40,
+		},
+		{
+			source: `index=main | dedup consecutive=TRUE host source`, count: 1, fields: []string{"host", "source"},
+			consecutive: true, rangeEnd: 47,
+		},
+		{
+			source: `index=main | dedup 2 host consecutive=false sortby -_time`, count: 2, fields: []string{"host"},
+			sortBy: []key{{field: "_time", descending: true, mode: SortValueModeAuto}}, sortByText: "-_time", rangeEnd: 57,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.source, func(t *testing.T) {
+			t.Parallel()
+			query, err := Parse(test.source)
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			command, ok := query.Commands[0].(*DedupCommand)
+			if !ok {
+				t.Fatalf("command = %T, want *DedupCommand", query.Commands[0])
+			}
+			fields := make([]string, len(command.Fields))
+			for index, field := range command.Fields {
+				fields[index] = field.Name
+			}
+			if command.Count != test.count || !slices.Equal(fields, test.fields) || command.Consecutive != test.consecutive {
+				t.Fatalf("dedup = %#v, want count %d fields %v consecutive %v", command, test.count, test.fields, test.consecutive)
+			}
+			if len(command.SortBy) != len(test.sortBy) {
+				t.Fatalf("sortby = %#v, want %v", command.SortBy, test.sortBy)
+			}
+			for index, want := range test.sortBy {
+				got := command.SortBy[index]
+				if got.Field != want.field || got.Descending != want.descending || got.Mode != want.mode || got.Quoted {
+					t.Fatalf("sortby[%d] = %#v, want %#v", index, got, want)
+				}
+			}
+			if len(test.sortBy) > 0 {
+				if got := test.source[command.SortByRange.Start.Offset:command.SortByRange.End.Offset]; got != test.sortByText {
+					t.Fatalf("sortby range text = %q, want %q", got, test.sortByText)
+				}
+			} else if command.SortByRange != (Range{}) {
+				t.Fatalf("sortby range = %#v, want zero", command.SortByRange)
+			}
+			if command.Range.Start.Offset != 13 || command.Range.End.Offset != test.rangeEnd {
+				t.Fatalf("range = %#v, want 13..%d", command.Range, test.rangeEnd)
+			}
+		})
+	}
+}
+
+func TestParseDedupSortByReportsSortKeyDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		source string
+		code   string
+	}{
+		{source: `index=main | dedup host sortby -`, code: "SPL_EXPECTED_FIELD"},
+		{source: `index=main | dedup host sortby - -_time`, code: "SPL_EXPECTED_FIELD"},
+		{source: `index=main | dedup host sortby -num(`, code: "SPL_EXPECTED_FIELD"},
+		{source: `index=main | dedup host sortby -num(bytes`, code: "SPL_EXPECTED_RIGHT_PAREN"},
+		{source: `index=main | dedup host sortby -lower(bytes)`, code: "SPL_UNSUPPORTED_SORT_SYNTAX"},
+	}
+	for _, test := range tests {
+		t.Run(test.source, func(t *testing.T) {
+			t.Parallel()
+			assertParseDiagnosticCode(t, test.source, test.code)
 		})
 	}
 }
