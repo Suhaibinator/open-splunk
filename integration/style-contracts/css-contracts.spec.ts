@@ -1227,7 +1227,7 @@ function composerMarkup(lines: number, completionOpen = false): string {
         <div class="editor-gutter" aria-hidden="true"><div class="editor-gutter-lines">${gutter}</div></div>
         <pre class="editor-highlight" aria-hidden="true">${query}</pre>
         <textarea aria-label="Search with SPL">${query}</textarea>
-        <div class="editor-meta" id="editor-help"><span>SPL</span><span>Ctrl+Space for commands</span><span>⌘↵ to run</span></div>
+        <div class="editor-meta" id="editor-help"><span>SPL</span><span>Ctrl+Space for suggestions</span><span>⌘↵ to run</span></div>
         ${menu}
       </div>
       <div class="time-picker-wrap">

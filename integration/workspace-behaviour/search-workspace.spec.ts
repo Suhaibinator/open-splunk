@@ -94,6 +94,34 @@ test("Escape closes the command menu and typing a pipe reopens it", async ({ pag
   await expect(page.getByTestId("completion-menu")).toBeVisible();
 });
 
+test("typing a field comparison offers the values the summary saw and Enter spells them as SPL", async ({ page }) => {
+  await openSeededWorkspace(page);
+  const editor = page.getByTestId("search-input");
+  const menu = page.getByTestId("completion-menu");
+  await editor.fill("");
+  await editor.pressSequentially("index=");
+
+  await expect(menu).toBeVisible();
+  const index = menu.getByRole("group", { name: "Indexes" }).getByRole("option");
+  await expect(index).toHaveCount(1);
+  await expect(index).toHaveAttribute("data-kind", "index");
+  await expect(index).toHaveAttribute("aria-selected", "true");
+  await expect(index.locator("code")).toHaveText("gradethis");
+  await page.keyboard.press("Enter");
+  await expect(menu).toHaveCount(0);
+  await expect(editor).toHaveValue("index=gradethis");
+
+  await editor.pressSequentially(" level=E");
+  const value = menu.getByRole("group", { name: "Values" }).getByRole("option");
+  await expect(value).toHaveCount(1);
+  await expect(value).toHaveAttribute("data-kind", "value");
+  await expect(value.locator("code")).toHaveText("\"ERROR\"");
+  await page.keyboard.press("Enter");
+  await expect(menu).toHaveCount(0);
+  await expect(editor).toHaveValue("index=gradethis level=\"ERROR\"");
+  await expect(editor).toBeFocused();
+});
+
 test("ArrowUp on the first line recalls the previous search and ArrowDown walks back to the draft", async ({ page }) => {
   await openSeededWorkspace(page);
   const editor = page.getByTestId("search-input");

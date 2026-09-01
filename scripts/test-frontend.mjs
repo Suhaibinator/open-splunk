@@ -96,6 +96,7 @@ const testFiles = [
   path.join("lib", "search", "streamstats-surface.test.ts"),
   path.join("integration", "browser_harness.test.ts"),
   path.join("app", "search-workspace", "completion-groups.test.ts"),
+  path.join("app", "search-workspace", "completion-candidates.test.ts"),
 ];
 
 function run(command, arguments_, environment = process.env) {

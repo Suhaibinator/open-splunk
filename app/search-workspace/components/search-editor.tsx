@@ -147,7 +147,7 @@ export function SearchEditor({
       />
       <div className="editor-meta" id="editor-help">
         <span>SPL</span>
-        <span>Ctrl+Space for commands</span>
+        <span>Ctrl+Space for suggestions</span>
         {historyRecallable ? <span>↑↓ history</span> : null}
         <span>⌘↵ to run</span>
       </div>

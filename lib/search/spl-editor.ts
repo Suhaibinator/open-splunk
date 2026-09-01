@@ -19,12 +19,40 @@ export interface SplDiagnostic {
   removeEnd?: number;
 }
 
+/**
+ * The kinds a completion can carry, in the order the menu lists them.
+ *
+ * Mirrors the server's `SearchSuggestionKind` (`internal/spl/suggestions.go`)
+ * plus `value`, which only the workspace produces: the server never suggests
+ * field values, so those come from the field summary the workspace holds.
+ */
+export const COMPLETION_KINDS = ["command", "function", "field", "value", "keyword", "index"] as const;
+
+export type CompletionKind = (typeof COMPLETION_KINDS)[number];
+
+/**
+ * What the fragment under the caret is. `command` is the first word of a
+ * stage (or of the implicit `search` head); `term` is a bare word further
+ * along the stage, where a field, function or keyword goes; `value` is the
+ * right-hand side of a `field=` / `field!=` / `field<` … comparison.
+ */
+export type CompletionStage = "command" | "term" | "value";
+
 export interface CompletionContext {
   fragmentStart: number;
   fragmentEnd: number;
   prefix: string;
   followsPipeline: boolean;
+  stage: CompletionStage;
+  /** The field a `value` fragment compares against. */
+  fieldName?: string;
 }
+
+const COMMAND_FRAGMENT = /^(\s*)([A-Za-z_]*)$/u;
+// `field`, a comparison operator, then the unquoted value typed so far.
+const VALUE_FRAGMENT = /([A-Za-z_][\w.]*)\s*(?:!=|<=|>=|=|<|>)\s*([\w.-]*)$/u;
+// A bare word after whitespace, an opening bracket, a comma or a sort sign.
+const TERM_FRAGMENT = /(?:^|[\s(,+-])([A-Za-z_][\w.]*)$/u;
 
 // Backend diagnostics and completion replacements use UTF-8 byte offsets,
 // while JavaScript string slicing uses UTF-16 code-unit offsets. If a forged
@@ -189,14 +217,36 @@ export function completionContextAt(spl: string, cursor: number): CompletionCont
   const lastPipe = structure.pipes.at(-1) ?? -1;
   const stageStart = lastPipe + 1;
   const stagePrefix = prefix.slice(stageStart);
-  const match = /^(\s*)([A-Za-z_]*)$/.exec(stagePrefix);
-  if (match === null) return null;
-
+  const followsPipeline = lastPipe >= 0;
+  const command = COMMAND_FRAGMENT.exec(stagePrefix);
+  if (command !== null) {
+    return {
+      fragmentStart: stageStart + command[1].length,
+      fragmentEnd: safeCursor,
+      prefix: command[2],
+      followsPipeline,
+      stage: "command",
+    };
+  }
+  const value = VALUE_FRAGMENT.exec(stagePrefix);
+  if (value !== null) {
+    return {
+      fragmentStart: safeCursor - value[2].length,
+      fragmentEnd: safeCursor,
+      prefix: value[2],
+      followsPipeline,
+      stage: "value",
+      fieldName: value[1],
+    };
+  }
+  const term = TERM_FRAGMENT.exec(stagePrefix);
+  if (term === null) return null;
   return {
-    fragmentStart: stageStart + match[1].length,
+    fragmentStart: safeCursor - term[1].length,
     fragmentEnd: safeCursor,
-    prefix: match[2],
-    followsPipeline: lastPipe >= 0,
+    prefix: term[1],
+    followsPipeline,
+    stage: "term",
   };
 }
 

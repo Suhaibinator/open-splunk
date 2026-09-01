@@ -139,7 +139,7 @@ test("an empty completion menu says so without any option", () => {
 
 test("the help strip offers history recall only when there is history to recall", () => {
   assert.doesNotMatch(render(), /↑↓ history/u);
-  assert.match(render({ historyRecallable: true }), /<span>Ctrl\+Space for commands<\/span><span>↑↓ history<\/span><span>⌘↵ to run<\/span>/u);
+  assert.match(render({ historyRecallable: true }), /<span>Ctrl\+Space for suggestions<\/span><span>↑↓ history<\/span><span>⌘↵ to run<\/span>/u);
 });
 
 test("a history recall is narrated by the live region until the popup speaks again", () => {

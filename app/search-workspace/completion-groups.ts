@@ -1,18 +1,9 @@
 import { SearchSuggestionKind } from "@/gen/ts/open_splunk/search_api";
+import { COMPLETION_KINDS, type CompletionKind } from "@/lib/search/spl-editor";
 
 import type { AppIconName } from "../_components/app-icon";
 
-/**
- * The kinds a completion can carry, in the order the menu lists them.
- *
- * Mirrors the server's `SearchSuggestionKind` (`internal/spl/suggestions.go`)
- * plus `value`, which only the workspace produces: the server never suggests
- * field values, so those come from the field summary the workspace already
- * holds.
- */
-export const COMPLETION_KINDS = ["command", "function", "field", "value", "keyword", "index"] as const;
-
-export type CompletionKind = (typeof COMPLETION_KINDS)[number];
+export { COMPLETION_KINDS, type CompletionKind };
 
 export interface CompletionKindPresentation {
   /** Group heading. */

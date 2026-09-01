@@ -182,11 +182,8 @@ import { InactiveResultTabPanels } from "./search-workspace/components/inactive-
 import { SearchSharingDialog } from "./search-workspace/components/search-sharing-dialog";
 import { WorkspaceDialogs } from "./search-workspace/components/workspace-dialogs";
 import { serializeRowsAsJsonLinesForClipboard, serializeRowsForClipboard } from "./search-workspace/clipboard-export";
-import {
-  completionKindFromSuggestion,
-  localCompletionRelevance,
-  orderCompletions,
-} from "./search-workspace/completion-groups";
+import { extendsFragment, localCompletions, typeaheadOpens } from "./search-workspace/completion-candidates";
+import { completionKindFromSuggestion, orderCompletions } from "./search-workspace/completion-groups";
 import { historyRecallAnnouncement, historyRecallDirection } from "./search-workspace/editor-history-recall";
 import {
   collapsePageEvents,
@@ -203,7 +200,6 @@ import {
   type TimechartCoverage,
 } from "./search-workspace/timechart-series";
 import {
-  COMPLETIONS,
   DEFAULT_QUERY,
   EVENT_EXPORT_FIELDS,
   EXPORT_FIELD_LABELS,
@@ -788,6 +784,9 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const [expandedEvents, setExpandedEvents] = useState<Set<string>>(new Set());
   const [completionOpen, setCompletionOpen] = useState(false);
   const [completionIndex, setCompletionIndex] = useState(0);
+  // Ctrl+Space asks for everything the caret could take; typing asks only
+  // for what would complete the word being spelled.
+  const [completionTrigger, setCompletionTrigger] = useState<"manual" | "typing">("manual");
   const [backendCompletions, setBackendCompletions] = useState<CompletionItem[] | null>(null);
   const [editorCaret, setEditorCaret] = useState(initialWorkspaceQuery.length);
   const [editorFocused, setEditorFocused] = useState(false);
@@ -1086,16 +1085,24 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   }, [backendEnabled, diagnostic]);
   const completionContext = useMemo(() => completionContextAt(query, editorCaret), [editorCaret, query]);
   const filteredCompletions = useMemo(() => {
-    if (backendEnabled && backendCompletions !== null) return orderCompletions(backendCompletions);
-    const prefix = completionContext?.prefix.toLowerCase() ?? "";
-    if (prefix.length === 0) return orderCompletions(COMPLETIONS);
-    const local: CompletionItem[] = [];
-    for (const completion of COMPLETIONS) {
-      if (!completion.label.startsWith(prefix)) continue;
-      local.push({ ...completion, relevance: localCompletionRelevance(completion.label, prefix) });
+    const local = localCompletions(completionContext, fields, {
+      commands: completionTrigger === "manual",
+      indexes: !backendEnabled,
+    });
+    // The server owns the SPL vocabulary; the field summary adds the values
+    // it never suggests. Until the server answers, the local list stands in.
+    if (backendEnabled && backendCompletions !== null) {
+      return orderCompletions([...local.filter((item) => item.kind === "value"), ...backendCompletions]);
     }
     return orderCompletions(local);
-  }, [backendCompletions, backendEnabled, completionContext]);
+  }, [backendCompletions, backendEnabled, completionContext, completionTrigger, fields]);
+  useEffect(() => {
+    // A popup that typing opened closes itself once nothing completes the
+    // word any more; one opened on purpose stays to say so.
+    if (!completionOpen || completionTrigger !== "typing" || extendsFragment(filteredCompletions)) return;
+    if (backendEnabled && backendCompletions === null) return;
+    setCompletionOpen(false);
+  }, [backendCompletions, backendEnabled, completionOpen, completionTrigger, filteredCompletions]);
 
   useEffect(() => {
     if (!backendEnabled || !completionOpen || backendBootstrapModel === null) {
@@ -4896,6 +4903,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         event.preventDefault();
         setEditorCaret(intent.caret);
         setCompletionIndex(0);
+        setCompletionTrigger("manual");
         setCompletionOpen(true);
         return;
       case "close-completions":
@@ -4944,11 +4952,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     recallCaretRef.current = recall.query.length;
   }
 
-  function insertCompletion(completion: {
-    insertion: string;
-    replaceStart?: number;
-    replaceEnd?: number;
-  }) {
+  function insertCompletion(completion: CompletionItem) {
     const editor = editorRef.current;
     const selectionStart = editor?.selectionStart ?? editorCaret;
     const selectionEnd = editor?.selectionEnd ?? selectionStart;
@@ -4975,7 +4979,8 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     if (modal === "time") setModal(null);
     setEditorCaret(caret);
     setCompletionIndex(0);
-    setCompletionOpen(context !== null && context.followsPipeline);
+    setCompletionTrigger("typing");
+    setCompletionOpen(typeaheadOpens(context, fields, { server: backendEnabled }));
   }
 
   function handleEditorScroll(event: UIEvent<HTMLTextAreaElement>) {
