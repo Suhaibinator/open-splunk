@@ -153,10 +153,15 @@ import {
   type SplDiagnostic,
   utf16OffsetsForUtf8ByteOffsets,
 } from "@/lib/search/spl-editor";
+import {
+  currentThemePreference,
+  setThemePreference,
+  subscribeToThemePreference,
+} from "@/lib/theme-preference";
 
 import { AppIcon, type AppIconName } from "./_components/app-icon";
 import { StatusDot, statusClassName } from "./_components/status";
-import { ProductShell } from "./_components/product-shell";
+import { ProductShell, ThemeMenu } from "./_components/product-shell";
 import { AlertSecretRecovery } from "./reports/alert-secret-recovery";
 import { AlertWizard } from "./reports/alert-wizard";
 import { defaultAlertForm } from "./reports/alerts-ui-state";
@@ -703,6 +708,11 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     subscribeToBackendAppId,
     currentBackendAppId,
     () => undefined,
+  );
+  const themePreference = useSyncExternalStore(
+    subscribeToThemePreference,
+    currentThemePreference,
+    () => "system" as const,
   );
   const [query, setQuery] = useState(initialWorkspaceQuery);
   const [submittedQuery, setSubmittedQuery] = useState(initialWorkspaceQuery);
@@ -6761,6 +6771,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
             <Link role="menuitem" href={productHref("/admin/")}>Account settings</Link>
             <button role="menuitem" type="button" onClick={() => showToast("Open Splunk is running in trusted-network mode.")}>Session details</button>
             <Link role="menuitem" tabIndex={0} href="/signin/" onClick={clearAdministratorBearerToken}>Sign out</Link>
+            <ThemeMenu preference={themePreference} onSelect={setThemePreference} />
           </div>
         ) : null}
       </div>

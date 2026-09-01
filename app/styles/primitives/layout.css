@@ -484,7 +484,8 @@
 }
 
 .suite-popover > a,
-.suite-popover > button {
+.suite-popover > button,
+.suite-theme-menu > button {
   align-items: center;
   background: transparent;
   border: 0;
@@ -500,9 +501,26 @@
 }
 
 .suite-popover > a:hover,
-.suite-popover > button:hover {
+.suite-popover > button:hover,
+.suite-theme-menu > button:hover {
   background: var(--bg-subtle);
 }
+
+/* The theme radios of the user popover: a fieldset so the legend names the
+   group. Every row carries the check glyph so the three labels align; only
+   the checked row shows it. */
+.suite-theme-menu {
+  border: 0;
+  margin: 0;
+  min-width: 0;
+  padding: 0;
+}
+.suite-theme-menu > button[aria-checked="false"] > .app-icon { visibility: hidden; }
+.suite-theme-menu > button[aria-checked="true"] {
+  color: var(--fg-strong);
+  font-weight: 600;
+}
+.suite-theme-menu > button > .app-icon { color: var(--accent); }
 
 .suite-popover > a > span,
 .suite-popover > button > span,
@@ -922,7 +940,7 @@
   .suite-main { min-height: calc(100dvh - 45px - env(safe-area-inset-top)); }
   .suite-data-disclosure { align-items: flex-start; flex-direction: column; gap: 1px; padding: 5px 10px; }
   .drawer-backdrop {
-    background: color-mix(in srgb, var(--bg-inverse) 48%, transparent);
+    background: color-mix(in srgb, var(--bg-scrim) 48%, transparent);
     border: 0;
     display: block;
     inset: 0;

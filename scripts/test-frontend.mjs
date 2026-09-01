@@ -64,6 +64,7 @@ const testFiles = [
   path.join("app", "search-workspace", "virtual-table.test.ts"),
   path.join("app", "datasets", "index-observability-data.test.ts"),
   path.join("lib", "byte-quantity.test.ts"),
+  path.join("lib", "theme-preference.test.ts"),
   path.join("lib", "api", "pagination.test.ts"),
   path.join("lib", "api", "cursor-pages.test.ts"),
   path.join("lib", "api", "open-splunk-client-routes.test.ts"),

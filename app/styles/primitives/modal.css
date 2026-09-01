@@ -17,7 +17,7 @@
 }
 
 .modal-backdrop {
-  background: color-mix(in srgb, var(--bg-inverse) 48%, transparent);
+  background: color-mix(in srgb, var(--bg-scrim) 48%, transparent);
   border: 0;
   inset: 0;
   position: fixed;
