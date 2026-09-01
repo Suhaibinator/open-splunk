@@ -44,6 +44,7 @@ func TestOfficialSPLCompatibilityCorpus(t *testing.T) {
 			if testCase.Expect.Fields != nil {
 				assertOfficialFieldsExpectation(t, testCase.Query, query, *testCase.Expect.Fields)
 			}
+			assertOfficialFacets(t, testCase, query)
 		})
 	}
 }
@@ -61,10 +62,14 @@ func TestDocumentedCommandSurfaceHasOfficialSPLCases(t *testing.T) {
 	}
 	documented := documentedCommands(t, contractPath)
 	coveredSet := make(map[string]struct{}, len(corpus.Cases))
+	facetedSet := make(map[string]struct{}, len(corpus.Cases))
 	caseIDs := make(map[string]struct{}, len(corpus.Cases))
 	for _, testCase := range corpus.Cases {
 		coveredSet[testCase.Command] = struct{}{}
 		caseIDs[testCase.ID] = struct{}{}
+		if len(testCase.Expect.Facets) != 0 {
+			facetedSet[testCase.Command] = struct{}{}
+		}
 		if testCase.Command == "sort" && testCase.Expect.Sort == nil {
 			t.Errorf("official sort case %q lacks detailed AST expectations", testCase.ID)
 		}
@@ -79,6 +84,12 @@ func TestDocumentedCommandSurfaceHasOfficialSPLCases(t *testing.T) {
 	slices.Sort(covered)
 	if missing := difference(documented, covered); len(missing) != 0 {
 		t.Fatalf("documented commands lack source-backed official SPL cases: %v", missing)
+	}
+	for _, command := range covered {
+		if _, faceted := facetedSet[command]; faceted || len(officialspl.AllowedFacets[command]) == 0 {
+			continue
+		}
+		t.Errorf("no official %s case pins its documented facets %v", command, officialspl.AllowedFacets[command])
 	}
 	for _, required := range []string{
 		"fields.exclude-list",
