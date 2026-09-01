@@ -20,6 +20,8 @@ function render(overrides: Partial<SearchEditorProps> = {}): string {
       filteredCompletions={[]}
       gutterLinesRef={createRef<HTMLDivElement>()}
       highlightRef={createRef<HTMLPreElement>()}
+      historyAnnouncement={null}
+      historyRecallable={false}
       launchPending={false}
       modal={null}
       query="index=main"
@@ -81,4 +83,22 @@ test("an open completion menu lists the highlighted command and announces the co
   assert.match(markup, /data-testid="completion-menu"/u);
   assert.match(markup, /id="spl-completion-1"[^>]*data-highlighted="true"/u);
   assert.match(markup, /2 suggestions available\. table selected\./u);
+});
+
+test("the help strip offers history recall only when there is history to recall", () => {
+  assert.doesNotMatch(render(), /↑↓ history/u);
+  assert.match(render({ historyRecallable: true }), /<span>Ctrl\+Space for commands<\/span><span>↑↓ history<\/span><span>⌘↵ to run<\/span>/u);
+});
+
+test("a history recall is narrated by the live region until the popup speaks again", () => {
+  assert.match(render({ historyAnnouncement: "Recalled search 2 of 14" }), /id="spl-completion-status"[^>]*>Recalled search 2 of 14</u);
+  assert.match(
+    render({
+      completionIndex: 0,
+      completionOpen: true,
+      filteredCompletions: [{ label: "stats", insertion: "stats count", detail: "Aggregate" }],
+      historyAnnouncement: "Recalled search 2 of 14",
+    }),
+    /1 suggestions available\. stats selected\./u,
+  );
 });

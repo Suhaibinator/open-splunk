@@ -90,6 +90,36 @@ test("Escape closes the command menu and typing a pipe reopens it", async ({ pag
   await expect(page.getByTestId("completion-menu")).toBeVisible();
 });
 
+test("ArrowUp on the first line recalls the previous search and ArrowDown walks back to the draft", async ({ page }) => {
+  await openSeededWorkspace(page);
+  const editor = page.getByTestId("search-input");
+  const status = page.locator("#spl-completion-status");
+  await expect(page.locator("#editor-help")).toContainText("↑↓ history");
+  await focusEditorEnd(page);
+
+  await page.keyboard.press("ArrowUp");
+  await expect(editor).toHaveValue("index=gradethis (level=ERROR OR status>=500) | sort -_time");
+  await expect(status).toHaveText(/^Recalled search 1 of \d+$/u);
+  await expect(page.getByTestId("completion-menu")).toHaveCount(0);
+
+  await page.keyboard.press("ArrowUp");
+  await expect(editor).toHaveValue('index=gradethis trace_id="4b9f0f06d2cc47c89bd04ce9a7318fd1" | sort _time');
+  await expect(status).toHaveText(/^Recalled search 2 of \d+$/u);
+
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowDown");
+  await expect(editor).toHaveValue(SEEDED_QUERY);
+  await expect(status).toHaveText("Restored draft");
+  await expect(editor).toBeFocused();
+
+  // Typing ends the walk: the next ArrowUp starts again from the edited draft.
+  await page.keyboard.type(" level=ERROR");
+  await page.keyboard.press("ArrowUp");
+  await expect(editor).toHaveValue("index=gradethis (level=ERROR OR status>=500) | sort -_time");
+  await page.keyboard.press("ArrowDown");
+  await expect(editor).toHaveValue(`${SEEDED_QUERY} level=ERROR`);
+});
+
 test("choosing a preset in the time picker updates the range the next run submits", async ({ page }) => {
   await openSeededWorkspace(page);
   const rangeButton = page.getByTestId("time-range-button");

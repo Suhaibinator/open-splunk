@@ -156,6 +156,8 @@ import {
   editorKeyIntent,
   insertCompletionIntoQuery,
   nextCompletionIndex,
+  recallHistory,
+  recallableHistory,
 } from "@/lib/search/spl-editor-interaction";
 
 import { AppIcon, type AppIconName } from "./_components/app-icon";
@@ -170,6 +172,7 @@ import { InactiveResultTabPanels } from "./search-workspace/components/inactive-
 import { SearchSharingDialog } from "./search-workspace/components/search-sharing-dialog";
 import { WorkspaceDialogs } from "./search-workspace/components/workspace-dialogs";
 import { serializeRowsAsJsonLinesForClipboard, serializeRowsForClipboard } from "./search-workspace/clipboard-export";
+import { historyRecallAnnouncement, historyRecallDirection } from "./search-workspace/editor-history-recall";
 import {
   collapsePageEvents,
   expandPageEvents,
@@ -908,6 +911,10 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const backendSavedSearchesRef = useRef<Map<string, ServerSavedSearch>>(new Map());
   const backendHistoryRef = useRef<Map<string, ServerSearchHistoryEntry>>(new Map());
   const backendHistoryRerunRef = useRef<ServerSearchHistoryEntry | null>(null);
+  // Arrow-key history recall: where the walk is, the draft it started from,
+  // and the text it last put in the editor so any other edit ends the walk.
+  const historyRecallRef = useRef<{ draft: string; index: number | null; shown: string } | null>(null);
+  const [historyAnnouncement, setHistoryAnnouncement] = useState<string | null>(null);
   const pendingSavedSelectedFieldsRef = useRef<Set<string> | null>(null);
   const pendingSavedPreferredTabRef = useRef<ResultTab | null>(null);
   const pendingSavedVisualizationRef = useRef<VisualizationSpec | undefined>(undefined);
@@ -1356,6 +1363,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     && savedBaselineCaptureId === null
     && savedWorkspaceFingerprint(currentSavedWorkspace) !== savedWorkspaceFingerprint(savedWorkspaceBaseline);
   const editorLineCount = Math.max(2, query.split("\n").length);
+  const historyRecallable = recallableHistory(history.map((entry) => entry.query)).some((entry) => entry !== query);
   const absoluteTimeInvalid = absoluteStart.trim().length === 0
     || absoluteEnd.trim().length === 0
     || absoluteStart >= absoluteEnd;
@@ -4783,8 +4791,33 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         insertCompletion(filteredCompletions[completionIndex] ?? filteredCompletions[0]);
         return;
       case "ignore":
+        recallHistoryFromKey(event);
         return;
     }
+  }
+
+  function recallHistoryFromKey(event: KeyboardEvent<HTMLTextAreaElement>) {
+    const editor = event.currentTarget;
+    const direction = historyRecallDirection(event, {
+      completionOpen,
+      selectionEnd: editor.selectionEnd,
+      selectionStart: editor.selectionStart,
+      value: query,
+    });
+    if (direction === null) return;
+    const walk = historyRecallRef.current?.shown === query
+      ? historyRecallRef.current
+      : { draft: query, index: null, shown: query };
+    const entries = recallableHistory(history.map((entry) => entry.query)).filter((entry) => entry !== walk.draft);
+    const recall = recallHistory(entries, walk.index, direction, walk.draft);
+    if (recall === null) return;
+    event.preventDefault();
+    historyRecallRef.current = { draft: walk.draft, index: recall.index, shown: recall.query };
+    setQuery(recall.query);
+    backendHistoryRerunRef.current = null;
+    setEditorCaret(recall.query.length);
+    setHistoryAnnouncement(historyRecallAnnouncement(recall.index, entries.length));
+    focusEditor(recall.query.length);
   }
 
   function insertCompletion(completion: {
@@ -4814,6 +4847,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     const context = completionContextAt(nextQuery, caret);
     setQuery(nextQuery);
     backendHistoryRerunRef.current = null;
+    historyRecallRef.current = null;
     if (modal === "time") setModal(null);
     setEditorCaret(caret);
     setCompletionIndex(0);
@@ -7032,6 +7066,8 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         filteredCompletions={filteredCompletions}
         gutterLinesRef={gutterLinesRef}
         highlightRef={highlightRef}
+        historyAnnouncement={historyAnnouncement}
+        historyRecallable={historyRecallable}
         isRunning={isRunning}
         launchPending={persistedLaunchPending}
         modal={modal}

@@ -30,6 +30,10 @@ export interface SearchEditorProps {
   filteredCompletions: CompletionItem[];
   gutterLinesRef: RefObject<HTMLDivElement | null>;
   highlightRef: RefObject<HTMLPreElement | null>;
+  /** Live-region text after an arrow-key history recall; null until one happens. */
+  historyAnnouncement: string | null;
+  /** Whether ↑/↓ on the boundary lines has anything to recall. */
+  historyRecallable: boolean;
   launchPending: boolean;
   modal: ModalName | null;
   query: string;
@@ -60,6 +64,8 @@ export function SearchEditor({
   filteredCompletions,
   gutterLinesRef,
   highlightRef,
+  historyAnnouncement,
+  historyRecallable,
   launchPending,
   modal,
   query,
@@ -106,13 +112,18 @@ export function SearchEditor({
         onScroll={onEditorScroll}
         onSelect={(event) => onEditorCaretChange(event.currentTarget.selectionStart)}
       />
-      <div className="editor-meta" id="editor-help"><span>SPL</span><span>Ctrl+Space for commands</span><span>⌘↵ to run</span></div>
+      <div className="editor-meta" id="editor-help">
+        <span>SPL</span>
+        <span>Ctrl+Space for commands</span>
+        {historyRecallable ? <span>↑↓ history</span> : null}
+        <span>⌘↵ to run</span>
+      </div>
       <span className="sr-only" id="spl-completion-status" aria-live="polite">
         {completionOpen
           ? filteredCompletions.length === 0
             ? "No matching SPL commands."
             : `${filteredCompletions.length} suggestions available. ${filteredCompletions[completionIndex]?.label ?? "First suggestion"} selected. Use Up and Down arrows, then Enter or Tab to insert.`
-          : "Suggestions closed."}
+          : historyAnnouncement ?? "Suggestions closed."}
       </span>
       {completionOpen ? (
         <div className="completion-menu" id="spl-completion-list" data-testid="completion-menu">

@@ -34,6 +34,8 @@ interface SearchComposerProps {
   filteredCompletions: CompletionItem[];
   gutterLinesRef: RefObject<HTMLDivElement | null>;
   highlightRef: RefObject<HTMLPreElement | null>;
+  historyAnnouncement: string | null;
+  historyRecallable: boolean;
   isRunning: boolean;
   launchPending: boolean;
   modal: ModalName | null;
@@ -81,6 +83,8 @@ export function SearchComposer({
   filteredCompletions,
   gutterLinesRef,
   highlightRef,
+  historyAnnouncement,
+  historyRecallable,
   isRunning,
   launchPending,
   modal,
@@ -167,6 +171,8 @@ export function SearchComposer({
           filteredCompletions={filteredCompletions}
           gutterLinesRef={gutterLinesRef}
           highlightRef={highlightRef}
+          historyAnnouncement={historyAnnouncement}
+          historyRecallable={historyRecallable}
           launchPending={launchPending}
           modal={modal}
           query={query}
