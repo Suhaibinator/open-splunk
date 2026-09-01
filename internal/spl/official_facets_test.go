@@ -186,9 +186,25 @@ func officialFacets(t *testing.T, source string, command spl.Command) map[string
 		}
 		return facets
 	case *spl.TopCommand:
-		return map[string]string{"fields": groupBy(command.Fields), "limit": number(command.Limit, 10)}
+		return map[string]string{
+			"by":           groupBy(command.By),
+			"countfield":   command.CountField,
+			"fields":       groupBy(command.Fields),
+			"limit":        number(command.Limit, 10),
+			"percentfield": command.PercentField,
+			"showcount":    boolean(!command.HideCount),
+			"showperc":     boolean(!command.HidePercent),
+		}
 	case *spl.RareCommand:
-		return map[string]string{"fields": groupBy(command.Fields), "limit": number(command.Limit, 10)}
+		return map[string]string{
+			"by":           groupBy(command.By),
+			"countfield":   command.CountField,
+			"fields":       groupBy(command.Fields),
+			"limit":        number(command.Limit, 10),
+			"percentfield": command.PercentField,
+			"showcount":    boolean(!command.HideCount),
+			"showperc":     boolean(!command.HidePercent),
+		}
 	case *spl.BinCommand:
 		span := number(command.Span.Magnitude, 10)
 		switch command.Span.Kind {

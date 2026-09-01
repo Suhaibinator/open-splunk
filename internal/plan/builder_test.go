@@ -1326,6 +1326,131 @@ func TestBuildTopRejectsGeneratedOutputCollisions(t *testing.T) {
 	}
 }
 
+func TestBuildTopByPartitionsPercentAndRetainsPerGroupLimit(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | top limit=3 message BY host`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if !slices.Equal(logical.OutputFields, []string{"host", "message", "count", "percent"}) {
+		t.Fatalf("output fields = %v", logical.OutputFields)
+	}
+	if len(logical.Operators) != 6 {
+		t.Fatalf("operator count = %d, want Scan, Filter, Aggregate, Window, Sort, Deduplicate", len(logical.Operators))
+	}
+	aggregate, ok := logical.Operators[2].(*Aggregate)
+	if !ok || len(aggregate.GroupBy) != 2 || aggregate.GroupBy[0].Name != "host" || aggregate.GroupBy[1].Name != "message" {
+		t.Fatalf("aggregate = %#v", logical.Operators[2])
+	}
+	window, ok := logical.Operators[3].(*Window)
+	if !ok || window.Function != WindowFunctionPercentOfTotal || window.Input.Name != "count" ||
+		window.Output != "percent" || len(window.PartitionBy) != 1 || window.PartitionBy[0].Name != "host" {
+		t.Fatalf("window = %#v", logical.Operators[3])
+	}
+	sortOp, ok := logical.Operators[4].(*Sort)
+	if !ok || sortOp.Limit != 0 || len(sortOp.Keys) != 3 ||
+		sortOp.Keys[0].Field.Name != "host" || sortOp.Keys[0].Descending || sortOp.Keys[0].Mode != SortValueModeLexical ||
+		sortOp.Keys[1].Field.Name != "count" || !sortOp.Keys[1].Descending ||
+		sortOp.Keys[2].Field.Name != "message" || !sortOp.Keys[2].Descending || sortOp.Keys[2].Mode != SortValueModeLexical {
+		t.Fatalf("top BY sort = %#v", logical.Operators[4])
+	}
+	dedup, ok := logical.Operators[5].(*Deduplicate)
+	if !ok || dedup.Count != 3 || dedup.Consecutive || len(dedup.Keys) != 1 || dedup.Keys[0].Name != "host" {
+		t.Fatalf("top BY retention = %#v", logical.Operators[5])
+	}
+
+	unlimited, err := Build(mustParse(t, `index=gradethis | rare limit=0 message BY host`), testScope([]string{"gradethis"}, nil))
+	if err != nil {
+		t.Fatalf("Build rare limit=0: %v", err)
+	}
+	if len(unlimited.Operators) != 5 {
+		t.Fatalf("rare limit=0 BY operator count = %d, want no per-group retention", len(unlimited.Operators))
+	}
+	if rareSort, ok := unlimited.Operators[4].(*Sort); !ok || rareSort.Keys[1].Field.Name != "count" || rareSort.Keys[1].Descending {
+		t.Fatalf("rare BY sort = %#v", unlimited.Operators[4])
+	}
+}
+
+func TestBuildFrequencyCommandsRenameAndHideGeneratedOutputs(t *testing.T) {
+	t.Parallel()
+
+	renamed, err := Build(
+		mustParse(t, `index=gradethis | top countfield=total percentfield=share message`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build renamed: %v", err)
+	}
+	if !slices.Equal(renamed.OutputFields, []string{"message", "total", "share"}) {
+		t.Fatalf("renamed output fields = %v", renamed.OutputFields)
+	}
+	if aggregate := renamed.Operators[2].(*Aggregate); aggregate.Measures[0].Output != "total" {
+		t.Fatalf("renamed aggregate = %#v", aggregate)
+	}
+	if window := renamed.Operators[3].(*Window); window.Input.Name != "total" || window.Output != "share" {
+		t.Fatalf("renamed window = %#v", window)
+	}
+	if sortOp := renamed.Operators[4].(*Sort); sortOp.Keys[0].Field.Name != "total" {
+		t.Fatalf("renamed sort = %#v", sortOp)
+	}
+
+	hidden, err := Build(
+		mustParse(t, `index=gradethis | top showcount=false showperc=false message`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build hidden: %v", err)
+	}
+	if !slices.Equal(hidden.OutputFields, []string{"message"}) {
+		t.Fatalf("hidden output fields = %v", hidden.OutputFields)
+	}
+	if len(hidden.Operators) != 5 {
+		t.Fatalf("hidden operator count = %d, want Scan, Filter, Aggregate, Sort, Project", len(hidden.Operators))
+	}
+	if sortOp, ok := hidden.Operators[3].(*Sort); !ok || sortOp.Limit != 10 || sortOp.Keys[0].Field.Name != "count" {
+		t.Fatalf("hidden sort = %#v", hidden.Operators[3])
+	}
+	if project, ok := hidden.Operators[4].(*Project); !ok || project.Mode != ProjectModeExclude ||
+		len(project.Fields) != 1 || project.Fields[0].Name != "count" {
+		t.Fatalf("hidden projection = %#v", hidden.Operators[4])
+	}
+
+	percentOnly, err := Build(
+		mustParse(t, `index=gradethis | rare showcount=false message BY host`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build percent only: %v", err)
+	}
+	if !slices.Equal(percentOnly.OutputFields, []string{"host", "message", "percent"}) {
+		t.Fatalf("percent-only output fields = %v", percentOnly.OutputFields)
+	}
+	if _, ok := percentOnly.Operators[len(percentOnly.Operators)-1].(*Project); !ok {
+		t.Fatalf("percent-only plan must end by excluding count: %#v", percentOnly.Operators)
+	}
+}
+
+func TestBuildFrequencyCommandsRejectOutputAndByCollisions(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`index=gradethis | top countfield=host host`,
+		`index=gradethis | top percentfield=host message BY host`,
+		`index=gradethis | top countfield=same percentfield=same host`,
+		`index=gradethis | rare countfield=percent host`,
+		`index=gradethis | top message BY count`,
+	} {
+		_, err := Build(mustParse(t, source), testScope([]string{"gradethis"}, nil))
+		assertDiagnosticCode(t, err, "SPL_DUPLICATE_FIELD")
+	}
+	_, err := Build(mustParse(t, `index=gradethis | top countfield=__os_count host`), testScope([]string{"gradethis"}, nil))
+	assertDiagnosticCode(t, err, "SPL_RESERVED_FIELD")
+}
+
 func TestBuildFrequencyCommandsUseCompleteOrderedFieldTuples(t *testing.T) {
 	t.Parallel()
 

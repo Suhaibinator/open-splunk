@@ -3,6 +3,7 @@ package spl
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -2632,8 +2633,15 @@ func TestParseTopRejectsUnsupportedOrMalformedSyntax(t *testing.T) {
 		{name: "negative limit", source: `index=main | top limit=-1 message`, code: "SPL_INVALID_ARGUMENT"},
 		{name: "negative positional limit", source: `index=main | top -1 message`, code: "SPL_INVALID_ARGUMENT"},
 		{name: "limit overflow", source: `index=main | top limit=18446744073709551616 message`, code: "SPL_NUMBER_OUT_OF_RANGE"},
-		{name: "by clause", source: `index=main | top message BY host`, code: "SPL_UNSUPPORTED_TOP_SYNTAX"},
-		{name: "unsupported option", source: `index=main | top showperc=false message`, code: "SPL_UNSUPPORTED_TOP_SYNTAX"},
+		{name: "unsupported option", source: `index=main | top useother=true message`, code: "SPL_UNSUPPORTED_TOP_SYNTAX"},
+		{name: "otherstr option", source: `index=main | top otherstr=rest message`, code: "SPL_UNSUPPORTED_TOP_SYNTAX"},
+		{name: "unknown option", source: `index=main | top maxrows=5 message`, code: "SPL_UNSUPPORTED_TOP_SYNTAX"},
+		{name: "repeated option", source: `index=main | top showperc=false showperc=true message`, code: "SPL_UNSUPPORTED_TOP_SYNTAX"},
+		{name: "positional and labeled limit", source: `index=main | top 5 limit=5 message`, code: "SPL_UNSUPPORTED_TOP_SYNTAX"},
+		{name: "showperc value", source: `index=main | top showperc=no message`, code: "SPL_UNSUPPORTED_TOP_SYNTAX"},
+		{name: "showcount missing value", source: `index=main | top showcount=`, code: "SPL_UNSUPPORTED_TOP_SYNTAX"},
+		{name: "countfield wildcard", source: `index=main | top countfield=c* message`, code: "SPL_UNSUPPORTED_TOP_SYNTAX"},
+		{name: "percentfield missing value", source: `index=main | top percentfield=`, code: "SPL_UNSUPPORTED_TOP_SYNTAX"},
 		{name: "wildcard field", source: `index=main | top mes*`, code: "SPL_UNSUPPORTED_TOP_SYNTAX"},
 	}
 	for _, test := range tests {
@@ -2656,8 +2664,9 @@ func TestParseTopLocatesUnsupportedOptionAfterLimit(t *testing.T) {
 	t.Parallel()
 
 	for _, source := range []string{
-		`index=main | top limit=20 showperc=false message`,
-		`index=main | top 20 showperc=false message`,
+		`index=main | top limit=20 useother=true message`,
+		`index=main | top 20 useother=true message`,
+		`index=main | top 20 showperc=false useother=true message`,
 	} {
 		_, err := Parse(source)
 		if err == nil {
@@ -2666,12 +2675,96 @@ func TestParseTopLocatesUnsupportedOptionAfterLimit(t *testing.T) {
 		diagnostic := &Diagnostic{}
 		ok := errors.As(err, &diagnostic)
 		if !ok || diagnostic.Code != "SPL_UNSUPPORTED_TOP_SYNTAX" ||
-			!strings.Contains(diagnostic.Message, `option "showperc"`) {
+			!strings.Contains(diagnostic.Message, `option "useother"`) {
 			t.Fatalf("diagnostic = %#v", err)
 		}
-		if got := source[diagnostic.Range.Start.Offset:diagnostic.Range.End.Offset]; got != "showperc" {
-			t.Fatalf("diagnostic source = %q, want showperc", got)
+		if got := source[diagnostic.Range.Start.Offset:diagnostic.Range.End.Offset]; got != "useother" {
+			t.Fatalf("diagnostic source = %q, want useother", got)
 		}
+	}
+}
+
+func TestParseFrequencyCommandsAcceptOutputOptionsAndBy(t *testing.T) {
+	t.Parallel()
+
+	type parts struct {
+		fields, by               []string
+		limit                    uint64
+		countField, percentField string
+		hideCount, hidePercent   bool
+		rangeEnd                 int
+	}
+	names := func(fields []FrequencyField) []string {
+		if len(fields) == 0 {
+			return nil
+		}
+		result := make([]string, len(fields))
+		for index, field := range fields {
+			result[index] = field.Name
+		}
+		return result
+	}
+	tests := []struct {
+		name   string
+		source string
+		want   parts
+	}{
+		{
+			name:   "by clause",
+			source: `index=main | top message BY host`,
+			want:   parts{fields: []string{"message"}, by: []string{"host"}, limit: 10, rangeEnd: 32},
+		},
+		{
+			name:   "multi field by tuple",
+			source: `index=main | rare limit=3 status, message by host, source`,
+			want:   parts{fields: []string{"status", "message"}, by: []string{"host", "source"}, limit: 3, rangeEnd: 57},
+		},
+		{
+			name:   "renamed outputs",
+			source: `index=main | top countfield=total percentfield="share" host`,
+			want:   parts{fields: []string{"host"}, limit: 10, countField: "total", percentField: "share", rangeEnd: 59},
+		},
+		{
+			name:   "hidden outputs after positional limit",
+			source: `index=main | top 5 showcount=false SHOWPERC=FALSE host`,
+			want:   parts{fields: []string{"host"}, limit: 5, hideCount: true, hidePercent: true, rangeEnd: 54},
+		},
+		{
+			name:   "explicit true keeps outputs",
+			source: `index=main | rare showcount=true showperc=true limit=0 host`,
+			want:   parts{fields: []string{"host"}, limit: 0, rangeEnd: 59},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			query, err := Parse(test.source)
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			var got parts
+			switch command := query.Commands[0].(type) {
+			case *TopCommand:
+				got = parts{
+					fields: names(command.Fields), by: names(command.By), limit: command.Limit,
+					countField: command.CountField, percentField: command.PercentField,
+					hideCount: command.HideCount, hidePercent: command.HidePercent,
+					rangeEnd: command.Range.End.Offset,
+				}
+			case *RareCommand:
+				got = parts{
+					fields: names(command.Fields), by: names(command.By), limit: command.Limit,
+					countField: command.CountField, percentField: command.PercentField,
+					hideCount: command.HideCount, hidePercent: command.HidePercent,
+					rangeEnd: command.Range.End.Offset,
+				}
+			default:
+				t.Fatalf("command = %#v", query.Commands[0])
+			}
+			if !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("parsed = %#v, want %#v", got, test.want)
+			}
+		})
 	}
 }
 
@@ -2720,10 +2813,10 @@ func TestParseRareRejectsUnsupportedOrMalformedSyntax(t *testing.T) {
 		{name: "negative limit", source: `index=main | rare limit=-1 message`, code: "SPL_INVALID_ARGUMENT"},
 		{name: "negative positional limit", source: `index=main | rare -1 message`, code: "SPL_INVALID_ARGUMENT"},
 		{name: "limit overflow", source: `index=main | rare limit=18446744073709551616 message`, code: "SPL_NUMBER_OUT_OF_RANGE"},
-		{name: "by clause", source: `index=main | rare message BY host`, code: "SPL_UNSUPPORTED_RARE_SYNTAX"},
-		{name: "unsupported option", source: `index=main | rare showperc=false message`, code: "SPL_UNSUPPORTED_RARE_SYNTAX"},
+		{name: "unsupported option", source: `index=main | rare useother=true message`, code: "SPL_UNSUPPORTED_RARE_SYNTAX"},
 		{name: "wildcard field", source: `index=main | rare mes*`, code: "SPL_UNSUPPORTED_RARE_SYNTAX"},
 		{name: "trailing option", source: `index=main | rare message limit=5`, code: "SPL_UNSUPPORTED_RARE_SYNTAX"},
+		{name: "trailing by option", source: `index=main | rare message BY host showperc=false`, code: "SPL_UNSUPPORTED_RARE_SYNTAX"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

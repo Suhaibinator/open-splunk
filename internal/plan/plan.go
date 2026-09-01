@@ -487,12 +487,14 @@ const (
 )
 
 // Window appends one derived output field without changing row cardinality.
-// PercentOfTotal is evaluated before any downstream top-N limit.
+// PercentOfTotal is evaluated before any downstream top-N limit; PartitionBy
+// restricts the total to rows sharing the same partition tuple.
 type Window struct {
-	Function WindowFunction
-	Input    FieldRef
-	Output   string
-	Range    spl.Range
+	Function    WindowFunction
+	Input       FieldRef
+	Output      string
+	PartitionBy []FieldRef
+	Range       spl.Range
 }
 
 func (*Window) operator()                 {}

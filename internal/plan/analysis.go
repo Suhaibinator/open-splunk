@@ -781,6 +781,9 @@ func (analyzer *queryAnalyzer) visitOperator(operator Operator, depth int) error
 		if err := analyzer.validateOutputName(operator.Output, depth+1); err != nil {
 			return err
 		}
+		if err := analyzer.addFields(operator.PartitionBy, depth+1); err != nil {
+			return err
+		}
 		return analyzer.addField(operator.Input, depth+1)
 	case *Sort:
 		for _, key := range operator.Keys {

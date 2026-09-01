@@ -94,6 +94,7 @@ The semantic rule inventory is:
 | `SPL-REGEX-001` | bounded row-filtering regex command |
 | `SPL-REVERSE-001` | complete established-order reversal |
 | `SPL-DEDUP-001` | ordered first-N key retention with sortby and consecutive runs |
+| `SPL-FREQUENCY-BY-001` | top/rare output options and per-group BY retention |
 | `SPL-ACCUM-001` | running numeric sum |
 | `SPL-STRCAT-001` | bounded concatenation command |
 | `SPL-ADDINFO-001` | immutable admitted-search metadata |
@@ -255,7 +256,7 @@ The cumulative command surface is:
 | `stats` | bounded transforming aggregation and grouping |
 | `eventstats` | bounded row-preserving aggregate attachment |
 | `streamstats` | bounded ordered running aggregates |
-| `top`, `rare` | bounded frequency summaries |
+| `top`, `rare` | bounded frequency summaries; `countfield=`/`percentfield=` rename and `showcount=false`/`showperc=false` hide the generated outputs; `BY g…` groups the tuples, scopes `percent` to each group, and keeps `limit` tuples per group (`SPL-FREQUENCY-BY-001`) |
 | `bin`/`bucket` | numeric and time discretization |
 | `timechart`, `chart` | bounded chart aggregation and split series |
 | `regex` | bounded RE2 row filtering (`SPL-REGEX-001`) |

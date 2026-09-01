@@ -81,7 +81,7 @@ var AllowedFacets = map[string][]string{
 	"makemv":      {"allow_empty", "delimiter", "field"},
 	"mvexpand":    {"field", "limit"},
 	"nomv":        {"field"},
-	"rare":        {"fields", "limit"},
+	"rare":        {"by", "countfield", "fields", "limit", "percentfield", "showcount", "showperc"},
 	"regex":       {"field", "negated", "pattern"},
 	"rename":      {"assignments"},
 	"reverse":     {},
@@ -95,7 +95,7 @@ var AllowedFacets = map[string][]string{
 	"table":       {"fields"},
 	"tail":        {"count"},
 	"timechart":   {"aggregate", "span", "split_by"},
-	"top":         {"fields", "limit"},
+	"top":         {"by", "countfield", "fields", "limit", "percentfield", "showcount", "showperc"},
 	"where":       {"predicate"},
 }
 

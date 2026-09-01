@@ -146,8 +146,8 @@ func TestPipelineCorpusFixturesAreStrictBoundAndExecutable(t *testing.T) {
 	for _, rule := range corpus.Rules {
 		caseCount += len(rule.Cases)
 	}
-	if caseCount != 69 {
-		t.Fatalf("case count = %d, want 69", caseCount)
+	if caseCount != 76 {
+		t.Fatalf("case count = %d, want 76", caseCount)
 	}
 	var referenceCount, evidenceCount int
 	for id, fixture := range fixtures {

@@ -824,13 +824,19 @@ const MaximumFrequencyFields = MaximumStatsGroupFields
 // tuple representation.
 type FrequencyField = StatsGroupField
 
-// TopCommand returns the most frequent scalar tuples for one or more fields.
-// Its compatibility slice keeps Splunk's default count and percent output
-// fields while rejecting BY and output-renaming options.
+// TopCommand returns the most frequent scalar tuples for one or more fields,
+// optionally per BY group. CountField and PercentField rename the generated
+// outputs when non-empty; HideCount and HidePercent record showcount=false and
+// showperc=false so a zero-value command keeps Splunk's default outputs.
 type TopCommand struct {
-	Fields []FrequencyField
-	Limit  uint64
-	Range  Range
+	Fields       []FrequencyField
+	By           []FrequencyField
+	Limit        uint64
+	CountField   string
+	PercentField string
+	HideCount    bool
+	HidePercent  bool
+	Range        Range
 }
 
 func (*TopCommand) command()             {}
@@ -838,11 +844,16 @@ func (*TopCommand) Name() string         { return "top" }
 func (c *TopCommand) SourceRange() Range { return c.Range }
 
 // RareCommand returns the least frequent scalar tuples for one or more fields.
-// It has the same deliberately bounded compatibility surface as TopCommand.
+// It has the same option surface as TopCommand.
 type RareCommand struct {
-	Fields []FrequencyField
-	Limit  uint64
-	Range  Range
+	Fields       []FrequencyField
+	By           []FrequencyField
+	Limit        uint64
+	CountField   string
+	PercentField string
+	HideCount    bool
+	HidePercent  bool
+	Range        Range
 }
 
 func (*RareCommand) command()             {}

@@ -4831,6 +4831,61 @@
       ]
     },
     {
+      "id": "SPL-FREQUENCY-BY-001",
+      "summary": "Top and rare accept countfield, percentfield, showcount, showperc, and a BY clause that groups the tuples, scopes the percentage to each group, and retains the limit per group.",
+      "cases": [
+        {
+          "name": "top by clause",
+          "source": "index=main | top limit=3 host BY source",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "rare renamed outputs per group",
+          "source": "index=main | rare countfield=total percentfield=share status BY host, source",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "hidden outputs keep ordering",
+          "source": "index=main | top showcount=false showperc=false limit=0 host BY source | head 5",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "empty by clause rejected",
+          "source": "index=main | top host BY",
+          "expect": {
+            "diagnostic": "SPL_EXPECTED_FIELD"
+          }
+        },
+        {
+          "name": "by field repeats counted field",
+          "source": "index=main | top host BY source, host",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_TOP_SYNTAX"
+          }
+        },
+        {
+          "name": "countfield collides with by field",
+          "source": "index=main | top countfield=source host BY source",
+          "expect": {
+            "diagnostic": "SPL_DUPLICATE_FIELD"
+          }
+        },
+        {
+          "name": "useother rejected",
+          "source": "index=main | rare useother=true host BY source",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_RARE_SYNTAX"
+          }
+        }
+      ]
+    },
+    {
       "id": "SPL-ACCUM-001",
       "summary": "Accum is the shared current-row-inclusive global streamstats numeric sum.",
       "cases": [

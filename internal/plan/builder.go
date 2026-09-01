@@ -1592,114 +1592,14 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			})
 			canonicalTimeAvailable = false
 		case *spl.TopCommand, *spl.RareCommand:
-			var commandName string
-			var frequencyFields []spl.FrequencyField
-			var commandRange spl.Range
-			var limit uint64
-			leastFrequent := false
-			switch command := command.(type) {
-			case *spl.TopCommand:
-				if command == nil {
-					return nil, &Diagnostic{
-						Code:    "SPL_INVALID_QUERY",
-						Message: "top command is nil",
-					}
-				}
-				commandName = command.Name()
-				frequencyFields = command.Fields
-				commandRange = command.Range
-				limit = command.Limit
-			case *spl.RareCommand:
-				if command == nil {
-					return nil, &Diagnostic{
-						Code:    "SPL_INVALID_QUERY",
-						Message: "rare command is nil",
-					}
-				}
-				commandName = command.Name()
-				frequencyFields = command.Fields
-				commandRange = command.Range
-				limit = command.Limit
-				leastFrequent = true
-			}
-			if len(frequencyFields) == 0 {
-				return nil, &Diagnostic{
-					Code:    "SPL_EXPECTED_FIELD",
-					Message: commandName + " requires at least one field",
-					Range:   commandRange,
-				}
-			}
-			if len(frequencyFields) > spl.MaximumFrequencyFields {
-				return nil, &Diagnostic{
-					Code: "SPL_QUERY_TOO_COMPLEX",
-					Message: fmt.Sprintf(
-						"%s contains more than %d fields",
-						commandName,
-						spl.MaximumFrequencyFields,
-					),
-					Range: commandRange,
-				}
+			frequency, frequencyErr := buildFrequencyOperators(command)
+			if frequencyErr != nil {
+				return nil, frequencyErr
 			}
 			canonicalTimeAvailable = false
-			outputFields := make([]string, 0, len(frequencyFields)+2)
-			for _, frequencyField := range frequencyFields {
-				fieldName := frequencyField.Name
-				fieldRange := frequencyField.Range
-				if fieldName == "count" || fieldName == "percent" {
-					return nil, &Diagnostic{
-						Code:    "SPL_DUPLICATE_FIELD",
-						Message: fmt.Sprintf("%s field %q collides with a generated output field", commandName, fieldName),
-						Range:   fieldRange,
-					}
-				}
-				outputFields = append(outputFields, fieldName)
-			}
-			fields, fieldErr := convertStatsGroupFields(
-				commandName,
-				frequencyFields,
-			)
-			if fieldErr != nil {
-				return nil, fieldErr
-			}
-			countField, countErr := ResolveField("count", commandRange)
-			if countErr != nil {
-				return nil, countErr
-			}
-			result.OutputFields = append(outputFields, "count", "percent")
+			result.OutputFields = frequency.outputFields
 			outputSchemaKnown = true
-			sortKeys := make([]SortKey, 0, len(fields)+1)
-			sortKeys = append(sortKeys, SortKey{
-				Field:      countField,
-				Descending: !leastFrequent,
-			})
-			for _, field := range fields {
-				sortKeys = append(sortKeys, SortKey{
-					Field:      field,
-					Descending: true,
-					Mode:       SortValueModeLexical,
-				})
-			}
-			result.Operators = append(result.Operators,
-				&Aggregate{
-					GroupBy: fields,
-					Measures: []AggregateMeasure{{
-						Function: AggregateFunctionCountRows,
-						Output:   "count",
-					}},
-					Range: commandRange,
-				},
-				&Window{
-					Function: WindowFunctionPercentOfTotal,
-					Input:    countField,
-					Output:   "percent",
-					Range:    commandRange,
-				},
-				&Sort{
-					Keys:  sortKeys,
-					Limit: limit,
-					Range: commandRange,
-				},
-			)
+			result.Operators = append(result.Operators, frequency.operators...)
 		case *spl.TimechartCommand:
 			if command == nil {
 				return nil, &Diagnostic{
@@ -5212,6 +5112,170 @@ func convertFieldsCommand(command *spl.FieldsCommand) ([]FieldRef, []ProjectFiel
 }
 
 // convertSortFields resolves authored sort keys for sort and dedup sortby.
+// frequencyPlan is the logical lowering of one top or rare command.
+type frequencyPlan struct {
+	operators    []Operator
+	outputFields []string
+}
+
+// buildFrequencyOperators lowers top and rare to a bounded count aggregate.
+// Without BY the plan is Aggregate → Window(percent of total) → Sort(limit).
+// With BY the aggregate groups by the BY tuple followed by the counted fields,
+// the percentage is partitioned per BY tuple, the sort places each BY group's
+// most (or least) frequent tuples first, and a Deduplicate keyed on the BY
+// tuple keeps the first limit rows of every group. showcount=false and
+// showperc=false drop the generated column after it has served the ordering.
+func buildFrequencyOperators(command spl.Command) (frequencyPlan, error) {
+	var (
+		commandName     string
+		frequencyFields []spl.FrequencyField
+		byFields        []spl.FrequencyField
+		commandRange    spl.Range
+		limit           uint64
+		countName       = "count"
+		percentName     = "percent"
+		hideCount       bool
+		hidePercent     bool
+		leastFrequent   bool
+	)
+	switch command := command.(type) {
+	case *spl.TopCommand:
+		if command == nil {
+			return frequencyPlan{}, &Diagnostic{Code: "SPL_INVALID_QUERY", Message: "top command is nil"}
+		}
+		commandName = command.Name()
+		frequencyFields, byFields, commandRange, limit = command.Fields, command.By, command.Range, command.Limit
+		hideCount, hidePercent = command.HideCount, command.HidePercent
+		if command.CountField != "" {
+			countName = command.CountField
+		}
+		if command.PercentField != "" {
+			percentName = command.PercentField
+		}
+	case *spl.RareCommand:
+		if command == nil {
+			return frequencyPlan{}, &Diagnostic{Code: "SPL_INVALID_QUERY", Message: "rare command is nil"}
+		}
+		commandName = command.Name()
+		frequencyFields, byFields, commandRange, limit = command.Fields, command.By, command.Range, command.Limit
+		hideCount, hidePercent = command.HideCount, command.HidePercent
+		if command.CountField != "" {
+			countName = command.CountField
+		}
+		if command.PercentField != "" {
+			percentName = command.PercentField
+		}
+		leastFrequent = true
+	default:
+		return frequencyPlan{}, fmt.Errorf("build frequency plan: unexpected command %T", command)
+	}
+	if len(frequencyFields) == 0 {
+		return frequencyPlan{}, &Diagnostic{
+			Code:    "SPL_EXPECTED_FIELD",
+			Message: commandName + " requires at least one field",
+			Range:   commandRange,
+		}
+	}
+	if len(frequencyFields) > spl.MaximumFrequencyFields || len(byFields) > spl.MaximumFrequencyFields {
+		return frequencyPlan{}, &Diagnostic{
+			Code:    "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf("%s contains more than %d fields", commandName, spl.MaximumFrequencyFields),
+			Range:   commandRange,
+		}
+	}
+	if countName == percentName {
+		return frequencyPlan{}, &Diagnostic{
+			Code:    "SPL_DUPLICATE_FIELD",
+			Message: fmt.Sprintf("%s countfield and percentfield both name %q", commandName, countName),
+			Range:   commandRange,
+		}
+	}
+	// Splunk lists the BY tuple first, then the counted tuple, then the
+	// generated columns.
+	grouped := make([]spl.FrequencyField, 0, len(byFields)+len(frequencyFields))
+	grouped = append(grouped, byFields...)
+	grouped = append(grouped, frequencyFields...)
+	outputFields := make([]string, 0, len(grouped)+2)
+	for _, field := range grouped {
+		if field.Name == countName || field.Name == percentName {
+			return frequencyPlan{}, &Diagnostic{
+				Code:    "SPL_DUPLICATE_FIELD",
+				Message: fmt.Sprintf("%s field %q collides with a generated output field", commandName, field.Name),
+				Range:   field.Range,
+			}
+		}
+		outputFields = append(outputFields, field.Name)
+	}
+	groupBy, fieldErr := convertStatsGroupFields(commandName, grouped)
+	if fieldErr != nil {
+		return frequencyPlan{}, fieldErr
+	}
+	partitionBy := groupBy[:len(byFields):len(byFields)]
+	countedFields := groupBy[len(byFields):]
+	countField, countErr := ResolveField(countName, commandRange)
+	if countErr != nil {
+		return frequencyPlan{}, countErr
+	}
+	if _, percentErr := ResolveField(percentName, commandRange); percentErr != nil {
+		return frequencyPlan{}, percentErr
+	}
+
+	sortKeys := make([]SortKey, 0, len(groupBy)+1)
+	for _, field := range partitionBy {
+		sortKeys = append(sortKeys, SortKey{Field: field, Mode: SortValueModeLexical})
+	}
+	sortKeys = append(sortKeys, SortKey{Field: countField, Descending: !leastFrequent})
+	for _, field := range countedFields {
+		sortKeys = append(sortKeys, SortKey{Field: field, Descending: true, Mode: SortValueModeLexical})
+	}
+
+	operators := []Operator{&Aggregate{
+		GroupBy: groupBy,
+		Measures: []AggregateMeasure{{
+			Function: AggregateFunctionCountRows,
+			Output:   countName,
+		}},
+		Range: commandRange,
+	}}
+	if !hidePercent {
+		operators = append(operators, &Window{
+			Function:    WindowFunctionPercentOfTotal,
+			Input:       countField,
+			Output:      percentName,
+			PartitionBy: partitionBy,
+			Range:       commandRange,
+		})
+	}
+	if len(partitionBy) == 0 {
+		operators = append(operators, &Sort{Keys: sortKeys, Limit: limit, Range: commandRange})
+	} else {
+		// Sort{Limit: 0} is unbounded: every group must be ordered before the
+		// per-group retention below, and limit=0 keeps every tuple of every group.
+		operators = append(operators, &Sort{Keys: sortKeys, Range: commandRange})
+		if limit > 0 {
+			operators = append(operators, &Deduplicate{
+				Count: limit,
+				Keys:  partitionBy,
+				Range: commandRange,
+			})
+		}
+	}
+	if !hideCount {
+		outputFields = append(outputFields, countName)
+	}
+	if !hidePercent {
+		outputFields = append(outputFields, percentName)
+	}
+	if hideCount {
+		operators = append(operators, &Project{
+			Mode:   ProjectModeExclude,
+			Fields: []FieldRef{countField},
+			Range:  commandRange,
+		})
+	}
+	return frequencyPlan{operators: operators, outputFields: outputFields}, nil
+}
+
 func convertSortFields(fields []spl.SortField) ([]SortKey, error) {
 	keys := make([]SortKey, 0, len(fields))
 	for _, field := range fields {

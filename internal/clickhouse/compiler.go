@@ -26127,10 +26127,29 @@ func compileWindow(operator *plan.Window, state compileState) (string, compileSt
 		return "", compileState{}, fmt.Errorf("compile ClickHouse window: unsupported function %d", operator.Function)
 	}
 
+	// A partitioned total (top ... BY) scopes the percentage to rows sharing
+	// the partition tuple; the tuple columns are aggregate group keys, so they
+	// are always present on every row.
+	partitions := make([]string, 0, len(operator.PartitionBy))
+	for _, ref := range operator.PartitionBy {
+		field, ok, err := resolveCompiledField(ref, state)
+		if err != nil {
+			return "", compileState{}, err
+		}
+		if !ok {
+			return "", compileState{}, fmt.Errorf("compile ClickHouse window: partition field %q is not visible", ref.Name)
+		}
+		partitions = append(partitions, field.valueSQL)
+	}
+	over := "OVER ()"
+	if len(partitions) > 0 {
+		over = "OVER (PARTITION BY " + strings.Join(partitions, ", ") + ")"
+	}
+
 	// Aggregate groups always have a strictly positive count, so an empty input
 	// produces no row on which division could occur. Cast before multiplication
 	// to avoid integer overflow and retain the unrounded SPL percentage.
-	total := "sum(" + input.valueSQL + ") OVER ()"
+	total := "sum(" + input.valueSQL + ") " + over
 	expression := "toFloat64(" + input.valueSQL + ") * 100.0 / toFloat64(" + total + ")"
 	next := state
 	next.visible = make(map[string]fieldState, len(state.visible)+1)

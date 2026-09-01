@@ -668,6 +668,56 @@
       }
     },
     {
+      "id": "top.by-clause",
+      "command": "top",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/top",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "top limit=3 host BY source",
+        "verified_on": "2026-09-01"
+      },
+      "query": "index=main | top limit=3 host BY source",
+      "expect": {
+        "commands": ["top"],
+        "facets": {
+          "by": "source",
+          "countfield": "",
+          "fields": "host",
+          "limit": "3",
+          "percentfield": "",
+          "showcount": "true",
+          "showperc": "true"
+        }
+      }
+    },
+    {
+      "id": "top.countfield-showperc",
+      "command": "top",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/top",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "top countfield=total showperc=false host",
+        "verified_on": "2026-09-01"
+      },
+      "query": "index=main | top countfield=total showperc=false host",
+      "expect": {
+        "commands": ["top"],
+        "facets": {
+          "by": "",
+          "countfield": "total",
+          "fields": "host",
+          "limit": "10",
+          "percentfield": "",
+          "showcount": "true",
+          "showperc": "false"
+        }
+      }
+    },
+    {
       "id": "rare.single-field",
       "command": "rare",
       "source": {
@@ -684,6 +734,31 @@
         "facets": {
           "fields": "host",
           "limit": "10"
+        }
+      }
+    },
+    {
+      "id": "rare.by-clause",
+      "command": "rare",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/rare",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "rare showcount=false percentfield=share status BY host",
+        "verified_on": "2026-09-01"
+      },
+      "query": "index=main | rare showcount=false percentfield=share status BY host",
+      "expect": {
+        "commands": ["rare"],
+        "facets": {
+          "by": "host",
+          "countfield": "",
+          "fields": "status",
+          "limit": "10",
+          "percentfield": "share",
+          "showcount": "false",
+          "showperc": "true"
         }
       }
     },

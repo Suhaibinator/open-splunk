@@ -2017,6 +2017,79 @@ func TestCompileTopCalculatesPercentBeforeDeterministicLimit(t *testing.T) {
 	}
 }
 
+func TestCompileTopByPartitionsPercentAndLimitsEachGroup(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis | top limit=3 message BY host`)
+	if !slices.Equal(compiled.OutputFields, []string{"host", "message", "count", "percent"}) {
+		t.Fatalf("output fields = %v", compiled.OutputFields)
+	}
+	for _, required := range []string{
+		`GROUP BY "host", "message"`,
+		`sum("count") OVER (PARTITION BY "__os_group_0")`,
+		`AS "percent"`,
+		`LIMIT ? BY "__os_dedup_key_`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("top BY SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	if strings.Contains(compiled.SQL, "OVER ()") {
+		t.Fatalf("top BY must not compute an unpartitioned total:\n%s", compiled.SQL)
+	}
+	if got := compiled.Args[len(compiled.Args)-1]; got != uint64(3) {
+		t.Fatalf("top BY limit argument = %#v, want 3", got)
+	}
+	retention := compiled.SQL[:strings.Index(compiled.SQL, "LIMIT ? BY")]
+	retention = retention[strings.LastIndex(retention, "ORDER BY"):]
+	if !strings.Contains(retention, `"__os_order_5_0", 2) ASC NULLS LAST, tupleElement("__os_order_5_1", 1)`) ||
+		!strings.HasSuffix(retention, `tupleElement("__os_order_5_2", 2) DESC NULLS LAST `) {
+		t.Fatalf("per-group retention must follow the BY asc, count desc, tuple desc order:\n%s", retention)
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
+	}
+
+	unlimited := compileSPL(t, `index=gradethis | top limit=0 message BY host`)
+	if strings.Contains(unlimited.SQL, "LIMIT ?") {
+		t.Fatalf("top limit=0 BY must keep every tuple of every group:\n%s", unlimited.SQL)
+	}
+}
+
+func TestCompileFrequencyCommandsRenameAndHideGeneratedOutputs(t *testing.T) {
+	t.Parallel()
+
+	renamed := compileSPL(t, `index=gradethis | rare countfield=total percentfield=share message`)
+	if !slices.Equal(renamed.OutputFields, []string{"message", "total", "share"}) {
+		t.Fatalf("renamed output fields = %v", renamed.OutputFields)
+	}
+	for _, required := range []string{`count() AS "total"`, `sum("total") OVER ()`, `AS "share"`} {
+		if !strings.Contains(renamed.SQL, required) {
+			t.Fatalf("renamed SQL missing %q:\n%s", required, renamed.SQL)
+		}
+	}
+	if strings.Contains(renamed.SQL, `"percent"`) || strings.Contains(renamed.SQL, `AS "count"`) {
+		t.Fatalf("renamed outputs must not keep the default names:\n%s", renamed.SQL)
+	}
+
+	hidden := compileSPL(t, `index=gradethis | top showcount=false showperc=false message`)
+	if !slices.Equal(hidden.OutputFields, []string{"message"}) {
+		t.Fatalf("hidden output fields = %v", hidden.OutputFields)
+	}
+	if !strings.HasPrefix(hidden.SQL, `SELECT "message" FROM`) {
+		t.Fatalf("hidden outputs must leave only the counted field:\n%s", hidden.SQL)
+	}
+	if !strings.Contains(hidden.SQL, `count() AS "count"`) || !strings.Contains(hidden.SQL, "ORDER BY") {
+		t.Fatalf("hidden count must still order the result:\n%s", hidden.SQL)
+	}
+	if strings.Contains(hidden.SQL, "OVER (") {
+		t.Fatalf("showperc=false must not compute a percentage:\n%s", hidden.SQL)
+	}
+	if got := hidden.Args[len(hidden.Args)-1]; got != uint64(10) {
+		t.Fatalf("hidden limit argument = %#v, want default 10", got)
+	}
+}
+
 func TestCompileMultiFieldTopUsesOneTupleAggregateAndExplicitTieOrder(t *testing.T) {
 	t.Parallel()
 
