@@ -328,6 +328,29 @@ jobs:
               ^FuzzParseRawQuery$ 125000x
               ^FuzzRawBreaker$ 100000x
               ^FuzzMarshalResponse$ 400000x
+          - label: spl-compiler
+            package: ./internal/clickhouse
+            target_budgets: |
+              ^FuzzParseBuildCompileIsDeterministicAndAtomic$ 120000x
+          - label: spl-regex
+            package: ./internal/splregex
+            target_budgets: |
+              ^FuzzCompileExtractionPattern$ 200000x
+              ^FuzzCompileMatchPattern$ 200000x
+              ^FuzzValidateReplacePattern$ 250000x
+          - label: spl-wildcard
+            package: ./internal/splwildcard
+            target_budgets: |
+              ^FuzzCompileLikePattern$ 200000x
+          - label: spl-timeformat
+            package: ./internal/spltimeformat
+            target_budgets: |
+              ^FuzzCompileStrftimeFormat$ 200000x
+              ^FuzzCompileStrptimeFormat$ 200000x
+          - label: spl-relativetime
+            package: ./internal/splrelativetime
+            target_budgets: |
+              ^FuzzCompileSpecifier$ 200000x
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
