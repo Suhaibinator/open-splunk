@@ -207,6 +207,10 @@ OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
 go test ./migrations/clickhouse -run TestMigrationsAgainstClickHouse -v
 ```
 
+The demo-mode search workspace has a browser gate that needs no container and
+runs in CI on every push: `npm run build && npm run test:workspace` drives the
+static export's editor, time picker, and result tabs in Chromium.
+
 Use the repository-pinned ClickHouse digest unless intentionally comparing a
 different pinned image. [Integration testing](integration/README.md) describes
 the backend, browser, and load gates; the
