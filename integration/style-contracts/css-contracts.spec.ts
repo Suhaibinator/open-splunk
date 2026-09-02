@@ -555,6 +555,23 @@ const statisticsListMarkup = `
   </tbody>
 </table>`;
 
+test("Events Table headers keep the shared table paint", async ({ page }) => {
+  await mount(page, `
+    <div class="table-wrap events-table-wrap">
+      <table class="table table--fixed events-table">
+        <thead><tr><th scope="col">_time</th><th scope="col">host</th></tr></thead>
+        <tbody><tr><td>2026-09-01</td><td>web-01</td></tr></tbody>
+      </table>
+    </div>
+  `, DESKTOP_WIDTH);
+
+  const [headerGround, border] = await resolveTokens(page, ["--bg-subtle", "--border"]);
+  const header = page.locator(".events-table th").first();
+  await expect(header).toHaveCSS("background-color", headerGround ?? "");
+  await expect(header).toHaveCSS("border-bottom-color", border ?? "");
+  await expect(header).toHaveCSS("white-space", "nowrap");
+});
+
 test.describe("statistics multivalue contracts", () => {
   test("multiline cells stay inside the fixed virtual row height", async ({ page }) => {
     await mount(page, statisticsMarkup, DESKTOP_WIDTH);
