@@ -3,167 +3,233 @@
     {
       "name": "search",
       "insertion": "search level=\"ERROR\"",
-      "detail": "Filter events or transformed rows."
+      "detail": "Filter events or transformed rows.",
+      "syntax": "search <search-expression>",
+      "documentation": "Filters events, or the rows of a transformed result, with the base-search predicate grammar: bare terms, field=value comparisons, wildcards, AND, OR, NOT and parenthesised groups. The text before the first pipe is an implicit search stage."
     },
     {
       "name": "where",
       "insertion": "where isnotnull(status) AND status >= 500",
-      "detail": "Filter with comparisons, including null-propagating period concatenation such as first.\" \".last = full_name for String and number operands (use tostring(value) for Boolean), direct isnull/isnotnull predicates, match(value, \"regex\") substring predicates using a literal bounded RE2 pattern, like(value, \"pattern\") whole-string predicates using a literal bounded wildcard pattern, now() as the fixed search-start Unix second, relative_time(time, \"specifier\") as nullable Unix seconds after a bounded literal offset-and-snap program in the effective IANA search timezone, strftime(time, \"format\") in that timezone, or strptime(text, \"format\") as nullable Unix seconds."
+      "detail": "Filter with comparisons, including null-propagating period concatenation such as first.\" \".last = full_name for String and number operands (use tostring(value) for Boolean), direct isnull/isnotnull predicates, match(value, \"regex\") substring predicates using a literal bounded RE2 pattern, like(value, \"pattern\") whole-string predicates using a literal bounded wildcard pattern, now() as the fixed search-start Unix second, relative_time(time, \"specifier\") as nullable Unix seconds after a bounded literal offset-and-snap program in the effective IANA search timezone, strftime(time, \"format\") in that timezone, or strptime(text, \"format\") as nullable Unix seconds.",
+      "syntax": "where <eval-predicate>",
+      "documentation": "Keeps the rows for which a typed predicate is true. Comparisons, isnull and isnotnull, match and like, and the now, relative_time, strftime and strptime time functions are available; a row whose predicate is null is dropped."
     },
     {
       "name": "eval",
       "insertion": "eval availability=if(isnull(status), \"missing\", \"present\")",
-      "detail": "Create or replace fields; the null-propagating period operator concatenates 2-32 String or number operands in source order, as in full_name=first.\" \".last (use tostring(value) for Boolean), if(predicate, true_value, false_value) selects between two values, coalesce(value, fallback, ...) selects the first non-null fixed value, case(predicate, value, ...) selects the value for the first true predicate, lower(value)/upper(value) map a Unicode string or multivalue, len(value)/length(value) count UTF-8 code points in one string, substr(value, start[, length]) selects UTF-8 code points with SQLite indexing and literal integer indexes, tostring(value) preserves strings, renders exact numbers, and uses capitalized Boolean text, round(value[, precision]) rounds a number with an optional literal precision from 0 through 18, ceil(value)/ceiling(value) rounds a number upward, floor(value) rounds it downward, mvcount(value) counts non-null multivalue members, a single value as 1, and no values as null, mvsort(multivalue_field) sorts homogeneous String members in ascending encoded order while preserving duplicates, match(value, \"regex\") tests substring matches with a 4 KiB literal RE2 pattern, like(value, \"pattern\") tests whole-string matches with a 4 KiB literal wildcard pattern where % matches zero or more Unicode code points and _ matches one Unicode code point, now() returns the fixed search-start Unix second, relative_time(time, \"-1d@d+2h\") applies an optional signed offset, optional snap, and optional signed post-snap offset in the effective IANA search timezone and returns nullable Unix seconds from a 1 KiB literal specifier, strftime(time, \"%Y-%m-%dT%H:%M:%S.%Q\") formats canonical time or Unix seconds in that timezone using a bounded literal format, and strptime(text, \"%Y-%m-%dT%H:%M:%S.%6N\") requires a full date and returns nullable microsecond Unix seconds with a 4 KiB literal format and a 4 KiB String input ceiling. Formatted tostring modes and negative or calculated round precisions are not yet supported."
+      "detail": "Create or replace fields; the null-propagating period operator concatenates 2-32 String or number operands in source order, as in full_name=first.\" \".last (use tostring(value) for Boolean), if(predicate, true_value, false_value) selects between two values, coalesce(value, fallback, ...) selects the first non-null fixed value, case(predicate, value, ...) selects the value for the first true predicate, lower(value)/upper(value) map a Unicode string or multivalue, len(value)/length(value) count UTF-8 code points in one string, substr(value, start[, length]) selects UTF-8 code points with SQLite indexing and literal integer indexes, tostring(value) preserves strings, renders exact numbers, and uses capitalized Boolean text, round(value[, precision]) rounds a number with an optional literal precision from 0 through 18, ceil(value)/ceiling(value) rounds a number upward, floor(value) rounds it downward, mvcount(value) counts non-null multivalue members, a single value as 1, and no values as null, mvsort(multivalue_field) sorts homogeneous String members in ascending encoded order while preserving duplicates, match(value, \"regex\") tests substring matches with a 4 KiB literal RE2 pattern, like(value, \"pattern\") tests whole-string matches with a 4 KiB literal wildcard pattern where % matches zero or more Unicode code points and _ matches one Unicode code point, now() returns the fixed search-start Unix second, relative_time(time, \"-1d@d+2h\") applies an optional signed offset, optional snap, and optional signed post-snap offset in the effective IANA search timezone and returns nullable Unix seconds from a 1 KiB literal specifier, strftime(time, \"%Y-%m-%dT%H:%M:%S.%Q\") formats canonical time or Unix seconds in that timezone using a bounded literal format, and strptime(text, \"%Y-%m-%dT%H:%M:%S.%6N\") requires a full date and returns nullable microsecond Unix seconds with a 4 KiB literal format and a 4 KiB String input ceiling. Formatted tostring modes and negative or calculated round precisions are not yet supported.",
+      "syntax": "eval <field>=<expression> [, <field>=<expression> ...]",
+      "documentation": "Creates or replaces fields from typed expressions, evaluated left to right so a later assignment can read an earlier one. Arithmetic, the period concatenation operator and the scalar function library are available."
     },
     {
       "name": "rename",
       "insertion": "rename logger AS component",
-      "detail": "Rename one or more exact fields."
+      "detail": "Rename one or more exact fields.",
+      "syntax": "rename <field> AS <new-field> [, <field> AS <new-field> ...]",
+      "documentation": "Renames exact source and destination pairs in place. Each pair names one field; wildcards are not supported."
     },
     {
       "name": "fields",
       "insertion": "fields _time level logger message trace_id",
-      "detail": "Include or exclude exact fields."
+      "detail": "Include or exclude exact fields.",
+      "syntax": "fields [+|-] <field> [<field> ...]",
+      "documentation": "Keeps only the listed fields, or with a leading minus removes them. Names are exact, and a trailing wildcard such as status_* selects a family of fields."
     },
     {
       "name": "table",
       "insertion": "table _time level logger message trace_id",
-      "detail": "Create an ordered statistics table."
+      "detail": "Create an ordered statistics table.",
+      "syntax": "table <field> [<field> ...]",
+      "documentation": "Projects the result to the listed exact fields in the order given, turning events into a statistics table."
     },
     {
       "name": "sort",
       "insertion": "sort -_time",
-      "detail": "Sort rows by exact fields."
+      "detail": "Sort rows by exact fields.",
+      "syntax": "sort [<count>] [+|-]<field> [, [+|-]<field> ...]",
+      "documentation": "Orders rows by one or more typed keys; a leading minus sorts a key descending. An optional leading count keeps only the first rows of the sorted result."
     },
     {
       "name": "dedup",
       "insertion": "dedup trace_id",
-      "detail": "Keep the first row for each exact key."
+      "detail": "Keep the first row for each exact key.",
+      "syntax": "dedup <field> [<field> ...]",
+      "documentation": "Keeps the first row seen for each distinct combination of the listed exact fields and drops the rest."
     },
     {
       "name": "rex",
       "insertion": "rex field=_raw \"(?<request_id>request_id=[^ ]+)\"",
-      "detail": "Extract named fields with the supported RE2 subset."
+      "detail": "Extract named fields with the supported RE2 subset.",
+      "syntax": "rex [field=<field>] \"<regex-with-named-groups>\"",
+      "documentation": "Extracts fields from the first match of an RE2 regular expression using named capture groups such as (?<request_id>[^ ]+). The source field defaults to _raw."
     },
     {
       "name": "spath",
       "insertion": "spath input=payload output=status path=response.status",
-      "detail": "Extract one typed scalar from an explicit JSON path."
+      "detail": "Extract one typed scalar from an explicit JSON path.",
+      "syntax": "spath [input=<field>] [output=<field>] path=<json.path>",
+      "documentation": "Extracts one typed value from a JSON document at an explicit dotted path such as response.status. input names the JSON field and output the destination field."
     },
     {
       "name": "lookup",
       "insertion": "lookup service_catalog service_id AS service_key OUTPUTNEW owner tier",
-      "detail": "Enrich rows from one visible exact-match lookup definition with bounded keys and outputs."
+      "detail": "Enrich rows from one visible exact-match lookup definition with bounded keys and outputs.",
+      "syntax": "lookup <lookup-name> <lookup-field> [AS <event-field>] [OUTPUT|OUTPUTNEW <field> [AS <field>] ...]",
+      "documentation": "Enriches rows from a CSV lookup definition by exact key match. OUTPUT overwrites fields the row already has; OUTPUTNEW fills only the fields it is missing."
     },
     {
       "name": "bin",
       "insertion": "bin duration_ms span=100 AS duration_bucket",
-      "detail": "Bucket one numeric or canonical time field with an explicit span."
+      "detail": "Bucket one numeric or canonical time field with an explicit span.",
+      "syntax": "bin <field> span=<span> [AS <new-field>]",
+      "documentation": "Groups a numeric or time field into buckets of a fixed span such as 100 or 5m, writing the bucket start back to the field or to the AS alias."
     },
     {
       "name": "bucket",
       "insertion": "bucket _time span=5m",
-      "detail": "Alias of bin with an explicit span."
+      "detail": "Alias of bin with an explicit span.",
+      "syntax": "bucket <field> span=<span> [AS <new-field>]",
+      "documentation": "Alias of bin: groups a numeric or time field into buckets of an explicit span."
     },
     {
       "name": "head",
       "insertion": "head 20",
-      "detail": "Keep the first rows."
+      "detail": "Keep the first rows.",
+      "syntax": "head [<count>]",
+      "documentation": "Keeps the first rows of the current order. The count defaults to 10."
     },
     {
       "name": "tail",
       "insertion": "tail 20",
-      "detail": "Keep and reverse the final rows."
+      "detail": "Keep and reverse the final rows.",
+      "syntax": "tail [<count>]",
+      "documentation": "Keeps the last rows of the current order and returns them in reverse. The count defaults to 10."
     },
     {
       "name": "regex",
       "insertion": "regex message!=\"error\"",
-      "detail": "Filter one exact field with a bounded literal RE2 pattern."
+      "detail": "Filter one exact field with a bounded literal RE2 pattern.",
+      "syntax": "regex <field>=\"<regex>\" | regex <field>!=\"<regex>\"",
+      "documentation": "Keeps the rows whose field matches, or with != does not match, a bounded RE2 regular expression."
     },
     {
       "name": "reverse",
       "insertion": "reverse",
-      "detail": "Reverse the established deterministic pipeline order."
+      "detail": "Reverse the established deterministic pipeline order.",
+      "syntax": "reverse",
+      "documentation": "Reverses the row order of the whole established result."
     },
     {
       "name": "accum",
       "insertion": "accum bytes AS running_bytes",
-      "detail": "Add a bounded running numeric sum in pipeline order."
+      "detail": "Add a bounded running numeric sum in pipeline order.",
+      "syntax": "accum <field> [AS <new-field>]",
+      "documentation": "Adds a running total of a numeric field in pipeline order, writing it back to the field or to the AS alias."
     },
     {
       "name": "strcat",
       "insertion": "strcat host \"/\" source endpoint",
-      "detail": "Concatenate bounded literal and exact-field operands into one field."
+      "detail": "Concatenate bounded literal and exact-field operands into one field.",
+      "syntax": "strcat <field-or-\"literal\"> [<field-or-\"literal\"> ...] <destination-field>",
+      "documentation": "Concatenates exact fields and quoted literals in order into the last named field."
     },
     {
       "name": "addinfo",
       "insertion": "addinfo",
-      "detail": "Add immutable search time bounds, start time, and search job ID."
+      "detail": "Add immutable search time bounds, start time, and search job ID.",
+      "syntax": "addinfo",
+      "documentation": "Adds info_min_time, info_max_time, info_search_time and info_sid to every row, describing the search's time range, start time and job ID."
     },
     {
       "name": "fillnull",
       "insertion": "fillnull value=\"0\" status",
-      "detail": "Replace missing or null values in explicit exact fields."
+      "detail": "Replace missing or null values in explicit exact fields.",
+      "syntax": "fillnull [value=<string>] <field> [<field> ...]",
+      "documentation": "Replaces missing or null values in the listed exact fields with the value string, which defaults to 0."
     },
     {
       "name": "addtotals",
       "insertion": "addtotals fieldname=Total bytes_in bytes_out",
-      "detail": "Add one bounded numeric row total over explicit exact fields."
+      "detail": "Add one bounded numeric row total over explicit exact fields.",
+      "syntax": "addtotals [fieldname=<field>] <field> [<field> ...]",
+      "documentation": "Adds a per-row sum of the listed numeric fields, named Total unless fieldname says otherwise."
     },
     {
       "name": "delta",
       "insertion": "delta bytes AS bytes_delta p=1",
-      "detail": "Subtract a bounded prior value in established pipeline order."
+      "detail": "Subtract a bounded prior value in established pipeline order.",
+      "syntax": "delta <field> [AS <new-field>] [p=<rows>]",
+      "documentation": "Subtracts the value from p rows earlier in pipeline order (p defaults to 1), writing the difference to the AS alias or to delta(field)."
     },
     {
       "name": "makemv",
       "insertion": "makemv delim=\",\" tags",
-      "detail": "Split one scalar String into a bounded typed multivalue."
+      "detail": "Split one scalar String into a bounded typed multivalue.",
+      "syntax": "makemv [delim=<string>] <field>",
+      "documentation": "Splits one string field on a literal delimiter into a multivalue field."
     },
     {
       "name": "mvexpand",
       "insertion": "mvexpand tags limit=100",
-      "detail": "Expand one multivalue into bounded ordered result rows."
+      "detail": "Expand one multivalue into bounded ordered result rows.",
+      "syntax": "mvexpand <field> [limit=<count>]",
+      "documentation": "Expands each member of a multivalue field into its own row, copying the other fields; limit caps the rows produced per input row."
     },
     {
       "name": "nomv",
       "insertion": "nomv tags",
-      "detail": "Display one native multivalue field as newline-separated canonical text without changing its typed value."
+      "detail": "Display one native multivalue field as newline-separated canonical text without changing its typed value.",
+      "syntax": "nomv <field>",
+      "documentation": "Displays a multivalue field as newline-separated text without changing its typed value."
     },
     {
       "name": "stats",
       "insertion": "stats partitions=1 allnum=false delim=\",\" count AS events sparkline(avg(latency),5m) AS latency_trend values(user) AS users rate(bytes) AS byte_rate BY level dedup_splitvals=false",
-      "detail": "Aggregate with bounded row, predicate, field, distinct-count, percentile, distribution, value-selection, chronological, rate, and time-binned sparkline measures. Leading unsigned partitions (0 selects the default; values above 100 clamp to 100), allnum, and delim options plus terminal dedup_splitvals are preserved in the plan; delimiter-display and parallel-order details remain oracle-governed."
+      "detail": "Aggregate with bounded row, predicate, field, distinct-count, percentile, distribution, value-selection, chronological, rate, and time-binned sparkline measures. Leading unsigned partitions (0 selects the default; values above 100 clamp to 100), allnum, and delim options plus terminal dedup_splitvals are preserved in the plan; delimiter-display and parallel-order details remain oracle-governed.",
+      "syntax": "stats [partitions=<n>] [allnum=<bool>] [delim=<string>] <aggregation> [AS <field>] [, ...] [BY <field> [<field> ...]] [dedup_splitvals=<bool>]",
+      "documentation": "Collapses rows into one summary row per BY group. Measures include count, dc, sum, avg, min, max, values, list, percentiles, earliest and latest, rate and time-binned sparkline."
     },
     {
       "name": "eventstats",
       "insertion": "eventstats values(user) AS users BY service",
-      "detail": "Add one row count, field-occurrence count, true-only count(eval(predicate)), exact distinct count, bounded canonical distinct-values list, bounded order-preserving list, pN/percN percentile (1-99), numeric sum, numeric average, exact mixed-type minimum, exact mixed-type maximum, chronologically earliest, or chronologically latest value to every input row globally or within up to 16 exact BY fields."
+      "detail": "Add one row count, field-occurrence count, true-only count(eval(predicate)), exact distinct count, bounded canonical distinct-values list, bounded order-preserving list, pN/percN percentile (1-99), numeric sum, numeric average, exact mixed-type minimum, exact mixed-type maximum, chronologically earliest, or chronologically latest value to every input row globally or within up to 16 exact BY fields.",
+      "syntax": "eventstats <aggregation> [AS <field>] [BY <field> [<field> ...]]",
+      "documentation": "Computes an aggregate the way stats does and attaches it as a field to every input row instead of collapsing them."
     },
     {
       "name": "streamstats",
       "insertion": "streamstats count AS running_count",
-      "detail": "Add one bounded running row count, exact-field occurrence count, true-only count(eval(predicate)), numeric sum, numeric average, exact mixed-type minimum, exact mixed-type maximum, or chronological earliest/latest value over deterministic pipeline frames; chronological winners use immutable event order. Options support excluding the current row and partitioning frames by exact fields."
+      "detail": "Add one bounded running row count, exact-field occurrence count, true-only count(eval(predicate)), numeric sum, numeric average, exact mixed-type minimum, exact mixed-type maximum, or chronological earliest/latest value over deterministic pipeline frames; chronological winners use immutable event order. Options support excluding the current row and partitioning frames by exact fields.",
+      "syntax": "streamstats [current=<bool>] [window=<rows>] [global=<bool>] <aggregation> [AS <field>] [BY <field> [<field> ...]]",
+      "documentation": "Adds running aggregates over rows in pipeline order. window bounds the frame, current=false excludes the current row and BY partitions the frames."
     },
     {
       "name": "top",
       "insertion": "top limit=20 message",
-      "detail": "Find the most frequent values."
+      "detail": "Find the most frequent values.",
+      "syntax": "top [limit=<count>] <field> [<field> ...]",
+      "documentation": "Lists the most frequent values of the fields with count and percent columns. The limit defaults to 10; BY clauses are not supported."
     },
     {
       "name": "rare",
       "insertion": "rare limit=20 message",
-      "detail": "Find the least frequent values."
+      "detail": "Find the least frequent values.",
+      "syntax": "rare [limit=<count>] <field> [<field> ...]",
+      "documentation": "Lists the least frequent values of the fields with count and percent columns. The limit defaults to 10; BY clauses are not supported."
     },
     {
       "name": "timechart",
       "insertion": "timechart span=5m count",
-      "detail": "Chart row counts, field occurrence counts, percentiles, sums, or averages over fixed time buckets; every supported aggregate may split BY one field."
+      "detail": "Chart row counts, field occurrence counts, percentiles, sums, or averages over fixed time buckets; every supported aggregate may split BY one field.",
+      "syntax": "timechart [span=<span>] <aggregation> [AS <field>] [BY <field>]",
+      "documentation": "Buckets rows by _time into fixed spans and computes an aggregate per bucket, optionally split into one series per BY value."
     },
     {
       "name": "chart",
       "insertion": "chart count OVER status BY level",
-      "detail": "Build a bounded two-dimensional pivot of row counts, exact-field occurrence counts, percentiles, sums, or averages."
+      "detail": "Build a bounded two-dimensional pivot of row counts, exact-field occurrence counts, percentiles, sums, or averages.",
+      "syntax": "chart <aggregation> [AS <field>] OVER <field> [BY <field>]",
+      "documentation": "Builds a two-dimensional pivot with one row per OVER value and one column per BY value."
     }
   ],
   "functions": [

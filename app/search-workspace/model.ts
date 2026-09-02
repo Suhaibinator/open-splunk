@@ -12,7 +12,10 @@ export type ModalName =
   | "export"
   | "settings"
   | "jobs"
-  | "inspect";
+  | "inspect"
+  | "spl-reference"
+  | "shortcuts"
+  | "examples";
 export type MenuName =
   | "app"
   | "user"
