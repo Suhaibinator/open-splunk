@@ -53,6 +53,7 @@ const testFiles = [
   path.join("app", "search-workspace", "editor-history-recall.test.ts"),
   path.join("app", "search-workspace", "event-page-controls.test.ts"),
   path.join("app", "search-workspace", "components", "export-presentation.test.tsx"),
+  path.join("app", "search-workspace", "components", "search-failure-panel.test.tsx"),
   path.join("app", "search-workspace", "panels", "events-pagination.test.tsx"),
   path.join("app", "search-workspace", "components", "inactive-result-tab-panels.test.tsx"),
   path.join("app", "search-workspace", "components", "search-editor.test.tsx"),
@@ -102,6 +103,7 @@ const testFiles = [
   path.join("app", "search-workspace", "spl-reference-data.test.ts"),
   path.join("app", "search-workspace", "components", "search-help-dialogs.test.tsx"),
   path.join("app", "search-workspace", "keyboard-shortcuts.test.ts"),
+  path.join("app", "search-workspace", "search-failure-presentation.test.ts"),
 ];
 
 function run(command, arguments_, environment = process.env) {

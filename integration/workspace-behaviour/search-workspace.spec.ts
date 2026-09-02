@@ -377,3 +377,52 @@ test("Help opens the examples gallery and Use loads a draft without running it",
   await expect(page.getByTestId("toast")).toContainText("Loaded “Slowest API routes” into the editor.");
   await expect(page.getByTestId("run-search")).toHaveAttribute("aria-label", "Run search");
 });
+
+test("a rejected local search uses the persistent failure panel and returns focus to its source", async ({ page }) => {
+  await openSeededWorkspace(page);
+  const editor = page.getByTestId("search-input");
+  await editor.fill("index=main\n| transaction");
+  await page.keyboard.press("Control+Enter");
+
+  const panel = page.getByTestId("search-failure-panel");
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText("Search syntax needs attention");
+  await expect(panel).toContainText("SPL_UNSUPPORTED_COMMAND");
+  const source = panel.getByRole("button", { name: "Line 2, column 3" });
+  await source.click();
+  await expect(editor).toBeFocused();
+  expect(await editor.evaluate((element) => (element as HTMLTextAreaElement).selectionStart)).toBe(13);
+
+  await editor.press("End");
+  await editor.pressSequentially(" keep-editing");
+  await expect(panel).toBeVisible();
+  await expect(source).toBeDisabled();
+});
+
+test("an invalid launch URL uses the persistent retryable failure panel", async ({ page }) => {
+  await page.goto("/search/?q=index%3Dmain&q=index%3Dmain%20%7C%20head%201&run=1");
+
+  const panel = page.getByTestId("search-failure-panel");
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText("A search launch URL must contain exactly one source.");
+  await expect(panel.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
+
+  const editor = page.getByTestId("search-input");
+  await editor.fill("index=main | stats count");
+  await expect(panel).toBeVisible();
+});
+
+test("a persisted launch retry keeps its exact target without rewriting the draft", async ({ page }) => {
+  await page.goto("/search/?savedSearchId=missing-search&run=1");
+
+  const panel = page.getByTestId("search-failure-panel");
+  await expect(panel).toContainText("That saved search or history entry is not in this workspace.");
+  const editor = page.getByTestId("search-input");
+  const editedDraft = "index=main | stats count";
+  await editor.fill(editedDraft);
+
+  await panel.getByRole("button", { name: "Retry", exact: true }).click();
+  await expect(panel).toContainText("That saved search or history entry is not in this workspace.");
+  await expect(editor).toHaveValue(editedDraft);
+  await expect(page).toHaveURL(/savedSearchId=missing-search/u);
+});

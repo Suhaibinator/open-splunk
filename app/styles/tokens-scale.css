@@ -70,6 +70,9 @@
   --space-7: 32px;
   --space-8: 40px;
 
+  /* Search result surfaces retain one stable vertical canvas across states. */
+  --space-result-panel-min-height: 560px;
+
   /* Type scale. This product's body size is 10px, so the ramp is deliberately
      bottom-heavy and --type-xs, not --type-md, is the default UI size. The
      family is --type-* rather than --text-* because --text and --text-strong

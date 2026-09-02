@@ -3,7 +3,7 @@
 .statistics-panel,
 .visualization-panel {
   background: var(--bg-surface);
-  min-height: 560px;
+  min-height: var(--space-result-panel-min-height);
   padding: 0 18px 30px;
 }
 
