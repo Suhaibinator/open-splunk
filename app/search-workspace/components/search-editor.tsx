@@ -8,7 +8,12 @@ import {
   useEffect,
 } from "react";
 
-import type { SplDiagnostic } from "@/lib/search/spl-editor";
+import {
+  diagnosticMarkers,
+  diagnosticSummary,
+  type EditorProblem,
+  markedLines,
+} from "@/lib/search/spl-diagnostic-markers";
 
 import { AppIcon } from "../../_components/app-icon";
 import {
@@ -33,7 +38,6 @@ export interface CompletionItem {
 export interface SearchEditorProps {
   completionIndex: number;
   completionOpen: boolean;
-  diagnostic: SplDiagnostic | null;
   editorFocused: boolean;
   editorLineCount: number;
   editorRef: RefObject<HTMLTextAreaElement | null>;
@@ -47,9 +51,13 @@ export interface SearchEditorProps {
   historyRecallable: boolean;
   launchPending: boolean;
   modal: ModalName | null;
+  /** Every listed diagnostic; only current ones with a range are marked in the text. */
+  problems: EditorProblem[];
   query: string;
   onCompletionIndexChange: Dispatch<SetStateAction<number>>;
   onCompletionOpenChange: Dispatch<SetStateAction<boolean>>;
+  /** Move the caret to a marked span, as a gutter dot or problems row asks. */
+  onDiagnosticFocus: (offset: number) => void;
   onEditorCaretChange: (position: number) => void;
   onEditorChange: (event: ChangeEvent<HTMLTextAreaElement>) => void;
   onEditorFocusedChange: (focused: boolean) => void;
@@ -75,7 +83,6 @@ function completionAnnouncement(completion: CompletionItem | undefined): string 
 export function SearchEditor({
   completionIndex,
   completionOpen,
-  diagnostic,
   editorFocused,
   editorLineCount,
   editorRef,
@@ -86,9 +93,11 @@ export function SearchEditor({
   historyRecallable,
   launchPending,
   modal,
+  problems,
   query,
   onCompletionIndexChange,
   onCompletionOpenChange,
+  onDiagnosticFocus,
   onEditorCaretChange,
   onEditorChange,
   onEditorFocusedChange,
@@ -98,6 +107,9 @@ export function SearchEditor({
   onModalChange,
 }: SearchEditorProps) {
   const groups = groupCompletions(filteredCompletions);
+  const markers = diagnosticMarkers(problems);
+  const gutterMarks = markedLines(query, markers);
+  const hasError = markers.some((marker) => marker.severity === "error");
   const activeCompletionId = completionOpen && filteredCompletions.length > 0
     ? `spl-completion-${completionIndex}`
     : undefined;
@@ -110,19 +122,40 @@ export function SearchEditor({
   }, [activeCompletionId]);
   return (
     <div
-      className={`spl-editor${editorFocused ? " focused" : ""}${diagnostic === null ? "" : " has-error"}`}
+      className={`spl-editor${editorFocused ? " focused" : ""}${hasError ? " has-error" : ""}`}
     >
       <div className="editor-gutter" aria-hidden="true">
         <div className="editor-gutter-lines" ref={gutterLinesRef}>
-          {Array.from({ length: editorLineCount }, (_, index) => <span key={index + 1}>{index + 1}</span>)}
+          {Array.from({ length: editorLineCount }, (_, index) => {
+            const line = index + 1;
+            const mark = gutterMarks.get(line);
+            // The gutter is pointer-only (keyboard users have the problems
+            // list), so a marked line is a button the tab order skips.
+            return mark === undefined
+              ? <span key={line}>{line}</span>
+              : (
+                <button
+                  className="editor-gutter-marker"
+                  data-severity={mark.severity}
+                  data-testid={`editor-gutter-marker-${line}`}
+                  key={line}
+                  tabIndex={-1}
+                  type="button"
+                  onClick={() => onDiagnosticFocus(mark.start)}
+                >
+                  {line}
+                </button>
+              );
+          })}
         </div>
       </div>
-      <pre className="editor-highlight" ref={highlightRef} aria-hidden="true">{syntaxTokens(query)}{query.endsWith("\n") ? "\n " : null}</pre>
+      <pre className="editor-highlight" ref={highlightRef} aria-hidden="true">{syntaxTokens(query, markers)}{query.endsWith("\n") ? "\n " : null}</pre>
       <textarea
         ref={editorRef}
         data-testid="search-input"
         aria-label="Search with SPL"
-        aria-describedby={`${diagnostic === null ? "editor-help" : "editor-diagnostic"} spl-completion-status`}
+        aria-describedby={`${problems.length === 0 ? "editor-help" : "editor-diagnostic"} spl-completion-status`}
+        aria-invalid={hasError ? true : undefined}
         aria-autocomplete="list"
         aria-haspopup="listbox"
         aria-controls={completionOpen ? "spl-completion-list" : undefined}
@@ -151,6 +184,7 @@ export function SearchEditor({
         {historyRecallable ? <span>↑↓ history</span> : null}
         <span>⌘↵ to run</span>
       </div>
+      <span className="sr-only" id="editor-diagnostic" aria-live="polite">{diagnosticSummary(problems)}</span>
       <span className="sr-only" id="spl-completion-status" aria-live="polite">
         {completionOpen
           ? filteredCompletions.length === 0

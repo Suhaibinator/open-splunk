@@ -4,6 +4,8 @@ import test from "node:test";
 import { createRef } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
+import type { EditorProblem } from "@/lib/search/spl-diagnostic-markers";
+
 import { SearchEditor, type SearchEditorProps } from "./search-editor";
 
 const noop = () => undefined;
@@ -13,7 +15,6 @@ function render(overrides: Partial<SearchEditorProps> = {}): string {
     <SearchEditor
       completionIndex={0}
       completionOpen={false}
-      diagnostic={null}
       editorFocused={false}
       editorLineCount={2}
       editorRef={createRef<HTMLTextAreaElement>()}
@@ -24,9 +25,11 @@ function render(overrides: Partial<SearchEditorProps> = {}): string {
       historyRecallable={false}
       launchPending={false}
       modal={null}
+      problems={[]}
       query="index=main"
       onCompletionIndexChange={noop}
       onCompletionOpenChange={noop}
+      onDiagnosticFocus={noop}
       onEditorCaretChange={noop}
       onEditorChange={noop}
       onEditorFocusedChange={noop}
@@ -76,12 +79,51 @@ test("the textarea leaves its height to the stylesheet's auto-grow rules", () =>
   assert.doesNotMatch(render(), /<textarea[^>]*\brows=/u);
 });
 
-test("a diagnostic redirects the description to the diagnostic strip", () => {
-  const markup = render({
-    diagnostic: { kind: "unclosed-quote", token: "\"", message: "Bad", line: 1, column: 1, suggestion: "Fix it" },
-  });
+const UNCLOSED: EditorProblem = {
+  diagnostic: {
+    code: "SPL_UNTERMINATED_STRING",
+    severity: "error",
+    message: "Bad",
+    range: { start: 11, end: 17, line: 1, column: 12 },
+    suggestions: ["Fix it"],
+  },
+  stale: false,
+  fix: null,
+};
+
+test("a diagnostic redirects the description to the summary and marks the control invalid", () => {
+  const markup = render({ query: 'index=main "oops', problems: [UNCLOSED] });
   assert.match(markup, /class="spl-editor has-error"/u);
-  assert.match(markup, /aria-describedby="editor-diagnostic spl-completion-status"/u);
+  assert.match(markup, /<textarea[^>]*aria-describedby="editor-diagnostic spl-completion-status"/u);
+  assert.match(markup, /<textarea[^>]*aria-invalid="true"/u);
+  assert.match(markup, /id="editor-diagnostic"[^>]*aria-live="polite">1 error</u);
+  assert.doesNotMatch(render(), /aria-invalid=/u);
+});
+
+test("a marked span is underlined in the mirror and dotted in the gutter, both pointing at its start", () => {
+  const markup = render({ query: 'index=main "oops', problems: [UNCLOSED] });
+  assert.match(markup, /<mark class="spl-diagnostic" data-severity="error">&quot;oops<\/mark>/u);
+  assert.match(markup, /<button class="editor-gutter-marker" data-severity="error" data-testid="editor-gutter-marker-1" tabindex="-1" type="button">1<\/button>/u);
+  assert.match(markup, /<span>2<\/span>/u);
+});
+
+test("a stale or warning problem neither marks the text nor flags the control as invalid", () => {
+  const stale = render({ query: "index=main", problems: [{ ...UNCLOSED, stale: true }] });
+  assert.doesNotMatch(stale, /<mark/u);
+  assert.doesNotMatch(stale, /editor-gutter-marker/u);
+  assert.doesNotMatch(stale, /aria-invalid=/u);
+  assert.match(stale, /class="spl-editor"/u);
+  // A stale message still counts in the summary, since it is still listed.
+  assert.match(stale, /id="editor-diagnostic"[^>]*>1 error</u);
+
+  const warning = render({
+    query: "index=main",
+    problems: [{ ...UNCLOSED, diagnostic: { ...UNCLOSED.diagnostic, severity: "warning", range: { start: 0, end: 5, line: 1, column: 1 } } }],
+  });
+  assert.match(warning, /<mark class="spl-diagnostic" data-severity="warning">index<\/mark>/u);
+  assert.match(warning, /data-testid="editor-gutter-marker-1"/u);
+  assert.doesNotMatch(warning, /aria-invalid=/u);
+  assert.match(warning, />1 warning</u);
 });
 
 test("the highlight mirror keeps a trailing newline visible with a sentinel line", () => {

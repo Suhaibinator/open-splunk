@@ -122,6 +122,36 @@ test("typing a field comparison offers the values the summary saw and Enter spel
   await expect(editor).toBeFocused();
 });
 
+test("an unsupported stage is underlined, dotted in the gutter, and listed with a jump to it", async ({ page }) => {
+  await openSeededWorkspace(page);
+  const editor = page.getByTestId("search-input");
+  await editor.fill("index=main\n| transaction");
+
+  const mark = page.locator(".editor-highlight mark.spl-diagnostic");
+  await expect(mark).toHaveCount(1);
+  await expect(mark).toHaveText("transaction");
+  await expect(mark).toHaveAttribute("data-severity", "error");
+  await expect(page.getByTestId("editor-gutter-marker-2")).toBeVisible();
+  await expect(page.getByTestId("editor-gutter-marker-1")).toHaveCount(0);
+  await expect(editor).toHaveAttribute("aria-invalid", "true");
+
+  const problems = page.getByTestId("search-diagnostics");
+  const row = problems.getByRole("listitem");
+  await expect(row).toHaveCount(1);
+  await expect(row).toHaveAttribute("data-severity", "error");
+  await expect(row).toContainText("Line 2, column 3");
+  await editor.blur();
+  await row.locator(".diagnostic-problem").click();
+  await expect(editor).toBeFocused();
+  expect(await editor.evaluate((element) => (element as HTMLTextAreaElement).selectionStart)).toBe(13);
+
+  await row.getByRole("button", { name: "Remove stage" }).click();
+  await expect(editor).toHaveValue("index=main");
+  await expect(problems).toHaveCount(0);
+  await expect(mark).toHaveCount(0);
+  await expect(editor).not.toHaveAttribute("aria-invalid", "true");
+});
+
 test("ArrowUp on the first line recalls the previous search and ArrowDown walks back to the draft", async ({ page }) => {
   await openSeededWorkspace(page);
   const editor = page.getByTestId("search-input");

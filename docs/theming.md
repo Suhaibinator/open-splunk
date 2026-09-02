@@ -199,7 +199,7 @@ once with `npx --no-install playwright install chromium`.
 The JSON ledgers have distinct roles:
 
 - `css-literal-debt.json` is exact allowed literal debt;
-- `css-retired-classes.json` contains the 73 removed classes and their
+- `css-retired-classes.json` contains the 74 removed classes and their
   replacements; and
 - `css-dynamic-classes.json` contains classes that exist only at runtime.
 

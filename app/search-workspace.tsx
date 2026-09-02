@@ -20,7 +20,7 @@ import {
 import Link from "next/link";
 
 import { SharingScope } from "@/gen/ts/open_splunk/common";
-import type { ResolvedTimeRange } from "@/gen/ts/open_splunk/common";
+import type { Diagnostic, ResolvedTimeRange } from "@/gen/ts/open_splunk/common";
 import {
   ExportJobState,
   type ExportJob,
@@ -154,6 +154,12 @@ import {
   type ServerSavedSearch,
   type ServerSearchHistoryEntry,
 } from "@/lib/search/server-api";
+import {
+  type EditorDiagnostic,
+  editorDiagnosticFromLocal,
+  editorDiagnosticsFromProto,
+  type EditorProblem,
+} from "@/lib/search/spl-diagnostic-markers";
 import {
   applyDiagnosticFix,
   completionContextAt,
@@ -522,6 +528,47 @@ function searchJobIdForWebSocketEvent(event: SearchWebSocketEvent): string | nul
   }
 }
 
+/** The server's diagnostics for one exact query text; markers must never underline other text. */
+interface BackendDiagnostics {
+  source: string;
+  diagnostics: Diagnostic[];
+}
+
+function diagnosticIdentity(diagnostic: Diagnostic): string {
+  const start = diagnostic.sourceRange?.start?.byteOffset ?? "";
+  const end = diagnostic.sourceRange?.end?.byteOffset ?? "";
+  return `${diagnostic.code}\u0000${diagnostic.message}\u0000${start}\u0000${end}`;
+}
+
+/** The same identity for a diagnostic the editor has already converted. */
+function problemKey(diagnostic: EditorDiagnostic): string {
+  const start = diagnostic.range?.start ?? "";
+  const end = diagnostic.range?.end ?? "";
+  return `${diagnostic.code}\u0000${diagnostic.message}\u0000${start}\u0000${end}`;
+}
+
+/**
+ * Folds a job's diagnostics into the verdict validation already gave for the
+ * same text, so a warning validation raised survives a job that repeats or
+ * omits it. A different text starts a fresh verdict.
+ */
+function mergeBackendDiagnostics(
+  current: BackendDiagnostics | null,
+  source: string,
+  diagnostics: Diagnostic[],
+): BackendDiagnostics {
+  if (current === null || current.source !== source) return { source, diagnostics };
+  const seen = new Set(current.diagnostics.map(diagnosticIdentity));
+  const merged = [...current.diagnostics];
+  for (const diagnostic of diagnostics) {
+    const identity = diagnosticIdentity(diagnostic);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    merged.push(diagnostic);
+  }
+  return { source, diagnostics: merged };
+}
+
 function uniqueMessages(messages: Array<string | undefined>): string[] {
   return [...new Set(messages.map((message) => message?.trim()).filter((message): message is string => Boolean(message)))];
 }
@@ -788,6 +835,11 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   // for what would complete the word being spelled.
   const [completionTrigger, setCompletionTrigger] = useState<"manual" | "typing">("manual");
   const [backendCompletions, setBackendCompletions] = useState<CompletionItem[] | null>(null);
+  // What the server said about the last run (validation, then the job) and
+  // about the text the suggestion popup last analysed. The run's verdict
+  // outlives edits, listed as stale; the popup's applies only to that text.
+  const [backendVerdict, setBackendVerdict] = useState<BackendDiagnostics | null>(null);
+  const [suggestionDiagnostics, setSuggestionDiagnostics] = useState<BackendDiagnostics | null>(null);
   const [editorCaret, setEditorCaret] = useState(initialWorkspaceQuery.length);
   const [editorFocused, setEditorFocused] = useState(false);
   const [searchMode, setSearchMode] = useState<SearchMode>("Smart");
@@ -1083,6 +1135,34 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       removeEnd: undefined,
     };
   }, [backendEnabled, diagnostic]);
+  const problems = useMemo((): EditorProblem[] => {
+    // The scanner, the last verdict and the suggestion pass can all report the
+    // same fault; the list shows each distinct one once, first source wins.
+    const items = new Map<string, EditorProblem>();
+    const add = (problem: EditorProblem) => {
+      const key = problemKey(problem.diagnostic);
+      if (!items.has(key)) items.set(key, problem);
+    };
+    if (editorDiagnostic !== null) {
+      add({
+        diagnostic: editorDiagnosticFromLocal(query, editorDiagnostic),
+        stale: false,
+        fix: editorDiagnostic.actionLabel === undefined ? null : editorDiagnostic,
+      });
+    }
+    if (backendVerdict !== null) {
+      const stale = backendVerdict.source !== query;
+      for (const verdict of editorDiagnosticsFromProto(backendVerdict.source, backendVerdict.diagnostics)) {
+        add({ diagnostic: verdict, stale, fix: null });
+      }
+    }
+    if (suggestionDiagnostics !== null && suggestionDiagnostics.source === query) {
+      for (const hint of editorDiagnosticsFromProto(query, suggestionDiagnostics.diagnostics)) {
+        add({ diagnostic: hint, stale: false, fix: null });
+      }
+    }
+    return [...items.values()];
+  }, [backendVerdict, editorDiagnostic, query, suggestionDiagnostics]);
   const completionContext = useMemo(() => completionContextAt(query, editorCaret), [editorCaret, query]);
   const filteredCompletions = useMemo(() => {
     const local = localCompletions(completionContext, fields, {
@@ -1142,6 +1222,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           ]),
         );
         setCompletionIndex(0);
+        setSuggestionDiagnostics({ source: query, diagnostics: response.diagnostics });
         setBackendCompletions(response.suggestions.map((suggestion, index) => {
           const start = suggestion.replacementRange?.start?.byteOffset;
           const end = suggestion.replacementRange?.end?.byteOffset;
@@ -2038,6 +2119,10 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       ...(job.failure?.diagnostics ?? []).map((jobDiagnostic) => jobDiagnostic.message),
       job.failure?.message,
     ]));
+    const source = job.definition?.spl;
+    if (source === undefined) return;
+    const diagnostics = [...job.diagnostics, ...(job.failure?.diagnostics ?? [])];
+    setBackendVerdict((current) => mergeBackendDiagnostics(current, source, diagnostics));
   }
 
   function updateBackendPreviewStatus(
@@ -2141,6 +2226,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     setRetainedJobRecovery(null);
     setBackendExpiresAt(null);
     setBackendNotices([]);
+    setBackendVerdict(null);
   }
 
   function clearTimers() {
@@ -2676,6 +2762,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       setRetainedJobRecovery(null);
       setBackendExpiresAt(null);
       setBackendNotices([]);
+      setBackendVerdict(null);
       setTimelineStart(null);
       setTimelineEnd(null);
       setEventPage(1);
@@ -4486,6 +4573,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           { definition },
           { signal: controller.signal, timeoutMs: 10_000 },
         );
+        setBackendVerdict({ source: nextQuery, diagnostics: validation.diagnostics });
         if (!validation.valid) {
           const detail = validation.diagnostics
             .map((item) => item.message.trim())
@@ -7212,7 +7300,6 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         backendTimeSyntax={backendEnabled}
         completionIndex={completionIndex}
         completionOpen={completionOpen}
-        diagnostic={editorDiagnostic}
         draftTimeRange={draftTimeRange}
         editorFocused={editorFocused}
         editorLineCount={editorLineCount}
@@ -7225,6 +7312,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         isRunning={isRunning}
         launchPending={persistedLaunchPending}
         modal={modal}
+        problems={problems}
         query={query}
         relativeAmount={relativeAmount}
         relativeUnit={relativeUnit}
@@ -7239,6 +7327,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         onCompletionIndexChange={setCompletionIndex}
         onCompletionOpenChange={setCompletionOpen}
         onDiagnosticFix={fixDiagnostic}
+        onDiagnosticFocus={focusEditor}
         onDraftTimeRangeChange={setDraftTimeRange}
         onEditorCaretChange={setEditorCaret}
         onEditorChange={handleEditorChange}

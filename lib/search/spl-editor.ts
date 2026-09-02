@@ -17,6 +17,9 @@ export interface SplDiagnostic {
   quote?: '"' | "'";
   removeStart?: number;
   removeEnd?: number;
+  /** UTF-16 span of the offending source, when the diagnostic has one to mark. */
+  start?: number;
+  end?: number;
 }
 
 /**
@@ -105,7 +108,8 @@ export function utf16OffsetsForUtf8ByteOffsets(
   return converted;
 }
 
-function sourceLocation(spl: string, offset: number): { line: number; column: number } {
+/** One-based line and code-point column of a UTF-16 offset, as the editor reports positions. */
+export function sourceLocation(spl: string, offset: number): { line: number; column: number } {
   const before = spl.slice(0, Math.max(0, offset));
   const lines = before.split("\n");
   return {
@@ -149,6 +153,8 @@ export function getQueryDiagnostic(spl: string): SplDiagnostic | null {
       suggestion: `Close the quoted ${tokenKind} before running the search.`,
       actionLabel: `Add closing ${quote}`,
       quote,
+      start: offset,
+      end: spl.length,
     };
   }
 
@@ -176,6 +182,8 @@ export function getQueryDiagnostic(spl: string): SplDiagnostic | null {
       actionLabel: "Remove stage",
       removeStart: pipeBefore < 0 ? 0 : pipeBefore,
       removeEnd: stageEnd,
+      start: tokenOffset,
+      end: tokenOffset + command.token.length,
     };
   }
 

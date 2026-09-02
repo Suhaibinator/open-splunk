@@ -172,9 +172,51 @@
   will-change: transform;
 }
 
-.editor-gutter-lines span {
+.editor-gutter-lines span,
+.editor-gutter-lines button {
   flex: 0 0 22px;
   text-align: center;
+}
+
+/* A line with a diagnostic: the number takes the severity's ink and grows a
+   dot, and the gutter, otherwise inert, lets the pointer through to it. */
+.editor-gutter-marker {
+  background: transparent;
+  border: 0;
+  color: var(--status-error);
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+  pointer-events: auto;
+  position: relative;
+}
+
+.editor-gutter-marker::after {
+  background: var(--status-error);
+  border-radius: 50%;
+  content: "";
+  height: 5px;
+  position: absolute;
+  right: 2px;
+  top: 3px;
+  width: 5px;
+}
+
+.editor-gutter-marker[data-severity="warning"],
+.editor-gutter-marker[data-severity="warning"]::after {
+  color: var(--status-warning);
+}
+
+.editor-gutter-marker[data-severity="warning"]::after {
+  background: var(--status-warning);
+}
+
+.editor-gutter-marker[data-severity="info"] {
+  color: var(--fg-muted);
+}
+
+.editor-gutter-marker[data-severity="info"]::after {
+  background: var(--fg-muted);
 }
 
 .editor-highlight,
@@ -258,6 +300,25 @@
   background: var(--status-error-soft);
   color: var(--status-error);
   text-decoration: underline wavy var(--status-error);
+}
+
+/* A diagnostic's span in the mirror. It is a <mark> nested inside the token
+   span, so it keeps the token's ink and only adds the squiggle; the browser's
+   own yellow highlight for <mark> is overridden away. */
+.spl-diagnostic {
+  background: transparent;
+  color: inherit;
+  text-decoration: underline wavy var(--status-error);
+  text-decoration-skip-ink: none;
+  text-underline-offset: 3px;
+}
+
+.spl-diagnostic[data-severity="warning"] {
+  text-decoration-color: var(--status-warning);
+}
+
+.spl-diagnostic[data-severity="info"] {
+  text-decoration-color: var(--fg-muted);
 }
 
 .editor-meta {
@@ -585,39 +646,82 @@
   line-height: 18px;
 }
 
-.diagnostic-strip {
+/* The problems list under the editor: one row per diagnostic, each a button
+   that moves the caret to the marked span. A row's wash and ink follow its
+   severity; a stale row (the query has changed since the run that raised it)
+   fades and no longer offers the jump. */
+.diagnostic-problems {
+  margin: 0 18px 7px;
+}
+
+.diagnostic-problems ul {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.diagnostic-problems li {
   align-items: center;
   background: var(--status-error-soft);
-  border-bottom: 1px solid var(--status-error-edge);
-  border-top: 1px solid var(--status-error-edge);
+  border: 1px solid var(--status-error-edge);
   color: var(--status-error-strong);
   display: flex;
   gap: 10px;
-  margin: 0 18px 7px;
   min-height: 46px;
   padding: 7px 10px;
 }
 
-.diagnostic-strip > span:nth-child(2) {
+.diagnostic-problems li[data-severity="warning"] {
+  background: var(--status-warning-soft);
+  border-color: var(--status-warning-edge);
+  color: var(--status-warning-strong);
+}
+
+.diagnostic-problems li[data-severity="info"] {
+  background: var(--status-info-soft);
+  border-color: var(--status-info-edge);
+  color: var(--status-info-strong);
+}
+
+.diagnostic-problems li[data-stale] {
+  opacity: 0.7;
+}
+
+.diagnostic-problem {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
   display: flex;
   flex: 1;
   flex-direction: column;
+  font: inherit;
+  min-width: 0;
+  padding: 0;
+  text-align: left;
 }
 
-.diagnostic-strip strong {
+.diagnostic-problem:disabled {
+  cursor: default;
+}
+
+.diagnostic-problem strong {
   font-size: var(--type-md);
 }
 
-.diagnostic-strip small {
-  color: var(--status-error-strong);
+.diagnostic-problem small {
+  color: inherit;
   font-size: var(--type-xs);
   margin-top: 2px;
 }
 
-.diagnostic-strip button {
+.diagnostic-fix {
   background: transparent;
   border: 0;
-  color: var(--status-error-strong);
+  color: inherit;
   font-weight: 700;
 }
 
@@ -761,7 +865,7 @@
     font-size: var(--type-lg);
   }
 
-  .diagnostic-strip {
+  .diagnostic-problems {
     margin-inline: 10px;
   }
 

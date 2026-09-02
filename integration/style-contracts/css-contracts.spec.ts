@@ -1237,6 +1237,20 @@ function composerMarkup(lines: number, completionOpen = false): string {
     </section>`;
 }
 
+const diagnosticMarkup = `
+  <section class="search-composer">
+    <div class="spl-editor has-error">
+      <div class="editor-gutter" aria-hidden="true"><div class="editor-gutter-lines">
+        <span id="gutter-plain">1</span>
+        <button class="editor-gutter-marker" data-severity="error" id="gutter-marker" tabindex="-1" type="button">2</button>
+      </div></div>
+      <pre class="editor-highlight" aria-hidden="true"><span class="spl-field">index</span>=main
+| <span class="spl-command"><mark class="spl-diagnostic" data-severity="error" id="diagnostic-error">transaction</mark></span> <mark class="spl-diagnostic" data-severity="warning" id="diagnostic-warning">host</mark></pre>
+      <textarea aria-label="Search with SPL" aria-invalid="true">index=main
+| transaction host</textarea>
+    </div>
+  </section>`;
+
 test.describe("SPL editor auto-grow", () => {
   test("the editor grows with the query up to its cap while the buttons keep their height", async ({ page }) => {
     // One line still fills the two-line composer row.
@@ -1291,6 +1305,25 @@ test.describe("SPL editor auto-grow", () => {
     expect(twoLines.menuTop).toBeGreaterThanOrEqual(twoLines.editorBottom);
     const eightLines = await menuGeometry(8);
     expect(eightLines.menuTop).toBeGreaterThanOrEqual(eightLines.editorBottom);
+  });
+
+  test("a diagnostic squiggles the mirror without washing the token, and dots its gutter line", async ({ page }) => {
+    // The mark nests inside a syntax token, so the browser's own <mark>
+    // yellow would paint over the token's ink; the rule overrides it away
+    // and leaves only a wavy underline in the severity's colour. The gutter
+    // marker is the one gutter element the pointer may reach.
+    await mount(page, diagnosticMarkup, DESKTOP_WIDTH);
+    const [error, warning] = await resolveTokens(page, ["--status-error", "--status-warning"]);
+    const errorMark = page.locator("#diagnostic-error");
+    await expect(errorMark).toHaveCSS("text-decoration-line", "underline");
+    await expect(errorMark).toHaveCSS("text-decoration-style", "wavy");
+    await expect(errorMark).toHaveCSS("text-decoration-color", error!);
+    await expect(errorMark).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+    await expect(page.locator("#diagnostic-warning")).toHaveCSS("text-decoration-color", warning!);
+    expect(error).not.toEqual(warning);
+    await expect(page.locator("#gutter-marker")).toHaveCSS("pointer-events", "auto");
+    await expect(page.locator("#gutter-marker")).toHaveCSS("color", error!);
+    await expect(page.locator("#gutter-plain")).toHaveCSS("pointer-events", "none");
   });
 
   test("the selected option is the one aria-selected names, not a private attribute", async ({ page }) => {
