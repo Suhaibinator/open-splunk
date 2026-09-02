@@ -2,8 +2,8 @@
  * Non-colour design tokens: the scales every rule is allowed to measure with.
  *
  * This is the tier-1 (primitive) half of the token layer that does not vary by
- * theme. Sizes, radii, type steps, stacking order, elevation, motion and the
- * two font stacks live here because none of them changes between light and
+ * theme. Sizes, radii, type steps, stacking order, elevation, motion, opacity
+ * and the two font stacks live here because none of them changes between light and
  * dark; colour lives in the sibling file, tokens-color.css.
  *
  * Every step below was chosen from the literals the application stylesheets and
@@ -22,6 +22,19 @@
   --dur-base: 180ms;
   --dur-fast: 100ms;
   --ease: ease-out;
+
+  /* Loading skeleton cadence and reusable result-shape geometry. */
+  --dur-skeleton: 1.4s;
+  --space-result-panel-min-height: 560px; /* Stable vertical canvas for every search result view. */
+  --space-skeleton-block-height: 180px;
+  --space-skeleton-line-height: 12px;
+  --space-skeleton-line-long: 88%;
+  --space-skeleton-line-medium: 68%;
+  --space-skeleton-line-short: 44%;
+  --space-skeleton-shimmer-size: 200%;
+
+  /* Chart translucency. */
+  --opacity-chart-area: 0.24; /* Series-area fill that keeps overlapping strokes and the plot grid legible. */
 
   /* Type stacks, moved verbatim out of the :root block the application
      stylesheet used to carry. */
@@ -69,6 +82,16 @@
   --space-6: 24px;
   --space-7: 32px;
   --space-8: 40px;
+
+  /* Resizable statistics-table geometry. These are read by the client so the
+     pure layout reducer and the CSS surface share the same scale source. */
+  --space-statistics-column-handle: 8px;
+  --space-statistics-column-maximum: 480px;
+  --space-statistics-column-minimum: 96px;
+  --space-statistics-column-numeric: 140px;
+  --space-statistics-column-step: 16px;
+  --space-statistics-column-text: 168px;
+  --space-statistics-column-time: 220px;
 
   /* Type scale. This product's body size is 10px, so the ramp is deliberately
      bottom-heavy and --type-xs, not --type-md, is the default UI size. The

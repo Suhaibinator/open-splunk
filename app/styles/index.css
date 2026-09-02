@@ -13,7 +13,7 @@
  *   1. tokens          -- names only; no rule, so nothing to override
  *   2. base            -- the reset and the element defaults every page gets
  *   3. primitives      -- one implementation each of button, table, form,
- *                         modal, status, layout and chart, in that order
+ *                         modal, status, layout, chart and skeleton, in order
  *   4. features        -- one file per surface, each colocated with the code
  *                         that renders it, free to override any primitive
  *   5. interaction     -- the coarse-pointer and reduced-motion contracts,
@@ -53,6 +53,7 @@
 @import url("./primitives/status.css");
 @import url("./primitives/layout.css");
 @import url("./primitives/chart.css");
+@import url("./primitives/skeleton.css");
 @import url("../search-workspace/search-editor.css");
 @import url("../search-workspace/search-job.css");
 @import url("../search-workspace/search-fields.css");

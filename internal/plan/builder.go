@@ -117,7 +117,8 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 	if searchStart.IsZero() {
 		return nil, &Diagnostic{Code: "SPL_INVALID_SEARCH_START", Message: "search-start anchor is required", Range: query.Range}
 	}
-	if _, err := ianatimezone.Load(scope.SearchTimezone); err != nil {
+	searchLocation, err := ianatimezone.Load(scope.SearchTimezone)
+	if err != nil {
 		return nil, &Diagnostic{
 			Code:    "SPL_INVALID_SEARCH_TIMEZONE",
 			Message: "effective search timezone is invalid",
@@ -576,15 +577,16 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					if !canonicalTimeAvailable {
 						return nil, unsupportedBinTimeField(command.FieldRange)
 					}
-					span, spanErr := fixedBinSpan(command.Span)
+					span, calendar, spanErr := timeBucketSpan(command.Span)
 					if spanErr != nil {
 						return nil, spanErr
 					}
 					result.Operators = append(result.Operators, &TimeBucket{
-						Field:  input,
-						Output: output,
-						Span:   span,
-						Range:  command.Range,
+						Field:    input,
+						Output:   output,
+						Span:     span,
+						Calendar: calendar,
+						Range:    command.Range,
 					})
 					break
 				}
@@ -1643,11 +1645,18 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					Suggestions: []string{"run timechart before removing, replacing, or transforming _time"},
 				}
 			}
-			span, spanErr := fixedTimechartSpan(command.Span)
+			span, calendar, spanErr := timechartSpan(command.Span)
 			if spanErr != nil {
 				return nil, spanErr
 			}
-			firstBucket, bucketCount, bucketErr := fixedTimechartBuckets(earliest, latest, span, command.Span.Range)
+			firstBucket, bucketCount, bucketErr := timechartBuckets(
+				earliest,
+				latest,
+				span,
+				calendar,
+				searchLocation,
+				command.Span.Range,
+			)
 			if bucketErr != nil {
 				return nil, bucketErr
 			}
@@ -1705,6 +1714,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				Split:          split,
 				Measure:        measure,
 				Span:           span,
+				Calendar:       calendar,
 				FirstBucket:    firstBucket,
 				BucketCount:    bucketCount,
 				FixedRange:     true,
@@ -2155,6 +2165,20 @@ func fixedTimechartSpan(span spl.TimeSpan) (time.Duration, error) {
 	return duration, nil
 }
 
+func timechartSpan(span spl.TimeSpan) (time.Duration, CalendarUnit, error) {
+	if calendar, ok := calendarUnit(span.Unit); ok {
+		if err := validateCalendarMagnitude(span.Magnitude, "timechart", span.Range); err != nil {
+			return 0, CalendarNone, err
+		}
+		return 0, calendar, nil
+	}
+	duration, err := fixedTimechartSpan(span)
+	if err != nil {
+		return 0, CalendarNone, err
+	}
+	return duration, CalendarNone, nil
+}
+
 func fixedNumericBinSpan(span spl.BinSpan) (uint64, error) {
 	if span.Kind != spl.BinSpanKindNumeric || span.Unit != spl.TimeSpanUnitInvalid {
 		return 0, &Diagnostic{
@@ -2202,17 +2226,56 @@ func fixedBinSpan(span spl.BinSpan) (time.Duration, error) {
 	if err != nil {
 		return 0, err
 	}
-	if duration >= 24*time.Hour {
+	if duration > 24*time.Hour {
 		return 0, &Diagnostic{
 			Code:    "SPL_UNSUPPORTED_BIN_SYNTAX",
-			Message: "bin spans of one day or more require timezone-aware alignment",
+			Message: "fixed bin spans greater than 24 hours are not supported",
 			Range:   span.Range,
 			Suggestions: []string{
-				"use a fixed span shorter than 24 hours",
+				"use a fixed span from 1s through 24h",
 			},
 		}
 	}
 	return duration, nil
+}
+
+func timeBucketSpan(span spl.BinSpan) (time.Duration, CalendarUnit, error) {
+	if span.Kind == spl.BinSpanKindTime {
+		if calendar, ok := calendarUnit(span.Unit); ok {
+			if err := validateCalendarMagnitude(span.Magnitude, "bin", span.Range); err != nil {
+				return 0, CalendarNone, err
+			}
+			return 0, calendar, nil
+		}
+	}
+	duration, err := fixedBinSpan(span)
+	if err != nil {
+		return 0, CalendarNone, err
+	}
+	return duration, CalendarNone, nil
+}
+
+func calendarUnit(unit spl.TimeSpanUnit) (CalendarUnit, bool) {
+	switch unit {
+	case spl.TimeSpanUnitDay:
+		return CalendarDay, true
+	case spl.TimeSpanUnitWeek:
+		return CalendarWeek, true
+	default:
+		return CalendarNone, false
+	}
+}
+
+func validateCalendarMagnitude(magnitude uint64, commandName string, sourceRange spl.Range) error {
+	if magnitude == 1 {
+		return nil
+	}
+	return &Diagnostic{
+		Code:        "SPL_UNSUPPORTED_CALENDAR_SPAN",
+		Message:     commandName + " calendar spans currently require a magnitude of exactly 1",
+		Range:       sourceRange,
+		Suggestions: []string{"span=1d"},
+	}
 }
 
 func unsupportedBinTimeField(sourceRange spl.Range) *Diagnostic {
@@ -2294,6 +2357,62 @@ func fixedTimechartBuckets(earliest, latest time.Time, span time.Duration, sourc
 		}
 	}
 	return time.Unix(firstSeconds, 0).UTC(), bucketCount, nil
+}
+
+func timechartBuckets(
+	earliest, latest time.Time,
+	span time.Duration,
+	calendar CalendarUnit,
+	location *time.Location,
+	sourceRange spl.Range,
+) (time.Time, uint64, error) {
+	if calendar == CalendarNone {
+		return fixedTimechartBuckets(earliest, latest, span, sourceRange)
+	}
+	if span != 0 || (calendar != CalendarDay && calendar != CalendarWeek) || location == nil {
+		return time.Time{}, 0, &Diagnostic{
+			Code:    "SPL_INVALID_ARGUMENT",
+			Message: "timechart calendar span metadata is invalid",
+			Range:   sourceRange,
+		}
+	}
+
+	localEarliest := earliest.In(location)
+	firstBucket := time.Date(
+		localEarliest.Year(),
+		localEarliest.Month(),
+		localEarliest.Day(),
+		0,
+		0,
+		0,
+		0,
+		location,
+	)
+	daysPerBucket := 1
+	if calendar == CalendarWeek {
+		firstBucket = firstBucket.AddDate(0, 0, -int(firstBucket.Weekday()))
+		daysPerBucket = 7
+	}
+
+	var bucketCount uint64
+	for bucket := firstBucket; bucket.Before(latest); bucket = bucket.AddDate(0, 0, daysPerBucket) {
+		bucketCount++
+		if bucketCount > maxTimechartBuckets {
+			return time.Time{}, 0, &Diagnostic{
+				Code:    "SPL_QUERY_TOO_COMPLEX",
+				Message: fmt.Sprintf("timechart produces more than %d fixed-range buckets", maxTimechartBuckets),
+				Range:   sourceRange,
+			}
+		}
+	}
+	if bucketCount == 0 {
+		return time.Time{}, 0, &Diagnostic{
+			Code:    "SPL_INVALID_TIME_RANGE",
+			Message: "timechart requires a non-empty bucket range",
+			Range:   sourceRange,
+		}
+	}
+	return firstBucket.UTC(), bucketCount, nil
 }
 
 func floorInt64(value, divisor int64) int64 {

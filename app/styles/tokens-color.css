@@ -220,6 +220,10 @@
   --highlight: var(--amber-200); /* Matched search term inside a result. */
   --selection: var(--blue-100); /* Selected row or range. */
   --focus-ring: var(--blue-450); /* Focus outline drawn outside a control. */
+
+  /* Loading skeleton: the resting and moving surfaces of provisional result shapes. */
+  --skeleton-base: var(--gray-200); /* Resting skeleton surface. */
+  --skeleton-highlight: var(--gray-50); /* Moving highlight across a skeleton surface. */
 }
 
 /*
@@ -335,6 +339,10 @@
   --highlight: var(--amber-600); /* Matched search term inside a result. */
   --selection: var(--blue-800); /* Selected row or range. */
   --focus-ring: var(--blue-200); /* Focus outline. */
+
+  /* Loading skeleton. */
+  --skeleton-base: var(--gray-750); /* Resting skeleton surface. */
+  --skeleton-highlight: var(--gray-650); /* Moving highlight across a skeleton surface. */
 
   /* The uncategorised chart slice is a neutral, so unlike the ramp it moves. */
   --chart-neutral: var(--gray-600); /* The uncategorised remainder slice. */

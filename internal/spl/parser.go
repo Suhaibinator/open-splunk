@@ -1531,6 +1531,7 @@ type fixedTimeSpanParserConfig struct {
 	syntaxCode         string
 	suggestion         string
 	logSpanUnsupported bool
+	calendarAllowed    bool
 }
 
 const timechartSyntaxSuggestion = "timechart span=5m count"
@@ -1541,11 +1542,13 @@ var (
 		syntaxCode:         "SPL_UNSUPPORTED_BIN_SYNTAX",
 		suggestion:         "bin _time span=5m",
 		logSpanUnsupported: true,
+		calendarAllowed:    true,
 	}
 	timechartTimeSpanConfig = fixedTimeSpanParserConfig{
-		commandName: "timechart",
-		syntaxCode:  "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
-		suggestion:  timechartSyntaxSuggestion,
+		commandName:     "timechart",
+		syntaxCode:      "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
+		suggestion:      timechartSyntaxSuggestion,
+		calendarAllowed: true,
 	}
 )
 
@@ -1568,6 +1571,7 @@ func parseFixedTimeSpan(tok token, config fixedTimeSpanParserConfig) (TimeSpan, 
 	}
 	var unit TimeSpanUnit
 	var unitNanoseconds uint64
+	calendar := false
 	switch strings.ToLower(unitText) {
 	case "s":
 		unit = TimeSpanUnitSecond
@@ -1578,6 +1582,18 @@ func parseFixedTimeSpan(tok token, config fixedTimeSpanParserConfig) (TimeSpan, 
 	case "h":
 		unit = TimeSpanUnitHour
 		unitNanoseconds = 60 * 60 * 1_000_000_000
+	case "d":
+		if !config.calendarAllowed {
+			return TimeSpan{}, unsupportedFixedTimeSpanUnit(tok, config)
+		}
+		unit = TimeSpanUnitDay
+		calendar = true
+	case "w":
+		if !config.calendarAllowed {
+			return TimeSpan{}, unsupportedFixedTimeSpanUnit(tok, config)
+		}
+		unit = TimeSpanUnitWeek
+		calendar = true
 	default:
 		return TimeSpan{}, unsupportedFixedTimeSpanUnit(tok, config)
 	}
@@ -1591,6 +1607,12 @@ func parseFixedTimeSpan(tok token, config fixedTimeSpanParserConfig) (TimeSpan, 
 	}
 	if magnitude == 0 {
 		return TimeSpan{}, invalidFixedTimeSpan(tok, config)
+	}
+	if calendar {
+		if magnitude != 1 {
+			return TimeSpan{}, unsupportedCalendarSpan(tok, config)
+		}
+		return TimeSpan{Magnitude: magnitude, Unit: unit, Range: tok.sourceRange}, nil
 	}
 	const maxDurationNanoseconds = uint64(1<<63 - 1)
 	if magnitude > maxDurationNanoseconds/unitNanoseconds {
@@ -1609,6 +1631,15 @@ func invalidFixedTimeSpan(tok token, config fixedTimeSpanParserConfig) *Diagnost
 		Message:     config.commandName + " span must be a positive integer followed by s, m, or h",
 		Range:       tok.sourceRange,
 		Suggestions: []string{config.suggestion},
+	}
+}
+
+func unsupportedCalendarSpan(tok token, config fixedTimeSpanParserConfig) *Diagnostic {
+	return &Diagnostic{
+		Code:        "SPL_UNSUPPORTED_CALENDAR_SPAN",
+		Message:     config.commandName + " calendar spans currently require a magnitude of exactly 1",
+		Range:       tok.sourceRange,
+		Suggestions: []string{"span=1d"},
 	}
 }
 

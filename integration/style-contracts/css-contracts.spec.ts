@@ -555,6 +555,45 @@ const statisticsListMarkup = `
   </tbody>
 </table>`;
 
+test("Events Table headers keep the shared table paint", async ({ page }) => {
+  await mount(page, `
+    <div class="table-wrap events-table-wrap">
+      <table class="table table--fixed events-table">
+        <thead><tr><th scope="col">_time</th><th scope="col">host</th></tr></thead>
+        <tbody><tr><td>2026-09-01</td><td>web-01</td></tr></tbody>
+      </table>
+    </div>
+  `, DESKTOP_WIDTH);
+
+  const [headerGround, border] = await resolveTokens(page, ["--bg-subtle", "--border"]);
+  const header = page.locator(".events-table th").first();
+  await expect(header).toHaveCSS("background-color", headerGround ?? "");
+  await expect(header).toHaveCSS("border-bottom-color", border ?? "");
+  await expect(header).toHaveCSS("white-space", "nowrap");
+});
+
+test("statistics col attributes and resize handles control column geometry", async ({ page }) => {
+  await mount(page, `
+    <div style="width: 360px">
+      <table class="statistics-table statistics-table--fixed statistics-table--user-layout" width="360">
+        <colgroup><col width="220" /><col width="140" /></colgroup>
+        <thead><tr>
+          <th scope="col">_time<span class="statistics-column-resizer"></span></th>
+          <th scope="col">count<span class="statistics-column-resizer"></span></th>
+        </tr></thead>
+        <tbody><tr><td>2026-09-01</td><td>42</td></tr></tbody>
+      </table>
+    </div>
+  `, DESKTOP_WIDTH);
+
+  const widths = await page.locator(".statistics-table th").evaluateAll((headers) => (
+    headers.map((header) => header.getBoundingClientRect().width)
+  ));
+  expect(widths[0]).toBeCloseTo(220, 0);
+  expect(widths[1]).toBeCloseTo(140, 0);
+  await expect(page.locator(".statistics-column-resizer").first()).toHaveCSS("width", "8px");
+});
+
 test.describe("statistics multivalue contracts", () => {
   test("multiline cells stay inside the fixed virtual row height", async ({ page }) => {
     await mount(page, statisticsMarkup, DESKTOP_WIDTH);
@@ -632,6 +671,35 @@ test("the statistics sparkline paints with the palette accent", async ({ page })
   await expect(polyline).toHaveCSS("stroke", "rgb(40, 120, 168)");
   await expect(polyline).toHaveCSS("fill", "none");
   await expect(polyline).toHaveCSS("stroke-linecap", "round");
+});
+
+test("time-series areas retain their series colour at the semantic fill opacity", async ({ page }) => {
+  await mount(page, `
+    <svg class="time-series-chart">
+      <polygon class="time-series-chart__area time-series-chart__series" data-series-color="2" points="0,20 20,0 20,20"></polygon>
+    </svg>
+  `, DESKTOP_WIDTH);
+
+  const area = page.locator(".time-series-chart__area");
+  await expect(area).toHaveCSS("fill", "rgb(40, 120, 168)");
+  await expect(area).toHaveCSS("fill-opacity", "0.24");
+  await expect(area).toHaveCSS("stroke", "none");
+});
+
+test("stacked categorical slots overlap one shared track in both orientations", async ({ page }) => {
+  await mount(page, `
+    <span class="visualization-vertical-bars is-stacked">
+      <span class="visualization-vertical-slot"></span>
+    </span>
+    <span class="visualization-horizontal-bars is-stacked">
+      <span class="visualization-horizontal-slot"></span>
+    </span>
+  `, DESKTOP_WIDTH);
+
+  await expect(page.locator(".visualization-vertical-bars")).toHaveCSS("display", "block");
+  await expect(page.locator(".visualization-vertical-slot")).toHaveCSS("position", "absolute");
+  await expect(page.locator(".visualization-horizontal-bars")).toHaveCSS("display", "block");
+  await expect(page.locator(".visualization-horizontal-slot")).toHaveCSS("position", "absolute");
 });
 
 const liveJobsMarkup = `
@@ -814,6 +882,8 @@ const SEMANTIC_COLOUR_TOKENS: readonly string[] = [
   "--chart-series-11",
   "--chart-series-12",
   "--chart-neutral",
+  "--skeleton-base",
+  "--skeleton-highlight",
   "--chrome-bar",
   "--chrome-appbar",
   "--chrome-hover",
@@ -822,6 +892,13 @@ const SEMANTIC_COLOUR_TOKENS: readonly string[] = [
   "--selection",
   "--focus-ring",
 ];
+
+test("loading skeletons stop moving when reduced motion is requested", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await mount(page, '<span class="skeleton skeleton--line"></span>', DESKTOP_WIDTH);
+
+  await expect(page.locator(".skeleton")).toHaveCSS("animation-name", "none");
+});
 
 /** WCAG 2.2 AA for text below 18.66px, which is every size this product ships. */
 const AA_CONTRAST = 4.5;

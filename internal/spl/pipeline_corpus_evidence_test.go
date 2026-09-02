@@ -143,7 +143,8 @@ var pipelineStringExpectationVocabulary = map[string]map[string]struct{}{
 		"SPL_UNSUPPORTED_DEDUP_SYNTAX": {}, "SPL_QUERY_TOO_COMPLEX": {},
 		"SPL_UNSUPPORTED_TOP_SYNTAX": {}, "SPL_UNSUPPORTED_RARE_SYNTAX": {},
 		"SPL_DUPLICATE_FIELD": {}, "SPL_AMBIGUOUS_FILLNULL_FIELD": {},
-		"unsupported-value": {},
+		"SPL_UNSUPPORTED_CALENDAR_SPAN": {},
+		"unsupported-value":             {},
 	},
 	"diagnostic_phase": {
 		"executor": {}, "parser": {}, "publication-preflight": {},
@@ -152,10 +153,11 @@ var pipelineStringExpectationVocabulary = map[string]map[string]struct{}{
 		"original-established-order": {}, "pipeline": {}, "member-order": {},
 		"durable-private-lineage": {},
 	},
-	"parse":    {"accept": {}},
-	"range":    {"delimiter-token": {}},
-	"relation": {"filter": {}},
-	"resource": {"15000-cumulative-rows": {}, "pre-downstream-stage-charge": {}},
+	"parse":      {"accept": {}},
+	"range":      {"delimiter-token": {}},
+	"relation":   {"filter": {}},
+	"resource":   {"15000-cumulative-rows": {}, "pre-downstream-stage-charge": {}},
+	"suggestion": {"span=1d": {}},
 	"surfaces": {
 		"complete": {}, "admitted-snapshot": {}, "private-columns-redacted": {},
 		"saved-search": {}, "history": {}, "two-page-public-result": {},
@@ -640,7 +642,8 @@ func isPipelineCorpusRuleID(id string) bool {
 		"SPL-DELTA-001", "SPL-MULTIVALUE-EVAL-001", "SPL-SPATH-MULTIVALUE-001",
 		"SPL-MAKEMV-001", "SPL-MVEXPAND-001", "SPL-NOMV-001", "SPL-MULTIVALUE-TYPE-001",
 		"SPL-ORDER-001", "SPL-PIPELINE-LIMITS-001", "SPL-ATOMIC-001",
-		"SPL-PIPELINE-DIAGNOSTICS-001", "SPL-DEDUP-001", "SPL-FREQUENCY-BY-001":
+		"SPL-PIPELINE-DIAGNOSTICS-001", "SPL-DEDUP-001", "SPL-FREQUENCY-BY-001",
+		"SPL-CALENDAR-SPAN-001":
 		return true
 	default:
 		return false
@@ -681,7 +684,7 @@ func requirePipelineCommandCoverage(t *testing.T, corpus pipelineCorpus) {
 	for _, command := range []string{
 		"regex", "reverse", "accum", "strcat", "addinfo",
 		"fillnull", "addtotals", "delta", "spath", "makemv", "mvexpand", "nomv",
-		"dedup", "head", "top", "rare",
+		"dedup", "head", "top", "rare", "bin",
 	} {
 		found := false
 		for _, rule := range corpus.Rules {

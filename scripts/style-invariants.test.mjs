@@ -464,13 +464,13 @@ test("the fixture harness injects exactly the stylesheets the application loads"
 /* == 3. The naming grammar and what the names promise ========================== */
 
 /** Group prefixes the semantic tier is allowed to use, from docs/theming.md. */
-const SEMANTIC_GROUPS = ["accent", "bg", "border", "chart", "chrome", "fg", "level", "status", "syntax"];
+const SEMANTIC_GROUPS = ["accent", "bg", "border", "chart", "chrome", "fg", "level", "skeleton", "status", "syntax"];
 
 /** The three interaction tokens the documented grammar leaves ungrouped. */
 const INTERACTION_TOKENS = new Set(["--focus-ring", "--highlight", "--selection"]);
 
 /** Name families `app/styles/tokens-scale.css` is allowed to use. */
-const SCALE_FAMILIES = ["dur", "ease", "font", "radius", "shadow", "space", "type", "z"];
+const SCALE_FAMILIES = ["dur", "ease", "font", "opacity", "radius", "shadow", "space", "type", "z"];
 
 /** The ladder a primitive step number may sit on: light at 0, darkest at 950. */
 const PRIMITIVE_STEPS = new Set([0, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 550, 600, 650, 700, 750, 800, 900, 950]);
@@ -594,7 +594,7 @@ function valueKind(value) {
   // --type-* family in two over a fluid step that is a font-size like the rest.
   if (/^(?:clamp|min|max)\((?:\s*-?[\d.]+(?:px|rem|em|%|vw|vh|dvw|dvh)\s*,?)+\)$/u.test(value)) return "length";
   if (/^-?[\d.]+m?s$/u.test(value)) return "duration";
-  if (/^-?\d+$/u.test(value)) return "number";
+  if (/^-?\d+(?:\.\d+)?$/u.test(value)) return "number";
   if (/\brgba?\(/u.test(value)) return "shadow";
   return "keyword or stack";
 }
@@ -1199,11 +1199,12 @@ test("app/styles/index.css loads tokens, base, the primitives, the features, the
     "app/styles/primitives/status.css",
     "app/styles/primitives/layout.css",
     "app/styles/primitives/chart.css",
+    "app/styles/primitives/skeleton.css",
   ];
   assert.deepEqual(
     loaded.slice(0, head.length),
     head,
-    "The tokens, the base sheet and the seven primitives are no longer the first imports, in that\n"
+    "The tokens, the base sheet and the eight primitives are no longer the first imports, in that\n"
       + "order. Tokens first because a rule that reads a name declared after it paints the fallback;\n"
       + "primitives before every feature because `.reports-table-wrap` and `.table-wrap` are both one\n"
       + `class and the feature is the one meant to win.\n${describeList(loaded.slice(0, head.length))}`,

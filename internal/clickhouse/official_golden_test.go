@@ -175,7 +175,7 @@ func renderOfficialGolden(t *testing.T, testCase officialspl.Case) string {
 	}
 	fmt.Fprintf(&builder, "-- sparse_fields: %t subset=%t\n", compiled.SparseFields, compiled.SparseFieldsSubset)
 	if compiled.Timechart != nil {
-		fmt.Fprintf(&builder, "-- timechart: %#v\n", *compiled.Timechart)
+		fmt.Fprintf(&builder, "-- timechart: %s\n", renderOfficialGoldenTimechart(*compiled.Timechart))
 	}
 	if compiled.Chart != nil {
 		fmt.Fprintf(&builder, "-- chart: %#v\n", *compiled.Chart)
@@ -198,6 +198,17 @@ func renderOfficialGolden(t *testing.T, testCase officialspl.Case) string {
 	builder.WriteString(compiled.SQL)
 	builder.WriteString("\n")
 	return builder.String()
+}
+
+func renderOfficialGoldenTimechart(output TimechartOutput) string {
+	rendered := fmt.Sprintf("%#v", output)
+	if output.Calendar {
+		return rendered
+	}
+	// Preserve the established fixed-span snapshot representation. Calendar
+	// spans include the explicit discriminator so their private transport is
+	// reviewable without rewriting every fixed-span golden.
+	return strings.Replace(rendered, ", Calendar:false", "", 1)
 }
 
 func compileOfficialGoldenCase(t *testing.T, testCase officialspl.Case) (CompiledQuery, error) {

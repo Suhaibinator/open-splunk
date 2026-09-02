@@ -3,8 +3,35 @@
 .statistics-panel,
 .visualization-panel {
   background: var(--bg-surface);
-  min-height: 560px;
+  min-height: var(--space-result-panel-min-height);
   padding: 0 18px 30px;
+}
+
+.result-skeleton {
+  background: var(--bg-surface);
+  min-height: var(--space-result-panel-min-height);
+  padding: var(--space-5);
+}
+
+.result-skeleton__content {
+  display: grid;
+  gap: var(--space-5);
+}
+
+.result-skeleton__header {
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  gap: var(--space-3);
+  padding-block: var(--space-4);
+}
+
+.result-skeleton__rows {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.result-skeleton__chart {
+  margin-top: var(--space-3);
 }
 
 .result-view-header {
@@ -280,6 +307,22 @@
   display: none;
 }
 
+.statistics-no-columns {
+  align-items: center;
+  color: var(--fg-muted);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  justify-content: center;
+  min-height: calc(var(--space-8) * 4);
+  padding: var(--space-5);
+  text-align: center;
+}
+
+.statistics-no-columns strong {
+  color: var(--fg-text);
+}
+
 .statistics-table {
   border: 0;
   border-collapse: collapse;
@@ -302,13 +345,12 @@
   display: table-row;
 }
 
-.statistics-col-level { width: 38%; }
-.statistics-col-count { width: 17%; }
-.statistics-col-percent { width: 19%; }
-.statistics-col-average { width: 26%; }
-
 .statistics-table.timechart-table {
   min-width: 520px;
+}
+
+.statistics-table.statistics-table--user-layout {
+  min-width: 0;
 }
 
 .statistics-table time {
@@ -357,7 +399,26 @@
   font-size: var(--type-sm);
   font-weight: 700;
   height: var(--statistics-header-height, 37px);
+  position: relative;
   text-align: left;
+}
+
+.statistics-column-resizer {
+  background: transparent;
+  bottom: 0;
+  cursor: col-resize;
+  position: absolute;
+  right: 0;
+  top: 0;
+  touch-action: none;
+  width: var(--space-statistics-column-handle);
+  z-index: var(--z-base);
+}
+
+.statistics-column-resizer:focus-visible,
+.statistics-column-resizer:hover {
+  background: var(--selection);
+  outline: 0;
 }
 
 .statistics-table th.numeric-cell,
@@ -405,6 +466,10 @@
   font-size: var(--type-md);
   font-variant-numeric: tabular-nums;
   height: var(--statistics-row-height, 42px);
+}
+
+.statistics-table-empty {
+  text-align: center;
 }
 
 .statistics-table.density-standard td {

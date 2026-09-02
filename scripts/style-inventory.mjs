@@ -1514,6 +1514,7 @@ const PROPERTY_KINDS = new Map(Object.entries({
   "column-gap": ["length"],
   "column-rule-color": ["colour"],
   "fill": ["colour"],
+  "fill-opacity": ["number"],
   "font-family": ["font-stack"],
   "font-size": ["length"],
   "gap": ["length"],

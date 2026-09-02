@@ -377,3 +377,211 @@ test("Help opens the examples gallery and Use loads a draft without running it",
   await expect(page.getByTestId("toast")).toContainText("Loaded “Slowest API routes” into the editor.");
   await expect(page.getByTestId("run-search")).toHaveAttribute("aria-label", "Run search");
 });
+
+test("Events Table follows selected-field rail order and expands shared details", async ({ page }) => {
+  await openSeededWorkspace(page);
+  await runFromEditor(page);
+
+  await page.getByRole("button", { name: "List", exact: true }).click();
+  await page.getByRole("menuitemradio", { name: /\bTable\b/u }).click();
+  const table = page.getByRole("table", { name: "Events table" });
+  await expect(table).toBeVisible();
+  await expect(table.getByRole("columnheader")).toHaveText([
+    "_time",
+    "host",
+    "source",
+    "sourcetype",
+    "level",
+    "trace_id",
+  ]);
+
+  await page.locator('[data-field-name="path"]').click();
+  await page.getByRole("checkbox", { name: "Selected field" }).check();
+  await page.getByRole("button", { name: "Close field summary" }).click();
+  await expect(table.getByRole("columnheader")).toHaveText([
+    "_time",
+    "host",
+    "source",
+    "sourcetype",
+    "level",
+    "trace_id",
+    "path",
+  ]);
+
+  const firstEventRow = table.locator(".events-table__event").first();
+  const expander = firstEventRow.getByRole("button", { name: /^Expand event at/u });
+  await expander.click();
+  await expect(firstEventRow.getByRole("button", { name: /^Collapse event at/u })).toHaveAttribute("aria-expanded", "true");
+  await expect(table.getByText("Event fields").first()).toBeVisible();
+});
+
+test("statistics column layout survives identical reruns and resets for a new query", async ({ page }) => {
+  await openSeededWorkspace(page);
+  const editor = page.getByTestId("search-input");
+  await editor.fill("index=main | stats count by level");
+  await runFromEditor(page);
+
+  const table = page.getByRole("table", { name: "Search statistics" });
+  const levelColumn = table.locator("col").first();
+  await expect(levelColumn).toHaveAttribute("width", /\d+/u);
+  const initialWidth = Number(await levelColumn.getAttribute("width"));
+  const resizer = table.getByRole("separator", { name: "Resize level column" });
+  await resizer.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect.poll(async () => Number(await levelColumn.getAttribute("width")))
+    .toBeGreaterThan(initialWidth);
+  const resizedWidth = Number(await levelColumn.getAttribute("width"));
+
+  await page.getByRole("button", { name: /^Columns/u }).click();
+  const columnMenu = page.getByRole("menu", { name: "Statistics table columns" });
+  await columnMenu.getByRole("menuitemcheckbox", { name: /\bcount\b/u }).click();
+  await columnMenu.getByRole("menuitemcheckbox", { name: /% of results/u }).click();
+  await columnMenu.getByRole("menuitemcheckbox", { name: /avg\(duration_ms\)/u }).click();
+  await expect(columnMenu.getByRole("menuitemcheckbox", { name: /\blevel\b/u })).toBeDisabled();
+  await expect(table.getByRole("columnheader")).toHaveCount(1);
+
+  await page.keyboard.press("Escape");
+  await runFromEditor(page);
+  const rerunTable = page.getByRole("table", { name: "Search statistics" });
+  await expect(rerunTable.getByRole("columnheader")).toHaveCount(1);
+  await expect(rerunTable.locator("col").first()).toHaveAttribute("width", String(resizedWidth));
+
+  await editor.fill("index=main | stats count by host");
+  await runFromEditor(page);
+  await expect(page.getByRole("table", { name: "Search statistics" }).getByRole("columnheader")).toHaveCount(4);
+});
+
+test("saved split timecharts restore Area and stacking presentation after rerun", async ({ page }) => {
+  await openSeededWorkspace(page);
+  const editor = page.getByTestId("search-input");
+  const query = "index=main | timechart count by service";
+  await editor.fill(query);
+  await runFromEditor(page);
+
+  const areaButton = page.getByRole("button", { name: "Area", exact: true });
+  const lineButton = page.getByRole("button", { name: "Line", exact: true });
+  const stacking = page.getByLabel("Stacking");
+  const title = page.getByLabel("Title");
+  const legend = page.getByLabel("Legend");
+  await areaButton.click();
+  await stacking.selectOption("stacked100");
+  await title.fill("Service share over time");
+  await legend.selectOption("right");
+  await expect(page.getByTestId("visualization-chart")).toHaveAttribute("data-stack-mode", "stacked100");
+  await expect(page.locator(".time-series-chart__area")).toHaveCount(2);
+
+  await page.getByRole("button", { name: /^Save As/u }).click();
+  await page.getByRole("menuitem", { name: /^Saved search/u }).click();
+  const saveDialog = page.getByRole("dialog", { name: "Save search" });
+  await saveDialog.getByRole("textbox", { name: "Name", exact: true }).fill("Area stack regression");
+  await saveDialog.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(saveDialog).toHaveCount(0);
+
+  await lineButton.click();
+  await stacking.selectOption("none");
+  await title.fill("Temporary title");
+  await legend.selectOption("bottom");
+
+  await page.getByRole("button", { name: "Open", exact: true }).click();
+  const openDialog = page.getByRole("dialog", { name: "Open a saved search" });
+  await openDialog.getByRole("button", { name: /^Area stack regression/u }).click();
+  await expect(openDialog).toHaveCount(0);
+  await expect(editor).toHaveValue(query);
+
+  await runFromEditor(page);
+  await expect(areaButton).toHaveAttribute("aria-pressed", "true");
+  await expect(stacking).toHaveValue("stacked100");
+  await expect(title).toHaveValue("Service share over time");
+  await expect(legend).toHaveValue("right");
+  await expect(page.getByTestId("visualization-chart")).toHaveAttribute("data-stack-mode", "stacked100");
+  await expect(page.locator(".time-series-chart__area")).toHaveCount(2);
+
+  await stacking.selectOption("stacked");
+  await title.fill("Service totals over time");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByTestId("toast")).toContainText("Saved changes");
+  await lineButton.click();
+  await stacking.selectOption("none");
+  await title.fill("Another temporary title");
+
+  await page.getByRole("button", { name: "Open", exact: true }).click();
+  await page.getByRole("dialog", { name: "Open a saved search" })
+    .getByRole("button", { name: /^Area stack regression/u })
+    .click();
+  await runFromEditor(page);
+  await expect(areaButton).toHaveAttribute("aria-pressed", "true");
+  await expect(stacking).toHaveValue("stacked");
+  await expect(title).toHaveValue("Service totals over time");
+  await expect(page.getByTestId("visualization-chart")).toHaveAttribute("data-stack-mode", "stacked");
+});
+
+test("a rejected local search uses the persistent failure panel and returns focus to its source", async ({ page }) => {
+  await openSeededWorkspace(page);
+  const editor = page.getByTestId("search-input");
+  await editor.fill("index=main\n| transaction");
+  await page.keyboard.press("Control+Enter");
+
+  const panel = page.getByTestId("search-failure-panel");
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText("Search syntax needs attention");
+  await expect(panel).toContainText("SPL_UNSUPPORTED_COMMAND");
+  const source = panel.getByRole("button", { name: "Line 2, column 3" });
+  await source.click();
+  await expect(editor).toBeFocused();
+  expect(await editor.evaluate((element) => (element as HTMLTextAreaElement).selectionStart)).toBe(13);
+
+  await editor.press("End");
+  await editor.pressSequentially(" keep-editing");
+  await expect(panel).toBeVisible();
+  await expect(source).toBeDisabled();
+});
+
+test("an invalid launch URL uses the persistent retryable failure panel", async ({ page }) => {
+  await page.goto("/search/?q=index%3Dmain&q=index%3Dmain%20%7C%20head%201&run=1");
+
+  const panel = page.getByTestId("search-failure-panel");
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText("A search launch URL must contain exactly one source.");
+  await expect(panel.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
+
+  const editor = page.getByTestId("search-input");
+  await editor.fill("index=main | stats count");
+  await expect(panel).toBeVisible();
+});
+
+test("a persisted launch retry keeps its exact target without rewriting the draft", async ({ page }) => {
+  await page.goto("/search/?savedSearchId=missing-search&run=1");
+
+  const panel = page.getByTestId("search-failure-panel");
+  await expect(panel).toContainText("That saved search or history entry is not in this workspace.");
+  const editor = page.getByTestId("search-input");
+  const editedDraft = "index=main | stats count";
+  await editor.fill(editedDraft);
+
+  await panel.getByRole("button", { name: "Retry", exact: true }).click();
+  await expect(panel).toContainText("That saved search or history entry is not in this workspace.");
+  await expect(editor).toHaveValue(editedDraft);
+  await expect(page).toHaveURL(/savedSearchId=missing-search/u);
+});
+
+test("running result tabs show accessible skeletons until demo results are ready", async ({ page }) => {
+  await openSeededWorkspace(page);
+  const editor = page.getByTestId("search-input");
+  await editor.fill("index=main | stats count");
+  await page.keyboard.press("Control+Enter");
+
+  await expect(page.getByTestId("result-skeleton-events")).toBeVisible();
+  await page.getByTestId("result-tab-patterns").click();
+  await expect(page.getByTestId("job-empty-results")).toHaveAttribute("aria-busy", "true");
+  await expect(page.getByTestId("job-empty-results")).toContainText("Search is running");
+  await expect(page.locator('[data-testid^="result-skeleton-"]')).toHaveCount(0);
+  await page.getByTestId("result-tab-events").click();
+  await expect(page.getByTestId("result-skeleton-events")).toBeVisible();
+  await page.getByTestId("result-tab-statistics").click();
+  await expect(page.getByTestId("result-skeleton-statistics")).toHaveAttribute("aria-busy", "true");
+  await page.getByTestId("result-tab-visualization").click();
+  await expect(page.getByTestId("result-skeleton-visualization")).toBeVisible();
+
+  await expect(page.getByTestId("run-search")).toHaveAttribute("aria-label", "Run search");
+  await expect(page.getByTestId("result-skeleton-visualization")).toHaveCount(0);
+});

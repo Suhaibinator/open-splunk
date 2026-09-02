@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
@@ -124,6 +125,8 @@ type pipelineCorpusOperation struct {
 	Limit       int                        `json:"limit,omitempty"`
 	Count       int                        `json:"count,omitempty"`
 	Consecutive bool                       `json:"consecutive,omitempty"`
+	Calendar    string                     `json:"calendar,omitempty"`
+	Timezone    string                     `json:"timezone,omitempty"`
 }
 
 type pipelineCorpusConcatPart struct {
@@ -139,15 +142,15 @@ func TestPipelineCorpusFixturesAreStrictBoundAndExecutable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(fixtures) != 40 {
-		t.Fatalf("fixture count = %d, want 40", len(fixtures))
+	if len(fixtures) != 44 {
+		t.Fatalf("fixture count = %d, want 44", len(fixtures))
 	}
 	caseCount := 0
 	for _, rule := range corpus.Rules {
 		caseCount += len(rule.Cases)
 	}
-	if caseCount != 78 {
-		t.Fatalf("case count = %d, want 78", caseCount)
+	if caseCount != 84 {
+		t.Fatalf("case count = %d, want 84", caseCount)
 	}
 	var referenceCount, evidenceCount int
 	for id, fixture := range fixtures {
@@ -163,8 +166,8 @@ func TestPipelineCorpusFixturesAreStrictBoundAndExecutable(t *testing.T) {
 			t.Fatalf("fixture %q has unvalidated runner %q", id, fixture.Runner)
 		}
 	}
-	if referenceCount != 25 || evidenceCount != 15 {
-		t.Fatalf("runner counts = reference %d evidence %d, want 25/15", referenceCount, evidenceCount)
+	if referenceCount != 29 || evidenceCount != 15 {
+		t.Fatalf("runner counts = reference %d evidence %d, want 29/15", referenceCount, evidenceCount)
 	}
 }
 
@@ -887,6 +890,7 @@ func decodePipelineCorpusOperation(raw json.RawMessage) (pipelineCorpusOperation
 		"mvexpand":  {"op", "field", "limit"},
 		"dedup":     {"op", "fields", "count", "consecutive"},
 		"head":      {"op", "count"},
+		"bin":       {"op", "field", "output", "calendar", "timezone"},
 	}[operation.Op]
 	if len(want) == 0 || len(fields) != len(want) {
 		return pipelineCorpusOperation{}, fmt.Errorf("operation %q does not use its exact field set", operation.Op)
@@ -954,6 +958,14 @@ func decodePipelineCorpusOperation(raw json.RawMessage) (pipelineCorpusOperation
 	case "head":
 		if operation.Count < 1 {
 			return pipelineCorpusOperation{}, errors.New("head count must be positive")
+		}
+	case "bin":
+		if operation.Field == "" || operation.Output == "" ||
+			(operation.Calendar != "day" && operation.Calendar != "week") {
+			return pipelineCorpusOperation{}, errors.New("calendar bin fields or unit are invalid")
+		}
+		if _, err := time.LoadLocation(operation.Timezone); err != nil {
+			return pipelineCorpusOperation{}, errors.New("calendar bin timezone is invalid")
 		}
 	}
 	return operation, nil
@@ -1164,7 +1176,7 @@ func validatePipelineCorpusSourceProgram(source string, encoded []json.RawMessag
 func isPipelineCorpusCommandName(name string) bool {
 	switch name {
 	case "regex", "reverse", "accum", "strcat", "addinfo", "fillnull", "addtotals", "delta", "makemv", "mvexpand",
-		"dedup", "head":
+		"dedup", "head", "bin":
 		return true
 	default:
 		return false
@@ -1234,6 +1246,20 @@ func matchPipelineCorpusOperation(command spl.Command, operation pipelineCorpusO
 		}
 	case *spl.LimitCommand:
 		if command.CommandName != "head" || command.Count != uint64(operation.Count) {
+			return mismatch()
+		}
+	case *spl.BinCommand:
+		output := command.Output
+		if output == "" {
+			output = command.Field
+		}
+		unit := spl.TimeSpanUnitDay
+		if operation.Calendar == "week" {
+			unit = spl.TimeSpanUnitWeek
+		}
+		if command.CommandName != "bin" || command.Field != operation.Field ||
+			output != operation.Output || command.Span.Kind != spl.BinSpanKindTime ||
+			command.Span.Magnitude != 1 || command.Span.Unit != unit {
 			return mismatch()
 		}
 	default:
@@ -1314,6 +1340,14 @@ func runPipelineReferenceCorpusFixture(t *testing.T, fixture pipelineCorpusFixtu
 			rows, err = pipelineReferenceDedup(rows, operation.Fields, operation.Count, operation.Consecutive)
 		case "head":
 			rows = pipelineReferenceHead(rows, operation.Count)
+		case "bin":
+			err = pipelineReferenceTimeBucket(
+				rows,
+				operation.Field,
+				operation.Output,
+				operation.Calendar,
+				operation.Timezone,
+			)
 		default:
 			t.Fatalf("unhandled operation %q", operation.Op)
 		}
@@ -1376,6 +1410,13 @@ func pipelineCorpusReferenceSchema(
 		}
 		switch operation.Op {
 		case "regex", "reverse", "head":
+		case "bin":
+			column, ok := lookup(operation.Field)
+			if !ok || column.Kind != "time" {
+				return nil, errors.New("calendar bin input must be a declared time column")
+			}
+			column.Name = operation.Output
+			upsert(column)
 		case "dedup":
 			// Rows without a complete key tuple are dropped, so every key column
 			// that survives is non-null afterwards.

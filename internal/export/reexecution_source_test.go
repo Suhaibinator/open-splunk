@@ -18,19 +18,20 @@ import (
 )
 
 type reexecutionTestSearches struct {
-	mu           sync.Mutex
-	job          searchjobs.Job
-	execution    *searchjobs.ExecutionSnapshot
-	pin          *reexecutionTestPin
-	manager      *searchjobs.Manager
-	resolver     searchjobs.KnowledgeResolver
-	appID        string
-	lastLease    searchjobs.ResultLease
-	acquireErr   error
-	acquireCalls int
-	access       searchjobs.AccessScope
-	id           string
-	onGet        func()
+	mu            sync.Mutex
+	job           searchjobs.Job
+	execution     *searchjobs.ExecutionSnapshot
+	resolvedRange *searchtime.Range
+	pin           *reexecutionTestPin
+	manager       *searchjobs.Manager
+	resolver      searchjobs.KnowledgeResolver
+	appID         string
+	lastLease     searchjobs.ResultLease
+	acquireErr    error
+	acquireCalls  int
+	access        searchjobs.AccessScope
+	id            string
+	onGet         func()
 }
 
 func (searches *reexecutionTestSearches) AcquireExecutionFor(
@@ -125,6 +126,9 @@ func (searches *reexecutionTestSearches) startManagerLocked() error {
 	if err != nil {
 		_ = manager.Close()
 		return err
+	}
+	if searches.resolvedRange != nil {
+		resolved = *searches.resolvedRange
 	}
 	created, err := manager.Create(context.Background(), searchjobs.CreateRequest{
 		SPL:               searches.job.SPL,
