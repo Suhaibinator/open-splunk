@@ -421,6 +421,23 @@ const (
 	ScalarFunctionMVJoin
 	ScalarFunctionMVZip
 	ScalarFunctionMVFind
+	ScalarFunctionAbs
+	ScalarFunctionSqrt
+	ScalarFunctionExp
+	ScalarFunctionLn
+	ScalarFunctionLog
+	ScalarFunctionPow
+	ScalarFunctionPi
+	ScalarFunctionTrim
+	ScalarFunctionLTrim
+	ScalarFunctionRTrim
+	ScalarFunctionURLDecode
+	ScalarFunctionMD5
+	ScalarFunctionSHA1
+	ScalarFunctionSHA256
+	ScalarFunctionSHA512
+	ScalarFunctionTypeOf
+	ScalarFunctionCIDRMatch
 	ScalarFunctionCount
 )
 
@@ -430,7 +447,7 @@ const (
 func (function ScalarFunction) ReturnsBoolean() bool {
 	switch function {
 	case ScalarFunctionIsNull, ScalarFunctionIsNotNull, ScalarFunctionMatch,
-		ScalarFunctionLike:
+		ScalarFunctionLike, ScalarFunctionCIDRMatch:
 		return true
 	default:
 		return false
@@ -1241,6 +1258,12 @@ type ChartCommand struct {
 func (*ChartCommand) command()             {}
 func (*ChartCommand) Name() string         { return "chart" }
 func (c *ChartCommand) SourceRange() Range { return c.Range }
+
+// MaximumDiagnosticSuggestions bounds the suggestion list carried by any
+// diagnostic. Stored search history, knowledge validation results, and the
+// suggestion API all reject diagnostics with more suggestions, so the parser
+// must never emit a longer list.
+const MaximumDiagnosticSuggestions = 32
 
 // Diagnostic is a stable, source-located parse or compatibility error.
 type Diagnostic struct {
