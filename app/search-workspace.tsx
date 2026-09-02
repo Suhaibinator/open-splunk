@@ -51,9 +51,11 @@ import {
   type VisualizationSpec,
 } from "@/gen/ts/open_splunk/result";
 import {
+  SearchFailureCode,
   SearchJobOrigin,
   SearchJobState,
   SearchResultTab,
+  type SearchFailure,
   type SearchDefinition,
   type SearchJob,
   type SearchProgress,
@@ -192,6 +194,7 @@ import { scheduledReportConfigurationHref } from "./reports/reports-view-state";
 import { SearchComposer } from "./search-workspace/components/search-composer";
 import type { CompletionItem } from "./search-workspace/components/search-editor";
 import { InactiveResultTabPanels } from "./search-workspace/components/inactive-result-tab-panels";
+import { SearchFailurePanel } from "./search-workspace/components/search-failure-panel";
 import { SearchSharingDialog } from "./search-workspace/components/search-sharing-dialog";
 import { ExamplesDialog, KeyboardShortcutsDialog, SplReferenceDialog } from "./search-workspace/components/search-help-dialogs";
 import { WorkspaceDialogs } from "./search-workspace/components/workspace-dialogs";
@@ -283,6 +286,13 @@ import {
 } from "./search-workspace/workspace-utils";
 import { useSearchSharing } from "./search-workspace/use-search-sharing";
 import { useSaveAsAlert } from "./search-workspace/use-save-as-alert";
+import {
+  activeTransportSearchFailure,
+  invalidSplSearchFailure,
+  presentSearchFailure,
+  transportSearchFailure,
+  type ActiveSearchFailure,
+} from "./search-workspace/search-failure-presentation";
 
 const ACTIVE_PHASES = new Set<JobPhase>(["queued", "parsing", "planning", "running", "finalizing"]);
 const RESULT_TAB_ORDER: ResultTab[] = ["events", "patterns", "statistics", "visualization"];
@@ -395,6 +405,26 @@ interface SavedWorkspaceBaseline {
   showDataLabels: boolean;
   stackMode: StackMode;
   timeZone: string;
+}
+
+function problemsFromDiagnostics(source: string, diagnostics: readonly Diagnostic[]): EditorProblem[] {
+  const problems = new Map<string, EditorProblem>();
+  for (const diagnostic of editorDiagnosticsFromProto(source, diagnostics)) {
+    const key = problemKey(diagnostic);
+    if (!problems.has(key)) {
+      problems.set(key, { diagnostic, fix: null, stale: false });
+    }
+  }
+  return [...problems.values()];
+}
+
+function fallbackBackendFailure(message: string): SearchFailure {
+  return {
+    code: SearchFailureCode.SEARCH_FAILURE_CODE_EXECUTION,
+    diagnostics: [],
+    message,
+    retryable: false,
+  };
 }
 
 type BackendObjectMutation =
@@ -854,6 +884,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const [backendExpiresAt, setBackendExpiresAt] = useState<Date | null>(null);
   const [backendNotices, setBackendNotices] = useState<string[]>([]);
   const statisticsColumnLayoutStoreRef = useRef<StatisticsColumnLayoutStore>(new Map());
+  const [searchFailure, setSearchFailure] = useState<ActiveSearchFailure | null>(null);
   const [backendInspection, setBackendInspection] = useState<ServerSearchJobInspectionState>({
     status: "idle",
   });
@@ -1081,19 +1112,33 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const historyLaunchCleanupRef = useRef<(() => void) | null>(null);
   const persistedLaunchEpochRef = useRef(0);
   const persistedLaunchPendingRef = useRef(false);
-  const openRetainedBackendJobRef = useRef<(jobID: string, signal: AbortSignal) => Promise<void>>(async () => {});
+  const openRetainedBackendJobRef = useRef<(
+    jobID: string,
+    signal: AbortSignal,
+    preserveDraft?: boolean,
+  ) => Promise<void>>(async () => {});
   const restoreUnavailableRetainedJobFromHistoryRef = useRef<(
     jobID: string,
     unavailableState: RetainedJobRecovery["state"],
     signal: AbortSignal,
+    preserveDraft?: boolean,
   ) => Promise<boolean>>(async () => false);
-  const openSavedSearchRef = useRef<(saved: DemoSavedSearch, fallbackRange?: TimeRange) => void>(() => undefined);
+  const openSavedSearchRef = useRef<(
+    saved: DemoSavedSearch,
+    fallbackRange?: TimeRange,
+    preserveDraft?: boolean,
+  ) => void>(() => undefined);
   const openHistoryEntryRef = useRef<(
     entry: DemoHistoryEntry,
     rerun: boolean,
     focusSearchEditor?: boolean,
+    preserveDraft?: boolean,
   ) => boolean>(() => false);
-  const searchRunnerRef = useRef<(queryText: string, range?: TimeRange) => void>(() => undefined);
+  const searchRunnerRef = useRef<(
+    queryText: string,
+    range?: TimeRange,
+    preserveDraft?: boolean,
+  ) => void>(() => undefined);
   const abandonDisplayedJobRef = useRef<(nextRange: TimeRange) => void>(() => undefined);
   const cancelSearchRef = useRef<() => void>(() => undefined);
   const timelineZoomParentRef = useRef<TimeRange | null>(null);
@@ -1203,6 +1248,17 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     }
     return [...items.values()];
   }, [backendVerdict, editorDiagnostic, query, suggestionDiagnostics]);
+  const activeFailureProblems = useMemo(() => {
+    if (searchFailure === null) return [];
+    const stale = searchFailure.source !== query;
+    return searchFailure.problems.map((problem) => ({
+      ...problem,
+      stale: problem.stale || stale,
+    }));
+  }, [query, searchFailure]);
+  const searchFailurePresentation = searchFailure === null
+    ? null
+    : presentSearchFailure(searchFailure.failure, activeFailureProblems);
   const completionContext = useMemo(() => completionContextAt(query, editorCaret), [editorCaret, query]);
   const filteredCompletions = useMemo(() => {
     const local = localCompletions(completionContext, fields, {
@@ -2197,12 +2253,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   }, [apiClient, backendEnabled]);
 
   function replaceBackendNotices(job: SearchJob) {
-    setBackendNotices(uniqueMessages([
-      ...job.warnings.map((warning) => warning.message),
-      ...job.diagnostics.map((jobDiagnostic) => jobDiagnostic.message),
-      ...(job.failure?.diagnostics ?? []).map((jobDiagnostic) => jobDiagnostic.message),
-      job.failure?.message,
-    ]));
+    setBackendNotices(uniqueMessages(job.warnings.map((warning) => warning.message)));
     const source = job.definition?.spl;
     if (source === undefined) return;
     const diagnostics = [...job.diagnostics, ...(job.failure?.diagnostics ?? [])];
@@ -2602,10 +2653,28 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     );
   }, [backendBootstrapModel, backendEnabled, exportClockTick, modal]);
 
+  function recordSearchLaunchFailure(
+    error: unknown,
+    fallbackMessage: string,
+    source: string,
+    range: TimeRange,
+    retryLaunch?: ParsedSearchLaunch,
+  ) {
+    const message = error instanceof Error ? error.message : fallbackMessage;
+    setPhase("failed");
+    setProgress(100);
+    setToast(null);
+    setSearchFailure(activeTransportSearchFailure(message, source, range, retryLaunch));
+  }
+
   // Applies the launch the address bar describes: once on mount, and again
   // when Back or Forward lands on a persisted launch. `launch` overrides the
   // URL's own source when a history entry remembers the job it displayed.
-  const applyUrlLaunch = useEffectEvent((options: { initial: boolean; launch?: ParsedSearchLaunch }) => {
+  const applyUrlLaunch = useEffectEvent((options: {
+    initial: boolean;
+    launch?: ParsedSearchLaunch;
+    preserveDraft?: boolean;
+  }) => {
     if (options.initial) {
       if (urlLaunchAppliedRef.current) return;
       urlLaunchAppliedRef.current = true;
@@ -2615,9 +2684,12 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     try {
       launch = options.launch ?? parseSearchLaunch(url.searchParams);
     } catch (error) {
-      setPhase("failed");
-      setProgress(100);
-      showToast(error instanceof Error ? error.message : "The search launch URL is invalid.", "warning");
+      recordSearchLaunchFailure(
+        error,
+        "The search launch URL is invalid.",
+        url.searchParams.get("q") ?? query,
+        timeRange,
+      );
       return;
     }
     const sharedQuery = launch.source === "q" ? launch.value : null;
@@ -2631,7 +2703,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     const sharedRange = TIME_PRESETS.find((preset) => preset.earliest === earliest && preset.latest === latest);
     let initialRange = TIME_PRESETS[3];
     timelineZoomParentRef.current = null;
-    if (sharedQuery !== null) {
+    if (sharedQuery !== null && !options.preserveDraft) {
       setQuery(sharedQuery);
       setEditorCaret(sharedQuery.length);
     }
@@ -2641,8 +2713,10 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         timezone: sharedTimezone,
       };
       initialRange = restoredRange;
-      setTimeRange(restoredRange);
-      setDraftTimeRange(restoredRange);
+      if (!options.preserveDraft) {
+        setTimeRange(restoredRange);
+        setDraftTimeRange(restoredRange);
+      }
     }
     if (options.initial && (launch.source === "q" || launch.source === null) && initialQuery.length > 0) {
       stampSearchLaunchState(launchHistoryState(initialQuery, initialRange));
@@ -2656,7 +2730,11 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       setPersistedLaunchPending(true);
       setPhase("queued");
       setProgress(1);
-      void openRetainedBackendJobRef.current(searchJobLaunchId, controller.signal)
+      void openRetainedBackendJobRef.current(
+        searchJobLaunchId,
+        controller.signal,
+        options.preserveDraft,
+      )
         .catch(async (error: unknown) => {
           if (controller.signal.aborted) return;
           const unavailableState = isHttpStatus(error, 410)
@@ -2669,6 +2747,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
                 searchJobLaunchId,
                 unavailableState,
                 controller.signal,
+                options.preserveDraft,
               );
             } catch {
               recovered = false;
@@ -2686,9 +2765,13 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
             );
             return;
           }
-          setPhase("failed");
-          setProgress(100);
-          showToast(error instanceof Error ? error.message : "Unable to open the retained search job.", "warning");
+          recordSearchLaunchFailure(
+            error,
+            "Unable to open the retained search job.",
+            initialQuery,
+            initialRange,
+            launch,
+          );
         })
         .finally(() => {
           if (!controller.signal.aborted) {
@@ -2709,15 +2792,26 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       const saved = savedSearchLaunchId === null ? undefined : savedSearches.find((item) => item.id === savedSearchLaunchId);
       const entry = historySearchLaunchId === null ? undefined : history.find((item) => item.id === historySearchLaunchId);
       if (saved === undefined && entry === undefined) {
-        showToast("That saved search or history entry is not in this workspace.", "warning");
+        recordSearchLaunchFailure(
+          new Error("That saved search or history entry is not in this workspace."),
+          "Unable to open the persisted search.",
+          initialQuery,
+          initialRange,
+          launch,
+        );
         return;
       }
       const launchTimer = window.setTimeout(() => {
         if (saved !== undefined) {
-          openSavedSearchRef.current(saved, initialRange);
-          if (shouldRunPersistedSearch) window.setTimeout(() => searchRunnerRef.current(saved.query), 0);
+          openSavedSearchRef.current(saved, initialRange, options.preserveDraft);
+          if (shouldRunPersistedSearch) {
+            window.setTimeout(
+              () => searchRunnerRef.current(saved.query, undefined, options.preserveDraft),
+              0,
+            );
+          }
         } else if (entry !== undefined) {
-          openHistoryEntryRef.current(entry, shouldRunPersistedSearch);
+          openHistoryEntryRef.current(entry, shouldRunPersistedSearch, true, options.preserveDraft);
         }
       }, 0);
       return () => window.clearTimeout(launchTimer);
@@ -2771,12 +2865,16 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
               : initialRange;
             persistedLaunchPendingRef.current = false;
             setPersistedLaunchPending(false);
-            openSavedSearchRef.current(displaySearch, initialRange);
+            openSavedSearchRef.current(displaySearch, initialRange, options.preserveDraft);
             if (shouldRunPersistedSearch) {
               launchTimer = window.setTimeout(
                 () => {
                   if (!controller.signal.aborted && persistedLaunchEpochRef.current === launchEpoch) {
-                    searchRunnerRef.current(savedSearch.search.spl, launchRange);
+                    searchRunnerRef.current(
+                      savedSearch.search.spl,
+                      launchRange,
+                      options.preserveDraft,
+                    );
                   }
                 },
                 0,
@@ -2809,15 +2907,24 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           ]);
           persistedLaunchPendingRef.current = false;
           setPersistedLaunchPending(false);
-          openHistoryEntryRef.current(displayEntry, shouldRunPersistedSearch);
+          openHistoryEntryRef.current(
+            displayEntry,
+            shouldRunPersistedSearch,
+            true,
+            options.preserveDraft,
+          );
         })
         .catch((error: unknown) => {
           if (controller.signal.aborted || persistedLaunchEpochRef.current !== launchEpoch) return;
           persistedLaunchPendingRef.current = false;
           setPersistedLaunchPending(false);
-          setPhase("failed");
-          setProgress(100);
-          showToast(error instanceof Error ? error.message : "Unable to open the persisted search.", "warning");
+          recordSearchLaunchFailure(
+            error,
+            "Unable to open the persisted search.",
+            initialQuery,
+            initialRange,
+            launch,
+          );
         });
       return () => {
         controller.abort();
@@ -2857,10 +2964,15 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         .then((bootstrap) => {
           const authorizedQuery = defaultQueryForBootstrap(bootstrap.response);
           setDefaultSearchQuery(authorizedQuery);
-          setQuery(authorizedQuery);
-          setEditorCaret(authorizedQuery.length);
+          if (!options.preserveDraft) {
+            setQuery(authorizedQuery);
+            setEditorCaret(authorizedQuery.length);
+          }
           if (authorizedQuery.length > 0) {
-            window.setTimeout(() => searchRunnerRef.current(authorizedQuery, initialRange), 0);
+            window.setTimeout(
+              () => searchRunnerRef.current(authorizedQuery, initialRange, options.preserveDraft),
+              0,
+            );
           } else {
             setSubmittedQuery("");
             setPhase("completed");
@@ -2868,12 +2980,19 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           }
         })
         .catch((error: unknown) => {
-          setPhase("failed");
-          setProgress(100);
-          showToast(error instanceof Error ? error.message : "Unable to initialize backend search.", "warning");
+          recordSearchLaunchFailure(
+            error,
+            "Unable to initialize backend search.",
+            initialQuery,
+            initialRange,
+            launch,
+          );
         });
     } else if (shouldRunContextualQuery) {
-      window.setTimeout(() => searchRunnerRef.current(initialQuery, initialRange), 0);
+      window.setTimeout(
+        () => searchRunnerRef.current(initialQuery, initialRange, options.preserveDraft),
+        0,
+      );
     }
   });
 
@@ -2889,7 +3008,12 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     const url = new URL(window.location.href);
     const decision = historyNavigationDecision(url.searchParams, readSearchLaunchState(event.state), backendEnabled);
     if (decision.kind === "invalid") {
-      showToast(decision.message, "warning");
+      recordSearchLaunchFailure(
+        new Error(decision.message),
+        "Unable to restore the search launch.",
+        query,
+        timeRange,
+      );
       return;
     }
     historyLaunchCleanupRef.current?.();
@@ -4359,28 +4483,22 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           void refreshBackendHistory(bootstrap);
           return;
         }
-        setPhase("completed");
-        setProgress(100);
         const message = error instanceof Error
           ? error.message
           : "The authoritative result snapshot could not be loaded.";
-        if (backendPreviewRef.current !== null) {
-          updateBackendPreviewStatus(
-            "finalization-error",
-            "Search completed, but authoritative results could not be loaded. The visible rows remain provisional.",
-          );
-          setBackendNotices((current) => appendUniqueMessage(
-            current,
-            `Authoritative results could not be loaded: ${message} The visible preview remains provisional and cannot be exported.`,
-          ));
-        } else {
-          updateBackendPreviewStatus("disabled");
-          setBackendNotices((current) => appendUniqueMessage(
-            current,
+        clearBackendPreview("disabled", "");
+        setBackendAuthoritativeResultsReady(false);
+        setPhase("failed");
+        setProgress(100);
+        const source = job.definition?.spl ?? submittedQuery;
+        setSearchFailure({
+          failure: transportSearchFailure(
             `Search completed, but authoritative results could not be loaded: ${message}`,
-          ));
-        }
-        showToast("Search completed, but its authoritative results could not be loaded.", "warning");
+          ),
+          problems: [],
+          source,
+          timeRange: submittedTimeRange,
+        });
         void refreshBackendHistory(bootstrap);
         return;
       }
@@ -4415,13 +4533,21 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       }
       void fetchAuthoritativeBackendMetadata(job, bootstrap, generation);
     } else if (terminalPhase === "failed") {
-      clearBackendPreview("disabled", "Search failed. Live preview rows were discarded.");
+      clearBackendPreview("disabled", "");
       setBackendAuthoritativeResultsReady(false);
       pendingSavedPreferredTabRef.current = null;
       pendingSavedSelectedFieldsRef.current = null;
       pendingSavedVisualizationRef.current = undefined;
       preservedSavedVisualizationRef.current = null;
-      showToast(job.failure?.message || "The backend search failed.", "warning");
+      const source = job.definition?.spl ?? submittedQuery;
+      const failure = job.failure ?? fallbackBackendFailure("The backend search failed.");
+      const diagnostics = [...job.diagnostics, ...failure.diagnostics];
+      setSearchFailure({
+        failure,
+        problems: problemsFromDiagnostics(source, diagnostics),
+        source,
+        timeRange: submittedTimeRange,
+      });
     } else if (terminalPhase === "canceled") {
       clearBackendPreview("disabled", "Search canceled. Live preview rows were discarded.");
       setBackendAuthoritativeResultsReady(false);
@@ -4466,6 +4592,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     jobID: string,
     unavailableState: RetainedJobRecovery["state"],
     signal: AbortSignal,
+    preserveDraft = false,
   ): Promise<boolean> {
     const bootstrap = await ensureBackendBootstrap();
     if (signal.aborted) return false;
@@ -4496,11 +4623,13 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       displayEntry,
       ...current.filter((entry) => entry.id !== displayEntry.id),
     ]);
-    setQuery(definition.spl);
-    setEditorCaret(definition.spl.length);
+    if (!preserveDraft) {
+      setQuery(definition.spl);
+      setEditorCaret(definition.spl.length);
+      setTimeRange(restoredRange);
+      setDraftTimeRange(restoredRange);
+    }
     setSubmittedQuery(definition.spl);
-    setTimeRange(restoredRange);
-    setDraftTimeRange(restoredRange);
     setSubmittedTimeRange(restoredRange);
     activeSavedSearchIdRef.current = null;
     setActiveSavedSearchId(null);
@@ -4512,7 +4641,11 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     return true;
   }
 
-  async function openRetainedBackendJob(jobID: string, signal: AbortSignal) {
+  async function openRetainedBackendJob(
+    jobID: string,
+    signal: AbortSignal,
+    preserveDraft = false,
+  ) {
     const initialRange = timeRange;
     clearDisplayedJobForDraft(initialRange);
     const generation = generationRef.current;
@@ -4531,11 +4664,13 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       latest: definition.timeRange?.latest ?? "now",
       timezone: definition.timeRange?.timezone,
     };
-    setQuery(definition.spl);
-    setEditorCaret(definition.spl.length);
+    if (!preserveDraft) {
+      setQuery(definition.spl);
+      setEditorCaret(definition.spl.length);
+      setTimeRange(jobRange);
+      setDraftTimeRange(jobRange);
+    }
     setSubmittedQuery(definition.spl);
-    setTimeRange(jobRange);
-    setDraftTimeRange(jobRange);
     setSubmittedTimeRange(jobRange);
     const savedSearchID = job.source?.savedSearchId?.trim() || null;
     activeSavedSearchIdRef.current = savedSearchID;
@@ -4553,7 +4688,11 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   openRetainedBackendJobRef.current = openRetainedBackendJob;
   restoreUnavailableRetainedJobFromHistoryRef.current = restoreUnavailableRetainedJobFromHistory;
 
-  async function runBackendSearch(nextQuery: string, rangeOverride: TimeRange = timeRange) {
+  async function runBackendSearch(
+    nextQuery: string,
+    rangeOverride: TimeRange = timeRange,
+    preserveDraft = false,
+  ) {
     const generation = ++generationRef.current;
     const launchTimeRange = rangeOverride;
     const launchSavedSearchId = activeSavedSearchIdRef.current;
@@ -4598,9 +4737,10 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     setToast(null);
     setMenu(null);
     setCompletionOpen(false);
+    setSearchFailure(null);
     setSubmittedQuery(nextQuery);
     setSubmittedTimeRange(launchTimeRange);
-    setQuery(nextQuery);
+    if (!preserveDraft) setQuery(nextQuery);
     setPhase("queued");
     setProgress(4);
     resetJobDisplayMetrics();
@@ -4679,7 +4819,16 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           const detail = validation.diagnostics
             .map((item) => item.message.trim())
             .find((message) => message.length > 0);
-          throw new Error(detail ?? "The connected server rejected this SPL search.");
+          const message = detail ?? "The connected server rejected this SPL search.";
+          setPhase("failed");
+          setProgress(100);
+          setSearchFailure({
+            failure: invalidSplSearchFailure(message, validation.diagnostics),
+            problems: problemsFromDiagnostics(nextQuery, validation.diagnostics),
+            source: nextQuery,
+            timeRange: launchTimeRange,
+          });
+          return;
         }
       }
       if (generationRef.current !== generation || controller.signal.aborted) return;
@@ -4788,18 +4937,24 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         showToast("Search results expired. Run the search again.", "warning");
         return;
       }
-      clearBackendPreview("disabled", "Search updates failed. Live preview rows were discarded.");
+      clearBackendPreview("disabled", "");
       setBackendAuthoritativeResultsReady(false);
       setPhase("failed");
       setProgress(100);
-      showToast(error instanceof Error ? error.message : "Unable to run the backend search.", "warning");
+      const message = error instanceof Error ? error.message : "Unable to run the backend search.";
+      setSearchFailure({
+        failure: transportSearchFailure(message),
+        problems: [],
+        source: nextQuery,
+        timeRange: launchTimeRange,
+      });
     } finally {
       if (backendAbortRef.current === controller) backendAbortRef.current = null;
     }
   }
 
-  searchRunnerRef.current = (queryText, range) => {
-    runSearch(queryText, range);
+  searchRunnerRef.current = (queryText, range, preserveDraft) => {
+    runSearch(queryText, range, "q", preserveDraft);
   };
 
   function backendWorkspaceTransitionBlocked(): boolean {
@@ -4846,16 +5001,36 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     setStackMode(visualization.stackMode);
   }
 
-  function runSearch(queryOverride?: string, rangeOverride: TimeRange = timeRange, launch: "q" | "keep" = "q") {
+  function runSearch(
+    queryOverride?: string,
+    rangeOverride: TimeRange = timeRange,
+    launch: "q" | "keep" = "q",
+    preserveDraft = false,
+  ) {
     if (searchLaunchRef.current) return;
     if (backendWorkspaceTransitionBlocked()) return;
     const nextQuery = queryOverride ?? query;
+    setSearchFailure(null);
     const nextDiagnostic = getQueryDiagnostic(nextQuery);
     if (nextDiagnostic !== null && (!backendEnabled || nextDiagnostic.kind !== "unsupported")) {
-      setQuery(nextQuery);
+      if (!preserveDraft) setQuery(nextQuery);
+      setSubmittedQuery(nextQuery);
+      setSubmittedTimeRange(rangeOverride);
       setCompletionOpen(false);
-      showToast(nextDiagnostic.message, "warning");
-      focusEditor(nextQuery.trim().length === 0 ? 0 : nextQuery.length);
+      setPhase("failed");
+      setProgress(100);
+      const problem: EditorProblem = {
+        diagnostic: editorDiagnosticFromLocal(nextQuery, nextDiagnostic),
+        fix: nextDiagnostic.actionLabel === undefined ? null : nextDiagnostic,
+        stale: false,
+      };
+      setSearchFailure({
+        failure: invalidSplSearchFailure(nextDiagnostic.message),
+        problems: [problem],
+        source: nextQuery,
+        timeRange: rangeOverride,
+      });
+      focusEditor(problem.diagnostic.range?.start ?? (nextQuery.trim().length === 0 ? 0 : nextQuery.length));
       return;
     }
     if (
@@ -4871,7 +5046,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       searchLaunchRef.current = false;
     }, 0);
     if (backendEnabled) {
-      void runBackendSearch(nextQuery, rangeOverride);
+      void runBackendSearch(nextQuery, rangeOverride, preserveDraft);
       return;
     }
     generationRef.current += 1;
@@ -4883,7 +5058,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     setCompletionOpen(false);
     setSubmittedQuery(nextQuery);
     setSubmittedTimeRange(launchTimeRange);
-    setQuery(nextQuery);
+    if (!preserveDraft) setQuery(nextQuery);
     if (launch === "q" && activeSavedSearchIdRef.current === null) {
       commitSearchLaunch("q", nextQuery, launchTimeRange, { mode: "navigate", state: launchHistoryState(nextQuery, launchTimeRange) });
     } else {
@@ -5924,7 +6099,11 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     setEventPage(1);
   }
 
-  function openSavedSearch(saved: DemoSavedSearch, fallbackRange: TimeRange = timeRange) {
+  function openSavedSearch(
+    saved: DemoSavedSearch,
+    fallbackRange: TimeRange = timeRange,
+    preserveDraft = false,
+  ) {
     if (backendWorkspaceTransitionBlocked()) return;
     if (isRunning) {
       showToast("Cancel the active search before opening a saved search.", "warning");
@@ -5940,10 +6119,12 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       }
       : fallbackRange;
     clearDisplayedJobForDraft(savedRange);
-    setQuery(saved.query);
-    setEditorCaret(saved.query.length);
-    setTimeRange(savedRange);
-    setDraftTimeRange(savedRange);
+    if (!preserveDraft) {
+      setQuery(saved.query);
+      setEditorCaret(saved.query.length);
+      setTimeRange(savedRange);
+      setDraftTimeRange(savedRange);
+    }
     timelineZoomParentRef.current = null;
     activeSavedSearchIdRef.current = saved.id;
     setActiveSavedSearchId(saved.id);
@@ -5968,10 +6149,15 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           : `Opened “${saved.name}” with the current workspace time range.`,
       presentationNotice ? "warning" : "info",
     );
-    focusEditor(saved.query.length);
+    if (!preserveDraft) focusEditor(saved.query.length);
   }
 
-  function openHistoryEntry(entry: DemoHistoryEntry, rerun: boolean, focusSearchEditor = true): boolean {
+  function openHistoryEntry(
+    entry: DemoHistoryEntry,
+    rerun: boolean,
+    focusSearchEditor = true,
+    preserveDraft = false,
+  ): boolean {
     if (backendWorkspaceTransitionBlocked()) return false;
     if (isRunning && !rerun) {
       showToast("Cancel the active search before restoring a history draft.", "warning");
@@ -5981,10 +6167,12 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       ? { label: entry.timeRange, earliest: entry.earliest, latest: entry.latest, timezone: entry.timezone }
       : TIME_PRESETS.find((preset) => preset.label === entry.timeRange) ?? timeRange;
     if (!rerun) clearDisplayedJobForDraft(restoredRange);
-    setQuery(entry.query);
-    setEditorCaret(entry.query.length);
-    setTimeRange(restoredRange);
-    setDraftTimeRange(restoredRange);
+    if (!preserveDraft) {
+      setQuery(entry.query);
+      setEditorCaret(entry.query.length);
+      setTimeRange(restoredRange);
+      setDraftTimeRange(restoredRange);
+    }
     timelineZoomParentRef.current = null;
     if (backendEnabled) {
       const serverEntry = backendHistoryRef.current.get(entry.id) ?? null;
@@ -5999,9 +6187,9 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       state: launchHistoryState(entry.query, restoredRange),
     });
     setModal(null);
-    if (rerun) runSearch(entry.query, restoredRange, "keep");
+    if (rerun) runSearch(entry.query, restoredRange, "keep", preserveDraft);
     else showToast("Search restored without running.", "info");
-    if (focusSearchEditor) focusEditor(entry.query.length);
+    if (focusSearchEditor && !preserveDraft) focusEditor(entry.query.length);
     return true;
   }
 
@@ -6960,6 +7148,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     resetExport();
     setQuery("");
     setSubmittedQuery("");
+    setSearchFailure(null);
     activeSavedSearchIdRef.current = null;
     setActiveSavedSearchId(null);
     backendHistoryRerunRef.current = null;
@@ -7707,7 +7896,34 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
 
       <InactiveResultTabPanels activeTab={activeTab} />
 
-      {!hasResultData ? (
+      {searchFailure !== null && searchFailurePresentation !== null ? (
+        <SearchFailurePanel
+          activeTab={activeTab}
+          canNavigateSource={searchFailure.source === query}
+          onFocusProblem={(problem) => {
+            const range = problem.diagnostic.range;
+            if (range !== null && searchFailure.source === query) focusEditor(range.start);
+          }}
+          onRetry={() => {
+            if (searchFailure.retryLaunch === undefined) {
+              runSearch(searchFailure.source, searchFailure.timeRange, "q", true);
+              return;
+            }
+            historyLaunchCleanupRef.current?.();
+            setSearchFailure(null);
+            historyLaunchCleanupRef.current = applyUrlLaunch({
+              initial: false,
+              launch: searchFailure.retryLaunch,
+              preserveDraft: true,
+            }) ?? null;
+          }}
+          presentation={searchFailurePresentation}
+          problems={activeFailureProblems}
+          serverSettingsHref={productHref("/admin/?section=server")}
+        />
+      ) : null}
+
+      {searchFailure === null && !hasResultData ? (
         <section
           id={`panel-${activeTab}`}
           role="tabpanel"
@@ -7740,7 +7956,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         </section>
       ) : null}
 
-      {hasResultData && activeTab === "events" ? (
+      {searchFailure === null && hasResultData && activeTab === "events" ? (
         <EventsPanel
           activeField={activeField}
           backendEnabled={backendEnabled}
@@ -7812,7 +8028,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         />
       ) : null}
 
-      {hasResultData && activeTab === "patterns" ? (
+      {searchFailure === null && hasResultData && activeTab === "patterns" ? (
         <PatternsPanel
           menu={menu}
           patternRows={patternRows}
@@ -7829,7 +8045,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         />
       ) : null}
 
-      {hasResultData && activeTab === "statistics" ? (
+      {searchFailure === null && hasResultData && activeTab === "statistics" ? (
         <StatisticsPanel
           columnLayoutStore={statisticsColumnLayoutStoreRef.current}
           elapsed={elapsed}
@@ -7869,7 +8085,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         />
       ) : null}
 
-      {hasResultData && activeTab === "visualization" ? (
+      {searchFailure === null && hasResultData && activeTab === "visualization" ? (
         <VisualizationPanel
           chartStyle={chartStyle}
           chartTitle={chartTitle}
