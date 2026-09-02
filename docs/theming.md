@@ -29,24 +29,25 @@ is:
 | 8 | `app/styles/primitives/status.css` | `.status` and `.badge` |
 | 9 | `app/styles/primitives/layout.css` | product shell, drawer, toasts and suite layouts |
 | 10 | `app/styles/primitives/chart.css` | shared chart geometry |
-| 11 | `app/search-workspace/search-editor.css` | search title, editor and time picker |
-| 12 | `app/search-workspace/search-job.css` | job strip, tabs and timeline |
-| 13 | `app/search-workspace/search-fields.css` | fields rail and events |
-| 14 | `app/search-workspace/search-results.css` | patterns, statistics and result grids |
-| 15 | `app/admin/admin.css` | administration and knowledge surfaces |
-| 16 | `app/activity/activity.css` | activity console |
-| 17 | `app/datasets/datasets.css` | dataset cards and field catalog |
-| 18 | `app/signin/signin.css` | sign-in page |
-| 19 | `app/home.css` | landing page |
-| 20 | `app/_components/backend-resource-state.css` | connected-backend empty/error state |
-| 21 | `app/dashboards/dashboards.css` | dashboard page rules |
-| 22 | `app/analytics/analytics.css` | analytics console; `analytics-` namespace |
-| 23 | `app/dashboards/operations-dashboard.css` | operations dashboard; `operations-` namespace |
-| 24 | `app/reports/reports.css` | reports and saved searches; `reports-` namespace |
-| 25 | `app/reports/alerts.css` | alert management; `alerts-` namespace |
-| 26 | `app/search-workspace/components/workspace-dialogs.css` | workspace dialogs; `workspace-dialog-` namespace |
-| 27 | `app/search-workspace/panels/visualization-panel.css` | result visualizations; `visualization-` namespace |
-| 28 | `app/styles/interaction.css` | coarse-pointer and reduced-motion floors |
+| 11 | `app/styles/primitives/skeleton.css` | shared loading placeholders and reduced-motion behavior |
+| 12 | `app/search-workspace/search-editor.css` | search title, editor and time picker |
+| 13 | `app/search-workspace/search-job.css` | job strip, tabs and timeline |
+| 14 | `app/search-workspace/search-fields.css` | fields rail and events |
+| 15 | `app/search-workspace/search-results.css` | patterns, statistics and result grids |
+| 16 | `app/admin/admin.css` | administration and knowledge surfaces |
+| 17 | `app/activity/activity.css` | activity console |
+| 18 | `app/datasets/datasets.css` | dataset cards and field catalog |
+| 19 | `app/signin/signin.css` | sign-in page |
+| 20 | `app/home.css` | landing page |
+| 21 | `app/_components/backend-resource-state.css` | connected-backend empty/error state |
+| 22 | `app/dashboards/dashboards.css` | dashboard page rules |
+| 23 | `app/analytics/analytics.css` | analytics console; `analytics-` namespace |
+| 24 | `app/dashboards/operations-dashboard.css` | operations dashboard; `operations-` namespace |
+| 25 | `app/reports/reports.css` | reports and saved searches; `reports-` namespace |
+| 26 | `app/reports/alerts.css` | alert management; `alerts-` namespace |
+| 27 | `app/search-workspace/components/workspace-dialogs.css` | workspace dialogs; `workspace-dialog-` namespace |
+| 28 | `app/search-workspace/panels/visualization-panel.css` | result visualizations; `visualization-` namespace |
+| 29 | `app/styles/interaction.css` | coarse-pointer and reduced-motion floors |
 
 Primitives precede features so a feature may supply layout around a primitive.
 `interaction.css` is last because its accessibility floors must outrank both.
@@ -71,8 +72,8 @@ name. Examples are `.reports-table`, `.alerts-table`,
 - Tier 1 is the raw palette. Only the token file reads these hue/lightness
   names.
 - Tier 2 names semantic roles such as foreground, surface, border, accent,
-  status, syntax, chart-series, and chrome colours. All other stylesheets read
-  only these roles.
+  status, syntax, chart-series, skeleton, and chrome colours. All other
+  stylesheets read only these roles.
 
 To recolour an existing role, change its tier-2 mapping. Add a tier-2 token only
 when the role is genuinely new, with a one-line role comment. Never reference a
@@ -142,6 +143,7 @@ file:
 - Overlays: the shared modal/dialog family.
 - Product chrome: `ProductShell`, `Wordmark`, and the shared drawer.
 - Charts: the shared chart geometry and the semantic chart-series token ramp.
+- Skeletons: `.skeleton` with line, width, and block modifiers; decorative nodes stay hidden from assistive technology.
 
 A host may size a shared child through a documented component-scoped custom-
 property interface instead of selecting into the child's internals. Add such a

@@ -55,6 +55,7 @@ const testFiles = [
   path.join("app", "search-workspace", "components", "export-presentation.test.tsx"),
   path.join("app", "search-workspace", "panels", "events-pagination.test.tsx"),
   path.join("app", "search-workspace", "components", "inactive-result-tab-panels.test.tsx"),
+  path.join("app", "search-workspace", "components", "result-skeleton.test.tsx"),
   path.join("app", "search-workspace", "components", "search-editor.test.tsx"),
   path.join("app", "search-workspace", "components", "search-sharing-dialog.test.tsx"),
   path.join("app", "search-workspace", "statistics-sparkline.test.ts"),

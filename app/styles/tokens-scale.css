@@ -23,6 +23,16 @@
   --dur-fast: 100ms;
   --ease: ease-out;
 
+  /* Loading skeleton cadence and reusable result-shape geometry. */
+  --dur-skeleton: 1.4s;
+  --space-result-panel-min-height: 560px; /* Stable vertical canvas for every search result view. */
+  --space-skeleton-block-height: 180px;
+  --space-skeleton-line-height: 12px;
+  --space-skeleton-line-long: 88%;
+  --space-skeleton-line-medium: 68%;
+  --space-skeleton-line-short: 44%;
+  --space-skeleton-shimmer-size: 200%;
+
   /* Type stacks, moved verbatim out of the :root block the application
      stylesheet used to carry. */
   --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;

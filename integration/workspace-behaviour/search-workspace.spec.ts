@@ -377,3 +377,25 @@ test("Help opens the examples gallery and Use loads a draft without running it",
   await expect(page.getByTestId("toast")).toContainText("Loaded “Slowest API routes” into the editor.");
   await expect(page.getByTestId("run-search")).toHaveAttribute("aria-label", "Run search");
 });
+
+test("running result tabs show accessible skeletons until demo results are ready", async ({ page }) => {
+  await openSeededWorkspace(page);
+  const editor = page.getByTestId("search-input");
+  await editor.fill("index=main | stats count");
+  await page.keyboard.press("Control+Enter");
+
+  await expect(page.getByTestId("result-skeleton-events")).toBeVisible();
+  await page.getByTestId("result-tab-patterns").click();
+  await expect(page.getByTestId("job-empty-results")).toHaveAttribute("aria-busy", "true");
+  await expect(page.getByTestId("job-empty-results")).toContainText("Search is running");
+  await expect(page.locator('[data-testid^="result-skeleton-"]')).toHaveCount(0);
+  await page.getByTestId("result-tab-events").click();
+  await expect(page.getByTestId("result-skeleton-events")).toBeVisible();
+  await page.getByTestId("result-tab-statistics").click();
+  await expect(page.getByTestId("result-skeleton-statistics")).toHaveAttribute("aria-busy", "true");
+  await page.getByTestId("result-tab-visualization").click();
+  await expect(page.getByTestId("result-skeleton-visualization")).toBeVisible();
+
+  await expect(page.getByTestId("run-search")).toHaveAttribute("aria-label", "Run search");
+  await expect(page.getByTestId("result-skeleton-visualization")).toHaveCount(0);
+});
