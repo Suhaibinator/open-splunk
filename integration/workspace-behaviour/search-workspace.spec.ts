@@ -90,6 +90,36 @@ test("Escape closes the command menu and typing a pipe reopens it", async ({ pag
   await expect(page.getByTestId("completion-menu")).toBeVisible();
 });
 
+test("ArrowUp on the first line recalls the previous search and ArrowDown walks back to the draft", async ({ page }) => {
+  await openSeededWorkspace(page);
+  const editor = page.getByTestId("search-input");
+  const status = page.locator("#spl-completion-status");
+  await expect(page.locator("#editor-help")).toContainText("↑↓ history");
+  await focusEditorEnd(page);
+
+  await page.keyboard.press("ArrowUp");
+  await expect(editor).toHaveValue("index=gradethis (level=ERROR OR status>=500) | sort -_time");
+  await expect(status).toHaveText(/^Recalled search 1 of \d+$/u);
+  await expect(page.getByTestId("completion-menu")).toHaveCount(0);
+
+  await page.keyboard.press("ArrowUp");
+  await expect(editor).toHaveValue('index=gradethis trace_id="4b9f0f06d2cc47c89bd04ce9a7318fd1" | sort _time');
+  await expect(status).toHaveText(/^Recalled search 2 of \d+$/u);
+
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowDown");
+  await expect(editor).toHaveValue(SEEDED_QUERY);
+  await expect(status).toHaveText("Restored draft");
+  await expect(editor).toBeFocused();
+
+  // Typing ends the walk: the next ArrowUp starts again from the edited draft.
+  await page.keyboard.type(" level=ERROR");
+  await page.keyboard.press("ArrowUp");
+  await expect(editor).toHaveValue("index=gradethis (level=ERROR OR status>=500) | sort -_time");
+  await page.keyboard.press("ArrowDown");
+  await expect(editor).toHaveValue(`${SEEDED_QUERY} level=ERROR`);
+});
+
 test("choosing a preset in the time picker updates the range the next run submits", async ({ page }) => {
   await openSeededWorkspace(page);
   const rangeButton = page.getByTestId("time-range-button");
@@ -106,6 +136,63 @@ test("choosing a preset in the time picker updates the range the next run submit
 
   await runFromEditor(page);
   await expect(page.getByTestId("job-time-range")).toHaveText("Last 4 hours");
+});
+
+test("Back restores the previous draft without a new run, and Forward runs the launch again", async ({ page }) => {
+  await openSeededWorkspace(page, { earliest: "-7d", latest: "now" });
+  const editor = page.getByTestId("search-input");
+  const runButton = page.getByTestId("run-search");
+  const jobStrip = page.getByTestId("job-strip");
+  const progress = page.getByLabel("Search progress");
+  await expect(page).toHaveURL(/run=0/u);
+  await expect(jobStrip).toHaveClass(/is-closed/u);
+
+  await focusEditorEnd(page);
+  await page.keyboard.type("\n| stats count");
+  await page.keyboard.press("Control+Enter");
+  await expect(runButton).toHaveAttribute("aria-label", "Cancel search");
+  await expect(runButton).toHaveAttribute("aria-label", "Run search");
+  await expect(page).toHaveURL(/[?&]q=index%3Dmain%0A%7C\+stats\+count(?:&|$)/u);
+  await expect(page).toHaveURL(/[?&]run=1(?:&|$)/u);
+  await expect(jobStrip).not.toHaveClass(/is-closed/u);
+  await expect(progress).toHaveJSProperty("value", 100);
+
+  await page.goBack();
+  await expect(page).toHaveURL(/[?&]q=index%3Dmain(?:&|$)/u);
+  await expect(page).toHaveURL(/[?&]run=0(?:&|$)/u);
+  await expect(editor).toHaveValue(SEEDED_QUERY);
+  await expect(page.getByTestId("time-range-button")).toContainText("Last 7 days");
+  await expect(jobStrip).toHaveClass(/is-closed/u);
+  await expect(jobStrip).toHaveAttribute("aria-busy", "false");
+  await expect(progress).toHaveJSProperty("value", 0);
+  await expect(runButton).toHaveAttribute("aria-label", "Run search");
+
+  // The demo has no retained job to reopen, so a run entry runs again in place.
+  await page.goForward();
+  await expect(editor).toHaveValue(`${SEEDED_QUERY}\n| stats count`);
+  await expect(runButton).toHaveAttribute("aria-label", "Cancel search");
+  await expect(runButton).toHaveAttribute("aria-label", "Run search");
+  await expect(jobStrip).not.toHaveClass(/is-closed/u);
+  await expect(page).toHaveURL(/[?&]q=index%3Dmain%0A%7C\+stats\+count(?:&|$)/u);
+  await expect(page).toHaveURL(/[?&]run=1(?:&|$)/u);
+});
+
+test("Escape with nothing open cancels the running search", async ({ page }) => {
+  await openSeededWorkspace(page);
+  const runButton = page.getByTestId("run-search");
+  await expect(runButton).not.toHaveAttribute("aria-keyshortcuts", "Escape");
+
+  await focusEditorEnd(page);
+  await page.keyboard.press("Control+Enter");
+  await expect(runButton).toHaveAttribute("aria-label", "Cancel search");
+  await expect(runButton).toHaveAttribute("aria-keyshortcuts", "Escape");
+  await expect(page.getByTestId("completion-menu")).toHaveCount(0);
+
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("toast")).toContainText("Search canceled.");
+  await expect(runButton).toHaveAttribute("aria-label", "Run search");
+  await expect(page.getByTestId("job-strip")).toContainText("Canceled");
+  await expect(page.getByTestId("search-input")).toBeFocused();
 });
 
 test("arrow keys move the selected result tab and focus follows it", async ({ page }) => {
