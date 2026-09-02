@@ -9,6 +9,7 @@ import { COMPACT_NUMBER_FORMAT, NUMBER_FORMAT } from "../constants";
 import { eventPageSizeOptions } from "../event-page-controls";
 import { formatExactInteger, formatExactNumericText } from "../formatters";
 import type { EventDisplay, MenuName, TimelineDisplay } from "../model";
+import { EventsTable } from "./events-table";
 import {
   eventFieldValueWhiteSpace,
   formatFieldValue,
@@ -333,6 +334,28 @@ export function EventsPanel({
     });
   }
 
+  function renderEventDetail(event: DemoEvent) {
+    return (
+      <div className="event-detail">
+        <header><strong>Event fields</strong><span>{Object.keys(event.fields).length} fields · typed JSON</span><button className="event-detail-copy-raw" type="button" onClick={() => void copyText(event.raw, "Raw event copied.")}>Copy raw</button></header>
+        <div className="event-field-grid">
+          {Object.entries(event.fields).map(([fieldName, fieldValue]) => (
+            <div className="event-field" key={fieldName}>
+              <button className="event-field-name" type="button" onClick={() => openFieldInspector(fieldName)}>{fieldName}</button>
+              <span className={`value-type value-${fieldValue === null ? "null" : typeof fieldValue}`}>{fieldValue === null ? "null" : typeof fieldValue}</span>
+              <code style={{ whiteSpace: eventFieldValueWhiteSpace(fieldValue) }}>{formatFieldValue(fieldValue)}</code>
+              <div className="event-field-actions">
+                <button type="button" disabled={event.pivotableFields?.[fieldName] === false} title={event.pivotableFields?.[fieldName] === false ? "This typed value cannot be represented losslessly in SPL" : "Include in current search"} aria-label={`Include ${fieldName}`} onClick={() => applyPivot(fieldName, fieldValue, "include")}><AppIcon name="plus" size="sm" /></button>
+                <button type="button" disabled={event.pivotableFields?.[fieldName] === false} title={event.pivotableFields?.[fieldName] === false ? "This typed value cannot be represented losslessly in SPL" : "Exclude from current search"} aria-label={`Exclude ${fieldName}`} onClick={() => applyPivot(fieldName, fieldValue, "exclude")}><AppIcon name="minus" size="sm" /></button>
+                <button type="button" disabled={event.pivotableFields?.[fieldName] === false} title={event.pivotableFields?.[fieldName] === false ? "This typed value cannot be represented losslessly in SPL" : "Open as new search"} aria-label={`New search for ${fieldName}`} onClick={() => applyPivot(fieldName, fieldValue, "new", true)}><AppIcon name="search" size="sm" /></button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   return (
       <section id="panel-events" role="tabpanel" aria-labelledby="tab-events" className="events-panel">
         <section className={`timeline-section${isPreview ? " timeline-section--preview" : ""}`} data-testid="timeline" aria-label={isPreview ? "Event timeline pending final results" : "Event timeline"}>
@@ -567,8 +590,8 @@ export function EventsPanel({
                   <button type="button" aria-haspopup="menu" aria-expanded={menu === "event-display"} onClick={() => setMenu(menu === "event-display" ? null : "event-display")}>{eventDisplay} <AppIcon name="chevron-down" size="xs" /></button>
                   {menu === "event-display" ? (
                     <div className="floating-menu result-control-menu" role="menu" aria-label="Event display">
-                      {(["List", "Raw"] as const).map((display) => (
-                        <button role="menuitemradio" aria-checked={eventDisplay === display} type="button" key={display} onClick={() => { setEventDisplay(display); setMenu(null); }}><span className="radio-mark">{eventDisplay === display ? "●" : "○"}</span><span><strong>{display}</strong><small>{display === "List" ? "Fields, metadata, and raw event" : "Raw event text with minimal chrome"}</small></span></button>
+                      {(["List", "Raw", "Table"] as const).map((display) => (
+                        <button role="menuitemradio" aria-checked={eventDisplay === display} type="button" key={display} onClick={() => { setEventDisplay(display); setMenu(null); }}><span className="radio-mark">{eventDisplay === display ? "●" : "○"}</span><span><strong>{display}</strong><small>{display === "List" ? "Fields, metadata, and raw event" : display === "Raw" ? "Raw event text with minimal chrome" : "Selected fields arranged as columns"}</small></span></button>
                       ))}
                     </div>
                   ) : null}
@@ -648,7 +671,7 @@ export function EventsPanel({
                 >Next <AppIcon name="chevron-right" size="xs" /></button>
               </nav>}
             </div>
-            <div className="event-head">
+            {eventDisplay === "Table" ? null : <div className="event-head">
               <span />
               {isPreview
                 ? <span title="Preview arrival order; final order is established when the search completes">Time · provisional order</span>
@@ -657,8 +680,17 @@ export function EventsPanel({
                 : <button type="button" aria-label={`Sort by time, ${eventSortDirection === "desc" ? "ascending" : "descending"}`} onClick={() => { setEventSortDirection((current) => current === "desc" ? "asc" : "desc"); setEventPage(1); }}>Time <span aria-hidden="true">{eventSortDirection === "desc" ? "↓" : "↑"}</span></button>}
               <span>{isPreview ? "Event · live preview" : "Event"}</span>
               <span className="event-row-actions-heading">Actions</span>
-            </div>
-            <div className="event-list" data-testid="event-list">
+            </div>}
+            {eventDisplay === "Table" ? (
+              <EventsTable
+                events={pagedResultEvents}
+                expandedEvents={expandedEvents}
+                fields={fields}
+                isPreview={isPreview}
+                onToggleEvent={toggleEvent}
+                renderEventDetail={renderEventDetail}
+              />
+            ) : <div className="event-list" data-testid="event-list">
               {pagedResultEvents.map((event) => {
                 const expanded = !isPreview && expandedEvents.has(event.id);
                 const level = String(event.fields.level ?? "INFO").toLowerCase();
@@ -675,25 +707,7 @@ export function EventsPanel({
                           <button type="button" aria-disabled={isPreview} title={isPreview ? "Authoritative field summaries load after completion." : undefined} key={fieldName} style={{ whiteSpace: eventFieldValueWhiteSpace(event.fields[fieldName] ?? null) }} onClick={() => { if (!isPreview) openFieldInspector(fieldName); }}><span>{fieldName}</span> = {formatFieldValue(event.fields[fieldName] ?? null)}</button>
                         ))}
                       </div>
-                      {expanded ? (
-                        <div className="event-detail">
-                          <header><strong>Event fields</strong><span>{Object.keys(event.fields).length} fields · typed JSON</span><button className="event-detail-copy-raw" type="button" onClick={() => void copyText(event.raw, "Raw event copied.")}>Copy raw</button></header>
-                          <div className="event-field-grid">
-                            {Object.entries(event.fields).map(([fieldName, fieldValue]) => (
-                              <div className="event-field" key={fieldName}>
-                                <button className="event-field-name" type="button" onClick={() => openFieldInspector(fieldName)}>{fieldName}</button>
-                                <span className={`value-type value-${fieldValue === null ? "null" : typeof fieldValue}`}>{fieldValue === null ? "null" : typeof fieldValue}</span>
-                                <code style={{ whiteSpace: eventFieldValueWhiteSpace(fieldValue) }}>{formatFieldValue(fieldValue)}</code>
-                                <div className="event-field-actions">
-                                  <button type="button" disabled={event.pivotableFields?.[fieldName] === false} title={event.pivotableFields?.[fieldName] === false ? "This typed value cannot be represented losslessly in SPL" : "Include in current search"} aria-label={`Include ${fieldName}`} onClick={() => applyPivot(fieldName, fieldValue, "include")}><AppIcon name="plus" size="sm" /></button>
-                                  <button type="button" disabled={event.pivotableFields?.[fieldName] === false} title={event.pivotableFields?.[fieldName] === false ? "This typed value cannot be represented losslessly in SPL" : "Exclude from current search"} aria-label={`Exclude ${fieldName}`} onClick={() => applyPivot(fieldName, fieldValue, "exclude")}><AppIcon name="minus" size="sm" /></button>
-                                  <button type="button" disabled={event.pivotableFields?.[fieldName] === false} title={event.pivotableFields?.[fieldName] === false ? "This typed value cannot be represented losslessly in SPL" : "Open as new search"} aria-label={`New search for ${fieldName}`} onClick={() => applyPivot(fieldName, fieldValue, "new", true)}><AppIcon name="search" size="sm" /></button>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ) : null}
+                      {expanded ? renderEventDetail(event) : null}
                     </div>
                     <button
                       className="event-copy-raw"
@@ -707,7 +721,8 @@ export function EventsPanel({
                 );
               })}
               {resultEvents.length === 0 ? <div className="empty-state event-empty"><strong>No events found</strong><span>Widen the time range or remove a field filter.</span><button className="button button--secondary button--compact" type="button" onClick={() => setQuery(defaultQuery)}>Reset search</button></div> : null}
-            </div>
+            </div>}
+            {eventDisplay === "Table" && resultEvents.length === 0 ? <div className="empty-state event-empty"><strong>No events found</strong><span>Widen the time range or remove a field filter.</span><button className="button button--secondary button--compact" type="button" onClick={() => setQuery(defaultQuery)}>Reset search</button></div> : null}
           </section>
         </div>
       </section>

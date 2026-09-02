@@ -377,3 +377,40 @@ test("Help opens the examples gallery and Use loads a draft without running it",
   await expect(page.getByTestId("toast")).toContainText("Loaded “Slowest API routes” into the editor.");
   await expect(page.getByTestId("run-search")).toHaveAttribute("aria-label", "Run search");
 });
+
+test("Events Table follows selected-field rail order and expands shared details", async ({ page }) => {
+  await openSeededWorkspace(page);
+  await runFromEditor(page);
+
+  await page.getByRole("button", { name: "List", exact: true }).click();
+  await page.getByRole("menuitemradio", { name: /\bTable\b/u }).click();
+  const table = page.getByRole("table", { name: "Events table" });
+  await expect(table).toBeVisible();
+  await expect(table.getByRole("columnheader")).toHaveText([
+    "_time",
+    "host",
+    "source",
+    "sourcetype",
+    "level",
+    "trace_id",
+  ]);
+
+  await page.locator('[data-field-name="path"]').click();
+  await page.getByRole("checkbox", { name: "Selected field" }).check();
+  await page.getByRole("button", { name: "Close field summary" }).click();
+  await expect(table.getByRole("columnheader")).toHaveText([
+    "_time",
+    "host",
+    "source",
+    "sourcetype",
+    "level",
+    "trace_id",
+    "path",
+  ]);
+
+  const firstEventRow = table.locator(".events-table__event").first();
+  const expander = firstEventRow.getByRole("button", { name: /^Expand event at/u });
+  await expander.click();
+  await expect(firstEventRow.getByRole("button", { name: /^Collapse event at/u })).toHaveAttribute("aria-expanded", "true");
+  await expect(table.getByText("Event fields").first()).toBeVisible();
+});
