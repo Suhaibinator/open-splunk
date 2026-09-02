@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -50,6 +51,52 @@ type Expectation struct {
 	Commands []string           `json:"commands"`
 	Sort     *SortExpectation   `json:"sort,omitempty"`
 	Fields   *FieldsExpectation `json:"fields,omitempty"`
+	// Facets records the documented option surface of the final command as
+	// canonical text, keyed by the facet names AllowedFacets grants that
+	// command. A value of "" asserts that the optional facet is absent.
+	Facets map[string]string `json:"facets,omitempty"`
+}
+
+// AllowedFacets names the documented option surface of every command in the
+// corpus. The names describe Splunk's documented syntax, not the
+// implementation's AST, so a case can pin (for example) rex max_match before
+// any implementation honors it. A command with no facets (reverse, addinfo)
+// has an empty list; a command missing from this table cannot appear in the
+// corpus at all, which keeps the registry complete as commands are added.
+var AllowedFacets = map[string][]string{
+	"accum":       {"field", "output"},
+	"addinfo":     {},
+	"addtotals":   {"fields", "output"},
+	"bin":         {"field", "output", "span"},
+	"bucket":      {"field", "output", "span"},
+	"chart":       {"aggregate", "over", "split_by"},
+	"dedup":       {"count", "fields"},
+	"delta":       {"field", "output", "previous"},
+	"eval":        {"expressions", "fields"},
+	"eventstats":  {"aggregate", "group_by"},
+	"fields":      {"mode", "names"},
+	"fillnull":    {"fields", "value"},
+	"head":        {"count"},
+	"lookup":      {"definition", "keys", "output_mode", "outputs"},
+	"makemv":      {"allow_empty", "delimiter", "field"},
+	"mvexpand":    {"field", "limit"},
+	"nomv":        {"field"},
+	"rare":        {"fields", "limit"},
+	"regex":       {"field", "negated", "pattern"},
+	"rename":      {"assignments"},
+	"reverse":     {},
+	"rex":         {"field", "max_match", "pattern"},
+	"search":      {"filter"},
+	"sort":        {"keys", "limit"},
+	"spath":       {"input", "output", "path"},
+	"stats":       {"aggregates", "group_by"},
+	"strcat":      {"all_required", "destination", "operands"},
+	"streamstats": {"aggregate", "current", "global", "group_by", "window"},
+	"table":       {"fields"},
+	"tail":        {"count"},
+	"timechart":   {"aggregate", "span", "split_by"},
+	"top":         {"fields", "limit"},
+	"where":       {"predicate"},
 }
 
 type SortExpectation struct {
@@ -124,6 +171,9 @@ func Validate(corpus Corpus) error {
 		seen[testCase.ID] = struct{}{}
 		if !commandPattern.MatchString(testCase.Command) {
 			return fmt.Errorf("%s has invalid command %q", path, testCase.Command)
+		}
+		if _, known := AllowedFacets[testCase.Command]; !known {
+			return fmt.Errorf("%s command %q has no AllowedFacets entry", path, testCase.Command)
 		}
 		if !strings.HasPrefix(testCase.ID, testCase.Command+".") {
 			return fmt.Errorf("%s id %q must start with command %q", path, testCase.ID, testCase.Command+".")
@@ -207,6 +257,16 @@ func validateDetailedExpectation(path string, testCase Case) error {
 		if len(fields.Names) == 0 || len(fields.Wildcards) != len(fields.Names) ||
 			len(fields.RangeTexts) != len(fields.Names) {
 			return fmt.Errorf("%s.fields has inconsistent field metadata", path)
+		}
+	}
+	allowed := AllowedFacets[testCase.Command]
+	for name, value := range testCase.Expect.Facets {
+		if !slices.Contains(allowed, name) {
+			return fmt.Errorf("%s.facets[%q] is not a documented %s facet (allowed: %v)",
+				path, name, testCase.Command, allowed)
+		}
+		if strings.TrimSpace(value) != value {
+			return fmt.Errorf("%s.facets[%q] has surrounding whitespace", path, name)
 		}
 	}
 	return nil

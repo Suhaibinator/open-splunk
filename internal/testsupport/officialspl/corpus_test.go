@@ -1,6 +1,8 @@
 package officialspl
 
 import (
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -57,6 +59,9 @@ func TestDecodeRejectsUntraceableOrAmbiguousCases(t *testing.T) {
 		{name: "unclassified source", encoded: strings.Replace(validCorpus, `"kind": "grammar-derived"`, `"kind": "guess"`, 1), want: "invalid kind"},
 		{name: "fragment not exercised", encoded: strings.Replace(validCorpus, `"query": "index=main | sort + host"`, `"query": "index=main | sort other"`, 1), want: "does not contain"},
 		{name: "command not asserted", encoded: strings.Replace(validCorpus, `"commands": ["sort"]`, `"commands": ["stats"]`, 1), want: "final expected command"},
+		{name: "undocumented facet", encoded: strings.Replace(validCorpus, `"commands": ["sort"]`, `"commands": ["sort"], "facets": {"descending": "true"}`, 1), want: "not a documented sort facet"},
+		{name: "unregistered command", encoded: strings.NewReplacer("sort", "transpose", `"commands": ["transpose"]`, `"commands": ["transpose"]`).Replace(validCorpus), want: "no AllowedFacets entry"},
+		{name: "padded facet value", encoded: strings.Replace(validCorpus, `"commands": ["sort"]`, `"commands": ["sort"], "facets": {"limit": " 0"}`, 1), want: "surrounding whitespace"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -66,5 +71,44 @@ func TestDecodeRejectsUntraceableOrAmbiguousCases(t *testing.T) {
 				t.Fatalf("Decode error = %v, want substring %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestDecodeAcceptsDocumentedFacets(t *testing.T) {
+	t.Parallel()
+	encoded := strings.Replace(validCorpus, `"commands": ["sort"]`, `"commands": ["sort"], "facets": {"keys": "+host", "limit": ""}`, 1)
+	corpus, err := Decode([]byte(encoded))
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if got := corpus.Cases[0].Expect.Facets; got["keys"] != "+host" || got["limit"] != "" || len(got) != 2 {
+		t.Fatalf("facets = %#v", got)
+	}
+}
+
+// TestAllowedFacetsRegistryIsCanonical keeps the facet vocabulary machine
+// readable: snake_case names, sorted so the registry diffs cleanly, and no
+// name repeated within a command.
+func TestAllowedFacetsRegistryIsCanonical(t *testing.T) {
+	t.Parallel()
+	namePattern := regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+	if len(AllowedFacets) == 0 {
+		t.Fatal("AllowedFacets is empty")
+	}
+	for command, facets := range AllowedFacets {
+		if !commandPattern.MatchString(command) {
+			t.Errorf("AllowedFacets command %q is not a valid command name", command)
+		}
+		if !slices.IsSorted(facets) {
+			t.Errorf("AllowedFacets[%q] = %v is not sorted", command, facets)
+		}
+		for index, facet := range facets {
+			if !namePattern.MatchString(facet) {
+				t.Errorf("AllowedFacets[%q][%d] = %q is not snake_case", command, index, facet)
+			}
+			if index > 0 && facets[index-1] == facet {
+				t.Errorf("AllowedFacets[%q] repeats %q", command, facet)
+			}
+		}
 	}
 }

@@ -1,0 +1,53 @@
+-- official SPL case: fields.exclude-list
+-- source: https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.4/search-commands/fields (Examples > Example 1)
+-- query: index=main | fields - host, ip
+-- output_fields: _time, _raw, index, source, sourcetype, service, level, message, trace_id, span_id, event_id, _indextime, fields
+-- string_or_bytes_outputs: []clickhouse.ResultStringOrBytesOutput{clickhouse.ResultStringOrBytesOutput{OutputIndex:0x1, Nullable:false}}
+-- sparse_fields: true subset=true
+-- atomic_result: false
+-- execution_authority_digest: bc9bb39e86e75a80ee2a8b4d53ebb5dad913a05f1d4f8a9f80c692177a83602f
+-- args[0]: "host"
+-- args[1]: "ip"
+-- args[2]: "_indextime"
+-- args[3]: "_raw"
+-- args[4]: "_time"
+-- args[5]: "batch_id"
+-- args[6]: "collector_id"
+-- args[7]: "event_id"
+-- args[8]: "host"
+-- args[9]: "index"
+-- args[10]: "level"
+-- args[11]: "message"
+-- args[12]: "service"
+-- args[13]: "severity"
+-- args[14]: "source"
+-- args[15]: "sourcetype"
+-- args[16]: "span_id"
+-- args[17]: "trace_id"
+-- args[18]: "host"
+-- args[19]: "ip"
+-- args[20]: "_indextime"
+-- args[21]: "_raw"
+-- args[22]: "_time"
+-- args[23]: "batch_id"
+-- args[24]: "collector_id"
+-- args[25]: "event_id"
+-- args[26]: "host"
+-- args[27]: "index"
+-- args[28]: "level"
+-- args[29]: "message"
+-- args[30]: "service"
+-- args[31]: "severity"
+-- args[32]: "source"
+-- args[33]: "sourcetype"
+-- args[34]: "span_id"
+-- args[35]: "trace_id"
+-- args[36]: "tenant-1"
+-- args[37]: "main"
+-- args[38]: "2026-07-21 00:00:00.000000000"
+-- args[39]: "2026-07-22 00:00:00.000000000"
+-- args[40]: "2026-07-22 00:00:01.000"
+-- args[41]: "2026-07-22 00:00:01.000"
+-- args[42]: 0x49
+-- args[43]: "main"
+SELECT "_time", "_raw", "index", "source", "sourcetype", "service", "level", "message", "trace_id", "span_id", "event_id", "_indextime", "__os_fields" AS "fields", "__os_field_names" AS "__os_result_field_names", toUInt8(ifNull("__os_raw_encoding" = 2, 0)) AS "__os_result_semantic_bytes_1" FROM (SELECT "_time", "_raw", "index", "source", "sourcetype", "service", "level", "message", "trace_id", "span_id", "event_id", "_indextime", "batch_id", "collector_id", "severity", "__os_fields", arrayFilter((field_name, field_type) -> (NOT (field_name = ? OR field_name = ?)) AND NOT (field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ?), "_stage_2"."__os_field_names", "_stage_2"."__os_field_types") AS "__os_field_names", arrayFilter((field_type, field_name) -> (NOT (field_name = ? OR field_name = ?)) AND NOT (field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ? OR field_name = ?), "_stage_2"."__os_field_types", "_stage_2"."__os_field_names") AS "__os_field_types", "__os_field_metadata_version", "__os_raw_encoding", "__os_sort_time", "__os_sort_event_id", "__os_sort_visibility_seq", "__os_sort_source_identity" FROM (SELECT * FROM (SELECT "event_id" AS "event_id", "index_name" AS "index", "event_time" AS "_time", "index_time" AS "_indextime", "host" AS "host", "source" AS "source", "sourcetype" AS "sourcetype", "service" AS "service", "severity" AS "severity", "level" AS "level", "body" AS "message", "raw" AS "_raw", "raw_encoding" AS "__os_raw_encoding", "trace_id" AS "trace_id", "span_id" AS "span_id", "collector_id" AS "collector_id", "batch_id" AS "batch_id", "fields" AS "__os_fields", "field_names" AS "__os_field_names", "field_types" AS "__os_field_types", "field_metadata_version" AS "__os_field_metadata_version", "event_time" AS "__os_sort_time", "event_id" AS "__os_sort_event_id", "visibility_seq" AS "__os_sort_visibility_seq", tuple("index_name", "collector_id", "batch_sequence", "batch_id") AS "__os_sort_source_identity" FROM "open_splunk"."events" WHERE "tenant_id" = ? AND "index_name" IN (?) AND "event_time" >= parseDateTime64BestEffort(?, 9, 'UTC') AND "event_time" < parseDateTime64BestEffort(?, 9, 'UTC') AND "index_time" <= parseDateTime64BestEffort(?, 3, 'UTC') AND "expires_at" > parseDateTime64BestEffort(?, 3, 'UTC') AND "visibility_seq" <= ?) AS "_stage_1" WHERE (1 AND ifNull("index" = ?, 0))) AS "_stage_2") AS "_stage_3" ORDER BY "__os_sort_time" DESC NULLS LAST, "__os_sort_event_id" DESC NULLS LAST, "__os_sort_visibility_seq" DESC NULLS LAST, "__os_sort_source_identity" DESC NULLS LAST

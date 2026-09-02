@@ -1,0 +1,27 @@
+-- official SPL case: lookup.explicit-output
+-- source: https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/lookup (Syntax)
+-- query: index=main | lookup users user AS user OUTPUT department
+-- output_fields: _time, _raw, index, host, source, sourcetype, service, level, message, trace_id, span_id, event_id, _indextime, fields, department
+-- string_or_bytes_outputs: []clickhouse.ResultStringOrBytesOutput{clickhouse.ResultStringOrBytesOutput{OutputIndex:0x1, Nullable:false}}
+-- sparse_fields: true subset=false
+-- atomic_result: false
+-- execution_authority_digest: fce2bdaa18e7bb4e34ee9bd1a54492f5fb96070ebf71472073e7e2fd9b947430
+-- args[0]: "department"
+-- args[1]: "department."
+-- args[2]: "department"
+-- args[3]: "department"
+-- args[4]: "department."
+-- args[5]: 0xb
+-- args[6]: 0x1
+-- args[7]: 0x0
+-- args[8]: "department."
+-- args[9]: "tenant-1"
+-- args[10]: "main"
+-- args[11]: "2026-07-21 00:00:00.000000000"
+-- args[12]: "2026-07-22 00:00:00.000000000"
+-- args[13]: "2026-07-22 00:00:01.000"
+-- args[14]: "2026-07-22 00:00:01.000"
+-- args[15]: 0x49
+-- args[16]: "main"
+-- args[17]: "user"
+SELECT "_time", "_raw", "index", "host", "source", "sourcetype", "service", "level", "message", "trace_id", "span_id", "event_id", "_indextime", "__os_fields" AS "fields", "department", "__os_field_names" AS "__os_result_field_names", toUInt8(ifNull("__os_raw_encoding" = 2, 0)) AS "__os_result_semantic_bytes_1" FROM (SELECT "_time", "_raw", "index", "host", "source", "sourcetype", "service", "level", "message", "trace_id", "span_id", "event_id", "_indextime", if(ifNull("__os_lookup_matched_2", toUInt8(0)) != 0, CAST("__os_lookup_2_column_1" AS Dynamic), CAST("__os_fields"."department" AS Dynamic)) AS "department", "severity", "collector_id", "batch_id", "__os_fields", "__os_field_names", "__os_field_types", "__os_field_metadata_version", "__os_raw_encoding", "__os_sort_time", "__os_sort_event_id", "__os_sort_visibility_seq", "__os_sort_source_identity", toUInt8(if(ifNull("__os_lookup_matched_2", toUInt8(0)) != 0, 1, ifNull(((has("__os_field_names", ?)) OR (arrayExists(name -> startsWith(name, ?), "__os_field_names"))), 0))) AS "__os_lookup_2_output_0_exists", toUInt8(if(ifNull("__os_lookup_matched_2", toUInt8(0)) != 0, toUInt8(2), multiIf(indexOf("__os_field_names", ?) != 0, arrayElement("__os_field_types", indexOf("__os_field_names", ?)), arrayExists(name -> startsWith(name, ?), "__os_field_names"), CAST(? AS UInt8), isNull("__os_fields"."department"), CAST(? AS UInt8), CAST(? AS UInt8)))) AS "__os_lookup_2_output_0_type", toUInt8(NOT (ifNull("__os_lookup_matched_2", toUInt8(0)) != 0) AND (arrayExists(name -> startsWith(name, ?), "__os_field_names"))) AS "__os_lookup_2_output_0_descendant" FROM (SELECT * FROM (SELECT * FROM (SELECT "event_id" AS "event_id", "index_name" AS "index", "event_time" AS "_time", "index_time" AS "_indextime", "host" AS "host", "source" AS "source", "sourcetype" AS "sourcetype", "service" AS "service", "severity" AS "severity", "level" AS "level", "body" AS "message", "raw" AS "_raw", "raw_encoding" AS "__os_raw_encoding", "trace_id" AS "trace_id", "span_id" AS "span_id", "collector_id" AS "collector_id", "batch_id" AS "batch_id", "fields" AS "__os_fields", "field_names" AS "__os_field_names", "field_types" AS "__os_field_types", "field_metadata_version" AS "__os_field_metadata_version", "event_time" AS "__os_sort_time", "event_id" AS "__os_sort_event_id", "visibility_seq" AS "__os_sort_visibility_seq", tuple("index_name", "collector_id", "batch_sequence", "batch_id") AS "__os_sort_source_identity" FROM "open_splunk"."events" WHERE "tenant_id" = ? AND "index_name" IN (?) AND "event_time" >= parseDateTime64BestEffort(?, 9, 'UTC') AND "event_time" < parseDateTime64BestEffort(?, 9, 'UTC') AND "index_time" <= parseDateTime64BestEffort(?, 3, 'UTC') AND "expires_at" > parseDateTime64BestEffort(?, 3, 'UTC') AND "visibility_seq" <= ?) AS "_stage_1" WHERE (1 AND ifNull("index" = ?, 0))) AS "__os_lookup_input_2" LEFT ANY JOIN "__os_lookup_table_2" AS "__os_lookup_table_2" ON ((has("__os_field_names", ?)) AND dynamicType("__os_fields"."user") = 'String' AND isNotNull(dynamicElement("__os_fields"."user", 'String')) AND isValidUTF8(dynamicElement("__os_fields"."user", 'String'))) AND dynamicElement("__os_fields"."user", 'String') = "__os_lookup_table_2"."__os_lookup_2_column_0") AS "__os_lookup_output_2") AS "_stage_4" ORDER BY "__os_sort_time" DESC NULLS LAST, "__os_sort_event_id" DESC NULLS LAST, "__os_sort_visibility_seq" DESC NULLS LAST, "__os_sort_source_identity" DESC NULLS LAST
