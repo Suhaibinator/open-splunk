@@ -18,6 +18,7 @@ import type { ModalName, TimePickerSection, TimeRange } from "../model";
 import { serverTimeRangeValidationError } from "../time-range";
 import { AppIcon, StatusIcon } from "../../_components/app-icon";
 import { Button } from "../../_components/button";
+import type { KeyboardPlatform } from "../keyboard-shortcuts";
 import { SearchEditor, type CompletionItem } from "./search-editor";
 
 interface SearchComposerProps {
@@ -39,6 +40,7 @@ interface SearchComposerProps {
   isRunning: boolean;
   launchPending: boolean;
   modal: ModalName | null;
+  platform: KeyboardPlatform;
   /** The problems list under the editor; empty renders nothing. */
   problems: EditorProblem[];
   query: string;
@@ -90,6 +92,7 @@ export function SearchComposer({
   isRunning,
   launchPending,
   modal,
+  platform,
   problems,
   query,
   relativeAmount,
@@ -178,6 +181,7 @@ export function SearchComposer({
           historyRecallable={historyRecallable}
           launchPending={launchPending}
           modal={modal}
+          platform={platform}
           problems={problems}
           query={query}
           onCompletionIndexChange={onCompletionIndexChange}

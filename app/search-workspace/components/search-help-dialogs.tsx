@@ -4,6 +4,12 @@ import { AppIcon } from "../../_components/app-icon";
 import { Modal } from "../../_components/modal";
 
 import {
+  KEYBOARD_SHORTCUTS,
+  type KeyboardPlatform,
+  SHORTCUT_SCOPES,
+  shortcutKeyLabels,
+} from "../keyboard-shortcuts";
+import {
   SPL_REFERENCE_SECTIONS,
   type SplReferenceEntry,
   type SplReferenceSection,
@@ -119,6 +125,45 @@ export function SplReferenceDialog({
               </section>
             ))}
         </div>
+      </div>
+    </Modal>
+  );
+}
+
+export interface KeyboardShortcutsDialogProps {
+  onClose: () => void;
+  platform: KeyboardPlatform;
+}
+
+export function KeyboardShortcutsDialog({ onClose, platform }: KeyboardShortcutsDialogProps) {
+  const headingPrefix = useId();
+  return (
+    <Modal
+      title="Keyboard shortcuts"
+      subtitle={platform === "mac" ? "Shown for macOS; ⌘ is the Command key." : "Shown for Windows and Linux."}
+      onClose={onClose}
+    >
+      <div className="workspace-dialog-shortcuts" data-testid="keyboard-shortcuts">
+        {SHORTCUT_SCOPES.map((scope) => (
+          <section aria-labelledby={`${headingPrefix}-${scope.id}`} key={scope.id}>
+            <h3 id={`${headingPrefix}-${scope.id}`}>{scope.title}</h3>
+            <dl>
+              {KEYBOARD_SHORTCUTS.filter((shortcut) => shortcut.scope === scope.id).map((shortcut) => (
+                <div key={shortcut.id}>
+                  <dt>
+                    {shortcut.chords.map((chord, chordIndex) => (
+                      <span className="workspace-dialog-shortcut-chord" key={chord.join("+")}>
+                        {chordIndex > 0 ? <span className="workspace-dialog-shortcut-or">or</span> : null}
+                        {shortcutKeyLabels(chord, platform).map((label) => <kbd key={label}>{label}</kbd>)}
+                      </span>
+                    ))}
+                  </dt>
+                  <dd>{shortcut.description}</dd>
+                </div>
+              ))}
+            </dl>
+          </section>
+        ))}
       </div>
     </Modal>
   );

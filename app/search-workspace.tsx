@@ -186,11 +186,12 @@ import { SearchComposer } from "./search-workspace/components/search-composer";
 import type { CompletionItem } from "./search-workspace/components/search-editor";
 import { InactiveResultTabPanels } from "./search-workspace/components/inactive-result-tab-panels";
 import { SearchSharingDialog } from "./search-workspace/components/search-sharing-dialog";
-import { SplReferenceDialog } from "./search-workspace/components/search-help-dialogs";
+import { KeyboardShortcutsDialog, SplReferenceDialog } from "./search-workspace/components/search-help-dialogs";
 import { WorkspaceDialogs } from "./search-workspace/components/workspace-dialogs";
 import { serializeRowsAsJsonLinesForClipboard, serializeRowsForClipboard } from "./search-workspace/clipboard-export";
 import { extendsFragment, localCompletions, typeaheadOpens } from "./search-workspace/completion-candidates";
 import { completionKindFromSuggestion, orderCompletions } from "./search-workspace/completion-groups";
+import { isEditableTarget, useKeyboardPlatform } from "./search-workspace/keyboard-shortcuts";
 import type { SplReferenceEntry } from "./search-workspace/spl-reference-data";
 import { historyRecallAnnouncement, historyRecallDirection } from "./search-workspace/editor-history-recall";
 import {
@@ -790,6 +791,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const [absoluteStart, setAbsoluteStart] = useState("");
   const [absoluteEnd, setAbsoluteEnd] = useState("");
   const [modal, setModal] = useState<ModalName | null>(null);
+  const keyboardPlatform = useKeyboardPlatform();
   const [menu, setMenu] = useState<MenuName | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
   const [dialogCurrentTimeMs, setDialogCurrentTimeMs] = useState(Date.now);
@@ -2893,6 +2895,21 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     window.addEventListener("keydown", closeTransientUi);
     return () => window.removeEventListener("keydown", closeTransientUi);
   }, [activeField, completionOpen, isRunning, menu, modal, persistedLaunchPending]);
+
+  // `?` outside a text field opens the shortcut sheet, the way it does on
+  // most keyboard-driven web tools; inside a field it types a question mark.
+  useEffect(() => {
+    if (modal !== null) return;
+    function openShortcutSheet(event: globalThis.KeyboardEvent) {
+      if (event.key !== "?" || event.ctrlKey || event.metaKey || event.altKey) return;
+      if (isEditableTarget(event.target)) return;
+      event.preventDefault();
+      setMenu(null);
+      setModal("shortcuts");
+    }
+    window.addEventListener("keydown", openShortcutSheet);
+    return () => window.removeEventListener("keydown", openShortcutSheet);
+  }, [modal]);
 
   useEffect(() => {
     if (menu === null) return;
@@ -7015,7 +7032,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           <div className="floating-menu utility-menu help-menu" role="menu">
             <span className="menu-label">Search help</span>
             <button role="menuitem" type="button" onClick={() => { setModal("spl-reference"); setMenu(null); }}>SPL command reference</button>
-            <button role="menuitem" type="button" onClick={() => showToast("Tip: press Ctrl+Space inside the editor for completions.")}>Keyboard shortcuts</button>
+            <button role="menuitem" type="button" onClick={() => { setModal("shortcuts"); setMenu(null); }}>Keyboard shortcuts</button>
             <button role="menuitem" type="button" onClick={() => showToast(`Open Splunk ${OPEN_SPLUNK_BUILD_LABEL}`)}>About Open Splunk</button>
           </div>
         ) : null}
@@ -7091,6 +7108,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           returnFocus={editorRef.current}
         />
       ) : null}
+      {modal === "shortcuts" ? <KeyboardShortcutsDialog platform={keyboardPlatform} onClose={() => setModal(null)} /> : null}
       <WorkspaceDialogs
         activeSavedSearchId={activeSavedSearchId}
         activeTab={activeTab}
@@ -7334,6 +7352,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         isRunning={isRunning}
         launchPending={persistedLaunchPending}
         modal={modal}
+        platform={keyboardPlatform}
         problems={problems}
         query={query}
         relativeAmount={relativeAmount}

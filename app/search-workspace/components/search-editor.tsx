@@ -21,6 +21,7 @@ import {
   type CompletionKind,
   groupCompletions,
 } from "../completion-groups";
+import { KEYBOARD_SHORTCUTS, type KeyboardPlatform, shortcutMetaText } from "../keyboard-shortcuts";
 import type { ModalName } from "../model";
 import { syntaxTokens } from "../workspace-utils";
 
@@ -51,6 +52,8 @@ export interface SearchEditorProps {
   historyRecallable: boolean;
   launchPending: boolean;
   modal: ModalName | null;
+  /** Decides whether the help strip spells Mod as ⌘ or Ctrl. */
+  platform: KeyboardPlatform;
   /** Every listed diagnostic; only current ones with a range are marked in the text. */
   problems: EditorProblem[];
   query: string;
@@ -93,6 +96,7 @@ export function SearchEditor({
   historyRecallable,
   launchPending,
   modal,
+  platform,
   problems,
   query,
   onCompletionIndexChange,
@@ -180,9 +184,9 @@ export function SearchEditor({
       />
       <div className="editor-meta" id="editor-help">
         <span>SPL</span>
-        <span>Ctrl+Space for suggestions</span>
-        {historyRecallable ? <span>↑↓ history</span> : null}
-        <span>⌘↵ to run</span>
+        {KEYBOARD_SHORTCUTS
+          .filter((shortcut) => shortcut.meta !== undefined && (shortcut.id !== "history" || historyRecallable))
+          .map((shortcut) => <span key={shortcut.id}>{shortcutMetaText(shortcut, platform)}</span>)}
       </div>
       <span className="sr-only" id="editor-diagnostic" aria-live="polite">{diagnosticSummary(problems)}</span>
       <span className="sr-only" id="spl-completion-status" aria-live="polite">

@@ -3,8 +3,9 @@ import test from "node:test";
 
 import { renderToStaticMarkup } from "react-dom/server";
 
+import { KEYBOARD_SHORTCUTS } from "../keyboard-shortcuts";
 import { SPL_REFERENCE_SECTIONS } from "../spl-reference-data";
-import { SplReferenceDialog } from "./search-help-dialogs";
+import { KeyboardShortcutsDialog, SplReferenceDialog } from "./search-help-dialogs";
 
 const noop = () => undefined;
 
@@ -29,4 +30,17 @@ test("every supported entry offers Insert and unsupported ones are flagged inste
   assert.equal(flagged.length, entries.filter((entry) => !entry.supported).length);
   assert.match(markup, /<code class="workspace-dialog-reference-name">transaction<\/code><span class="badge badge--warning">Not supported<\/span>/u);
   assert.match(markup, /<pre class="workspace-dialog-reference-syntax"><code>stats \[partitions=&lt;n&gt;\]/u);
+});
+
+test("the shortcut sheet lists every shortcut as a definition with keycaps for the platform", () => {
+  const mac = renderToStaticMarkup(<KeyboardShortcutsDialog platform="mac" onClose={noop} />);
+  assert.match(mac, /<h2 id="[^"]+">Keyboard shortcuts<\/h2>/u);
+  assert.equal((mac.match(/<dd>/gu) ?? []).length, KEYBOARD_SHORTCUTS.length);
+  assert.match(mac, /<dt><span class="workspace-dialog-shortcut-chord"><kbd>⌘<\/kbd><kbd>Enter<\/kbd><\/span><\/dt><dd>Run the search<\/dd>/u);
+  assert.match(mac, /<kbd>Enter<\/kbd><\/span><span class="workspace-dialog-shortcut-chord"><span class="workspace-dialog-shortcut-or">or<\/span><kbd>Tab<\/kbd>/u);
+  assert.match(mac, /<kbd>\?<\/kbd>/u);
+
+  const other = renderToStaticMarkup(<KeyboardShortcutsDialog platform="other" onClose={noop} />);
+  assert.match(other, /<kbd>Ctrl<\/kbd><kbd>Enter<\/kbd><\/span><\/dt><dd>Run the search<\/dd>/u);
+  assert.doesNotMatch(other, /⌘/u);
 });

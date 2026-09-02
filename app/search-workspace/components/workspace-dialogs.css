@@ -684,3 +684,80 @@
     width: auto;
   }
 }
+
+/* Keyboard shortcut sheet */
+.workspace-dialog-shortcuts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.workspace-dialog-shortcuts h3 {
+  font-size: var(--type-md);
+  margin: 0 0 var(--space-2);
+}
+
+.workspace-dialog-shortcuts dl {
+  border: 1px solid var(--border);
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  margin: 0;
+}
+
+/* The pairs stay grouped in markup for the outline; the grid lays them out. */
+.workspace-dialog-shortcuts dl > div {
+  display: contents;
+}
+
+.workspace-dialog-shortcuts dt,
+.workspace-dialog-shortcuts dd {
+  border-bottom: 1px solid var(--border-subtle);
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+}
+
+.workspace-dialog-shortcuts dl > div:last-child dt,
+.workspace-dialog-shortcuts dl > div:last-child dd {
+  border-bottom: 0;
+}
+
+.workspace-dialog-shortcuts dt {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.workspace-dialog-shortcuts dd {
+  color: var(--fg-secondary);
+  font-size: var(--type-sm);
+  line-height: 1.5;
+}
+
+.workspace-dialog-shortcut-chord {
+  align-items: center;
+  display: inline-flex;
+  gap: 3px;
+}
+
+.workspace-dialog-shortcut-or {
+  color: var(--fg-faint);
+  font-size: var(--type-xs);
+  margin: 0 3px;
+}
+
+.workspace-dialog-shortcuts kbd {
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-sm);
+  color: var(--fg-text);
+  display: inline-block;
+  font-family: var(--font-sans);
+  font-size: var(--type-xs);
+  line-height: 1;
+  min-width: 22px;
+  padding: var(--space-1) 6px;
+  text-align: center;
+}

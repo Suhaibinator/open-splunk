@@ -327,3 +327,31 @@ test("unsupported commands in the SPL reference are flagged and cannot be insert
   await expect(dialog).toHaveCount(0);
   await expect(page.getByTestId("search-input")).toHaveValue(SEEDED_QUERY);
 });
+
+test("? outside a text field opens the shortcut sheet and inside the editor types a question mark", async ({ page }) => {
+  await openSeededWorkspace(page);
+  const editor = page.getByTestId("search-input");
+  await focusEditorEnd(page);
+  await page.keyboard.press("Shift+?");
+  await expect(editor).toHaveValue(`${SEEDED_QUERY}?`);
+  await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Run search" }).focus();
+  await page.keyboard.press("Shift+?");
+  const dialog = page.getByRole("dialog", { name: "Keyboard shortcuts" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("heading", { level: 3 })).toHaveText(["Search editor", "Completion popup", "Anywhere in the workspace"]);
+  await expect(dialog.locator("kbd").first()).toHaveText("Ctrl");
+
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(editor).toHaveValue(`${SEEDED_QUERY}?`);
+});
+
+test("Help opens the shortcut sheet from the menu", async ({ page }) => {
+  await openSeededWorkspace(page);
+  await page.getByRole("button", { name: "Help" }).click();
+  await page.getByRole("menuitem", { name: "Keyboard shortcuts" }).click();
+  await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeVisible();
+  await expect(page.getByTestId("keyboard-shortcuts").locator("dd")).toHaveCount(9);
+});
