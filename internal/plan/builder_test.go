@@ -1326,6 +1326,131 @@ func TestBuildTopRejectsGeneratedOutputCollisions(t *testing.T) {
 	}
 }
 
+func TestBuildTopByPartitionsPercentAndRetainsPerGroupLimit(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | top limit=3 message BY host`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if !slices.Equal(logical.OutputFields, []string{"host", "message", "count", "percent"}) {
+		t.Fatalf("output fields = %v", logical.OutputFields)
+	}
+	if len(logical.Operators) != 6 {
+		t.Fatalf("operator count = %d, want Scan, Filter, Aggregate, Window, Sort, Deduplicate", len(logical.Operators))
+	}
+	aggregate, ok := logical.Operators[2].(*Aggregate)
+	if !ok || len(aggregate.GroupBy) != 2 || aggregate.GroupBy[0].Name != "host" || aggregate.GroupBy[1].Name != "message" {
+		t.Fatalf("aggregate = %#v", logical.Operators[2])
+	}
+	window, ok := logical.Operators[3].(*Window)
+	if !ok || window.Function != WindowFunctionPercentOfTotal || window.Input.Name != "count" ||
+		window.Output != "percent" || len(window.PartitionBy) != 1 || window.PartitionBy[0].Name != "host" {
+		t.Fatalf("window = %#v", logical.Operators[3])
+	}
+	sortOp, ok := logical.Operators[4].(*Sort)
+	if !ok || sortOp.Limit != 0 || len(sortOp.Keys) != 3 ||
+		sortOp.Keys[0].Field.Name != "host" || sortOp.Keys[0].Descending || sortOp.Keys[0].Mode != SortValueModeLexical ||
+		sortOp.Keys[1].Field.Name != "count" || !sortOp.Keys[1].Descending ||
+		sortOp.Keys[2].Field.Name != "message" || !sortOp.Keys[2].Descending || sortOp.Keys[2].Mode != SortValueModeLexical {
+		t.Fatalf("top BY sort = %#v", logical.Operators[4])
+	}
+	dedup, ok := logical.Operators[5].(*Deduplicate)
+	if !ok || dedup.Count != 3 || dedup.Consecutive || len(dedup.Keys) != 1 || dedup.Keys[0].Name != "host" {
+		t.Fatalf("top BY retention = %#v", logical.Operators[5])
+	}
+
+	unlimited, err := Build(mustParse(t, `index=gradethis | rare limit=0 message BY host`), testScope([]string{"gradethis"}, nil))
+	if err != nil {
+		t.Fatalf("Build rare limit=0: %v", err)
+	}
+	if len(unlimited.Operators) != 5 {
+		t.Fatalf("rare limit=0 BY operator count = %d, want no per-group retention", len(unlimited.Operators))
+	}
+	if rareSort, ok := unlimited.Operators[4].(*Sort); !ok || rareSort.Keys[1].Field.Name != "count" || rareSort.Keys[1].Descending {
+		t.Fatalf("rare BY sort = %#v", unlimited.Operators[4])
+	}
+}
+
+func TestBuildFrequencyCommandsRenameAndHideGeneratedOutputs(t *testing.T) {
+	t.Parallel()
+
+	renamed, err := Build(
+		mustParse(t, `index=gradethis | top countfield=total percentfield=share message`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build renamed: %v", err)
+	}
+	if !slices.Equal(renamed.OutputFields, []string{"message", "total", "share"}) {
+		t.Fatalf("renamed output fields = %v", renamed.OutputFields)
+	}
+	if aggregate := renamed.Operators[2].(*Aggregate); aggregate.Measures[0].Output != "total" {
+		t.Fatalf("renamed aggregate = %#v", aggregate)
+	}
+	if window := renamed.Operators[3].(*Window); window.Input.Name != "total" || window.Output != "share" {
+		t.Fatalf("renamed window = %#v", window)
+	}
+	if sortOp := renamed.Operators[4].(*Sort); sortOp.Keys[0].Field.Name != "total" {
+		t.Fatalf("renamed sort = %#v", sortOp)
+	}
+
+	hidden, err := Build(
+		mustParse(t, `index=gradethis | top showcount=false showperc=false message`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build hidden: %v", err)
+	}
+	if !slices.Equal(hidden.OutputFields, []string{"message"}) {
+		t.Fatalf("hidden output fields = %v", hidden.OutputFields)
+	}
+	if len(hidden.Operators) != 5 {
+		t.Fatalf("hidden operator count = %d, want Scan, Filter, Aggregate, Sort, Project", len(hidden.Operators))
+	}
+	if sortOp, ok := hidden.Operators[3].(*Sort); !ok || sortOp.Limit != 10 || sortOp.Keys[0].Field.Name != "count" {
+		t.Fatalf("hidden sort = %#v", hidden.Operators[3])
+	}
+	if project, ok := hidden.Operators[4].(*Project); !ok || project.Mode != ProjectModeExclude ||
+		len(project.Fields) != 1 || project.Fields[0].Name != "count" {
+		t.Fatalf("hidden projection = %#v", hidden.Operators[4])
+	}
+
+	percentOnly, err := Build(
+		mustParse(t, `index=gradethis | rare showcount=false message BY host`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build percent only: %v", err)
+	}
+	if !slices.Equal(percentOnly.OutputFields, []string{"host", "message", "percent"}) {
+		t.Fatalf("percent-only output fields = %v", percentOnly.OutputFields)
+	}
+	if _, ok := percentOnly.Operators[len(percentOnly.Operators)-1].(*Project); !ok {
+		t.Fatalf("percent-only plan must end by excluding count: %#v", percentOnly.Operators)
+	}
+}
+
+func TestBuildFrequencyCommandsRejectOutputAndByCollisions(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`index=gradethis | top countfield=host host`,
+		`index=gradethis | top percentfield=host message BY host`,
+		`index=gradethis | top countfield=same percentfield=same host`,
+		`index=gradethis | rare countfield=percent host`,
+		`index=gradethis | top message BY count`,
+	} {
+		_, err := Build(mustParse(t, source), testScope([]string{"gradethis"}, nil))
+		assertDiagnosticCode(t, err, "SPL_DUPLICATE_FIELD")
+	}
+	_, err := Build(mustParse(t, `index=gradethis | top countfield=__os_count host`), testScope([]string{"gradethis"}, nil))
+	assertDiagnosticCode(t, err, "SPL_RESERVED_FIELD")
+}
+
 func TestBuildFrequencyCommandsUseCompleteOrderedFieldTuples(t *testing.T) {
 	t.Parallel()
 
@@ -1873,6 +1998,131 @@ func TestBuildTimechartProducesBoundedRuntimeWideSchema(t *testing.T) {
 	if logical.DynamicOutput == nil || !slices.Equal(logical.DynamicOutput.FixedFields, []string{"_time"}) ||
 		logical.DynamicOutput.MaxSeries != 12 {
 		t.Fatalf("dynamic output = %#v", logical.DynamicOutput)
+	}
+}
+
+func TestBuildTimechartSeriesOptionsNarrowTheSplitAndRuntimeAllowance(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		source       string
+		seriesLimit  uint16
+		includeNull  bool
+		includeOther bool
+		maxSeries    uint16
+	}{
+		{
+			name:         "defaults",
+			source:       `index=gradethis | timechart span=5m count by level`,
+			seriesLimit:  10,
+			includeNull:  true,
+			includeOther: true,
+			maxSeries:    12,
+		},
+		{
+			name:         "limit only",
+			source:       `index=gradethis | timechart span=5m limit=3 count by level`,
+			seriesLimit:  3,
+			includeNull:  true,
+			includeOther: true,
+			maxSeries:    5,
+		},
+		{
+			name:         "limit without other",
+			source:       `index=gradethis | timechart span=5m count by level limit=5 useother=false`,
+			seriesLimit:  5,
+			includeNull:  true,
+			includeOther: false,
+			maxSeries:    6,
+		},
+		{
+			name:         "ordinary series only",
+			source:       `index=gradethis | timechart span=5m usenull=false sum(bytes) by level limit=1 useother=false`,
+			seriesLimit:  1,
+			includeNull:  false,
+			includeOther: false,
+			maxSeries:    1,
+		},
+		{
+			name:         "explicit defaults",
+			source:       `index=gradethis | timechart span=5m limit=10 count by level useother=true usenull=true`,
+			seriesLimit:  10,
+			includeNull:  true,
+			includeOther: true,
+			maxSeries:    12,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			logical, err := Build(mustParse(t, test.source), testScope([]string{"gradethis"}, nil))
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+			operator, ok := logical.Operators[len(logical.Operators)-1].(*Timechart)
+			if !ok || operator.Split == nil {
+				t.Fatalf("last operator = %#v, want split timechart", logical.Operators[len(logical.Operators)-1])
+			}
+			if operator.Split.SeriesLimit != test.seriesLimit ||
+				operator.Split.IncludeNull != test.includeNull ||
+				operator.Split.IncludeOther != test.includeOther ||
+				operator.Split.NullLabel != "NULL" || operator.Split.OtherLabel != "OTHER" {
+				t.Fatalf("split = %#v", operator.Split)
+			}
+			if logical.DynamicOutput == nil ||
+				!slices.Equal(logical.DynamicOutput.FixedFields, []string{"_time"}) ||
+				logical.DynamicOutput.MaxSeries != test.maxSeries {
+				t.Fatalf("dynamic output = %#v, want max series %d", logical.DynamicOutput, test.maxSeries)
+			}
+			if _, err := Analyze(logical); err != nil {
+				t.Fatalf("Analyze: %v", err)
+			}
+		})
+	}
+}
+
+func TestBuildTimechartRejectsForgedSeriesOptions(t *testing.T) {
+	t.Parallel()
+
+	base := mustParse(t, `index=gradethis | timechart span=5m count by level`)
+	command := base.Commands[0].(*spl.TimechartCommand)
+	optionRange := spl.Range{
+		Start: spl.Position{Offset: 1, Line: 1, Column: 2},
+		End:   spl.Position{Offset: 8, Line: 1, Column: 9},
+	}
+	tests := []struct {
+		name    string
+		options spl.TimechartOptions
+		split   *spl.StatsGroupField
+		code    string
+	}{
+		{name: "zero limit", options: spl.TimechartOptions{Limit: 0, LimitSpecified: true, LimitRange: optionRange}, split: command.SplitBy, code: "SPL_UNSUPPORTED_TIMECHART_LIMIT"},
+		{name: "limit above maximum", options: spl.TimechartOptions{Limit: 11, LimitSpecified: true, LimitRange: optionRange}, split: command.SplitBy, code: "SPL_UNSUPPORTED_TIMECHART_LIMIT"},
+		{name: "limit without range", options: spl.TimechartOptions{Limit: 5, LimitSpecified: true}, split: command.SplitBy, code: "SPL_UNSUPPORTED_TIMECHART_SYNTAX"},
+		{name: "unspecified limit with value", options: spl.TimechartOptions{Limit: 5}, split: command.SplitBy, code: "SPL_UNSUPPORTED_TIMECHART_SYNTAX"},
+		{name: "useother without range", options: spl.TimechartOptions{UseOtherSpecified: true}, split: command.SplitBy, code: "SPL_UNSUPPORTED_TIMECHART_SYNTAX"},
+		{name: "unspecified useother with value", options: spl.TimechartOptions{UseOther: true}, split: command.SplitBy, code: "SPL_UNSUPPORTED_TIMECHART_SYNTAX"},
+		{name: "usenull without range", options: spl.TimechartOptions{UseNullSpecified: true}, split: command.SplitBy, code: "SPL_UNSUPPORTED_TIMECHART_SYNTAX"},
+		{name: "unspecified usenull with range", options: spl.TimechartOptions{UseNullRange: optionRange}, split: command.SplitBy, code: "SPL_UNSUPPORTED_TIMECHART_SYNTAX"},
+		{name: "options without split", options: spl.TimechartOptions{Limit: 5, LimitSpecified: true, LimitRange: optionRange}, code: "SPL_UNSUPPORTED_TIMECHART_SYNTAX"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			forged := *command
+			forged.Options = test.options
+			forged.SplitBy = test.split
+			query := &spl.Query{
+				Search:   base.Search,
+				Commands: []spl.Command{&forged},
+				Range:    base.Range,
+			}
+			_, err := Build(query, testScope([]string{"gradethis"}, nil))
+			assertDiagnosticCode(t, err, test.code)
+		})
 	}
 }
 

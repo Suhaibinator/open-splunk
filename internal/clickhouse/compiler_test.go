@@ -421,6 +421,78 @@ func TestCompileDedupHonorsPriorSortAndProjectionBoundaries(t *testing.T) {
 	}
 }
 
+func TestCompileDedupConsecutiveBoundsEachRunOfEqualKeys(t *testing.T) {
+	t.Parallel()
+
+	baseline := compileSPL(t, `index=gradethis`)
+	compiled := compileSPL(t, `index=gradethis | dedup 2 status, host consecutive=true`)
+	if !slices.Equal(compiled.OutputFields, baseline.OutputFields) {
+		t.Fatalf("dedup changed output schema: got %v want %v", compiled.OutputFields, baseline.OutputFields)
+	}
+	order := `ORDER BY "__os_sort_time" DESC NULLS LAST, "__os_sort_event_id" DESC NULLS LAST, "__os_sort_visibility_seq" DESC NULLS LAST, "__os_sort_source_identity" DESC NULLS LAST`
+	window := ` OVER (` + order + ` ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)`
+	for _, required := range []string{
+		`lagInFrame(toUInt8(1), 1, toUInt8(0))` + window + ` != 0`,
+		`ifNull("__os_dedup_key_2_0" = lagInFrame("__os_dedup_key_2_0", 1, "__os_dedup_key_2_0")` + window + `, 0)`,
+		`ifNull("__os_dedup_key_2_1" = lagInFrame("__os_dedup_key_2_1", 1, "__os_dedup_key_2_1")` + window + `, 0)`,
+		`)) AS "__os_dedup_run_start_2" FROM (`,
+		`WHERE if("__os_dedup_any_unsupported_2" != 0, throwIf(toUInt8(1), '` + UnsupportedDedupValueMarker + `') = 0, ("__os_dedup_present_2_0" != 0 AND "__os_dedup_present_2_1" != 0))`,
+		`sum("__os_dedup_run_start_2")` + window + ` AS "__os_dedup_run_2"`,
+		`"__os_dedup_run_start_2", "__os_dedup_run_2") FROM (`,
+		`WHERE 1 ` + order + ` LIMIT ? BY "__os_dedup_run_2"`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("consecutive dedup SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	if strings.Contains(compiled.SQL, `LIMIT ? BY "__os_dedup_key_`) {
+		t.Fatalf("consecutive dedup must bound runs, not global key tuples:\n%s", compiled.SQL)
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
+	}
+	if got := compiled.Args[len(compiled.Args)-1]; got != uint64(2) {
+		t.Fatalf("dedup count argument = %#v, want 2", got)
+	}
+	outerProjectionEnd := strings.Index(compiled.SQL, " FROM (")
+	if outerProjectionEnd < 0 || strings.Contains(compiled.SQL[:outerProjectionEnd], "__os_dedup_") {
+		t.Fatalf("private dedup columns leaked into public projection:\n%s", compiled.SQL)
+	}
+	// Repeated stages must not share helper names.
+	twice := compileSPL(t, `index=gradethis | dedup status consecutive=true | dedup host consecutive=true`)
+	runStarts := regexp.MustCompile(`AS "__os_dedup_run_start_[0-9]+"`).FindAllString(twice.SQL, -1)
+	if len(runStarts) != 2 || runStarts[0] == runStarts[1] {
+		t.Fatalf("repeated consecutive dedup stages collide: %v\n%s", runStarts, twice.SQL)
+	}
+}
+
+func TestCompileDedupSortByOrdersBeforeDeduplicating(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis | dedup host sortby -num(bytes), +_time | head 3`)
+	limitBy := strings.LastIndex(compiled.SQL, " LIMIT ? BY ")
+	if limitBy < 0 {
+		t.Fatalf("dedup LIMIT BY missing:\n%s", compiled.SQL)
+	}
+	sortLimit := strings.Index(compiled.SQL, " LIMIT ?")
+	if sortLimit < 0 || sortLimit != limitBy {
+		t.Fatalf("dedup sortby must not bound the sorted input before dedup runs:\n%s", compiled.SQL)
+	}
+	dedupOrder := strings.LastIndex(compiled.SQL[:limitBy], "ORDER BY ")
+	if dedupOrder < 0 ||
+		!strings.Contains(compiled.SQL[dedupOrder:limitBy], `tupleElement("__os_order_2_0", 2) DESC NULLS LAST`) ||
+		!strings.Contains(compiled.SQL[dedupOrder:limitBy], `tupleElement("__os_order_2_1", 2) ASC NULLS LAST`) {
+		t.Fatalf("dedup did not select from the sortby order:\n%s", compiled.SQL)
+	}
+	head := compiled.SQL[limitBy:]
+	if !strings.Contains(head, `tupleElement("__os_order_2_0", 2) DESC NULLS LAST`) || !strings.Contains(head, "LIMIT ?") {
+		t.Fatalf("head after dedup sortby did not inherit the sortby order:\n%s", compiled.SQL)
+	}
+	if got := compiled.Args[len(compiled.Args)-2:]; !reflect.DeepEqual(got, []any{uint64(1), uint64(3)}) {
+		t.Fatalf("trailing arguments = %#v, want dedup count 1 then head 3", got)
+	}
+}
+
 func TestCompileEvalFieldCopiesPreserveFlattenedObjectProvenance(t *testing.T) {
 	t.Parallel()
 
@@ -1607,6 +1679,32 @@ func TestCompileTimechartRevalidatesExactGridAndOutputContract(t *testing.T) {
 				query.DynamicOutput.MaxSeries = 11
 			},
 		},
+		{
+			name: "series limit raised past the maximum",
+			corrupt: func(query *plan.Query, operator *plan.Timechart) {
+				operator.Split.SeriesLimit = 11
+				query.DynamicOutput.MaxSeries = 13
+			},
+		},
+		{
+			name: "series limit zeroed",
+			corrupt: func(query *plan.Query, operator *plan.Timechart) {
+				operator.Split.SeriesLimit = 0
+				query.DynamicOutput.MaxSeries = 2
+			},
+		},
+		{
+			name: "null series disabled without shrinking the bound",
+			corrupt: func(_ *plan.Query, operator *plan.Timechart) {
+				operator.Split.IncludeNull = false
+			},
+		},
+		{
+			name: "other series disabled without shrinking the bound",
+			corrupt: func(_ *plan.Query, operator *plan.Timechart) {
+				operator.Split.IncludeOther = false
+			},
+		},
 	} {
 		t.Run("split/"+test.name, func(t *testing.T) {
 			t.Parallel()
@@ -1616,6 +1714,93 @@ func TestCompileTimechartRevalidatesExactGridAndOutputContract(t *testing.T) {
 			if _, err := (Compiler{}).Compile(logical); err == nil ||
 				!strings.Contains(err.Error(), "dynamic output contract is invalid") {
 				t.Fatalf("Compile() error = %v, want dynamic-contract rejection", err)
+			}
+		})
+	}
+}
+
+func TestCompileTimechartSeriesOptionsNarrowTheCollapsedSeries(t *testing.T) {
+	t.Parallel()
+
+	const (
+		nullBranch    = `"__os_tc_kind" = 1, '1:'`
+		countOther    = `"__os_tc_kind" = 0, '2:'`
+		valueOther    = ", '2:') AS"
+		nullSentinel  = "CAST('1:' AS String) FROM"
+		otherSentinel = "CAST('2:' AS String) FROM"
+	)
+	tests := []struct {
+		name      string
+		source    string
+		maxSeries uint16
+		contains  []string
+		excludes  []string
+	}{
+		{
+			name:      "count defaults",
+			source:    `index=gradethis | timechart span=5m count BY level`,
+			maxSeries: 12,
+			contains:  []string{`__os_tc_series_rank" <= 10, concat('0:'`, nullBranch, countOther},
+		},
+		{
+			name:      "count limit without other",
+			source:    `index=gradethis | timechart span=5m count BY level limit=3 useother=false`,
+			maxSeries: 4,
+			contains:  []string{`__os_tc_series_rank" <= 3, concat('0:'`, nullBranch},
+			excludes:  []string{countOther, `<= 10, concat`},
+		},
+		{
+			name:      "count ordinary series only",
+			source:    `index=gradethis | timechart span=5m limit=1 usenull=false useother=false count BY level`,
+			maxSeries: 1,
+			contains:  []string{`__os_tc_series_rank" <= 1, concat('0:'`},
+			excludes:  []string{countOther, nullBranch},
+		},
+		{
+			name:      "value defaults",
+			source:    `index=gradethis | timechart span=5m sum(bytes) BY level`,
+			maxSeries: 12,
+			contains:  []string{`ASC LIMIT 10), `, `__os_tc_kind" IN (0, 1) GROUP BY`, nullSentinel, otherSentinel, valueOther},
+		},
+		{
+			name:      "value limit without null",
+			source:    `index=gradethis | timechart span=5m avg(bytes) BY level limit=2 usenull=false`,
+			maxSeries: 3,
+			contains:  []string{`ASC LIMIT 2), `, `__os_tc_kind" = 0 GROUP BY`, otherSentinel},
+			excludes:  []string{nullSentinel, `IN (0, 1) GROUP BY`},
+		},
+		{
+			name:      "value ordinary series only",
+			source:    `index=gradethis | timechart span=5m useother=false p95(bytes) BY level limit=4 usenull=false`,
+			maxSeries: 4,
+			contains:  []string{`ASC LIMIT 4), `, `__os_tc_kind" = 0 AND ("__os_tc_kind" != 0 OR "__os_tc_label" IN (SELECT "__os_tc_label" FROM "__os_timechart_numeric_scores")) GROUP BY`},
+			excludes:  []string{nullSentinel, otherSentinel},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			logical := buildPlan(t, test.source)
+			if logical.DynamicOutput == nil || logical.DynamicOutput.MaxSeries != test.maxSeries {
+				t.Fatalf("dynamic output = %#v, want max series %d", logical.DynamicOutput, test.maxSeries)
+			}
+			compiled, err := (Compiler{}).Compile(logical)
+			if err != nil {
+				t.Fatalf("Compile: %v", err)
+			}
+			if compiled.Timechart == nil || compiled.Timechart.MaxSeries != test.maxSeries {
+				t.Fatalf("compiled timechart output = %#v, want max series %d", compiled.Timechart, test.maxSeries)
+			}
+			for _, fragment := range test.contains {
+				if !strings.Contains(compiled.SQL, fragment) {
+					t.Fatalf("SQL missing %q:\n%s", fragment, compiled.SQL)
+				}
+			}
+			for _, fragment := range test.excludes {
+				if strings.Contains(compiled.SQL, fragment) {
+					t.Fatalf("SQL still contains %q:\n%s", fragment, compiled.SQL)
+				}
 			}
 		})
 	}
@@ -1942,6 +2127,79 @@ func TestCompileTopCalculatesPercentBeforeDeterministicLimit(t *testing.T) {
 	}
 	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
 		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
+	}
+}
+
+func TestCompileTopByPartitionsPercentAndLimitsEachGroup(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis | top limit=3 message BY host`)
+	if !slices.Equal(compiled.OutputFields, []string{"host", "message", "count", "percent"}) {
+		t.Fatalf("output fields = %v", compiled.OutputFields)
+	}
+	for _, required := range []string{
+		`GROUP BY "host", "message"`,
+		`sum("count") OVER (PARTITION BY "__os_group_0")`,
+		`AS "percent"`,
+		`LIMIT ? BY "__os_dedup_key_`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("top BY SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	if strings.Contains(compiled.SQL, "OVER ()") {
+		t.Fatalf("top BY must not compute an unpartitioned total:\n%s", compiled.SQL)
+	}
+	if got := compiled.Args[len(compiled.Args)-1]; got != uint64(3) {
+		t.Fatalf("top BY limit argument = %#v, want 3", got)
+	}
+	retention := compiled.SQL[:strings.Index(compiled.SQL, "LIMIT ? BY")]
+	retention = retention[strings.LastIndex(retention, "ORDER BY"):]
+	if !strings.Contains(retention, `"__os_order_5_0", 2) ASC NULLS LAST, tupleElement("__os_order_5_1", 1)`) ||
+		!strings.HasSuffix(retention, `tupleElement("__os_order_5_2", 2) DESC NULLS LAST `) {
+		t.Fatalf("per-group retention must follow the BY asc, count desc, tuple desc order:\n%s", retention)
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
+	}
+
+	unlimited := compileSPL(t, `index=gradethis | top limit=0 message BY host`)
+	if strings.Contains(unlimited.SQL, "LIMIT ?") {
+		t.Fatalf("top limit=0 BY must keep every tuple of every group:\n%s", unlimited.SQL)
+	}
+}
+
+func TestCompileFrequencyCommandsRenameAndHideGeneratedOutputs(t *testing.T) {
+	t.Parallel()
+
+	renamed := compileSPL(t, `index=gradethis | rare countfield=total percentfield=share message`)
+	if !slices.Equal(renamed.OutputFields, []string{"message", "total", "share"}) {
+		t.Fatalf("renamed output fields = %v", renamed.OutputFields)
+	}
+	for _, required := range []string{`count() AS "total"`, `sum("total") OVER ()`, `AS "share"`} {
+		if !strings.Contains(renamed.SQL, required) {
+			t.Fatalf("renamed SQL missing %q:\n%s", required, renamed.SQL)
+		}
+	}
+	if strings.Contains(renamed.SQL, `"percent"`) || strings.Contains(renamed.SQL, `AS "count"`) {
+		t.Fatalf("renamed outputs must not keep the default names:\n%s", renamed.SQL)
+	}
+
+	hidden := compileSPL(t, `index=gradethis | top showcount=false showperc=false message`)
+	if !slices.Equal(hidden.OutputFields, []string{"message"}) {
+		t.Fatalf("hidden output fields = %v", hidden.OutputFields)
+	}
+	if !strings.HasPrefix(hidden.SQL, `SELECT "message" FROM`) {
+		t.Fatalf("hidden outputs must leave only the counted field:\n%s", hidden.SQL)
+	}
+	if !strings.Contains(hidden.SQL, `count() AS "count"`) || !strings.Contains(hidden.SQL, "ORDER BY") {
+		t.Fatalf("hidden count must still order the result:\n%s", hidden.SQL)
+	}
+	if strings.Contains(hidden.SQL, "OVER (") {
+		t.Fatalf("showperc=false must not compute a percentage:\n%s", hidden.SQL)
+	}
+	if got := hidden.Args[len(hidden.Args)-1]; got != uint64(10) {
+		t.Fatalf("hidden limit argument = %#v, want default 10", got)
 	}
 }
 
@@ -5139,5 +5397,29 @@ func testChartScope() plan.Scope {
 		SearchTimezone:    "UTC",
 		IndexTimeCutoff:   time.Date(2026, 7, 22, 0, 0, 1, 0, time.UTC),
 		VisibilityCutoff:  new(uint64(73)),
+	}
+}
+
+func TestCompileChartSingleSplitMatchesStatsBy(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name, chart, stats string
+	}{
+		{"count BY", `index=gradethis | chart count BY host`, `index=gradethis | stats count BY host`},
+		{"sum OVER", `index=gradethis | chart sum(bytes) OVER host`, `index=gradethis | stats sum(bytes) BY host`},
+		{"percentile after table", `index=gradethis | table host latency | chart p95(latency) BY host`, `index=gradethis | table host latency | stats p95(latency) BY host`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			chart := compileSPL(t, test.chart)
+			stats := compileSPL(t, test.stats)
+			if chart.SQL != stats.SQL || !reflect.DeepEqual(chart.Args, stats.Args) {
+				t.Fatalf("chart SQL:\n%s\nargs %#v\nwant the stats SQL:\n%s\nargs %#v", chart.SQL, chart.Args, stats.SQL, stats.Args)
+			}
+			if !slices.Equal(chart.OutputFields, stats.OutputFields) {
+				t.Fatalf("chart outputs = %v, want %v", chart.OutputFields, stats.OutputFields)
+			}
+		})
 	}
 }

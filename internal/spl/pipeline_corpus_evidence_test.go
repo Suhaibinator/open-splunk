@@ -131,7 +131,10 @@ var pipelineStringExpectationVocabulary = map[string]map[string]struct{}{
 		"SPL_UNSUPPORTED_STRCAT_SYNTAX": {}, "SPL_UNSUPPORTED_ADDINFO_SYNTAX": {},
 		"SPL_UNSUPPORTED_FILLNULL_SYNTAX": {}, "SPL_UNSUPPORTED_ADDTOTALS_SYNTAX": {},
 		"SPL_UNSUPPORTED_DELTA_SYNTAX": {}, "SPL_UNSUPPORTED_MAKEMV_SYNTAX": {},
-		"SPL_QUERY_TOO_COMPLEX": {}, "unsupported-value": {},
+		"SPL_UNSUPPORTED_DEDUP_SYNTAX": {}, "SPL_QUERY_TOO_COMPLEX": {},
+		"SPL_UNSUPPORTED_TOP_SYNTAX": {}, "SPL_UNSUPPORTED_RARE_SYNTAX": {},
+		"SPL_DUPLICATE_FIELD": {}, "SPL_AMBIGUOUS_FILLNULL_FIELD": {},
+		"unsupported-value": {},
 	},
 	"diagnostic_phase": {
 		"executor": {}, "parser": {}, "publication-preflight": {},
@@ -358,7 +361,7 @@ func validatePipelineValueExpectation(raw json.RawMessage) error {
 			return err
 		}
 		admitted := map[string]struct{}{
-			"0": {}, "missing-and-null-kept": {}, "missing-source-empty": {},
+			"0": {}, "NA": {}, "missing-and-null-kept": {}, "missing-source-empty": {},
 			"present-empty-emits-zero": {}, "preserve-destination-when-source-null": {},
 			"missing-whole-null-and-null-member": {},
 		}
@@ -628,7 +631,7 @@ func isPipelineCorpusRuleID(id string) bool {
 		"SPL-DELTA-001", "SPL-MULTIVALUE-EVAL-001", "SPL-SPATH-MULTIVALUE-001",
 		"SPL-MAKEMV-001", "SPL-MVEXPAND-001", "SPL-NOMV-001", "SPL-MULTIVALUE-TYPE-001",
 		"SPL-ORDER-001", "SPL-PIPELINE-LIMITS-001", "SPL-ATOMIC-001",
-		"SPL-PIPELINE-DIAGNOSTICS-001":
+		"SPL-PIPELINE-DIAGNOSTICS-001", "SPL-DEDUP-001", "SPL-FREQUENCY-BY-001":
 		return true
 	default:
 		return false
@@ -669,6 +672,7 @@ func requirePipelineCommandCoverage(t *testing.T, corpus pipelineCorpus) {
 	for _, command := range []string{
 		"regex", "reverse", "accum", "strcat", "addinfo",
 		"fillnull", "addtotals", "delta", "spath", "makemv", "mvexpand", "nomv",
+		"dedup", "head", "top", "rare",
 	} {
 		found := false
 		for _, rule := range corpus.Rules {

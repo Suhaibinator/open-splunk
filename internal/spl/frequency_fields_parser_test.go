@@ -137,8 +137,13 @@ func TestParseFrequencyCommandsRequireExactDistinctCommaSeparatedFields(t *testi
 		{name: "duplicate", arguments: "host,source,host", wantRange: "host"},
 		{name: "quoted field", arguments: `host,"source"`, wantRange: `"source"`},
 		{name: "wildcard field", arguments: "host,sour*", wantRange: "sour*"},
-		{name: "by clause", arguments: "host BY source", wantRange: "BY"},
+		{name: "empty by clause", arguments: "host BY", wantCode: "SPL_EXPECTED_FIELD"},
+		{name: "by before field", arguments: "BY source", wantCode: "SPL_EXPECTED_FIELD", wantRange: "BY"},
+		{name: "second by clause", arguments: "host BY source BY level", wantRange: "BY"},
+		{name: "by repeats counted field", arguments: "host BY source, host", wantRange: "host"},
+		{name: "by wildcard", arguments: "host BY sour*", wantRange: "sour*"},
 		{name: "output option", arguments: "host,showperc=false", wantRange: "showperc"},
+		{name: "option after by", arguments: "host BY source limit=5", wantRange: "limit"},
 	}
 	for _, commandName := range []string{"top", "rare"} {
 		for _, test := range tests {

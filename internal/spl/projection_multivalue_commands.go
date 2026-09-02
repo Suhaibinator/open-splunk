@@ -32,11 +32,14 @@ type ExactCommandField struct {
 }
 
 // FillNullCommand replaces missing and explicit-null values in an explicit
-// field list. Value is always a String; the default is the String "0".
+// field list, or in every field of the upstream result when AllFields is set
+// (Fields is then empty). Value is always a String; the default is the
+// String "0".
 type FillNullCommand struct {
 	Value      string
 	ValueRange Range
 	Fields     []ExactCommandField
+	AllFields  bool
 	Range      Range
 }
 
@@ -139,8 +142,8 @@ func (p *parser) parseFillNullCommand(name token) (Command, error) {
 			p.advance()
 			p.advance() // '=' established by lookahead.
 			value := p.current()
-			if value.kind != tokenString || !value.quoted {
-				return nil, p.unsupportedCommandSyntax("fillnull", value, "fillnull value requires one quoted String literal")
+			if value.kind != tokenString && value.kind != tokenWord {
+				return nil, p.unsupportedCommandSyntax("fillnull", value, "fillnull value requires one String literal or unquoted word")
 			}
 			if !utf8.ValidString(value.text) {
 				return nil, p.unsupportedCommandSyntax("fillnull", value, "fillnull value must contain valid UTF-8")
@@ -158,9 +161,9 @@ func (p *parser) parseFillNullCommand(name token) (Command, error) {
 		end = current.sourceRange.End
 		p.advance()
 	}
-	if err := p.requireProjectionFields("fillnull", command.Fields); err != nil {
-		return nil, err
-	}
+	// Without an explicit field list Splunk fills every field of the result;
+	// the planner admits that form only above an exact upstream schema.
+	command.AllFields = len(command.Fields) == 0
 	command.Range = Range{Start: name.sourceRange.Start, End: end}
 	return command, nil
 }

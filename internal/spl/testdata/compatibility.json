@@ -624,6 +624,318 @@
         ]
       }
     },
+    "reference.dedup-consecutive": {
+      "runner": "reference",
+      "input": {
+        "schema": [
+          {
+            "name": "event_id",
+            "kind": "number",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "host",
+            "kind": "string",
+            "nullable": true,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "number": 1
+            },
+            {
+              "string": "api"
+            }
+          ],
+          [
+            {
+              "number": 2
+            },
+            {
+              "string": "api"
+            }
+          ],
+          [
+            {
+              "number": 3
+            },
+            {
+              "null": true
+            }
+          ],
+          [
+            {
+              "number": 4
+            },
+            {
+              "string": "worker"
+            }
+          ],
+          [
+            {
+              "number": 5
+            },
+            {
+              "string": "api"
+            }
+          ],
+          [
+            {
+              "number": 6
+            },
+            {
+              "missing": true
+            }
+          ],
+          [
+            {
+              "number": 7
+            },
+            {
+              "string": "worker"
+            }
+          ]
+        ]
+      },
+      "program": [
+        {
+          "op": "dedup",
+          "fields": [
+            "host"
+          ],
+          "count": 1,
+          "consecutive": true
+        }
+      ],
+      "expected": {
+        "schema": [
+          {
+            "name": "event_id",
+            "kind": "number",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "host",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "number": 1
+            },
+            {
+              "string": "api"
+            }
+          ],
+          [
+            {
+              "number": 4
+            },
+            {
+              "string": "worker"
+            }
+          ],
+          [
+            {
+              "number": 5
+            },
+            {
+              "string": "api"
+            }
+          ],
+          [
+            {
+              "number": 7
+            },
+            {
+              "string": "worker"
+            }
+          ]
+        ]
+      }
+    },
+    "reference.dedup-count-head": {
+      "runner": "reference",
+      "input": {
+        "schema": [
+          {
+            "name": "id",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "n",
+            "kind": "number",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "host",
+            "kind": "string",
+            "nullable": true,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "string": "a"
+            },
+            {
+              "number": 9
+            },
+            {
+              "string": "api"
+            }
+          ],
+          [
+            {
+              "string": "b"
+            },
+            {
+              "number": 8
+            },
+            {
+              "string": "api"
+            }
+          ],
+          [
+            {
+              "string": "c"
+            },
+            {
+              "number": 7
+            },
+            {
+              "null": true
+            }
+          ],
+          [
+            {
+              "string": "d"
+            },
+            {
+              "number": 6
+            },
+            {
+              "string": "worker"
+            }
+          ],
+          [
+            {
+              "string": "e"
+            },
+            {
+              "number": 5
+            },
+            {
+              "string": "api"
+            }
+          ],
+          [
+            {
+              "string": "f"
+            },
+            {
+              "number": 4
+            },
+            {
+              "string": "worker"
+            }
+          ],
+          [
+            {
+              "string": "g"
+            },
+            {
+              "number": 3
+            },
+            {
+              "string": "worker"
+            }
+          ]
+        ]
+      },
+      "program": [
+        {
+          "op": "dedup",
+          "fields": [
+            "host"
+          ],
+          "count": 2,
+          "consecutive": false
+        },
+        {
+          "op": "head",
+          "count": 3
+        }
+      ],
+      "expected": {
+        "schema": [
+          {
+            "name": "id",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "n",
+            "kind": "number",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "host",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "string": "a"
+            },
+            {
+              "number": 9
+            },
+            {
+              "string": "api"
+            }
+          ],
+          [
+            {
+              "string": "b"
+            },
+            {
+              "number": 8
+            },
+            {
+              "string": "api"
+            }
+          ],
+          [
+            {
+              "string": "d"
+            },
+            {
+              "number": 6
+            },
+            {
+              "string": "worker"
+            }
+          ]
+        ]
+      }
+    },
     "reference.accum-default": {
       "runner": "reference",
       "input": {
@@ -1220,6 +1532,100 @@
             },
             {
               "string": "未知"
+            }
+          ]
+        ]
+      }
+    },
+    "reference.fillnull-all-fields": {
+      "runner": "reference",
+      "input": {
+        "schema": [
+          {
+            "name": "host",
+            "kind": "string",
+            "nullable": true,
+            "multivalue": false
+          },
+          {
+            "name": "route",
+            "kind": "string",
+            "nullable": true,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "missing": true
+            },
+            {
+              "string": "v1"
+            }
+          ],
+          [
+            {
+              "null": true
+            },
+            {
+              "missing": true
+            }
+          ],
+          [
+            {
+              "string": "api"
+            },
+            {
+              "string": "v2"
+            }
+          ]
+        ]
+      },
+      "program": [
+        {
+          "op": "fillnull",
+          "fields": [],
+          "value": "NA"
+        }
+      ],
+      "expected": {
+        "schema": [
+          {
+            "name": "host",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "route",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "string": "NA"
+            },
+            {
+              "string": "v1"
+            }
+          ],
+          [
+            {
+              "string": "NA"
+            },
+            {
+              "string": "NA"
+            }
+          ],
+          [
+            {
+              "string": "api"
+            },
+            {
+              "string": "v2"
             }
           ]
         ]
@@ -4474,6 +4880,106 @@
       ]
     },
     {
+      "id": "SPL-DEDUP-001",
+      "summary": "Dedup retains the first N complete key tuples of the established or sortby order, restarting per run of adjacent duplicates when consecutive.",
+      "cases": [
+        {
+          "name": "consecutive runs",
+          "source": "index=main | sort 0 +event_id | dedup host consecutive=true",
+          "fixture": "reference.dedup-consecutive",
+          "expect": {
+            "parse": "accept",
+            "order": "pipeline"
+          }
+        },
+        {
+          "name": "global count before head",
+          "source": "index=main | sort 0 -n | dedup 2 host | head 3",
+          "fixture": "reference.dedup-count-head",
+          "expect": {
+            "parse": "accept",
+            "order": "pipeline"
+          }
+        },
+        {
+          "name": "sortby keys accepted",
+          "source": "index=main | dedup host, source sortby -num(bytes), +str(host), ip(client_ip)",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "trailing desc rejected",
+          "source": "index=main | dedup host sortby _time desc",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_DEDUP_SYNTAX"
+          }
+        },
+        {
+          "name": "keepempty rejected",
+          "source": "index=main | dedup host keepempty=true",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_DEDUP_SYNTAX"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-FREQUENCY-BY-001",
+      "summary": "Top and rare accept countfield, percentfield, showcount, showperc, and a BY clause that groups the tuples, scopes the percentage to each group, and retains the limit per group.",
+      "cases": [
+        {
+          "name": "top by clause",
+          "source": "index=main | top limit=3 host BY source",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "rare renamed outputs per group",
+          "source": "index=main | rare countfield=total percentfield=share status BY host, source",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "hidden outputs keep ordering",
+          "source": "index=main | top showcount=false showperc=false limit=0 host BY source | head 5",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "empty by clause rejected",
+          "source": "index=main | top host BY",
+          "expect": {
+            "diagnostic": "SPL_EXPECTED_FIELD"
+          }
+        },
+        {
+          "name": "by field repeats counted field",
+          "source": "index=main | top host BY source, host",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_TOP_SYNTAX"
+          }
+        },
+        {
+          "name": "countfield collides with by field",
+          "source": "index=main | top countfield=source host BY source",
+          "expect": {
+            "diagnostic": "SPL_DUPLICATE_FIELD"
+          }
+        },
+        {
+          "name": "useother rejected",
+          "source": "index=main | rare useother=true host BY source",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_RARE_SYNTAX"
+          }
+        }
+      ]
+    },
+    {
       "id": "SPL-ACCUM-001",
       "summary": "Accum is the shared current-row-inclusive global streamstats numeric sum.",
       "cases": [
@@ -4552,7 +5058,7 @@
     },
     {
       "id": "SPL-FILLNULL-001",
-      "summary": "Fillnull writes one quoted String only to explicit missing or null fields.",
+      "summary": "Fillnull writes one String (quoted or an unquoted word) to explicit missing or null fields, or to every field of an exact upstream schema when no field is listed.",
       "cases": [
         {
           "name": "default zero String",
@@ -4593,10 +5099,26 @@
           }
         },
         {
+          "name": "unquoted value over the exact schema",
+          "source": "index=main | table host route | fillnull value=NA",
+          "fixture": "reference.fillnull-all-fields",
+          "expect": {
+            "parse": "accept",
+            "value": "NA"
+          }
+        },
+        {
+          "name": "unquoted numeric value",
+          "source": "index=main | fillnull value=-1 host",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
           "name": "implicit schema form rejected",
           "source": "index=main | fillnull value=\"0\"",
           "expect": {
-            "diagnostic": "SPL_EXPECTED_FIELD"
+            "diagnostic": "SPL_AMBIGUOUS_FILLNULL_FIELD"
           }
         }
       ]

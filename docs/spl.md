@@ -93,6 +93,8 @@ The semantic rule inventory is:
 | `SPL-TOSTRING-FORMAT-001` | `commas` and `duration` numeric rendering |
 | `SPL-REGEX-001` | bounded row-filtering regex command |
 | `SPL-REVERSE-001` | complete established-order reversal |
+| `SPL-DEDUP-001` | ordered first-N key retention with sortby and consecutive runs |
+| `SPL-FREQUENCY-BY-001` | top/rare output options and per-group BY retention |
 | `SPL-ACCUM-001` | running numeric sum |
 | `SPL-STRCAT-001` | bounded concatenation command |
 | `SPL-ADDINFO-001` | immutable admitted-search metadata |
@@ -249,20 +251,20 @@ The cumulative command surface is:
 | `fields`, `table` | exact table projection and exact/wildcard fields inclusion or exclusion |
 | `rename` | exact source/destination pairs |
 | `sort` | bounded exact typed keys, labeled or positional limits, and terminal reversal (`SPL-SORT-001`) |
-| `dedup` | global first-N retention by exact key tuple |
-| `head`, `tail` | bounded row selection; `tail` publishes reversed selection order |
+| `dedup` | first-N retention by exact key tuple in the established or `sortby ±key` order; `consecutive=true` restarts the count at each run of adjacent duplicates (`SPL-DEDUP-001`) |
+| `head`, `tail` | bounded row selection by positional count or `limit=N`; `tail` publishes reversed selection order |
 | `stats` | bounded transforming aggregation and grouping |
 | `eventstats` | bounded row-preserving aggregate attachment |
 | `streamstats` | bounded ordered running aggregates |
-| `top`, `rare` | bounded frequency summaries |
+| `top`, `rare` | bounded frequency summaries; `countfield=`/`percentfield=` rename and `showcount=false`/`showperc=false` hide the generated outputs; `BY g…` groups the tuples, scopes `percent` to each group, and keeps `limit` tuples per group (`SPL-FREQUENCY-BY-001`) |
 | `bin`/`bucket` | numeric and time discretization |
-| `timechart`, `chart` | bounded chart aggregation and split series |
+| `timechart`, `chart` | bounded chart aggregation and split series; `timechart … BY <field>` accepts `limit=1..10`, `useother=<bool>`, and `usenull=<bool>` before the aggregate or after the split field (`limit=0` is rejected); `chart <agg> BY <row>` (or `OVER <row>`) with one split field is the `stats <agg> BY <row>` table |
 | `regex` | bounded RE2 row filtering (`SPL-REGEX-001`) |
 | `reverse` | reverse the complete established relation order (`SPL-REVERSE-001`) |
 | `accum` | running numeric sum (`SPL-ACCUM-001`) |
 | `strcat` | bounded explicit-field concatenation (`SPL-STRCAT-001`) |
 | `addinfo` | admitted time-range/search-start metadata (`SPL-ADDINFO-001`) |
-| `fillnull` | explicit fields with a String replacement (`SPL-FILLNULL-001`) |
+| `fillnull` | explicit fields with a String replacement (`value=` quoted or an unquoted word, default `"0"`); the field-less form fills every field of an exact upstream schema such as a `stats` or `table` result (`SPL-FILLNULL-001`) |
 | `addtotals` | row-only total over explicit fields (`SPL-ADDTOTALS-001`) |
 | `delta` | difference from 1 through 10,000 established rows earlier (`SPL-DELTA-001`) |
 | `makemv` | literal-delimiter String splitting (`SPL-MAKEMV-001`) |

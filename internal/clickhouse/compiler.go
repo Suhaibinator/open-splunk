@@ -628,6 +628,21 @@ type TimechartOutput struct {
 	ValueKind  TimechartValueKind
 }
 
+// timechartSplitMaxSeries is the runtime series allowance a timechart split
+// publishes: its ordinary series limit plus each enabled NULL and OTHER
+// sentinel series. The planner derives DynamicOutput.MaxSeries the same way,
+// so a forged plan whose allowance disagrees with its split is rejected.
+func timechartSplitMaxSeries(split *plan.TimechartSplit) uint16 {
+	series := split.SeriesLimit
+	if split.IncludeNull {
+		series++
+	}
+	if split.IncludeOther {
+		series++
+	}
+	return series
+}
+
 // RuntimeWideBoundsValid reports whether the dynamic-series metadata is safe
 // for both the executor transport and the public search-job schema boundary.
 func (output TimechartOutput) RuntimeWideBoundsValid() bool {
@@ -4229,9 +4244,9 @@ func compileTimechart(
 	}
 	if len(outputFields) != 0 || dynamic == nil ||
 		!slices.Equal(dynamic.FixedFields, []string{"_time"}) ||
-		dynamic.MaxSeries != 12 || operator.Split.SeriesLimit != 10 ||
-		uint32(operator.Split.SeriesLimit)+2 != uint32(dynamic.MaxSeries) ||
-		!operator.Split.IncludeNull || !operator.Split.IncludeOther ||
+		operator.Split.SeriesLimit < 1 ||
+		operator.Split.SeriesLimit > spl.MaximumTimechartSeriesLimit ||
+		dynamic.MaxSeries != timechartSplitMaxSeries(operator.Split) ||
 		operator.Split.NullLabel != "NULL" || operator.Split.OtherLabel != "OTHER" {
 		return CompiledQuery{}, errors.New("compile ClickHouse timechart: dynamic output contract is invalid")
 	}
@@ -4585,13 +4600,18 @@ func compileTimechart(
 	sql.WriteString(scored)
 	sql.WriteString("), ")
 
+	// usenull=false and useother=false drop their sentinel branch, so the
+	// affected rows collapse into the private empty encoding that never becomes
+	// a map key or a public series name.
 	seriesLimit := strconv.FormatUint(uint64(operator.Split.SeriesLimit), 10)
 	sql.WriteString(collapsed)
 	sql.WriteString(" AS MATERIALIZED (SELECT ")
 	sql.WriteString(bucketNumber)
 	sql.WriteString(", multiIf(")
-	sql.WriteString(kind)
-	sql.WriteString(" = 1, '1:', ")
+	if operator.Split.IncludeNull {
+		sql.WriteString(kind)
+		sql.WriteString(" = 1, '1:', ")
+	}
 	sql.WriteString(kind)
 	sql.WriteString(" = 0 AND ")
 	sql.WriteString(seriesRank)
@@ -4600,8 +4620,11 @@ func compileTimechart(
 	sql.WriteString(", concat('0:', ")
 	sql.WriteString(label)
 	sql.WriteString("), ")
-	sql.WriteString(kind)
-	sql.WriteString(" = 0, '2:', CAST('' AS String)) AS ")
+	if operator.Split.IncludeOther {
+		sql.WriteString(kind)
+		sql.WriteString(" = 0, '2:', ")
+	}
+	sql.WriteString("CAST('' AS String)) AS ")
 	sql.WriteString(encoded)
 	sql.WriteString(", ")
 	if fieldOccurrenceCount {
@@ -5146,18 +5169,25 @@ func compileSplitValueTimechart(
 	sql.WriteString(strconv.FormatUint(uint64(operator.Split.SeriesLimit), 10))
 	sql.WriteString("), ")
 
+	// usenull=false excludes the missing/null rows before they are collapsed;
+	// useother=false keeps only the selected ordinary labels, so neither
+	// sentinel encoding can appear.
+	selectedLabel := label + " IN (SELECT " + label + " FROM " + numericScores + ")"
+	collapsedKinds := kind + " IN (0, 1)"
+	if !operator.Split.IncludeNull {
+		collapsedKinds = kind + " = 0"
+	}
+	if !operator.Split.IncludeOther {
+		collapsedKinds += " AND (" + kind + " != 0 OR " + selectedLabel + ")"
+	}
 	sql.WriteString(collapsed)
 	sql.WriteString(" AS (SELECT ")
 	sql.WriteString(bucketNumber)
 	sql.WriteString(", multiIf(")
 	sql.WriteString(kind)
 	sql.WriteString(" = 1, '1:', ")
-	sql.WriteString(label)
-	sql.WriteString(" IN (SELECT ")
-	sql.WriteString(label)
-	sql.WriteString(" FROM ")
-	sql.WriteString(numericScores)
-	sql.WriteString("), concat('0:', ")
+	sql.WriteString(selectedLabel)
+	sql.WriteString(", concat('0:', ")
 	sql.WriteString(label)
 	sql.WriteString("), '2:') AS ")
 	sql.WriteString(encoded)
@@ -5183,8 +5213,8 @@ func compileSplitValueTimechart(
 	sql.WriteString(" FROM ")
 	sql.WriteString(numericGroups)
 	sql.WriteString(" WHERE ")
-	sql.WriteString(kind)
-	sql.WriteString(" IN (0, 1) GROUP BY ")
+	sql.WriteString(collapsedKinds)
+	sql.WriteString(" GROUP BY ")
 	sql.WriteString(bucketNumber)
 	sql.WriteString(", ")
 	sql.WriteString(encoded)
@@ -5214,22 +5244,27 @@ func compileSplitValueTimechart(
 	sql.WriteString(encoded)
 	sql.WriteString(" FROM ")
 	sql.WriteString(numericScores)
-	sql.WriteString(" UNION ALL SELECT toUInt8(1), CAST('' AS String), CAST('1:' AS String) FROM (SELECT 1 FROM ")
-	sql.WriteString(numericGroups)
-	sql.WriteString(" WHERE ")
-	sql.WriteString(kind)
-	sql.WriteString(" = 1 LIMIT 1)")
-	sql.WriteString(" UNION ALL SELECT toUInt8(2), CAST('' AS String), CAST('2:' AS String) FROM (SELECT 1 FROM ")
-	sql.WriteString(numericGroups)
-	sql.WriteString(" WHERE ")
-	sql.WriteString(kind)
-	sql.WriteString(" = 0 AND ")
-	sql.WriteString(label)
-	sql.WriteString(" NOT IN (SELECT ")
-	sql.WriteString(label)
-	sql.WriteString(" FROM ")
-	sql.WriteString(numericScores)
-	sql.WriteString(") LIMIT 1)), ")
+	if operator.Split.IncludeNull {
+		sql.WriteString(" UNION ALL SELECT toUInt8(1), CAST('' AS String), CAST('1:' AS String) FROM (SELECT 1 FROM ")
+		sql.WriteString(numericGroups)
+		sql.WriteString(" WHERE ")
+		sql.WriteString(kind)
+		sql.WriteString(" = 1 LIMIT 1)")
+	}
+	if operator.Split.IncludeOther {
+		sql.WriteString(" UNION ALL SELECT toUInt8(2), CAST('' AS String), CAST('2:' AS String) FROM (SELECT 1 FROM ")
+		sql.WriteString(numericGroups)
+		sql.WriteString(" WHERE ")
+		sql.WriteString(kind)
+		sql.WriteString(" = 0 AND ")
+		sql.WriteString(label)
+		sql.WriteString(" NOT IN (SELECT ")
+		sql.WriteString(label)
+		sql.WriteString(" FROM ")
+		sql.WriteString(numericScores)
+		sql.WriteString(") LIMIT 1)")
+	}
+	sql.WriteString("), ")
 
 	sql.WriteString(domain)
 	sql.WriteString(" AS (SELECT arrayMap(item -> item.3, arraySort(item -> (item.1, item.2), groupArray((sort_kind, ")
@@ -26072,10 +26107,39 @@ func compileDeduplicate(
 	if orderErr != nil {
 		return compiledRelation{}, nil, nil, 0, orderErr
 	}
+	limitBy := keyColumns
+	if operator.Consecutive {
+		// Consecutive mode retains the first Count rows of every run of equal
+		// key tuples. Eligibility is applied before the window so a row missing
+		// a key neither starts nor breaks a run, then each row learns whether
+		// its tuple repeats the previous eligible row's, and a running count
+		// of run starts labels the run that LIMIT BY bounds.
+		window := " OVER (ORDER BY " + order + " ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)"
+		repeated := make([]string, 0, len(keyColumns)+1)
+		repeated = append(repeated, "lagInFrame(toUInt8(1), 1, toUInt8(0))"+window+" != 0")
+		for _, key := range keyColumns {
+			repeated = append(repeated, "ifNull("+key+" = lagInFrame("+key+", 1, "+key+")"+window+", 0)")
+		}
+		runStart := quoteIdentifier(fmt.Sprintf("__os_dedup_run_start_%d", stage))
+		run := quoteIdentifier(fmt.Sprintf("__os_dedup_run_%d", stage))
+		additionalAliases++
+		startAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", stage+additionalAliases))
+		startSQL := "SELECT *, toUInt8(NOT (" + strings.Join(repeated, " AND ") + ")) AS " + runStart +
+			" FROM (" + deduplicated.sql + ") AS " + startAlias + " WHERE " + predicate
+		deduplicated = deduplicated.selectFrom(startSQL, operator.Range)
+		additionalAliases++
+		runAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", stage+additionalAliases))
+		runSQL := "SELECT *, sum(" + runStart + ")" + window + " AS " + run +
+			" FROM (" + deduplicated.sql + ") AS " + runAlias
+		deduplicated = deduplicated.selectFrom(runSQL, operator.Range)
+		helperColumns = append(helperColumns, runStart, run)
+		predicate = "1"
+		limitBy = []string{run}
+	}
 	additionalAliases++
 	dedupAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", stage+additionalAliases))
 	dedupSQL := "SELECT * EXCEPT (" + strings.Join(helperColumns, ", ") + ") FROM (" + deduplicated.sql + ") AS " + dedupAlias + " WHERE " + predicate +
-		" ORDER BY " + order + " LIMIT ? BY " + strings.Join(keyColumns, ", ")
+		" ORDER BY " + order + " LIMIT ? BY " + strings.Join(limitBy, ", ")
 	deduplicated = deduplicated.selectFrom(dedupSQL, operator.Range)
 	return deduplicated, prefixArgs, currentOrder, additionalAliases, nil
 }
@@ -26098,10 +26162,29 @@ func compileWindow(operator *plan.Window, state compileState) (string, compileSt
 		return "", compileState{}, fmt.Errorf("compile ClickHouse window: unsupported function %d", operator.Function)
 	}
 
+	// A partitioned total (top ... BY) scopes the percentage to rows sharing
+	// the partition tuple; the tuple columns are aggregate group keys, so they
+	// are always present on every row.
+	partitions := make([]string, 0, len(operator.PartitionBy))
+	for _, ref := range operator.PartitionBy {
+		field, ok, err := resolveCompiledField(ref, state)
+		if err != nil {
+			return "", compileState{}, err
+		}
+		if !ok {
+			return "", compileState{}, fmt.Errorf("compile ClickHouse window: partition field %q is not visible", ref.Name)
+		}
+		partitions = append(partitions, field.valueSQL)
+	}
+	over := "OVER ()"
+	if len(partitions) > 0 {
+		over = "OVER (PARTITION BY " + strings.Join(partitions, ", ") + ")"
+	}
+
 	// Aggregate groups always have a strictly positive count, so an empty input
 	// produces no row on which division could occur. Cast before multiplication
 	// to avoid integer overflow and retain the unrounded SPL percentage.
-	total := "sum(" + input.valueSQL + ") OVER ()"
+	total := "sum(" + input.valueSQL + ") " + over
 	expression := "toFloat64(" + input.valueSQL + ") * 100.0 / toFloat64(" + total + ")"
 	next := state
 	next.visible = make(map[string]fieldState, len(state.visible)+1)

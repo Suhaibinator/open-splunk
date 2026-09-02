@@ -37,8 +37,8 @@ const (
 	maxFieldPathSegmentBytes            = 256
 	maxTimechartBuckets                 = 10_000
 	maxTimechartSpan                    = 24 * time.Hour
-	timechartSeriesLimit                = 10
-	maxTimechartSeries                  = 12
+	timechartSeriesLimit                = spl.MaximumTimechartSeriesLimit
+	maxTimechartSeries                  = timechartSeriesLimit + 2
 	eventStatsSupportedAggregateMessage = "eventstats currently supports exactly one count, " +
 		"count(field), count(eval(predicate)), pN(field), percN(field), min(field), " +
 		"max(field), earliest(field), latest(field), sum(field), avg(field), " +
@@ -333,6 +333,13 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			}
 		case *spl.FillNullCommand:
 			if !outputSchemaKnown {
+				if command != nil && command.AllFields {
+					return nil, &Diagnostic{
+						Code:    "SPL_AMBIGUOUS_FILLNULL_FIELD",
+						Message: "fillnull without a field list needs an exact upstream schema (for example after stats or table); list the fields to fill on raw events",
+						Range:   command.Range,
+					}
+				}
 				for _, field := range command.Fields {
 					if field.Name == "fields" {
 						return nil, &Diagnostic{
@@ -343,12 +350,20 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					}
 				}
 			}
-			operator, buildErr := buildFillNull(command)
+			var (
+				operator *FillNull
+				buildErr error
+			)
+			if command != nil && command.AllFields {
+				operator, buildErr = buildFillNullOverSchema(command, result.OutputFields)
+			} else {
+				operator, buildErr = buildFillNull(command)
+			}
 			if buildErr != nil {
 				return nil, buildErr
 			}
 			result.Operators = append(result.Operators, operator)
-			for _, field := range command.Fields {
+			for _, field := range operator.Fields {
 				publishOutputFieldAndTrackTime(field.Name)
 			}
 		case *spl.AddTotalsCommand:
@@ -676,41 +691,9 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			canonicalTimeAvailable = canonicalTimeAvailable && slices.Contains(command.Fields, "_time")
 			result.Operators = append(result.Operators, &Project{Mode: ProjectModeTable, Fields: fields, Range: command.Range})
 		case *spl.SortCommand:
-			keys := make([]SortKey, 0, len(command.Fields))
-			for _, field := range command.Fields {
-				fieldRange := field.FieldRange
-				if fieldRange == (spl.Range{}) {
-					fieldRange = field.Range
-				}
-				var (
-					ref      FieldRef
-					fieldErr error
-				)
-				if field.Quoted {
-					ref, fieldErr = ResolveQuotedField(field.Field, fieldRange)
-				} else {
-					ref, fieldErr = ResolveField(field.Field, fieldRange)
-				}
-				if fieldErr != nil {
-					return nil, fieldErr
-				}
-				mode := SortValueModeAuto
-				switch field.Mode {
-				case spl.SortValueModeAuto:
-				case spl.SortValueModeString:
-					mode = SortValueModeLexical
-				case spl.SortValueModeNumber:
-					mode = SortValueModeNumeric
-				case spl.SortValueModeIP:
-					mode = SortValueModeIP
-				default:
-					return nil, &Diagnostic{
-						Code:    "SPL_INVALID_QUERY",
-						Message: "sort field has an invalid value mode",
-						Range:   field.Range,
-					}
-				}
-				keys = append(keys, SortKey{Field: ref, Descending: field.Descending, Mode: mode})
+			keys, keysErr := convertSortFields(command.Fields)
+			if keysErr != nil {
+				return nil, keysErr
 			}
 			limit := command.Limit
 			if !command.LimitSpecified {
@@ -753,7 +736,23 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				}
 				keys = append(keys, key)
 			}
-			result.Operators = append(result.Operators, &Deduplicate{Count: command.Count, Keys: keys, Range: command.Range})
+			if len(command.SortBy) > 0 {
+				// sortby establishes the order dedup selects from, and that order
+				// survives as the relation's order afterwards. It is unbounded:
+				// a Splunk-style default sort limit would truncate the input
+				// before the key tuples are examined.
+				sortKeys, sortErr := convertSortFields(command.SortBy)
+				if sortErr != nil {
+					return nil, sortErr
+				}
+				result.Operators = append(result.Operators, &Sort{Keys: sortKeys, Range: command.SortByRange})
+			}
+			result.Operators = append(result.Operators, &Deduplicate{
+				Count:       command.Count,
+				Keys:        keys,
+				Consecutive: command.Consecutive,
+				Range:       command.Range,
+			})
 		case *spl.LimitCommand:
 			result.Operators = append(result.Operators, &Limit{Count: command.Count, FromEnd: command.Name() == "tail", Range: command.Range})
 		case *spl.EventStatsCommand:
@@ -1608,114 +1607,14 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			})
 			canonicalTimeAvailable = false
 		case *spl.TopCommand, *spl.RareCommand:
-			var commandName string
-			var frequencyFields []spl.FrequencyField
-			var commandRange spl.Range
-			var limit uint64
-			leastFrequent := false
-			switch command := command.(type) {
-			case *spl.TopCommand:
-				if command == nil {
-					return nil, &Diagnostic{
-						Code:    "SPL_INVALID_QUERY",
-						Message: "top command is nil",
-					}
-				}
-				commandName = command.Name()
-				frequencyFields = command.Fields
-				commandRange = command.Range
-				limit = command.Limit
-			case *spl.RareCommand:
-				if command == nil {
-					return nil, &Diagnostic{
-						Code:    "SPL_INVALID_QUERY",
-						Message: "rare command is nil",
-					}
-				}
-				commandName = command.Name()
-				frequencyFields = command.Fields
-				commandRange = command.Range
-				limit = command.Limit
-				leastFrequent = true
-			}
-			if len(frequencyFields) == 0 {
-				return nil, &Diagnostic{
-					Code:    "SPL_EXPECTED_FIELD",
-					Message: commandName + " requires at least one field",
-					Range:   commandRange,
-				}
-			}
-			if len(frequencyFields) > spl.MaximumFrequencyFields {
-				return nil, &Diagnostic{
-					Code: "SPL_QUERY_TOO_COMPLEX",
-					Message: fmt.Sprintf(
-						"%s contains more than %d fields",
-						commandName,
-						spl.MaximumFrequencyFields,
-					),
-					Range: commandRange,
-				}
+			frequency, frequencyErr := buildFrequencyOperators(command)
+			if frequencyErr != nil {
+				return nil, frequencyErr
 			}
 			canonicalTimeAvailable = false
-			outputFields := make([]string, 0, len(frequencyFields)+2)
-			for _, frequencyField := range frequencyFields {
-				fieldName := frequencyField.Name
-				fieldRange := frequencyField.Range
-				if fieldName == "count" || fieldName == "percent" {
-					return nil, &Diagnostic{
-						Code:    "SPL_DUPLICATE_FIELD",
-						Message: fmt.Sprintf("%s field %q collides with a generated output field", commandName, fieldName),
-						Range:   fieldRange,
-					}
-				}
-				outputFields = append(outputFields, fieldName)
-			}
-			fields, fieldErr := convertStatsGroupFields(
-				commandName,
-				frequencyFields,
-			)
-			if fieldErr != nil {
-				return nil, fieldErr
-			}
-			countField, countErr := ResolveField("count", commandRange)
-			if countErr != nil {
-				return nil, countErr
-			}
-			result.OutputFields = append(outputFields, "count", "percent")
+			result.OutputFields = frequency.outputFields
 			outputSchemaKnown = true
-			sortKeys := make([]SortKey, 0, len(fields)+1)
-			sortKeys = append(sortKeys, SortKey{
-				Field:      countField,
-				Descending: !leastFrequent,
-			})
-			for _, field := range fields {
-				sortKeys = append(sortKeys, SortKey{
-					Field:      field,
-					Descending: true,
-					Mode:       SortValueModeLexical,
-				})
-			}
-			result.Operators = append(result.Operators,
-				&Aggregate{
-					GroupBy: fields,
-					Measures: []AggregateMeasure{{
-						Function: AggregateFunctionCountRows,
-						Output:   "count",
-					}},
-					Range: commandRange,
-				},
-				&Window{
-					Function: WindowFunctionPercentOfTotal,
-					Input:    countField,
-					Output:   "percent",
-					Range:    commandRange,
-				},
-				&Sort{
-					Keys:  sortKeys,
-					Limit: limit,
-					Range: commandRange,
-				},
-			)
+			result.Operators = append(result.Operators, frequency.operators...)
 		case *spl.TimechartCommand:
 			if command == nil {
 				return nil, &Diagnostic{
@@ -1782,18 +1681,20 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 						},
 					}
 				}
-				split = &TimechartSplit{
-					Field:        resolved,
-					SeriesLimit:  timechartSeriesLimit,
-					IncludeNull:  true,
-					IncludeOther: true,
-					NullLabel:    "NULL",
-					OtherLabel:   "OTHER",
+				split, splitErr = buildTimechartSplit(resolved, command.Options, command.Range)
+				if splitErr != nil {
+					return nil, splitErr
 				}
 				result.OutputFields = nil
 				result.DynamicOutput = &DynamicSeriesOutput{
 					FixedFields: []string{"_time"},
-					MaxSeries:   maxTimechartSeries,
+					MaxSeries:   timechartMaxSeries(split),
+				}
+			} else if command.Options != (spl.TimechartOptions{}) {
+				return nil, &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
+					Message: "timechart limit, useother, and usenull require a BY split field",
+					Range:   command.Range,
 				}
 			} else {
 				result.OutputFields = []string{"_time", measure.Output}
@@ -1828,7 +1729,11 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			// usenull and useother default to true, so NULL and OTHER are
 			// always reachable public column names. A field spelled like one
 			// of them would collide with a series deterministically.
-			for _, axis := range []spl.StatsGroupField{command.Over, command.SplitBy} {
+			axes := []spl.StatsGroupField{command.Over, command.SplitBy}
+			if command.SingleSplit() {
+				axes = axes[:1]
+			}
+			for _, axis := range axes {
 				if axis.Quoted {
 					return nil, &Diagnostic{
 						Code:    "SPL_UNSUPPORTED_CHART_FIELD_TYPE",
@@ -1861,6 +1766,33 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			if overErr != nil {
 				return nil, overErr
 			}
+			if measure.Function != AggregateFunctionCountRows &&
+				measure.Input.Name == over.Name {
+				return nil, &Diagnostic{
+					Code:    "SPL_DUPLICATE_FIELD",
+					Message: fmt.Sprintf("chart aggregate input and row field %q are repeated", over.Name),
+					Range:   command.Over.Range,
+				}
+			}
+			if command.SingleSplit() {
+				// One split field is Splunk's stats BY table: the row split
+				// becomes the group key and the aggregate the only other
+				// column, so it plans exactly as `stats <aggregate> BY <row>`.
+				statsOptions, optionsErr := buildStatsOptions(spl.StatsOptions{}, command.Range)
+				if optionsErr != nil {
+					return nil, optionsErr
+				}
+				result.OutputFields = []string{over.Name, measure.Output}
+				result.DynamicOutput = nil
+				outputSchemaKnown = true
+				result.Operators = append(result.Operators, &Aggregate{
+					GroupBy:      []FieldRef{over},
+					Measures:     []AggregateMeasure{measure},
+					StatsOptions: statsOptions,
+					Range:        command.Range,
+				})
+				continue
+			}
 			splitBy, splitErr := ResolveField(command.SplitBy.Name, command.SplitBy.Range)
 			if splitErr != nil {
 				return nil, splitErr
@@ -1870,14 +1802,6 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					Code:    "SPL_DUPLICATE_FIELD",
 					Message: fmt.Sprintf("chart row and column field %q is repeated", splitBy.Name),
 					Range:   command.SplitBy.Range,
-				}
-			}
-			if measure.Function != AggregateFunctionCountRows &&
-				measure.Input.Name == over.Name {
-				return nil, &Diagnostic{
-					Code:    "SPL_DUPLICATE_FIELD",
-					Message: fmt.Sprintf("chart aggregate input and row field %q are repeated", over.Name),
-					Range:   command.Over.Range,
 				}
 			}
 			result.OutputFields = nil
@@ -1913,6 +1837,81 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 		result.parsedSourceDigest = sourceDigest
 	}
 	return result, nil
+}
+
+// buildTimechartSplit applies Splunk's series defaults (limit=10,
+// useother=true, usenull=true) over the authored options. The parser owns the
+// limit bound, but a forged command can carry any value, so the planner
+// revalidates it before the compiler trusts SeriesLimit.
+func buildTimechartSplit(
+	field FieldRef,
+	options spl.TimechartOptions,
+	commandRange spl.Range,
+) (*TimechartSplit, error) {
+	invalid := func(message string, sourceRange spl.Range) (*TimechartSplit, error) {
+		if sourceRange == (spl.Range{}) {
+			sourceRange = commandRange
+		}
+		return nil, &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
+			Message: message,
+			Range:   sourceRange,
+		}
+	}
+	split := &TimechartSplit{
+		Field:        field,
+		SeriesLimit:  timechartSeriesLimit,
+		IncludeNull:  true,
+		IncludeOther: true,
+		NullLabel:    "NULL",
+		OtherLabel:   "OTHER",
+	}
+	if options.LimitSpecified {
+		if options.LimitRange == (spl.Range{}) {
+			return invalid("timechart limit metadata is invalid", options.LimitRange)
+		}
+		if options.Limit == 0 || options.Limit > timechartSeriesLimit {
+			return nil, &Diagnostic{
+				Code:        "SPL_UNSUPPORTED_TIMECHART_LIMIT",
+				Message:     fmt.Sprintf("timechart limit must be from 1 through %d", timechartSeriesLimit),
+				Range:       options.LimitRange,
+				Suggestions: []string{fmt.Sprintf("limit=%d", timechartSeriesLimit)},
+			}
+		}
+		split.SeriesLimit = uint16(options.Limit)
+	} else if options.Limit != 0 || options.LimitRange != (spl.Range{}) {
+		return invalid("unspecified timechart limit contains authored metadata", options.LimitRange)
+	}
+	if options.UseOtherSpecified {
+		if options.UseOtherRange == (spl.Range{}) {
+			return invalid("timechart useother metadata is invalid", options.UseOtherRange)
+		}
+		split.IncludeOther = options.UseOther
+	} else if options.UseOther || options.UseOtherRange != (spl.Range{}) {
+		return invalid("unspecified timechart useother contains authored metadata", options.UseOtherRange)
+	}
+	if options.UseNullSpecified {
+		if options.UseNullRange == (spl.Range{}) {
+			return invalid("timechart usenull metadata is invalid", options.UseNullRange)
+		}
+		split.IncludeNull = options.UseNull
+	} else if options.UseNull || options.UseNullRange != (spl.Range{}) {
+		return invalid("unspecified timechart usenull contains authored metadata", options.UseNullRange)
+	}
+	return split, nil
+}
+
+// timechartMaxSeries is the runtime series allowance a split publishes: the
+// ordinary series limit plus each enabled NULL and OTHER sentinel series.
+func timechartMaxSeries(split *TimechartSplit) uint16 {
+	series := split.SeriesLimit
+	if split.IncludeNull {
+		series++
+	}
+	if split.IncludeOther {
+		series++
+	}
+	return series
 }
 
 func buildChartMeasure(
@@ -5225,6 +5224,211 @@ func convertFieldsCommand(command *spl.FieldsCommand) ([]FieldRef, []ProjectFiel
 		fields = append(fields, field)
 	}
 	return fields, patterns, nil
+}
+
+// convertSortFields resolves authored sort keys for sort and dedup sortby.
+// frequencyPlan is the logical lowering of one top or rare command.
+type frequencyPlan struct {
+	operators    []Operator
+	outputFields []string
+}
+
+// buildFrequencyOperators lowers top and rare to a bounded count aggregate.
+// Without BY the plan is Aggregate → Window(percent of total) → Sort(limit).
+// With BY the aggregate groups by the BY tuple followed by the counted fields,
+// the percentage is partitioned per BY tuple, the sort places each BY group's
+// most (or least) frequent tuples first, and a Deduplicate keyed on the BY
+// tuple keeps the first limit rows of every group. showcount=false and
+// showperc=false drop the generated column after it has served the ordering.
+func buildFrequencyOperators(command spl.Command) (frequencyPlan, error) {
+	var (
+		commandName     string
+		frequencyFields []spl.FrequencyField
+		byFields        []spl.FrequencyField
+		commandRange    spl.Range
+		limit           uint64
+		countName       = "count"
+		percentName     = "percent"
+		hideCount       bool
+		hidePercent     bool
+		leastFrequent   bool
+	)
+	switch command := command.(type) {
+	case *spl.TopCommand:
+		if command == nil {
+			return frequencyPlan{}, &Diagnostic{Code: "SPL_INVALID_QUERY", Message: "top command is nil"}
+		}
+		commandName = command.Name()
+		frequencyFields, byFields, commandRange, limit = command.Fields, command.By, command.Range, command.Limit
+		hideCount, hidePercent = command.HideCount, command.HidePercent
+		if command.CountField != "" {
+			countName = command.CountField
+		}
+		if command.PercentField != "" {
+			percentName = command.PercentField
+		}
+	case *spl.RareCommand:
+		if command == nil {
+			return frequencyPlan{}, &Diagnostic{Code: "SPL_INVALID_QUERY", Message: "rare command is nil"}
+		}
+		commandName = command.Name()
+		frequencyFields, byFields, commandRange, limit = command.Fields, command.By, command.Range, command.Limit
+		hideCount, hidePercent = command.HideCount, command.HidePercent
+		if command.CountField != "" {
+			countName = command.CountField
+		}
+		if command.PercentField != "" {
+			percentName = command.PercentField
+		}
+		leastFrequent = true
+	default:
+		return frequencyPlan{}, fmt.Errorf("build frequency plan: unexpected command %T", command)
+	}
+	if len(frequencyFields) == 0 {
+		return frequencyPlan{}, &Diagnostic{
+			Code:    "SPL_EXPECTED_FIELD",
+			Message: commandName + " requires at least one field",
+			Range:   commandRange,
+		}
+	}
+	if len(frequencyFields) > spl.MaximumFrequencyFields || len(byFields) > spl.MaximumFrequencyFields {
+		return frequencyPlan{}, &Diagnostic{
+			Code:    "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf("%s contains more than %d fields", commandName, spl.MaximumFrequencyFields),
+			Range:   commandRange,
+		}
+	}
+	if countName == percentName {
+		return frequencyPlan{}, &Diagnostic{
+			Code:    "SPL_DUPLICATE_FIELD",
+			Message: fmt.Sprintf("%s countfield and percentfield both name %q", commandName, countName),
+			Range:   commandRange,
+		}
+	}
+	// Splunk lists the BY tuple first, then the counted tuple, then the
+	// generated columns.
+	grouped := make([]spl.FrequencyField, 0, len(byFields)+len(frequencyFields))
+	grouped = append(grouped, byFields...)
+	grouped = append(grouped, frequencyFields...)
+	outputFields := make([]string, 0, len(grouped)+2)
+	for _, field := range grouped {
+		if field.Name == countName || field.Name == percentName {
+			return frequencyPlan{}, &Diagnostic{
+				Code:    "SPL_DUPLICATE_FIELD",
+				Message: fmt.Sprintf("%s field %q collides with a generated output field", commandName, field.Name),
+				Range:   field.Range,
+			}
+		}
+		outputFields = append(outputFields, field.Name)
+	}
+	groupBy, fieldErr := convertStatsGroupFields(commandName, grouped)
+	if fieldErr != nil {
+		return frequencyPlan{}, fieldErr
+	}
+	partitionBy := groupBy[:len(byFields):len(byFields)]
+	countedFields := groupBy[len(byFields):]
+	countField, countErr := ResolveField(countName, commandRange)
+	if countErr != nil {
+		return frequencyPlan{}, countErr
+	}
+	if _, percentErr := ResolveField(percentName, commandRange); percentErr != nil {
+		return frequencyPlan{}, percentErr
+	}
+
+	sortKeys := make([]SortKey, 0, len(groupBy)+1)
+	for _, field := range partitionBy {
+		sortKeys = append(sortKeys, SortKey{Field: field, Mode: SortValueModeLexical})
+	}
+	sortKeys = append(sortKeys, SortKey{Field: countField, Descending: !leastFrequent})
+	for _, field := range countedFields {
+		sortKeys = append(sortKeys, SortKey{Field: field, Descending: true, Mode: SortValueModeLexical})
+	}
+
+	operators := []Operator{&Aggregate{
+		GroupBy: groupBy,
+		Measures: []AggregateMeasure{{
+			Function: AggregateFunctionCountRows,
+			Output:   countName,
+		}},
+		Range: commandRange,
+	}}
+	if !hidePercent {
+		operators = append(operators, &Window{
+			Function:    WindowFunctionPercentOfTotal,
+			Input:       countField,
+			Output:      percentName,
+			PartitionBy: partitionBy,
+			Range:       commandRange,
+		})
+	}
+	if len(partitionBy) == 0 {
+		operators = append(operators, &Sort{Keys: sortKeys, Limit: limit, Range: commandRange})
+	} else {
+		// Sort{Limit: 0} is unbounded: every group must be ordered before the
+		// per-group retention below, and limit=0 keeps every tuple of every group.
+		operators = append(operators, &Sort{Keys: sortKeys, Range: commandRange})
+		if limit > 0 {
+			operators = append(operators, &Deduplicate{
+				Count: limit,
+				Keys:  partitionBy,
+				Range: commandRange,
+			})
+		}
+	}
+	if !hideCount {
+		outputFields = append(outputFields, countName)
+	}
+	if !hidePercent {
+		outputFields = append(outputFields, percentName)
+	}
+	if hideCount {
+		operators = append(operators, &Project{
+			Mode:   ProjectModeExclude,
+			Fields: []FieldRef{countField},
+			Range:  commandRange,
+		})
+	}
+	return frequencyPlan{operators: operators, outputFields: outputFields}, nil
+}
+
+func convertSortFields(fields []spl.SortField) ([]SortKey, error) {
+	keys := make([]SortKey, 0, len(fields))
+	for _, field := range fields {
+		fieldRange := field.FieldRange
+		if fieldRange == (spl.Range{}) {
+			fieldRange = field.Range
+		}
+		var (
+			ref      FieldRef
+			fieldErr error
+		)
+		if field.Quoted {
+			ref, fieldErr = ResolveQuotedField(field.Field, fieldRange)
+		} else {
+			ref, fieldErr = ResolveField(field.Field, fieldRange)
+		}
+		if fieldErr != nil {
+			return nil, fieldErr
+		}
+		mode := SortValueModeAuto
+		switch field.Mode {
+		case spl.SortValueModeAuto:
+		case spl.SortValueModeString:
+			mode = SortValueModeLexical
+		case spl.SortValueModeNumber:
+			mode = SortValueModeNumeric
+		case spl.SortValueModeIP:
+			mode = SortValueModeIP
+		default:
+			return nil, &Diagnostic{
+				Code:    "SPL_INVALID_QUERY",
+				Message: "sort field has an invalid value mode",
+				Range:   field.Range,
+			}
+		}
+		keys = append(keys, SortKey{Field: ref, Descending: field.Descending, Mode: mode})
+	}
+	return keys, nil
 }
 
 func convertTableFields(command *spl.TableCommand) ([]FieldRef, error) {
