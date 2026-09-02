@@ -51,7 +51,8 @@ export type StatsDensity = "compact" | "standard";
 export type PatternSensitivity = "Precise" | "Balanced" | "Broad";
 export type EventDisplay = "List" | "Raw" | "Table";
 export type TimelineDisplay = "Columns" | "Compact";
-export type ChartStyle = "column" | "horizontal" | "line";
+export type ChartStyle = "area" | "column" | "horizontal" | "line";
+export type StackMode = "none" | "stacked" | "stacked100";
 export type LegendPosition = "bottom" | "right" | "none";
 
 export interface TimeRange {

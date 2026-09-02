@@ -12,6 +12,37 @@
   vector-effect: non-scaling-stroke;
 }
 
+.time-series-chart__area {
+  fill: currentcolor;
+  fill-opacity: var(--opacity-chart-area);
+  stroke: none;
+}
+
+.time-series-chart__line.time-series-chart__series {
+  stroke: currentcolor;
+}
+
+.time-series-chart__marker.time-series-chart__series {
+  border-color: currentcolor;
+}
+
+.time-series-chart__tooltip i.time-series-chart__series {
+  background-color: currentcolor;
+}
+
+.time-series-chart__series[data-series-color="1"] { color: var(--chart-series-1); }
+.time-series-chart__series[data-series-color="2"] { color: var(--chart-series-2); }
+.time-series-chart__series[data-series-color="3"] { color: var(--chart-series-3); }
+.time-series-chart__series[data-series-color="4"] { color: var(--chart-series-4); }
+.time-series-chart__series[data-series-color="5"] { color: var(--chart-series-5); }
+.time-series-chart__series[data-series-color="6"] { color: var(--chart-series-6); }
+.time-series-chart__series[data-series-color="7"] { color: var(--chart-series-7); }
+.time-series-chart__series[data-series-color="8"] { color: var(--chart-series-8); }
+.time-series-chart__series[data-series-color="9"] { color: var(--chart-series-9); }
+.time-series-chart__series[data-series-color="10"] { color: var(--chart-series-10); }
+.time-series-chart__series[data-series-color="11"] { color: var(--chart-series-11); }
+.time-series-chart__series[data-series-color="12"] { color: var(--chart-series-12); }
+
 .timeline-grid-lines,
 .chart-grid {
   display: flex;

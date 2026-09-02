@@ -470,7 +470,7 @@ const SEMANTIC_GROUPS = ["accent", "bg", "border", "chart", "chrome", "fg", "lev
 const INTERACTION_TOKENS = new Set(["--focus-ring", "--highlight", "--selection"]);
 
 /** Name families `app/styles/tokens-scale.css` is allowed to use. */
-const SCALE_FAMILIES = ["dur", "ease", "font", "radius", "shadow", "space", "type", "z"];
+const SCALE_FAMILIES = ["dur", "ease", "font", "opacity", "radius", "shadow", "space", "type", "z"];
 
 /** The ladder a primitive step number may sit on: light at 0, darkest at 950. */
 const PRIMITIVE_STEPS = new Set([0, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 550, 600, 650, 700, 750, 800, 900, 950]);
@@ -594,7 +594,7 @@ function valueKind(value) {
   // --type-* family in two over a fluid step that is a font-size like the rest.
   if (/^(?:clamp|min|max)\((?:\s*-?[\d.]+(?:px|rem|em|%|vw|vh|dvw|dvh)\s*,?)+\)$/u.test(value)) return "length";
   if (/^-?[\d.]+m?s$/u.test(value)) return "duration";
-  if (/^-?\d+$/u.test(value)) return "number";
+  if (/^-?\d+(?:\.\d+)?$/u.test(value)) return "number";
   if (/\brgba?\(/u.test(value)) return "shadow";
   return "keyword or stack";
 }

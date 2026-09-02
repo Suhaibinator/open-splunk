@@ -8,6 +8,7 @@ import { SearchJobState } from "@/gen/ts/open_splunk/search";
 
 import {
   backendJobPhase,
+  demoTimechartSplitField,
   eventCountForQuery,
   eventFieldValueWhiteSpace,
   filteredDemoEvents,
@@ -15,6 +16,19 @@ import {
   stateTone,
   syntaxTokens,
 } from "./workspace-utils";
+
+test("demo split-series detection is bounded to unquoted timechart by clauses", () => {
+  assert.equal(
+    demoTimechartSplitField("index=main | timechart span=5m count by service"),
+    "service",
+  );
+  assert.equal(
+    demoTimechartSplitField('index=main | timechart count eval(note="by decoy") BY host'),
+    "host",
+  );
+  assert.equal(demoTimechartSplitField('index=main | timechart count eval(note="by service")'), null);
+  assert.equal(demoTimechartSplitField("index=main | stats count by service"), null);
+});
 
 interface SyntaxTokenProps {
   children?: ReactNode;

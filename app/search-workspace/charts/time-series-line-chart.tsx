@@ -12,7 +12,9 @@ import type { TimelinePoint } from "@/lib/demo/search-data";
 
 import { COMPACT_NUMBER_FORMAT, NUMBER_FORMAT } from "../constants";
 import { formatExactNumericText } from "../formatters";
+import type { StackMode } from "../model";
 import { linearTickScale } from "./chart-scale";
+import { stackChartRows, stackedChartDomain } from "./chart-stacking";
 
 const VIEWBOX_WIDTH = 1000;
 const VIEWBOX_HEIGHT = 300;
@@ -40,8 +42,16 @@ export const TIME_SERIES_COLORS = [
 ] as const;
 
 interface TimeSeriesLineChartProps {
+  chartStyle?: "area" | "line";
   points: TimelinePoint[];
   seriesLabel?: string;
+  stackMode?: StackMode;
+}
+
+interface TimeSeriesCoordinate {
+  startY: number;
+  x: number;
+  y: number;
 }
 
 export function timelineSeriesNames(points: TimelinePoint[], fallbackLabel = "Events"): string[] {
@@ -58,6 +68,19 @@ function pointSeriesValue(point: TimelinePoint, name: string, fallbackLabel: str
   return point.series?.[name] ?? (name === fallbackLabel ? point.count : 0);
 }
 
+function seriesColorIndex(index: number): number {
+  return (index % TIME_SERIES_COLORS.length) + 1;
+}
+
+function pointSeriesCoordinate(
+  point: TimelinePoint,
+  name: string,
+  fallbackLabel: string,
+): number | null {
+  const value = point.series?.[name] ?? (name === fallbackLabel ? point.count : null);
+  return value !== null && Number.isFinite(value) ? value : null;
+}
+
 export function formatTimelineSeriesValue(
   point: TimelinePoint,
   name: string,
@@ -71,15 +94,23 @@ export function formatTimelineSeriesValue(
     : formatExactNumericText(exact, { compact, compactSuffix: "s" });
 }
 
-function axisScale(
-  points: TimelinePoint[],
-  seriesNames: string[],
-  fallbackLabel: string,
-): { minimum: number; maximum: number; ticks: number[] } {
-  const values = points
-    .flatMap((point) => seriesNames.map((name) => pointSeriesValue(point, name, fallbackLabel)))
-    .filter(Number.isFinite);
-  return linearTickScale(values);
+function contiguousSegments(
+  coordinates: readonly (TimeSeriesCoordinate | null)[],
+): TimeSeriesCoordinate[][] {
+  const segments: TimeSeriesCoordinate[][] = [];
+  let activeSegment: TimeSeriesCoordinate[] | null = null;
+  for (const coordinate of coordinates) {
+    if (coordinate === null) {
+      activeSegment = null;
+      continue;
+    }
+    if (activeSegment === null) {
+      activeSegment = [];
+      segments.push(activeSegment);
+    }
+    activeSegment.push(coordinate);
+  }
+  return segments;
 }
 
 function tickIndices(length: number, targetCount: number): number[] {
@@ -91,7 +122,16 @@ function tickIndices(length: number, targetCount: number): number[] {
   );
 }
 
-export function TimeSeriesLineChart({ points, seriesLabel = "Events" }: TimeSeriesLineChartProps) {
+function formatAxisTick(value: number, approximate: boolean, stackMode: StackMode): string {
+  return `${approximate ? "≈" : ""}${COMPACT_NUMBER_FORMAT.format(value)}${stackMode === "stacked100" ? "%" : ""}`;
+}
+
+export function TimeSeriesLineChart({
+  chartStyle = "line",
+  points,
+  seriesLabel = "Events",
+  stackMode = "none",
+}: TimeSeriesLineChartProps) {
   const plotRef = useRef<HTMLDivElement>(null);
   const inspectButtonRef = useRef<HTMLButtonElement>(null);
   const hintId = useId();
@@ -99,9 +139,13 @@ export function TimeSeriesLineChart({ points, seriesLabel = "Events" }: TimeSeri
   const [plotWidth, setPlotWidth] = useState(900);
   const [keyboardActive, setKeyboardActive] = useState(false);
   const seriesNames = useMemo(() => timelineSeriesNames(points, seriesLabel), [points, seriesLabel]);
+  const stackedRows = useMemo(() => stackChartRows(
+    points.map((point) => seriesNames.map((name) => pointSeriesCoordinate(point, name, seriesLabel))),
+    stackMode,
+  ), [points, seriesLabel, seriesNames, stackMode]);
   const { minimum, maximum, ticks } = useMemo(
-    () => axisScale(points, seriesNames, seriesLabel),
-    [points, seriesLabel, seriesNames],
+    () => linearTickScale(stackedChartDomain(stackedRows)),
+    [stackedRows],
   );
   const axisRange = maximum - minimum;
   const hasApproximateCoordinates = points.some((point) => point.coordinateApproximate === true);
@@ -120,22 +164,27 @@ export function TimeSeriesLineChart({ points, seriesLabel = "Events" }: TimeSeri
     setActiveIndex((current) => current === null || points.length === 0 ? null : Math.min(current, points.length - 1));
   }, [points]);
 
-  const seriesCoordinates = useMemo(() => seriesNames.map((name) => ({
+  const seriesCoordinates = useMemo(() => seriesNames.map((name, seriesIndex) => ({
     name,
-    points: points.map((point, index) => {
-      const value = pointSeriesValue(point, name, seriesLabel);
-      const projectedValue = Number.isFinite(value) ? Math.min(maximum, Math.max(minimum, value)) : 0;
+    points: points.map((_point, index) => {
+      const value = stackedRows[index]?.[seriesIndex];
+      if (value === undefined || value.raw === null) return null;
+      const projectedEnd = Math.min(maximum, Math.max(minimum, value.end));
+      const projectedStart = Math.min(maximum, Math.max(minimum, value.start));
       return {
         x: points.length <= 1 ? VIEWBOX_WIDTH / 2 : (index / (points.length - 1)) * VIEWBOX_WIDTH,
-        y: VIEWBOX_HEIGHT - ((projectedValue - minimum) / axisRange) * VIEWBOX_HEIGHT,
+        y: VIEWBOX_HEIGHT - ((projectedEnd - minimum) / axisRange) * VIEWBOX_HEIGHT,
+        startY: VIEWBOX_HEIGHT - ((projectedStart - minimum) / axisRange) * VIEWBOX_HEIGHT,
       };
     }),
-  })), [axisRange, maximum, minimum, points, seriesLabel, seriesNames]);
+  })), [axisRange, maximum, minimum, points, seriesNames, stackedRows]);
   const xTicks = tickIndices(points.length, plotWidth < 520 ? 3 : plotWidth < 820 ? 4 : 5);
   const activePoint = activeIndex === null ? null : points[activeIndex] ?? null;
   const activeCoordinates = activeIndex === null ? [] : seriesCoordinates.flatMap((series, seriesIndex) => {
     const coordinate = series.points[activeIndex];
-    return coordinate === undefined ? [] : [{ ...coordinate, name: series.name, seriesIndex }];
+    return coordinate === undefined || coordinate === null
+      ? []
+      : [{ ...coordinate, name: series.name, seriesIndex }];
   });
   const activeCoordinate = activeCoordinates.reduce<(typeof activeCoordinates)[number] | null>((highest, coordinate) =>
     highest === null || coordinate.y < highest.y ? coordinate : highest, null);
@@ -180,9 +229,16 @@ export function TimeSeriesLineChart({ points, seriesLabel = "Events" }: TimeSeri
     : `${activePoint.label}, ${seriesNames.map((name) => `${timelineSeriesDisplayName(name)} ${formatTimelineSeriesValue(activePoint, name, seriesLabel)}`).join(", ")}${activePoint.coordinateApproximate ? ". Chart position is approximate; displayed values are exact." : ""}`;
 
   return (
-    <div className="time-series-chart" data-testid="line-chart">
+    <div
+      className="time-series-chart"
+      data-chart-style={chartStyle}
+      data-stack-mode={stackMode}
+      data-testid="line-chart"
+    >
       <div className="time-series-chart__y-axis" aria-hidden="true">
-        {ticks.map((tick) => <span key={tick}>{hasApproximateCoordinates ? "≈" : ""}{COMPACT_NUMBER_FORMAT.format(tick)}</span>)}
+        {ticks.map((tick) => (
+          <span key={tick}>{formatAxisTick(tick, hasApproximateCoordinates, stackMode)}</span>
+        ))}
       </div>
       <div className="time-series-chart__plot" ref={plotRef}>
         <svg viewBox={`0 0 ${VIEWBOX_WIDTH} ${VIEWBOX_HEIGHT}`} preserveAspectRatio="none" aria-hidden="true">
@@ -201,13 +257,30 @@ export function TimeSeriesLineChart({ points, seriesLabel = "Events" }: TimeSeri
               );
             })}
           </g>
-          {seriesCoordinates.map((series, seriesIndex) => (
-            <polyline
-              className="time-series-chart__line"
-              key={series.name}
-              points={series.points.map(({ x, y }) => `${x.toFixed(2)},${y.toFixed(2)}`).join(" ")}
-              style={{ stroke: TIME_SERIES_COLORS[seriesIndex % TIME_SERIES_COLORS.length] }}
-            />
+          {chartStyle === "area" ? seriesCoordinates.flatMap((series, seriesIndex) => (
+            contiguousSegments(series.points).map((segment) => (
+              <polygon
+                className="time-series-chart__area time-series-chart__series"
+                data-series-color={seriesColorIndex(seriesIndex)}
+                data-series-name={series.name}
+                key={`${series.name}-area-${segment[0]?.x}`}
+                points={[
+                  ...segment.map(({ x, y }) => `${x.toFixed(2)},${y.toFixed(2)}`),
+                  ...segment.toReversed().map(({ startY, x }) => `${x.toFixed(2)},${startY.toFixed(2)}`),
+                ].join(" ")}
+              />
+            ))
+          )) : null}
+          {seriesCoordinates.flatMap((series, seriesIndex) => (
+            contiguousSegments(series.points).map((segment) => (
+              <polyline
+                className="time-series-chart__line time-series-chart__series"
+                data-series-color={seriesColorIndex(seriesIndex)}
+                data-series-name={series.name}
+                key={`${series.name}-line-${segment[0]?.x}`}
+                points={segment.map(({ x, y }) => `${x.toFixed(2)},${y.toFixed(2)}`).join(" ")}
+              />
+            ))
           ))}
         </svg>
         <button
@@ -233,11 +306,11 @@ export function TimeSeriesLineChart({ points, seriesLabel = "Events" }: TimeSeri
             <span className="time-series-chart__crosshair" aria-hidden="true" style={{ left: `${activeXPercent}%` }} />
             {activeCoordinates.map((coordinate) => (
               <span
-                className="time-series-chart__marker"
+                className="time-series-chart__marker time-series-chart__series"
                 aria-hidden="true"
+                data-series-color={seriesColorIndex(coordinate.seriesIndex)}
                 key={coordinate.name}
                 style={{
-                  borderColor: TIME_SERIES_COLORS[coordinate.seriesIndex % TIME_SERIES_COLORS.length],
                   left: `${(coordinate.x / VIEWBOX_WIDTH) * 100}%`,
                   top: `${(coordinate.y / VIEWBOX_HEIGHT) * 100}%`,
                 }}
@@ -251,7 +324,11 @@ export function TimeSeriesLineChart({ points, seriesLabel = "Events" }: TimeSeri
               <strong>{activePoint.label}</strong>
               {seriesNames.map((name, seriesIndex) => (
                 <span key={name}>
-                  <i aria-hidden="true" style={{ backgroundColor: TIME_SERIES_COLORS[seriesIndex % TIME_SERIES_COLORS.length] }} />
+                  <i
+                    aria-hidden="true"
+                    className="time-series-chart__series"
+                    data-series-color={seriesColorIndex(seriesIndex)}
+                  />
                   <span>{timelineSeriesDisplayName(name)}</span>
                   <b>{formatTimelineSeriesValue(activePoint, name, seriesLabel)}</b>
                 </span>

@@ -450,3 +450,67 @@ test("statistics column layout survives identical reruns and resets for a new qu
   await runFromEditor(page);
   await expect(page.getByRole("table", { name: "Search statistics" }).getByRole("columnheader")).toHaveCount(4);
 });
+
+test("saved split timecharts restore Area and stacking presentation after rerun", async ({ page }) => {
+  await openSeededWorkspace(page);
+  const editor = page.getByTestId("search-input");
+  const query = "index=main | timechart count by service";
+  await editor.fill(query);
+  await runFromEditor(page);
+
+  const areaButton = page.getByRole("button", { name: "Area", exact: true });
+  const lineButton = page.getByRole("button", { name: "Line", exact: true });
+  const stacking = page.getByLabel("Stacking");
+  const title = page.getByLabel("Title");
+  const legend = page.getByLabel("Legend");
+  await areaButton.click();
+  await stacking.selectOption("stacked100");
+  await title.fill("Service share over time");
+  await legend.selectOption("right");
+  await expect(page.getByTestId("visualization-chart")).toHaveAttribute("data-stack-mode", "stacked100");
+  await expect(page.locator(".time-series-chart__area")).toHaveCount(2);
+
+  await page.getByRole("button", { name: /^Save As/u }).click();
+  await page.getByRole("menuitem", { name: /^Saved search/u }).click();
+  const saveDialog = page.getByRole("dialog", { name: "Save search" });
+  await saveDialog.getByRole("textbox", { name: "Name", exact: true }).fill("Area stack regression");
+  await saveDialog.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(saveDialog).toHaveCount(0);
+
+  await lineButton.click();
+  await stacking.selectOption("none");
+  await title.fill("Temporary title");
+  await legend.selectOption("bottom");
+
+  await page.getByRole("button", { name: "Open", exact: true }).click();
+  const openDialog = page.getByRole("dialog", { name: "Open a saved search" });
+  await openDialog.getByRole("button", { name: /^Area stack regression/u }).click();
+  await expect(openDialog).toHaveCount(0);
+  await expect(editor).toHaveValue(query);
+
+  await runFromEditor(page);
+  await expect(areaButton).toHaveAttribute("aria-pressed", "true");
+  await expect(stacking).toHaveValue("stacked100");
+  await expect(title).toHaveValue("Service share over time");
+  await expect(legend).toHaveValue("right");
+  await expect(page.getByTestId("visualization-chart")).toHaveAttribute("data-stack-mode", "stacked100");
+  await expect(page.locator(".time-series-chart__area")).toHaveCount(2);
+
+  await stacking.selectOption("stacked");
+  await title.fill("Service totals over time");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByTestId("toast")).toContainText("Saved changes");
+  await lineButton.click();
+  await stacking.selectOption("none");
+  await title.fill("Another temporary title");
+
+  await page.getByRole("button", { name: "Open", exact: true }).click();
+  await page.getByRole("dialog", { name: "Open a saved search" })
+    .getByRole("button", { name: /^Area stack regression/u })
+    .click();
+  await runFromEditor(page);
+  await expect(areaButton).toHaveAttribute("aria-pressed", "true");
+  await expect(stacking).toHaveValue("stacked");
+  await expect(title).toHaveValue("Service totals over time");
+  await expect(page.getByTestId("visualization-chart")).toHaveAttribute("data-stack-mode", "stacked");
+});

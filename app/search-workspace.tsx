@@ -37,6 +37,7 @@ import {
   type DemoField,
   type DemoHistoryEntry,
   type DemoSavedSearch,
+  type DemoSavedSearchVisualization,
   type DemoScalar,
   type TimelinePoint,
 } from "@/lib/demo/search-data";
@@ -237,6 +238,7 @@ import type {
   SearchMode,
   SearchSettingsCapabilities,
   SearchWorkspaceProps,
+  StackMode,
   StatsDensity,
   TimePickerSection,
   TimeRange,
@@ -266,6 +268,7 @@ import type { StatisticsColumnLayoutStore } from "./search-workspace/panels/stat
 import { VisualizationPanel } from "./search-workspace/panels/visualization-panel";
 import {
   backendJobPhase,
+  demoTimechartSplitField,
   eventCountForQuery,
   filteredDemoEvents,
   formatDuration,
@@ -390,6 +393,7 @@ interface SavedWorkspaceBaseline {
   query: string;
   selectedFields: string[];
   showDataLabels: boolean;
+  stackMode: StackMode;
   timeZone: string;
 }
 
@@ -502,15 +506,33 @@ function workspaceResultTabFromSaved(tab: SearchResultTab): ResultTab | null {
 }
 
 function visualizationTypeForChartStyle(style: ChartStyle): VisualizationType {
+  if (style === "area") return VisualizationType.VISUALIZATION_TYPE_AREA;
   if (style === "line") return VisualizationType.VISUALIZATION_TYPE_LINE;
   if (style === "horizontal") return VisualizationType.VISUALIZATION_TYPE_BAR;
   return VisualizationType.VISUALIZATION_TYPE_COLUMN;
 }
 
 function chartStyleForVisualizationType(type: VisualizationType): ChartStyle | null {
+  if (type === VisualizationType.VISUALIZATION_TYPE_AREA) return "area";
   if (type === VisualizationType.VISUALIZATION_TYPE_LINE) return "line";
   if (type === VisualizationType.VISUALIZATION_TYPE_BAR) return "horizontal";
   if (type === VisualizationType.VISUALIZATION_TYPE_COLUMN) return "column";
+  return null;
+}
+
+function visualizationStackMode(mode: StackMode): VisualizationStackMode {
+  if (mode === "stacked") return VisualizationStackMode.VISUALIZATION_STACK_MODE_STACKED;
+  if (mode === "stacked100") return VisualizationStackMode.VISUALIZATION_STACK_MODE_STACKED_100_PERCENT;
+  return VisualizationStackMode.VISUALIZATION_STACK_MODE_NONE;
+}
+
+function workspaceStackMode(mode: VisualizationStackMode): StackMode | null {
+  if (
+    mode === VisualizationStackMode.VISUALIZATION_STACK_MODE_UNSPECIFIED
+    || mode === VisualizationStackMode.VISUALIZATION_STACK_MODE_NONE
+  ) return "none";
+  if (mode === VisualizationStackMode.VISUALIZATION_STACK_MODE_STACKED) return "stacked";
+  if (mode === VisualizationStackMode.VISUALIZATION_STACK_MODE_STACKED_100_PERCENT) return "stacked100";
   return null;
 }
 
@@ -912,6 +934,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const [chartTitle, setChartTitle] = useState("Event volume by level");
   const [legendPosition, setLegendPosition] = useState<"bottom" | "right" | "none">("bottom");
   const [showDataLabels, setShowDataLabels] = useState(true);
+  const [stackMode, setStackMode] = useState<StackMode>("none");
   const [statsDensity, setStatsDensity] = useState<StatsDensity>("compact");
   const [patternSensitivity, setPatternSensitivity] = useState<PatternSensitivity>("Balanced");
   const [eventDisplay, setEventDisplay] = useState<EventDisplay>("List");
@@ -1279,12 +1302,23 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         ? displayedBackendResults?.timeline ?? []
         : []
       : backendTimeline
-    : DEMO_TIMELINE, [
+    : demoTimechartSplitField(submittedQuery) === null
+      ? DEMO_TIMELINE
+      : DEMO_TIMELINE.map((point, index) => {
+        const apiCount = Math.round(point.count * (index % 2 === 0 ? 0.62 : 0.48));
+        return Object.assign({}, point, {
+          series: {
+            api: apiCount,
+            worker: point.count - apiCount,
+          },
+        });
+      }), [
     backendDisplayingPreview,
     backendEnabled,
     backendResultKind,
     backendTimeline,
     displayedBackendResults?.timeline,
+    submittedQuery,
   ]);
   const timechartValueColumns = useMemo(() => backendEnabled
     ? backendResultSchema === null
@@ -1433,7 +1467,11 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     return {
       savedSearchId: activeSavedSearchId,
       activeTab,
-      chartStyle: isTimechartResult && timechartValueColumns.length > 1 ? "line" : chartStyle,
+      chartStyle: isTimechartResult
+        && timechartValueColumns.length > 1
+        && chartStyle !== "area"
+        ? "line"
+        : chartStyle,
       chartTitle,
       earliest: timeRange.earliest,
       latest: timeRange.latest,
@@ -1441,6 +1479,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       query,
       selectedFields,
       showDataLabels,
+      stackMode,
       timeZone: timeRange.timezone ?? "",
     };
   }, [
@@ -1454,13 +1493,19 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     pendingSavedSelectedFieldsRef,
     query,
     showDataLabels,
+    stackMode,
     timeRange.earliest,
     timeRange.latest,
     timeRange.timezone,
     timechartValueColumns.length,
   ]);
   useEffect(() => {
-    if (isTimechartResult && timechartValueColumns.length > 1 && chartStyle !== "line") {
+    if (
+      isTimechartResult
+      && timechartValueColumns.length > 1
+      && chartStyle !== "line"
+      && chartStyle !== "area"
+    ) {
       setChartStyle("line");
       if (!visualizationEditedRef.current) {
         setSavedWorkspaceBaseline((current) => current === null
@@ -1469,6 +1514,28 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       }
     }
   }, [chartStyle, isTimechartResult, timechartValueColumns.length]);
+  const stackModeAvailable = isTimechartResult
+    ? timechartValueColumns.length > 1
+    : statisticsRows.some((row) => (row.series?.length ?? 0) > 0);
+  const demoSavedPresentationPending = !backendEnabled
+    && submittedQuery.trim().length === 0
+    && activeSavedSearchId !== null
+    && savedSearches.some((saved) =>
+      saved.id === activeSavedSearchId && saved.visualization !== undefined,
+    );
+  // Saved presentation is applied before a restored query has a result shape;
+  // normalization resumes once the pending server/demo definition is consumed.
+  const savedPresentationPending = demoSavedPresentationPending
+    || (backendEnabled && pendingSavedVisualizationRef.current !== undefined);
+  useEffect(() => {
+    if (stackModeAvailable || savedPresentationPending || stackMode === "none") return;
+    setStackMode("none");
+    if (!visualizationEditedRef.current) {
+      setSavedWorkspaceBaseline((current) => current === null
+        ? null
+        : { ...current, stackMode: "none" });
+    }
+  }, [savedPresentationPending, stackMode, stackModeAvailable]);
   useEffect(() => {
     if (
       savedBaselineCaptureId === null
@@ -4338,9 +4405,11 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       if (savedVisualization !== undefined) {
         // restoreBackendPresentation already applied the supported settings.
       } else if (kind === ResultSetKind.RESULT_SET_KIND_TIME_SERIES) {
+        setStackMode("none");
         setChartStyle("line");
         setChartTitle("Event volume over time");
       } else {
+        setStackMode("none");
         setChartStyle("column");
         setChartTitle("Event volume by level");
       }
@@ -4750,6 +4819,33 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     return false;
   }
 
+  function currentDemoVisualization(): DemoSavedSearchVisualization {
+    const splitTimechart = isTimechartResult
+      ? timechartValueColumns.length > 1
+      : demoTimechartSplitField(query) !== null;
+    return {
+      chartStyle: splitTimechart && chartStyle !== "area" ? "line" : chartStyle,
+      legend: legendPosition,
+      showDataLabels,
+      stackMode: stackModeAvailable || splitTimechart ? stackMode : "none",
+      title: chartTitle,
+    };
+  }
+
+  function restoreDemoVisualization(visualization: DemoSavedSearchVisualization | undefined) {
+    if (backendEnabled) return;
+    visualizationEditedRef.current = false;
+    if (visualization === undefined) {
+      setStackMode("none");
+      return;
+    }
+    setChartStyle(visualization.chartStyle);
+    setChartTitle(visualization.title);
+    setLegendPosition(visualization.legend);
+    setShowDataLabels(visualization.showDataLabels);
+    setStackMode(visualization.stackMode);
+  }
+
   function runSearch(queryOverride?: string, rangeOverride: TimeRange = timeRange, launch: "q" | "keep" = "q") {
     if (searchLaunchRef.current) return;
     if (backendWorkspaceTransitionBlocked()) return;
@@ -4846,10 +4942,17 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       setProgress(100);
       setElapsed("1.82 s");
       setActiveTab(resultTabForQuery(nextQuery));
-      if (hasPipelineCommand(nextQuery, "timechart")) {
+      const savedVisualization = activeSavedSearchIdRef.current === null
+        ? undefined
+        : savedSearches.find((saved) => saved.id === activeSavedSearchIdRef.current)?.visualization;
+      if (savedVisualization !== undefined) {
+        restoreDemoVisualization(savedVisualization);
+      } else if (hasPipelineCommand(nextQuery, "timechart")) {
+        setStackMode("none");
         setChartStyle("line");
         setChartTitle("Event volume over time");
       } else {
+        setStackMode("none");
         setChartStyle("column");
         setChartTitle("Event volume by level");
       }
@@ -5497,7 +5600,11 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         ? {
           ...existing,
           type: visualizationTypeForChartStyle(
-            isTimechartResult && timechartValueColumns.length > 1 ? "line" : chartStyle,
+            isTimechartResult
+              && timechartValueColumns.length > 1
+              && chartStyle !== "area"
+              ? "line"
+              : chartStyle,
           ),
           title: chartTitle.trim() || undefined,
           xField: isTimechartResult
@@ -5506,7 +5613,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           yFields: timechartValueColumns.length > 0
             ? timechartValueColumns
             : existing?.yFields ?? schemaFields.slice(1),
-          stackMode: existing?.stackMode ?? VisualizationStackMode.VISUALIZATION_STACK_MODE_NONE,
+          stackMode: visualizationStackMode(stackModeAvailable ? stackMode : "none"),
           showLegend: legendPosition !== "none",
           showDataLabels,
         }
@@ -5680,6 +5787,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       latest: timeRange.latest,
       updatedAt: "Just now",
       owner: "admin",
+      visualization: currentDemoVisualization(),
     };
     setSavedSearches((current) => [saved, ...current.filter((item) => item.id !== id)]);
     activeSavedSearchIdRef.current = id;
@@ -5714,7 +5822,14 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       return;
     }
     setSavedSearches((current) =>
-      current.map((item) => (item.id === activeSavedSearchId ? { ...item, query, earliest: timeRange.earliest, latest: timeRange.latest, updatedAt: "Just now" } : item)),
+      current.map((item) => (item.id === activeSavedSearchId ? {
+        ...item,
+        query,
+        earliest: timeRange.earliest,
+        latest: timeRange.latest,
+        updatedAt: "Just now",
+        visualization: currentDemoVisualization(),
+      } : item)),
     );
     setSavedWorkspaceBaseline(null);
     setSavedBaselineCaptureId(activeSavedSearchId);
@@ -5733,20 +5848,24 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     if (visualization === undefined) {
       pendingSavedVisualizationRef.current = undefined;
       preservedSavedVisualizationRef.current = null;
+      setStackMode("none");
       return null;
     }
     const restoredStyle = chartStyleForVisualizationType(visualization.type);
-    if (restoredStyle === null) {
+    const restoredStackMode = workspaceStackMode(visualization.stackMode);
+    if (restoredStyle === null || restoredStackMode === null) {
       pendingSavedVisualizationRef.current = undefined;
       preservedSavedVisualizationRef.current = visualization;
-      return "Its saved chart type is not available in this workspace; the server definition was preserved.";
+      setStackMode("none");
+      return "Its saved chart settings are not available in this workspace; the server definition was preserved.";
     }
     preservedSavedVisualizationRef.current = null;
     pendingSavedVisualizationRef.current = visualization;
     setChartStyle(restoredStyle);
+    setStackMode(restoredStackMode);
     setChartTitle(
       visualization.title?.trim()
-      || (chartStyleForVisualizationType(visualization.type) === "line"
+      || (restoredStyle === "line" || restoredStyle === "area"
         ? "Event volume over time"
         : "Event volume by level"),
     );
@@ -5832,9 +5951,14 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     setSavedBaselineCaptureId(saved.id);
     backendHistoryRerunRef.current = null;
     commitSearchLaunch("savedSearchId", saved.id, null, { mode: "navigate", state: launchHistoryState(saved.query, savedRange) });
-    const presentationNotice = restoreBackendPresentation(
-      backendSavedSearchesRef.current.get(saved.id)?.search,
-    );
+    let presentationNotice: string | null = null;
+    if (backendEnabled) {
+      presentationNotice = restoreBackendPresentation(
+        backendSavedSearchesRef.current.get(saved.id)?.search,
+      );
+    } else {
+      restoreDemoVisualization(saved.visualization);
+    }
     setModal(null);
     showToast(
       presentationNotice
@@ -7753,6 +7877,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           isTimechartResult={isTimechartResult}
           legendPosition={legendPosition}
           showDataLabels={showDataLabels}
+          stackMode={stackMode}
           previewTruncated={backendPreviewDisplay?.snapshot.truncated === true}
           statisticsDimension={statisticsDimension}
           statisticsRows={statisticsRows}
@@ -7763,11 +7888,11 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           onChartTitleChange={setChartTitle}
           onLegendPositionChange={setLegendPosition}
           onShowDataLabelsChange={setShowDataLabels}
+          onStackModeChange={setStackMode}
           onVisualizationEdited={() => {
             preservedSavedVisualizationRef.current = null;
             visualizationEditedRef.current = true;
           }}
-          onShowToast={showToast}
         />
       ) : null}
     </ProductShell>

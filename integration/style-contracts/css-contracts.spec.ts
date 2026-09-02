@@ -673,6 +673,35 @@ test("the statistics sparkline paints with the palette accent", async ({ page })
   await expect(polyline).toHaveCSS("stroke-linecap", "round");
 });
 
+test("time-series areas retain their series colour at the semantic fill opacity", async ({ page }) => {
+  await mount(page, `
+    <svg class="time-series-chart">
+      <polygon class="time-series-chart__area time-series-chart__series" data-series-color="2" points="0,20 20,0 20,20"></polygon>
+    </svg>
+  `, DESKTOP_WIDTH);
+
+  const area = page.locator(".time-series-chart__area");
+  await expect(area).toHaveCSS("fill", "rgb(40, 120, 168)");
+  await expect(area).toHaveCSS("fill-opacity", "0.24");
+  await expect(area).toHaveCSS("stroke", "none");
+});
+
+test("stacked categorical slots overlap one shared track in both orientations", async ({ page }) => {
+  await mount(page, `
+    <span class="visualization-vertical-bars is-stacked">
+      <span class="visualization-vertical-slot"></span>
+    </span>
+    <span class="visualization-horizontal-bars is-stacked">
+      <span class="visualization-horizontal-slot"></span>
+    </span>
+  `, DESKTOP_WIDTH);
+
+  await expect(page.locator(".visualization-vertical-bars")).toHaveCSS("display", "block");
+  await expect(page.locator(".visualization-vertical-slot")).toHaveCSS("position", "absolute");
+  await expect(page.locator(".visualization-horizontal-bars")).toHaveCSS("display", "block");
+  await expect(page.locator(".visualization-horizontal-slot")).toHaveCSS("position", "absolute");
+});
+
 const liveJobsMarkup = `
 <div class="table-wrap">
   <table class="table table--cards live-jobs-table">
