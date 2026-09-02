@@ -2,6 +2,7 @@ package plan
 
 import (
 	"errors"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -310,5 +311,74 @@ func TestBuildChartNumericDiagnosticRangeIsAggregate(t *testing.T) {
 	}
 	if diagnostic.Range != command.Aggregate.Range {
 		t.Fatalf("diagnostic range = %#v, want aggregate %#v", diagnostic.Range, command.Aggregate.Range)
+	}
+}
+
+func TestBuildChartSingleSplitPlansAsStatsBy(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name, chart, stats string
+	}{
+		{"count BY", `index=gradethis | chart count BY host`, `index=gradethis | stats count BY host`},
+		{"count OVER", `index=gradethis | chart count OVER host`, `index=gradethis | stats count BY host`},
+		{"sum OVER", `index=gradethis | chart sum(bytes) OVER host`, `index=gradethis | stats sum(bytes) BY host`},
+		{"percentile BY", `index=gradethis | chart p95(latency) BY service`, `index=gradethis | stats p95(latency) BY service`},
+		{"after table", `index=gradethis | table host bytes | chart avg(bytes) BY host`, `index=gradethis | table host bytes | stats avg(bytes) BY host`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			chart, err := Build(mustParse(t, test.chart), testScope([]string{"gradethis"}, nil))
+			if err != nil {
+				t.Fatalf("Build(%q): %v", test.chart, err)
+			}
+			stats, err := Build(mustParse(t, test.stats), testScope([]string{"gradethis"}, nil))
+			if err != nil {
+				t.Fatalf("Build(%q): %v", test.stats, err)
+			}
+			if chart.DynamicOutput != nil || !slices.Equal(chart.OutputFields, stats.OutputFields) {
+				t.Fatalf("chart outputs = %v (dynamic %#v), want the stats outputs %v", chart.OutputFields, chart.DynamicOutput, stats.OutputFields)
+			}
+			chartAggregate, ok := chart.Operators[len(chart.Operators)-1].(*Aggregate)
+			if !ok {
+				t.Fatalf("chart last operator = %T, want *Aggregate", chart.Operators[len(chart.Operators)-1])
+			}
+			statsAggregate := stats.Operators[len(stats.Operators)-1].(*Aggregate)
+			if len(chart.Operators) != len(stats.Operators) {
+				t.Fatalf("chart operators = %#v, want the stats operator chain %#v", chart.Operators, stats.Operators)
+			}
+			for index := range chart.Operators[:len(chart.Operators)-1] {
+				if reflect.TypeOf(chart.Operators[index]) != reflect.TypeOf(stats.Operators[index]) {
+					t.Fatalf("chart operator %d = %T, want %T", index, chart.Operators[index], stats.Operators[index])
+				}
+			}
+			// Source ranges differ between the two spellings; the group keys
+			// and measures must not.
+			if len(chartAggregate.GroupBy) != 1 || chartAggregate.GroupBy[0].Name != statsAggregate.GroupBy[0].Name ||
+				len(chartAggregate.Measures) != 1 ||
+				!reflect.DeepEqual(chartAggregate.StatsOptions, statsAggregate.StatsOptions) {
+				t.Fatalf("chart aggregate = %#v, want the stats aggregate %#v", chartAggregate, statsAggregate)
+			}
+			chartMeasure, statsMeasure := chartAggregate.Measures[0], statsAggregate.Measures[0]
+			chartMeasure.Input.Range, statsMeasure.Input.Range = spl.Range{}, spl.Range{}
+			if !reflect.DeepEqual(chartMeasure, statsMeasure) {
+				t.Fatalf("chart measure = %#v, want the stats measure %#v", chartMeasure, statsMeasure)
+			}
+		})
+	}
+
+	for _, test := range []struct {
+		name, source, code string
+	}{
+		{"row field is the measure input", `index=gradethis | chart sum(bytes) BY bytes`, "SPL_DUPLICATE_FIELD"},
+		{"reserved series name as row", `index=gradethis | chart count BY OTHER`, "SPL_UNSUPPORTED_CHART_FIELD_TYPE"},
+		{"reserved payload on an open schema", `index=gradethis | chart count OVER fields`, "SPL_UNSUPPORTED_CHART_FIELD_TYPE"},
+		{"not the final command", `index=gradethis | chart count BY host | table host`, "SPL_UNSUPPORTED_CHART_PIPELINE"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Build(mustParse(t, test.source), testScope([]string{"gradethis"}, nil))
+			assertDiagnosticCode(t, err, test.code)
+		})
 	}
 }

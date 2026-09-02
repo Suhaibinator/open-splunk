@@ -1516,9 +1516,11 @@ func timechartSyntaxSuggestions() []string {
 }
 
 // parseChartCommand parses the bounded two-field pivot
-// "chart <aggregate> OVER <row> BY <column>" and its equivalent spelling
-// "chart <aggregate> BY <row>, <column>". Chart never discretizes, so no
-// option is accepted; bin/bucket remains the only discretizer.
+// "chart <aggregate> OVER <row> BY <column>", its equivalent spelling
+// "chart <aggregate> BY <row>, <column>", and the single-split forms
+// "chart <aggregate> OVER <row>" / "chart <aggregate> BY <row>" that plan as
+// the stats BY table. Chart never discretizes, so no option is accepted;
+// bin/bucket remains the only discretizer.
 func (p *parser) parseChartCommand(name token) (Command, error) {
 	if diagnostic := p.chartOptionDiagnostic(); diagnostic != nil {
 		return nil, diagnostic
@@ -1549,7 +1551,7 @@ func (p *parser) parseChartCommand(name token) (Command, error) {
 		}
 		over = row
 		if p.atCommandEnd() {
-			return nil, p.chartSingleSplitSyntax()
+			break
 		}
 		if !p.isKeyword("BY") {
 			return nil, p.chartClauseDiagnostic("chart OVER requires BY followed by one column split field")
@@ -1572,7 +1574,7 @@ func (p *parser) parseChartCommand(name token) (Command, error) {
 		over, splitBy = row, column
 	default:
 		if p.atCommandEnd() {
-			return nil, p.chartSingleSplitSyntax()
+			return nil, p.chartMissingSplitSyntax()
 		}
 		current := p.current()
 		if current.kind == tokenComma || (current.kind == tokenWord && (supportedStatsAggregateName(current.text) ||
@@ -1582,15 +1584,19 @@ func (p *parser) parseChartCommand(name token) (Command, error) {
 		return nil, p.chartClauseDiagnostic("chart requires OVER <row> BY <column> or BY <row>, <column>")
 	}
 
-	if over.Name == splitBy.Name {
-		return nil, p.unsupportedChartSyntaxAt(splitBy.Range, "chart row and column fields must be different")
+	end := over.Range.End
+	if splitBy != (StatsGroupField{}) {
+		if over.Name == splitBy.Name {
+			return nil, p.unsupportedChartSyntaxAt(splitBy.Range, "chart row and column fields must be different")
+		}
+		end = splitBy.Range.End
 	}
 	return &ChartCommand{
 		Aggregate:       aggregate,
 		Over:            over,
 		SplitBy:         splitBy,
 		OverSpelledOver: overSpelledOver,
-		Range:           Range{Start: name.sourceRange.Start, End: splitBy.Range.End},
+		Range:           Range{Start: name.sourceRange.Start, End: end},
 	}, nil
 }
 
@@ -1702,8 +1708,8 @@ func (p *parser) parseChartSplitFields() (StatsGroupField, StatsGroupField, erro
 	if wantField {
 		return StatsGroupField{}, StatsGroupField{}, p.errorAtCurrent("SPL_EXPECTED_FIELD", "chart BY requires a split field")
 	}
-	if len(fields) != 2 {
-		return StatsGroupField{}, StatsGroupField{}, p.chartSingleSplitSyntax()
+	if len(fields) == 1 {
+		return fields[0], StatsGroupField{}, nil
 	}
 	return fields[0], fields[1], nil
 }
@@ -1763,12 +1769,12 @@ func (p *parser) chartClauseDiagnostic(message string) *Diagnostic {
 	return p.unsupportedChartSyntax(current, message)
 }
 
-func (p *parser) chartSingleSplitSyntax() *Diagnostic {
+func (p *parser) chartMissingSplitSyntax() *Diagnostic {
 	return &Diagnostic{
 		Code:        "SPL_UNSUPPORTED_CHART_SYNTAX",
-		Message:     "chart requires one row split field and one column split field",
+		Message:     "chart requires a row split field: OVER <row> or BY <row>, optionally followed by one column split field",
 		Range:       p.current().sourceRange,
-		Suggestions: []string{"stats count BY <field>", "chart count OVER row BY column", "chart p95(field) OVER row BY column", "chart sum(field) OVER row BY column"},
+		Suggestions: []string{"stats count BY <field>", "chart count BY row", "chart count OVER row BY column", "chart p95(field) OVER row BY column", "chart sum(field) OVER row BY column"},
 	}
 }
 

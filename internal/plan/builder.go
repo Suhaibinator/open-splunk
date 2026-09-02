@@ -1727,7 +1727,11 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			// usenull and useother default to true, so NULL and OTHER are
 			// always reachable public column names. A field spelled like one
 			// of them would collide with a series deterministically.
-			for _, axis := range []spl.StatsGroupField{command.Over, command.SplitBy} {
+			axes := []spl.StatsGroupField{command.Over, command.SplitBy}
+			if command.SingleSplit() {
+				axes = axes[:1]
+			}
+			for _, axis := range axes {
 				if axis.Quoted {
 					return nil, &Diagnostic{
 						Code:    "SPL_UNSUPPORTED_CHART_FIELD_TYPE",
@@ -1760,6 +1764,33 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			if overErr != nil {
 				return nil, overErr
 			}
+			if measure.Function != AggregateFunctionCountRows &&
+				measure.Input.Name == over.Name {
+				return nil, &Diagnostic{
+					Code:    "SPL_DUPLICATE_FIELD",
+					Message: fmt.Sprintf("chart aggregate input and row field %q are repeated", over.Name),
+					Range:   command.Over.Range,
+				}
+			}
+			if command.SingleSplit() {
+				// One split field is Splunk's stats BY table: the row split
+				// becomes the group key and the aggregate the only other
+				// column, so it plans exactly as `stats <aggregate> BY <row>`.
+				statsOptions, optionsErr := buildStatsOptions(spl.StatsOptions{}, command.Range)
+				if optionsErr != nil {
+					return nil, optionsErr
+				}
+				result.OutputFields = []string{over.Name, measure.Output}
+				result.DynamicOutput = nil
+				outputSchemaKnown = true
+				result.Operators = append(result.Operators, &Aggregate{
+					GroupBy:      []FieldRef{over},
+					Measures:     []AggregateMeasure{measure},
+					StatsOptions: statsOptions,
+					Range:        command.Range,
+				})
+				continue
+			}
 			splitBy, splitErr := ResolveField(command.SplitBy.Name, command.SplitBy.Range)
 			if splitErr != nil {
 				return nil, splitErr
@@ -1769,14 +1800,6 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					Code:    "SPL_DUPLICATE_FIELD",
 					Message: fmt.Sprintf("chart row and column field %q is repeated", splitBy.Name),
 					Range:   command.SplitBy.Range,
-				}
-			}
-			if measure.Function != AggregateFunctionCountRows &&
-				measure.Input.Name == over.Name {
-				return nil, &Diagnostic{
-					Code:    "SPL_DUPLICATE_FIELD",
-					Message: fmt.Sprintf("chart aggregate input and row field %q are repeated", over.Name),
-					Range:   command.Over.Range,
 				}
 			}
 			result.OutputFields = nil

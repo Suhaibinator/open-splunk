@@ -1254,14 +1254,17 @@ func (c *TimechartCommand) SourceRange() Range { return c.Range }
 // value of the row split and one runtime series per retained value of the
 // column split. Aggregate retains the same source-located representation used
 // by stats and timechart. The bounded compatibility surface supports one
-// argument-free count or one exact-field count/percentile/sum/average plus two
-// distinct split fields, and is a terminal transforming command.
+// argument-free count or one exact-field count/percentile/sum/average plus one
+// or two distinct split fields, and is a terminal transforming command. With a
+// single split field the command is the stats BY table of that field.
 type ChartCommand struct {
 	Aggregate StatsAggregate
 	// Over is Splunk's row-split field: the first output column.
 	Over StatsGroupField
 	// SplitBy is Splunk's column-split field: its runtime values become the
-	// remaining output column names.
+	// remaining output column names. It is zero-valued for the single-split
+	// forms "OVER <row>" and "BY <row>", whose only other column is the
+	// aggregate output.
 	SplitBy StatsGroupField
 	// OverSpelledOver records whether the user wrote OVER <row> BY <column>
 	// rather than the equivalent BY <row>, <column>. Both spellings describe
@@ -1274,6 +1277,10 @@ type ChartCommand struct {
 func (*ChartCommand) command()             {}
 func (*ChartCommand) Name() string         { return "chart" }
 func (c *ChartCommand) SourceRange() Range { return c.Range }
+
+// SingleSplit reports whether the command names only a row split field and
+// therefore produces the stats BY table instead of a runtime-named pivot.
+func (c *ChartCommand) SingleSplit() bool { return c.SplitBy == (StatsGroupField{}) }
 
 // MaximumDiagnosticSuggestions bounds the suggestion list carried by any
 // diagnostic. Stored search history, knowledge validation results, and the

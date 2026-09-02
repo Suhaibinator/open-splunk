@@ -2465,9 +2465,9 @@ func TestParseChartRejectsUnsupportedOrMalformedSyntax(t *testing.T) {
 		code      string
 		locatedAt string
 	}{
-		{"single OVER split", `index=main | chart count over path`, "SPL_UNSUPPORTED_CHART_SYNTAX", ""},
-		{"single BY split", `index=main | chart count by path`, "SPL_UNSUPPORTED_CHART_SYNTAX", ""},
 		{"no split at all", `index=main | chart count`, "SPL_UNSUPPORTED_CHART_SYNTAX", ""},
+		{"single OVER split then stray field", `index=main | chart count over path level`, "SPL_UNSUPPORTED_CHART_SYNTAX", "level"},
+		{"single BY split then stray option", `index=main | chart count by path limit=5`, "SPL_UNSUPPORTED_CHART_OPTION", "limit"},
 		{"identical OVER and BY fields", `index=main | chart count over path by path`, "SPL_UNSUPPORTED_CHART_SYNTAX", "path"},
 		{"identical BY list fields", `index=main | chart count by path, path`, "SPL_UNSUPPORTED_CHART_SYNTAX", "path"},
 		{"three BY fields", `index=main | chart count by path, level, host`, "SPL_UNSUPPORTED_CHART_SYNTAX", ","},
@@ -2514,23 +2514,70 @@ func TestParseChartRejectsUnsupportedOrMalformedSyntax(t *testing.T) {
 	}
 }
 
-func TestParseChartSingleSplitSuggestsStats(t *testing.T) {
+func TestParseChartMissingSplitSuggestsStatsAndSingleSplit(t *testing.T) {
 	t.Parallel()
 
-	for _, source := range []string{
-		`index=main | chart count over path`,
-		`index=main | chart count by path`,
-		`index=main | chart count`,
-	} {
-		_, err := Parse(source)
-		diagnostic := &Diagnostic{}
-		ok := errors.As(err, &diagnostic)
-		if !ok || diagnostic.Code != "SPL_UNSUPPORTED_CHART_SYNTAX" {
-			t.Fatalf("Parse(%q) diagnostic = %#v", source, err)
+	source := `index=main | chart count`
+	_, err := Parse(source)
+	diagnostic := &Diagnostic{}
+	ok := errors.As(err, &diagnostic)
+	if !ok || diagnostic.Code != "SPL_UNSUPPORTED_CHART_SYNTAX" {
+		t.Fatalf("Parse(%q) diagnostic = %#v", source, err)
+	}
+	for _, suggestion := range []string{"stats count BY <field>", "chart count BY row"} {
+		if !slices.Contains(diagnostic.Suggestions, suggestion) {
+			t.Fatalf("Parse(%q) suggestions = %v, want %q", source, diagnostic.Suggestions, suggestion)
 		}
-		if !slices.Contains(diagnostic.Suggestions, "stats count BY <field>") {
-			t.Fatalf("Parse(%q) suggestions = %v, want the stats equivalent", source, diagnostic.Suggestions)
-		}
+	}
+}
+
+func TestParseChartSingleSplitFormsShareOneShape(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		source       string
+		spelledOver  bool
+		aggregate    string
+		wantRangeEnd string
+	}{
+		{"OVER row", `index=main | chart count OVER path`, true, "count", "chart count OVER path"},
+		{"BY row", `index=main | chart count BY path`, false, "count", "chart count BY path"},
+		{"lower-case by row", `index=main | chart sum(bytes) by path`, false, "sum(bytes)", "chart sum(bytes) by path"},
+		{"OVER a field spelled by", `index=main | chart p95(latency) OVER by`, true, "p95(latency)", "chart p95(latency) OVER by"},
+		{"BY a field spelled over", `index=main | chart count BY over`, false, "count", "chart count BY over"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			query, err := Parse(test.source)
+			if err != nil {
+				t.Fatalf("Parse(%q): %v", test.source, err)
+			}
+			command, ok := query.Commands[len(query.Commands)-1].(*ChartCommand)
+			if !ok {
+				t.Fatalf("last command = %T, want *ChartCommand", query.Commands[len(query.Commands)-1])
+			}
+			if !command.SingleSplit() || command.SplitBy != (StatsGroupField{}) {
+				t.Fatalf("SplitBy = %#v, want the zero single-split value", command.SplitBy)
+			}
+			wantRow := test.wantRangeEnd[strings.LastIndex(test.wantRangeEnd, " ")+1:]
+			if command.Over.Name != wantRow || command.Over.Quoted {
+				t.Fatalf("Over = %#v, want %q", command.Over, wantRow)
+			}
+			if command.OverSpelledOver != test.spelledOver {
+				t.Fatalf("OverSpelledOver = %t, want %t", command.OverSpelledOver, test.spelledOver)
+			}
+			if got := test.source[command.Aggregate.Range.Start.Offset:command.Aggregate.Range.End.Offset]; got != test.aggregate {
+				t.Fatalf("aggregate source = %q, want %q", got, test.aggregate)
+			}
+			if got := test.source[command.Range.Start.Offset:command.Range.End.Offset]; got != test.wantRangeEnd {
+				t.Fatalf("command source = %q, want %q", got, test.wantRangeEnd)
+			}
+			if shape := ClassifyResultShape(query); shape.Kind != ResultKindStatistics || shape.RuntimeNamedColumns {
+				t.Fatalf("ResultShape = %#v, want a statistics table without runtime-named columns", shape)
+			}
+		})
 	}
 }
 

@@ -5286,3 +5286,27 @@ func testChartScope() plan.Scope {
 		VisibilityCutoff:  new(uint64(73)),
 	}
 }
+
+func TestCompileChartSingleSplitMatchesStatsBy(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name, chart, stats string
+	}{
+		{"count BY", `index=gradethis | chart count BY host`, `index=gradethis | stats count BY host`},
+		{"sum OVER", `index=gradethis | chart sum(bytes) OVER host`, `index=gradethis | stats sum(bytes) BY host`},
+		{"percentile after table", `index=gradethis | table host latency | chart p95(latency) BY host`, `index=gradethis | table host latency | stats p95(latency) BY host`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			chart := compileSPL(t, test.chart)
+			stats := compileSPL(t, test.stats)
+			if chart.SQL != stats.SQL || !reflect.DeepEqual(chart.Args, stats.Args) {
+				t.Fatalf("chart SQL:\n%s\nargs %#v\nwant the stats SQL:\n%s\nargs %#v", chart.SQL, chart.Args, stats.SQL, stats.Args)
+			}
+			if !slices.Equal(chart.OutputFields, stats.OutputFields) {
+				t.Fatalf("chart outputs = %v, want %v", chart.OutputFields, stats.OutputFields)
+			}
+		})
+	}
+}
