@@ -7,6 +7,33 @@
   padding: 0 18px 30px;
 }
 
+.result-skeleton {
+  background: var(--bg-surface);
+  min-height: var(--space-result-panel-min-height);
+  padding: var(--space-5);
+}
+
+.result-skeleton__content {
+  display: grid;
+  gap: var(--space-5);
+}
+
+.result-skeleton__header {
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  gap: var(--space-3);
+  padding-block: var(--space-4);
+}
+
+.result-skeleton__rows {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.result-skeleton__chart {
+  margin-top: var(--space-3);
+}
+
 .result-view-header {
   align-items: center;
   border-bottom: 1px solid var(--border);

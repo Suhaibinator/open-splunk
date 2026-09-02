@@ -882,6 +882,8 @@ const SEMANTIC_COLOUR_TOKENS: readonly string[] = [
   "--chart-series-11",
   "--chart-series-12",
   "--chart-neutral",
+  "--skeleton-base",
+  "--skeleton-highlight",
   "--chrome-bar",
   "--chrome-appbar",
   "--chrome-hover",
@@ -890,6 +892,13 @@ const SEMANTIC_COLOUR_TOKENS: readonly string[] = [
   "--selection",
   "--focus-ring",
 ];
+
+test("loading skeletons stop moving when reduced motion is requested", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await mount(page, '<span class="skeleton skeleton--line"></span>', DESKTOP_WIDTH);
+
+  await expect(page.locator(".skeleton")).toHaveCSS("animation-name", "none");
+});
 
 /** WCAG 2.2 AA for text below 18.66px, which is every size this product ships. */
 const AA_CONTRAST = 4.5;

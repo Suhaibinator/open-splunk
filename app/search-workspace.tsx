@@ -194,6 +194,7 @@ import { scheduledReportConfigurationHref } from "./reports/reports-view-state";
 import { SearchComposer } from "./search-workspace/components/search-composer";
 import type { CompletionItem } from "./search-workspace/components/search-editor";
 import { InactiveResultTabPanels } from "./search-workspace/components/inactive-result-tab-panels";
+import { ResultSkeleton } from "./search-workspace/components/result-skeleton";
 import { SearchFailurePanel } from "./search-workspace/components/search-failure-panel";
 import { SearchSharingDialog } from "./search-workspace/components/search-sharing-dialog";
 import { ExamplesDialog, KeyboardShortcutsDialog, SplReferenceDialog } from "./search-workspace/components/search-help-dialogs";
@@ -1207,7 +1208,17 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         && phase !== "canceled"
         && phase !== "interrupted"
         && phase !== "expired"
-      : phase !== "failed" && phase !== "canceled");
+      : !isRunning && phase !== "failed" && phase !== "canceled");
+  const resultSkeletonTab = activeTab === "events"
+    || activeTab === "statistics"
+    || activeTab === "visualization"
+    ? activeTab
+    : null;
+  const showResultSkeleton = searchFailure === null
+    && isRunning
+    && !hasResultData
+    && !searchIsClosed
+    && resultSkeletonTab !== null;
   const diagnostic = useMemo(() => query.trim().length === 0 ? null : getQueryDiagnostic(query), [query]);
   const editorDiagnostic = useMemo(() => {
     if (!backendEnabled || diagnostic?.kind !== "unsupported") return diagnostic;
@@ -7923,7 +7934,11 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         />
       ) : null}
 
-      {searchFailure === null && !hasResultData ? (
+      {showResultSkeleton && resultSkeletonTab !== null ? (
+        <ResultSkeleton tab={resultSkeletonTab} />
+      ) : null}
+
+      {searchFailure === null && !showResultSkeleton && !hasResultData ? (
         <section
           id={`panel-${activeTab}`}
           role="tabpanel"

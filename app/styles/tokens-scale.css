@@ -23,6 +23,16 @@
   --dur-fast: 100ms;
   --ease: ease-out;
 
+  /* Loading skeleton cadence and reusable result-shape geometry. */
+  --dur-skeleton: 1.4s;
+  --space-result-panel-min-height: 560px; /* Stable vertical canvas for every search result view. */
+  --space-skeleton-block-height: 180px;
+  --space-skeleton-line-height: 12px;
+  --space-skeleton-line-long: 88%;
+  --space-skeleton-line-medium: 68%;
+  --space-skeleton-line-short: 44%;
+  --space-skeleton-shimmer-size: 200%;
+
   /* Chart translucency. */
   --opacity-chart-area: 0.24; /* Series-area fill that keeps overlapping strokes and the plot grid legible. */
 
@@ -82,9 +92,6 @@
   --space-statistics-column-step: 16px;
   --space-statistics-column-text: 168px;
   --space-statistics-column-time: 220px;
-
-  /* Search result surfaces retain one stable vertical canvas across states. */
-  --space-result-panel-min-height: 560px;
 
   /* Type scale. This product's body size is 10px, so the ramp is deliberately
      bottom-heavy and --type-xs, not --type-md, is the default UI size. The
