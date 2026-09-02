@@ -414,3 +414,39 @@ test("Events Table follows selected-field rail order and expands shared details"
   await expect(firstEventRow.getByRole("button", { name: /^Collapse event at/u })).toHaveAttribute("aria-expanded", "true");
   await expect(table.getByText("Event fields").first()).toBeVisible();
 });
+
+test("statistics column layout survives identical reruns and resets for a new query", async ({ page }) => {
+  await openSeededWorkspace(page);
+  const editor = page.getByTestId("search-input");
+  await editor.fill("index=main | stats count by level");
+  await runFromEditor(page);
+
+  const table = page.getByRole("table", { name: "Search statistics" });
+  const levelColumn = table.locator("col").first();
+  await expect(levelColumn).toHaveAttribute("width", /\d+/u);
+  const initialWidth = Number(await levelColumn.getAttribute("width"));
+  const resizer = table.getByRole("separator", { name: "Resize level column" });
+  await resizer.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect.poll(async () => Number(await levelColumn.getAttribute("width")))
+    .toBeGreaterThan(initialWidth);
+  const resizedWidth = Number(await levelColumn.getAttribute("width"));
+
+  await page.getByRole("button", { name: /^Columns/u }).click();
+  const columnMenu = page.getByRole("menu", { name: "Statistics table columns" });
+  await columnMenu.getByRole("menuitemcheckbox", { name: /\bcount\b/u }).click();
+  await columnMenu.getByRole("menuitemcheckbox", { name: /% of results/u }).click();
+  await columnMenu.getByRole("menuitemcheckbox", { name: /avg\(duration_ms\)/u }).click();
+  await expect(columnMenu.getByRole("menuitemcheckbox", { name: /\blevel\b/u })).toBeDisabled();
+  await expect(table.getByRole("columnheader")).toHaveCount(1);
+
+  await page.keyboard.press("Escape");
+  await runFromEditor(page);
+  const rerunTable = page.getByRole("table", { name: "Search statistics" });
+  await expect(rerunTable.getByRole("columnheader")).toHaveCount(1);
+  await expect(rerunTable.locator("col").first()).toHaveAttribute("width", String(resizedWidth));
+
+  await editor.fill("index=main | stats count by host");
+  await runFromEditor(page);
+  await expect(page.getByRole("table", { name: "Search statistics" }).getByRole("columnheader")).toHaveCount(4);
+});

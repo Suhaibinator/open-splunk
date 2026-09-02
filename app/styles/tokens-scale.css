@@ -70,6 +70,16 @@
   --space-7: 32px;
   --space-8: 40px;
 
+  /* Resizable statistics-table geometry. These are read by the client so the
+     pure layout reducer and the CSS surface share the same scale source. */
+  --space-statistics-column-handle: 8px;
+  --space-statistics-column-maximum: 480px;
+  --space-statistics-column-minimum: 96px;
+  --space-statistics-column-numeric: 140px;
+  --space-statistics-column-step: 16px;
+  --space-statistics-column-text: 168px;
+  --space-statistics-column-time: 220px;
+
   /* Type scale. This product's body size is 10px, so the ramp is deliberately
      bottom-heavy and --type-xs, not --type-md, is the default UI size. The
      family is --type-* rather than --text-* because --text and --text-strong

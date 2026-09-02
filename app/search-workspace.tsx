@@ -262,6 +262,7 @@ import { summarizeByteQuantity } from "@/lib/byte-quantity";
 import { EventsPanel } from "./search-workspace/panels/events-panel";
 import { PatternsPanel } from "./search-workspace/panels/patterns-panel";
 import { StatisticsPanel } from "./search-workspace/panels/statistics-panel";
+import type { StatisticsColumnLayoutStore } from "./search-workspace/panels/statistics-column-layout";
 import { VisualizationPanel } from "./search-workspace/panels/visualization-panel";
 import {
   backendJobPhase,
@@ -830,6 +831,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const [retainedJobRecovery, setRetainedJobRecovery] = useState<RetainedJobRecovery | null>(null);
   const [backendExpiresAt, setBackendExpiresAt] = useState<Date | null>(null);
   const [backendNotices, setBackendNotices] = useState<string[]>([]);
+  const statisticsColumnLayoutStoreRef = useRef<StatisticsColumnLayoutStore>(new Map());
   const [backendInspection, setBackendInspection] = useState<ServerSearchJobInspectionState>({
     status: "idle",
   });
@@ -7705,6 +7707,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
 
       {hasResultData && activeTab === "statistics" ? (
         <StatisticsPanel
+          columnLayoutStore={statisticsColumnLayoutStoreRef.current}
           elapsed={elapsed}
           genericStatisticsTable={genericStatisticsTable}
           genericStatsSort={genericStatsSort}
@@ -7728,6 +7731,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           statisticsRows={statisticsRows}
           statsDensity={statsDensity}
           statsSort={statsSort}
+          submittedQuery={submittedQuery}
           timechartSort={timechartSort}
           timechartValueColumns={timechartValueColumns}
           timelinePoints={timelinePoints}

@@ -572,6 +572,28 @@ test("Events Table headers keep the shared table paint", async ({ page }) => {
   await expect(header).toHaveCSS("white-space", "nowrap");
 });
 
+test("statistics col attributes and resize handles control column geometry", async ({ page }) => {
+  await mount(page, `
+    <div style="width: 360px">
+      <table class="statistics-table statistics-table--fixed statistics-table--user-layout" width="360">
+        <colgroup><col width="220" /><col width="140" /></colgroup>
+        <thead><tr>
+          <th scope="col">_time<span class="statistics-column-resizer"></span></th>
+          <th scope="col">count<span class="statistics-column-resizer"></span></th>
+        </tr></thead>
+        <tbody><tr><td>2026-09-01</td><td>42</td></tr></tbody>
+      </table>
+    </div>
+  `, DESKTOP_WIDTH);
+
+  const widths = await page.locator(".statistics-table th").evaluateAll((headers) => (
+    headers.map((header) => header.getBoundingClientRect().width)
+  ));
+  expect(widths[0]).toBeCloseTo(220, 0);
+  expect(widths[1]).toBeCloseTo(140, 0);
+  await expect(page.locator(".statistics-column-resizer").first()).toHaveCSS("width", "8px");
+});
+
 test.describe("statistics multivalue contracts", () => {
   test("multiline cells stay inside the fixed virtual row height", async ({ page }) => {
     await mount(page, statisticsMarkup, DESKTOP_WIDTH);
