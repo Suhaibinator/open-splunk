@@ -333,6 +333,13 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			}
 		case *spl.FillNullCommand:
 			if !outputSchemaKnown {
+				if command != nil && command.AllFields {
+					return nil, &Diagnostic{
+						Code:    "SPL_AMBIGUOUS_FILLNULL_FIELD",
+						Message: "fillnull without a field list needs an exact upstream schema (for example after stats or table); list the fields to fill on raw events",
+						Range:   command.Range,
+					}
+				}
 				for _, field := range command.Fields {
 					if field.Name == "fields" {
 						return nil, &Diagnostic{
@@ -343,12 +350,20 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					}
 				}
 			}
-			operator, buildErr := buildFillNull(command)
+			var (
+				operator *FillNull
+				buildErr error
+			)
+			if command != nil && command.AllFields {
+				operator, buildErr = buildFillNullOverSchema(command, result.OutputFields)
+			} else {
+				operator, buildErr = buildFillNull(command)
+			}
 			if buildErr != nil {
 				return nil, buildErr
 			}
 			result.Operators = append(result.Operators, operator)
-			for _, field := range command.Fields {
+			for _, field := range operator.Fields {
 				publishOutputFieldAndTrackTime(field.Name)
 			}
 		case *spl.AddTotalsCommand:

@@ -264,7 +264,7 @@ The cumulative command surface is:
 | `accum` | running numeric sum (`SPL-ACCUM-001`) |
 | `strcat` | bounded explicit-field concatenation (`SPL-STRCAT-001`) |
 | `addinfo` | admitted time-range/search-start metadata (`SPL-ADDINFO-001`) |
-| `fillnull` | explicit fields with a String replacement (`SPL-FILLNULL-001`) |
+| `fillnull` | explicit fields with a String replacement (`value=` quoted or an unquoted word, default `"0"`); the field-less form fills every field of an exact upstream schema such as a `stats` or `table` result (`SPL-FILLNULL-001`) |
 | `addtotals` | row-only total over explicit fields (`SPL-ADDTOTALS-001`) |
 | `delta` | difference from 1 through 10,000 established rows earlier (`SPL-DELTA-001`) |
 | `makemv` | literal-delimiter String splitting (`SPL-MAKEMV-001`) |

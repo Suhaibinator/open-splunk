@@ -160,6 +160,48 @@ func buildFillNull(command *spl.FillNullCommand) (*FillNull, error) {
 	return &FillNull{Fields: fields, Value: strings.Clone(command.Value), Range: command.Range}, nil
 }
 
+// buildFillNullOverSchema expands the field-less fillnull form over an exact
+// upstream schema. Every published output is filled, including literal stats
+// outputs that are not exact unquoted field names.
+func buildFillNullOverSchema(command *spl.FillNullCommand, schema []string) (*FillNull, error) {
+	if command == nil || !command.AllFields || len(command.Fields) != 0 || !utf8.ValidString(command.Value) {
+		return nil, &Diagnostic{
+			Code:    "SPL_INVALID_QUERY",
+			Message: "fillnull command metadata is invalid",
+		}
+	}
+	if len(schema) == 0 {
+		return nil, &Diagnostic{
+			Code:    "SPL_EXPECTED_FIELD",
+			Message: "fillnull has no upstream fields to fill",
+			Range:   command.Range,
+		}
+	}
+	if len(schema) > spl.MaximumExplicitProjectionFields {
+		return nil, &Diagnostic{
+			Code:    "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf("fillnull would fill more than %d upstream fields; list the fields to fill", spl.MaximumExplicitProjectionFields),
+			Range:   command.Range,
+		}
+	}
+	fields := make([]FieldRef, 0, len(schema))
+	for _, name := range schema {
+		resolved, err := ResolveField(name, command.Range)
+		if err != nil {
+			resolved, err = ResolveQuotedField(name, command.Range)
+		}
+		if err != nil {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_FILLNULL_SYNTAX",
+				Message: fmt.Sprintf("fillnull cannot fill the upstream field %q; list the fields to fill", name),
+				Range:   command.Range,
+			}
+		}
+		fields = append(fields, resolved)
+	}
+	return &FillNull{Fields: fields, Value: strings.Clone(command.Value), Range: command.Range}, nil
+}
+
 func buildRowTotal(command *spl.AddTotalsCommand) (*RowTotal, error) {
 	if command == nil || len(command.Fields) < 1 ||
 		len(command.Fields) > spl.MaximumExplicitProjectionFields ||

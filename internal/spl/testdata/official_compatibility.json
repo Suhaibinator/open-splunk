@@ -957,6 +957,26 @@
       }
     },
     {
+      "id": "fillnull.all-fields",
+      "command": "fillnull",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/fillnull",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "fillnull value=NA",
+        "verified_on": "2026-09-01"
+      },
+      "query": "index=main | stats count BY host | fillnull value=NA",
+      "expect": {
+        "commands": ["stats", "fillnull"],
+        "facets": {
+          "fields": "",
+          "value": "NA"
+        }
+      }
+    },
+    {
       "id": "addtotals.explicit-output",
       "command": "addtotals",
       "source": {

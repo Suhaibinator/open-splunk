@@ -1537,6 +1537,100 @@
         ]
       }
     },
+    "reference.fillnull-all-fields": {
+      "runner": "reference",
+      "input": {
+        "schema": [
+          {
+            "name": "host",
+            "kind": "string",
+            "nullable": true,
+            "multivalue": false
+          },
+          {
+            "name": "route",
+            "kind": "string",
+            "nullable": true,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "missing": true
+            },
+            {
+              "string": "v1"
+            }
+          ],
+          [
+            {
+              "null": true
+            },
+            {
+              "missing": true
+            }
+          ],
+          [
+            {
+              "string": "api"
+            },
+            {
+              "string": "v2"
+            }
+          ]
+        ]
+      },
+      "program": [
+        {
+          "op": "fillnull",
+          "fields": [],
+          "value": "NA"
+        }
+      ],
+      "expected": {
+        "schema": [
+          {
+            "name": "host",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "route",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "string": "NA"
+            },
+            {
+              "string": "v1"
+            }
+          ],
+          [
+            {
+              "string": "NA"
+            },
+            {
+              "string": "NA"
+            }
+          ],
+          [
+            {
+              "string": "api"
+            },
+            {
+              "string": "v2"
+            }
+          ]
+        ]
+      }
+    },
     "reference.addtotals": {
       "runner": "reference",
       "input": {
@@ -4964,7 +5058,7 @@
     },
     {
       "id": "SPL-FILLNULL-001",
-      "summary": "Fillnull writes one quoted String only to explicit missing or null fields.",
+      "summary": "Fillnull writes one String (quoted or an unquoted word) to explicit missing or null fields, or to every field of an exact upstream schema when no field is listed.",
       "cases": [
         {
           "name": "default zero String",
@@ -5005,10 +5099,26 @@
           }
         },
         {
+          "name": "unquoted value over the exact schema",
+          "source": "index=main | table host route | fillnull value=NA",
+          "fixture": "reference.fillnull-all-fields",
+          "expect": {
+            "parse": "accept",
+            "value": "NA"
+          }
+        },
+        {
+          "name": "unquoted numeric value",
+          "source": "index=main | fillnull value=-1 host",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
           "name": "implicit schema form rejected",
           "source": "index=main | fillnull value=\"0\"",
           "expect": {
-            "diagnostic": "SPL_EXPECTED_FIELD"
+            "diagnostic": "SPL_AMBIGUOUS_FILLNULL_FIELD"
           }
         }
       ]

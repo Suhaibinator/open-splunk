@@ -139,15 +139,15 @@ func TestPipelineCorpusFixturesAreStrictBoundAndExecutable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(fixtures) != 39 {
-		t.Fatalf("fixture count = %d, want 39", len(fixtures))
+	if len(fixtures) != 40 {
+		t.Fatalf("fixture count = %d, want 40", len(fixtures))
 	}
 	caseCount := 0
 	for _, rule := range corpus.Rules {
 		caseCount += len(rule.Cases)
 	}
-	if caseCount != 76 {
-		t.Fatalf("case count = %d, want 76", caseCount)
+	if caseCount != 78 {
+		t.Fatalf("case count = %d, want 78", caseCount)
 	}
 	var referenceCount, evidenceCount int
 	for id, fixture := range fixtures {
@@ -163,8 +163,8 @@ func TestPipelineCorpusFixturesAreStrictBoundAndExecutable(t *testing.T) {
 			t.Fatalf("fixture %q has unvalidated runner %q", id, fixture.Runner)
 		}
 	}
-	if referenceCount != 24 || evidenceCount != 15 {
-		t.Fatalf("runner counts = reference %d evidence %d, want 24/15", referenceCount, evidenceCount)
+	if referenceCount != 25 || evidenceCount != 15 {
+		t.Fatalf("runner counts = reference %d evidence %d, want 25/15", referenceCount, evidenceCount)
 	}
 }
 
@@ -926,8 +926,10 @@ func decodePipelineCorpusOperation(raw json.RawMessage) (pipelineCorpusOperation
 			return pipelineCorpusOperation{}, errors.New("addinfo values are invalid")
 		}
 	case "fillnull":
-		if !validPipelineCorpusFieldList(operation.Fields) {
-			return pipelineCorpusOperation{}, errors.New("fillnull fields are empty or duplicated")
+		// An empty field list is the field-less form that fills every column
+		// of the schema established by the preceding operations.
+		if len(operation.Fields) != 0 && !validPipelineCorpusFieldList(operation.Fields) {
+			return pipelineCorpusOperation{}, errors.New("fillnull fields are duplicated")
 		}
 	case "addtotals":
 		if !validPipelineCorpusFieldList(operation.Fields) || operation.Output == "" {
@@ -1198,7 +1200,7 @@ func matchPipelineCorpusOperation(command spl.Command, operation pipelineCorpusO
 		for index := range command.Fields {
 			fields[index] = command.Fields[index].Name
 		}
-		if command.Value != operation.Value || !slices.Equal(fields, operation.Fields) {
+		if command.Value != operation.Value || command.AllFields != (len(operation.Fields) == 0) || !slices.Equal(fields, operation.Fields) {
 			return mismatch()
 		}
 	case *spl.AddTotalsCommand:
@@ -1288,7 +1290,18 @@ func runPipelineReferenceCorpusFixture(t *testing.T, fixture pipelineCorpusFixtu
 				started: operation.Started, sid: operation.SID,
 			})
 		case "fillnull":
-			pipelineReferenceFillNull(rows, operation.Fields, operation.Value)
+			fields := operation.Fields
+			if len(fields) == 0 {
+				schema, schemaErr := pipelineCorpusReferenceSchema(fixture.Input.Schema, fixture.Program[:index])
+				if schemaErr != nil {
+					t.Fatalf("operation %d: derive upstream schema: %v", index, schemaErr)
+				}
+				fields = make([]string, len(schema))
+				for columnIndex, column := range schema {
+					fields[columnIndex] = column.Name
+				}
+			}
+			pipelineReferenceFillNull(rows, fields, operation.Value)
 		case "addtotals":
 			pipelineReferenceAddTotals(rows, operation.Fields, operation.Output)
 		case "delta":
@@ -1386,7 +1399,14 @@ func pipelineCorpusReferenceSchema(
 				upsert(column)
 			}
 		case "fillnull":
-			for _, field := range operation.Fields {
+			fields := operation.Fields
+			if len(fields) == 0 {
+				fields = make([]string, len(schema))
+				for columnIndex, column := range schema {
+					fields[columnIndex] = column.Name
+				}
+			}
+			for _, field := range fields {
 				upsert(pipelineCorpusColumn{Name: field, Kind: "string"})
 			}
 		case "addtotals":

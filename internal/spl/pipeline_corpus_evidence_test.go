@@ -133,7 +133,8 @@ var pipelineStringExpectationVocabulary = map[string]map[string]struct{}{
 		"SPL_UNSUPPORTED_DELTA_SYNTAX": {}, "SPL_UNSUPPORTED_MAKEMV_SYNTAX": {},
 		"SPL_UNSUPPORTED_DEDUP_SYNTAX": {}, "SPL_QUERY_TOO_COMPLEX": {},
 		"SPL_UNSUPPORTED_TOP_SYNTAX": {}, "SPL_UNSUPPORTED_RARE_SYNTAX": {},
-		"SPL_DUPLICATE_FIELD": {}, "unsupported-value": {},
+		"SPL_DUPLICATE_FIELD": {}, "SPL_AMBIGUOUS_FILLNULL_FIELD": {},
+		"unsupported-value": {},
 	},
 	"diagnostic_phase": {
 		"executor": {}, "parser": {}, "publication-preflight": {},
@@ -360,7 +361,7 @@ func validatePipelineValueExpectation(raw json.RawMessage) error {
 			return err
 		}
 		admitted := map[string]struct{}{
-			"0": {}, "missing-and-null-kept": {}, "missing-source-empty": {},
+			"0": {}, "NA": {}, "missing-and-null-kept": {}, "missing-source-empty": {},
 			"present-empty-emits-zero": {}, "preserve-destination-when-source-null": {},
 			"missing-whole-null-and-null-member": {},
 		}
