@@ -259,6 +259,34 @@ npm run test:contracts
 
 Failure artifacts are written beneath `test-results/css-contracts`.
 
+## Search workspace behaviour in the demo export
+
+`workspace-behaviour/search-workspace.spec.ts` drives the search workspace
+with real keyboard and pointer input in Chromium: the SPL completion menu
+(Ctrl+Space, arrows, Enter, Escape, and reopening on a typed pipe), running a
+search with Ctrl+Enter, choosing a preset in the time picker, and keyboard
+navigation across the result tabs. The decisions behind the editor's key
+handling live in `lib/search/spl-editor-interaction.ts` and are unit tested;
+this suite checks that the workspace wires them, together with the time picker
+and the tab list, to the input users actually send.
+
+It runs against the demo-mode static export — the same files the Go binary
+embeds — served by `scripts/serve-static-ui.mjs`, a `node:http` server that
+maps `/search/` onto `out/search/index.html` the way the embedded file server
+does. No backend, container, or fixture is involved, so it is
+platform-independent and enforced by the CI `frontend` job after the export is
+built:
+
+```sh
+npx --no-install playwright install chromium
+npm run build
+npm run test:workspace
+```
+
+The tests are `.spec.ts` on purpose: `scripts/test-frontend.mjs` runs `.test.ts`
+files under node's test runner, where a Playwright test cannot run. Failure
+artifacts are written beneath `test-results/workspace-behaviour`.
+
 ## Stylesheet structural invariants
 
 `scripts/style-invariants.test.mjs` runs inside `npm run test:frontend` and

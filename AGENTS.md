@@ -16,11 +16,12 @@ Go backend (`cmd/`, `internal/`) + Next.js UI (`app/`, `lib/`), UI embedded into
 npm run typecheck && npm run lint && npm run check:docs
 npm run test:frontend      # unit + style invariants
 npm run test:contracts     # computed-style contracts (Playwright)
+npm run build && npm run test:workspace   # demo-export workspace behaviour (Playwright)
 go build ./... && go vet ./... && go test ./...
 ```
 
 - `npm run lint` includes `lint:css` (stylelint, errors). Go lint in CI is `golangci-lint` pinned in `.github/workflows/ci.yml` — run it with `GOOS=linux` and uncapped issue counts.
-- Install the pinned browser once with `npx --no-install playwright install chromium` before `npm run test:contracts`.
+- Install the pinned browser once with `npx --no-install playwright install chromium` before `npm run test:contracts` or `npm run test:workspace`. The workspace tests drive the static export in `out/`, so build first.
 - `scripts/test-frontend.mjs` has a **hardcoded** test list; a new `*.test.ts(x)` or `scripts/*.test.mjs` runs only if added there.
 - `scripts/check-docs.mjs` allow-lists `docs/*.md`; register a new doc in both lists or `check:docs` fails.
 - `internal/clickhouse/testdata/golden/*.sql` snapshots the compiled contract of every official SPL corpus case. A lowering change shows up as a diff there; regenerate with `OPEN_SPLUNK_UPDATE_GOLDEN=1 go test ./internal/clickhouse -run TestOfficial` (refused under `CI`) and review the diff before committing.

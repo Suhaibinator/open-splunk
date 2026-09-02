@@ -11,6 +11,7 @@ import {
   type UIEvent,
   useEffect,
   useEffectEvent,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -111,9 +112,17 @@ import { applyFieldPivot, type PivotMode } from "@/lib/search/query-pivots";
 import {
   boundedIndexSearchQuery,
   parseSearchLaunch,
-  replaceSearchLaunchSource,
+  type ParsedSearchLaunch,
   splFromFindInput,
 } from "@/lib/search/launch-url";
+import {
+  commitSearchLaunch,
+  historyNavigationDecision,
+  readSearchLaunchState,
+  stampSearchLaunchState,
+  type SearchLaunchHistoryState,
+  type SearchLaunchRange,
+} from "@/lib/search/search-launch-state";
 import {
   duplicateSavedSearchName,
   savedSearchNameWithSuffix,
@@ -149,10 +158,16 @@ import {
   applyDiagnosticFix,
   completionContextAt,
   getQueryDiagnostic,
-  isCursorInQuotedValue,
   type SplDiagnostic,
   utf16OffsetsForUtf8ByteOffsets,
 } from "@/lib/search/spl-editor";
+import {
+  editorKeyIntent,
+  insertCompletionIntoQuery,
+  nextCompletionIndex,
+  recallHistory,
+  recallableHistory,
+} from "@/lib/search/spl-editor-interaction";
 import {
   currentThemePreference,
   setThemePreference,
@@ -171,6 +186,7 @@ import { InactiveResultTabPanels } from "./search-workspace/components/inactive-
 import { SearchSharingDialog } from "./search-workspace/components/search-sharing-dialog";
 import { WorkspaceDialogs } from "./search-workspace/components/workspace-dialogs";
 import { serializeRowsAsJsonLinesForClipboard, serializeRowsForClipboard } from "./search-workspace/clipboard-export";
+import { historyRecallAnnouncement, historyRecallDirection } from "./search-workspace/editor-history-recall";
 import {
   collapsePageEvents,
   expandPageEvents,
@@ -287,22 +303,15 @@ interface BackendBootstrapState {
   receivedAt: number;
 }
 
-function replaceCurrentSearchLaunch(
-  source: "q" | "savedSearchId" | "historySearchId" | "searchJobId",
-  value: string,
-  range: TimeRange | null = null,
-  run = source !== "searchJobId",
-) {
-  const url = new URL(window.location.href);
-  url.search = replaceSearchLaunchSource(url.searchParams, source, value, run).toString();
-  if (range !== null) {
-    url.searchParams.set("earliest", range.earliest);
-    url.searchParams.set("latest", range.latest);
-    url.searchParams.set("label", range.label);
-    if (range.timezone) url.searchParams.set("timezone", range.timezone);
-    else url.searchParams.delete("timezone");
-  }
-  window.history.replaceState(window.history.state, "", url);
+/** What a history entry remembers about the draft and range it showed. */
+function launchHistoryState(query: string, range: TimeRange): SearchLaunchHistoryState {
+  return { q: query, earliest: range.earliest, latest: range.latest, label: range.label, timezone: range.timezone };
+}
+
+/** Maps a launch range back onto its preset so the picker shows the preset's name. */
+function restoredTimeRange(range: SearchLaunchRange): TimeRange {
+  const preset = TIME_PRESETS.find((candidate) => candidate.earliest === range.earliest && candidate.latest === range.latest);
+  return { ...(preset ?? { label: range.label, earliest: range.earliest, latest: range.latest }), timezone: range.timezone };
 }
 
 type BackendConnectionState = "loading" | "ready" | "error";
@@ -914,6 +923,12 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const backendSavedSearchesRef = useRef<Map<string, ServerSavedSearch>>(new Map());
   const backendHistoryRef = useRef<Map<string, ServerSearchHistoryEntry>>(new Map());
   const backendHistoryRerunRef = useRef<ServerSearchHistoryEntry | null>(null);
+  // Arrow-key history recall: where the walk is, the draft it started from,
+  // and the text it last put in the editor so any other edit ends the walk.
+  const historyRecallRef = useRef<{ draft: string; index: number | null; shown: string } | null>(null);
+  // Where the caret goes once a recalled query is in the editor.
+  const recallCaretRef = useRef<number | null>(null);
+  const [historyAnnouncement, setHistoryAnnouncement] = useState<string | null>(null);
   const pendingSavedSelectedFieldsRef = useRef<Set<string> | null>(null);
   const pendingSavedPreferredTabRef = useRef<ResultTab | null>(null);
   const pendingSavedVisualizationRef = useRef<VisualizationSpec | undefined>(undefined);
@@ -981,6 +996,8 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     toDisplay: historyEntryForDisplay,
   };
   const urlLaunchAppliedRef = useRef(false);
+  // Abort handle for a persisted launch started by Back or Forward.
+  const historyLaunchCleanupRef = useRef<(() => void) | null>(null);
   const persistedLaunchEpochRef = useRef(0);
   const persistedLaunchPendingRef = useRef(false);
   const openRetainedBackendJobRef = useRef<(jobID: string, signal: AbortSignal) => Promise<void>>(async () => {});
@@ -995,7 +1012,9 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     rerun: boolean,
     focusSearchEditor?: boolean,
   ) => boolean>(() => false);
-  const searchRunnerRef = useRef<(queryText: string, range: TimeRange) => void>(() => undefined);
+  const searchRunnerRef = useRef<(queryText: string, range?: TimeRange) => void>(() => undefined);
+  const abandonDisplayedJobRef = useRef<(nextRange: TimeRange) => void>(() => undefined);
+  const cancelSearchRef = useRef<() => void>(() => undefined);
   const timelineZoomParentRef = useRef<TimeRange | null>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLPreElement>(null);
@@ -1362,6 +1381,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     && savedBaselineCaptureId === null
     && savedWorkspaceFingerprint(currentSavedWorkspace) !== savedWorkspaceFingerprint(savedWorkspaceBaseline);
   const editorLineCount = Math.max(2, query.split("\n").length);
+  const historyRecallable = recallableHistory(history.map((entry) => entry.query)).some((entry) => entry !== query);
   const absoluteTimeInvalid = absoluteStart.trim().length === 0
     || absoluteEnd.trim().length === 0
     || absoluteStart >= absoluteEnd;
@@ -2409,13 +2429,18 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     );
   }, [backendBootstrapModel, backendEnabled, exportClockTick, modal]);
 
-  const applyInitialUrlLaunch = useEffectEvent(() => {
-    if (urlLaunchAppliedRef.current) return;
-    urlLaunchAppliedRef.current = true;
+  // Applies the launch the address bar describes: once on mount, and again
+  // when Back or Forward lands on a persisted launch. `launch` overrides the
+  // URL's own source when a history entry remembers the job it displayed.
+  const applyUrlLaunch = useEffectEvent((options: { initial: boolean; launch?: ParsedSearchLaunch }) => {
+    if (options.initial) {
+      if (urlLaunchAppliedRef.current) return;
+      urlLaunchAppliedRef.current = true;
+    }
     const url = new URL(window.location.href);
-    let launch: ReturnType<typeof parseSearchLaunch>;
+    let launch: ParsedSearchLaunch;
     try {
-      launch = parseSearchLaunch(url.searchParams);
+      launch = options.launch ?? parseSearchLaunch(url.searchParams);
     } catch (error) {
       setPhase("failed");
       setProgress(100);
@@ -2445,6 +2470,9 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       initialRange = restoredRange;
       setTimeRange(restoredRange);
       setDraftTimeRange(restoredRange);
+    }
+    if (options.initial && (launch.source === "q" || launch.source === null) && initialQuery.length > 0) {
+      stampSearchLaunchState(launchHistoryState(initialQuery, initialRange));
     }
     const hasContextualQuery = sharedQuery !== null;
     const shouldRunContextualQuery = hasContextualQuery && launch.run;
@@ -2499,8 +2527,27 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         controller.abort();
         persistedLaunchPendingRef.current = false;
         setPersistedLaunchPending(false);
-        urlLaunchAppliedRef.current = false;
+        if (options.initial) urlLaunchAppliedRef.current = false;
       };
+    }
+    if (!backendEnabled && (savedSearchLaunchId !== null || historySearchLaunchId !== null)) {
+      // The demo keeps its saved searches and history in memory; open them
+      // after the current render settles so the guards see an idle workspace.
+      const saved = savedSearchLaunchId === null ? undefined : savedSearches.find((item) => item.id === savedSearchLaunchId);
+      const entry = historySearchLaunchId === null ? undefined : history.find((item) => item.id === historySearchLaunchId);
+      if (saved === undefined && entry === undefined) {
+        showToast("That saved search or history entry is not in this workspace.", "warning");
+        return;
+      }
+      const launchTimer = window.setTimeout(() => {
+        if (saved !== undefined) {
+          openSavedSearchRef.current(saved, initialRange);
+          if (shouldRunPersistedSearch) window.setTimeout(() => searchRunnerRef.current(saved.query), 0);
+        } else if (entry !== undefined) {
+          openHistoryEntryRef.current(entry, shouldRunPersistedSearch);
+        }
+      }, 0);
+      return () => window.clearTimeout(launchTimer);
     }
     if (backendEnabled && (savedSearchLaunchId !== null || historySearchLaunchId !== null)) {
       const controller = new AbortController();
@@ -2607,7 +2654,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           persistedLaunchPendingRef.current = false;
           setPersistedLaunchPending(false);
         }
-        urlLaunchAppliedRef.current = false;
+        if (options.initial) urlLaunchAppliedRef.current = false;
       };
     }
     if (hasContextualQuery && !shouldRunContextualQuery) {
@@ -2657,9 +2704,74 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   });
 
   useEffect(
-    () => applyInitialUrlLaunch(),
+    () => applyUrlLaunch({ initial: true }),
     [backendEnabled],
   );
+
+  // Back and Forward land on entries this workspace wrote. The entry's URL
+  // and remembered state say what to show; nothing here adds history, so a
+  // run triggered from here refines the entry it lands on.
+  const followHistoryEntry = useEffectEvent((event: PopStateEvent) => {
+    const url = new URL(window.location.href);
+    const decision = historyNavigationDecision(url.searchParams, readSearchLaunchState(event.state), backendEnabled);
+    if (decision.kind === "invalid") {
+      showToast(decision.message, "warning");
+      return;
+    }
+    historyLaunchCleanupRef.current?.();
+    historyLaunchCleanupRef.current = null;
+    if (decision.kind === "restore") {
+      const range = decision.range === null ? timeRange : restoredTimeRange(decision.range);
+      const nextQuery = decision.query ?? query;
+      abandonDisplayedJobRef.current(range);
+      setQuery(nextQuery);
+      setEditorCaret(nextQuery.length);
+      setTimeRange(range);
+      setDraftTimeRange(range);
+      timelineZoomParentRef.current = null;
+      activeSavedSearchIdRef.current = null;
+      setActiveSavedSearchId(null);
+      backendHistoryRerunRef.current = null;
+      historyRecallRef.current = null;
+      setModal(null);
+      setCompletionOpen(false);
+      if (decision.run) window.setTimeout(() => searchRunnerRef.current(nextQuery, range), 0);
+      return;
+    }
+    abandonDisplayedJobRef.current(timeRange);
+    historyLaunchCleanupRef.current = applyUrlLaunch({
+      initial: false,
+      launch: decision.kind === "open-job"
+        ? { source: "searchJobId", value: decision.searchJobId, run: false }
+        : undefined,
+    }) ?? null;
+  });
+
+  useEffect(() => {
+    function handlePopState(event: PopStateEvent) {
+      followHistoryEntry(event);
+    }
+    window.addEventListener("popstate", handlePopState);
+    return () => {
+      window.removeEventListener("popstate", handlePopState);
+      historyLaunchCleanupRef.current?.();
+      historyLaunchCleanupRef.current = null;
+    };
+  }, []);
+
+  // A recalled query takes the caret to its end as soon as React commits
+  // it; a frame callback can fire after the next keystroke and move the
+  // caret out from under it.
+  useLayoutEffect(() => {
+    const caret = recallCaretRef.current;
+    if (caret === null) return;
+    recallCaretRef.current = null;
+    const editor = editorRef.current;
+    if (editor === null) return;
+    const safeOffset = Math.min(caret, query.length);
+    editor.focus();
+    editor.setSelectionRange(safeOffset, safeOffset);
+  }, [query]);
 
   useEffect(() => {
     setCompletionIndex((current) => Math.max(0, Math.min(current, filteredCompletions.length - 1)));
@@ -2673,6 +2785,9 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     setExpandedEvents(new Set());
   }, [currentResultPageSize, eventPage]);
 
+  // Escape closes the topmost transient surface; with nothing open it
+  // cancels the running search, so a stray run is a keystroke away from
+  // stopping without reaching for the mouse.
   useEffect(() => {
     function closeTransientUi(event: globalThis.KeyboardEvent) {
       if (event.key !== "Escape") return;
@@ -2680,11 +2795,12 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       else if (modal !== null) setModal(null);
       else if (activeField !== null) setActiveField(null);
       else if (menu !== null) setMenu(null);
-      else setCompletionOpen(false);
+      else if (completionOpen) setCompletionOpen(false);
+      else if (isRunning && !persistedLaunchPending) cancelSearchRef.current();
     }
     window.addEventListener("keydown", closeTransientUi);
     return () => window.removeEventListener("keydown", closeTransientUi);
-  }, [activeField, menu, modal]);
+  }, [activeField, completionOpen, isRunning, menu, modal, persistedLaunchPending]);
 
   useEffect(() => {
     if (menu === null) return;
@@ -4253,10 +4369,13 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     const launchHistoryEntry = launchSavedSearchId === null
       ? backendHistoryRerunRef.current
       : null;
+    const launchState = launchHistoryState(nextQuery, launchTimeRange);
     if (launchSavedSearchId === null && launchHistoryEntry === null) {
-      replaceCurrentSearchLaunch("q", nextQuery, launchTimeRange);
+      commitSearchLaunch("q", nextQuery, launchTimeRange, { mode: "navigate", state: launchState });
     } else if (launchHistoryEntry !== null) {
-      replaceCurrentSearchLaunch("historySearchId", launchHistoryEntry.id, null, true);
+      commitSearchLaunch("historySearchId", launchHistoryEntry.id, null, { mode: "navigate", run: true, state: launchState });
+    } else {
+      stampSearchLaunchState(launchState);
     }
     if (launchSavedSearchId === null && launchHistoryEntry === null) {
       pendingSavedPreferredTabRef.current = null;
@@ -4409,6 +4528,8 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         return;
       }
       backendJobIdRef.current = job.searchJobId;
+      // Back and Forward reopen this job instead of running the search again.
+      stampSearchLaunchState({ searchJobId: job.searchJobId });
       applyBackendJob(job, generation);
       if (backendCancelRequestedRef.current) {
         try {
@@ -4506,7 +4627,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     return false;
   }
 
-  function runSearch(queryOverride?: string, rangeOverride: TimeRange = timeRange) {
+  function runSearch(queryOverride?: string, rangeOverride: TimeRange = timeRange, launch: "q" | "keep" = "q") {
     if (searchLaunchRef.current) return;
     if (backendWorkspaceTransitionBlocked()) return;
     const nextQuery = queryOverride ?? query;
@@ -4544,6 +4665,11 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     setSubmittedQuery(nextQuery);
     setSubmittedTimeRange(launchTimeRange);
     setQuery(nextQuery);
+    if (launch === "q" && activeSavedSearchIdRef.current === null) {
+      commitSearchLaunch("q", nextQuery, launchTimeRange, { mode: "navigate", state: launchHistoryState(nextQuery, launchTimeRange) });
+    } else {
+      stampSearchLaunchState(launchHistoryState(nextQuery, launchTimeRange));
+    }
     setPhase("queued");
     setProgress(4);
     setElapsed("0.00 s");
@@ -4698,6 +4824,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     ]);
     showToast("Search canceled.", "warning");
   }
+  cancelSearchRef.current = cancelSearch;
 
   function openJobInspector() {
     setModal("inspect");
@@ -4752,48 +4879,73 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   }
 
   function handleEditorKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-      event.preventDefault();
-      if (backendWorkspaceTransitionBlocked()) return;
-      if (runDisabledReason !== null) {
-        showToast(runDisabledReason, "warning");
+    const intent = editorKeyIntent(event, {
+      query,
+      caret: event.currentTarget.selectionStart,
+      completionOpen,
+      completionCount: filteredCompletions.length,
+    });
+    switch (intent.kind) {
+      case "run":
+        event.preventDefault();
+        if (backendWorkspaceTransitionBlocked()) return;
+        if (runDisabledReason !== null) {
+          showToast(runDisabledReason, "warning");
+          return;
+        }
+        if (dirty) timelineZoomParentRef.current = null;
+        runSearch();
         return;
-      }
-      if (dirty) timelineZoomParentRef.current = null;
-      runSearch();
-      return;
-    }
-    if (event.ctrlKey && event.key === " ") {
-      event.preventDefault();
-      const caret = event.currentTarget.selectionStart;
-      if (isCursorInQuotedValue(query, caret)) {
+      case "open-completions":
+        event.preventDefault();
+        setEditorCaret(intent.caret);
+        setCompletionIndex(0);
+        setCompletionOpen(true);
+        return;
+      case "close-completions":
+        event.preventDefault();
+        // Escape that closed the popup is spent; only an Escape with nothing
+        // open reaches the window listener that cancels the search.
+        if (completionOpen) event.stopPropagation();
         setCompletionOpen(false);
         return;
-      }
-      setEditorCaret(caret);
-      setCompletionIndex(0);
-      setCompletionOpen(true);
-      return;
+      case "move-completion":
+        event.preventDefault();
+        if (filteredCompletions.length === 0) return;
+        setCompletionIndex((current) => nextCompletionIndex(current, intent.delta, filteredCompletions.length));
+        return;
+      case "accept-completion":
+        event.preventDefault();
+        insertCompletion(filteredCompletions[completionIndex] ?? filteredCompletions[0]);
+        return;
+      case "ignore":
+        recallHistoryFromKey(event);
+        return;
     }
-    if (!completionOpen) return;
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-      event.preventDefault();
-      if (filteredCompletions.length === 0) return;
-      setCompletionIndex((current) => {
-        const delta = event.key === "ArrowDown" ? 1 : -1;
-        return (current + delta + filteredCompletions.length) % filteredCompletions.length;
-      });
-      return;
-    }
-    if ((event.key === "Enter" || event.key === "Tab") && filteredCompletions.length > 0) {
-      event.preventDefault();
-      insertCompletion(filteredCompletions[completionIndex] ?? filteredCompletions[0]);
-      return;
-    }
-    if (event.key === "Escape") {
-      event.preventDefault();
-      setCompletionOpen(false);
-    }
+  }
+
+  function recallHistoryFromKey(event: KeyboardEvent<HTMLTextAreaElement>) {
+    const editor = event.currentTarget;
+    const direction = historyRecallDirection(event, {
+      completionOpen,
+      selectionEnd: editor.selectionEnd,
+      selectionStart: editor.selectionStart,
+      value: query,
+    });
+    if (direction === null) return;
+    const walk = historyRecallRef.current?.shown === query
+      ? historyRecallRef.current
+      : { draft: query, index: null, shown: query };
+    const entries = recallableHistory(history.map((entry) => entry.query)).filter((entry) => entry !== walk.draft);
+    const recall = recallHistory(entries, walk.index, direction, walk.draft);
+    if (recall === null) return;
+    event.preventDefault();
+    historyRecallRef.current = { draft: walk.draft, index: recall.index, shown: recall.query };
+    setQuery(recall.query);
+    backendHistoryRerunRef.current = null;
+    setEditorCaret(recall.query.length);
+    setHistoryAnnouncement(historyRecallAnnouncement(recall.index, entries.length));
+    recallCaretRef.current = recall.query.length;
   }
 
   function insertCompletion(completion: {
@@ -4801,40 +4953,20 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     replaceStart?: number;
     replaceEnd?: number;
   }) {
-    const { insertion } = completion;
     const editor = editorRef.current;
     const selectionStart = editor?.selectionStart ?? editorCaret;
     const selectionEnd = editor?.selectionEnd ?? selectionStart;
-    if (isCursorInQuotedValue(query, selectionStart)) {
+    const edited = insertCompletionIntoQuery(query, selectionStart, selectionEnd, completion);
+    if (edited === null) {
       setCompletionOpen(false);
       return;
     }
-    const context = completionContextAt(query, selectionStart);
-    let nextQuery: string;
-    let nextCaret: number;
 
-    if (completion.replaceStart !== undefined && completion.replaceEnd !== undefined) {
-      const replaceStart = Math.max(0, Math.min(query.length, completion.replaceStart));
-      const replaceEnd = Math.max(replaceStart, Math.min(query.length, completion.replaceEnd));
-      nextQuery = `${query.slice(0, replaceStart)}${insertion}${query.slice(replaceEnd)}`;
-      nextCaret = replaceStart + insertion.length;
-    } else if (context !== null) {
-      nextQuery = `${query.slice(0, context.fragmentStart)}${insertion}${query.slice(Math.max(context.fragmentEnd, selectionEnd))}`;
-      nextCaret = context.fragmentStart + insertion.length;
-    } else {
-      const before = query.slice(0, selectionStart);
-      const after = query.slice(selectionEnd);
-      const separator = before.length === 0 || before.endsWith("\n") ? "" : "\n";
-      const inserted = `${separator}| ${insertion}`;
-      nextQuery = `${before}${inserted}${after}`;
-      nextCaret = before.length + inserted.length;
-    }
-
-    setQuery(nextQuery);
+    setQuery(edited.query);
     backendHistoryRerunRef.current = null;
-    setEditorCaret(nextCaret);
+    setEditorCaret(edited.caret);
     setCompletionOpen(false);
-    focusEditor(nextCaret);
+    focusEditor(edited.caret);
   }
 
   function handleEditorChange(event: ChangeEvent<HTMLTextAreaElement>) {
@@ -4843,6 +4975,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     const context = completionContextAt(nextQuery, caret);
     setQuery(nextQuery);
     backendHistoryRerunRef.current = null;
+    historyRecallRef.current = null;
     if (modal === "time") setModal(null);
     setEditorCaret(caret);
     setCompletionIndex(0);
@@ -5344,7 +5477,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         displaySearch,
         ...current.filter((item) => item.id !== displaySearch.id),
       ]);
-      replaceCurrentSearchLaunch("savedSearchId", result.value.id);
+      commitSearchLaunch("savedSearchId", result.value.id, null, { mode: "rewrite", state: currentLaunchState() });
       if (purpose === "report") {
         window.location.assign(productHref(scheduledReportConfigurationHref(result.value.id)));
         return;
@@ -5406,7 +5539,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     setSavedWorkspaceBaseline(null);
     setSavedBaselineCaptureId(id);
     setModal(null);
-    replaceCurrentSearchLaunch("savedSearchId", id);
+    commitSearchLaunch("savedSearchId", id, null, { mode: "rewrite", state: currentLaunchState() });
     showToast(`Saved “${trimmedName}”.`, "success");
   }
 
@@ -5474,6 +5607,27 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     return null;
   }
 
+  /** The current entry's remembered state, keeping the job it already shows. */
+  function currentLaunchState(): SearchLaunchHistoryState {
+    return { ...launchHistoryState(query, timeRange), searchJobId: backendJobIdRef.current ?? undefined };
+  }
+
+  // Clears the workspace for a history navigation and, when a backend job was
+  // still running, asks the server to stop it so it does not run unattended.
+  function abandonDisplayedJob(nextRange: TimeRange) {
+    const supersededJobId = backendJobIdRef.current;
+    const wasRunning = isRunning;
+    clearDisplayedJobForDraft(nextRange);
+    if (backendEnabled && wasRunning && supersededJobId !== null) {
+      void apiClient.search.cancel(
+        { searchJobId: supersededJobId, reason: undefined },
+        { timeoutMs: 5_000 },
+      ).catch(() => undefined);
+    }
+  }
+
+  abandonDisplayedJobRef.current = abandonDisplayedJob;
+
   function clearDisplayedJobForDraft(nextRange: TimeRange) {
     generationRef.current += 1;
     clearTimers();
@@ -5529,7 +5683,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     setSavedWorkspaceBaseline(null);
     setSavedBaselineCaptureId(saved.id);
     backendHistoryRerunRef.current = null;
-    replaceCurrentSearchLaunch("savedSearchId", saved.id);
+    commitSearchLaunch("savedSearchId", saved.id, null, { mode: "navigate", state: launchHistoryState(saved.query, savedRange) });
     const presentationNotice = restoreBackendPresentation(
       backendSavedSearchesRef.current.get(saved.id)?.search,
     );
@@ -5567,9 +5721,13 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     }
     activeSavedSearchIdRef.current = null;
     setActiveSavedSearchId(null);
-    replaceCurrentSearchLaunch("historySearchId", entry.id, null, rerun);
+    commitSearchLaunch("historySearchId", entry.id, null, {
+      mode: "navigate",
+      run: rerun,
+      state: launchHistoryState(entry.query, restoredRange),
+    });
     setModal(null);
-    if (rerun) runSearch(entry.query, restoredRange);
+    if (rerun) runSearch(entry.query, restoredRange, "keep");
     else showToast("Search restored without running.", "info");
     if (focusSearchEditor) focusEditor(entry.query.length);
     return true;
@@ -5811,7 +5969,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         if (activeSavedSearchId === id) {
           activeSavedSearchIdRef.current = null;
           setActiveSavedSearchId(null);
-          replaceCurrentSearchLaunch("q", query, timeRange, false);
+          commitSearchLaunch("q", query, timeRange, { mode: "rewrite", run: false, state: currentLaunchState() });
         }
         showToast("Saved search deleted.", "warning");
       } catch (error) {
@@ -5833,7 +5991,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     if (activeSavedSearchId === id) {
       activeSavedSearchIdRef.current = null;
       setActiveSavedSearchId(null);
-      replaceCurrentSearchLaunch("q", query, timeRange, false);
+      commitSearchLaunch("q", query, timeRange, { mode: "rewrite", run: false, state: currentLaunchState() });
     }
     showToast("Saved search deleted.", "warning");
   }
@@ -7062,6 +7220,8 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         filteredCompletions={filteredCompletions}
         gutterLinesRef={gutterLinesRef}
         highlightRef={highlightRef}
+        historyAnnouncement={historyAnnouncement}
+        historyRecallable={historyRecallable}
         isRunning={isRunning}
         launchPending={persistedLaunchPending}
         modal={modal}

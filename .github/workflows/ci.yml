@@ -126,6 +126,11 @@ jobs:
       - name: Build static UI
         run: npm run build
 
+      # The workspace behaviour tests drive the demo-mode export just built, in the
+      # Chromium installed above, so they run after the build and need no backend.
+      - name: Test workspace behaviour against the static export
+        run: npm run test:workspace
+
   go-lint:
     name: Go lint
     runs-on: ubuntu-latest

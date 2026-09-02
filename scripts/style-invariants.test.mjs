@@ -359,6 +359,7 @@ const COMPONENT_KNOBS = [
   "app/dashboards/operations-dashboard.css: --chart-x-axis-height",
   "app/dashboards/operations-dashboard.css: --chart-x-axis-type",
   "app/dashboards/operations-dashboard.css: --chart-y-axis-width",
+  "app/search-workspace/search-editor.css: --search-editor-max-height",
   "app/search-workspace/search-job.css: --pulse-ring-core",
 ];
 
