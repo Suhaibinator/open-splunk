@@ -122,6 +122,15 @@ var pipelineEvidenceRegistry = map[string][]pipelineEvidenceTarget{
 		{Path: "internal/queryexec/pipeline_runtime_marker_adversarial_test.go", Identity: "TestPipelineRuntimeMarkersAreCompletelyClassifiedAndRedacted"},
 		{Path: "internal/clickhouse/pipeline_fillnull_container_compiler_test.go", Identity: "TestPipelineFixedRawProvenancePipelinesCompileWithAtomicConsumers"},
 	},
+	"nomv-live-typed-grouping": {
+		{Path: "internal/queryexec/nomv_runtime_integration_test.go", Identity: "TestNoMVPresentationThroughManagerAgainstClickHouse"},
+	},
+	"nomv-live-presentation-follows-rename": {
+		{Path: "internal/queryexec/nomv_runtime_integration_test.go", Identity: "TestNoMVPresentationThroughManagerAgainstClickHouse"},
+	},
+	"nomv-live-overwrite-and-reapply": {
+		{Path: "internal/queryexec/nomv_runtime_integration_test.go", Identity: "TestNoMVPresentationThroughManagerAgainstClickHouse"},
+	},
 }
 
 var pipelineStringExpectationVocabulary = map[string]map[string]struct{}{
