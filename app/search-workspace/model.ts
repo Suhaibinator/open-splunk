@@ -25,6 +25,7 @@ export type MenuName =
   | "search-mode"
   | "save-as"
   | "stats-format"
+  | "statistics-columns"
   | "pattern-sensitivity"
   | "event-display"
   | "event-page-size"
