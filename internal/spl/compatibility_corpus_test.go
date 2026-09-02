@@ -106,10 +106,14 @@ func TestCompatibilityCorpusParserExpectations(t *testing.T) {
 		"SPL_EXPECTED_FIELD":                {},
 		"SPL_INVALID_FIELD":                 {},
 		"SPL_INVALID_FIELD_QUOTE_ESCAPE":    {},
+		"SPL_INVALID_EVAL_ARITY":            {},
+		"SPL_UNSUPPORTED_CIDR_PREFIX":       {},
 		"SPL_UNSUPPORTED_EVAL_EXPRESSION":   {},
 		"SPL_UNSUPPORTED_EXPRESSION":        {},
 		"SPL_UNSUPPORTED_MEMBERSHIP_SYNTAX": {},
 		"SPL_UNSUPPORTED_STATS_AGGREGATE":   {},
+		"SPL_UNSUPPORTED_TOSTRING_FORMAT":   {},
+		"SPL_UNSUPPORTED_TRIM_CHARACTERS":   {},
 		"SPL_UNTERMINATED_FIELD_QUOTE":      {},
 	}
 
@@ -149,6 +153,13 @@ func TestCompatibilityCorpusParserExpectations(t *testing.T) {
 				var diagnostic *spl.Diagnostic
 				if !errors.As(parseErr, &diagnostic) || diagnostic.Code != diagnosticExpectation {
 					t.Fatalf("parse error = %v, want %s", parseErr, diagnosticExpectation)
+				}
+				if len(diagnostic.Suggestions) > spl.MaximumDiagnosticSuggestions {
+					t.Fatalf(
+						"diagnostic carries %d suggestions, more than the %d every consumer accepts",
+						len(diagnostic.Suggestions),
+						spl.MaximumDiagnosticSuggestions,
+					)
 				}
 			})
 		}

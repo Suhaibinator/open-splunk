@@ -86,6 +86,11 @@ The semantic rule inventory is:
 | `SPL-EXPRESSION-LIMITS-001` | expression structural and work ceilings |
 | `SPL-SECURITY-001` | authorization and parameterized-SQL invariants |
 | `SPL-EXPRESSION-DIAGNOSTICS-001` | stable expression failures |
+| `SPL-MATH-001` | domain-guarded numeric functions |
+| `SPL-TEXT-TRANSFORM-001` | bounded trim, URL-decode, and digest text functions |
+| `SPL-TYPEOF-001` | static and runtime value-type names |
+| `SPL-CIDRMATCH-001` | literal-prefix IP containment |
+| `SPL-TOSTRING-FORMAT-001` | `commas` and `duration` numeric rendering |
 | `SPL-REGEX-001` | bounded row-filtering regex command |
 | `SPL-REVERSE-001` | complete established-order reversal |
 | `SPL-ACCUM-001` | running numeric sum |
@@ -136,11 +141,52 @@ lineage do not use that optimization.
 `where` and conditional predicates use explicit Boolean operators with
 precedence `NOT`, `AND`, then `OR`. Quoted text is a literal and bare names are
 fields. Supported scalar functions include `isnull`, `isnotnull`, `replace`,
-`tonumber`, `if`, `coalesce`, `case`, period concatenation, `lower`, `upper`,
-`len`/`length`, `substr`, default `tostring`, `round`, `ceil`/`ceiling`,
-`floor`, `mvcount`, `mvsort`, `split`, `mvappend`, `mvdedup`, `mvindex`,
-`mvjoin`, `mvzip`, `mvfind`, `match`, `like`, `now`, `relative_time`,
-`strftime`, and `strptime`.
+`tonumber`, `if`, `coalesce`, `nullif`, `case`, period concatenation, `lower`,
+`upper`, `trim`/`ltrim`/`rtrim`, `urldecode`, `md5`/`sha1`/`sha256`/`sha512`,
+`len`/`length`, `substr`, `tostring`, `typeof`, `round`, `ceil`/`ceiling`,
+`floor`, `abs`, `sqrt`, `exp`, `ln`, `log`, `pow`, `pi`, `cidrmatch`,
+`mvcount`, `mvsort`, `split`, `mvappend`, `mvdedup`, `mvindex`, `mvjoin`,
+`mvzip`, `mvfind`, `match`, `like`, `now`, `relative_time`, `strftime`, and
+`strptime`.
+
+The scalar function pack follows these contracts:
+
+- `abs`, `sqrt`, `exp`, `ln`, `log(x[, base])`, `pow`, and `pi()` share the
+  arithmetic operand rules, so each call charges one arithmetic operator and
+  accepts finite numeric values and bounded numeric strings but not
+  numeric-looking fixed String literals. Domain-invalid inputs (a negative
+  square root, a non-positive logarithm argument, a base of one, or a NaN
+  power) return null; overflow keeps the exceptional-value rules of
+  `SPL-ARITHMETIC-EXCEPTION-001`.
+- `trim`, `ltrim`, and `rtrim` strip spaces and tabs by default, or the
+  characters of a quoted literal of at most 256 bytes. `urldecode` decodes
+  percent escapes, keeps a literal `+`, and returns the input unchanged when the
+  decoded bytes are not valid UTF-8. The digest functions return lowercase
+  hexadecimal text. All of them apply per member to String multivalues, like
+  `lower` and `upper`.
+- `nullif(a, b)` is `if(a = b, null, a)`, so it follows the comparison and
+  branch rules of `if` and adds no rule of its own: the first operand must have
+  a fixed String, Bool, or numeric kind, so convert a raw event field with
+  `tostring` or `tonumber` first.
+- `typeof(x)` returns `Number`, `String`, `Boolean`, or `Invalid`. Fixed kinds
+  resolve at compile time and canonical time counts as `Number`; a dynamic
+  value is classified at runtime, where bounded numeric text is `Number`, a
+  missing value (including a flattened object, which has no scalar at its own
+  path) is `Invalid`, and a stored list or other unsupported type yields null.
+  Statically multivalue inputs are rejected.
+- `cidrmatch(prefix, address)` requires a quoted literal prefix, matches an
+  IPv4 or IPv6 address against the masked prefix, returns false for text that is
+  not an address, and returns null for a null address. IPv4-mapped IPv6
+  addresses are not matched against IPv4 prefixes. Like the other Boolean
+  functions it belongs in `where` or inside `if(...)`.
+- `tostring(x, "commas")` renders a number with thousands separators and at
+  most two rounded fraction digits; `tostring(x, "duration")` renders whole
+  seconds as `HH:MM:SS`, prefixed with `D+` once the value reaches one day.
+  Negative durations, non-finite values, and magnitudes of 2^63 or more return
+  null. A Boolean expression keeps its default `True`/`False` rendering; a
+  stored event value that is not numeric is null like any other ineligible
+  arithmetic operand; a fixed String or time input is rejected before
+  execution (convert with `tonumber` first), and so is any other format name.
 
 Authored `eval` additionally supports bounded arithmetic `+`, `-`, `*`, `/`,
 and `%`, plus `IN` and `NOT IN` membership. Arithmetic accepts finite numeric

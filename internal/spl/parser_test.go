@@ -898,7 +898,7 @@ func TestParseEvalRejectsMalformedOrUnsupportedExpressions(t *testing.T) {
 		{`index=main | eval value=replace(message, "(?=secret)", "")`, "SPL_UNSUPPORTED_REGEX"},
 		{`index=main | eval value=replace(message, "", "x")`, "SPL_UNSUPPORTED_REGEX"},
 		{`index=main | eval value=replace(message, "a*", "x")`, "SPL_UNSUPPORTED_REGEX"},
-		{`index=main | eval value=trim(duration)`, "SPL_UNSUPPORTED_EVAL_FUNCTION"},
+		{`index=main | eval value=mvfilter(duration)`, "SPL_UNSUPPORTED_EVAL_FUNCTION"},
 		{`index=main | eval x+1=duration_ms`, "SPL_UNSUPPORTED_EVAL_EXPRESSION"},
 		{`index=main | eval value=tonumber(duration),`, "SPL_EXPECTED_FIELD"},
 	}

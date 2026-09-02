@@ -206,11 +206,69 @@ func TestCompileEvalToStringRejectsForgedPlansButAcceptsBoolean(t *testing.T) {
 			Value: plan.Value{Kind: plan.ValueKindString, String: "value"},
 		}
 	}
-	testUnaryScalarCompilerStructuralTrustBoundary(
-		t,
-		plan.ScalarFunctionToString,
-		plan.ScalarFunctionToString,
-	)
+	var typedNil *plan.ScalarLiteralExpression
+	cyclic := &plan.ScalarCallExpression{Function: plan.ScalarFunctionToString}
+	cyclic.Arguments = []plan.ScalarExpression{cyclic}
+	for _, test := range []struct {
+		name       string
+		expression plan.ScalarExpression
+		want       string
+	}{
+		{
+			name:       "zero arguments",
+			expression: &plan.ScalarCallExpression{Function: plan.ScalarFunctionToString},
+			want:       "expected one argument",
+		},
+		{
+			name: "three arguments",
+			expression: &plan.ScalarCallExpression{
+				Function:  plan.ScalarFunctionToString,
+				Arguments: []plan.ScalarExpression{literal(), literal(), literal()},
+			},
+			want: "expected one argument",
+		},
+		{
+			// A two-argument call is a format conversion, and the format must
+			// be a quoted literal that the parser already validated.
+			name: "unquoted format literal",
+			expression: &plan.ScalarCallExpression{
+				Function:  plan.ScalarFunctionToString,
+				Arguments: []plan.ScalarExpression{literal(), literal()},
+			},
+			want: "unsupported format",
+		},
+		{
+			name: "unknown quoted format",
+			expression: &plan.ScalarCallExpression{
+				Function: plan.ScalarFunctionToString,
+				Arguments: []plan.ScalarExpression{literal(), &plan.ScalarLiteralExpression{
+					Value: plan.Value{Kind: plan.ValueKindString, String: "hex", Quoted: true},
+				}},
+			},
+			want: "unsupported format",
+		},
+		{
+			name: "typed nil argument",
+			expression: &plan.ScalarCallExpression{
+				Function:  plan.ScalarFunctionToString,
+				Arguments: []plan.ScalarExpression{typedNil},
+			},
+			want: "missing scalar expression",
+		},
+		{
+			name:       "cyclic expression",
+			expression: cyclic,
+			want:       "contains a cycle",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			err := compileForgedScalarAssignment(t, base, test.expression)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Compile error = %v, want %q", err, test.want)
+			}
+		})
+	}
 
 	boolean := &plan.ScalarCallExpression{
 		Function:  plan.ScalarFunctionIsNull,

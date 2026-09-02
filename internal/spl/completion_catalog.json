@@ -471,7 +471,7 @@
     {
       "name": "tostring",
       "insertion": "tostring(",
-      "detail": "Render a supported scalar value as text.",
+      "detail": "Render a supported scalar value as text, optionally with the \"commas\" or \"duration\" format.",
       "class": "scalar",
       "highlight_requires_call": true
     },
@@ -640,6 +640,132 @@
       "name": "substr",
       "insertion": "substr(",
       "detail": "Select Unicode code points using literal indexes.",
+      "class": "scalar",
+      "highlight_requires_call": true
+    },
+    {
+      "name": "abs",
+      "insertion": "abs(",
+      "detail": "Return the absolute value of a number.",
+      "class": "scalar",
+      "highlight_requires_call": true
+    },
+    {
+      "name": "sqrt",
+      "insertion": "sqrt(",
+      "detail": "Return the square root of a number; negative inputs are null.",
+      "class": "scalar",
+      "highlight_requires_call": true
+    },
+    {
+      "name": "exp",
+      "insertion": "exp(",
+      "detail": "Raise e to the power of a number.",
+      "class": "scalar",
+      "highlight_requires_call": true
+    },
+    {
+      "name": "ln",
+      "insertion": "ln(",
+      "detail": "Return the natural logarithm of a positive number.",
+      "class": "scalar",
+      "highlight_requires_call": true
+    },
+    {
+      "name": "log",
+      "insertion": "log(",
+      "detail": "Return the base-10 logarithm, or use an optional literal base.",
+      "class": "scalar",
+      "highlight_requires_call": true
+    },
+    {
+      "name": "pow",
+      "insertion": "pow(",
+      "detail": "Raise a number to a power.",
+      "class": "scalar",
+      "highlight_requires_call": true
+    },
+    {
+      "name": "pi",
+      "insertion": "pi()",
+      "detail": "Return the constant pi.",
+      "class": "scalar",
+      "highlight_requires_call": true
+    },
+    {
+      "name": "trim",
+      "insertion": "trim(",
+      "detail": "Strip spaces and tabs, or literal characters, from both ends.",
+      "class": "scalar",
+      "highlight_requires_call": true
+    },
+    {
+      "name": "ltrim",
+      "insertion": "ltrim(",
+      "detail": "Strip spaces and tabs, or literal characters, from the start.",
+      "class": "scalar",
+      "highlight_requires_call": true
+    },
+    {
+      "name": "rtrim",
+      "insertion": "rtrim(",
+      "detail": "Strip spaces and tabs, or literal characters, from the end.",
+      "class": "scalar",
+      "highlight_requires_call": true
+    },
+    {
+      "name": "urldecode",
+      "insertion": "urldecode(",
+      "detail": "Decode percent-encoded characters in a string.",
+      "class": "scalar",
+      "highlight_requires_call": true
+    },
+    {
+      "name": "md5",
+      "insertion": "md5(",
+      "detail": "Return the lowercase hexadecimal MD5 digest of a string.",
+      "class": "scalar",
+      "highlight_requires_call": true
+    },
+    {
+      "name": "sha1",
+      "insertion": "sha1(",
+      "detail": "Return the lowercase hexadecimal SHA-1 digest of a string.",
+      "class": "scalar",
+      "highlight_requires_call": true
+    },
+    {
+      "name": "sha256",
+      "insertion": "sha256(",
+      "detail": "Return the lowercase hexadecimal SHA-256 digest of a string.",
+      "class": "scalar",
+      "highlight_requires_call": true
+    },
+    {
+      "name": "sha512",
+      "insertion": "sha512(",
+      "detail": "Return the lowercase hexadecimal SHA-512 digest of a string.",
+      "class": "scalar",
+      "highlight_requires_call": true
+    },
+    {
+      "name": "nullif",
+      "insertion": "nullif(",
+      "detail": "Return null when both arguments are equal, otherwise the first.",
+      "class": "scalar",
+      "highlight_requires_call": true
+    },
+    {
+      "name": "typeof",
+      "insertion": "typeof(",
+      "detail": "Name the value type: Number, String, Boolean, or Invalid.",
+      "class": "scalar",
+      "highlight_requires_call": true
+    },
+    {
+      "name": "cidrmatch",
+      "insertion": "cidrmatch(",
+      "detail": "Test whether an IP address falls inside a literal CIDR block.",
       "class": "scalar",
       "highlight_requires_call": true
     }

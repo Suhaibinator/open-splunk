@@ -46,20 +46,37 @@ func TestParseToStringSupportsNestingPredicatesAndScalarKinds(t *testing.T) {
 	}
 }
 
-func TestParseToStringEnforcesDefaultOnlyArity(t *testing.T) {
+func TestParseToStringEnforcesArityAndFormats(t *testing.T) {
 	t.Parallel()
 
 	for _, source := range []string{
 		`index=main | eval value=tostring()`,
 		`index=main | eval value=tostring(status, "hex", "extra")`,
+		`index=main | eval value=tostring(status, "commas", "extra")`,
 	} {
 		assertParseDiagnosticCode(t, source, "SPL_INVALID_EVAL_ARITY")
 	}
 	for _, source := range []string{
 		`index=main | eval value=tostring(status, "hex")`,
 		`index=main | eval value=tostring(status, format)`,
+		`index=main | eval value=tostring(status, commas)`,
+		`index=main | eval value=tostring(status, "Commas")`,
+		`index=main | eval value=tostring(status, "")`,
 	} {
 		assertParseDiagnosticCode(t, source, "SPL_UNSUPPORTED_TOSTRING_FORMAT")
+	}
+	for _, source := range []string{
+		`index=main | eval value=tostring(bytes, "commas")`,
+		`index=main | eval value=tostring(duration, "duration")`,
+	} {
+		query, err := Parse(source)
+		if err != nil {
+			t.Fatalf("Parse(%q): %v", source, err)
+		}
+		call, ok := query.Commands[0].(*EvalCommand).Assignments[0].Expression.(*ScalarCallExpr)
+		if !ok || call.Function != ScalarFunctionToString || len(call.Arguments) != 2 {
+			t.Fatalf("Parse(%q) expression = %#v, want a two-argument tostring call", source, query.Commands[0])
+		}
 	}
 }
 

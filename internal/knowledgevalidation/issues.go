@@ -11,13 +11,14 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
 const (
 	maximumFieldPathBytes  = 1 << 10
 	maximumIssueCodeBytes  = 128
 	maximumIssueMessage    = 4 << 10
-	maximumSuggestions     = 32
+	maximumSuggestions     = spl.MaximumDiagnosticSuggestions
 	maximumSuggestionBytes = 1 << 10
 )
 

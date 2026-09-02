@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"net/netip"
 	"slices"
 	"strconv"
 	"strings"
@@ -5599,6 +5600,122 @@ func booleanArgumentDiagnostic(function string, argument ScalarExpr, suggestions
 	}
 }
 
+// rejectBooleanMathArgument reports a Boolean-returning operand handed to a
+// numeric eval function; the math functions share the arithmetic operand
+// model, which never consumes a Boolean.
+func rejectBooleanMathArgument(function string, argument ScalarExpr) error {
+	if !scalarExpressionMayReturnBooleanFunction(argument) {
+		return nil
+	}
+	return booleanArgumentDiagnostic(
+		function,
+		argument,
+		"use isnull or isnotnull directly with where",
+		"convert a numeric value before passing it to "+function,
+	)
+}
+
+// rejectBooleanTextArgument reports a Boolean-returning operand handed to a
+// text-transform eval function.
+func rejectBooleanTextArgument(function string, argument ScalarExpr) error {
+	if !scalarExpressionMayReturnBooleanFunction(argument) {
+		return nil
+	}
+	return booleanArgumentDiagnostic(
+		function,
+		argument,
+		"use isnull or isnotnull directly with where",
+		"consume the Boolean with a supported conditional or conversion function",
+	)
+}
+
+// SupportedToStringFormats lists the tostring second-argument formats that
+// have an exact lowering. "hex" stays rejected because Splunk's hexadecimal
+// rendering of non-integral input is undocumented.
+var SupportedToStringFormats = []string{"commas", "duration"}
+
+// validateToStringFormatLiteral requires the tostring format to be one of the
+// supported quoted literals so the planner never sees a dynamic format.
+func validateToStringFormatLiteral(expression ScalarExpr) error {
+	literal, ok := expression.(*ScalarLiteralExpr)
+	if !ok || literal == nil || literal.Value.Kind != LiteralKindString ||
+		!literal.Value.Quoted || !slices.Contains(SupportedToStringFormats, literal.Value.Text) {
+		return &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_TOSTRING_FORMAT",
+			Message: `tostring supports only the quoted "commas" and "duration" formats`,
+			Range:   expression.SourceRange(),
+			Suggestions: []string{
+				`tostring(value, "commas")`,
+				`tostring(value, "duration")`,
+				"tostring(value)",
+			},
+		}
+	}
+	return nil
+}
+
+// MaximumTrimCharactersBytes bounds the explicit character set accepted by
+// trim, ltrim, and rtrim so the bound SQL argument stays small.
+const MaximumTrimCharactersBytes = 256
+
+// validateTrimCharactersLiteral requires the trim character set to be a
+// bounded, non-empty, valid UTF-8 quoted string literal.
+func validateTrimCharactersLiteral(function string, expression ScalarExpr) error {
+	literal, ok := expression.(*ScalarLiteralExpr)
+	if !ok || literal == nil || literal.Value.Kind != LiteralKindString ||
+		!literal.Value.Quoted {
+		return &Diagnostic{
+			Code:        "SPL_UNSUPPORTED_TRIM_CHARACTERS",
+			Message:     function + " characters must be a quoted string literal",
+			Range:       expression.SourceRange(),
+			Suggestions: []string{function + `(value, "xy")`},
+		}
+	}
+	if literal.Value.Text == "" || !utf8.ValidString(literal.Value.Text) {
+		return &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_TRIM_CHARACTERS",
+			Message: function + " characters must be a non-empty valid UTF-8 string",
+			Range:   literal.Range,
+		}
+	}
+	if len(literal.Value.Text) > MaximumTrimCharactersBytes {
+		return &Diagnostic{
+			Code: "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf(
+				"%s characters exceed the %d-byte limit",
+				function,
+				MaximumTrimCharactersBytes,
+			),
+			Range: literal.Range,
+		}
+	}
+	return nil
+}
+
+// validateCIDRPrefixLiteral requires the cidrmatch prefix to be a quoted
+// literal that parses as an IPv4 or IPv6 CIDR block.
+func validateCIDRPrefixLiteral(expression ScalarExpr) error {
+	literal, ok := expression.(*ScalarLiteralExpr)
+	if !ok || literal == nil || literal.Value.Kind != LiteralKindString ||
+		!literal.Value.Quoted {
+		return &Diagnostic{
+			Code:        "SPL_UNSUPPORTED_CIDR_PREFIX",
+			Message:     "cidrmatch prefix must be a quoted string literal",
+			Range:       expression.SourceRange(),
+			Suggestions: []string{`cidrmatch("10.0.0.0/8", ip)`},
+		}
+	}
+	if _, err := netip.ParsePrefix(literal.Value.Text); err != nil {
+		return &Diagnostic{
+			Code:        "SPL_UNSUPPORTED_CIDR_PREFIX",
+			Message:     "cidrmatch prefix must be an IPv4 or IPv6 CIDR block such as 10.0.0.0/8",
+			Range:       literal.Range,
+			Suggestions: []string{`cidrmatch("10.0.0.0/8", ip)`, `cidrmatch("2001:db8::/32", ip)`},
+		}
+	}
+	return nil
+}
+
 func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 	arguments := make([]ScalarExpr, 0, 3)
 	functionName := strings.ToLower(name.text)
@@ -5832,18 +5949,13 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 		}
 	case "tostring":
 		function = ScalarFunctionToString
-		if len(arguments) == 2 {
-			return nil, &Diagnostic{
-				Code:    "SPL_UNSUPPORTED_TOSTRING_FORMAT",
-				Message: "tostring formats are not supported; only tostring(value) is supported",
-				Range:   arguments[1].SourceRange(),
-				Suggestions: []string{
-					"tostring(value)",
-				},
-			}
+		if len(arguments) != 1 && len(arguments) != 2 {
+			return nil, invalidEvalArity(name.sourceRange, "tostring requires one or two arguments")
 		}
-		if len(arguments) != 1 {
-			return nil, invalidEvalArity(name.sourceRange, "tostring requires exactly one argument")
+		if len(arguments) == 2 {
+			if err := validateToStringFormatLiteral(arguments[1]); err != nil {
+				return nil, err
+			}
 		}
 	case "replace":
 		function = ScalarFunctionReplace
@@ -6213,39 +6325,171 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 				}
 			}
 		}
+	case "abs", "sqrt", "exp", "ln":
+		function = map[string]ScalarFunction{
+			"abs":  ScalarFunctionAbs,
+			"sqrt": ScalarFunctionSqrt,
+			"exp":  ScalarFunctionExp,
+			"ln":   ScalarFunctionLn,
+		}[functionName]
+		if len(arguments) != 1 {
+			return nil, invalidEvalArity(name.sourceRange, functionName+" requires exactly one argument")
+		}
+		if err := rejectBooleanMathArgument(functionName, arguments[0]); err != nil {
+			return nil, err
+		}
+	case "log":
+		function = ScalarFunctionLog
+		if len(arguments) != 1 && len(arguments) != 2 {
+			return nil, invalidEvalArity(name.sourceRange, "log requires one or two arguments")
+		}
+		for _, argument := range arguments {
+			if err := rejectBooleanMathArgument("log", argument); err != nil {
+				return nil, err
+			}
+		}
+	case "pow":
+		function = ScalarFunctionPow
+		if len(arguments) != 2 {
+			return nil, invalidEvalArity(name.sourceRange, "pow requires exactly two arguments")
+		}
+		for _, argument := range arguments {
+			if err := rejectBooleanMathArgument("pow", argument); err != nil {
+				return nil, err
+			}
+		}
+	case "pi":
+		function = ScalarFunctionPi
+		if len(arguments) != 0 {
+			return nil, invalidEvalArity(name.sourceRange, "pi requires no arguments")
+		}
+	case "trim", "ltrim", "rtrim":
+		function = map[string]ScalarFunction{
+			"trim":  ScalarFunctionTrim,
+			"ltrim": ScalarFunctionLTrim,
+			"rtrim": ScalarFunctionRTrim,
+		}[functionName]
+		if len(arguments) != 1 && len(arguments) != 2 {
+			return nil, invalidEvalArity(name.sourceRange, functionName+" requires one or two arguments")
+		}
+		if err := rejectBooleanTextArgument(functionName, arguments[0]); err != nil {
+			return nil, err
+		}
+		if len(arguments) == 2 {
+			if err := validateTrimCharactersLiteral(functionName, arguments[1]); err != nil {
+				return nil, err
+			}
+		}
+	case "urldecode", "md5", "sha1", "sha256", "sha512":
+		function = map[string]ScalarFunction{
+			"urldecode": ScalarFunctionURLDecode,
+			"md5":       ScalarFunctionMD5,
+			"sha1":      ScalarFunctionSHA1,
+			"sha256":    ScalarFunctionSHA256,
+			"sha512":    ScalarFunctionSHA512,
+		}[functionName]
+		if len(arguments) != 1 {
+			return nil, invalidEvalArity(name.sourceRange, functionName+" requires exactly one argument")
+		}
+		if err := rejectBooleanTextArgument(functionName, arguments[0]); err != nil {
+			return nil, err
+		}
+	case "typeof":
+		function = ScalarFunctionTypeOf
+		if len(arguments) != 1 {
+			return nil, invalidEvalArity(name.sourceRange, "typeof requires exactly one argument")
+		}
+	case "cidrmatch":
+		function = ScalarFunctionCIDRMatch
+		if len(arguments) != 2 {
+			return nil, invalidEvalArity(name.sourceRange, "cidrmatch requires exactly two arguments")
+		}
+		if err := validateCIDRPrefixLiteral(arguments[0]); err != nil {
+			return nil, err
+		}
+		if scalarExpressionMayReturnBooleanFunction(arguments[1]) {
+			return nil, booleanArgumentDiagnostic(
+				"cidrmatch",
+				arguments[1],
+				"use isnull or isnotnull directly with where",
+				"pass the field that holds the IP address text",
+			)
+		}
+	case "nullif":
+		// nullif(a, b) is sugar for if(a = b, null, a); it inherits the
+		// comparison rules of if so no separate evaluation model exists.
+		if len(arguments) != 2 {
+			return nil, invalidEvalArity(name.sourceRange, "nullif requires exactly two arguments")
+		}
+		for _, argument := range arguments {
+			if scalarExpressionMayReturnBooleanFunction(argument) {
+				return nil, booleanArgumentDiagnostic(
+					"nullif",
+					argument,
+					"use isnull or isnotnull directly with where",
+					"consume the Boolean with a supported conditional or conversion function",
+				)
+			}
+		}
+		if countErr := p.countEvalPredicate(arguments[0].SourceRange()); countErr != nil {
+			return nil, countErr
+		}
+		callRange := Range{Start: name.sourceRange.Start, End: p.previous().sourceRange.End}
+		return &ScalarIfExpr{
+			Condition: &WhereComparisonExpr{
+				Left:  arguments[0],
+				Op:    CompareOpEqual,
+				Right: arguments[1],
+				Range: Range{Start: arguments[0].SourceRange().Start, End: arguments[1].SourceRange().End},
+			},
+			True: &ScalarLiteralExpr{
+				Value: Literal{Kind: LiteralKindNull, Text: "null", Range: name.sourceRange},
+				Range: name.sourceRange,
+			},
+			False: arguments[0],
+			Range: callRange,
+		}, nil
 	default:
 		return nil, &Diagnostic{
 			Code:    "SPL_UNSUPPORTED_EVAL_FUNCTION",
 			Message: fmt.Sprintf("eval function %q is not supported", name.text),
 			Range:   name.sourceRange,
+			// One representative per family keeps this list inside
+			// MaximumDiagnosticSuggestions; the completion catalog carries the
+			// full inventory.
 			Suggestions: []string{
 				"tonumber(value)",
 				"tostring(value)",
-				`replace(value, "pattern", "replacement")`,
+				`tostring(value, "commas")`,
+				"typeof(value)",
 				"isnull(value)",
 				"isnotnull(value)",
 				"coalesce(value, fallback)",
+				"nullif(value, sentinel)",
+				`if(predicate, true_value, false_value)`,
 				"lower(value)",
 				"upper(value)",
+				"trim(value)",
 				"len(value)",
 				"substr(value, start, length)",
+				`replace(value, "pattern", "replacement")`,
+				"urldecode(value)",
+				"md5(value)",
 				"round(value, precision)",
-				"ceil(value)",
 				"floor(value)",
+				"ceil(value)",
+				"abs(value)",
+				"sqrt(value)",
+				"pow(value, exponent)",
+				"log(value, base)",
 				"mvcount(value)",
-				"mvsort(multivalue_field)",
 				`split(value, ",")`,
-				"mvappend(value, ...)",
-				"mvdedup(multivalue_field)",
 				"mvindex(multivalue_field, start, end)",
 				`mvjoin(multivalue_field, ",")`,
-				`mvzip(left, right, ",")`,
-				`mvfind(multivalue_field, "pattern")`,
 				`match(value, "pattern")`,
 				`like(value, "pattern%")`,
+				`cidrmatch("10.0.0.0/8", ip)`,
 				"now()",
-				`strftime(time, "%Y-%m-%dT%H:%M:%S.%Q")`,
-				`if(predicate, true_value, false_value)`,
 			},
 		}
 	}

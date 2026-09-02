@@ -220,6 +220,23 @@ func TestScalarFunctionBooleanTraitsRemainInParity(t *testing.T) {
 		{spl.ScalarFunctionMVJoin, ScalarFunctionMVJoin, false},
 		{spl.ScalarFunctionMVZip, ScalarFunctionMVZip, false},
 		{spl.ScalarFunctionMVFind, ScalarFunctionMVFind, false},
+		{spl.ScalarFunctionAbs, ScalarFunctionAbs, false},
+		{spl.ScalarFunctionSqrt, ScalarFunctionSqrt, false},
+		{spl.ScalarFunctionExp, ScalarFunctionExp, false},
+		{spl.ScalarFunctionLn, ScalarFunctionLn, false},
+		{spl.ScalarFunctionLog, ScalarFunctionLog, false},
+		{spl.ScalarFunctionPow, ScalarFunctionPow, false},
+		{spl.ScalarFunctionPi, ScalarFunctionPi, false},
+		{spl.ScalarFunctionTrim, ScalarFunctionTrim, false},
+		{spl.ScalarFunctionLTrim, ScalarFunctionLTrim, false},
+		{spl.ScalarFunctionRTrim, ScalarFunctionRTrim, false},
+		{spl.ScalarFunctionURLDecode, ScalarFunctionURLDecode, false},
+		{spl.ScalarFunctionMD5, ScalarFunctionMD5, false},
+		{spl.ScalarFunctionSHA1, ScalarFunctionSHA1, false},
+		{spl.ScalarFunctionSHA256, ScalarFunctionSHA256, false},
+		{spl.ScalarFunctionSHA512, ScalarFunctionSHA512, false},
+		{spl.ScalarFunctionTypeOf, ScalarFunctionTypeOf, false},
+		{spl.ScalarFunctionCIDRMatch, ScalarFunctionCIDRMatch, true},
 	}
 	if len(functions) != int(spl.ScalarFunctionCount) {
 		t.Fatalf(
