@@ -1149,42 +1149,27 @@ func (p *parser) unsupportedBinSyntax(tok token, message string) *Diagnostic {
 }
 
 func (p *parser) parseTimechartCommand(name token) (Command, error) {
-	if !p.isKeyword("SPAN") {
-		return nil, p.unsupportedTimechartSyntax(p.current(), "timechart requires span=<positive integer><s|m|h> before its aggregate")
-	}
-	spanOption := p.current()
-	p.advance()
-	if !p.match(tokenEqual) {
-		return nil, &Diagnostic{
-			Code:        "SPL_EXPECTED_EQUAL",
-			Message:     "timechart span must be followed by '='",
-			Range:       spanOption.sourceRange,
-			Suggestions: []string{timechartSyntaxSuggestion},
-		}
-	}
-	spanToken := p.current()
-	if spanToken.kind != tokenWord {
-		return nil, &Diagnostic{
-			Code:        "SPL_INVALID_ARGUMENT",
-			Message:     "timechart span must be a positive integer followed by s, m, or h",
-			Range:       spanToken.sourceRange,
-			Suggestions: []string{timechartSyntaxSuggestion},
-		}
-	}
-	span, err := parseTimechartSpan(spanToken)
+	var options TimechartOptions
+	span, spanSpecified, err := p.parseTimechartOptions(&options, true)
 	if err != nil {
 		return nil, err
 	}
-	p.advance()
+	if !spanSpecified {
+		return nil, p.unsupportedTimechartSyntax(p.current(), "timechart requires span=<positive integer><s|m|h> before its aggregate")
+	}
 
 	aggregate, aggregateEnd, err := p.parseTimechartAggregate()
 	if err != nil {
 		return nil, err
 	}
 	if p.atCommandEnd() {
+		if diagnostic := p.timechartOptionsRequireSplit(options); diagnostic != nil {
+			return nil, diagnostic
+		}
 		return &TimechartCommand{
 			Span:      span,
 			Aggregate: aggregate,
+			Options:   options,
 			Range: Range{
 				Start: name.sourceRange.Start,
 				End:   aggregateEnd,
@@ -1217,6 +1202,13 @@ func (p *parser) parseTimechartCommand(name token) (Command, error) {
 		return nil, p.unsupportedTimechartSyntax(field, "wildcard timechart split fields are not supported")
 	}
 	p.advance()
+	end := field.sourceRange.End
+	if !p.atCommandEnd() {
+		if _, _, optionsErr := p.parseTimechartOptions(&options, false); optionsErr != nil {
+			return nil, optionsErr
+		}
+		end = p.previous().sourceRange.End
+	}
 	if !p.atCommandEnd() {
 		return nil, p.unsupportedTimechartSyntax(p.current(), "only one timechart split field is currently supported")
 	}
@@ -1224,8 +1216,147 @@ func (p *parser) parseTimechartCommand(name token) (Command, error) {
 		Span:      span,
 		Aggregate: aggregate,
 		SplitBy:   &StatsGroupField{Name: field.text, Range: field.sourceRange},
-		Range:     Range{Start: name.sourceRange.Start, End: field.sourceRange.End},
+		Options:   options,
+		Range:     Range{Start: name.sourceRange.Start, End: end},
 	}, nil
+}
+
+// parseTimechartOptions consumes the span=, limit=, useother=, and usenull=
+// options at the current position: before the aggregate (where span is
+// required) or after the split field, where Splunk places the series options.
+// Each option may be authored once across both positions.
+func (p *parser) parseTimechartOptions(options *TimechartOptions, allowSpan bool) (TimeSpan, bool, error) {
+	var span TimeSpan
+	spanSpecified := false
+	for {
+		option := p.current()
+		if option.kind != tokenWord {
+			return span, spanSpecified, nil
+		}
+		lower := strings.ToLower(option.text)
+		if !p.nextIs(tokenEqual) {
+			if lower == "span" && allowSpan && !spanSpecified {
+				return span, spanSpecified, &Diagnostic{
+					Code:        "SPL_EXPECTED_EQUAL",
+					Message:     "timechart span must be followed by '='",
+					Range:       option.sourceRange,
+					Suggestions: []string{timechartSyntaxSuggestion},
+				}
+			}
+			return span, spanSpecified, nil
+		}
+		switch lower {
+		case "span":
+			if !allowSpan {
+				return span, spanSpecified, p.unsupportedTimechartSyntax(option, "timechart span must precede the aggregate")
+			}
+			if spanSpecified {
+				return span, spanSpecified, p.unsupportedTimechartSyntax(option, "timechart option \"span\" is repeated")
+			}
+			p.advance()
+			p.advance()
+			spanToken := p.current()
+			if spanToken.kind != tokenWord {
+				return span, spanSpecified, &Diagnostic{
+					Code:        "SPL_INVALID_ARGUMENT",
+					Message:     "timechart span must be a positive integer followed by s, m, or h",
+					Range:       spanToken.sourceRange,
+					Suggestions: []string{timechartSyntaxSuggestion},
+				}
+			}
+			parsed, err := parseTimechartSpan(spanToken)
+			if err != nil {
+				return span, spanSpecified, err
+			}
+			span, spanSpecified = parsed, true
+			p.advance()
+		case "limit":
+			if options.LimitSpecified {
+				return span, spanSpecified, p.unsupportedTimechartSyntax(option, "timechart option \"limit\" is repeated")
+			}
+			p.advance()
+			p.advance()
+			value := p.current()
+			if value.kind != tokenWord || !unsignedIntegerSyntax(value.text) {
+				if p.atCommandEnd() {
+					value = option
+				}
+				return span, spanSpecified, &Diagnostic{
+					Code:        "SPL_INVALID_ARGUMENT",
+					Message:     "timechart limit must be a non-negative integer",
+					Range:       value.sourceRange,
+					Suggestions: []string{"limit=10"},
+				}
+			}
+			limit, limitErr := strconv.ParseUint(value.text, 10, 64)
+			if limitErr != nil || limit == 0 || limit > MaximumTimechartSeriesLimit {
+				message := fmt.Sprintf("timechart limit must be from 1 through %d", MaximumTimechartSeriesLimit)
+				if limitErr == nil && limit == 0 {
+					message = "timechart limit=0 (unlimited series) is not supported"
+				}
+				return span, spanSpecified, &Diagnostic{
+					Code:        "SPL_UNSUPPORTED_TIMECHART_LIMIT",
+					Message:     message,
+					Range:       Range{Start: option.sourceRange.Start, End: value.sourceRange.End},
+					Suggestions: []string{fmt.Sprintf("limit=%d", MaximumTimechartSeriesLimit)},
+				}
+			}
+			options.Limit = limit
+			options.LimitSpecified = true
+			options.LimitRange = Range{Start: option.sourceRange.Start, End: value.sourceRange.End}
+			p.advance()
+		case "useother", "usenull":
+			specified := options.UseOtherSpecified
+			if lower == "usenull" {
+				specified = options.UseNullSpecified
+			}
+			if specified {
+				return span, spanSpecified, p.unsupportedTimechartSyntax(option, fmt.Sprintf("timechart option %q is repeated", lower))
+			}
+			p.advance()
+			p.advance()
+			value := p.current()
+			parsed, ok := parseStrictBool(value.text)
+			if value.kind != tokenWord || !ok {
+				if p.atCommandEnd() {
+					value = option
+				}
+				return span, spanSpecified, p.unsupportedTimechartSyntax(value, fmt.Sprintf("timechart %s must be true or false", lower))
+			}
+			optionRange := Range{Start: option.sourceRange.Start, End: value.sourceRange.End}
+			if lower == "useother" {
+				options.UseOther, options.UseOtherSpecified, options.UseOtherRange = parsed, true, optionRange
+			} else {
+				options.UseNull, options.UseNullSpecified, options.UseNullRange = parsed, true, optionRange
+			}
+			p.advance()
+		default:
+			return span, spanSpecified, p.unsupportedTimechartSyntax(option, fmt.Sprintf("timechart option %q is not supported", option.text))
+		}
+	}
+}
+
+// timechartOptionsRequireSplit rejects series options on a timechart without
+// a BY split field: there are no series to limit or to collect into NULL and
+// OTHER, so accepting them silently would hide an authoring mistake.
+func (p *parser) timechartOptionsRequireSplit(options TimechartOptions) *Diagnostic {
+	var optionRange Range
+	switch {
+	case options.LimitSpecified:
+		optionRange = options.LimitRange
+	case options.UseOtherSpecified:
+		optionRange = options.UseOtherRange
+	case options.UseNullSpecified:
+		optionRange = options.UseNullRange
+	default:
+		return nil
+	}
+	return &Diagnostic{
+		Code:        "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
+		Message:     "timechart limit, useother, and usenull require a BY split field",
+		Range:       optionRange,
+		Suggestions: []string{"timechart span=5m count BY host limit=5 useother=false"},
+	}
 }
 
 func (p *parser) parseTimechartAggregate() (StatsAggregate, Position, error) {

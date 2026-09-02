@@ -321,6 +321,19 @@ func TestAnalyzeAcceptsValidAndRejectsForgedTimechartSumAndAverageMeasures(t *te
 		}}}); err != nil {
 			t.Fatalf("Analyze(valid split %v): %v", function, err)
 		}
+		// limit=N, useother=false, and usenull=false are authored series
+		// options, so the narrowed split shapes are valid plans.
+		if _, err := Analyze(&Query{Operators: []Operator{&Timechart{
+			Time: timeField, Measure: valid, Split: func() *TimechartSplit {
+				got := validSplit(splitField)
+				got.SeriesLimit = 1
+				got.IncludeNull = false
+				got.IncludeOther = false
+				return got
+			}(),
+		}}}); err != nil {
+			t.Fatalf("Analyze(valid narrowed split %v): %v", function, err)
+		}
 
 		tests := []struct {
 			name    string
@@ -336,8 +349,12 @@ func TestAnalyzeAcceptsValidAndRejectsForgedTimechartSumAndAverageMeasures(t *te
 			{name: "same measure and split", measure: valid, split: validSplit(input)},
 			{name: "zero series limit", measure: valid, split: func() *TimechartSplit { got := validSplit(splitField); got.SeriesLimit = 0; return got }()},
 			{name: "wrong series limit", measure: valid, split: func() *TimechartSplit { got := validSplit(splitField); got.SeriesLimit++; return got }()},
-			{name: "null series disabled", measure: valid, split: func() *TimechartSplit { got := validSplit(splitField); got.IncludeNull = false; return got }()},
-			{name: "other series disabled", measure: valid, split: func() *TimechartSplit { got := validSplit(splitField); got.IncludeOther = false; return got }()},
+			{name: "forged split path", measure: valid, split: func() *TimechartSplit {
+				got := validSplit(splitField)
+				got.Field.Path = []string{"attacker"}
+				return got
+			}()},
+			{name: "unresolved split field", measure: valid, split: validSplit(FieldRef{Name: "service"})},
 			{name: "null label renamed", measure: valid, split: func() *TimechartSplit { got := validSplit(splitField); got.NullLabel = "none"; return got }()},
 			{name: "other label renamed", measure: valid, split: func() *TimechartSplit { got := validSplit(splitField); got.OtherLabel = "rest"; return got }()},
 		}

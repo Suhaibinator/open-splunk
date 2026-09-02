@@ -2171,7 +2171,22 @@ func TestParseTimechartRejectsUnsupportedOrMalformedSyntax(t *testing.T) {
 		{"quoted split field", `index=main | timechart span=5m count by "level"`, "SPL_EXPECTED_FIELD", `"level"`},
 		{"wildcard split field", `index=main | timechart span=5m count by level*`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "level*"},
 		{"multiple split fields", `index=main | timechart span=5m count by level host`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "host"},
-		{"unsupported option", `index=main | timechart span=5m count by level useother=false`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "useother"},
+		{"unsupported option", `index=main | timechart span=5m count by level nullstr=none`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "nullstr"},
+		{"unsupported leading option", `index=main | timechart span=5m sep=- count by level`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "sep"},
+		{"repeated limit", `index=main | timechart span=5m limit=5 count by level limit=5`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "limit"},
+		{"repeated span", `index=main | timechart span=5m span=5m count by level`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "span"},
+		{"trailing span", `index=main | timechart span=5m count by level span=1h`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "span"},
+		{"limit without split", `index=main | timechart span=5m limit=5 count`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "limit=5"},
+		{"useother without split", `index=main | timechart span=5m useother=false count`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "useother=false"},
+		{"zero limit", `index=main | timechart span=5m limit=0 count by level`, "SPL_UNSUPPORTED_TIMECHART_LIMIT", "limit=0"},
+		{"limit above the series allowance", `index=main | timechart span=5m limit=11 count by level`, "SPL_UNSUPPORTED_TIMECHART_LIMIT", "limit=11"},
+		{"limit overflow", `index=main | timechart span=5m limit=18446744073709551616 count by level`, "SPL_UNSUPPORTED_TIMECHART_LIMIT", "limit=18446744073709551616"},
+		{"negative limit", `index=main | timechart span=5m limit=-1 count by level`, "SPL_INVALID_ARGUMENT", "-1"},
+		{"missing limit value", `index=main | timechart span=5m count by level limit=`, "SPL_INVALID_ARGUMENT", "limit"},
+		{"non-boolean useother", `index=main | timechart span=5m count by level useother=maybe`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "maybe"},
+		{"numeric usenull", `index=main | timechart span=5m count by level usenull=0`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "0"},
+		{"missing usenull value", `index=main | timechart span=5m count by level usenull=`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "usenull"},
+		{"stray field after options", `index=main | timechart span=5m count by level useother=false host`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "host"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -2980,5 +2995,69 @@ func assertParseDiagnosticCode(t *testing.T, source, code string) {
 	ok := errors.As(err, &diagnostic)
 	if !ok || diagnostic.Code != code {
 		t.Fatalf("Parse(%q) error = %#v, want %s", source, err, code)
+	}
+}
+
+func TestParseTimechartSeriesOptionsInEitherPosition(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		source  string
+		want    TimechartOptions
+		wantEnd string
+	}{
+		{
+			"leading options",
+			`index=main | timechart span=1h limit=5 useother=false usenull=false count BY host`,
+			TimechartOptions{Limit: 5, LimitSpecified: true, UseOtherSpecified: true, UseNullSpecified: true},
+			"host",
+		},
+		{
+			"trailing options",
+			`index=main | timechart span=1h count BY host limit=3 useother=true usenull=false`,
+			TimechartOptions{Limit: 3, LimitSpecified: true, UseOther: true, UseOtherSpecified: true, UseNullSpecified: true},
+			"usenull=false",
+		},
+		{
+			"split across positions",
+			`index=main | timechart limit=10 span=1h sum(bytes) BY host USEOTHER=FALSE`,
+			TimechartOptions{Limit: 10, LimitSpecified: true, UseOtherSpecified: true},
+			"USEOTHER=FALSE",
+		},
+		{"no options", `index=main | timechart span=1h count BY host`, TimechartOptions{}, "host"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			query, err := Parse(test.source)
+			if err != nil {
+				t.Fatalf("Parse(%q): %v", test.source, err)
+			}
+			command, ok := query.Commands[len(query.Commands)-1].(*TimechartCommand)
+			if !ok {
+				t.Fatalf("last command = %T, want *TimechartCommand", query.Commands[len(query.Commands)-1])
+			}
+			if command.SplitBy == nil || command.SplitBy.Name != "host" {
+				t.Fatalf("SplitBy = %#v, want host", command.SplitBy)
+			}
+			got := command.Options
+			for name, sourceRange := range map[string]*Range{"limit": &got.LimitRange, "useother": &got.UseOtherRange, "usenull": &got.UseNullRange} {
+				if *sourceRange == (Range{}) {
+					continue
+				}
+				text := strings.ToLower(test.source[sourceRange.Start.Offset:sourceRange.End.Offset])
+				if !strings.HasPrefix(text, name+"=") {
+					t.Fatalf("%s range covers %q", name, text)
+				}
+				*sourceRange = Range{}
+			}
+			if got != test.want {
+				t.Fatalf("Options = %#v, want %#v", got, test.want)
+			}
+			if commandText := test.source[command.Range.Start.Offset:command.Range.End.Offset]; !strings.HasSuffix(commandText, test.wantEnd) {
+				t.Fatalf("command source = %q, want it to end with %q", commandText, test.wantEnd)
+			}
+		})
 	}
 }

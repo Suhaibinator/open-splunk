@@ -258,7 +258,7 @@ The cumulative command surface is:
 | `streamstats` | bounded ordered running aggregates |
 | `top`, `rare` | bounded frequency summaries; `countfield=`/`percentfield=` rename and `showcount=false`/`showperc=false` hide the generated outputs; `BY g…` groups the tuples, scopes `percent` to each group, and keeps `limit` tuples per group (`SPL-FREQUENCY-BY-001`) |
 | `bin`/`bucket` | numeric and time discretization |
-| `timechart`, `chart` | bounded chart aggregation and split series; `chart <agg> BY <row>` (or `OVER <row>`) with one split field is the `stats <agg> BY <row>` table |
+| `timechart`, `chart` | bounded chart aggregation and split series; `timechart … BY <field>` accepts `limit=1..10`, `useother=<bool>`, and `usenull=<bool>` before the aggregate or after the split field (`limit=0` is rejected); `chart <agg> BY <row>` (or `OVER <row>`) with one split field is the `stats <agg> BY <row>` table |
 | `regex` | bounded RE2 row filtering (`SPL-REGEX-001`) |
 | `reverse` | reverse the complete established relation order (`SPL-REVERSE-001`) |
 | `accum` | running numeric sum (`SPL-ACCUM-001`) |

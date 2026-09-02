@@ -2001,6 +2001,131 @@ func TestBuildTimechartProducesBoundedRuntimeWideSchema(t *testing.T) {
 	}
 }
 
+func TestBuildTimechartSeriesOptionsNarrowTheSplitAndRuntimeAllowance(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		source       string
+		seriesLimit  uint16
+		includeNull  bool
+		includeOther bool
+		maxSeries    uint16
+	}{
+		{
+			name:         "defaults",
+			source:       `index=gradethis | timechart span=5m count by level`,
+			seriesLimit:  10,
+			includeNull:  true,
+			includeOther: true,
+			maxSeries:    12,
+		},
+		{
+			name:         "limit only",
+			source:       `index=gradethis | timechart span=5m limit=3 count by level`,
+			seriesLimit:  3,
+			includeNull:  true,
+			includeOther: true,
+			maxSeries:    5,
+		},
+		{
+			name:         "limit without other",
+			source:       `index=gradethis | timechart span=5m count by level limit=5 useother=false`,
+			seriesLimit:  5,
+			includeNull:  true,
+			includeOther: false,
+			maxSeries:    6,
+		},
+		{
+			name:         "ordinary series only",
+			source:       `index=gradethis | timechart span=5m usenull=false sum(bytes) by level limit=1 useother=false`,
+			seriesLimit:  1,
+			includeNull:  false,
+			includeOther: false,
+			maxSeries:    1,
+		},
+		{
+			name:         "explicit defaults",
+			source:       `index=gradethis | timechart span=5m limit=10 count by level useother=true usenull=true`,
+			seriesLimit:  10,
+			includeNull:  true,
+			includeOther: true,
+			maxSeries:    12,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			logical, err := Build(mustParse(t, test.source), testScope([]string{"gradethis"}, nil))
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+			operator, ok := logical.Operators[len(logical.Operators)-1].(*Timechart)
+			if !ok || operator.Split == nil {
+				t.Fatalf("last operator = %#v, want split timechart", logical.Operators[len(logical.Operators)-1])
+			}
+			if operator.Split.SeriesLimit != test.seriesLimit ||
+				operator.Split.IncludeNull != test.includeNull ||
+				operator.Split.IncludeOther != test.includeOther ||
+				operator.Split.NullLabel != "NULL" || operator.Split.OtherLabel != "OTHER" {
+				t.Fatalf("split = %#v", operator.Split)
+			}
+			if logical.DynamicOutput == nil ||
+				!slices.Equal(logical.DynamicOutput.FixedFields, []string{"_time"}) ||
+				logical.DynamicOutput.MaxSeries != test.maxSeries {
+				t.Fatalf("dynamic output = %#v, want max series %d", logical.DynamicOutput, test.maxSeries)
+			}
+			if _, err := Analyze(logical); err != nil {
+				t.Fatalf("Analyze: %v", err)
+			}
+		})
+	}
+}
+
+func TestBuildTimechartRejectsForgedSeriesOptions(t *testing.T) {
+	t.Parallel()
+
+	base := mustParse(t, `index=gradethis | timechart span=5m count by level`)
+	command := base.Commands[0].(*spl.TimechartCommand)
+	optionRange := spl.Range{
+		Start: spl.Position{Offset: 1, Line: 1, Column: 2},
+		End:   spl.Position{Offset: 8, Line: 1, Column: 9},
+	}
+	tests := []struct {
+		name    string
+		options spl.TimechartOptions
+		split   *spl.StatsGroupField
+		code    string
+	}{
+		{name: "zero limit", options: spl.TimechartOptions{Limit: 0, LimitSpecified: true, LimitRange: optionRange}, split: command.SplitBy, code: "SPL_UNSUPPORTED_TIMECHART_LIMIT"},
+		{name: "limit above maximum", options: spl.TimechartOptions{Limit: 11, LimitSpecified: true, LimitRange: optionRange}, split: command.SplitBy, code: "SPL_UNSUPPORTED_TIMECHART_LIMIT"},
+		{name: "limit without range", options: spl.TimechartOptions{Limit: 5, LimitSpecified: true}, split: command.SplitBy, code: "SPL_UNSUPPORTED_TIMECHART_SYNTAX"},
+		{name: "unspecified limit with value", options: spl.TimechartOptions{Limit: 5}, split: command.SplitBy, code: "SPL_UNSUPPORTED_TIMECHART_SYNTAX"},
+		{name: "useother without range", options: spl.TimechartOptions{UseOtherSpecified: true}, split: command.SplitBy, code: "SPL_UNSUPPORTED_TIMECHART_SYNTAX"},
+		{name: "unspecified useother with value", options: spl.TimechartOptions{UseOther: true}, split: command.SplitBy, code: "SPL_UNSUPPORTED_TIMECHART_SYNTAX"},
+		{name: "usenull without range", options: spl.TimechartOptions{UseNullSpecified: true}, split: command.SplitBy, code: "SPL_UNSUPPORTED_TIMECHART_SYNTAX"},
+		{name: "unspecified usenull with range", options: spl.TimechartOptions{UseNullRange: optionRange}, split: command.SplitBy, code: "SPL_UNSUPPORTED_TIMECHART_SYNTAX"},
+		{name: "options without split", options: spl.TimechartOptions{Limit: 5, LimitSpecified: true, LimitRange: optionRange}, code: "SPL_UNSUPPORTED_TIMECHART_SYNTAX"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			forged := *command
+			forged.Options = test.options
+			forged.SplitBy = test.split
+			query := &spl.Query{
+				Search:   base.Search,
+				Commands: []spl.Command{&forged},
+				Range:    base.Range,
+			}
+			_, err := Build(query, testScope([]string{"gradethis"}, nil))
+			assertDiagnosticCode(t, err, test.code)
+		})
+	}
+}
+
 func TestBuildTimechartWithoutSplitProducesStaticCountSchema(t *testing.T) {
 	t.Parallel()
 

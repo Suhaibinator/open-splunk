@@ -1679,6 +1679,32 @@ func TestCompileTimechartRevalidatesExactGridAndOutputContract(t *testing.T) {
 				query.DynamicOutput.MaxSeries = 11
 			},
 		},
+		{
+			name: "series limit raised past the maximum",
+			corrupt: func(query *plan.Query, operator *plan.Timechart) {
+				operator.Split.SeriesLimit = 11
+				query.DynamicOutput.MaxSeries = 13
+			},
+		},
+		{
+			name: "series limit zeroed",
+			corrupt: func(query *plan.Query, operator *plan.Timechart) {
+				operator.Split.SeriesLimit = 0
+				query.DynamicOutput.MaxSeries = 2
+			},
+		},
+		{
+			name: "null series disabled without shrinking the bound",
+			corrupt: func(_ *plan.Query, operator *plan.Timechart) {
+				operator.Split.IncludeNull = false
+			},
+		},
+		{
+			name: "other series disabled without shrinking the bound",
+			corrupt: func(_ *plan.Query, operator *plan.Timechart) {
+				operator.Split.IncludeOther = false
+			},
+		},
 	} {
 		t.Run("split/"+test.name, func(t *testing.T) {
 			t.Parallel()
@@ -1688,6 +1714,93 @@ func TestCompileTimechartRevalidatesExactGridAndOutputContract(t *testing.T) {
 			if _, err := (Compiler{}).Compile(logical); err == nil ||
 				!strings.Contains(err.Error(), "dynamic output contract is invalid") {
 				t.Fatalf("Compile() error = %v, want dynamic-contract rejection", err)
+			}
+		})
+	}
+}
+
+func TestCompileTimechartSeriesOptionsNarrowTheCollapsedSeries(t *testing.T) {
+	t.Parallel()
+
+	const (
+		nullBranch    = `"__os_tc_kind" = 1, '1:'`
+		countOther    = `"__os_tc_kind" = 0, '2:'`
+		valueOther    = ", '2:') AS"
+		nullSentinel  = "CAST('1:' AS String) FROM"
+		otherSentinel = "CAST('2:' AS String) FROM"
+	)
+	tests := []struct {
+		name      string
+		source    string
+		maxSeries uint16
+		contains  []string
+		excludes  []string
+	}{
+		{
+			name:      "count defaults",
+			source:    `index=gradethis | timechart span=5m count BY level`,
+			maxSeries: 12,
+			contains:  []string{`__os_tc_series_rank" <= 10, concat('0:'`, nullBranch, countOther},
+		},
+		{
+			name:      "count limit without other",
+			source:    `index=gradethis | timechart span=5m count BY level limit=3 useother=false`,
+			maxSeries: 4,
+			contains:  []string{`__os_tc_series_rank" <= 3, concat('0:'`, nullBranch},
+			excludes:  []string{countOther, `<= 10, concat`},
+		},
+		{
+			name:      "count ordinary series only",
+			source:    `index=gradethis | timechart span=5m limit=1 usenull=false useother=false count BY level`,
+			maxSeries: 1,
+			contains:  []string{`__os_tc_series_rank" <= 1, concat('0:'`},
+			excludes:  []string{countOther, nullBranch},
+		},
+		{
+			name:      "value defaults",
+			source:    `index=gradethis | timechart span=5m sum(bytes) BY level`,
+			maxSeries: 12,
+			contains:  []string{`ASC LIMIT 10), `, `__os_tc_kind" IN (0, 1) GROUP BY`, nullSentinel, otherSentinel, valueOther},
+		},
+		{
+			name:      "value limit without null",
+			source:    `index=gradethis | timechart span=5m avg(bytes) BY level limit=2 usenull=false`,
+			maxSeries: 3,
+			contains:  []string{`ASC LIMIT 2), `, `__os_tc_kind" = 0 GROUP BY`, otherSentinel},
+			excludes:  []string{nullSentinel, `IN (0, 1) GROUP BY`},
+		},
+		{
+			name:      "value ordinary series only",
+			source:    `index=gradethis | timechart span=5m useother=false p95(bytes) BY level limit=4 usenull=false`,
+			maxSeries: 4,
+			contains:  []string{`ASC LIMIT 4), `, `__os_tc_kind" = 0 AND ("__os_tc_kind" != 0 OR "__os_tc_label" IN (SELECT "__os_tc_label" FROM "__os_timechart_numeric_scores")) GROUP BY`},
+			excludes:  []string{nullSentinel, otherSentinel},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			logical := buildPlan(t, test.source)
+			if logical.DynamicOutput == nil || logical.DynamicOutput.MaxSeries != test.maxSeries {
+				t.Fatalf("dynamic output = %#v, want max series %d", logical.DynamicOutput, test.maxSeries)
+			}
+			compiled, err := (Compiler{}).Compile(logical)
+			if err != nil {
+				t.Fatalf("Compile: %v", err)
+			}
+			if compiled.Timechart == nil || compiled.Timechart.MaxSeries != test.maxSeries {
+				t.Fatalf("compiled timechart output = %#v, want max series %d", compiled.Timechart, test.maxSeries)
+			}
+			for _, fragment := range test.contains {
+				if !strings.Contains(compiled.SQL, fragment) {
+					t.Fatalf("SQL missing %q:\n%s", fragment, compiled.SQL)
+				}
+			}
+			for _, fragment := range test.excludes {
+				if strings.Contains(compiled.SQL, fragment) {
+					t.Fatalf("SQL still contains %q:\n%s", fragment, compiled.SQL)
+				}
 			}
 		})
 	}

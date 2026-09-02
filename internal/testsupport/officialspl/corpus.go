@@ -94,7 +94,7 @@ var AllowedFacets = map[string][]string{
 	"streamstats": {"aggregate", "current", "global", "group_by", "window"},
 	"table":       {"fields"},
 	"tail":        {"count"},
-	"timechart":   {"aggregate", "span", "split_by"},
+	"timechart":   {"aggregate", "limit", "span", "split_by", "usenull", "useother"},
 	"top":         {"by", "countfield", "fields", "limit", "percentfield", "showcount", "showperc"},
 	"where":       {"predicate"},
 }

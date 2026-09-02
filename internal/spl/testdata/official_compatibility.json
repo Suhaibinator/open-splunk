@@ -820,8 +820,35 @@
         "commands": ["timechart"],
         "facets": {
           "aggregate": "count",
+          "limit": "10",
           "span": "1h",
-          "split_by": ""
+          "split_by": "",
+          "usenull": "true",
+          "useother": "true"
+        }
+      }
+    },
+    {
+      "id": "timechart.limit-useother",
+      "command": "timechart",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/timechart",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "timechart span=1h limit=5 count BY host useother=false",
+        "verified_on": "2026-09-01"
+      },
+      "query": "index=main | timechart span=1h limit=5 count BY host useother=false",
+      "expect": {
+        "commands": ["timechart"],
+        "facets": {
+          "aggregate": "count",
+          "limit": "5",
+          "span": "1h",
+          "split_by": "host",
+          "usenull": "true",
+          "useother": "false"
         }
       }
     },

@@ -1243,7 +1243,30 @@ type TimechartCommand struct {
 	Span      TimeSpan
 	Aggregate StatsAggregate
 	SplitBy   *StatsGroupField
+	Options   TimechartOptions
 	Range     Range
+}
+
+// MaximumTimechartSeriesLimit bounds timechart limit=N: the ordinary split
+// series a chart may retain before the remainder collapses into OTHER. It is
+// Splunk's default of 10 and, with the NULL and OTHER series, fills the
+// backend's runtime series allowance.
+const MaximumTimechartSeriesLimit = 10
+
+// TimechartOptions preserves the authored split-series options and their
+// source locations. Unspecified options are zero-valued and distinct from an
+// explicitly authored false; the planner applies Splunk's defaults limit=10,
+// useother=true, and usenull=true.
+type TimechartOptions struct {
+	Limit             uint64
+	LimitSpecified    bool
+	LimitRange        Range
+	UseOther          bool
+	UseOtherSpecified bool
+	UseOtherRange     Range
+	UseNull           bool
+	UseNullSpecified  bool
+	UseNullRange      Range
 }
 
 func (*TimechartCommand) command()             {}

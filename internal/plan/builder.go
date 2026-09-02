@@ -37,8 +37,8 @@ const (
 	maxFieldPathSegmentBytes            = 256
 	maxTimechartBuckets                 = 10_000
 	maxTimechartSpan                    = 24 * time.Hour
-	timechartSeriesLimit                = 10
-	maxTimechartSeries                  = 12
+	timechartSeriesLimit                = spl.MaximumTimechartSeriesLimit
+	maxTimechartSeries                  = timechartSeriesLimit + 2
 	eventStatsSupportedAggregateMessage = "eventstats currently supports exactly one count, " +
 		"count(field), count(eval(predicate)), pN(field), percN(field), min(field), " +
 		"max(field), earliest(field), latest(field), sum(field), avg(field), " +
@@ -1681,18 +1681,20 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 						},
 					}
 				}
-				split = &TimechartSplit{
-					Field:        resolved,
-					SeriesLimit:  timechartSeriesLimit,
-					IncludeNull:  true,
-					IncludeOther: true,
-					NullLabel:    "NULL",
-					OtherLabel:   "OTHER",
+				split, splitErr = buildTimechartSplit(resolved, command.Options, command.Range)
+				if splitErr != nil {
+					return nil, splitErr
 				}
 				result.OutputFields = nil
 				result.DynamicOutput = &DynamicSeriesOutput{
 					FixedFields: []string{"_time"},
-					MaxSeries:   maxTimechartSeries,
+					MaxSeries:   timechartMaxSeries(split),
+				}
+			} else if command.Options != (spl.TimechartOptions{}) {
+				return nil, &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
+					Message: "timechart limit, useother, and usenull require a BY split field",
+					Range:   command.Range,
 				}
 			} else {
 				result.OutputFields = []string{"_time", measure.Output}
@@ -1835,6 +1837,81 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 		result.parsedSourceDigest = sourceDigest
 	}
 	return result, nil
+}
+
+// buildTimechartSplit applies Splunk's series defaults (limit=10,
+// useother=true, usenull=true) over the authored options. The parser owns the
+// limit bound, but a forged command can carry any value, so the planner
+// revalidates it before the compiler trusts SeriesLimit.
+func buildTimechartSplit(
+	field FieldRef,
+	options spl.TimechartOptions,
+	commandRange spl.Range,
+) (*TimechartSplit, error) {
+	invalid := func(message string, sourceRange spl.Range) (*TimechartSplit, error) {
+		if sourceRange == (spl.Range{}) {
+			sourceRange = commandRange
+		}
+		return nil, &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
+			Message: message,
+			Range:   sourceRange,
+		}
+	}
+	split := &TimechartSplit{
+		Field:        field,
+		SeriesLimit:  timechartSeriesLimit,
+		IncludeNull:  true,
+		IncludeOther: true,
+		NullLabel:    "NULL",
+		OtherLabel:   "OTHER",
+	}
+	if options.LimitSpecified {
+		if options.LimitRange == (spl.Range{}) {
+			return invalid("timechart limit metadata is invalid", options.LimitRange)
+		}
+		if options.Limit == 0 || options.Limit > timechartSeriesLimit {
+			return nil, &Diagnostic{
+				Code:        "SPL_UNSUPPORTED_TIMECHART_LIMIT",
+				Message:     fmt.Sprintf("timechart limit must be from 1 through %d", timechartSeriesLimit),
+				Range:       options.LimitRange,
+				Suggestions: []string{fmt.Sprintf("limit=%d", timechartSeriesLimit)},
+			}
+		}
+		split.SeriesLimit = uint16(options.Limit)
+	} else if options.Limit != 0 || options.LimitRange != (spl.Range{}) {
+		return invalid("unspecified timechart limit contains authored metadata", options.LimitRange)
+	}
+	if options.UseOtherSpecified {
+		if options.UseOtherRange == (spl.Range{}) {
+			return invalid("timechart useother metadata is invalid", options.UseOtherRange)
+		}
+		split.IncludeOther = options.UseOther
+	} else if options.UseOther || options.UseOtherRange != (spl.Range{}) {
+		return invalid("unspecified timechart useother contains authored metadata", options.UseOtherRange)
+	}
+	if options.UseNullSpecified {
+		if options.UseNullRange == (spl.Range{}) {
+			return invalid("timechart usenull metadata is invalid", options.UseNullRange)
+		}
+		split.IncludeNull = options.UseNull
+	} else if options.UseNull || options.UseNullRange != (spl.Range{}) {
+		return invalid("unspecified timechart usenull contains authored metadata", options.UseNullRange)
+	}
+	return split, nil
+}
+
+// timechartMaxSeries is the runtime series allowance a split publishes: the
+// ordinary series limit plus each enabled NULL and OTHER sentinel series.
+func timechartMaxSeries(split *TimechartSplit) uint16 {
+	series := split.SeriesLimit
+	if split.IncludeNull {
+		series++
+	}
+	if split.IncludeOther {
+		series++
+	}
+	return series
 }
 
 func buildChartMeasure(
