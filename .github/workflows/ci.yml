@@ -333,6 +333,29 @@ jobs:
               ^FuzzParseRawQuery$ 125000x
               ^FuzzRawBreaker$ 100000x
               ^FuzzMarshalResponse$ 400000x
+          - label: spl-compiler
+            package: ./internal/clickhouse
+            target_budgets: |
+              ^FuzzParseBuildCompileIsDeterministicAndAtomic$ 120000x
+          - label: spl-regex
+            package: ./internal/splregex
+            target_budgets: |
+              ^FuzzCompileExtractionPattern$ 200000x
+              ^FuzzCompileMatchPattern$ 200000x
+              ^FuzzValidateReplacePattern$ 250000x
+          - label: spl-wildcard
+            package: ./internal/splwildcard
+            target_budgets: |
+              ^FuzzCompileLikePattern$ 200000x
+          - label: spl-timeformat
+            package: ./internal/spltimeformat
+            target_budgets: |
+              ^FuzzCompileStrftimeFormat$ 200000x
+              ^FuzzCompileStrptimeFormat$ 200000x
+          - label: spl-relativetime
+            package: ./internal/splrelativetime
+            target_budgets: |
+              ^FuzzCompileSpecifier$ 200000x
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -584,6 +607,8 @@ jobs:
           ./internal/clickhouse TestPipelinePinnedClickHouseRetainedTupleHasCanonicalBytes
           ./internal/queryexec TestSemanticBytesLineageManagerAgainstClickHouse
           ./internal/queryexec TestPipelineCommandsPreserveUntouchedSemanticBytesThroughManagerAgainstClickHouse
+          ./internal/clickhouse TestStatsInventoryPinnedRuntimeAgainstClickHouse
+          ./internal/queryexec TestNoMVPresentationThroughManagerAgainstClickHouse
           EOF
           require_exact_test \
             ./cmd/open-splunk-server \
@@ -687,6 +712,35 @@ jobs:
           -run '^TestLookupRuntimeManagerAgainstClickHouse$'
           -count=1
           -timeout=8m
+          -p=1
+          -v
+
+      # The stats inventory ledger flips its pinned_runtime evidence on this
+      # test: every registered ledger item executes as a named subtest against
+      # the digest-pinned image, so the ledger cannot claim runtime coverage
+      # that CI does not run.
+      - name: Execute stats inventory pinned runtime against pinned ClickHouse
+        env:
+          OPEN_SPLUNK_CLICKHOUSE_INTEGRATION: "1"
+        run: >-
+          go test ./internal/clickhouse
+          -run '^TestStatsInventoryPinnedRuntimeAgainstClickHouse$'
+          -count=1
+          -timeout=15m
+          -p=1
+          -v
+
+      # SPL-NOMV-001 corpus evidence: the newline presentation rides the
+      # typed list through the search-job manager, follows rename/fields,
+      # clears on overwrite, and a present scalar fails the job atomically.
+      - name: Execute nomv presentation manager against pinned ClickHouse
+        env:
+          OPEN_SPLUNK_CLICKHOUSE_INTEGRATION: "1"
+        run: >-
+          go test ./internal/queryexec
+          -run '^TestNoMVPresentationThroughManagerAgainstClickHouse$'
+          -count=1
+          -timeout=15m
           -p=1
           -v
 
