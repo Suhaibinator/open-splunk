@@ -67,6 +67,7 @@
   --blue-100: #e8f3f9; /* Informational wash. */
   --blue-200: #cfe2ec; /* Informational wash border. */
   --blue-300: #b8ceda; /* Muted informational edge. */
+  --blue-350: #7fb4d3; /* Light informational ink: clears AA on a dark ground. */
   --blue-400: #5290b0; /* Light informational fill; the debug severity swatch. */
   --blue-450: #2f8ac1; /* Saturated interaction blue: focus rings. */
   --blue-500: #3b88ad; /* Mid informational fill. */
@@ -93,6 +94,7 @@
   --red-100: #fff0ee; /* Error wash. */
   --red-200: #f8e3e1; /* Error wash border. */
   --red-300: #dba39f; /* Muted error edge. */
+  --red-350: #e0736c; /* Light error ink: clears AA on a dark ground. */
   --red-400: #c84f48; /* The error severity swatch. */
   --red-500: #c93c37; /* Primary error colour. */
   --red-600: #b23b36; /* Pressed error colour. */
@@ -100,15 +102,18 @@
 
   /* Purple: categorical only; the product assigns it no state. */
   --purple-100: #efeaf6; /* Purple wash. */
+  --purple-400: #b094cf; /* Light purple: an ink that clears AA on a dark ground. */
   --purple-500: #8b67a8; /* Mid purple. */
   --purple-550: #a14b96; /* Magenta-leaning purple. */
   --purple-600: #6d4b9f; /* Deep purple. */
 
-  /* Extended categorical hues: only the chart series ramp reaches these. */
+  /* Extended categorical hues: the chart series ramp, and the dark theme's
+     syntax pipe, reach these. */
   --brown-400: #a57835; /* Categorical brown, light. */
   --brown-500: #8a6d55; /* Categorical brown. */
   --indigo-500: #6f7fb5; /* Categorical indigo. */
   --olive-500: #708f37; /* Categorical olive. */
+  --pink-400: #d98fb5; /* Light pink: an ink that clears AA on a dark ground. */
   --pink-500: #c76594; /* Categorical pink. */
   --teal-500: #4d9a8a; /* Categorical teal. */
   --teal-600: #4f8f6f; /* Categorical green-teal. */
@@ -121,6 +126,8 @@
   --bg-subtle: var(--gray-150); /* Recessed strips inside a surface: toolbars, table headers. */
   --bg-raised: var(--gray-50); /* A surface lifted off the canvas: menus, popovers. */
   --bg-inverse: var(--gray-950); /* Surfaces that carry inverted text. */
+  --bg-inverse-tint: var(--slate-700); /* The lifted end of a gradient across --bg-inverse; the sign-in story. */
+  --bg-scrim: var(--gray-900); /* The dimming wash behind a modal or drawer; each rule mixes it to partial opacity. */
 
   /* Foregrounds. */
   --fg-text: var(--gray-800); /* Body text. */
@@ -216,15 +223,20 @@
 }
 
 /*
- * Dark theme -- a first cut, restating tier 2 only.
+ * Dark theme -- restating tier 2 only.
  *
- * Nothing sets `data-theme` yet, so this block cannot affect the shipped light
- * render; it exists to prove the two-tier split holds, and to give the toggle a
- * target when one is added. Backgrounds and foregrounds swap ends of the gray
- * ramp; hues move one or two steps lighter so they keep contrast against a dark
- * ground, and every "soft" wash becomes a dark tint rather than a pale one. The
- * categorical chart ramp is deliberately not restated: those twelve hues are
- * chosen to separate from each other, not from the background.
+ * `data-theme` is set on `<html>` by lib/theme-preference.ts: a boot script
+ * inlined ahead of every stylesheet resolves the stored choice (System, Light
+ * or Dark, from the user popover) against `prefers-color-scheme` before the
+ * first paint, so this block is what a dark-mode user sees and the light block
+ * above never flashes first. The media query is read in JavaScript on purpose:
+ * .stylelintrc.json keeps `prefers-color-scheme` out of the CSS, so there is
+ * one place that decides the theme and the switch can always override it.
+ * Backgrounds and foregrounds swap ends of the gray ramp; hues move one or two
+ * steps lighter so they keep contrast against a dark ground, and every "soft"
+ * wash becomes a dark tint rather than a pale one. The categorical chart ramp
+ * is deliberately not restated: those twelve hues are chosen to separate from
+ * each other, not from the background.
  *
  * `--fg-inverse` and `--chrome-fg` are two roles rather than one for the sake
  * of this block: the inverse surface flips with the theme, while the two chrome
@@ -241,6 +253,8 @@
   --bg-subtle: var(--gray-800); /* Recessed strips inside a surface. */
   --bg-raised: var(--gray-750); /* A surface lifted off the canvas. */
   --bg-inverse: var(--gray-50); /* Surfaces that carry inverted text. */
+  --bg-inverse-tint: var(--gray-200); /* The lifted end of a gradient across --bg-inverse. */
+  --bg-scrim: var(--slate-900); /* The dimming wash behind a modal or drawer; it darkens in both themes. */
 
   /* Foregrounds. */
   --fg-text: var(--gray-200); /* Body text. */
@@ -249,7 +263,7 @@
   --fg-muted: var(--gray-450); /* Secondary text. */
   --fg-faint: var(--gray-550); /* Tertiary text. */
   --fg-inverse: var(--gray-950); /* Text on --bg-inverse. */
-  --fg-inverse-muted: var(--gray-600); /* Secondary text on --bg-inverse. */
+  --fg-inverse-muted: var(--gray-650); /* Secondary text on --bg-inverse; clears AA at the --bg-inverse-tint end too. */
   --fg-link: var(--blue-300); /* Anchor text. */
 
   /* Borders. */
@@ -262,9 +276,9 @@
   --accent: var(--green-500); /* Primary action colour. */
   --accent-hover: var(--green-400); /* Hovered and pressed accent. */
   --accent-bright: var(--green-300); /* Saturated accent fill. */
-  --accent-inverse: var(--green-600); /* The accent on --bg-inverse, which is a light surface here. */
+  --accent-inverse: var(--green-700); /* The accent on --bg-inverse, which is a light surface here; a label ink, so it clears AA. */
   --accent-soft: var(--green-800); /* Accent-tinted background wash. */
-  --accent-alt: var(--purple-500); /* Second decorative accent. */
+  --accent-alt: var(--purple-400); /* Second decorative accent; an ink in the completion menu, so it clears AA. */
   --accent-alt-soft: var(--purple-600); /* Second decorative accent, as a background wash. */
 
   /* Status. */
@@ -298,14 +312,16 @@
   --level-error: var(--red-300); /* error events. */
   --level-debug: var(--blue-300); /* debug events. */
 
-  /* SPL syntax: the ramp lightens by one step so a query keeps its hues
-     against a dark editor without any of them dropping out of it. */
-  --syntax-pipe: var(--pink-500); /* The pipe between two commands. */
-  --syntax-command: var(--purple-500); /* A search command name. */
+  /* SPL syntax: every ink lightens until it clears 4.5:1 on --bg-surface,
+     the editor's ground, so a query keeps its hues against a dark editor
+     without any of them dropping out of it. The computed-style contracts hold
+     the command, field and string inks to that ratio. */
+  --syntax-pipe: var(--pink-400); /* The pipe between two commands. */
+  --syntax-command: var(--purple-400); /* A search command name. */
   --syntax-function: var(--orange-400); /* An eval or stats function name. */
-  --syntax-field: var(--blue-400); /* A field name. */
+  --syntax-field: var(--blue-350); /* A field name. */
   --syntax-string: var(--green-500); /* A quoted string. */
-  --syntax-literal: var(--red-400); /* A boolean, an operator, a bare literal. */
+  --syntax-literal: var(--red-350); /* A boolean, an operator, a bare literal. */
 
   /* Application chrome. */
   --chrome-bar: var(--gray-950); /* Product bar. */

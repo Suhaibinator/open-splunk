@@ -763,6 +763,8 @@ const SEMANTIC_COLOUR_TOKENS: readonly string[] = [
   "--bg-subtle",
   "--bg-raised",
   "--bg-inverse",
+  "--bg-inverse-tint",
+  "--bg-scrim",
   "--fg-text",
   "--fg-strong",
   "--fg-secondary",
@@ -897,7 +899,10 @@ test.describe("colour token contracts", () => {
     expect(short, "state badges whose glyph falls below WCAG AA on its own wash").toEqual([]);
   });
 
-  test("the dark theme restates the semantic tier and is inert until it is selected", async ({ page }) => {
+  // The theme switch (lib/theme-preference.ts) writes `data-theme` on the
+  // root and nothing else: this is the contract that the attribute alone
+  // repaints the semantic tier, and that taking it away restores every value.
+  test("the dark theme resolves when selected and restores when removed", async ({ page }) => {
     await mount(page, "", DESKTOP_WIDTH);
 
     const roles = ["--bg-canvas", "--fg-text", "--border", "--chrome-bar"];
@@ -908,21 +913,88 @@ test.describe("colour token contracts", () => {
       "rgb(207, 212, 215)",
       "rgb(30, 37, 43)",
     ]);
+    expect(await colorScheme(page)).toEqual("light");
 
-    // Nothing sets `data-theme` yet, so the dark block must be unreachable in
-    // the shipped render. Selecting it here proves it is wired correctly.
     await page.evaluate(() => document.documentElement.setAttribute("data-theme", "dark"));
     const dark = await resolveTokens(page, roles);
     for (const [index, role] of roles.entries()) {
       expect(dark[index], `${role} is unchanged in the dark theme`).not.toEqual(light[index]);
     }
+    // Form controls, scrollbars and the canvas behind the page follow the
+    // block's own `color-scheme`, so a dark page gets dark browser chrome.
+    expect(await colorScheme(page)).toEqual("dark");
+
+    // `data-theme="light"` is what the boot script writes for the light
+    // theme; it must select nothing, so the light values are the defaults.
+    await page.evaluate(() => document.documentElement.setAttribute("data-theme", "light"));
+    expect(await resolveTokens(page, roles)).toEqual(light);
+    expect(await colorScheme(page)).toEqual("light");
 
     // Removing the attribute restores the light values, so the theme block
     // overrides tier 2 alone and leaves the palette underneath it untouched.
     await page.evaluate(() => document.documentElement.removeAttribute("data-theme"));
     expect(await resolveTokens(page, roles)).toEqual(light);
   });
+
+  // The three surfaces a search author stares at longest: the SPL editor,
+  // its completion menu and the toast. Each reads only semantic tokens, so
+  // the dark block must move every one of them, and the syntax inks -- which
+  // the dark block lightens one step -- must still clear AA on the editor's
+  // dark ground.
+  test("the editor, completion menu and toast repaint in the dark theme with AA syntax inks", async ({ page }) => {
+    await mount(
+      page,
+      '<div class="spl-editor"><div class="editor-highlight">'
+      + '<span class="spl-command">stats</span> <span class="spl-field">host</span> <span class="spl-string">"web"</span>'
+      + "</div></div>"
+      + '<div class="completion-menu"><div class="completion-title"><span>Commands</span></div>'
+      + '<button type="button" data-highlighted="true"><code>stats</code><span>Aggregate</span></button></div>'
+      + '<div class="toast"><span>i</span><strong>Saved</strong></div>',
+      DESKTOP_WIDTH,
+    );
+
+    const pairs: ReadonlyArray<readonly [string, "backgroundColor" | "color"]> = [
+      [".spl-editor", "backgroundColor"],
+      [".editor-highlight", "color"],
+      [".completion-menu", "backgroundColor"],
+      [".completion-menu > button", "backgroundColor"],
+      [".completion-menu code", "color"],
+      [".toast", "backgroundColor"],
+      [".toast", "color"],
+    ];
+    const light = await paints(page, pairs);
+    await page.evaluate(() => document.documentElement.setAttribute("data-theme", "dark"));
+    const dark = await paints(page, pairs);
+    for (const [index, [selector, property]] of pairs.entries()) {
+      expect(dark[index], `${selector} ${property} is unchanged in the dark theme`).not.toEqual(light[index]);
+    }
+
+    const editorGround = dark[0] ?? "";
+    const inks = await paints(page, [[".spl-command", "color"], [".spl-string", "color"], [".spl-field", "color"]]);
+    const short = [".spl-command", ".spl-string", ".spl-field"]
+      .map((selector, index) => ({ ratio: contrastRatio(inks[index] ?? "", editorGround), selector }))
+      .filter((ink) => ink.ratio < AA_CONTRAST)
+      .map((ink) => `${ink.selector} is ${ink.ratio.toFixed(2)}:1`);
+    expect(short, "syntax inks below WCAG AA on the dark editor").toEqual([]);
+  });
 });
+
+/** The root's computed `color-scheme`, which the theme block switches. */
+async function colorScheme(page: Page): Promise<string> {
+  return page.evaluate(() => globalThis.getComputedStyle(document.documentElement).colorScheme);
+}
+
+/** One computed paint per (selector, property) pair, in order. */
+async function paints(
+  page: Page,
+  pairs: ReadonlyArray<readonly [string, "backgroundColor" | "color"]>,
+): Promise<string[]> {
+  return page.evaluate((targets) => targets.map(([selector, property]) => {
+    const element = document.querySelector(selector);
+    if (element === null) throw new Error(`fixture is missing ${selector}`);
+    return globalThis.getComputedStyle(element)[property];
+  }), pairs);
+}
 
 // Contracts for the five breakpoints Phase 4 folded onto the canon.
 //

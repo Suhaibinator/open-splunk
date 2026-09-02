@@ -13,7 +13,12 @@
         "verified_on": "2026-08-29"
       },
       "query": "index=main | search status=200",
-      "expect": { "commands": ["search"] }
+      "expect": {
+        "commands": ["search"],
+        "facets": {
+          "filter": "status=200"
+        }
+      }
     },
     {
       "id": "where.comparison",
@@ -27,7 +32,12 @@
         "verified_on": "2026-08-29"
       },
       "query": "index=main | where status=200",
-      "expect": { "commands": ["where"] }
+      "expect": {
+        "commands": ["where"],
+        "facets": {
+          "predicate": "status=200"
+        }
+      }
     },
     {
       "id": "eval.arithmetic-assignment",
@@ -41,7 +51,13 @@
         "verified_on": "2026-08-29"
       },
       "query": "index=main | eval total=price*quantity",
-      "expect": { "commands": ["eval"] }
+      "expect": {
+        "commands": ["eval"],
+        "facets": {
+          "expressions": "price*quantity",
+          "fields": "total"
+        }
+      }
     },
     {
       "id": "rex.named-capture",
@@ -55,7 +71,14 @@
         "verified_on": "2026-08-29"
       },
       "query": "index=main | rex field=_raw \"(?<code>[0-9]+)\"",
-      "expect": { "commands": ["rex"] }
+      "expect": {
+        "commands": ["rex"],
+        "facets": {
+          "field": "_raw",
+          "max_match": "1",
+          "pattern": "(?<code>[0-9]+)"
+        }
+      }
     },
     {
       "id": "spath.explicit-path",
@@ -69,7 +92,14 @@
         "verified_on": "2026-08-29"
       },
       "query": "index=main | spath input=_raw output=user path=user.name",
-      "expect": { "commands": ["spath"] }
+      "expect": {
+        "commands": ["spath"],
+        "facets": {
+          "input": "_raw",
+          "output": "user",
+          "path": "user.name"
+        }
+      }
     },
     {
       "id": "fields.exclude-list",
@@ -90,6 +120,10 @@
           "names": ["host", "ip"],
           "wildcards": [false, false],
           "range_texts": ["host", "ip"]
+        },
+        "facets": {
+          "mode": "exclude",
+          "names": "host, ip"
         }
       }
     },
@@ -112,6 +146,10 @@
           "names": ["source", "sourcetype", "host", "error*"],
           "wildcards": [false, false, false, true],
           "range_texts": ["source", "sourcetype", "host", "error*"]
+        },
+        "facets": {
+          "mode": "include",
+          "names": "source, sourcetype, host, error*"
         }
       }
     },
@@ -134,6 +172,10 @@
           "names": ["_*"],
           "wildcards": [true],
           "range_texts": ["_*"]
+        },
+        "facets": {
+          "mode": "exclude",
+          "names": "_*"
         }
       }
     },
@@ -156,6 +198,10 @@
           "names": ["event_id", "status*"],
           "wildcards": [false, true],
           "range_texts": ["event_id", "status*"]
+        },
+        "facets": {
+          "mode": "include",
+          "names": "event_id, status*"
         }
       }
     },
@@ -171,7 +217,12 @@
         "verified_on": "2026-08-29"
       },
       "query": "index=main | table host source sourcetype",
-      "expect": { "commands": ["table"] }
+      "expect": {
+        "commands": ["table"],
+        "facets": {
+          "fields": "host, source, sourcetype"
+        }
+      }
     },
     {
       "id": "rename.field-alias",
@@ -185,7 +236,12 @@
         "verified_on": "2026-08-29"
       },
       "query": "index=main | rename host AS origin",
-      "expect": { "commands": ["rename"] }
+      "expect": {
+        "commands": ["rename"],
+        "facets": {
+          "assignments": "host AS origin"
+        }
+      }
     },
     {
       "id": "sort.spaced-ascending-time",
@@ -214,6 +270,10 @@
               "field_range_text": "_time"
             }
           ]
+        },
+        "facets": {
+          "keys": "+_time",
+          "limit": "0"
         }
       }
     },
@@ -244,6 +304,10 @@
               "field_range_text": "Time"
             }
           ]
+        },
+        "facets": {
+          "keys": "-Time",
+          "limit": ""
         }
       }
     },
@@ -274,6 +338,10 @@
               "field_range_text": "_time"
             }
           ]
+        },
+        "facets": {
+          "keys": "+_time",
+          "limit": "10"
         }
       }
     },
@@ -312,6 +380,10 @@
               "field_range_text": "source"
             }
           ]
+        },
+        "facets": {
+          "keys": "-num(size), +str(source)",
+          "limit": "100"
         }
       }
     },
@@ -342,6 +414,10 @@
               "field_range_text": "host"
             }
           ]
+        },
+        "facets": {
+          "keys": "+host",
+          "limit": "12"
         }
       }
     },
@@ -380,6 +456,10 @@
               "field_range_text": "source"
             }
           ]
+        },
+        "facets": {
+          "keys": "-host, -source",
+          "limit": ""
         }
       }
     },
@@ -395,7 +475,13 @@
         "verified_on": "2026-08-29"
       },
       "query": "index=main | dedup source",
-      "expect": { "commands": ["dedup"] }
+      "expect": {
+        "commands": ["dedup"],
+        "facets": {
+          "count": "1",
+          "fields": "source"
+        }
+      }
     },
     {
       "id": "head.count",
@@ -409,7 +495,12 @@
         "verified_on": "2026-08-29"
       },
       "query": "index=main | head 20",
-      "expect": { "commands": ["head"] }
+      "expect": {
+        "commands": ["head"],
+        "facets": {
+          "count": "20"
+        }
+      }
     },
     {
       "id": "tail.count",
@@ -423,7 +514,12 @@
         "verified_on": "2026-08-29"
       },
       "query": "index=main | tail 20",
-      "expect": { "commands": ["tail"] }
+      "expect": {
+        "commands": ["tail"],
+        "facets": {
+          "count": "20"
+        }
+      }
     },
     {
       "id": "stats.count-by-field",
@@ -437,7 +533,13 @@
         "verified_on": "2026-08-29"
       },
       "query": "index=main | stats count BY host",
-      "expect": { "commands": ["stats"] }
+      "expect": {
+        "commands": ["stats"],
+        "facets": {
+          "aggregates": "count",
+          "group_by": "host"
+        }
+      }
     },
     {
       "id": "eventstats.average-by-field",
@@ -451,7 +553,13 @@
         "verified_on": "2026-08-29"
       },
       "query": "index=main | eventstats avg(duration) AS average BY host",
-      "expect": { "commands": ["eventstats"] }
+      "expect": {
+        "commands": ["eventstats"],
+        "facets": {
+          "aggregate": "avg(duration) AS average",
+          "group_by": "host"
+        }
+      }
     },
     {
       "id": "streamstats.running-count",
@@ -465,7 +573,16 @@
         "verified_on": "2026-08-29"
       },
       "query": "index=main | streamstats count AS current_count BY host",
-      "expect": { "commands": ["streamstats"] }
+      "expect": {
+        "commands": ["streamstats"],
+        "facets": {
+          "aggregate": "count AS current_count",
+          "current": "",
+          "global": "",
+          "group_by": "host",
+          "window": ""
+        }
+      }
     },
     {
       "id": "top.single-field",
@@ -479,7 +596,13 @@
         "verified_on": "2026-08-29"
       },
       "query": "index=main | top host",
-      "expect": { "commands": ["top"] }
+      "expect": {
+        "commands": ["top"],
+        "facets": {
+          "fields": "host",
+          "limit": "10"
+        }
+      }
     },
     {
       "id": "rare.single-field",
@@ -493,7 +616,13 @@
         "verified_on": "2026-08-29"
       },
       "query": "index=main | rare host",
-      "expect": { "commands": ["rare"] }
+      "expect": {
+        "commands": ["rare"],
+        "facets": {
+          "fields": "host",
+          "limit": "10"
+        }
+      }
     },
     {
       "id": "bin.time-span",
@@ -507,7 +636,14 @@
         "verified_on": "2026-08-29"
       },
       "query": "index=main | bin _time span=5m",
-      "expect": { "commands": ["bin"] }
+      "expect": {
+        "commands": ["bin"],
+        "facets": {
+          "field": "_time",
+          "output": "",
+          "span": "5m"
+        }
+      }
     },
     {
       "id": "bucket.time-span",
@@ -521,7 +657,14 @@
         "verified_on": "2026-08-29"
       },
       "query": "index=main | bucket _time span=5m",
-      "expect": { "commands": ["bucket"] }
+      "expect": {
+        "commands": ["bucket"],
+        "facets": {
+          "field": "_time",
+          "output": "",
+          "span": "5m"
+        }
+      }
     },
     {
       "id": "timechart.hourly-count",
@@ -535,7 +678,14 @@
         "verified_on": "2026-08-29"
       },
       "query": "index=main | timechart span=1h count",
-      "expect": { "commands": ["timechart"] }
+      "expect": {
+        "commands": ["timechart"],
+        "facets": {
+          "aggregate": "count",
+          "span": "1h",
+          "split_by": ""
+        }
+      }
     },
     {
       "id": "chart.count-over-by-fields",
@@ -549,7 +699,14 @@
         "verified_on": "2026-08-29"
       },
       "query": "index=main | chart count OVER host BY sourcetype",
-      "expect": { "commands": ["chart"] }
+      "expect": {
+        "commands": ["chart"],
+        "facets": {
+          "aggregate": "count",
+          "over": "host",
+          "split_by": "sourcetype"
+        }
+      }
     },
     {
       "id": "regex.raw-pattern",
@@ -563,7 +720,14 @@
         "verified_on": "2026-08-29"
       },
       "query": "index=main | regex \"error\"",
-      "expect": { "commands": ["regex"] }
+      "expect": {
+        "commands": ["regex"],
+        "facets": {
+          "field": "_raw",
+          "negated": "false",
+          "pattern": "error"
+        }
+      }
     },
     {
       "id": "reverse.no-arguments",
@@ -591,7 +755,13 @@
         "verified_on": "2026-08-29"
       },
       "query": "index=main | accum count",
-      "expect": { "commands": ["accum"] }
+      "expect": {
+        "commands": ["accum"],
+        "facets": {
+          "field": "count",
+          "output": ""
+        }
+      }
     },
     {
       "id": "strcat.fields-and-literal",
@@ -605,7 +775,14 @@
         "verified_on": "2026-08-29"
       },
       "query": "index=main | strcat source \":\" sourcetype newfield",
-      "expect": { "commands": ["strcat"] }
+      "expect": {
+        "commands": ["strcat"],
+        "facets": {
+          "all_required": "",
+          "destination": "newfield",
+          "operands": "source, \":\", sourcetype"
+        }
+      }
     },
     {
       "id": "addinfo.no-arguments",
@@ -633,7 +810,13 @@
         "verified_on": "2026-08-29"
       },
       "query": "index=main | fillnull value=\"NULL\" host",
-      "expect": { "commands": ["fillnull"] }
+      "expect": {
+        "commands": ["fillnull"],
+        "facets": {
+          "fields": "host",
+          "value": "NULL"
+        }
+      }
     },
     {
       "id": "addtotals.explicit-output",
@@ -647,7 +830,13 @@
         "verified_on": "2026-08-29"
       },
       "query": "index=main | addtotals fieldname=Total price tax",
-      "expect": { "commands": ["addtotals"] }
+      "expect": {
+        "commands": ["addtotals"],
+        "facets": {
+          "fields": "price, tax",
+          "output": "Total"
+        }
+      }
     },
     {
       "id": "delta.field-alias",
@@ -661,7 +850,14 @@
         "verified_on": "2026-08-29"
       },
       "query": "index=main | delta count AS change",
-      "expect": { "commands": ["delta"] }
+      "expect": {
+        "commands": ["delta"],
+        "facets": {
+          "field": "count",
+          "output": "change",
+          "previous": "1"
+        }
+      }
     },
     {
       "id": "makemv.literal-delimiter",
@@ -675,7 +871,14 @@
         "verified_on": "2026-08-29"
       },
       "query": "index=main | makemv delim=\",\" recipients",
-      "expect": { "commands": ["makemv"] }
+      "expect": {
+        "commands": ["makemv"],
+        "facets": {
+          "allow_empty": "false",
+          "delimiter": ",",
+          "field": "recipients"
+        }
+      }
     },
     {
       "id": "mvexpand.single-field",
@@ -689,7 +892,13 @@
         "verified_on": "2026-08-29"
       },
       "query": "index=main | mvexpand recipients",
-      "expect": { "commands": ["mvexpand"] }
+      "expect": {
+        "commands": ["mvexpand"],
+        "facets": {
+          "field": "recipients",
+          "limit": ""
+        }
+      }
     },
     {
       "id": "nomv.single-field",
@@ -703,7 +912,12 @@
         "verified_on": "2026-08-29"
       },
       "query": "index=main | nomv recipients",
-      "expect": { "commands": ["nomv"] }
+      "expect": {
+        "commands": ["nomv"],
+        "facets": {
+          "field": "recipients"
+        }
+      }
     },
     {
       "id": "lookup.explicit-output",
@@ -717,7 +931,15 @@
         "verified_on": "2026-08-29"
       },
       "query": "index=main | lookup users user AS user OUTPUT department",
-      "expect": { "commands": ["lookup"] }
+      "expect": {
+        "commands": ["lookup"],
+        "facets": {
+          "definition": "users",
+          "keys": "user AS user",
+          "output_mode": "overwrite",
+          "outputs": "department AS department"
+        }
+      }
     }
   ]
 }

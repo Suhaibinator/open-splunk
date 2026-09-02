@@ -18,6 +18,13 @@ import {
 import { searchLaunchHref, splFromFindInput } from "@/lib/search/launch-url";
 import { OPEN_SPLUNK_BUILD_LABEL } from "@/lib/build-identity";
 import { createErrorMessage } from "@/lib/error-message";
+import {
+  currentThemePreference,
+  setThemePreference,
+  subscribeToThemePreference,
+  THEME_PREFERENCES,
+  type ThemePreference,
+} from "@/lib/theme-preference";
 
 import { AppIcon } from "./app-icon";
 import { installModalSurface } from "./modal-surface";
@@ -93,10 +100,49 @@ function submitProductFind(
     : href);
 }
 
+/**
+ * Every focusable entry of a popover: plain items, and the theme radios, which
+ * the arrow keys walk through as one list even though the radios sit inside
+ * their own group.
+ */
+const MENU_ITEM_SELECTOR = '[role="menuitem"], [role="menuitemradio"]';
+
 function focusFirstMenuItem(nextMenu: "apps" | "help" | "user") {
   window.requestAnimationFrame(() => {
-    document.querySelector<HTMLElement>(`[data-suite-menu="${nextMenu}"] [role="menuitem"]`)?.focus();
+    document.querySelector<HTMLElement>(`[data-suite-menu="${nextMenu}"] :is(${MENU_ITEM_SELECTOR})`)?.focus();
   });
+}
+
+const THEME_LABELS: Record<ThemePreference, string> = {
+  dark: "Dark",
+  light: "Light",
+  system: "System",
+};
+
+interface ThemeMenuProps {
+  onSelect: (preference: ThemePreference) => void;
+  preference: ThemePreference;
+}
+
+/**
+ * The System / Light / Dark radio group of the user popover. Exactly one entry
+ * is checked: `system` is the absence of a stored choice, so it is what a
+ * first visit and a cleared storage both show.
+ */
+export function ThemeMenu({ onSelect, preference }: ThemeMenuProps) {
+  return (
+    <>
+      <span className="suite-menu-rule" />
+      <fieldset className="suite-theme-menu">
+        <legend className="suite-menu-label">Theme</legend>
+        {THEME_PREFERENCES.map((option) => (
+          <button key={option} role="menuitemradio" type="button" aria-checked={preference === option} onClick={() => onSelect(option)}>
+            <AppIcon name="check" size="xs" />{THEME_LABELS[option]}
+          </button>
+        ))}
+      </fieldset>
+    </>
+  );
 }
 
 const appCatalogErrorMessage = createErrorMessage("The backend app catalog could not be loaded.");
@@ -148,6 +194,11 @@ export function ProductShell({
     currentBackendAppId,
     () => undefined,
   );
+  const themePreference = useSyncExternalStore(
+    subscribeToThemePreference,
+    currentThemePreference,
+    () => "system" as const,
+  );
   const findRef = useRef<HTMLInputElement>(null);
   const mobileTriggerRef = useRef<HTMLButtonElement>(null);
   const mobileDrawerRef = useRef<HTMLDialogElement>(null);
@@ -196,7 +247,7 @@ export function ProductShell({
     setMenu(nextMenu);
     if (event.key === "ArrowDown") focusFirstMenuItem(nextMenu);
     else window.requestAnimationFrame(() => {
-      const items = document.querySelectorAll<HTMLElement>(`[data-suite-menu="${nextMenu}"] [role="menuitem"]`);
+      const items = document.querySelectorAll<HTMLElement>(`[data-suite-menu="${nextMenu}"] :is(${MENU_ITEM_SELECTOR})`);
       items.item(items.length - 1)?.focus();
     });
   }
@@ -265,7 +316,7 @@ export function ProductShell({
     function navigateMenu(event: KeyboardEvent) {
       const popover = document.querySelector<HTMLElement>(`[data-suite-menu="${menu}"]`);
       if (popover === null) return;
-      const items = Array.from(popover.querySelectorAll<HTMLElement>('[role="menuitem"]'));
+      const items = Array.from(popover.querySelectorAll<HTMLElement>(MENU_ITEM_SELECTOR));
       const current = items.indexOf(document.activeElement as HTMLElement);
       let next = current;
       if (event.key === "ArrowDown") next = current < 0 ? 0 : (current + 1) % items.length;
@@ -410,6 +461,7 @@ export function ProductShell({
                 <div className="suite-user-summary"><span aria-hidden="true">{sessionInitial}</span><div><strong>{sessionLabel}</strong><small>{sessionDetail}</small></div></div>
                 <Link role="menuitem" href={productHref("/admin/")}>{localSession ? "Server administration" : "Account settings"}</Link>
                 <Link role="menuitem" href="/signin/">{localSession ? "About local access" : "Sign out"}</Link>
+                <ThemeMenu preference={themePreference} onSelect={setThemePreference} />
               </div>
             ) : null}
           </div>
