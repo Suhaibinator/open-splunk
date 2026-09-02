@@ -119,17 +119,35 @@ func TestPipelineCommandASTRetainsOptionsAndDefaults(t *testing.T) {
 	fillSource := `index=main | fillnull value="未知" Host route`
 	fill := requirePipelineLastCommand(t, fillSource, "fillnull")
 	assertPipelineConcreteType(t, fill, "FillNullCommand")
-	assertPipelineLiteralOrStringField(t, fill, "Value", "未知")
-	assertPipelineStringSliceField(t, fill, "Fields", []string{"Host", "route"})
+	assertPipelineValueField(t, fill, "未知")
+	assertPipelineFieldNames(t, fill, []string{"Host", "route"})
 	defaultFill := requirePipelineLastCommand(t, `index=main | fillnull host`, "fillnull")
-	assertPipelineLiteralOrStringField(t, defaultFill, "Value", "0")
+	assertPipelineValueField(t, defaultFill, "0")
+	assertPipelineBoolField(t, defaultFill, "AllFields", false)
+	for source, value := range map[string]string{
+		`index=main | fillnull value=NA host`:  "NA",
+		`index=main | fillnull value=-1 host`:  "-1",
+		`index=main | fillnull value=1.5 host`: "1.5",
+		`index=main | fillnull value=n/a host`: "n/a",
+	} {
+		unquotedFill := requirePipelineLastCommand(t, source, "fillnull")
+		assertPipelineValueField(t, unquotedFill, value)
+		assertPipelineFieldNames(t, unquotedFill, []string{"host"})
+	}
+	allFill := requirePipelineLastCommand(t, `index=main | stats count BY host | fillnull value=NA`, "fillnull")
+	assertPipelineValueField(t, allFill, "NA")
+	assertPipelineBoolField(t, allFill, "AllFields", true)
+	assertPipelineFieldNames(t, allFill, []string{})
+	bareFill := requirePipelineLastCommand(t, `index=main | stats count BY host | fillnull`, "fillnull")
+	assertPipelineValueField(t, bareFill, "0")
+	assertPipelineBoolField(t, bareFill, "AllFields", true)
 
 	totals := requirePipelineLastCommand(t,
 		`index=main | addtotals row=true col=false fieldname=sum_bytes bytes_in bytes_out`,
 		"addtotals",
 	)
 	assertPipelineConcreteType(t, totals, "AddTotalsCommand")
-	assertPipelineStringSliceField(t, totals, "Fields", []string{"bytes_in", "bytes_out"})
+	assertPipelineFieldNames(t, totals, []string{"bytes_in", "bytes_out"})
 	assertPipelineStringField(t, totals, "Output", "sum_bytes")
 	defaultTotals := requirePipelineLastCommand(t, `index=main | addtotals x`, "addtotals")
 	assertPipelineStringField(t, defaultTotals, "Output", "Total")
@@ -194,7 +212,7 @@ func TestPipelineCommandsRejectDeferredAndAmbiguousSyntaxAtTheOffendingToken(t *
 		{name: "strcat one source", source: `index=main | strcat host out`, rangeText: "strcat host out"},
 		{name: "addinfo positional", source: `index=main | addinfo now`, rangeText: "now"},
 		{name: "addinfo option", source: `index=main | addinfo sid=false`, rangeText: "sid"},
-		{name: "fillnull requires literal value", source: `index=main | fillnull value=dynamic host`, rangeText: "dynamic"},
+		{name: "fillnull requires literal value", source: `index=main | fillnull value='host' host`, rangeText: "'host'"},
 		{name: "fillnull wildcard", source: `index=main | fillnull host*`, rangeText: "host*"},
 		{name: "fillnull quoted field", source: `index=main | fillnull 'host name'`, rangeText: `'host name'`},
 		{name: "fillnull duplicate field", source: `index=main | fillnull host host`, rangeText: "host", rangeAtLastOccurrence: true},
@@ -255,20 +273,21 @@ func TestPipelineCommandsHaveExactEmptyTailDiagnostics(t *testing.T) {
 	for _, test := range []struct {
 		name, source, code, rangeText string
 		accept                        bool
+		command                       string
 	}{
 		{name: "regex", source: `index=main | regex`, code: "SPL_EXPECTED_REGEX_PATTERN"},
 		{name: "reverse", source: `index=main | reverse`, accept: true},
 		{name: "accum", source: `index=main | accum`, code: "SPL_EXPECTED_FIELD"},
 		{name: "strcat", source: `index=main | strcat`, code: "SPL_EXPECTED_FIELD"},
 		{name: "addinfo", source: `index=main | addinfo`, accept: true},
-		{name: "fillnull", source: `index=main | fillnull`, code: "SPL_EXPECTED_FIELD"},
+		{name: "fillnull", source: `index=main | fillnull`, accept: true},
 		{name: "addtotals", source: `index=main | addtotals`, code: "SPL_EXPECTED_FIELD"},
 		{name: "delta", source: `index=main | delta`, code: "SPL_EXPECTED_FIELD"},
 		{name: "makemv", source: `index=main | makemv`, code: "SPL_EXPECTED_FIELD"},
 		{name: "mvexpand", source: `index=main | mvexpand`, code: "SPL_EXPECTED_FIELD"},
 		{name: "accum missing output", source: `index=main | accum bytes AS`, code: "SPL_EXPECTED_FIELD", rangeText: "AS"},
 		{name: "delta missing output", source: `index=main | delta bytes AS`, code: "SPL_EXPECTED_FIELD", rangeText: "AS"},
-		{name: "fillnull option without field", source: `index=main | fillnull value="x"`, code: "SPL_EXPECTED_FIELD"},
+		{name: "fillnull option without field", source: `index=main | fillnull value="x"`, accept: true, command: "fillnull"},
 		{name: "addtotals option without field", source: `index=main | addtotals fieldname=total`, code: "SPL_EXPECTED_FIELD"},
 		{name: "makemv option without field", source: `index=main | makemv delim=","`, code: "SPL_EXPECTED_FIELD"},
 	} {
@@ -279,8 +298,12 @@ func TestPipelineCommandsHaveExactEmptyTailDiagnostics(t *testing.T) {
 				if err != nil {
 					t.Fatalf("Parse(%q): %v", test.source, err)
 				}
-				if len(query.Commands) != 1 || query.Commands[0].Name() != test.name {
-					t.Fatalf("Parse(%q) commands = %#v, want one %s", test.source, query.Commands, test.name)
+				wantCommand := test.command
+				if wantCommand == "" {
+					wantCommand = test.name
+				}
+				if len(query.Commands) != 1 || query.Commands[0].Name() != wantCommand {
+					t.Fatalf("Parse(%q) commands = %#v, want one %s", test.source, query.Commands, wantCommand)
 				}
 				return
 			}
@@ -891,8 +914,9 @@ func assertPipelineUintField(t *testing.T, command Command, name string, want ui
 	}
 }
 
-func assertPipelineLiteralOrStringField(t *testing.T, command Command, name, want string) {
+func assertPipelineValueField(t *testing.T, command Command, want string) {
 	t.Helper()
+	const name = "Value"
 	field := pipelineRequiredField(t, command, name)
 	if field.Kind() == reflect.String {
 		if field.String() != want {
@@ -909,8 +933,9 @@ func assertPipelineLiteralOrStringField(t *testing.T, command Command, name, wan
 	t.Fatalf("%T.%s = %#v, want literal text %q", command, name, field.Interface(), want)
 }
 
-func assertPipelineStringSliceField(t *testing.T, command Command, name string, want []string) {
+func assertPipelineFieldNames(t *testing.T, command Command, want []string) {
 	t.Helper()
+	const name = "Fields"
 	field := pipelineRequiredField(t, command, name)
 	if field.Kind() != reflect.Slice || field.Len() != len(want) {
 		t.Fatalf("%T.%s = %#v, want %v", command, name, field.Interface(), want)

@@ -55,6 +55,29 @@ func officialFacets(t *testing.T, source string, command spl.Command) map[string
 		}
 		return strings.Join(names, ", ")
 	}
+	sortKeys := func(fields []spl.SortField) string {
+		keys := make([]string, len(fields))
+		for index, field := range fields {
+			direction := "+"
+			if field.Descending {
+				direction = "-"
+			}
+			key := field.Field
+			switch field.Mode {
+			case spl.SortValueModeString:
+				key = "str(" + key + ")"
+			case spl.SortValueModeNumber:
+				key = "num(" + key + ")"
+			case spl.SortValueModeIP:
+				key = "ip(" + key + ")"
+			case spl.SortValueModeAuto:
+			default:
+				t.Fatalf("unexpected sort mode %v", field.Mode)
+			}
+			keys[index] = direction + key
+		}
+		return strings.Join(keys, ", ")
+	}
 	exactFields := func(fields []spl.ExactCommandField) string {
 		names := make([]string, len(fields))
 		for index, field := range fields {
@@ -112,37 +135,22 @@ func officialFacets(t *testing.T, source string, command spl.Command) map[string
 		}
 		return map[string]string{"assignments": strings.Join(assignments, ", ")}
 	case *spl.SortCommand:
-		keys := make([]string, len(command.Fields))
-		for index, field := range command.Fields {
-			direction := "+"
-			if field.Descending {
-				direction = "-"
-			}
-			key := field.Field
-			switch field.Mode {
-			case spl.SortValueModeString:
-				key = "str(" + key + ")"
-			case spl.SortValueModeNumber:
-				key = "num(" + key + ")"
-			case spl.SortValueModeIP:
-				key = "ip(" + key + ")"
-			case spl.SortValueModeAuto:
-			default:
-				t.Fatalf("unexpected sort mode %v", field.Mode)
-			}
-			keys[index] = direction + key
-		}
 		limit := ""
 		if command.LimitSpecified {
 			limit = number(command.Limit, 10)
 		}
-		return map[string]string{"keys": strings.Join(keys, ", "), "limit": limit}
+		return map[string]string{"keys": sortKeys(command.Fields), "limit": limit}
 	case *spl.DedupCommand:
 		names := make([]string, len(command.Fields))
 		for index, field := range command.Fields {
 			names[index] = field.Name
 		}
-		return map[string]string{"count": number(command.Count, 10), "fields": strings.Join(names, ", ")}
+		return map[string]string{
+			"consecutive": boolean(command.Consecutive),
+			"count":       number(command.Count, 10),
+			"fields":      strings.Join(names, ", "),
+			"sortby":      sortKeys(command.SortBy),
+		}
 	case *spl.LimitCommand:
 		return map[string]string{"count": number(command.Count, 10)}
 	case *spl.StatsCommand:
@@ -178,9 +186,25 @@ func officialFacets(t *testing.T, source string, command spl.Command) map[string
 		}
 		return facets
 	case *spl.TopCommand:
-		return map[string]string{"fields": groupBy(command.Fields), "limit": number(command.Limit, 10)}
+		return map[string]string{
+			"by":           groupBy(command.By),
+			"countfield":   command.CountField,
+			"fields":       groupBy(command.Fields),
+			"limit":        number(command.Limit, 10),
+			"percentfield": command.PercentField,
+			"showcount":    boolean(!command.HideCount),
+			"showperc":     boolean(!command.HidePercent),
+		}
 	case *spl.RareCommand:
-		return map[string]string{"fields": groupBy(command.Fields), "limit": number(command.Limit, 10)}
+		return map[string]string{
+			"by":           groupBy(command.By),
+			"countfield":   command.CountField,
+			"fields":       groupBy(command.Fields),
+			"limit":        number(command.Limit, 10),
+			"percentfield": command.PercentField,
+			"showcount":    boolean(!command.HideCount),
+			"showperc":     boolean(!command.HidePercent),
+		}
 	case *spl.BinCommand:
 		span := number(command.Span.Magnitude, 10)
 		switch command.Span.Kind {
@@ -200,10 +224,17 @@ func officialFacets(t *testing.T, source string, command spl.Command) map[string
 		if command.SplitBy != nil {
 			splitBy = command.SplitBy.Name
 		}
+		limit := uint64(spl.MaximumTimechartSeriesLimit)
+		if command.Options.LimitSpecified {
+			limit = command.Options.Limit
+		}
 		return map[string]string{
 			"aggregate": text(command.Aggregate.Range),
+			"limit":     number(limit, 10),
 			"span":      number(command.Span.Magnitude, 10) + command.Span.Unit.String(),
 			"split_by":  splitBy,
+			"useother":  boolean(!command.Options.UseOtherSpecified || command.Options.UseOther),
+			"usenull":   boolean(!command.Options.UseNullSpecified || command.Options.UseNull),
 		}
 	case *spl.ChartCommand:
 		return map[string]string{

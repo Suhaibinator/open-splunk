@@ -122,6 +122,8 @@ type pipelineCorpusOperation struct {
 	Delimiter   string                     `json:"delimiter,omitempty"`
 	AllowEmpty  bool                       `json:"allow_empty,omitempty"`
 	Limit       int                        `json:"limit,omitempty"`
+	Count       int                        `json:"count,omitempty"`
+	Consecutive bool                       `json:"consecutive,omitempty"`
 }
 
 type pipelineCorpusConcatPart struct {
@@ -137,15 +139,15 @@ func TestPipelineCorpusFixturesAreStrictBoundAndExecutable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(fixtures) != 37 {
-		t.Fatalf("fixture count = %d, want 37", len(fixtures))
+	if len(fixtures) != 40 {
+		t.Fatalf("fixture count = %d, want 40", len(fixtures))
 	}
 	caseCount := 0
 	for _, rule := range corpus.Rules {
 		caseCount += len(rule.Cases)
 	}
-	if caseCount != 64 {
-		t.Fatalf("case count = %d, want 64", caseCount)
+	if caseCount != 78 {
+		t.Fatalf("case count = %d, want 78", caseCount)
 	}
 	var referenceCount, evidenceCount int
 	for id, fixture := range fixtures {
@@ -161,8 +163,8 @@ func TestPipelineCorpusFixturesAreStrictBoundAndExecutable(t *testing.T) {
 			t.Fatalf("fixture %q has unvalidated runner %q", id, fixture.Runner)
 		}
 	}
-	if referenceCount != 22 || evidenceCount != 15 {
-		t.Fatalf("runner counts = reference %d evidence %d, want 22/15", referenceCount, evidenceCount)
+	if referenceCount != 25 || evidenceCount != 15 {
+		t.Fatalf("runner counts = reference %d evidence %d, want 25/15", referenceCount, evidenceCount)
 	}
 }
 
@@ -883,6 +885,8 @@ func decodePipelineCorpusOperation(raw json.RawMessage) (pipelineCorpusOperation
 		"delta":     {"op", "input", "output", "period"},
 		"makemv":    {"op", "field", "delimiter", "allow_empty"},
 		"mvexpand":  {"op", "field", "limit"},
+		"dedup":     {"op", "fields", "count", "consecutive"},
+		"head":      {"op", "count"},
 	}[operation.Op]
 	if len(want) == 0 || len(fields) != len(want) {
 		return pipelineCorpusOperation{}, fmt.Errorf("operation %q does not use its exact field set", operation.Op)
@@ -922,8 +926,10 @@ func decodePipelineCorpusOperation(raw json.RawMessage) (pipelineCorpusOperation
 			return pipelineCorpusOperation{}, errors.New("addinfo values are invalid")
 		}
 	case "fillnull":
-		if !validPipelineCorpusFieldList(operation.Fields) {
-			return pipelineCorpusOperation{}, errors.New("fillnull fields are empty or duplicated")
+		// An empty field list is the field-less form that fills every column
+		// of the schema established by the preceding operations.
+		if len(operation.Fields) != 0 && !validPipelineCorpusFieldList(operation.Fields) {
+			return pipelineCorpusOperation{}, errors.New("fillnull fields are duplicated")
 		}
 	case "addtotals":
 		if !validPipelineCorpusFieldList(operation.Fields) || operation.Output == "" {
@@ -940,6 +946,14 @@ func decodePipelineCorpusOperation(raw json.RawMessage) (pipelineCorpusOperation
 	case "mvexpand":
 		if operation.Field == "" || operation.Limit < 0 || uint64(operation.Limit) > spl.MaximumMVExpandLimit {
 			return pipelineCorpusOperation{}, errors.New("mvexpand field or limit is invalid")
+		}
+	case "dedup":
+		if !validPipelineCorpusFieldList(operation.Fields) || operation.Count < 1 {
+			return pipelineCorpusOperation{}, errors.New("dedup fields or count are invalid")
+		}
+	case "head":
+		if operation.Count < 1 {
+			return pipelineCorpusOperation{}, errors.New("head count must be positive")
 		}
 	}
 	return operation, nil
@@ -1149,7 +1163,8 @@ func validatePipelineCorpusSourceProgram(source string, encoded []json.RawMessag
 
 func isPipelineCorpusCommandName(name string) bool {
 	switch name {
-	case "regex", "reverse", "accum", "strcat", "addinfo", "fillnull", "addtotals", "delta", "makemv", "mvexpand":
+	case "regex", "reverse", "accum", "strcat", "addinfo", "fillnull", "addtotals", "delta", "makemv", "mvexpand",
+		"dedup", "head":
 		return true
 	default:
 		return false
@@ -1185,7 +1200,7 @@ func matchPipelineCorpusOperation(command spl.Command, operation pipelineCorpusO
 		for index := range command.Fields {
 			fields[index] = command.Fields[index].Name
 		}
-		if command.Value != operation.Value || !slices.Equal(fields, operation.Fields) {
+		if command.Value != operation.Value || command.AllFields != (len(operation.Fields) == 0) || !slices.Equal(fields, operation.Fields) {
 			return mismatch()
 		}
 	case *spl.AddTotalsCommand:
@@ -1206,6 +1221,19 @@ func matchPipelineCorpusOperation(command spl.Command, operation pipelineCorpusO
 		}
 	case *spl.MVExpandCommand:
 		if command.Field != operation.Field || command.Limit != uint64(operation.Limit) {
+			return mismatch()
+		}
+	case *spl.DedupCommand:
+		fields := make([]string, len(command.Fields))
+		for index := range command.Fields {
+			fields[index] = command.Fields[index].Name
+		}
+		if command.Count != uint64(operation.Count) || command.Consecutive != operation.Consecutive ||
+			!slices.Equal(fields, operation.Fields) {
+			return mismatch()
+		}
+	case *spl.LimitCommand:
+		if command.CommandName != "head" || command.Count != uint64(operation.Count) {
 			return mismatch()
 		}
 	default:
@@ -1262,7 +1290,18 @@ func runPipelineReferenceCorpusFixture(t *testing.T, fixture pipelineCorpusFixtu
 				started: operation.Started, sid: operation.SID,
 			})
 		case "fillnull":
-			pipelineReferenceFillNull(rows, operation.Fields, operation.Value)
+			fields := operation.Fields
+			if len(fields) == 0 {
+				schema, schemaErr := pipelineCorpusReferenceSchema(fixture.Input.Schema, fixture.Program[:index])
+				if schemaErr != nil {
+					t.Fatalf("operation %d: derive upstream schema: %v", index, schemaErr)
+				}
+				fields = make([]string, len(schema))
+				for columnIndex, column := range schema {
+					fields[columnIndex] = column.Name
+				}
+			}
+			pipelineReferenceFillNull(rows, fields, operation.Value)
 		case "addtotals":
 			pipelineReferenceAddTotals(rows, operation.Fields, operation.Output)
 		case "delta":
@@ -1271,6 +1310,10 @@ func runPipelineReferenceCorpusFixture(t *testing.T, fixture pipelineCorpusFixtu
 			err = pipelineReferenceMakeMV(rows, operation.Field, operation.Delimiter, operation.AllowEmpty)
 		case "mvexpand":
 			rows, err = pipelineReferenceMVExpandWithLedger(rows, operation.Field, operation.Limit, &ledger)
+		case "dedup":
+			rows, err = pipelineReferenceDedup(rows, operation.Fields, operation.Count, operation.Consecutive)
+		case "head":
+			rows = pipelineReferenceHead(rows, operation.Count)
 		default:
 			t.Fatalf("unhandled operation %q", operation.Op)
 		}
@@ -1332,7 +1375,16 @@ func pipelineCorpusReferenceSchema(
 			return nil, err
 		}
 		switch operation.Op {
-		case "regex", "reverse":
+		case "regex", "reverse", "head":
+		case "dedup":
+			// Rows without a complete key tuple are dropped, so every key column
+			// that survives is non-null afterwards.
+			for _, field := range operation.Fields {
+				if column, ok := lookup(field); ok {
+					column.Nullable = false
+					upsert(column)
+				}
+			}
 		case "accum":
 			upsert(pipelineCorpusColumn{Name: operation.Output, Kind: "number", Nullable: true})
 		case "strcat":
@@ -1347,7 +1399,14 @@ func pipelineCorpusReferenceSchema(
 				upsert(column)
 			}
 		case "fillnull":
-			for _, field := range operation.Fields {
+			fields := operation.Fields
+			if len(fields) == 0 {
+				fields = make([]string, len(schema))
+				for columnIndex, column := range schema {
+					fields[columnIndex] = column.Name
+				}
+			}
+			for _, field := range fields {
 				upsert(pipelineCorpusColumn{Name: field, Kind: "string"})
 			}
 		case "addtotals":

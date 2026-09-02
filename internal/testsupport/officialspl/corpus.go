@@ -70,7 +70,7 @@ var AllowedFacets = map[string][]string{
 	"bin":         {"field", "output", "span"},
 	"bucket":      {"field", "output", "span"},
 	"chart":       {"aggregate", "over", "split_by"},
-	"dedup":       {"count", "fields"},
+	"dedup":       {"consecutive", "count", "fields", "sortby"},
 	"delta":       {"field", "output", "previous"},
 	"eval":        {"expressions", "fields"},
 	"eventstats":  {"aggregate", "group_by"},
@@ -81,7 +81,7 @@ var AllowedFacets = map[string][]string{
 	"makemv":      {"allow_empty", "delimiter", "field"},
 	"mvexpand":    {"field", "limit"},
 	"nomv":        {"field"},
-	"rare":        {"fields", "limit"},
+	"rare":        {"by", "countfield", "fields", "limit", "percentfield", "showcount", "showperc"},
 	"regex":       {"field", "negated", "pattern"},
 	"rename":      {"assignments"},
 	"reverse":     {},
@@ -94,8 +94,8 @@ var AllowedFacets = map[string][]string{
 	"streamstats": {"aggregate", "current", "global", "group_by", "window"},
 	"table":       {"fields"},
 	"tail":        {"count"},
-	"timechart":   {"aggregate", "span", "split_by"},
-	"top":         {"fields", "limit"},
+	"timechart":   {"aggregate", "limit", "span", "split_by", "usenull", "useother"},
+	"top":         {"by", "countfield", "fields", "limit", "percentfield", "showcount", "showperc"},
 	"where":       {"predicate"},
 }
 

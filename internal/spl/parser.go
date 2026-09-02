@@ -1149,42 +1149,27 @@ func (p *parser) unsupportedBinSyntax(tok token, message string) *Diagnostic {
 }
 
 func (p *parser) parseTimechartCommand(name token) (Command, error) {
-	if !p.isKeyword("SPAN") {
-		return nil, p.unsupportedTimechartSyntax(p.current(), "timechart requires span=<positive integer><s|m|h> before its aggregate")
-	}
-	spanOption := p.current()
-	p.advance()
-	if !p.match(tokenEqual) {
-		return nil, &Diagnostic{
-			Code:        "SPL_EXPECTED_EQUAL",
-			Message:     "timechart span must be followed by '='",
-			Range:       spanOption.sourceRange,
-			Suggestions: []string{timechartSyntaxSuggestion},
-		}
-	}
-	spanToken := p.current()
-	if spanToken.kind != tokenWord {
-		return nil, &Diagnostic{
-			Code:        "SPL_INVALID_ARGUMENT",
-			Message:     "timechart span must be a positive integer followed by s, m, or h",
-			Range:       spanToken.sourceRange,
-			Suggestions: []string{timechartSyntaxSuggestion},
-		}
-	}
-	span, err := parseTimechartSpan(spanToken)
+	var options TimechartOptions
+	span, spanSpecified, err := p.parseTimechartOptions(&options, true)
 	if err != nil {
 		return nil, err
 	}
-	p.advance()
+	if !spanSpecified {
+		return nil, p.unsupportedTimechartSyntax(p.current(), "timechart requires span=<positive integer><s|m|h> before its aggregate")
+	}
 
 	aggregate, aggregateEnd, err := p.parseTimechartAggregate()
 	if err != nil {
 		return nil, err
 	}
 	if p.atCommandEnd() {
+		if diagnostic := p.timechartOptionsRequireSplit(options); diagnostic != nil {
+			return nil, diagnostic
+		}
 		return &TimechartCommand{
 			Span:      span,
 			Aggregate: aggregate,
+			Options:   options,
 			Range: Range{
 				Start: name.sourceRange.Start,
 				End:   aggregateEnd,
@@ -1217,6 +1202,13 @@ func (p *parser) parseTimechartCommand(name token) (Command, error) {
 		return nil, p.unsupportedTimechartSyntax(field, "wildcard timechart split fields are not supported")
 	}
 	p.advance()
+	end := field.sourceRange.End
+	if !p.atCommandEnd() {
+		if _, _, optionsErr := p.parseTimechartOptions(&options, false); optionsErr != nil {
+			return nil, optionsErr
+		}
+		end = p.previous().sourceRange.End
+	}
 	if !p.atCommandEnd() {
 		return nil, p.unsupportedTimechartSyntax(p.current(), "only one timechart split field is currently supported")
 	}
@@ -1224,8 +1216,147 @@ func (p *parser) parseTimechartCommand(name token) (Command, error) {
 		Span:      span,
 		Aggregate: aggregate,
 		SplitBy:   &StatsGroupField{Name: field.text, Range: field.sourceRange},
-		Range:     Range{Start: name.sourceRange.Start, End: field.sourceRange.End},
+		Options:   options,
+		Range:     Range{Start: name.sourceRange.Start, End: end},
 	}, nil
+}
+
+// parseTimechartOptions consumes the span=, limit=, useother=, and usenull=
+// options at the current position: before the aggregate (where span is
+// required) or after the split field, where Splunk places the series options.
+// Each option may be authored once across both positions.
+func (p *parser) parseTimechartOptions(options *TimechartOptions, allowSpan bool) (TimeSpan, bool, error) {
+	var span TimeSpan
+	spanSpecified := false
+	for {
+		option := p.current()
+		if option.kind != tokenWord {
+			return span, spanSpecified, nil
+		}
+		lower := strings.ToLower(option.text)
+		if !p.nextIs(tokenEqual) {
+			if lower == "span" && allowSpan && !spanSpecified {
+				return span, spanSpecified, &Diagnostic{
+					Code:        "SPL_EXPECTED_EQUAL",
+					Message:     "timechart span must be followed by '='",
+					Range:       option.sourceRange,
+					Suggestions: []string{timechartSyntaxSuggestion},
+				}
+			}
+			return span, spanSpecified, nil
+		}
+		switch lower {
+		case "span":
+			if !allowSpan {
+				return span, spanSpecified, p.unsupportedTimechartSyntax(option, "timechart span must precede the aggregate")
+			}
+			if spanSpecified {
+				return span, spanSpecified, p.unsupportedTimechartSyntax(option, "timechart option \"span\" is repeated")
+			}
+			p.advance()
+			p.advance()
+			spanToken := p.current()
+			if spanToken.kind != tokenWord {
+				return span, spanSpecified, &Diagnostic{
+					Code:        "SPL_INVALID_ARGUMENT",
+					Message:     "timechart span must be a positive integer followed by s, m, or h",
+					Range:       spanToken.sourceRange,
+					Suggestions: []string{timechartSyntaxSuggestion},
+				}
+			}
+			parsed, err := parseTimechartSpan(spanToken)
+			if err != nil {
+				return span, spanSpecified, err
+			}
+			span, spanSpecified = parsed, true
+			p.advance()
+		case "limit":
+			if options.LimitSpecified {
+				return span, spanSpecified, p.unsupportedTimechartSyntax(option, "timechart option \"limit\" is repeated")
+			}
+			p.advance()
+			p.advance()
+			value := p.current()
+			if value.kind != tokenWord || !unsignedIntegerSyntax(value.text) {
+				if p.atCommandEnd() {
+					value = option
+				}
+				return span, spanSpecified, &Diagnostic{
+					Code:        "SPL_INVALID_ARGUMENT",
+					Message:     "timechart limit must be a non-negative integer",
+					Range:       value.sourceRange,
+					Suggestions: []string{"limit=10"},
+				}
+			}
+			limit, limitErr := strconv.ParseUint(value.text, 10, 64)
+			if limitErr != nil || limit == 0 || limit > MaximumTimechartSeriesLimit {
+				message := fmt.Sprintf("timechart limit must be from 1 through %d", MaximumTimechartSeriesLimit)
+				if limitErr == nil && limit == 0 {
+					message = "timechart limit=0 (unlimited series) is not supported"
+				}
+				return span, spanSpecified, &Diagnostic{
+					Code:        "SPL_UNSUPPORTED_TIMECHART_LIMIT",
+					Message:     message,
+					Range:       Range{Start: option.sourceRange.Start, End: value.sourceRange.End},
+					Suggestions: []string{fmt.Sprintf("limit=%d", MaximumTimechartSeriesLimit)},
+				}
+			}
+			options.Limit = limit
+			options.LimitSpecified = true
+			options.LimitRange = Range{Start: option.sourceRange.Start, End: value.sourceRange.End}
+			p.advance()
+		case "useother", "usenull":
+			specified := options.UseOtherSpecified
+			if lower == "usenull" {
+				specified = options.UseNullSpecified
+			}
+			if specified {
+				return span, spanSpecified, p.unsupportedTimechartSyntax(option, fmt.Sprintf("timechart option %q is repeated", lower))
+			}
+			p.advance()
+			p.advance()
+			value := p.current()
+			parsed, ok := parseStrictBool(value.text)
+			if value.kind != tokenWord || !ok {
+				if p.atCommandEnd() {
+					value = option
+				}
+				return span, spanSpecified, p.unsupportedTimechartSyntax(value, fmt.Sprintf("timechart %s must be true or false", lower))
+			}
+			optionRange := Range{Start: option.sourceRange.Start, End: value.sourceRange.End}
+			if lower == "useother" {
+				options.UseOther, options.UseOtherSpecified, options.UseOtherRange = parsed, true, optionRange
+			} else {
+				options.UseNull, options.UseNullSpecified, options.UseNullRange = parsed, true, optionRange
+			}
+			p.advance()
+		default:
+			return span, spanSpecified, p.unsupportedTimechartSyntax(option, fmt.Sprintf("timechart option %q is not supported", option.text))
+		}
+	}
+}
+
+// timechartOptionsRequireSplit rejects series options on a timechart without
+// a BY split field: there are no series to limit or to collect into NULL and
+// OTHER, so accepting them silently would hide an authoring mistake.
+func (p *parser) timechartOptionsRequireSplit(options TimechartOptions) *Diagnostic {
+	var optionRange Range
+	switch {
+	case options.LimitSpecified:
+		optionRange = options.LimitRange
+	case options.UseOtherSpecified:
+		optionRange = options.UseOtherRange
+	case options.UseNullSpecified:
+		optionRange = options.UseNullRange
+	default:
+		return nil
+	}
+	return &Diagnostic{
+		Code:        "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
+		Message:     "timechart limit, useother, and usenull require a BY split field",
+		Range:       optionRange,
+		Suggestions: []string{"timechart span=5m count BY host limit=5 useother=false"},
+	}
 }
 
 func (p *parser) parseTimechartAggregate() (StatsAggregate, Position, error) {
@@ -1516,9 +1647,11 @@ func timechartSyntaxSuggestions() []string {
 }
 
 // parseChartCommand parses the bounded two-field pivot
-// "chart <aggregate> OVER <row> BY <column>" and its equivalent spelling
-// "chart <aggregate> BY <row>, <column>". Chart never discretizes, so no
-// option is accepted; bin/bucket remains the only discretizer.
+// "chart <aggregate> OVER <row> BY <column>", its equivalent spelling
+// "chart <aggregate> BY <row>, <column>", and the single-split forms
+// "chart <aggregate> OVER <row>" / "chart <aggregate> BY <row>" that plan as
+// the stats BY table. Chart never discretizes, so no option is accepted;
+// bin/bucket remains the only discretizer.
 func (p *parser) parseChartCommand(name token) (Command, error) {
 	if diagnostic := p.chartOptionDiagnostic(); diagnostic != nil {
 		return nil, diagnostic
@@ -1549,7 +1682,7 @@ func (p *parser) parseChartCommand(name token) (Command, error) {
 		}
 		over = row
 		if p.atCommandEnd() {
-			return nil, p.chartSingleSplitSyntax()
+			break
 		}
 		if !p.isKeyword("BY") {
 			return nil, p.chartClauseDiagnostic("chart OVER requires BY followed by one column split field")
@@ -1572,7 +1705,7 @@ func (p *parser) parseChartCommand(name token) (Command, error) {
 		over, splitBy = row, column
 	default:
 		if p.atCommandEnd() {
-			return nil, p.chartSingleSplitSyntax()
+			return nil, p.chartMissingSplitSyntax()
 		}
 		current := p.current()
 		if current.kind == tokenComma || (current.kind == tokenWord && (supportedStatsAggregateName(current.text) ||
@@ -1582,15 +1715,19 @@ func (p *parser) parseChartCommand(name token) (Command, error) {
 		return nil, p.chartClauseDiagnostic("chart requires OVER <row> BY <column> or BY <row>, <column>")
 	}
 
-	if over.Name == splitBy.Name {
-		return nil, p.unsupportedChartSyntaxAt(splitBy.Range, "chart row and column fields must be different")
+	end := over.Range.End
+	if splitBy != (StatsGroupField{}) {
+		if over.Name == splitBy.Name {
+			return nil, p.unsupportedChartSyntaxAt(splitBy.Range, "chart row and column fields must be different")
+		}
+		end = splitBy.Range.End
 	}
 	return &ChartCommand{
 		Aggregate:       aggregate,
 		Over:            over,
 		SplitBy:         splitBy,
 		OverSpelledOver: overSpelledOver,
-		Range:           Range{Start: name.sourceRange.Start, End: splitBy.Range.End},
+		Range:           Range{Start: name.sourceRange.Start, End: end},
 	}, nil
 }
 
@@ -1702,8 +1839,8 @@ func (p *parser) parseChartSplitFields() (StatsGroupField, StatsGroupField, erro
 	if wantField {
 		return StatsGroupField{}, StatsGroupField{}, p.errorAtCurrent("SPL_EXPECTED_FIELD", "chart BY requires a split field")
 	}
-	if len(fields) != 2 {
-		return StatsGroupField{}, StatsGroupField{}, p.chartSingleSplitSyntax()
+	if len(fields) == 1 {
+		return fields[0], StatsGroupField{}, nil
 	}
 	return fields[0], fields[1], nil
 }
@@ -1763,12 +1900,12 @@ func (p *parser) chartClauseDiagnostic(message string) *Diagnostic {
 	return p.unsupportedChartSyntax(current, message)
 }
 
-func (p *parser) chartSingleSplitSyntax() *Diagnostic {
+func (p *parser) chartMissingSplitSyntax() *Diagnostic {
 	return &Diagnostic{
 		Code:        "SPL_UNSUPPORTED_CHART_SYNTAX",
-		Message:     "chart requires one row split field and one column split field",
+		Message:     "chart requires a row split field: OVER <row> or BY <row>, optionally followed by one column split field",
 		Range:       p.current().sourceRange,
-		Suggestions: []string{"stats count BY <field>", "chart count OVER row BY column", "chart p95(field) OVER row BY column", "chart sum(field) OVER row BY column"},
+		Suggestions: []string{"stats count BY <field>", "chart count BY row", "chart count OVER row BY column", "chart p95(field) OVER row BY column", "chart sum(field) OVER row BY column"},
 	}
 }
 
@@ -1795,9 +1932,14 @@ func (p *parser) unsupportedChartSyntaxAt(sourceRange Range, message string) *Di
 }
 
 type parsedFrequencyCommand struct {
-	fields      []FrequencyField
-	limit       uint64
-	sourceRange Range
+	fields       []FrequencyField
+	by           []FrequencyField
+	limit        uint64
+	countField   string
+	percentField string
+	hideCount    bool
+	hidePercent  bool
+	sourceRange  Range
 }
 
 func (p *parser) parseTopCommand(name token) (Command, error) {
@@ -1806,9 +1948,14 @@ func (p *parser) parseTopCommand(name token) (Command, error) {
 		return nil, err
 	}
 	return &TopCommand{
-		Fields: parsed.fields,
-		Limit:  parsed.limit,
-		Range:  parsed.sourceRange,
+		Fields:       parsed.fields,
+		By:           parsed.by,
+		Limit:        parsed.limit,
+		CountField:   parsed.countField,
+		PercentField: parsed.percentField,
+		HideCount:    parsed.hideCount,
+		HidePercent:  parsed.hidePercent,
+		Range:        parsed.sourceRange,
 	}, nil
 }
 
@@ -1818,117 +1965,217 @@ func (p *parser) parseRareCommand(name token) (Command, error) {
 		return nil, err
 	}
 	return &RareCommand{
-		Fields: parsed.fields,
-		Limit:  parsed.limit,
-		Range:  parsed.sourceRange,
+		Fields:       parsed.fields,
+		By:           parsed.by,
+		Limit:        parsed.limit,
+		CountField:   parsed.countField,
+		PercentField: parsed.percentField,
+		HideCount:    parsed.hideCount,
+		HidePercent:  parsed.hidePercent,
+		Range:        parsed.sourceRange,
 	}, nil
 }
 
+// parseFrequencyCommand accepts Splunk's `top|rare [N] [option=value ...]
+// field-list [BY field-list]` shape. Options precede the field list as in the
+// documented syntax; `useother` and `otherstr` remain unsupported because the
+// lowering has no "OTHER" row to fold the remainder into.
 func (p *parser) parseFrequencyCommand(name token, commandName string) (parsedFrequencyCommand, error) {
 	command := parsedFrequencyCommand{limit: 10}
 	if p.atCommandEnd() {
 		return parsedFrequencyCommand{}, p.errorAtCurrent("SPL_EXPECTED_FIELD", commandName+" requires one field")
 	}
 
-	var limitToken token
 	hasLimit := false
 	if p.current().kind == tokenWord && unsignedIntegerSyntax(p.current().text) {
-		limitToken = p.current()
+		limit, err := p.parseFrequencyLimit(p.current(), commandName)
+		if err != nil {
+			return parsedFrequencyCommand{}, err
+		}
+		command.limit = limit
 		hasLimit = true
 		p.advance()
 	} else if p.current().kind == tokenWord && strings.HasPrefix(p.current().text, "-") && integerSyntax(p.current().text) {
 		return parsedFrequencyCommand{}, p.errorAtCurrent("SPL_INVALID_ARGUMENT", commandName+" limit must be a non-negative integer")
-	} else if p.isKeyword("LIMIT") && p.index+1 < len(p.tokens) && p.tokens[p.index+1].kind == tokenEqual {
-		p.advance()
-		p.advance()
-		limitToken = p.current()
-		if limitToken.kind != tokenWord || !unsignedIntegerSyntax(limitToken.text) {
-			return parsedFrequencyCommand{}, p.errorAtCurrent("SPL_INVALID_ARGUMENT", commandName+" limit must be a non-negative integer")
-		}
-		hasLimit = true
-		p.advance()
-	} else if p.current().kind == tokenWord && p.index+1 < len(p.tokens) && p.tokens[p.index+1].kind == tokenEqual {
-		return parsedFrequencyCommand{}, p.unsupportedFrequencySyntax(
-			p.current(), commandName, fmt.Sprintf("%s option %q is not supported", commandName, p.current().text),
-		)
 	}
-	if hasLimit {
-		limit, err := strconv.ParseUint(limitToken.text, 10, 64)
-		if err != nil {
-			return parsedFrequencyCommand{}, &Diagnostic{
-				Code:    "SPL_NUMBER_OUT_OF_RANGE",
-				Message: commandName + " result count is outside the supported 64-bit range",
-				Range:   limitToken.sourceRange,
-			}
+	seenOptions := make(map[string]struct{}, 4)
+	for p.current().kind == tokenWord && p.nextIs(tokenEqual) {
+		option := p.current()
+		lower := strings.ToLower(option.text)
+		if _, repeated := seenOptions[lower]; repeated || (lower == "limit" && hasLimit) {
+			return parsedFrequencyCommand{}, p.unsupportedFrequencySyntax(
+				option, commandName, fmt.Sprintf("%s option %q is repeated", commandName, option.text),
+			)
 		}
-		command.limit = limit
+		seenOptions[lower] = struct{}{}
+		switch lower {
+		case "limit":
+			p.advance()
+			p.advance()
+			if p.current().kind != tokenWord || !unsignedIntegerSyntax(p.current().text) {
+				return parsedFrequencyCommand{}, p.errorAtCurrent("SPL_INVALID_ARGUMENT", commandName+" limit must be a non-negative integer")
+			}
+			limit, err := p.parseFrequencyLimit(p.current(), commandName)
+			if err != nil {
+				return parsedFrequencyCommand{}, err
+			}
+			command.limit = limit
+			hasLimit = true
+			p.advance()
+		case "countfield", "percentfield":
+			p.advance()
+			p.advance()
+			value := p.current()
+			if (value.kind != tokenWord && value.kind != tokenString) || value.text == "" ||
+				strings.Contains(value.text, "*") || strings.TrimSpace(value.text) != value.text {
+				if p.atCommandEnd() {
+					value = option
+				}
+				return parsedFrequencyCommand{}, p.unsupportedFrequencySyntax(
+					value, commandName, fmt.Sprintf("%s %s requires an exact output field name", commandName, lower),
+				)
+			}
+			if lower == "countfield" {
+				command.countField = value.text
+			} else {
+				command.percentField = value.text
+			}
+			p.advance()
+		case "showcount", "showperc":
+			p.advance()
+			p.advance()
+			value := p.current()
+			parsed, ok := parseStrictBool(value.text)
+			if value.kind != tokenWord || !ok {
+				if p.atCommandEnd() {
+					value = option
+				}
+				return parsedFrequencyCommand{}, p.unsupportedFrequencySyntax(
+					value, commandName, fmt.Sprintf("%s %s must be true or false", commandName, lower),
+				)
+			}
+			if lower == "showcount" {
+				command.hideCount = !parsed
+			} else {
+				command.hidePercent = !parsed
+			}
+			p.advance()
+		default:
+			return parsedFrequencyCommand{}, p.unsupportedFrequencySyntax(
+				option, commandName, fmt.Sprintf("%s option %q is not supported", commandName, option.text),
+			)
+		}
 	}
 
 	if p.atCommandEnd() {
 		return parsedFrequencyCommand{}, p.errorAtCurrent("SPL_EXPECTED_FIELD", commandName+" requires one field")
 	}
-	command.fields = make([]FrequencyField, 0, 1)
+	fields, end, err := p.parseFrequencyFieldList(commandName, name.sourceRange.End, nil)
+	if err != nil {
+		return parsedFrequencyCommand{}, err
+	}
+	command.fields = fields
+	if p.isKeyword("BY") {
+		p.advance()
+		if p.atCommandEnd() {
+			return parsedFrequencyCommand{}, p.errorAtCurrent("SPL_EXPECTED_FIELD", commandName+" BY requires at least one exact field")
+		}
+		by, byEnd, byErr := p.parseFrequencyFieldList(commandName, end, fields)
+		if byErr != nil {
+			return parsedFrequencyCommand{}, byErr
+		}
+		command.by = by
+		end = byEnd
+	}
+	if !p.atCommandEnd() {
+		tok := p.current()
+		message := commandName + " fields must be separated by commas"
+		if tok.kind == tokenWord && p.nextIs(tokenEqual) {
+			message = fmt.Sprintf("%s option %q must precede the field list", commandName, tok.text)
+		} else if strings.EqualFold(tok.text, "BY") {
+			message = commandName + " accepts a single BY clause"
+		}
+		return parsedFrequencyCommand{}, p.unsupportedFrequencySyntax(tok, commandName, message)
+	}
+	command.sourceRange = Range{Start: name.sourceRange.Start, End: end}
+	return command, nil
+}
+
+func (p *parser) parseFrequencyLimit(limitToken token, commandName string) (uint64, error) {
+	limit, err := strconv.ParseUint(limitToken.text, 10, 64)
+	if err != nil {
+		return 0, &Diagnostic{
+			Code:    "SPL_NUMBER_OUT_OF_RANGE",
+			Message: commandName + " result count is outside the supported 64-bit range",
+			Range:   limitToken.sourceRange,
+		}
+	}
+	return limit, nil
+}
+
+// parseFrequencyFieldList reads one comma-separated exact field list for the
+// counted fields or the BY clause. taken holds the other clause's fields so a
+// name cannot be both counted and grouped.
+func (p *parser) parseFrequencyFieldList(
+	commandName string,
+	end Position,
+	taken []FrequencyField,
+) ([]FrequencyField, Position, error) {
+	fields := make([]FrequencyField, 0, 1)
 	wantField := true
-	end := name.sourceRange.End
 	for !p.atCommandEnd() {
 		tok := p.current()
 		if wantField {
 			if tok.kind == tokenComma {
-				return parsedFrequencyCommand{}, p.errorAtCurrent(
+				return nil, end, p.errorAtCurrent(
 					"SPL_EXPECTED_FIELD",
 					commandName+" requires an exact field after each comma",
 				)
 			}
-			if tok.kind == tokenWord && p.index+1 < len(p.tokens) && p.tokens[p.index+1].kind == tokenEqual {
-				return parsedFrequencyCommand{}, p.unsupportedFrequencySyntax(
+			if tok.kind == tokenWord && p.nextIs(tokenEqual) {
+				return nil, end, p.unsupportedFrequencySyntax(
 					tok,
 					commandName,
-					fmt.Sprintf("%s option %q is not supported", commandName, tok.text),
+					fmt.Sprintf("%s option %q must precede the field list", commandName, tok.text),
 				)
 			}
 			if tok.kind != tokenWord {
-				return parsedFrequencyCommand{}, p.unsupportedFrequencySyntax(
+				return nil, end, p.unsupportedFrequencySyntax(
 					tok,
 					commandName,
 					commandName+" supports unquoted exact fields only",
 				)
 			}
 			if strings.EqualFold(tok.text, "BY") {
-				return parsedFrequencyCommand{}, p.unsupportedFrequencySyntax(
-					tok,
-					commandName,
-					commandName+" BY clauses are not supported",
+				return nil, end, p.errorAtCurrent(
+					"SPL_EXPECTED_FIELD",
+					commandName+" requires an exact field before BY",
 				)
 			}
 			if strings.Contains(tok.text, "*") {
-				return parsedFrequencyCommand{}, p.unsupportedFrequencySyntax(
+				return nil, end, p.unsupportedFrequencySyntax(
 					tok,
 					commandName,
 					"wildcard "+commandName+" fields are not supported",
 				)
 			}
-			duplicate := false
-			for _, field := range command.fields {
+			for _, field := range append(append([]FrequencyField(nil), taken...), fields...) {
 				if field.Name == tok.text {
-					duplicate = true
-					break
+					return nil, end, p.unsupportedFrequencySyntax(
+						tok,
+						commandName,
+						fmt.Sprintf("%s field %q is repeated", commandName, tok.text),
+					)
 				}
 			}
-			if duplicate {
-				return parsedFrequencyCommand{}, p.unsupportedFrequencySyntax(
-					tok,
-					commandName,
-					fmt.Sprintf("%s field %q is repeated", commandName, tok.text),
-				)
-			}
-			if len(command.fields) >= MaximumFrequencyFields {
-				return parsedFrequencyCommand{}, &Diagnostic{
+			if len(fields) >= MaximumFrequencyFields {
+				return nil, end, &Diagnostic{
 					Code:    "SPL_QUERY_TOO_COMPLEX",
 					Message: fmt.Sprintf("%s contains more than %d fields", commandName, MaximumFrequencyFields),
 					Range:   tok.sourceRange,
 				}
 			}
-			command.fields = append(command.fields, FrequencyField{
+			fields = append(fields, FrequencyField{
 				Name:  tok.text,
 				Range: tok.sourceRange,
 			})
@@ -1943,22 +2190,15 @@ func (p *parser) parseFrequencyCommand(name token, commandName string) (parsedFr
 			p.advance()
 			continue
 		}
-		message := commandName + " fields must be separated by commas"
-		if tok.kind == tokenWord && p.index+1 < len(p.tokens) && p.tokens[p.index+1].kind == tokenEqual {
-			message = fmt.Sprintf("%s option %q is not supported", commandName, tok.text)
-		} else if strings.EqualFold(tok.text, "BY") {
-			message = commandName + " BY clauses are not supported"
-		}
-		return parsedFrequencyCommand{}, p.unsupportedFrequencySyntax(tok, commandName, message)
+		break
 	}
-	if len(command.fields) == 0 || wantField {
-		return parsedFrequencyCommand{}, p.errorAtCurrent(
+	if len(fields) == 0 || wantField {
+		return nil, end, p.errorAtCurrent(
 			"SPL_EXPECTED_FIELD",
 			commandName+" requires at least one exact field and cannot end with a comma",
 		)
 	}
-	command.sourceRange = Range{Start: name.sourceRange.Start, End: end}
-	return command, nil
+	return fields, end, nil
 }
 
 func (p *parser) unsupportedFrequencySyntax(tok token, commandName, message string) *Diagnostic {
@@ -4384,47 +4624,12 @@ func (p *parser) parseSortCommand(name token) (Command, error) {
 			lastWasComma = true
 			continue
 		}
-		if p.current().kind == tokenScalarComposite {
-			prepared, err := p.prepareScalarQuotedOperand()
-			if err != nil {
-				return nil, err
-			}
-			if !prepared {
-				return nil, p.errorAtCurrent("SPL_EXPECTED_FIELD", "expected a sort field")
-			}
-		}
-		tok := p.current()
-		keyStart := tok.sourceRange.Start
-		descending := false
-		if direction, ok := sortDirectionPrefix(tok); ok {
-			descending = direction
-			prefix := tok
-			p.advance()
-			if p.atCommandEnd() || p.current().kind == tokenComma || sortTokenStartsDirection(p.current()) {
-				return nil, &Diagnostic{
-					Code:    "SPL_EXPECTED_FIELD",
-					Message: "expected a sort field after direction prefix",
-					Range:   prefix.sourceRange,
-				}
-			}
-			tok = p.current()
-		} else if tok.kind == tokenWord && len(tok.text) > 1 && (tok.text[0] == '+' || tok.text[0] == '-') {
-			descending = tok.text[0] == '-'
-			tok.text = tok.text[1:]
-			tok.sourceRange.Start = advanceSourcePosition(tok.sourceRange.Start, p.current().text[:1])
-		}
-		if tok.text == "" || sortTokenStartsDirection(tok) {
-			return nil, p.errorAtCurrent("SPL_EXPECTED_FIELD", "expected a sort field after direction prefix")
-		}
-
-		field, keyEnd, err := p.parseSortFieldValue(tok)
+		field, err := p.parseSortKey()
 		if err != nil {
 			return nil, err
 		}
-		field.Descending = descending
-		field.Range = Range{Start: keyStart, End: keyEnd}
 		command.Fields = append(command.Fields, field)
-		end = keyEnd
+		end = field.Range.End
 		lastWasComma = false
 
 		if !p.atCommandEnd() && p.current().kind == tokenWord &&
@@ -4457,6 +4662,51 @@ func (p *parser) parseSortLimit(command *SortCommand, value token) error {
 	command.Limit = limit
 	command.LimitSpecified = true
 	return nil
+}
+
+// parseSortKey consumes one [+|-]field or [+|-]mode(field) sort key. It is
+// shared by sort and dedup sortby; the caller owns separators and terminators.
+func (p *parser) parseSortKey() (SortField, error) {
+	if p.current().kind == tokenScalarComposite {
+		prepared, err := p.prepareScalarQuotedOperand()
+		if err != nil {
+			return SortField{}, err
+		}
+		if !prepared {
+			return SortField{}, p.errorAtCurrent("SPL_EXPECTED_FIELD", "expected a sort field")
+		}
+	}
+	tok := p.current()
+	keyStart := tok.sourceRange.Start
+	descending := false
+	if direction, ok := sortDirectionPrefix(tok); ok {
+		descending = direction
+		prefix := tok
+		p.advance()
+		if p.atCommandEnd() || p.current().kind == tokenComma || sortTokenStartsDirection(p.current()) {
+			return SortField{}, &Diagnostic{
+				Code:    "SPL_EXPECTED_FIELD",
+				Message: "expected a sort field after direction prefix",
+				Range:   prefix.sourceRange,
+			}
+		}
+		tok = p.current()
+	} else if tok.kind == tokenWord && len(tok.text) > 1 && (tok.text[0] == '+' || tok.text[0] == '-') {
+		descending = tok.text[0] == '-'
+		tok.text = tok.text[1:]
+		tok.sourceRange.Start = advanceSourcePosition(tok.sourceRange.Start, p.current().text[:1])
+	}
+	if tok.text == "" || sortTokenStartsDirection(tok) {
+		return SortField{}, p.errorAtCurrent("SPL_EXPECTED_FIELD", "expected a sort field after direction prefix")
+	}
+
+	field, keyEnd, err := p.parseSortFieldValue(tok)
+	if err != nil {
+		return SortField{}, err
+	}
+	field.Descending = descending
+	field.Range = Range{Start: keyStart, End: keyEnd}
+	return field, nil
 }
 
 // parseSortFieldValue consumes the field portion of one sort key. tok is a
@@ -4595,6 +4845,7 @@ func (p *parser) parseDedupCommand(name token) (Command, error) {
 
 	end := name.sourceRange.End
 	wantField := true
+	consecutiveSpecified := false
 	seen := make(map[string]struct{})
 	for !p.atCommandEnd() {
 		tok := p.current()
@@ -4610,8 +4861,47 @@ func (p *parser) parseDedupCommand(name token) (Command, error) {
 			return unsupported(tok, "dedup supports unquoted exact field names only")
 		}
 		lower := strings.ToLower(tok.text)
-		if lower == "keepempty" || lower == "consecutive" || lower == "keepevents" || lower == "sortby" {
-			return unsupported(tok, fmt.Sprintf("dedup option %q is not supported", tok.text))
+		if lower == "sortby" {
+			if len(command.Fields) == 0 {
+				return unsupported(tok, "dedup requires at least one exact field before sortby")
+			}
+			if wantField {
+				return unsupported(tok, "dedup requires an exact field before each comma")
+			}
+			p.advance()
+			sortEnd, err := p.parseDedupSortBy(command, tok)
+			if err != nil {
+				return nil, err
+			}
+			end = sortEnd
+			break
+		}
+		if p.nextIs(tokenEqual) {
+			switch lower {
+			case "consecutive":
+				if consecutiveSpecified {
+					return unsupported(tok, "dedup option \"consecutive\" is repeated")
+				}
+				p.advance()
+				p.advance()
+				value := p.current()
+				parsed, ok := parseStrictBool(value.text)
+				if value.kind != tokenWord || !ok {
+					if p.atCommandEnd() {
+						value = tok
+					}
+					return unsupported(value, "dedup consecutive must be true or false")
+				}
+				command.Consecutive = parsed
+				consecutiveSpecified = true
+				end = value.sourceRange.End
+				p.advance()
+				continue
+			case "keepempty", "keepevents":
+				return unsupported(tok, fmt.Sprintf("dedup option %q is not supported", tok.text))
+			default:
+				return unsupported(tok, fmt.Sprintf("dedup option %q is not recognized", tok.text))
+			}
 		}
 		if strings.Contains(tok.text, "*") {
 			return unsupported(tok, "dedup wildcard fields are not supported")
@@ -4635,6 +4925,68 @@ func (p *parser) parseDedupCommand(name token) (Command, error) {
 	return command, nil
 }
 
+// parseDedupSortBy consumes the sort keys that follow the sortby keyword. The
+// clause is terminal: it runs to the end of the command, so the official
+// space-separated spelling and the comma-separated sort spelling both work.
+func (p *parser) parseDedupSortBy(command *DedupCommand, keyword token) (Position, error) {
+	unsupported := func(tok token, message string) (Position, error) {
+		return Position{}, &Diagnostic{
+			Code:        "SPL_UNSUPPORTED_DEDUP_SYNTAX",
+			Message:     message,
+			Range:       tok.sourceRange,
+			Suggestions: []string{"dedup field sortby -_time", "dedup field sortby +num(bytes), -host"},
+		}
+	}
+	if p.atCommandEnd() {
+		return unsupported(keyword, "dedup sortby requires at least one sort key")
+	}
+	seen := make(map[string]struct{})
+	lastWasComma := false
+	end := keyword.sourceRange.End
+	for !p.atCommandEnd() {
+		if p.current().kind == tokenComma {
+			if len(command.SortBy) == 0 || lastWasComma {
+				return unsupported(p.current(), "dedup sortby requires a sort key before each comma")
+			}
+			lastWasComma = true
+			p.advance()
+			continue
+		}
+		if p.current().kind == tokenWord && p.nextIs(tokenEqual) {
+			return unsupported(p.current(), "dedup options must precede sortby")
+		}
+		if p.current().kind == tokenWord &&
+			(strings.EqualFold(p.current().text, "d") || strings.EqualFold(p.current().text, "desc")) &&
+			p.index+1 < len(p.tokens) && (p.tokens[p.index+1].kind == tokenPipe || p.tokens[p.index+1].kind == tokenEOF) {
+			return unsupported(p.current(), "dedup sortby uses a + or - prefix on each key instead of a trailing desc")
+		}
+		key, err := p.parseSortKey()
+		if err != nil {
+			return Position{}, err
+		}
+		keyToken := token{sourceRange: key.Range}
+		if _, duplicate := seen[key.Field]; duplicate {
+			return unsupported(keyToken, fmt.Sprintf("dedup sortby key %q is duplicated", key.Field))
+		}
+		if len(command.SortBy) >= maxDedupFields {
+			return unsupported(keyToken, fmt.Sprintf("dedup sortby supports at most %d keys", maxDedupFields))
+		}
+		seen[key.Field] = struct{}{}
+		command.SortBy = append(command.SortBy, key)
+		end = key.Range.End
+		lastWasComma = false
+	}
+	if lastWasComma {
+		return unsupported(p.previous(), "dedup sortby cannot end with a comma")
+	}
+	command.SortByRange = Range{Start: command.SortBy[0].Range.Start, End: end}
+	return end, nil
+}
+
+// parseLimitCommand accepts the positional count form and the labeled
+// limit=N form; both are the same bounded row selection. The predicate
+// form and the keeplast/null options remain unsupported because they need
+// a per-row eval guard rather than a fixed count.
 func (p *parser) parseLimitCommand(name string, nameToken token) (Command, error) {
 	count := uint64(10)
 	end := nameToken.sourceRange.End
@@ -4642,6 +4994,17 @@ func (p *parser) parseLimitCommand(name string, nameToken token) (Command, error
 		tok := p.current()
 		if tok.kind != tokenWord {
 			return nil, p.errorAtCurrent("SPL_INVALID_ARGUMENT", fmt.Sprintf("%s count must be a positive integer", name))
+		}
+		if p.nextIs(tokenEqual) {
+			if !strings.EqualFold(tok.text, "limit") {
+				return nil, p.errorAtCurrent("SPL_UNSUPPORTED_ARGUMENT", fmt.Sprintf("unsupported %s argument %q", name, tok.text))
+			}
+			p.advance()
+			p.advance()
+			tok = p.current()
+			if tok.kind != tokenWord {
+				return nil, p.errorAtCurrent("SPL_INVALID_ARGUMENT", fmt.Sprintf("%s limit must be a positive integer", name))
+			}
 		}
 		parsed, err := strconv.ParseUint(tok.text, 10, 64)
 		if err != nil || parsed == 0 {

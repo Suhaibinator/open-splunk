@@ -3,6 +3,7 @@ package plan
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -277,5 +278,48 @@ func TestPipelinePlanningBoundsRepeatedExpansionAndKeepsOrdinalPrivate(t *testin
 	if diagnostic.Range.Start.Offset != wantOffset ||
 		rejected[diagnostic.Range.Start.Offset:diagnostic.Range.End.Offset] != "mvexpand overflow" {
 		t.Fatalf("third mvexpand diagnostic range = %#v", diagnostic.Range)
+	}
+}
+
+func TestBuildFillNullFieldlessFormFillsTheExactUpstreamSchema(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | stats count avg(bytes) AS mean BY host | fillnull value=NA`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	fill, ok := logical.Operators[len(logical.Operators)-1].(*FillNull)
+	if !ok || fill.Value != "NA" {
+		t.Fatalf("last operator = %#v, want fillnull NA", logical.Operators[len(logical.Operators)-1])
+	}
+	names := make([]string, len(fill.Fields))
+	for index, field := range fill.Fields {
+		names[index] = field.Name
+	}
+	if !slices.Equal(names, []string{"host", "count", "mean"}) || !slices.Equal(logical.OutputFields, names) {
+		t.Fatalf("fillnull fields = %v, outputs = %v", names, logical.OutputFields)
+	}
+
+	for _, test := range []struct {
+		name, source, code string
+	}{
+		{name: "open event schema", source: `index=gradethis | fillnull`, code: "SPL_AMBIGUOUS_FILLNULL_FIELD"},
+		{name: "open schema with value", source: `index=gradethis | fillnull value="0"`, code: "SPL_AMBIGUOUS_FILLNULL_FIELD"},
+		{name: "unreferenceable literal output", source: `index=gradethis | stats count AS "parent..child" | fillnull`, code: "SPL_UNSUPPORTED_FILLNULL_SYNTAX"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, buildErr := Build(mustParse(t, test.source), testScope([]string{"gradethis"}, nil))
+			var diagnostic *Diagnostic
+			if !errors.As(buildErr, &diagnostic) || diagnostic.Code != test.code {
+				t.Fatalf("Build(%q) error = %v, want %s", test.source, buildErr, test.code)
+			}
+			if diagnostic.Range.Start.Offset != strings.Index(test.source, "fillnull") {
+				t.Fatalf("diagnostic range = %#v, want the fillnull command", diagnostic.Range)
+			}
+		})
 	}
 }

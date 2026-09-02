@@ -484,6 +484,50 @@
       }
     },
     {
+      "id": "dedup.sortby",
+      "command": "dedup",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/dedup",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "dedup 3 source sortby -_size",
+        "verified_on": "2026-09-01"
+      },
+      "query": "index=main | dedup 3 source sortby -_size",
+      "expect": {
+        "commands": ["dedup"],
+        "facets": {
+          "consecutive": "false",
+          "count": "3",
+          "fields": "source",
+          "sortby": "-_size"
+        }
+      }
+    },
+    {
+      "id": "dedup.consecutive",
+      "command": "dedup",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/dedup",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "dedup host consecutive=true",
+        "verified_on": "2026-09-01"
+      },
+      "query": "index=main | dedup host consecutive=true",
+      "expect": {
+        "commands": ["dedup"],
+        "facets": {
+          "consecutive": "true",
+          "count": "1",
+          "fields": "host",
+          "sortby": ""
+        }
+      }
+    },
+    {
       "id": "head.count",
       "command": "head",
       "source": {
@@ -495,6 +539,25 @@
         "verified_on": "2026-08-29"
       },
       "query": "index=main | head 20",
+      "expect": {
+        "commands": ["head"],
+        "facets": {
+          "count": "20"
+        }
+      }
+    },
+    {
+      "id": "head.limit-option",
+      "command": "head",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/head",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "head limit=20",
+        "verified_on": "2026-09-01"
+      },
+      "query": "index=main | head limit=20",
       "expect": {
         "commands": ["head"],
         "facets": {
@@ -605,6 +668,56 @@
       }
     },
     {
+      "id": "top.by-clause",
+      "command": "top",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/top",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "top limit=3 host BY source",
+        "verified_on": "2026-09-01"
+      },
+      "query": "index=main | top limit=3 host BY source",
+      "expect": {
+        "commands": ["top"],
+        "facets": {
+          "by": "source",
+          "countfield": "",
+          "fields": "host",
+          "limit": "3",
+          "percentfield": "",
+          "showcount": "true",
+          "showperc": "true"
+        }
+      }
+    },
+    {
+      "id": "top.countfield-showperc",
+      "command": "top",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/top",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "top countfield=total showperc=false host",
+        "verified_on": "2026-09-01"
+      },
+      "query": "index=main | top countfield=total showperc=false host",
+      "expect": {
+        "commands": ["top"],
+        "facets": {
+          "by": "",
+          "countfield": "total",
+          "fields": "host",
+          "limit": "10",
+          "percentfield": "",
+          "showcount": "true",
+          "showperc": "false"
+        }
+      }
+    },
+    {
       "id": "rare.single-field",
       "command": "rare",
       "source": {
@@ -621,6 +734,31 @@
         "facets": {
           "fields": "host",
           "limit": "10"
+        }
+      }
+    },
+    {
+      "id": "rare.by-clause",
+      "command": "rare",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/rare",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "rare showcount=false percentfield=share status BY host",
+        "verified_on": "2026-09-01"
+      },
+      "query": "index=main | rare showcount=false percentfield=share status BY host",
+      "expect": {
+        "commands": ["rare"],
+        "facets": {
+          "by": "host",
+          "countfield": "",
+          "fields": "status",
+          "limit": "10",
+          "percentfield": "share",
+          "showcount": "false",
+          "showperc": "true"
         }
       }
     },
@@ -682,8 +820,35 @@
         "commands": ["timechart"],
         "facets": {
           "aggregate": "count",
+          "limit": "10",
           "span": "1h",
-          "split_by": ""
+          "split_by": "",
+          "usenull": "true",
+          "useother": "true"
+        }
+      }
+    },
+    {
+      "id": "timechart.limit-useother",
+      "command": "timechart",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/timechart",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "timechart span=1h limit=5 count BY host useother=false",
+        "verified_on": "2026-09-01"
+      },
+      "query": "index=main | timechart span=1h limit=5 count BY host useother=false",
+      "expect": {
+        "commands": ["timechart"],
+        "facets": {
+          "aggregate": "count",
+          "limit": "5",
+          "span": "1h",
+          "split_by": "host",
+          "usenull": "true",
+          "useother": "false"
         }
       }
     },
@@ -705,6 +870,27 @@
           "aggregate": "count",
           "over": "host",
           "split_by": "sourcetype"
+        }
+      }
+    },
+    {
+      "id": "chart.single-split",
+      "command": "chart",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/chart",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "chart count BY host",
+        "verified_on": "2026-09-01"
+      },
+      "query": "index=main | chart count BY host",
+      "expect": {
+        "commands": ["chart"],
+        "facets": {
+          "aggregate": "count",
+          "over": "host",
+          "split_by": ""
         }
       }
     },
@@ -815,6 +1001,26 @@
         "facets": {
           "fields": "host",
           "value": "NULL"
+        }
+      }
+    },
+    {
+      "id": "fillnull.all-fields",
+      "command": "fillnull",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/fillnull",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "fillnull value=NA",
+        "verified_on": "2026-09-01"
+      },
+      "query": "index=main | stats count BY host | fillnull value=NA",
+      "expect": {
+        "commands": ["stats", "fillnull"],
+        "facets": {
+          "fields": "",
+          "value": "NA"
         }
       }
     },

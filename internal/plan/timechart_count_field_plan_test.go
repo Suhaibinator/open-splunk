@@ -328,16 +328,17 @@ func TestAnalyzeRejectsForgedTimechartCountFieldMeasures(t *testing.T) {
 			got.SeriesLimit = 0
 			return got
 		}()},
-		{name: "null series disabled", measure: valid, split: func() *TimechartSplit {
+		{name: "series limit above maximum", measure: valid, split: func() *TimechartSplit {
 			got := validSplit(mustResolveEventAggregateField(t, "service"))
-			got.IncludeNull = false
+			got.SeriesLimit = timechartSeriesLimit + 1
 			return got
 		}()},
-		{name: "other series disabled", measure: valid, split: func() *TimechartSplit {
+		{name: "forged split path", measure: valid, split: func() *TimechartSplit {
 			got := validSplit(mustResolveEventAggregateField(t, "service"))
-			got.IncludeOther = false
+			got.Field.Path = []string{"attacker"}
 			return got
 		}()},
+		{name: "unresolved split field", measure: valid, split: validSplit(FieldRef{Name: "service"})},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

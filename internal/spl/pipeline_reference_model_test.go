@@ -176,6 +176,50 @@ func TestPipelineIndependentReferenceModelCoversCommands(t *testing.T) {
 	if got := pipelineRefGet(accumRows[2], "running"); !reflect.DeepEqual(got, pipelineRefNumber(5)) {
 		t.Fatalf("accum finite row after ineligible infinity = %#v, want 5", got)
 	}
+
+	// dedup drops rows without a complete key, keeps the first count per tuple
+	// globally, and per run of adjacent duplicates when consecutive; head keeps
+	// the leading rows of whatever order dedup left behind.
+	dedupRows := []pipelineReferenceRow{
+		{"id": pipelineRefString("a"), "host": pipelineRefString("api"), "n": pipelineRefNumber(1)},
+		{"id": pipelineRefString("b"), "host": pipelineRefString("api"), "n": pipelineRefNumber(1)},
+		{"id": pipelineRefString("c"), "host": pipelineRefNull(), "n": pipelineRefNumber(1)},
+		{"id": pipelineRefString("d"), "host": pipelineRefString("worker"), "n": pipelineRefString("1")},
+		{"id": pipelineRefString("e"), "host": pipelineRefString("api"), "n": pipelineRefNumber(1)},
+		{"id": pipelineRefString("f"), "n": pipelineRefNumber(1)},
+		{"id": pipelineRefString("g"), "host": pipelineRefString("worker"), "n": pipelineRefNumber(1)},
+	}
+	global, err := pipelineReferenceDedup(dedupRows, []string{"host", "n"}, 1, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := pipelineReferenceIDs(global); !reflect.DeepEqual(got, []string{"a", "d", "g"}) {
+		t.Fatalf("global dedup ids = %v", got)
+	}
+	runs, err := pipelineReferenceDedup(dedupRows, []string{"host"}, 1, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := pipelineReferenceIDs(runs); !reflect.DeepEqual(got, []string{"a", "d", "e", "g"}) {
+		t.Fatalf("consecutive dedup ids = %v", got)
+	}
+	twoPerRun, err := pipelineReferenceDedup(dedupRows, []string{"host"}, 2, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := pipelineReferenceIDs(twoPerRun); !reflect.DeepEqual(got, []string{"a", "b", "d", "e", "g"}) {
+		t.Fatalf("consecutive dedup 2 ids = %v", got)
+	}
+	if got := pipelineReferenceIDs(pipelineReferenceHead(global, 2)); !reflect.DeepEqual(got, []string{"a", "d"}) {
+		t.Fatalf("head ids = %v", got)
+	}
+	if got := pipelineReferenceHead(global, 9); len(got) != len(global) {
+		t.Fatalf("head beyond the input kept %d rows, want %d", len(got), len(global))
+	}
+	listKey := []pipelineReferenceRow{{"host": {kind: pipelineReferenceList, members: []pipelineReferenceValue{pipelineRefString("x")}}}}
+	if _, err := pipelineReferenceDedup(listKey, []string{"host"}, 1, false); !errors.Is(err, errPipelineReferenceUnsupportedValue) {
+		t.Fatalf("dedup hostile error = %v", err)
+	}
 }
 
 func TestPipelineIndependentReferenceStrcatUsesSharedConversionAndWritePolicy(t *testing.T) {
@@ -354,6 +398,83 @@ func pipelineReferenceReverse(rows []pipelineReferenceRow) []pipelineReferenceRo
 	result := make([]pipelineReferenceRow, len(rows))
 	for index := range rows {
 		result[len(rows)-1-index] = pipelineRefCloneRow(rows[index])
+	}
+	return result
+}
+
+// pipelineReferenceDedup keeps the first count rows of every complete key
+// tuple in the established order. A row whose key is missing or null is not
+// eligible and is dropped (Splunk's keepempty=false default). With consecutive,
+// the count restarts whenever an eligible row's tuple differs from the
+// immediately preceding eligible row, so each run of adjacent duplicates keeps
+// its own first count rows.
+func pipelineReferenceDedup(
+	rows []pipelineReferenceRow,
+	keys []string,
+	count int,
+	consecutive bool,
+) ([]pipelineReferenceRow, error) {
+	result := make([]pipelineReferenceRow, 0, len(rows))
+	seen := make(map[string]int, len(rows))
+	previous, runLength := "", 0
+	for _, row := range rows {
+		identity, eligible, err := pipelineReferenceDedupIdentity(row, keys)
+		if err != nil {
+			return nil, err
+		}
+		if !eligible {
+			continue
+		}
+		var retained int
+		if consecutive {
+			if runLength == 0 || identity != previous {
+				runLength = 0
+			}
+			runLength++
+			previous = identity
+			retained = runLength
+		} else {
+			seen[identity]++
+			retained = seen[identity]
+		}
+		if retained <= count {
+			result = append(result, pipelineRefCloneRow(row))
+		}
+	}
+	return result, nil
+}
+
+// pipelineReferenceDedupIdentity renders the key tuple with each member's kind
+// so a String "1" and a Number 1 stay distinct, matching the typed column path.
+func pipelineReferenceDedupIdentity(row pipelineReferenceRow, keys []string) (string, bool, error) {
+	var identity strings.Builder
+	for _, key := range keys {
+		value := pipelineRefGet(row, key)
+		switch value.kind {
+		case pipelineReferenceMissing, pipelineReferenceNull:
+			return "", false, nil
+		case pipelineReferenceString:
+			identity.WriteString("s" + strconv.Quote(value.text))
+		case pipelineReferenceNumber, pipelineReferenceTime:
+			identity.WriteString("n" + strconv.FormatFloat(value.number, 'g', -1, 64))
+		case pipelineReferenceBool:
+			identity.WriteString("b" + strconv.FormatBool(value.boolean))
+		default:
+			return "", false, errPipelineReferenceUnsupportedValue
+		}
+		identity.WriteByte(0)
+	}
+	return identity.String(), true, nil
+}
+
+// pipelineReferenceHead keeps the first count rows of the established order.
+func pipelineReferenceHead(rows []pipelineReferenceRow, count int) []pipelineReferenceRow {
+	if count > len(rows) {
+		count = len(rows)
+	}
+	result := make([]pipelineReferenceRow, count)
+	for index := range result {
+		result[index] = pipelineRefCloneRow(rows[index])
 	}
 	return result
 }

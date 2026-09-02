@@ -3,6 +3,7 @@ package spl
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -100,6 +101,67 @@ func TestParseProjectionSortAndLimits(t *testing.T) {
 	}
 	if got := query.Commands[3].(*LimitCommand); got.Name() != "tail" || got.Count != 3 {
 		t.Fatalf("tail = %#v", got)
+	}
+}
+
+func TestParseLimitCommandsAcceptLabeledLimit(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		source string
+		name   string
+		count  uint64
+		end    int
+	}{
+		{source: `index=main | head limit=20`, name: "head", count: 20, end: 26},
+		{source: `index=main | head LIMIT=1`, name: "head", count: 1, end: 25},
+		{source: `index=main | tail limit=7`, name: "tail", count: 7, end: 25},
+		{source: `index=main | tail`, name: "tail", count: 10, end: 17},
+	}
+	for _, test := range tests {
+		t.Run(test.source, func(t *testing.T) {
+			t.Parallel()
+			query, err := Parse(test.source)
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			command, ok := query.Commands[0].(*LimitCommand)
+			if !ok || command.Name() != test.name || command.Count != test.count {
+				t.Fatalf("command = %#v, want %s %d", query.Commands[0], test.name, test.count)
+			}
+			if command.Range.Start.Offset != 13 || command.Range.End.Offset != test.end {
+				t.Fatalf("range = %#v, want 13..%d", command.Range, test.end)
+			}
+		})
+	}
+}
+
+func TestParseLimitCommandsRejectPredicatesAndOptions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		source string
+		code   string
+	}{
+		{source: `index=main | head limit=0`, code: "SPL_INVALID_ARGUMENT"},
+		{source: `index=main | head limit=-1`, code: "SPL_INVALID_ARGUMENT"},
+		{source: `index=main | head limit=`, code: "SPL_INVALID_ARGUMENT"},
+		{source: `index=main | head limit="5"`, code: "SPL_INVALID_ARGUMENT"},
+		{source: `index=main | tail limit=5.5`, code: "SPL_INVALID_ARGUMENT"},
+		{source: `index=main | head 5 limit=5`, code: "SPL_UNSUPPORTED_ARGUMENT"},
+		{source: `index=main | head limit=5 5`, code: "SPL_UNSUPPORTED_ARGUMENT"},
+		{source: `index=main | head limit=5 keeplast=true`, code: "SPL_UNSUPPORTED_ARGUMENT"},
+		{source: `index=main | head keeplast=true`, code: "SPL_UNSUPPORTED_ARGUMENT"},
+		{source: `index=main | head null=true limit=5`, code: "SPL_UNSUPPORTED_ARGUMENT"},
+		{source: `index=main | head status=200`, code: "SPL_UNSUPPORTED_ARGUMENT"},
+		{source: `index=main | head status>200`, code: "SPL_INVALID_ARGUMENT"},
+		{source: `index=main | head (status=200)`, code: "SPL_INVALID_ARGUMENT"},
+	}
+	for _, test := range tests {
+		t.Run(test.source, func(t *testing.T) {
+			t.Parallel()
+			assertParseDiagnosticCode(t, test.source, test.code)
+		})
 	}
 }
 
@@ -333,9 +395,21 @@ func TestParseDedupRejectsUnsupportedOrAmbiguousSyntax(t *testing.T) {
 		`index=main | dedup ho*`,
 		`index=main | dedup "host"`,
 		`index=main | dedup host keepempty=true`,
-		`index=main | dedup consecutive=true host`,
 		`index=main | dedup keepevents=true host`,
-		`index=main | dedup host sortby -_time`,
+		`index=main | dedup host consecutive=yes`,
+		`index=main | dedup host consecutive=`,
+		`index=main | dedup host consecutive="true"`,
+		`index=main | dedup host consecutive=true consecutive=false`,
+		`index=main | dedup host maxfields=2`,
+		`index=main | dedup sortby -_time`,
+		`index=main | dedup host, sortby -_time`,
+		`index=main | dedup host sortby`,
+		`index=main | dedup host sortby ,`,
+		`index=main | dedup host sortby -_time,`,
+		`index=main | dedup host sortby -_time,,host`,
+		`index=main | dedup host sortby -_time -_time`,
+		`index=main | dedup host sortby -_time consecutive=true`,
+		`index=main | dedup host sortby _time desc`,
 	}
 	for _, source := range tests {
 		t.Run(source, func(t *testing.T) {
@@ -352,6 +426,115 @@ func TestParseDedupRejectsUnsupportedOrAmbiguousSyntax(t *testing.T) {
 			if diagnostic.Range.Start.Offset < 0 || diagnostic.Range.Start.Offset > len(source) || diagnostic.Range.End.Offset > len(source) {
 				t.Fatalf("diagnostic range = %#v outside source length %d", diagnostic.Range, len(source))
 			}
+		})
+	}
+}
+
+func TestParseDedupAcceptsSortByAndConsecutive(t *testing.T) {
+	t.Parallel()
+
+	type key struct {
+		field      string
+		descending bool
+		mode       SortValueMode
+	}
+	tests := []struct {
+		source      string
+		count       uint64
+		fields      []string
+		consecutive bool
+		sortBy      []key
+		sortByText  string
+		rangeEnd    int
+	}{
+		{
+			source: `index=main | dedup source sortby +_size`, count: 1, fields: []string{"source"},
+			sortBy: []key{{field: "_size", mode: SortValueModeAuto}}, sortByText: "+_size", rangeEnd: 39,
+		},
+		{
+			source: `index=main | dedup 3 source sortby -_size`, count: 3, fields: []string{"source"},
+			sortBy: []key{{field: "_size", descending: true, mode: SortValueModeAuto}}, sortByText: "-_size", rangeEnd: 41,
+		},
+		{
+			source: `index=main | dedup host, source sortby -num(bytes) +str(host), ip(client_ip)`, count: 1,
+			fields: []string{"host", "source"},
+			sortBy: []key{
+				{field: "bytes", descending: true, mode: SortValueModeNumber},
+				{field: "host", mode: SortValueModeString},
+				{field: "client_ip", mode: SortValueModeIP},
+			},
+			sortByText: "-num(bytes) +str(host), ip(client_ip)", rangeEnd: 76,
+		},
+		{
+			source: `index=main | dedup host consecutive=true`, count: 1, fields: []string{"host"}, consecutive: true, rangeEnd: 40,
+		},
+		{
+			source: `index=main | dedup consecutive=TRUE host source`, count: 1, fields: []string{"host", "source"},
+			consecutive: true, rangeEnd: 47,
+		},
+		{
+			source: `index=main | dedup 2 host consecutive=false sortby -_time`, count: 2, fields: []string{"host"},
+			sortBy: []key{{field: "_time", descending: true, mode: SortValueModeAuto}}, sortByText: "-_time", rangeEnd: 57,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.source, func(t *testing.T) {
+			t.Parallel()
+			query, err := Parse(test.source)
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			command, ok := query.Commands[0].(*DedupCommand)
+			if !ok {
+				t.Fatalf("command = %T, want *DedupCommand", query.Commands[0])
+			}
+			fields := make([]string, len(command.Fields))
+			for index, field := range command.Fields {
+				fields[index] = field.Name
+			}
+			if command.Count != test.count || !slices.Equal(fields, test.fields) || command.Consecutive != test.consecutive {
+				t.Fatalf("dedup = %#v, want count %d fields %v consecutive %v", command, test.count, test.fields, test.consecutive)
+			}
+			if len(command.SortBy) != len(test.sortBy) {
+				t.Fatalf("sortby = %#v, want %v", command.SortBy, test.sortBy)
+			}
+			for index, want := range test.sortBy {
+				got := command.SortBy[index]
+				if got.Field != want.field || got.Descending != want.descending || got.Mode != want.mode || got.Quoted {
+					t.Fatalf("sortby[%d] = %#v, want %#v", index, got, want)
+				}
+			}
+			if len(test.sortBy) > 0 {
+				if got := test.source[command.SortByRange.Start.Offset:command.SortByRange.End.Offset]; got != test.sortByText {
+					t.Fatalf("sortby range text = %q, want %q", got, test.sortByText)
+				}
+			} else if command.SortByRange != (Range{}) {
+				t.Fatalf("sortby range = %#v, want zero", command.SortByRange)
+			}
+			if command.Range.Start.Offset != 13 || command.Range.End.Offset != test.rangeEnd {
+				t.Fatalf("range = %#v, want 13..%d", command.Range, test.rangeEnd)
+			}
+		})
+	}
+}
+
+func TestParseDedupSortByReportsSortKeyDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		source string
+		code   string
+	}{
+		{source: `index=main | dedup host sortby -`, code: "SPL_EXPECTED_FIELD"},
+		{source: `index=main | dedup host sortby - -_time`, code: "SPL_EXPECTED_FIELD"},
+		{source: `index=main | dedup host sortby -num(`, code: "SPL_EXPECTED_FIELD"},
+		{source: `index=main | dedup host sortby -num(bytes`, code: "SPL_EXPECTED_RIGHT_PAREN"},
+		{source: `index=main | dedup host sortby -lower(bytes)`, code: "SPL_UNSUPPORTED_SORT_SYNTAX"},
+	}
+	for _, test := range tests {
+		t.Run(test.source, func(t *testing.T) {
+			t.Parallel()
+			assertParseDiagnosticCode(t, test.source, test.code)
 		})
 	}
 }
@@ -1988,7 +2171,22 @@ func TestParseTimechartRejectsUnsupportedOrMalformedSyntax(t *testing.T) {
 		{"quoted split field", `index=main | timechart span=5m count by "level"`, "SPL_EXPECTED_FIELD", `"level"`},
 		{"wildcard split field", `index=main | timechart span=5m count by level*`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "level*"},
 		{"multiple split fields", `index=main | timechart span=5m count by level host`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "host"},
-		{"unsupported option", `index=main | timechart span=5m count by level useother=false`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "useother"},
+		{"unsupported option", `index=main | timechart span=5m count by level nullstr=none`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "nullstr"},
+		{"unsupported leading option", `index=main | timechart span=5m sep=- count by level`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "sep"},
+		{"repeated limit", `index=main | timechart span=5m limit=5 count by level limit=5`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "limit"},
+		{"repeated span", `index=main | timechart span=5m span=5m count by level`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "span"},
+		{"trailing span", `index=main | timechart span=5m count by level span=1h`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "span"},
+		{"limit without split", `index=main | timechart span=5m limit=5 count`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "limit=5"},
+		{"useother without split", `index=main | timechart span=5m useother=false count`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "useother=false"},
+		{"zero limit", `index=main | timechart span=5m limit=0 count by level`, "SPL_UNSUPPORTED_TIMECHART_LIMIT", "limit=0"},
+		{"limit above the series allowance", `index=main | timechart span=5m limit=11 count by level`, "SPL_UNSUPPORTED_TIMECHART_LIMIT", "limit=11"},
+		{"limit overflow", `index=main | timechart span=5m limit=18446744073709551616 count by level`, "SPL_UNSUPPORTED_TIMECHART_LIMIT", "limit=18446744073709551616"},
+		{"negative limit", `index=main | timechart span=5m limit=-1 count by level`, "SPL_INVALID_ARGUMENT", "-1"},
+		{"missing limit value", `index=main | timechart span=5m count by level limit=`, "SPL_INVALID_ARGUMENT", "limit"},
+		{"non-boolean useother", `index=main | timechart span=5m count by level useother=maybe`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "maybe"},
+		{"numeric usenull", `index=main | timechart span=5m count by level usenull=0`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "0"},
+		{"missing usenull value", `index=main | timechart span=5m count by level usenull=`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "usenull"},
+		{"stray field after options", `index=main | timechart span=5m count by level useother=false host`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "host"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -2282,9 +2480,9 @@ func TestParseChartRejectsUnsupportedOrMalformedSyntax(t *testing.T) {
 		code      string
 		locatedAt string
 	}{
-		{"single OVER split", `index=main | chart count over path`, "SPL_UNSUPPORTED_CHART_SYNTAX", ""},
-		{"single BY split", `index=main | chart count by path`, "SPL_UNSUPPORTED_CHART_SYNTAX", ""},
 		{"no split at all", `index=main | chart count`, "SPL_UNSUPPORTED_CHART_SYNTAX", ""},
+		{"single OVER split then stray field", `index=main | chart count over path level`, "SPL_UNSUPPORTED_CHART_SYNTAX", "level"},
+		{"single BY split then stray option", `index=main | chart count by path limit=5`, "SPL_UNSUPPORTED_CHART_OPTION", "limit"},
 		{"identical OVER and BY fields", `index=main | chart count over path by path`, "SPL_UNSUPPORTED_CHART_SYNTAX", "path"},
 		{"identical BY list fields", `index=main | chart count by path, path`, "SPL_UNSUPPORTED_CHART_SYNTAX", "path"},
 		{"three BY fields", `index=main | chart count by path, level, host`, "SPL_UNSUPPORTED_CHART_SYNTAX", ","},
@@ -2331,23 +2529,70 @@ func TestParseChartRejectsUnsupportedOrMalformedSyntax(t *testing.T) {
 	}
 }
 
-func TestParseChartSingleSplitSuggestsStats(t *testing.T) {
+func TestParseChartMissingSplitSuggestsStatsAndSingleSplit(t *testing.T) {
 	t.Parallel()
 
-	for _, source := range []string{
-		`index=main | chart count over path`,
-		`index=main | chart count by path`,
-		`index=main | chart count`,
-	} {
-		_, err := Parse(source)
-		diagnostic := &Diagnostic{}
-		ok := errors.As(err, &diagnostic)
-		if !ok || diagnostic.Code != "SPL_UNSUPPORTED_CHART_SYNTAX" {
-			t.Fatalf("Parse(%q) diagnostic = %#v", source, err)
+	source := `index=main | chart count`
+	_, err := Parse(source)
+	diagnostic := &Diagnostic{}
+	ok := errors.As(err, &diagnostic)
+	if !ok || diagnostic.Code != "SPL_UNSUPPORTED_CHART_SYNTAX" {
+		t.Fatalf("Parse(%q) diagnostic = %#v", source, err)
+	}
+	for _, suggestion := range []string{"stats count BY <field>", "chart count BY row"} {
+		if !slices.Contains(diagnostic.Suggestions, suggestion) {
+			t.Fatalf("Parse(%q) suggestions = %v, want %q", source, diagnostic.Suggestions, suggestion)
 		}
-		if !slices.Contains(diagnostic.Suggestions, "stats count BY <field>") {
-			t.Fatalf("Parse(%q) suggestions = %v, want the stats equivalent", source, diagnostic.Suggestions)
-		}
+	}
+}
+
+func TestParseChartSingleSplitFormsShareOneShape(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		source       string
+		spelledOver  bool
+		aggregate    string
+		wantRangeEnd string
+	}{
+		{"OVER row", `index=main | chart count OVER path`, true, "count", "chart count OVER path"},
+		{"BY row", `index=main | chart count BY path`, false, "count", "chart count BY path"},
+		{"lower-case by row", `index=main | chart sum(bytes) by path`, false, "sum(bytes)", "chart sum(bytes) by path"},
+		{"OVER a field spelled by", `index=main | chart p95(latency) OVER by`, true, "p95(latency)", "chart p95(latency) OVER by"},
+		{"BY a field spelled over", `index=main | chart count BY over`, false, "count", "chart count BY over"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			query, err := Parse(test.source)
+			if err != nil {
+				t.Fatalf("Parse(%q): %v", test.source, err)
+			}
+			command, ok := query.Commands[len(query.Commands)-1].(*ChartCommand)
+			if !ok {
+				t.Fatalf("last command = %T, want *ChartCommand", query.Commands[len(query.Commands)-1])
+			}
+			if !command.SingleSplit() || command.SplitBy != (StatsGroupField{}) {
+				t.Fatalf("SplitBy = %#v, want the zero single-split value", command.SplitBy)
+			}
+			wantRow := test.wantRangeEnd[strings.LastIndex(test.wantRangeEnd, " ")+1:]
+			if command.Over.Name != wantRow || command.Over.Quoted {
+				t.Fatalf("Over = %#v, want %q", command.Over, wantRow)
+			}
+			if command.OverSpelledOver != test.spelledOver {
+				t.Fatalf("OverSpelledOver = %t, want %t", command.OverSpelledOver, test.spelledOver)
+			}
+			if got := test.source[command.Aggregate.Range.Start.Offset:command.Aggregate.Range.End.Offset]; got != test.aggregate {
+				t.Fatalf("aggregate source = %q, want %q", got, test.aggregate)
+			}
+			if got := test.source[command.Range.Start.Offset:command.Range.End.Offset]; got != test.wantRangeEnd {
+				t.Fatalf("command source = %q, want %q", got, test.wantRangeEnd)
+			}
+			if shape := ClassifyResultShape(query); shape.Kind != ResultKindStatistics || shape.RuntimeNamedColumns {
+				t.Fatalf("ResultShape = %#v, want a statistics table without runtime-named columns", shape)
+			}
+		})
 	}
 }
 
@@ -2450,8 +2695,15 @@ func TestParseTopRejectsUnsupportedOrMalformedSyntax(t *testing.T) {
 		{name: "negative limit", source: `index=main | top limit=-1 message`, code: "SPL_INVALID_ARGUMENT"},
 		{name: "negative positional limit", source: `index=main | top -1 message`, code: "SPL_INVALID_ARGUMENT"},
 		{name: "limit overflow", source: `index=main | top limit=18446744073709551616 message`, code: "SPL_NUMBER_OUT_OF_RANGE"},
-		{name: "by clause", source: `index=main | top message BY host`, code: "SPL_UNSUPPORTED_TOP_SYNTAX"},
-		{name: "unsupported option", source: `index=main | top showperc=false message`, code: "SPL_UNSUPPORTED_TOP_SYNTAX"},
+		{name: "unsupported option", source: `index=main | top useother=true message`, code: "SPL_UNSUPPORTED_TOP_SYNTAX"},
+		{name: "otherstr option", source: `index=main | top otherstr=rest message`, code: "SPL_UNSUPPORTED_TOP_SYNTAX"},
+		{name: "unknown option", source: `index=main | top maxrows=5 message`, code: "SPL_UNSUPPORTED_TOP_SYNTAX"},
+		{name: "repeated option", source: `index=main | top showperc=false showperc=true message`, code: "SPL_UNSUPPORTED_TOP_SYNTAX"},
+		{name: "positional and labeled limit", source: `index=main | top 5 limit=5 message`, code: "SPL_UNSUPPORTED_TOP_SYNTAX"},
+		{name: "showperc value", source: `index=main | top showperc=no message`, code: "SPL_UNSUPPORTED_TOP_SYNTAX"},
+		{name: "showcount missing value", source: `index=main | top showcount=`, code: "SPL_UNSUPPORTED_TOP_SYNTAX"},
+		{name: "countfield wildcard", source: `index=main | top countfield=c* message`, code: "SPL_UNSUPPORTED_TOP_SYNTAX"},
+		{name: "percentfield missing value", source: `index=main | top percentfield=`, code: "SPL_UNSUPPORTED_TOP_SYNTAX"},
 		{name: "wildcard field", source: `index=main | top mes*`, code: "SPL_UNSUPPORTED_TOP_SYNTAX"},
 	}
 	for _, test := range tests {
@@ -2474,8 +2726,9 @@ func TestParseTopLocatesUnsupportedOptionAfterLimit(t *testing.T) {
 	t.Parallel()
 
 	for _, source := range []string{
-		`index=main | top limit=20 showperc=false message`,
-		`index=main | top 20 showperc=false message`,
+		`index=main | top limit=20 useother=true message`,
+		`index=main | top 20 useother=true message`,
+		`index=main | top 20 showperc=false useother=true message`,
 	} {
 		_, err := Parse(source)
 		if err == nil {
@@ -2484,12 +2737,96 @@ func TestParseTopLocatesUnsupportedOptionAfterLimit(t *testing.T) {
 		diagnostic := &Diagnostic{}
 		ok := errors.As(err, &diagnostic)
 		if !ok || diagnostic.Code != "SPL_UNSUPPORTED_TOP_SYNTAX" ||
-			!strings.Contains(diagnostic.Message, `option "showperc"`) {
+			!strings.Contains(diagnostic.Message, `option "useother"`) {
 			t.Fatalf("diagnostic = %#v", err)
 		}
-		if got := source[diagnostic.Range.Start.Offset:diagnostic.Range.End.Offset]; got != "showperc" {
-			t.Fatalf("diagnostic source = %q, want showperc", got)
+		if got := source[diagnostic.Range.Start.Offset:diagnostic.Range.End.Offset]; got != "useother" {
+			t.Fatalf("diagnostic source = %q, want useother", got)
 		}
+	}
+}
+
+func TestParseFrequencyCommandsAcceptOutputOptionsAndBy(t *testing.T) {
+	t.Parallel()
+
+	type parts struct {
+		fields, by               []string
+		limit                    uint64
+		countField, percentField string
+		hideCount, hidePercent   bool
+		rangeEnd                 int
+	}
+	names := func(fields []FrequencyField) []string {
+		if len(fields) == 0 {
+			return nil
+		}
+		result := make([]string, len(fields))
+		for index, field := range fields {
+			result[index] = field.Name
+		}
+		return result
+	}
+	tests := []struct {
+		name   string
+		source string
+		want   parts
+	}{
+		{
+			name:   "by clause",
+			source: `index=main | top message BY host`,
+			want:   parts{fields: []string{"message"}, by: []string{"host"}, limit: 10, rangeEnd: 32},
+		},
+		{
+			name:   "multi field by tuple",
+			source: `index=main | rare limit=3 status, message by host, source`,
+			want:   parts{fields: []string{"status", "message"}, by: []string{"host", "source"}, limit: 3, rangeEnd: 57},
+		},
+		{
+			name:   "renamed outputs",
+			source: `index=main | top countfield=total percentfield="share" host`,
+			want:   parts{fields: []string{"host"}, limit: 10, countField: "total", percentField: "share", rangeEnd: 59},
+		},
+		{
+			name:   "hidden outputs after positional limit",
+			source: `index=main | top 5 showcount=false SHOWPERC=FALSE host`,
+			want:   parts{fields: []string{"host"}, limit: 5, hideCount: true, hidePercent: true, rangeEnd: 54},
+		},
+		{
+			name:   "explicit true keeps outputs",
+			source: `index=main | rare showcount=true showperc=true limit=0 host`,
+			want:   parts{fields: []string{"host"}, limit: 0, rangeEnd: 59},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			query, err := Parse(test.source)
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			var got parts
+			switch command := query.Commands[0].(type) {
+			case *TopCommand:
+				got = parts{
+					fields: names(command.Fields), by: names(command.By), limit: command.Limit,
+					countField: command.CountField, percentField: command.PercentField,
+					hideCount: command.HideCount, hidePercent: command.HidePercent,
+					rangeEnd: command.Range.End.Offset,
+				}
+			case *RareCommand:
+				got = parts{
+					fields: names(command.Fields), by: names(command.By), limit: command.Limit,
+					countField: command.CountField, percentField: command.PercentField,
+					hideCount: command.HideCount, hidePercent: command.HidePercent,
+					rangeEnd: command.Range.End.Offset,
+				}
+			default:
+				t.Fatalf("command = %#v", query.Commands[0])
+			}
+			if !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("parsed = %#v, want %#v", got, test.want)
+			}
+		})
 	}
 }
 
@@ -2538,10 +2875,10 @@ func TestParseRareRejectsUnsupportedOrMalformedSyntax(t *testing.T) {
 		{name: "negative limit", source: `index=main | rare limit=-1 message`, code: "SPL_INVALID_ARGUMENT"},
 		{name: "negative positional limit", source: `index=main | rare -1 message`, code: "SPL_INVALID_ARGUMENT"},
 		{name: "limit overflow", source: `index=main | rare limit=18446744073709551616 message`, code: "SPL_NUMBER_OUT_OF_RANGE"},
-		{name: "by clause", source: `index=main | rare message BY host`, code: "SPL_UNSUPPORTED_RARE_SYNTAX"},
-		{name: "unsupported option", source: `index=main | rare showperc=false message`, code: "SPL_UNSUPPORTED_RARE_SYNTAX"},
+		{name: "unsupported option", source: `index=main | rare useother=true message`, code: "SPL_UNSUPPORTED_RARE_SYNTAX"},
 		{name: "wildcard field", source: `index=main | rare mes*`, code: "SPL_UNSUPPORTED_RARE_SYNTAX"},
 		{name: "trailing option", source: `index=main | rare message limit=5`, code: "SPL_UNSUPPORTED_RARE_SYNTAX"},
+		{name: "trailing by option", source: `index=main | rare message BY host showperc=false`, code: "SPL_UNSUPPORTED_RARE_SYNTAX"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -2658,5 +2995,69 @@ func assertParseDiagnosticCode(t *testing.T, source, code string) {
 	ok := errors.As(err, &diagnostic)
 	if !ok || diagnostic.Code != code {
 		t.Fatalf("Parse(%q) error = %#v, want %s", source, err, code)
+	}
+}
+
+func TestParseTimechartSeriesOptionsInEitherPosition(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		source  string
+		want    TimechartOptions
+		wantEnd string
+	}{
+		{
+			"leading options",
+			`index=main | timechart span=1h limit=5 useother=false usenull=false count BY host`,
+			TimechartOptions{Limit: 5, LimitSpecified: true, UseOtherSpecified: true, UseNullSpecified: true},
+			"host",
+		},
+		{
+			"trailing options",
+			`index=main | timechart span=1h count BY host limit=3 useother=true usenull=false`,
+			TimechartOptions{Limit: 3, LimitSpecified: true, UseOther: true, UseOtherSpecified: true, UseNullSpecified: true},
+			"usenull=false",
+		},
+		{
+			"split across positions",
+			`index=main | timechart limit=10 span=1h sum(bytes) BY host USEOTHER=FALSE`,
+			TimechartOptions{Limit: 10, LimitSpecified: true, UseOtherSpecified: true},
+			"USEOTHER=FALSE",
+		},
+		{"no options", `index=main | timechart span=1h count BY host`, TimechartOptions{}, "host"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			query, err := Parse(test.source)
+			if err != nil {
+				t.Fatalf("Parse(%q): %v", test.source, err)
+			}
+			command, ok := query.Commands[len(query.Commands)-1].(*TimechartCommand)
+			if !ok {
+				t.Fatalf("last command = %T, want *TimechartCommand", query.Commands[len(query.Commands)-1])
+			}
+			if command.SplitBy == nil || command.SplitBy.Name != "host" {
+				t.Fatalf("SplitBy = %#v, want host", command.SplitBy)
+			}
+			got := command.Options
+			for name, sourceRange := range map[string]*Range{"limit": &got.LimitRange, "useother": &got.UseOtherRange, "usenull": &got.UseNullRange} {
+				if *sourceRange == (Range{}) {
+					continue
+				}
+				text := strings.ToLower(test.source[sourceRange.Start.Offset:sourceRange.End.Offset])
+				if !strings.HasPrefix(text, name+"=") {
+					t.Fatalf("%s range covers %q", name, text)
+				}
+				*sourceRange = Range{}
+			}
+			if got != test.want {
+				t.Fatalf("Options = %#v, want %#v", got, test.want)
+			}
+			if commandText := test.source[command.Range.Start.Offset:command.Range.End.Offset]; !strings.HasSuffix(commandText, test.wantEnd) {
+				t.Fatalf("command source = %q, want it to end with %q", commandText, test.wantEnd)
+			}
+		})
 	}
 }

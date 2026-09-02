@@ -70,7 +70,7 @@ func ClassifyResultShape(query *Query) ResultShape {
 		case *ChartCommand:
 			result = ResultShape{
 				Kind:                ResultKindStatistics,
-				RuntimeNamedColumns: true,
+				RuntimeNamedColumns: !command.SingleSplit(),
 			}
 		default:
 			return ResultShape{}

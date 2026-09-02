@@ -788,11 +788,16 @@ type DedupField struct {
 }
 
 // DedupCommand retains the first Count rows for each complete key tuple in
-// the ordering established by the preceding pipeline.
+// the ordering established by the preceding pipeline, or by SortBy when the
+// sortby clause is present. Consecutive restricts removal to rows whose key
+// tuple repeats the immediately preceding retained-eligible row.
 type DedupCommand struct {
-	Count  uint64
-	Fields []DedupField
-	Range  Range
+	Count       uint64
+	Fields      []DedupField
+	Consecutive bool
+	SortBy      []SortField
+	SortByRange Range
+	Range       Range
 }
 
 func (*DedupCommand) command()             {}
@@ -819,13 +824,19 @@ const MaximumFrequencyFields = MaximumStatsGroupFields
 // tuple representation.
 type FrequencyField = StatsGroupField
 
-// TopCommand returns the most frequent scalar tuples for one or more fields.
-// Its compatibility slice keeps Splunk's default count and percent output
-// fields while rejecting BY and output-renaming options.
+// TopCommand returns the most frequent scalar tuples for one or more fields,
+// optionally per BY group. CountField and PercentField rename the generated
+// outputs when non-empty; HideCount and HidePercent record showcount=false and
+// showperc=false so a zero-value command keeps Splunk's default outputs.
 type TopCommand struct {
-	Fields []FrequencyField
-	Limit  uint64
-	Range  Range
+	Fields       []FrequencyField
+	By           []FrequencyField
+	Limit        uint64
+	CountField   string
+	PercentField string
+	HideCount    bool
+	HidePercent  bool
+	Range        Range
 }
 
 func (*TopCommand) command()             {}
@@ -833,11 +844,16 @@ func (*TopCommand) Name() string         { return "top" }
 func (c *TopCommand) SourceRange() Range { return c.Range }
 
 // RareCommand returns the least frequent scalar tuples for one or more fields.
-// It has the same deliberately bounded compatibility surface as TopCommand.
+// It has the same option surface as TopCommand.
 type RareCommand struct {
-	Fields []FrequencyField
-	Limit  uint64
-	Range  Range
+	Fields       []FrequencyField
+	By           []FrequencyField
+	Limit        uint64
+	CountField   string
+	PercentField string
+	HideCount    bool
+	HidePercent  bool
+	Range        Range
 }
 
 func (*RareCommand) command()             {}
@@ -1227,7 +1243,30 @@ type TimechartCommand struct {
 	Span      TimeSpan
 	Aggregate StatsAggregate
 	SplitBy   *StatsGroupField
+	Options   TimechartOptions
 	Range     Range
+}
+
+// MaximumTimechartSeriesLimit bounds timechart limit=N: the ordinary split
+// series a chart may retain before the remainder collapses into OTHER. It is
+// Splunk's default of 10 and, with the NULL and OTHER series, fills the
+// backend's runtime series allowance.
+const MaximumTimechartSeriesLimit = 10
+
+// TimechartOptions preserves the authored split-series options and their
+// source locations. Unspecified options are zero-valued and distinct from an
+// explicitly authored false; the planner applies Splunk's defaults limit=10,
+// useother=true, and usenull=true.
+type TimechartOptions struct {
+	Limit             uint64
+	LimitSpecified    bool
+	LimitRange        Range
+	UseOther          bool
+	UseOtherSpecified bool
+	UseOtherRange     Range
+	UseNull           bool
+	UseNullSpecified  bool
+	UseNullRange      Range
 }
 
 func (*TimechartCommand) command()             {}
@@ -1238,14 +1277,17 @@ func (c *TimechartCommand) SourceRange() Range { return c.Range }
 // value of the row split and one runtime series per retained value of the
 // column split. Aggregate retains the same source-located representation used
 // by stats and timechart. The bounded compatibility surface supports one
-// argument-free count or one exact-field count/percentile/sum/average plus two
-// distinct split fields, and is a terminal transforming command.
+// argument-free count or one exact-field count/percentile/sum/average plus one
+// or two distinct split fields, and is a terminal transforming command. With a
+// single split field the command is the stats BY table of that field.
 type ChartCommand struct {
 	Aggregate StatsAggregate
 	// Over is Splunk's row-split field: the first output column.
 	Over StatsGroupField
 	// SplitBy is Splunk's column-split field: its runtime values become the
-	// remaining output column names.
+	// remaining output column names. It is zero-valued for the single-split
+	// forms "OVER <row>" and "BY <row>", whose only other column is the
+	// aggregate output.
 	SplitBy StatsGroupField
 	// OverSpelledOver records whether the user wrote OVER <row> BY <column>
 	// rather than the equivalent BY <row>, <column>. Both spellings describe
@@ -1258,6 +1300,10 @@ type ChartCommand struct {
 func (*ChartCommand) command()             {}
 func (*ChartCommand) Name() string         { return "chart" }
 func (c *ChartCommand) SourceRange() Range { return c.Range }
+
+// SingleSplit reports whether the command names only a row split field and
+// therefore produces the stats BY table instead of a runtime-named pivot.
+func (c *ChartCommand) SingleSplit() bool { return c.SplitBy == (StatsGroupField{}) }
 
 // MaximumDiagnosticSuggestions bounds the suggestion list carried by any
 // diagnostic. Stored search history, knowledge validation results, and the
