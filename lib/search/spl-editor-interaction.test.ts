@@ -128,9 +128,49 @@ test("completion insertion starts a new pipeline stage when the caret is not on 
   );
 });
 
+test("completion insertion replaces the field or value fragment under the caret", () => {
+  assert.deepEqual(
+    insertCompletionIntoQuery("index=main method=G", 19, 19, { insertion: "\"GET\"", kind: "value" }),
+    { query: "index=main method=\"GET\"", caret: 23 },
+  );
+  assert.deepEqual(
+    insertCompletionIntoQuery("index=ma", 8, 8, { insertion: "main", kind: "index" }),
+    { query: "index=main", caret: 10 },
+  );
+  assert.deepEqual(
+    insertCompletionIntoQuery("index=main | stats count by ho", 30, 30, { insertion: "host", kind: "field" }),
+    { query: "index=main | stats count by host", caret: 32 },
+  );
+  assert.deepEqual(
+    insertCompletionIntoQuery("inde", 4, 4, { insertion: "index", kind: "field" }),
+    { query: "index", caret: 5 },
+  );
+});
+
+test("a command completion outside command position still starts a new stage", () => {
+  // The value fragment `main` is not a command being typed, so a command
+  // offered there opens a stage instead of overwriting the value.
+  assert.deepEqual(
+    insertCompletionIntoQuery("index=main", 10, 10, { insertion: "stats count", kind: "command" }),
+    { query: "index=main\n| stats count", caret: 24 },
+  );
+  assert.deepEqual(
+    insertCompletionIntoQuery("index=main | stats count by ho", 30, 30, { insertion: "head 5", kind: "command" }),
+    { query: "index=main | stats count by ho\n| head 5", caret: 39 },
+  );
+});
+
+test("a non-command completion with nothing to replace is spliced at the caret", () => {
+  assert.deepEqual(
+    insertCompletionIntoQuery("index=main | head 5 ", 20, 20, { insertion: "host", kind: "field" }),
+    { query: "index=main | head 5 host", caret: 24 },
+  );
+});
+
 test("completion insertion refuses to edit inside a quoted value", () => {
   const query = `index=main | search message="serv`;
   assert.equal(insertCompletionIntoQuery(query, query.length, query.length, { insertion: "stats" }), null);
+  assert.equal(insertCompletionIntoQuery(query, query.length, query.length, { insertion: "\"server\"", kind: "value" }), null);
 });
 
 test("recallable history drops blanks and repeats while keeping newest-first order", () => {

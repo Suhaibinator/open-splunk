@@ -9,6 +9,7 @@ import type {
 import { useEffect, useRef, useState } from "react";
 
 import { resolveAbsoluteTimeRange } from "@/lib/search/backend-data";
+import type { EditorProblem } from "@/lib/search/spl-diagnostic-markers";
 import type { SplDiagnostic } from "@/lib/search/spl-editor";
 
 import { installModalSurface } from "../../_components/modal-surface";
@@ -26,7 +27,6 @@ interface SearchComposerProps {
   backendTimeSyntax: boolean;
   completionIndex: number;
   completionOpen: boolean;
-  diagnostic: SplDiagnostic | null;
   draftTimeRange: TimeRange;
   editorFocused: boolean;
   editorLineCount: number;
@@ -39,6 +39,8 @@ interface SearchComposerProps {
   isRunning: boolean;
   launchPending: boolean;
   modal: ModalName | null;
+  /** The problems list under the editor; empty renders nothing. */
+  problems: EditorProblem[];
   query: string;
   relativeAmount: number;
   relativeUnit: "m" | "h" | "d";
@@ -53,6 +55,7 @@ interface SearchComposerProps {
   onCompletionIndexChange: Dispatch<SetStateAction<number>>;
   onCompletionOpenChange: Dispatch<SetStateAction<boolean>>;
   onDiagnosticFix: (diagnostic: SplDiagnostic) => void;
+  onDiagnosticFocus: (offset: number) => void;
   onDraftTimeRangeChange: Dispatch<SetStateAction<TimeRange>>;
   onEditorCaretChange: (position: number) => void;
   onEditorChange: (event: ChangeEvent<HTMLTextAreaElement>) => void;
@@ -75,7 +78,6 @@ export function SearchComposer({
   backendTimeSyntax,
   completionIndex,
   completionOpen,
-  diagnostic,
   draftTimeRange,
   editorFocused,
   editorLineCount,
@@ -88,6 +90,7 @@ export function SearchComposer({
   isRunning,
   launchPending,
   modal,
+  problems,
   query,
   relativeAmount,
   relativeUnit,
@@ -102,6 +105,7 @@ export function SearchComposer({
   onCompletionIndexChange,
   onCompletionOpenChange,
   onDiagnosticFix,
+  onDiagnosticFocus,
   onDraftTimeRangeChange,
   onEditorCaretChange,
   onEditorChange,
@@ -164,7 +168,6 @@ export function SearchComposer({
         <SearchEditor
           completionIndex={completionIndex}
           completionOpen={completionOpen}
-          diagnostic={diagnostic}
           editorFocused={editorFocused}
           editorLineCount={editorLineCount}
           editorRef={editorRef}
@@ -175,9 +178,11 @@ export function SearchComposer({
           historyRecallable={historyRecallable}
           launchPending={launchPending}
           modal={modal}
+          problems={problems}
           query={query}
           onCompletionIndexChange={onCompletionIndexChange}
           onCompletionOpenChange={onCompletionOpenChange}
+          onDiagnosticFocus={onDiagnosticFocus}
           onEditorCaretChange={onEditorCaretChange}
           onEditorChange={onEditorChange}
           onEditorFocusedChange={onEditorFocusedChange}
@@ -315,12 +320,39 @@ export function SearchComposer({
         </Button>
       </section>
 
-      {diagnostic === null ? null : (
-        <div className="diagnostic-strip" id="editor-diagnostic" role="alert" data-testid="search-diagnostic">
-          <StatusIcon tone="error" icon="warning" />
-          <span><strong>{diagnostic.message}</strong><small>Line {diagnostic.line}, column {diagnostic.column} · {diagnostic.suggestion}</small></span>
-          {diagnostic.actionLabel === undefined ? null : <button type="button" onClick={() => onDiagnosticFix(diagnostic)}>{diagnostic.actionLabel}</button>}
-        </div>
+      {problems.length === 0 ? null : (
+        <section className="diagnostic-problems" aria-labelledby="editor-problems-title" data-testid="search-diagnostics">
+          <h2 className="sr-only" id="editor-problems-title">Problems in the search</h2>
+          <ul>
+            {problems.map(({ diagnostic, fix, stale }) => (
+              <li
+                data-severity={diagnostic.severity}
+                data-stale={stale ? "true" : undefined}
+                key={`${diagnostic.code}:${diagnostic.range?.start ?? "none"}:${diagnostic.message}`}
+              >
+                <StatusIcon tone={diagnostic.severity} icon="warning" />
+                <button
+                  className="diagnostic-problem"
+                  type="button"
+                  disabled={stale || diagnostic.range === null}
+                  onClick={() => {
+                    if (diagnostic.range !== null) onDiagnosticFocus(diagnostic.range.start);
+                  }}
+                >
+                  <strong>{diagnostic.message}</strong>
+                  <small>
+                    {[
+                      diagnostic.range === null ? undefined : `Line ${diagnostic.range.line}, column ${diagnostic.range.column}`,
+                      ...diagnostic.suggestions,
+                      stale ? "From the previous run; the search has changed since." : undefined,
+                    ].filter((part) => part !== undefined).join(" · ")}
+                  </small>
+                </button>
+                {fix?.actionLabel === undefined ? null : <button className="diagnostic-fix" type="button" onClick={() => onDiagnosticFix(fix)}>{fix.actionLabel}</button>}
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
     </>
   );

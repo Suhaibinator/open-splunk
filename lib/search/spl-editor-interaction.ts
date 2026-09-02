@@ -1,4 +1,4 @@
-import { completionContextAt, isCursorInQuotedValue } from "./spl-editor";
+import { type CompletionKind, completionContextAt, isCursorInQuotedValue } from "./spl-editor";
 
 // Pure decisions behind the SPL editor's key handling. The workspace component
 // owns the DOM, timers and React state; everything here takes plain values and
@@ -51,6 +51,8 @@ export function nextCompletionIndex(current: number, delta: 1 | -1, count: numbe
 
 export interface CompletionInsertion {
   insertion: string;
+  /** Defaults to `command`, the only kind the popup offered before it grouped. */
+  kind?: CompletionKind;
   replaceStart?: number;
   replaceEnd?: number;
 }
@@ -62,9 +64,11 @@ export interface EditedQuery {
 
 /**
  * Splices a completion into the query. A server-supplied replacement range wins;
- * otherwise the fragment under the caret is replaced, and with no fragment the
- * completion starts a new pipeline stage on its own line. Returns null when the
- * caret sits inside a quoted value, where no completion applies.
+ * otherwise the fragment under the caret is replaced -- a command only when the
+ * caret is in command position, anything else wherever it was typed -- and with
+ * no fragment to replace a command starts a new pipeline stage on its own line.
+ * Returns null when the caret sits inside a quoted value, where no completion
+ * applies.
  */
 export function insertCompletionIntoQuery(
   query: string,
@@ -84,7 +88,8 @@ export function insertCompletionIntoQuery(
       caret: replaceStart + insertion.length,
     };
   }
-  if (context !== null) {
+  const kind = completion.kind ?? "command";
+  if (context !== null && (kind !== "command" || context.stage === "command")) {
     return {
       query: `${query.slice(0, context.fragmentStart)}${insertion}${query.slice(Math.max(context.fragmentEnd, selectionEnd))}`,
       caret: context.fragmentStart + insertion.length,
@@ -92,6 +97,9 @@ export function insertCompletionIntoQuery(
   }
   const before = query.slice(0, selectionStart);
   const after = query.slice(selectionEnd);
+  if (kind !== "command") {
+    return { query: `${before}${insertion}${after}`, caret: before.length + insertion.length };
+  }
   const separator = before.length === 0 || before.endsWith("\n") ? "" : "\n";
   const inserted = `${separator}| ${insertion}`;
   return {
