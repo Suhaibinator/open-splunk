@@ -114,6 +114,7 @@ func TestCompatibilityCorpusParserExpectations(t *testing.T) {
 		"SPL_UNSUPPORTED_STATS_AGGREGATE":   {},
 		"SPL_UNSUPPORTED_TOSTRING_FORMAT":   {},
 		"SPL_UNSUPPORTED_TRIM_CHARACTERS":   {},
+		"SPL_UNSUPPORTED_CALENDAR_SPAN":     {},
 		"SPL_UNTERMINATED_FIELD_QUOTE":      {},
 	}
 
@@ -160,6 +161,10 @@ func TestCompatibilityCorpusParserExpectations(t *testing.T) {
 						len(diagnostic.Suggestions),
 						spl.MaximumDiagnosticSuggestions,
 					)
+				}
+				if suggestion, present := compatibilityExpectedString(testCase, "suggestion"); present &&
+					!slices.Contains(diagnostic.Suggestions, suggestion) {
+					t.Fatalf("diagnostic suggestions = %q, want %q", diagnostic.Suggestions, suggestion)
 				}
 			})
 		}
@@ -344,6 +349,7 @@ func requireExpressionCorpusCoverage(t *testing.T, corpus compatibilityCorpus) {
 		"SPL-EXPRESSION-LIMITS-001":      {"operator 256", "operator 257", "unary chain 33", "membership aggregate 257", "forged cycle", "node SQL 64KiB"},
 		"SPL-SECURITY-001":               {"calculated index does not widen", "bound literal", "no expansion"},
 		"SPL-EXPRESSION-DIAGNOSTICS-001": {"string plus", "unterminated field quote", "candidate overflow", "Boolean assignment"},
+		"SPL-CALENDAR-SPAN-001":          {"spring daylight-saving day", "fall daylight-saving day", "UTC day", "Sunday week across year", "multi-day rejected", "multi-week rejected"},
 	}
 
 	byRule := make(map[string]map[string]struct{}, len(corpus.Rules))

@@ -1,0 +1,21 @@
+-- official SPL case: timechart.span-day
+-- source: https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/timechart (Syntax)
+-- query: index=main | timechart span=1d count
+-- output_fields: _time, count
+-- sparse_fields: false subset=false
+-- timechart: clickhouse.TimechartOutput{Mode:0x1, FirstBucket:time.Date(2026, time.July, 21, 0, 0, 0, 0, time.UTC), Span:0, Calendar:true, BucketCount:0x1, MaxSeries:0x1, MaxLabelBytes:0x0, ValueField:"", ValueKind:0x0}
+-- atomic_result: false
+-- execution_authority_digest: 103c714ee7b31b92ce4ea328a314ae32335e49de1c9dcc2de2345e17549be157
+-- args[0]: "tenant-1"
+-- args[1]: "main"
+-- args[2]: "2026-07-21 00:00:00.000000000"
+-- args[3]: "2026-07-22 00:00:00.000000000"
+-- args[4]: "2026-07-22 00:00:01.000"
+-- args[5]: "2026-07-22 00:00:01.000"
+-- args[6]: 0x49
+-- args[7]: "main"
+-- args[8]: "UTC"
+-- args[9]: "2026-07-21 00:00:00.000000000"
+-- args[10]: "UTC"
+-- args[11]: 0x1
+WITH "__os_timechart_source" AS (SELECT "_time" AS "__os_tc_event_time" FROM (SELECT * FROM (SELECT "event_id" AS "event_id", "index_name" AS "index", "event_time" AS "_time", "index_time" AS "_indextime", "host" AS "host", "source" AS "source", "sourcetype" AS "sourcetype", "service" AS "service", "severity" AS "severity", "level" AS "level", "body" AS "message", "raw" AS "_raw", "raw_encoding" AS "__os_raw_encoding", "trace_id" AS "trace_id", "span_id" AS "span_id", "collector_id" AS "collector_id", "batch_id" AS "batch_id", "fields" AS "__os_fields", "field_names" AS "__os_field_names", "field_types" AS "__os_field_types", "field_metadata_version" AS "__os_field_metadata_version", "event_time" AS "__os_sort_time", "event_id" AS "__os_sort_event_id", "visibility_seq" AS "__os_sort_visibility_seq", tuple("index_name", "collector_id", "batch_sequence", "batch_id") AS "__os_sort_source_identity" FROM "open_splunk"."events" WHERE "tenant_id" = ? AND "index_name" IN (?) AND "event_time" >= parseDateTime64BestEffort(?, 9, 'UTC') AND "event_time" < parseDateTime64BestEffort(?, 9, 'UTC') AND "index_time" <= parseDateTime64BestEffort(?, 3, 'UTC') AND "expires_at" > parseDateTime64BestEffort(?, 3, 'UTC') AND "visibility_seq" <= ?) AS "_stage_1" WHERE (1 AND ifNull("index" = ?, 0))) AS "_stage_2"), "__os_timechart_group_counts" AS (SELECT toDateTime64(toTimeZone(toStartOfDay(toTimeZone("__os_tc_event_time", ?)), 'UTC'), 9, 'UTC') AS "__os_tc_bucket_number", count() AS "__os_timechart_count" FROM "__os_timechart_source" GROUP BY "__os_tc_bucket_number"), "__os_timechart_grid" AS (SELECT toUInt64(tupleElement("__os_calendar_grid_item", 1)) AS "__os_timechart_ordinal", toTimeZone(tupleElement("__os_calendar_grid_item", 2), 'UTC') AS "__os_tc_bucket_number" FROM (SELECT arrayJoin(arrayMap(i -> (toUInt64(i), addDays(toTimeZone(toDateTime64(?, 9, 'UTC'), ?), i)), range(?))) AS "__os_calendar_grid_item")) SELECT "__os_timechart_grid"."__os_timechart_ordinal" AS "__os_timechart_ordinal", "__os_timechart_grid"."__os_tc_bucket_number" AS "__os_timechart_bucket", ifNull("__os_timechart_group_counts"."__os_timechart_count", toUInt64(0)) AS "__os_timechart_count" FROM "__os_timechart_grid" LEFT JOIN "__os_timechart_group_counts" ON "__os_timechart_group_counts"."__os_tc_bucket_number" = "__os_timechart_grid"."__os_tc_bucket_number" ORDER BY "__os_timechart_grid"."__os_timechart_ordinal" ASC

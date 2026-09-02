@@ -312,19 +312,19 @@ func TestAnalyzeAcceptsValidAndRejectsForgedTimechartSumAndAverageMeasures(t *te
 	for _, function := range []AggregateFunction{AggregateFunctionSum, AggregateFunctionAverage} {
 		valid := AggregateMeasure{Function: function, Input: input, Output: "result"}
 		if _, err := Analyze(&Query{Operators: []Operator{&Timechart{
-			Time: timeField, Measure: valid,
+			Time: timeField, Measure: valid, Span: time.Minute,
 		}}}); err != nil {
 			t.Fatalf("Analyze(valid %v): %v", function, err)
 		}
 		if _, err := Analyze(&Query{Operators: []Operator{&Timechart{
-			Time: timeField, Measure: valid, Split: validSplit(splitField),
+			Time: timeField, Measure: valid, Split: validSplit(splitField), Span: time.Minute,
 		}}}); err != nil {
 			t.Fatalf("Analyze(valid split %v): %v", function, err)
 		}
 		// limit=N, useother=false, and usenull=false are authored series
 		// options, so the narrowed split shapes are valid plans.
 		if _, err := Analyze(&Query{Operators: []Operator{&Timechart{
-			Time: timeField, Measure: valid, Split: func() *TimechartSplit {
+			Time: timeField, Measure: valid, Span: time.Minute, Split: func() *TimechartSplit {
 				got := validSplit(splitField)
 				got.SeriesLimit = 1
 				got.IncludeNull = false
@@ -361,7 +361,7 @@ func TestAnalyzeAcceptsValidAndRejectsForgedTimechartSumAndAverageMeasures(t *te
 		for _, test := range tests {
 			t.Run(test.name, func(t *testing.T) {
 				_, err := Analyze(&Query{Operators: []Operator{&Timechart{
-					Time: timeField, Measure: test.measure, Split: test.split,
+					Time: timeField, Measure: test.measure, Split: test.split, Span: time.Minute,
 				}}})
 				if err == nil {
 					t.Fatal("Analyze succeeded, want forged timechart rejection")

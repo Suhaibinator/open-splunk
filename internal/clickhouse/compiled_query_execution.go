@@ -205,6 +205,12 @@ func sealFinalCompiledQueryContext(
 	if err := ctx.Err(); err != nil {
 		return CompiledQuery{}, err
 	}
+	if compiled.Timechart != nil &&
+		!validTimechartOutputSpanContract(compiled.Timechart) {
+		return CompiledQuery{}, errors.New(
+			"seal compiled ClickHouse execution: timechart calendar and fixed span contract is invalid",
+		)
+	}
 	if len(lookupPreparations) > 1 {
 		return CompiledQuery{}, errors.New(
 			"seal compiled ClickHouse execution: multiple lookup preparations",
@@ -680,6 +686,12 @@ func compiledExecutionDigestContext(
 			return compiledExecutionSeal{}, false, nil
 		}
 		writeInt64(digest, int64(compiled.Timechart.Span))
+		if compiled.Timechart.Calendar {
+			// False keeps the established fixed-grid digest byte-for-byte. The
+			// calendar-only marker still seals both transitions because adding or
+			// removing it changes the digest.
+			writeBool(digest, true)
+		}
 		writeUint64(digest, compiled.Timechart.BucketCount)
 		writeUint64(digest, uint64(compiled.Timechart.MaxSeries))
 		writeUint64(digest, uint64(compiled.Timechart.MaxLabelBytes))

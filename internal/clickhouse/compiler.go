@@ -53,7 +53,11 @@ const (
 	// ClickHouse's practical lower bound even though every selected event is
 	// representable.
 	TimechartOrdinalColumn = "__os_timechart_ordinal"
-	TimechartCountColumn   = "__os_timechart_count"
+	// TimechartBucketColumn is present only for a calendar timechart. Fixed
+	// grids keep their established ordinal-only transport, while calendar grids
+	// carry the exact UTC boundary produced by ClickHouse's timezone database.
+	TimechartBucketColumn = "__os_timechart_bucket"
+	TimechartCountColumn  = "__os_timechart_count"
 	// The fixed-value transport is deliberately distinct from the count
 	// transport. Its nullable value and repeated upstream-presence proof let the
 	// executor distinguish a real all-ineligible input (publish a null grid)
@@ -615,9 +619,12 @@ func (kind TimechartValueKind) Valid() bool {
 // results because their public fields are predetermined or selected by split
 // values.
 type TimechartOutput struct {
-	Mode          TimechartMode
-	FirstBucket   time.Time
-	Span          time.Duration
+	Mode        TimechartMode
+	FirstBucket time.Time
+	Span        time.Duration
+	// Calendar selects the private exact-boundary transport. It is mutually
+	// exclusive with a positive fixed Span and is covered by the execution seal.
+	Calendar      bool
 	BucketCount   uint64
 	MaxSeries     uint16
 	MaxLabelBytes uint16
@@ -626,6 +633,12 @@ type TimechartOutput struct {
 	// aggregate validation policy instead of trusting mutable OutputFields alone.
 	ValueField string
 	ValueKind  TimechartValueKind
+}
+
+func validTimechartOutputSpanContract(output *TimechartOutput) bool {
+	return output != nil &&
+		((output.Calendar && output.Span == 0) ||
+			(!output.Calendar && output.Span > 0))
 }
 
 // timechartSplitMaxSeries is the runtime series allowance a timechart split
@@ -2361,6 +2374,11 @@ func wrapCompiledChronologicalValidation(
 			)
 		}
 	case compiled.Timechart != nil && compiled.Chart == nil:
+		if !validTimechartOutputSpanContract(compiled.Timechart) {
+			return CompiledQuery{}, errors.New(
+				"compile ClickHouse query: timechart calendar and fixed span contract is invalid",
+			)
+		}
 		switch compiled.Timechart.Mode {
 		case TimechartModeFixedCount:
 			resultColumns = []string{TimechartOrdinalColumn, TimechartCountColumn}
@@ -2394,6 +2412,13 @@ func wrapCompiledChronologicalValidation(
 		default:
 			return CompiledQuery{}, errors.New(
 				"compile ClickHouse query: timechart output mode is invalid",
+			)
+		}
+		if compiled.Timechart.Calendar {
+			resultColumns = slices.Insert(
+				resultColumns,
+				1,
+				TimechartBucketColumn,
 			)
 		}
 	default:
@@ -2749,8 +2774,18 @@ func compileTimeBucket(
 	if operator.Field.Name != "_time" || !operator.Field.Canonical {
 		return compiledRelation{}, compileState{}, nil, errors.New("compile ClickHouse time bucket: canonical _time field is required")
 	}
-	if operator.Span < time.Second || operator.Span >= 24*time.Hour || operator.Span%time.Second != 0 {
-		return compiledRelation{}, compileState{}, nil, errors.New("compile ClickHouse time bucket: fixed span must be at least one second and shorter than 24 hours")
+	calendar := operator.Calendar != plan.CalendarNone
+	if calendar {
+		if operator.Span != 0 ||
+			(operator.Calendar != plan.CalendarDay &&
+				operator.Calendar != plan.CalendarWeek) {
+			return compiledRelation{}, compileState{}, nil, errors.New(
+				"compile ClickHouse time bucket: calendar span is invalid",
+			)
+		}
+	} else if operator.Span < time.Second || operator.Span > 24*time.Hour ||
+		operator.Span%time.Second != 0 {
+		return compiledRelation{}, compileState{}, nil, errors.New("compile ClickHouse time bucket: fixed span must be from one second through 24 hours")
 	}
 	if !state.eventRows {
 		return compiledRelation{}, compileState{}, nil, &plan.Diagnostic{
@@ -2774,26 +2809,66 @@ func compileTimeBucket(
 	if scan == nil || !SupportsSearchTimeRange(scan.Earliest, scan.Latest) {
 		return compiledRelation{}, compileState{}, nil, errors.New("compile ClickHouse time bucket: scan range is invalid")
 	}
-	spanNanoseconds := int64(operator.Span)
-	firstBucketTicks := floorBucketTicks(scan.Earliest.UnixNano(), spanNanoseconds)
-	if firstBucketTicks < MinimumSearchTime().UnixNano() {
-		return compiledRelation{}, compileState{}, nil, &plan.Diagnostic{
-			Code:    "SPL_UNSUPPORTED_BIN_TIME_RANGE",
-			Message: "the first epoch-aligned bin falls before the supported timestamp range",
-			Range:   operator.Range,
-			Suggestions: []string{
-				"use a smaller fixed span",
-				"move the search earliest time forward",
-			},
+	var value string
+	var valueArgs []any
+	if calendar {
+		if state.context == nil {
+			return compiledRelation{}, compileState{}, nil, errors.New(
+				"compile ClickHouse time bucket: search timezone is required",
+			)
 		}
-	}
+		if err := validateCompileContextSearchTimezone(state.context); err != nil {
+			return compiledRelation{}, compileState{}, nil, err
+		}
+		location, err := ianatimezone.Load(state.context.searchTimezone)
+		if err != nil {
+			return compiledRelation{}, compileState{}, nil, err
+		}
+		firstBucket := calendarBoundary(
+			scan.Earliest,
+			operator.Calendar,
+			location,
+		).UTC()
+		if firstBucket.Before(MinimumSearchTime()) {
+			return compiledRelation{}, compileState{}, nil, &plan.Diagnostic{
+				Code:    "SPL_UNSUPPORTED_BIN_TIME_RANGE",
+				Message: "the first calendar bin falls before the supported timestamp range",
+				Range:   operator.Range,
+				Suggestions: []string{
+					"move the search earliest time forward",
+					"use a fixed span shorter than 24 hours",
+				},
+			}
+		}
+		value = calendarBucketKeySQL(field.valueSQL, operator.Calendar)
+		valueArgs = appendCalendarBucketKeyArgs(
+			nil,
+			operator.Calendar,
+			state.context.searchTimezone,
+		)
+	} else {
+		spanNanoseconds := int64(operator.Span)
+		firstBucketTicks := floorBucketTicks(scan.Earliest.UnixNano(), spanNanoseconds)
+		if firstBucketTicks < MinimumSearchTime().UnixNano() {
+			return compiledRelation{}, compileState{}, nil, &plan.Diagnostic{
+				Code:    "SPL_UNSUPPORTED_BIN_TIME_RANGE",
+				Message: "the first epoch-aligned bin falls before the supported timestamp range",
+				Range:   operator.Range,
+				Suggestions: []string{
+					"use a smaller fixed span",
+					"move the search earliest time forward",
+				},
+			}
+		}
 
-	ticks := "reinterpretAsInt64(" + field.valueSQL + ")"
-	bucketTicks := "(" + epochFloorBucketNumberSQL(ticks) + ") * ?"
-	value := "fromUnixTimestamp64Nano(" + bucketTicks + ", 'UTC')"
+		ticks := "reinterpretAsInt64(" + field.valueSQL + ")"
+		bucketTicks := "(" + epochFloorBucketNumberSQL(ticks) + ") * ?"
+		value = "fromUnixTimestamp64Nano(" + bucketTicks + ", 'UTC')"
+		valueArgs = []any{spanNanoseconds, spanNanoseconds, spanNanoseconds}
+	}
 	fragment, next := compileBucketProjection(relation.sql, state, operator.Field.Name, operator.Output, value, field, alias)
 	relation = relation.selectFrom(fragment, operator.Range)
-	return relation, next, []any{spanNanoseconds, spanNanoseconds, spanNanoseconds}, nil
+	return relation, next, valueArgs, nil
 }
 
 func compileNumericBucket(
@@ -4119,28 +4194,45 @@ func compileTimechart(
 	if err := validateTimechartMeasure(operator, state); err != nil {
 		return CompiledQuery{}, err
 	}
-	if operator.Span < time.Second || operator.Span > 24*time.Hour || operator.Span%time.Second != 0 || operator.FirstBucket.Nanosecond() != 0 ||
-		operator.FirstBucket.IsZero() || operator.BucketCount == 0 || operator.BucketCount > 10_000 || !operator.FixedRange ||
+	if operator.FirstBucket.Nanosecond() != 0 || operator.FirstBucket.IsZero() ||
+		operator.BucketCount == 0 || operator.BucketCount > 10_000 || !operator.FixedRange ||
 		!operator.Continuous || !operator.IncludePartial {
 		return CompiledQuery{}, errors.New("compile ClickHouse timechart: bounded defaults are invalid")
 	}
 	if scan == nil {
 		return CompiledQuery{}, errors.New("compile ClickHouse timechart: Scan snapshot is required")
 	}
-	spanSeconds := int64(operator.Span / time.Second)
-	spanNanoseconds, err := validateFixedTimeGridSpec(TimelineSpec{
-		FirstBucket: operator.FirstBucket,
-		SpanSeconds: spanSeconds,
-		BucketCount: operator.BucketCount,
-		Earliest:    scan.Earliest,
-		Latest:      scan.Latest,
-	}, "timechart")
+	var gridSpec timechartGridSpec
+	var err error
+	switch operator.Calendar {
+	case plan.CalendarNone:
+		if operator.Span < time.Second || operator.Span > 24*time.Hour ||
+			operator.Span%time.Second != 0 {
+			return CompiledQuery{}, errors.New(
+				"compile ClickHouse timechart: fixed span is invalid",
+			)
+		}
+		gridSpec, err = fixedTimechartGridSpec(operator, scan)
+	case plan.CalendarDay, plan.CalendarWeek:
+		if operator.Span != 0 || state.context == nil {
+			return CompiledQuery{}, errors.New(
+				"compile ClickHouse timechart: calendar span is invalid",
+			)
+		}
+		if err = validateCompileContextSearchTimezone(state.context); err == nil {
+			gridSpec, err = calendarTimechartGridSpec(
+				operator,
+				scan,
+				state.context.searchTimezone,
+			)
+		}
+	default:
+		return CompiledQuery{}, errors.New(
+			"compile ClickHouse timechart: calendar unit is invalid",
+		)
+	}
 	if err != nil {
 		return CompiledQuery{}, err
-	}
-	firstBucketNumber, gridOK := ordinalGridFirstBucketNumber(operator.FirstBucket.Unix(), spanSeconds, operator.BucketCount)
-	if !gridOK {
-		return CompiledQuery{}, errors.New("compile ClickHouse timechart: bucket grid overflows")
 	}
 	if !state.eventRows {
 		return CompiledQuery{}, &plan.Diagnostic{
@@ -4193,8 +4285,7 @@ func compileTimechart(
 			measureInputSQL,
 			measureArgs,
 			outputFields,
-			spanNanoseconds,
-			firstBucketNumber,
+			gridSpec,
 			alias,
 		)
 	}
@@ -4223,8 +4314,7 @@ func compileTimechart(
 				measureInputSQL,
 				measureArgs,
 				outputFields,
-				spanNanoseconds,
-				firstBucketNumber,
+				gridSpec,
 				alias,
 			)
 		}
@@ -4237,8 +4327,7 @@ func compileTimechart(
 			operator,
 			timeField,
 			outputFields,
-			spanNanoseconds,
-			firstBucketNumber,
+			gridSpec,
 			alias,
 		)
 	}
@@ -4326,8 +4415,7 @@ func compileTimechart(
 			measureInputSQL,
 			measureArgs,
 			dynamic,
-			spanNanoseconds,
-			firstBucketNumber,
+			gridSpec,
 			alias,
 		)
 	}
@@ -4394,7 +4482,7 @@ func compileTimechart(
 	invalid := q("__os_tc_invalid")
 	ordinal := q(TimechartOrdinalColumn)
 
-	bucketNumberExpression := epochFloorBucketNumberSQL(ticks)
+	bucketNumberExpression := gridSpec.bucketKeySQL(eventTime, ticks)
 	validLabel := "isValidUTF8(" + label + ") AND length(" + label + ") BETWEEN 1 AND " +
 		strconv.Itoa(maxTimechartLabelBytes) + " AND " + label + " NOT IN ('NULL', 'OTHER')"
 
@@ -4746,7 +4834,7 @@ func compileTimechart(
 
 	sql.WriteString(grid)
 	sql.WriteString(" AS (")
-	sql.WriteString(ordinalGridSQL(ordinal, bucketNumber))
+	sql.WriteString(gridSpec.gridSQL(ordinal, bucketNumber))
 	sql.WriteString(") ")
 
 	sql.WriteString("SELECT ")
@@ -4755,6 +4843,7 @@ func compileTimechart(
 	sql.WriteString(ordinal)
 	sql.WriteString(" AS ")
 	sql.WriteString(ordinal)
+	gridSpec.writeBucketProjection(&sql, grid, bucketNumber)
 	sql.WriteString(", ")
 	sql.WriteString("if(")
 	sql.WriteString(grid)
@@ -4801,7 +4890,7 @@ func compileTimechart(
 	sql.WriteString(" ASC")
 	sql.WriteString(materializedCTESettingsSQL)
 
-	args = appendOrdinalGridArgs(args, spanNanoseconds, firstBucketNumber, operator.BucketCount)
+	args = gridSpec.appendArgs(args)
 	sourceDepth := relationalNodeDepth(relation.depth)
 	preparedDepth := relationalNodeDepth(sourceDepth)
 	classifiedDepth := relationalNodeDepth(preparedDepth)
@@ -4813,7 +4902,7 @@ func compileTimechart(
 	domainRowsDepth := relationalNodeDepth(collapsedDepth)
 	domainDepth := relationalNodeDepth(domainRowsDepth)
 	bucketMapsDepth := relationalNodeDepth(collapsedDepth)
-	gridDepth := relationalNodeDepth()
+	gridDepth := gridSpec.relationalDepth()
 	resultDepth := relationalNodeDepth(
 		gridDepth,
 		domainDepth,
@@ -4828,6 +4917,7 @@ func compileTimechart(
 			Mode:          TimechartModeRuntimeWide,
 			FirstBucket:   operator.FirstBucket.UTC(),
 			Span:          operator.Span,
+			Calendar:      gridSpec.isCalendar(),
 			BucketCount:   operator.BucketCount,
 			MaxSeries:     dynamic.MaxSeries,
 			MaxLabelBytes: maxTimechartLabelBytes,
@@ -4850,8 +4940,7 @@ func compileSplitValueTimechart(
 	measureInputSQL string,
 	measureArgs []any,
 	dynamic *plan.DynamicSeriesOutput,
-	spanNanoseconds int64,
-	firstBucketNumber int64,
+	gridSpec timechartGridSpec,
 	alias string,
 ) (CompiledQuery, error) {
 	if operator == nil || operator.Split == nil || dynamic == nil {
@@ -4908,7 +4997,7 @@ func compileSplitValueTimechart(
 	invalid := q("__os_tc_invalid")
 	ordinal := q(TimechartOrdinalColumn)
 
-	bucketNumberExpression := epochFloorBucketNumberSQL(ticks)
+	bucketNumberExpression := gridSpec.bucketKeySQL(eventTime, ticks)
 	validLabel := "isValidUTF8(" + label + ") AND length(" + label + ") BETWEEN 1 AND " +
 		strconv.Itoa(maxTimechartLabelBytes) + " AND " + label + " NOT IN ('NULL', 'OTHER')"
 
@@ -5328,7 +5417,7 @@ func compileSplitValueTimechart(
 
 	sql.WriteString(grid)
 	sql.WriteString(" AS (")
-	sql.WriteString(ordinalGridSQL(ordinal, bucketNumber))
+	sql.WriteString(gridSpec.gridSQL(ordinal, bucketNumber))
 	sql.WriteString(") ")
 
 	sql.WriteString("SELECT ")
@@ -5337,6 +5426,7 @@ func compileSplitValueTimechart(
 	sql.WriteString(ordinal)
 	sql.WriteString(" AS ")
 	sql.WriteString(ordinal)
+	gridSpec.writeBucketProjection(&sql, grid, bucketNumber)
 	sql.WriteString(", ")
 	sql.WriteString("if(")
 	sql.WriteString(grid)
@@ -5400,7 +5490,7 @@ func compileSplitValueTimechart(
 	sql.WriteString(" ASC")
 	sql.WriteString(materializedCTESettingsSQL)
 
-	args = appendOrdinalGridArgs(args, spanNanoseconds, firstBucketNumber, operator.BucketCount)
+	args = gridSpec.appendArgs(args)
 	sourceDepth := relationalNodeDepth(relation.depth)
 	preparedDepth := relationalNodeDepth(sourceDepth)
 	classifiedDepth := relationalNodeDepth(preparedDepth)
@@ -5432,7 +5522,7 @@ func compileSplitValueTimechart(
 	collisionsDepth := relationalNodeDepth(collisionInputDepth)
 	bucketMapsDepth := relationalNodeDepth(finalizedDepth)
 	validationDepth := relationalNodeDepth(numericGroupsDepth)
-	gridDepth := relationalNodeDepth()
+	gridDepth := gridSpec.relationalDepth()
 	resultDepth := relationalNodeDepth(
 		gridDepth,
 		domainDepth,
@@ -5449,6 +5539,7 @@ func compileSplitValueTimechart(
 			Mode:          TimechartModeRuntimeWideValue,
 			FirstBucket:   operator.FirstBucket.UTC(),
 			Span:          operator.Span,
+			Calendar:      gridSpec.isCalendar(),
 			BucketCount:   operator.BucketCount,
 			MaxSeries:     dynamic.MaxSeries,
 			MaxLabelBytes: maxTimechartLabelBytes,
@@ -5577,14 +5668,14 @@ func compileFixedCountTimechart(
 	operator *plan.Timechart,
 	timeField fieldState,
 	outputFields []string,
-	spanNanoseconds int64,
-	firstBucketNumber int64,
+	gridSpec timechartGridSpec,
 	alias string,
 ) (CompiledQuery, error) {
 	q := quoteIdentifier
 	source := q("__os_timechart_source")
 	counts := q("__os_timechart_group_counts")
 	grid := q("__os_timechart_grid")
+	eventTime := q("__os_tc_event_time")
 	ticks := q("__os_tc_ticks")
 	bucketNumber := q("__os_tc_bucket_number")
 	ordinal := q(TimechartOrdinalColumn)
@@ -5594,17 +5685,24 @@ func compileFixedCountTimechart(
 	sql.Grow(len(relation.sql) + 1_536)
 	sql.WriteString("WITH ")
 	sql.WriteString(source)
-	sql.WriteString(" AS (SELECT reinterpretAsInt64(")
-	sql.WriteString(timeField.valueSQL)
-	sql.WriteString(") AS ")
-	sql.WriteString(ticks)
+	if gridSpec.isCalendar() {
+		sql.WriteString(" AS (SELECT ")
+		sql.WriteString(timeField.valueSQL)
+		sql.WriteString(" AS ")
+		sql.WriteString(eventTime)
+	} else {
+		sql.WriteString(" AS (SELECT reinterpretAsInt64(")
+		sql.WriteString(timeField.valueSQL)
+		sql.WriteString(") AS ")
+		sql.WriteString(ticks)
+	}
 	sql.WriteString(" FROM (")
 	sql.WriteString(relation.sql)
 	sql.WriteString(") AS ")
 	sql.WriteString(alias)
 	sql.WriteString("), ")
 
-	writeBucketCountGridSQL(&sql, bucketCountGrid{
+	gridEmitter := bucketCountGrid{
 		counts:       counts,
 		countsSource: source,
 		ticks:        ticks,
@@ -5612,12 +5710,17 @@ func compileFixedCountTimechart(
 		grid:         grid,
 		ordinal:      ordinal,
 		count:        count,
-	})
+	}
+	if gridSpec.isCalendar() {
+		gridSpec.writeCalendarBucketCountGridSQL(&sql, gridEmitter, eventTime)
+	} else {
+		writeBucketCountGridSQL(&sql, gridEmitter)
+	}
 
-	args = appendOrdinalGridArgs(args, spanNanoseconds, firstBucketNumber, operator.BucketCount)
+	args = gridSpec.appendArgs(args)
 	sourceDepth := relationalNodeDepth(relation.depth)
 	countsDepth := relationalNodeDepth(sourceDepth)
-	gridDepth := relationalNodeDepth()
+	gridDepth := gridSpec.relationalDepth()
 	resultDepth := relationalNodeDepth(gridDepth, countsDepth)
 	compiled := CompiledQuery{
 		SQL:          sql.String(),
@@ -5627,6 +5730,7 @@ func compileFixedCountTimechart(
 			Mode:          TimechartModeFixedCount,
 			FirstBucket:   operator.FirstBucket.UTC(),
 			Span:          operator.Span,
+			Calendar:      gridSpec.isCalendar(),
 			BucketCount:   operator.BucketCount,
 			MaxSeries:     1,
 			MaxLabelBytes: 0,
@@ -5643,8 +5747,7 @@ func compileFixedCountValueTimechart(
 	measureInputSQL string,
 	measureArgs []any,
 	outputFields []string,
-	spanNanoseconds int64,
-	firstBucketNumber int64,
+	gridSpec timechartGridSpec,
 	alias string,
 ) (CompiledQuery, error) {
 	q := quoteIdentifier
@@ -5652,6 +5755,7 @@ func compileFixedCountValueTimechart(
 	counts := q("__os_timechart_group_counts")
 	inputPresence := q("__os_timechart_input_presence")
 	grid := q("__os_timechart_grid")
+	eventTime := q("__os_tc_event_time")
 	ticks := q("__os_tc_ticks")
 	measureCount := q("__os_tc_measure_count")
 	bucketNumber := q("__os_tc_bucket_number")
@@ -5663,10 +5767,17 @@ func compileFixedCountValueTimechart(
 	sql.Grow(len(relation.sql) + len(measureInputSQL) + 2_048)
 	sql.WriteString("WITH ")
 	sql.WriteString(source)
-	sql.WriteString(" AS (SELECT reinterpretAsInt64(")
-	sql.WriteString(timeField.valueSQL)
-	sql.WriteString(") AS ")
-	sql.WriteString(ticks)
+	if gridSpec.isCalendar() {
+		sql.WriteString(" AS (SELECT ")
+		sql.WriteString(timeField.valueSQL)
+		sql.WriteString(" AS ")
+		sql.WriteString(eventTime)
+	} else {
+		sql.WriteString(" AS (SELECT reinterpretAsInt64(")
+		sql.WriteString(timeField.valueSQL)
+		sql.WriteString(") AS ")
+		sql.WriteString(ticks)
+	}
 	sql.WriteString(", ")
 	sql.WriteString(measureInputSQL)
 	sql.WriteString(" AS ")
@@ -5682,7 +5793,7 @@ func compileFixedCountValueTimechart(
 	// relation, so an all-zero count(field) result never re-runs the scoped scan.
 	sql.WriteString(counts)
 	sql.WriteString(" AS MATERIALIZED (SELECT ")
-	sql.WriteString(epochFloorBucketNumberSQL(ticks))
+	sql.WriteString(gridSpec.bucketKeySQL(eventTime, ticks))
 	sql.WriteString(" AS ")
 	sql.WriteString(bucketNumber)
 	sql.WriteString(", toUInt64(sum(toUInt128(")
@@ -5704,13 +5815,14 @@ func compileFixedCountValueTimechart(
 
 	sql.WriteString(grid)
 	sql.WriteString(" AS (")
-	sql.WriteString(ordinalGridSQL(ordinal, bucketNumber))
+	sql.WriteString(gridSpec.gridSQL(ordinal, bucketNumber))
 	sql.WriteString(") SELECT ")
 	sql.WriteString(grid)
 	sql.WriteString(".")
 	sql.WriteString(ordinal)
 	sql.WriteString(" AS ")
 	sql.WriteString(ordinal)
+	gridSpec.writeBucketProjection(&sql, grid, bucketNumber)
 	sql.WriteString(", ifNull(")
 	sql.WriteString(counts)
 	sql.WriteString(".")
@@ -5745,16 +5857,11 @@ func compileFixedCountValueTimechart(
 	sql.WriteString(materializedCTESettingsSQL)
 
 	args = prependArguments(measureArgs, args)
-	args = appendOrdinalGridArgs(
-		args,
-		spanNanoseconds,
-		firstBucketNumber,
-		operator.BucketCount,
-	)
+	args = gridSpec.appendArgs(args)
 	sourceDepth := relationalNodeDepth(relation.depth)
 	countsDepth := relationalNodeDepth(sourceDepth)
 	inputPresenceDepth := relationalNodeDepth(countsDepth)
-	gridDepth := relationalNodeDepth()
+	gridDepth := gridSpec.relationalDepth()
 	resultDepth := relationalNodeDepth(
 		gridDepth,
 		countsDepth,
@@ -5768,6 +5875,7 @@ func compileFixedCountValueTimechart(
 			Mode:          TimechartModeFixedFieldCount,
 			FirstBucket:   operator.FirstBucket.UTC(),
 			Span:          operator.Span,
+			Calendar:      gridSpec.isCalendar(),
 			BucketCount:   operator.BucketCount,
 			MaxSeries:     1,
 			MaxLabelBytes: 0,
@@ -5787,8 +5895,7 @@ func compileFixedValueTimechart(
 	measureInputSQL string,
 	measureArgs []any,
 	outputFields []string,
-	spanNanoseconds int64,
-	firstBucketNumber int64,
+	gridSpec timechartGridSpec,
 	alias string,
 ) (CompiledQuery, error) {
 	q := quoteIdentifier
@@ -5796,6 +5903,7 @@ func compileFixedValueTimechart(
 	aggregates := q("__os_timechart_value_groups")
 	inputPresence := q("__os_timechart_input_presence")
 	grid := q("__os_timechart_grid")
+	eventTime := q("__os_tc_event_time")
 	ticks := q("__os_tc_ticks")
 	measureValues := q("__os_tc_measure_values")
 	bucketNumber := q("__os_tc_bucket_number")
@@ -5831,10 +5939,17 @@ func compileFixedValueTimechart(
 	sql.Grow(len(relation.sql) + len(measureInputSQL) + 2_048)
 	sql.WriteString("WITH ")
 	sql.WriteString(source)
-	sql.WriteString(" AS (SELECT reinterpretAsInt64(")
-	sql.WriteString(timeField.valueSQL)
-	sql.WriteString(") AS ")
-	sql.WriteString(ticks)
+	if gridSpec.isCalendar() {
+		sql.WriteString(" AS (SELECT ")
+		sql.WriteString(timeField.valueSQL)
+		sql.WriteString(" AS ")
+		sql.WriteString(eventTime)
+	} else {
+		sql.WriteString(" AS (SELECT reinterpretAsInt64(")
+		sql.WriteString(timeField.valueSQL)
+		sql.WriteString(") AS ")
+		sql.WriteString(ticks)
+	}
 	sql.WriteString(", ")
 	sql.WriteString(measureInputSQL)
 	sql.WriteString(" AS ")
@@ -5847,7 +5962,7 @@ func compileFixedValueTimechart(
 
 	sql.WriteString(aggregates)
 	sql.WriteString(" AS MATERIALIZED (SELECT ")
-	sql.WriteString(epochFloorBucketNumberSQL(ticks))
+	sql.WriteString(gridSpec.bucketKeySQL(eventTime, ticks))
 	sql.WriteString(" AS ")
 	sql.WriteString(bucketNumber)
 	sql.WriteString(", ")
@@ -5869,13 +5984,14 @@ func compileFixedValueTimechart(
 
 	sql.WriteString(grid)
 	sql.WriteString(" AS (")
-	sql.WriteString(ordinalGridSQL(ordinal, bucketNumber))
+	sql.WriteString(gridSpec.gridSQL(ordinal, bucketNumber))
 	sql.WriteString(") SELECT ")
 	sql.WriteString(grid)
 	sql.WriteString(".")
 	sql.WriteString(ordinal)
 	sql.WriteString(" AS ")
 	sql.WriteString(ordinal)
+	gridSpec.writeBucketProjection(&sql, grid, bucketNumber)
 	sql.WriteString(", ")
 	sql.WriteString(aggregates)
 	sql.WriteString(".")
@@ -5910,16 +6026,11 @@ func compileFixedValueTimechart(
 	sql.WriteString(materializedCTESettingsSQL)
 
 	args = prependArguments(measureArgs, args)
-	args = appendOrdinalGridArgs(
-		args,
-		spanNanoseconds,
-		firstBucketNumber,
-		operator.BucketCount,
-	)
+	args = gridSpec.appendArgs(args)
 	sourceDepth := relationalNodeDepth(relation.depth)
 	aggregatesDepth := relationalNodeDepth(sourceDepth)
 	inputPresenceDepth := relationalNodeDepth(aggregatesDepth)
-	gridDepth := relationalNodeDepth()
+	gridDepth := gridSpec.relationalDepth()
 	resultDepth := relationalNodeDepth(
 		gridDepth,
 		aggregatesDepth,
@@ -5933,6 +6044,7 @@ func compileFixedValueTimechart(
 			Mode:          TimechartModeFixedValue,
 			FirstBucket:   operator.FirstBucket.UTC(),
 			Span:          operator.Span,
+			Calendar:      gridSpec.isCalendar(),
 			BucketCount:   operator.BucketCount,
 			MaxSeries:     1,
 			MaxLabelBytes: 0,

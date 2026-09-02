@@ -590,6 +590,7 @@ jobs:
           ./internal/clickhouse TestStatsMultivalueByAgainstClickHouse
           ./internal/clickhouse TestStatsMultivalueByExpansionLimitAgainstClickHouse
           ./internal/clickhouse TestStatsByUnsupportedCannotHideBehindMissingKeyAgainstClickHouse
+          ./internal/clickhouse TestCalendarSpansAgainstClickHouse
           ./internal/queryexec TestStatsByFixedMultivalueStringOrBytesAgainstClickHouse
           ./internal/queryexec TestAuthoredSemanticBytesManagerAgainstClickHouse
           ./internal/queryexec TestSemanticBytesModeManagerAgainstClickHouse
@@ -635,6 +636,19 @@ jobs:
           -run '^(TestStatsByDeferredValidationAdversarialAgainstClickHouse|TestStatsMultivalueByAgainstClickHouse|TestStatsMultivalueByExpansionLimitAgainstClickHouse|TestStatsByUnsupportedCannotHideBehindMissingKeyAgainstClickHouse|TestStatsByFixedMultivalueStringOrBytesAgainstClickHouse|TestAuthoredSemanticBytesManagerAgainstClickHouse|TestSemanticBytesModeManagerAgainstClickHouse|TestSparklineFeedsStatsByThroughManagerAgainstClickHouse)$'
           -count=1
           -timeout=15m
+          -p=1
+          -v
+
+      # SPL-CALENDAR-SPAN-001: exercise ClickHouse's pinned IANA database for
+      # 23-hour and 25-hour New York days plus Sunday-aligned week boundaries.
+      - name: Execute calendar bin and timechart spans
+        env:
+          OPEN_SPLUNK_CLICKHOUSE_INTEGRATION: "1"
+        run: >-
+          go test ./internal/clickhouse
+          -run '^TestCalendarSpansAgainstClickHouse$'
+          -count=1
+          -timeout=8m
           -p=1
           -v
 

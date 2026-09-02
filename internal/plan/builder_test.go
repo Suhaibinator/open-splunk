@@ -1879,21 +1879,27 @@ func TestBuildTimeBinInvalidatesCanonicalTimeForTimechart(t *testing.T) {
 func TestBuildTimeBinBoundsFixedSpan(t *testing.T) {
 	t.Parallel()
 
-	logical, err := Build(
-		mustParse(t, `index=gradethis | bin _time span=86399s`),
-		testScope([]string{"gradethis"}, nil),
-	)
-	if err != nil {
-		t.Fatalf("Build(maximum sub-day span): %v", err)
-	}
-	if got := logical.Operators[len(logical.Operators)-1].(*TimeBucket).Span; got != 86_399*time.Second {
-		t.Fatalf("maximum sub-day span = %v, want 86399s", got)
-	}
-
 	for _, source := range []string{
+		`index=gradethis | bin _time span=86399s`,
 		`index=gradethis | bin _time span=86400s`,
 		`index=gradethis | bin _time span=1440m`,
 		`index=gradethis | bin _time span=24h`,
+	} {
+		logical, err := Build(
+			mustParse(t, source),
+			testScope([]string{"gradethis"}, nil),
+		)
+		if err != nil {
+			t.Fatalf("Build(%q): %v", source, err)
+		}
+		bucket := logical.Operators[len(logical.Operators)-1].(*TimeBucket)
+		if bucket.Calendar != CalendarNone || bucket.Span <= 0 ||
+			bucket.Span > 24*time.Hour {
+			t.Fatalf("Build(%q) bucket = %#v, want fixed span through 24h", source, bucket)
+		}
+	}
+
+	for _, source := range []string{
 		`index=gradethis | bin _time span=86401s`,
 		`index=gradethis | bucket span=25h _time`,
 	} {
@@ -2221,6 +2227,18 @@ func TestBuildTimechartBoundsFixedRangeBucketCount(t *testing.T) {
 
 func TestBuildTimechartBoundsFixedSpan(t *testing.T) {
 	t.Parallel()
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | timechart span=24h count by level`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build(24h fixed timechart): %v", err)
+	}
+	operator := logical.Operators[len(logical.Operators)-1].(*Timechart)
+	if operator.Calendar != CalendarNone || operator.Span != 24*time.Hour {
+		t.Fatalf("24h timechart = %#v, want fixed-duration plan", operator)
+	}
 
 	for _, source := range []string{
 		`index=gradethis | timechart span=86401s count by level`,

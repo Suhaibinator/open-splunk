@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 )
@@ -222,6 +223,50 @@ func TestPipelineIndependentReferenceModelCoversCommands(t *testing.T) {
 	}
 }
 
+func TestPipelineReferenceTimeBucketUsesCivilDayAndSundayWeek(t *testing.T) {
+	t.Parallel()
+
+	rows := []pipelineReferenceRow{
+		{"_time": {kind: pipelineReferenceTime, number: 1772971200}},
+		{"_time": {kind: pipelineReferenceTime, number: 1773057600}},
+	}
+	if err := pipelineReferenceTimeBucket(
+		rows,
+		"_time",
+		"_time",
+		"day",
+		"America/New_York",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if got := []float64{
+		pipelineRefGet(rows[0], "_time").number,
+		pipelineRefGet(rows[1], "_time").number,
+	}; !reflect.DeepEqual(got, []float64{1772946000, 1773028800}) {
+		t.Fatalf("spring day boundaries = %v", got)
+	}
+
+	weekly := []pipelineReferenceRow{
+		{"_time": {kind: pipelineReferenceTime, number: 1798718400}},
+		{"_time": {kind: pipelineReferenceTime, number: 1798977600}},
+	}
+	if err := pipelineReferenceTimeBucket(
+		weekly,
+		"_time",
+		"_time",
+		"week",
+		"UTC",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if got := []float64{
+		pipelineRefGet(weekly[0], "_time").number,
+		pipelineRefGet(weekly[1], "_time").number,
+	}; !reflect.DeepEqual(got, []float64{1798329600, 1798934400}) {
+		t.Fatalf("Sunday week boundaries = %v", got)
+	}
+}
+
 func TestPipelineIndependentReferenceStrcatUsesSharedConversionAndWritePolicy(t *testing.T) {
 	t.Parallel()
 
@@ -400,6 +445,54 @@ func pipelineReferenceReverse(rows []pipelineReferenceRow) []pipelineReferenceRo
 		result[len(rows)-1-index] = pipelineRefCloneRow(rows[index])
 	}
 	return result
+}
+
+// pipelineReferenceTimeBucket independently applies calendar bin semantics
+// with the standard library's IANA database. It deliberately does not call the
+// parser, planner, or ClickHouse calendar helpers whose agreement the corpus is
+// intended to verify.
+func pipelineReferenceTimeBucket(
+	rows []pipelineReferenceRow,
+	field string,
+	output string,
+	calendar string,
+	timezone string,
+) error {
+	location, err := time.LoadLocation(timezone)
+	if err != nil {
+		return err
+	}
+	if field == "" || output == "" || (calendar != "day" && calendar != "week") {
+		return errPipelineReferenceUnsupportedValue
+	}
+	for _, row := range rows {
+		value := pipelineRefGet(row, field)
+		switch value.kind {
+		case pipelineReferenceMissing:
+			delete(row, output)
+			continue
+		case pipelineReferenceNull:
+			row[output] = pipelineRefNull()
+			continue
+		case pipelineReferenceTime:
+		default:
+			return errPipelineReferenceUnsupportedValue
+		}
+
+		seconds := math.Floor(value.number)
+		nanoseconds := math.Round((value.number - seconds) * float64(time.Second))
+		instant := time.Unix(int64(seconds), int64(nanoseconds)).In(location)
+		year, month, day := instant.Date()
+		boundary := time.Date(year, month, day, 0, 0, 0, 0, location)
+		if calendar == "week" {
+			boundary = boundary.AddDate(0, 0, -int(boundary.Weekday()))
+		}
+		row[output] = pipelineReferenceValue{
+			kind:   pipelineReferenceTime,
+			number: float64(boundary.Unix()),
+		}
+	}
+	return nil
 }
 
 // pipelineReferenceDedup keeps the first count rows of every complete key
