@@ -2,6 +2,7 @@ import type { PointerEvent, ReactNode } from "react";
 
 import { SearchJobState } from "@/gen/ts/open_splunk/search";
 import { DEMO_EVENTS, type DemoEvent, type DemoHistoryEntry, type DemoScalar } from "@/lib/demo/search-data";
+import type { DiagnosticMarker } from "@/lib/search/spl-diagnostic-markers";
 import {
   isSplOffsetInQuotedValue,
   isSupportedSplPipelineCommand,
@@ -129,7 +130,45 @@ function nextNonWhitespaceIsLeftParenthesis(query: string, offset: number): bool
   return false;
 }
 
-export function syntaxTokens(query: string): ReactNode[] {
+const MARKER_SEVERITY_RANK: Record<DiagnosticMarker["severity"], number> = { error: 0, warning: 1, info: 2 };
+
+/**
+ * A token's text split where diagnostic markers begin or end, each slice
+ * wrapped in a `<mark>` when a marker covers it. Without markers the token
+ * renders exactly as before: one string child.
+ */
+function markedSlices(part: string, partOffset: number, markers: readonly DiagnosticMarker[]): ReactNode[] {
+  const partEnd = partOffset + part.length;
+  const boundaries = new Set<number>([partOffset, partEnd]);
+  let covered = false;
+  for (const marker of markers) {
+    if (marker.end <= partOffset || marker.start >= partEnd) continue;
+    covered = true;
+    boundaries.add(Math.max(marker.start, partOffset));
+    boundaries.add(Math.min(marker.end, partEnd));
+  }
+  if (!covered) return [part];
+  const edges = Array.from(boundaries).toSorted((left, right) => left - right);
+  const slices: ReactNode[] = [];
+  for (let index = 0; index < edges.length - 1; index += 1) {
+    const sliceStart = edges[index]!;
+    const sliceEnd = edges[index + 1]!;
+    const text = part.slice(sliceStart - partOffset, sliceEnd - partOffset);
+    let severity: DiagnosticMarker["severity"] | null = null;
+    for (const marker of markers) {
+      if (marker.start > sliceStart || marker.end < sliceEnd) continue;
+      if (severity === null || MARKER_SEVERITY_RANK[marker.severity] < MARKER_SEVERITY_RANK[severity]) {
+        severity = marker.severity;
+      }
+    }
+    slices.push(severity === null
+      ? text
+      : <mark className="spl-diagnostic" data-severity={severity} key={sliceStart}>{text}</mark>);
+  }
+  return slices;
+}
+
+export function syntaxTokens(query: string, markers: readonly DiagnosticMarker[] = []): ReactNode[] {
   const structure = scanSplStructure(query);
   const parts: string[] = [];
   let cursor = 0;
@@ -181,7 +220,11 @@ export function syntaxTokens(query: string): ReactNode[] {
     } else if (/^(index|host|source|sourcetype|level|status|trace_id|message|path)$/i.test(part)) {
       className = "spl-field";
     }
-    return <span className={className} key={`${sourceOffset}-${part}`}>{part}</span>;
+    return (
+      <span className={className} key={`${sourceOffset}-${part}`}>
+        {markedSlices(part, partOffset, markers)}
+      </span>
+    );
   });
 }
 

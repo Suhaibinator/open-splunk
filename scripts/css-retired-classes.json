@@ -8,6 +8,7 @@
     "close-button": ".button .button--ghost .button--icon",
     "compact": ".button--compact",
     "danger": ".button--danger",
+    "diagnostic-strip": ".diagnostic-problems, the list of every current and stale problem under the editor",
     "global-search": ".suite-find, rendered by ProductShell",
     "icon-button": ".button .button--icon",
     "job-card-state": ".status .status--label with a tone modifier, through StatusLabel",

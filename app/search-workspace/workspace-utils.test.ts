@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isValidElement, type ReactNode } from "react";
+import { createElement, Fragment, isValidElement, type ReactNode } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 
 import { SPL_PIPELINE_COMMANDS } from "@/lib/search/spl-syntax";
 import { SearchJobState } from "@/gen/ts/open_splunk/search";
@@ -472,5 +473,24 @@ test("backend lifecycle mapping treats restart interruption as terminal and reje
   assert.throws(
     () => backendJobPhase(SearchJobState.UNRECOGNIZED),
     /unsupported lifecycle state/,
+  );
+});
+
+test("diagnostic markers underline slices inside tokens without changing the text", () => {
+  const query = "index=main | stats count BY host";
+  const marked = renderToStaticMarkup(createElement(Fragment, null, ...syntaxTokens(query, [
+    { start: 13, end: 18, severity: "error" },
+    { start: 15, end: 24, severity: "warning" },
+  ])));
+  // The error covers all of `stats`; the warning starts inside it and runs
+  // on through the space and `count`, so the token splits at every edge.
+  assert.match(marked, /<mark class="spl-diagnostic" data-severity="error">st<\/mark><mark class="spl-diagnostic" data-severity="error">ats<\/mark>/u);
+  assert.match(marked, /<mark class="spl-diagnostic" data-severity="warning"> <\/mark>/u);
+  assert.match(marked, /<mark class="spl-diagnostic" data-severity="warning">count<\/mark>/u);
+  assert.doesNotMatch(marked, /<mark[^>]*>BY/u);
+  assert.equal(marked.replaceAll(/<[^>]+>/gu, ""), query);
+  assert.equal(
+    renderToStaticMarkup(createElement(Fragment, null, ...syntaxTokens(query, []))),
+    renderToStaticMarkup(createElement(Fragment, null, ...syntaxTokens(query))),
   );
 });

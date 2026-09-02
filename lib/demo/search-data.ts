@@ -430,6 +430,20 @@ export const DEMO_FIELDS: DemoField[] = [
       { value: 842, count: 71 },
     ],
   },
+  // Neither selected nor interesting, so the sidebar leaves it out; it is here
+  // so `index=` can complete the demo index the way a server would.
+  {
+    name: "index",
+    displayName: "index",
+    distinctCount: 1,
+    eventCount: 12_846,
+    selected: false,
+    interesting: false,
+    type: "string",
+    values: [
+      { value: "gradethis", count: 12_846 },
+    ],
+  },
 ];
 
 export const DEMO_TIMELINE: TimelinePoint[] = Array.from({ length: 72 }, (_, index) => {
