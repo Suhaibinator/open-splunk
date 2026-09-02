@@ -1,4 +1,5 @@
 import { linearTickScale } from "../charts/chart-scale";
+import { stackChartRows, stackedChartDomain } from "../charts/chart-stacking";
 import {
   type FocusEvent,
   type KeyboardEvent,
@@ -29,7 +30,7 @@ import {
 import { categoricalActivation } from "../categorical-interaction";
 import { COMPACT_NUMBER_FORMAT, NUMBER_FORMAT } from "../constants";
 import { formatExactNumericText } from "../formatters";
-import type { ChartStyle, LegendPosition } from "../model";
+import type { ChartStyle, LegendPosition, StackMode } from "../model";
 import { describeTimechartCoverage, type TimechartCoverage } from "../timechart-series";
 
 interface VisualizationPanelProps {
@@ -39,6 +40,7 @@ interface VisualizationPanelProps {
   isTimechartResult: boolean;
   legendPosition: LegendPosition;
   showDataLabels: boolean;
+  stackMode: StackMode;
   statisticsDimension: string;
   statisticsRows: WorkspaceStatistic[];
   /** Which buckets of a server time-series result are plotted; null outside backend timecharts. */
@@ -49,8 +51,8 @@ interface VisualizationPanelProps {
   onChartTitleChange: (title: string) => void;
   onLegendPositionChange: (position: LegendPosition) => void;
   onShowDataLabelsChange: (show: boolean) => void;
+  onStackModeChange: (mode: StackMode) => void;
   onVisualizationEdited: () => void;
-  onShowToast: (message: string) => void;
   previewTruncated: boolean;
 }
 
@@ -71,6 +73,7 @@ interface CategoricalChartProps {
   rows: WorkspaceStatistic[];
   series: StatisticSeriesDefinition[];
   showDataLabels: boolean;
+  stackMode: StackMode;
   onApplyPivot: VisualizationPanelProps["onApplyPivot"];
 }
 
@@ -149,32 +152,25 @@ function statisticMagnitude(row: WorkspaceStatistic): number {
     : Math.abs(row.count);
 }
 
-function categoricalScale(
-  rows: WorkspaceStatistic[],
-  series: StatisticSeriesDefinition[],
-): ChartScale {
-  const values = rows.flatMap((row) => series.flatMap((definition) => {
-    const value = rowSeries(row, definition).value;
-    return value === null || !Number.isFinite(value) ? [] : [value];
-  }));
-  return linearTickScale(values);
+function categoricalScale(stackedRows: ReturnType<typeof stackChartRows>): ChartScale {
+  return linearTickScale(stackedChartDomain(stackedRows));
 }
 
-function verticalGeometry(value: number, scale: ChartScale): { top: number; height: number } {
+function verticalGeometry(start: number, end: number, scale: ChartScale): { top: number; height: number } {
   const range = scale.maximum - scale.minimum;
-  const start = Math.max(0, value);
-  const end = Math.min(0, value);
+  const upper = Math.max(start, end);
+  const lower = Math.min(start, end);
   return {
-    top: ((scale.maximum - start) / range) * 100,
-    height: (Math.abs(start - end) / range) * 100,
+    top: ((scale.maximum - upper) / range) * 100,
+    height: ((upper - lower) / range) * 100,
   };
 }
 
-function horizontalGeometry(value: number, scale: ChartScale): { left: number; width: number } {
+function horizontalGeometry(start: number, end: number, scale: ChartScale): { left: number; width: number } {
   const range = scale.maximum - scale.minimum;
   return {
-    left: ((Math.min(0, value) - scale.minimum) / range) * 100,
-    width: (Math.abs(value) / range) * 100,
+    left: ((Math.min(start, end) - scale.minimum) / range) * 100,
+    width: (Math.abs(end - start) / range) * 100,
   };
 }
 
@@ -185,6 +181,10 @@ function displaySeriesValue(series: WorkspaceStatisticSeries, compact = false): 
 
 function seriesColor(index: number): string {
   return TIME_SERIES_COLORS[index % TIME_SERIES_COLORS.length];
+}
+
+function formatAxisTick(value: number, approximate: boolean, stackMode: StackMode): string {
+  return `${approximate ? "≈" : ""}${COMPACT_NUMBER_FORMAT.format(value)}${stackMode === "stacked100" ? "%" : ""}`;
 }
 
 function CategoricalTooltip({
@@ -274,6 +274,7 @@ function CategoricalChart({
   rows,
   series,
   showDataLabels,
+  stackMode,
   onApplyPivot,
 }: CategoricalChartProps) {
   const hintId = useId();
@@ -282,7 +283,11 @@ function CategoricalChart({
   const lastPointerTypeRef = useRef<string | null>(null);
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const [pinnedIndex, setPinnedIndex] = useState<number | null>(null);
-  const scale = useMemo(() => categoricalScale(rows, series), [rows, series]);
+  const stackedRows = useMemo(() => stackChartRows(
+    rows.map((row) => series.map((definition) => rowSeries(row, definition).value)),
+    stackMode,
+  ), [rows, series, stackMode]);
+  const scale = useMemo(() => categoricalScale(stackedRows), [stackedRows]);
   const approximate = rows.some((row) =>
     row.coordinateApproximate === true || row.series?.some((item) => item.coordinateApproximate) === true,
   );
@@ -429,7 +434,8 @@ function CategoricalChart({
   );
 
   if (horizontal) {
-    const minimumRowHeight = Math.max(30, (series.length * 17) + 8);
+    const renderedSeriesCount = stackMode === "none" ? series.length : 1;
+    const minimumRowHeight = Math.max(30, (renderedSeriesCount * 17) + 8);
     return (
       <div className="visualization-chart visualization-chart--horizontal" data-testid="categorical-chart">
         <div className="visualization-horizontal-scroller">
@@ -459,16 +465,25 @@ function CategoricalChart({
                   {...categoryButtonProps(row, rowIndex, "visualization-horizontal-group")}
                 >
                   <strong title={row.level}>{row.level}</strong>
-                  <span className="visualization-horizontal-bars" aria-hidden="true">
+                  <span
+                    className={`visualization-horizontal-bars${stackMode === "none" ? "" : " is-stacked"}`}
+                    aria-hidden="true"
+                  >
                     {series.map((definition, seriesIndex) => {
                       const item = rowSeries(row, definition);
-                      if (item.value === null) return <span className="visualization-horizontal-slot" key={definition.key} />;
-                      const geometry = horizontalGeometry(item.value, scale);
+                      const stackedValue = stackedRows[rowIndex]?.[seriesIndex];
+                      if (item.value === null || stackedValue === undefined || stackedValue.raw === null) {
+                        return <span className="visualization-horizontal-slot" key={definition.key} />;
+                      }
+                      const geometry = horizontalGeometry(stackedValue.start, stackedValue.end, scale);
                       const color = backendSeries ? seriesColor(seriesIndex) : categoryColor(row.level, rowIndex);
                       return (
                         <span className="visualization-horizontal-slot" key={definition.key}>
                           <i
                             className="visualization-horizontal-bar"
+                            data-chart-end={stackedValue.end}
+                            data-chart-raw={item.value}
+                            data-chart-start={stackedValue.start}
                             style={{ backgroundColor: color, left: `${geometry.left}%`, width: `${geometry.width}%` }}
                           />
                           {showDataLabels ? (
@@ -493,7 +508,7 @@ function CategoricalChart({
             </div>
             <div className="visualization-horizontal-axis" aria-hidden="true">
               {scale.ticks.toReversed().map((tick) => (
-                <span key={tick}>{approximate ? "≈" : ""}{COMPACT_NUMBER_FORMAT.format(tick)}</span>
+                <span key={tick}>{formatAxisTick(tick, approximate, stackMode)}</span>
               ))}
             </div>
             {inspector}
@@ -504,11 +519,14 @@ function CategoricalChart({
     );
   }
 
-  const minimumGroupWidth = Math.max(72, (series.length * 24) + 24);
+  const renderedSeriesCount = stackMode === "none" ? series.length : 1;
+  const minimumGroupWidth = Math.max(72, (renderedSeriesCount * 24) + 24);
   return (
     <div className="visualization-chart" data-testid="categorical-chart">
       <div className="visualization-vertical-y-axis" aria-hidden="true">
-        {scale.ticks.map((tick) => <span key={tick}>{approximate ? "≈" : ""}{COMPACT_NUMBER_FORMAT.format(tick)}</span>)}
+        {scale.ticks.map((tick) => (
+          <span key={tick}>{formatAxisTick(tick, approximate, stackMode)}</span>
+        ))}
       </div>
       <div className="visualization-vertical-scroller">
         <div
@@ -533,11 +551,17 @@ function CategoricalChart({
                 key={row.id ?? row.level}
                 {...categoryButtonProps(row, rowIndex, "visualization-vertical-group")}
               >
-                <span className="visualization-vertical-bars" aria-hidden="true">
+                <span
+                  className={`visualization-vertical-bars${stackMode === "none" ? "" : " is-stacked"}`}
+                  aria-hidden="true"
+                >
                   {series.map((definition, seriesIndex) => {
                     const item = rowSeries(row, definition);
-                    if (item.value === null) return <span className="visualization-vertical-slot" key={definition.key} />;
-                    const geometry = verticalGeometry(item.value, scale);
+                    const stackedValue = stackedRows[rowIndex]?.[seriesIndex];
+                    if (item.value === null || stackedValue === undefined || stackedValue.raw === null) {
+                      return <span className="visualization-vertical-slot" key={definition.key} />;
+                    }
+                    const geometry = verticalGeometry(stackedValue.start, stackedValue.end, scale);
                     const color = backendSeries ? seriesColor(seriesIndex) : categoryColor(row.level, rowIndex);
                     const dataLabelTop = item.value >= 0
                       ? `max(2px, calc(${geometry.top}% - 17px))`
@@ -546,6 +570,9 @@ function CategoricalChart({
                       <span className="visualization-vertical-slot" key={definition.key}>
                         <i
                           className="visualization-vertical-bar"
+                          data-chart-end={stackedValue.end}
+                          data-chart-raw={item.value}
+                          data-chart-start={stackedValue.start}
                           style={{
                             backgroundColor: color,
                             height: item.value === 0 ? "2px" : `${geometry.height}%`,
@@ -580,6 +607,7 @@ export function VisualizationPanel({
   isTimechartResult,
   legendPosition,
   showDataLabels,
+  stackMode,
   statisticsDimension,
   statisticsRows,
   timechartCoverage,
@@ -589,8 +617,8 @@ export function VisualizationPanel({
   onChartTitleChange,
   onLegendPositionChange,
   onShowDataLabelsChange,
+  onStackModeChange,
   onVisualizationEdited,
-  onShowToast,
   previewTruncated,
 }: VisualizationPanelProps) {
   const displayedStatisticsRows = statisticsRows.length > MAX_CATEGORICAL_ROWS
@@ -609,14 +637,21 @@ export function VisualizationPanel({
     ? timelinePoints.some((point) => point.coordinateApproximate === true)
     : statisticsRows.some((row) =>
       row.coordinateApproximate === true || row.series?.some((series) => series.coordinateApproximate) === true,
-    );
+  );
   const splitTimechart = isTimechartResult && timelineSeries.length > 1;
-  const isLineChart = isTimechartResult && (chartStyle === "line" || splitTimechart);
-  const effectiveChartStyle = isLineChart ? "line" : chartStyle;
+  const isTimeSeriesChart = isTimechartResult
+    && (chartStyle === "line" || chartStyle === "area" || splitTimechart);
+  const effectiveChartStyle = isTimeSeriesChart
+    ? chartStyle === "area" ? "area" : "line"
+    : chartStyle;
   const hasCategoricalChart = isTimechartResult
     ? timelinePoints.length > 0
     : displayedStatisticsRows.length > 0 && categoricalSeries.length > 0;
   const backendCategoricalResult = statisticsRows.some((row) => row.series !== undefined);
+  const categoricalSeriesResult = !isTimechartResult
+    && statisticsRows.some((row) => (row.series?.length ?? 0) > 0);
+  const supportsStacking = splitTimechart || categoricalSeriesResult;
+  const effectiveStackMode = supportsStacking ? stackMode : "none";
   const seriesSummary = categoricalSeries.length === 1
     ? categoricalSeries[0]?.label ?? "Results"
     : categoricalSeries.length === 2
@@ -674,14 +709,15 @@ export function VisualizationPanel({
         </div>
         <fieldset className="chart-toggle">
           <legend className="sr-only">Chart style</legend>
-          <button className={effectiveChartStyle === "column" ? "active" : ""} type="button" aria-pressed={effectiveChartStyle === "column"} disabled={!hasCategoricalChart || splitTimechart} title={splitTimechart ? "Split-series timecharts use Line so no server series is collapsed" : !hasCategoricalChart ? "Column charts require one dimension and at least one numeric measure" : undefined} onClick={() => selectChartStyle("column")}><AppIcon name="column-chart" size="sm" /> Column</button>
-          <button className={chartStyle === "horizontal" ? "active" : ""} type="button" aria-pressed={chartStyle === "horizontal"} disabled={isTimechartResult || !hasCategoricalChart} title={isTimechartResult ? "Bar charts require categorical results" : !hasCategoricalChart ? "Bar charts require one dimension and at least one numeric measure" : undefined} onClick={() => selectChartStyle("horizontal")}><AppIcon name="bar-chart" size="sm" /> Bar</button>
-          <button className={isLineChart ? "active" : ""} type="button" aria-pressed={isLineChart} disabled={!isTimechartResult} title={!isTimechartResult ? "Line charts require time-series results" : undefined} onClick={() => selectChartStyle("line")}><AppIcon name="analytics" size="sm" /> Line</button>
-          <button type="button" onClick={() => onShowToast("Area and scatter charts become available for compatible result shapes.")}>More…</button>
+          <button className={effectiveChartStyle === "column" ? "active" : ""} type="button" aria-pressed={effectiveChartStyle === "column"} disabled={!hasCategoricalChart || splitTimechart} title={splitTimechart ? "Split-series timecharts use Line or Area so no server series is collapsed" : !hasCategoricalChart ? "Column charts require one dimension and at least one numeric measure" : undefined} onClick={() => selectChartStyle("column")}><AppIcon name="column-chart" size="sm" /> Column</button>
+          <button className={effectiveChartStyle === "horizontal" ? "active" : ""} type="button" aria-pressed={effectiveChartStyle === "horizontal"} disabled={isTimechartResult || !hasCategoricalChart} title={isTimechartResult ? "Bar charts require categorical results" : !hasCategoricalChart ? "Bar charts require one dimension and at least one numeric measure" : undefined} onClick={() => selectChartStyle("horizontal")}><AppIcon name="bar-chart" size="sm" /> Bar</button>
+          <button className={effectiveChartStyle === "line" ? "active" : ""} type="button" aria-pressed={effectiveChartStyle === "line"} disabled={!isTimechartResult} title={!isTimechartResult ? "Line charts require time-series results" : undefined} onClick={() => selectChartStyle("line")}><AppIcon name="analytics" size="sm" /> Line</button>
+          <button className={effectiveChartStyle === "area" ? "active" : ""} type="button" aria-pressed={effectiveChartStyle === "area"} disabled={!isTimechartResult} title={!isTimechartResult ? "Area charts require time-series results" : undefined} onClick={() => selectChartStyle("area")}><AppIcon name="analytics" size="sm" /> Area</button>
         </fieldset>
       </header>
       <div
-        className={`visualization-canvas chart-${effectiveChartStyle} legend-${legendPosition}${isLineChart ? " visualization-canvas--line" : ""}${!isTimechartResult ? " visualization-canvas--categorical" : ""}${isPreview ? " visualization-canvas--preview" : ""}`}
+        className={`visualization-canvas chart-${effectiveChartStyle} legend-${legendPosition}${isTimeSeriesChart ? " visualization-canvas--line" : ""}${!isTimechartResult ? " visualization-canvas--categorical" : ""}${isPreview ? " visualization-canvas--preview" : ""}`}
+        data-stack-mode={effectiveStackMode}
         data-testid="visualization-chart"
       >
         {!hasCategoricalChart ? (
@@ -692,8 +728,12 @@ export function VisualizationPanel({
               ? "The live preview has not produced a chart-compatible result shape yet. Statistics will update if compatible provisional rows arrive."
               : "Return one categorical dimension and at least one numeric measure, or use a timechart for a time-series visualization. The complete server result remains available in Statistics."}</p>
           </output>
-        ) : isLineChart ? (
-          <TimeSeriesLineChart points={timelinePoints} />
+        ) : isTimeSeriesChart ? (
+          <TimeSeriesLineChart
+            chartStyle={effectiveChartStyle === "area" ? "area" : "line"}
+            points={timelinePoints}
+            stackMode={effectiveStackMode}
+          />
         ) : isTimechartResult ? (
           <>
             <div className="chart-y-axis" aria-hidden="true">
@@ -734,13 +774,14 @@ export function VisualizationPanel({
             rows={displayedStatisticsRows}
             series={categoricalSeries}
             showDataLabels={showDataLabels}
+            stackMode={effectiveStackMode}
             onApplyPivot={onApplyPivot}
           />
         )}
         {!hasCategoricalChart || legendPosition === "none" ? null : (
           <div className="chart-legend">
             {isTimechartResult
-              ? isLineChart
+              ? isTimeSeriesChart
                 ? timelineSeries.map((name, index) => (
                   <span key={name}>
                     <i style={{ backgroundColor: seriesColor(index) }} />
@@ -774,7 +815,13 @@ export function VisualizationPanel({
           onVisualizationEdited();
           onLegendPositionChange(event.target.value as LegendPosition);
         }}><option value="bottom">Bottom</option><option value="right">Right</option><option value="none">Hidden</option></select></label>
-        {isLineChart ? (
+        {supportsStacking ? (
+          <label><span>Stacking</span><select value={effectiveStackMode} onChange={(event) => {
+            onVisualizationEdited();
+            onStackModeChange(event.target.value as StackMode);
+          }}><option value="none">None</option><option value="stacked">Stacked</option><option value="stacked100">100%</option></select></label>
+        ) : null}
+        {isTimeSeriesChart ? (
           <div className="visualization-interaction-note"><strong>Inspect values</strong><span>Hover, tap, or focus the plot and use the arrow keys.</span></div>
         ) : (
           <>

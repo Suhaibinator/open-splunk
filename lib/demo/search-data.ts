@@ -38,6 +38,14 @@ export interface DemoField {
   values: DemoFieldValue[];
 }
 
+export interface DemoSavedSearchVisualization {
+  chartStyle: "area" | "column" | "horizontal" | "line";
+  legend: "bottom" | "right" | "none";
+  showDataLabels: boolean;
+  stackMode: "none" | "stacked" | "stacked100";
+  title: string;
+}
+
 export interface DemoSavedSearch {
   id: string;
   name: string;
@@ -48,6 +56,7 @@ export interface DemoSavedSearch {
   timezone?: string;
   updatedAt: string;
   owner: string;
+  visualization?: DemoSavedSearchVisualization;
 }
 
 export interface DemoHistoryEntry {

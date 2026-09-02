@@ -58,6 +58,19 @@ export function hasPipelineCommand(query: string, commands: string | readonly st
   });
 }
 
+/** A deliberately small demo-only projection of `timechart ... by <field>`. */
+export function demoTimechartSplitField(query: string): string | null {
+  for (const stage of splitSplPipeline(query).slice(1)) {
+    if (!/^\s*timechart\b/i.test(stage)) continue;
+    const candidates = [...stage.matchAll(/\bby\s+([A-Za-z_][A-Za-z0-9_.-]*)\b/giu)];
+    const match = candidates.toReversed().find((candidate) =>
+      !isSplOffsetInQuotedValue(stage, candidate.index),
+    );
+    if (match?.[1] !== undefined) return match[1];
+  }
+  return null;
+}
+
 function demoHeadLimit(query: string): number | null {
   let effectiveLimit: number | null = null;
   for (const stage of splitSplPipeline(query).slice(1)) {

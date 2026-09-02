@@ -20,7 +20,7 @@ is:
 | Order | File | Ownership |
 | ---: | --- | --- |
 | 1 | `app/styles/tokens-color.css` | primitive palette, semantic colour roles, dark-theme role overrides |
-| 2 | `app/styles/tokens-scale.css` | spacing, radii, type, stacking, elevation, motion, fonts |
+| 2 | `app/styles/tokens-scale.css` | spacing, radii, type, stacking, elevation, motion, opacity, fonts |
 | 3 | `app/styles/base.css` | reset, element defaults, focus ring, shared keyframes |
 | 4 | `app/styles/primitives/button.css` | `.button` and modifiers |
 | 5 | `app/styles/primitives/table.css` | `.table-wrap`, `.table`, modifiers and card mode |
@@ -95,7 +95,7 @@ attribute's effect on the semantic tier, the editor, the completion menu and
 the toast.
 
 `tokens-scale.css` owns the named spacing, radius, typography, page-layer,
-elevation, motion, and font scales. Prefer the nearest existing semantic or
+elevation, motion, opacity, and font scales. Prefer the nearest existing semantic or
 scale token. Do not create a token merely to hide a one-off literal; first ask
 whether the component should use an existing primitive or layout step.
 
