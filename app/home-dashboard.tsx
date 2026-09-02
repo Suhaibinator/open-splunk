@@ -13,6 +13,7 @@ import {
   currentBackendAppId,
   subscribeToBackendAppId,
 } from "@/lib/search/app-navigation";
+import { type ExampleDraftTitle, exampleDraft } from "@/lib/search/example-drafts";
 import { historySearchLaunchHref, searchLaunchHref } from "@/lib/search/launch-url";
 import {
   listServerSearchHistory,
@@ -32,12 +33,20 @@ interface HomeDashboardProps {
 
 type RecentHistoryState = "loading" | "available" | "unavailable" | "error";
 
-const RECENT_SEARCHES: { ago: string; events: string; query: string; title: string; tone: StatusTone }[] = [
-  { title: "Production errors by service", query: "index=gradethis level=ERROR | stats count by service", events: "1,432", ago: "7 min ago", tone: "success" },
-  { title: "Slowest API routes", query: "index=gradethis duration_ms=* | stats p95(duration_ms) AS p95_ms BY path | sort -p95_ms", events: "42", ago: "34 min ago", tone: "success" },
-  { title: "Notification worker retries", query: "index=gradethis logger=notification-worker retry_count>0", events: "391", ago: "Yesterday", tone: "success" },
-  { title: "Checkout trace investigation", query: "index=payments trace_id=\"8e1c…\"", events: "—", ago: "Yesterday", tone: "error" },
-];
+// The preview's recent searches replay the example drafts, so a query this
+// table links to is the one the search workspace's examples gallery loads.
+const RECENT_SEARCHES: { ago: string; events: string; query: string; title: string; tone: StatusTone }[] = ([
+  { title: "Production errors by service", events: "1,432", ago: "7 min ago", tone: "success" },
+  { title: "Slowest API routes", events: "42", ago: "34 min ago", tone: "success" },
+  { title: "Notification worker retries", events: "391", ago: "Yesterday", tone: "success" },
+  { title: "Checkout trace investigation", events: "—", ago: "Yesterday", tone: "error" },
+] satisfies { ago: string; events: string; title: ExampleDraftTitle; tone: StatusTone }[]).map((search) => ({
+  ago: search.ago,
+  events: search.events,
+  query: exampleDraft(search.title).spl,
+  title: search.title,
+  tone: search.tone,
+}));
 
 const recentHistoryErrorMessage = createErrorMessage("The server did not return usable recent search history.");
 

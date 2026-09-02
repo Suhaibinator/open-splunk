@@ -25,6 +25,7 @@ function render(overrides: Partial<SearchEditorProps> = {}): string {
       historyRecallable={false}
       launchPending={false}
       modal={null}
+      platform="mac"
       problems={[]}
       query="index=main"
       onCompletionIndexChange={noop}
@@ -182,6 +183,10 @@ test("an empty completion menu says so without any option", () => {
 test("the help strip offers history recall only when there is history to recall", () => {
   assert.doesNotMatch(render(), /↑↓ history/u);
   assert.match(render({ historyRecallable: true }), /<span>Ctrl\+Space for suggestions<\/span><span>↑↓ history<\/span><span>⌘↵ to run<\/span>/u);
+});
+
+test("the help strip spells the run chord for the platform it is shown on", () => {
+  assert.match(render({ platform: "other" }), /<span>Ctrl\+Space for suggestions<\/span><span>Ctrl\+↵ to run<\/span>/u);
 });
 
 test("a history recall is narrated by the live region until the popup speaks again", () => {

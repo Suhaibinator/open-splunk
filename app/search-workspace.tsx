@@ -109,6 +109,7 @@ import {
   type ServerSearchJobInspectionState,
 } from "@/lib/search/server-inspection";
 import { applyFieldPivot, type PivotMode } from "@/lib/search/query-pivots";
+import { type ExampleDraft, exampleDraftSpl } from "@/lib/search/example-drafts";
 import {
   boundedIndexSearchQuery,
   parseSearchLaunch,
@@ -191,10 +192,13 @@ import { SearchComposer } from "./search-workspace/components/search-composer";
 import type { CompletionItem } from "./search-workspace/components/search-editor";
 import { InactiveResultTabPanels } from "./search-workspace/components/inactive-result-tab-panels";
 import { SearchSharingDialog } from "./search-workspace/components/search-sharing-dialog";
+import { ExamplesDialog, KeyboardShortcutsDialog, SplReferenceDialog } from "./search-workspace/components/search-help-dialogs";
 import { WorkspaceDialogs } from "./search-workspace/components/workspace-dialogs";
 import { serializeRowsAsJsonLinesForClipboard, serializeRowsForClipboard } from "./search-workspace/clipboard-export";
 import { extendsFragment, localCompletions, typeaheadOpens } from "./search-workspace/completion-candidates";
 import { completionKindFromSuggestion, orderCompletions } from "./search-workspace/completion-groups";
+import { isEditableTarget, useKeyboardPlatform } from "./search-workspace/keyboard-shortcuts";
+import type { SplReferenceEntry } from "./search-workspace/spl-reference-data";
 import { historyRecallAnnouncement, historyRecallDirection } from "./search-workspace/editor-history-recall";
 import {
   collapsePageEvents,
@@ -798,6 +802,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const [absoluteStart, setAbsoluteStart] = useState("");
   const [absoluteEnd, setAbsoluteEnd] = useState("");
   const [modal, setModal] = useState<ModalName | null>(null);
+  const keyboardPlatform = useKeyboardPlatform();
   const [menu, setMenu] = useState<MenuName | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
   const [dialogCurrentTimeMs, setDialogCurrentTimeMs] = useState(Date.now);
@@ -2901,6 +2906,21 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     window.addEventListener("keydown", closeTransientUi);
     return () => window.removeEventListener("keydown", closeTransientUi);
   }, [activeField, completionOpen, isRunning, menu, modal, persistedLaunchPending]);
+
+  // `?` outside a text field opens the shortcut sheet, the way it does on
+  // most keyboard-driven web tools; inside a field it types a question mark.
+  useEffect(() => {
+    if (modal !== null) return;
+    function openShortcutSheet(event: globalThis.KeyboardEvent) {
+      if (event.key !== "?" || event.ctrlKey || event.metaKey || event.altKey) return;
+      if (isEditableTarget(event.target)) return;
+      event.preventDefault();
+      setMenu(null);
+      setModal("shortcuts");
+    }
+    window.addEventListener("keydown", openShortcutSheet);
+    return () => window.removeEventListener("keydown", openShortcutSheet);
+  }, [modal]);
 
   useEffect(() => {
     if (menu === null) return;
@@ -5050,10 +5070,12 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     recallCaretRef.current = recall.query.length;
   }
 
-  function insertCompletion(completion: CompletionItem) {
+  // `at` overrides the editor's selection; the reference pane passes the end
+  // of the query so a command it inserts always becomes a new trailing stage.
+  function insertCompletion(completion: CompletionItem, at?: number) {
     const editor = editorRef.current;
-    const selectionStart = editor?.selectionStart ?? editorCaret;
-    const selectionEnd = editor?.selectionEnd ?? selectionStart;
+    const selectionStart = at ?? editor?.selectionStart ?? editorCaret;
+    const selectionEnd = at ?? editor?.selectionEnd ?? selectionStart;
     const edited = insertCompletionIntoQuery(query, selectionStart, selectionEnd, completion);
     if (edited === null) {
       setCompletionOpen(false);
@@ -5065,6 +5087,31 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     setEditorCaret(edited.caret);
     setCompletionOpen(false);
     focusEditor(edited.caret);
+  }
+
+  // Commands from the reference pane go on the end of the pipeline; functions
+  // and keywords land at the caret, where the expression being written is.
+  function insertReferenceEntry(entry: SplReferenceEntry) {
+    if (entry.insertion === null) return;
+    setModal(null);
+    insertCompletion(
+      { kind: entry.kind, label: entry.name, insertion: entry.insertion, detail: entry.detail, relevance: 1 },
+      entry.kind === "command" ? query.length : undefined,
+    );
+  }
+
+  // An example replaces the draft the way pasting it would: nothing runs, the
+  // history walk and any pinned rerun are forgotten, and the editor gets focus.
+  function loadExampleDraft(example: ExampleDraft) {
+    const nextQuery = exampleDraftSpl(example, backendEnabled);
+    setModal(null);
+    setQuery(nextQuery);
+    backendHistoryRerunRef.current = null;
+    historyRecallRef.current = null;
+    setEditorCaret(nextQuery.length);
+    setCompletionOpen(false);
+    showToast(`Loaded “${example.title}” into the editor. Run it when ready.`, "info");
+    focusEditor(nextQuery.length);
   }
 
   function handleEditorChange(event: ChangeEvent<HTMLTextAreaElement>) {
@@ -7009,8 +7056,9 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         {menu === "help" ? (
           <div className="floating-menu utility-menu help-menu" role="menu">
             <span className="menu-label">Search help</span>
-            <button role="menuitem" type="button" onClick={() => showToast("SPL reference will open in a documentation pane.")}>SPL command reference</button>
-            <button role="menuitem" type="button" onClick={() => showToast("Tip: press Ctrl+Space inside the editor for completions.")}>Keyboard shortcuts</button>
+            <button role="menuitem" type="button" onClick={() => { setModal("spl-reference"); setMenu(null); }}>SPL command reference</button>
+            <button role="menuitem" type="button" onClick={() => { setModal("shortcuts"); setMenu(null); }}>Keyboard shortcuts</button>
+            <button role="menuitem" type="button" onClick={() => { setModal("examples"); setMenu(null); }}>Example searches</button>
             <button role="menuitem" type="button" onClick={() => showToast(`Open Splunk ${OPEN_SPLUNK_BUILD_LABEL}`)}>About Open Splunk</button>
           </div>
         ) : null}
@@ -7080,6 +7128,22 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           onClose={saveAsAlert.closeSecret}
         />
       )}
+      {modal === "spl-reference" ? (
+        <SplReferenceDialog
+          onClose={() => setModal(null)}
+          onInsert={insertReferenceEntry}
+          returnFocus={editorRef.current}
+        />
+      ) : null}
+      {modal === "shortcuts" ? <KeyboardShortcutsDialog platform={keyboardPlatform} onClose={() => setModal(null)} /> : null}
+      {modal === "examples" ? (
+        <ExamplesDialog
+          connected={backendEnabled}
+          onClose={() => setModal(null)}
+          onUse={loadExampleDraft}
+          returnFocus={editorRef.current}
+        />
+      ) : null}
       <WorkspaceDialogs
         activeSavedSearchId={activeSavedSearchId}
         activeTab={activeTab}
@@ -7323,6 +7387,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         isRunning={isRunning}
         launchPending={persistedLaunchPending}
         modal={modal}
+        platform={keyboardPlatform}
         problems={problems}
         query={query}
         relativeAmount={relativeAmount}

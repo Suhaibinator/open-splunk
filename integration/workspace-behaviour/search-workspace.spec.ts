@@ -284,3 +284,96 @@ test("arrow keys move the selected result tab and focus follows it", async ({ pa
   await page.keyboard.press("Home");
   await expect(events).toHaveAttribute("aria-selected", "true");
 });
+
+test("Help opens the SPL reference, the filter narrows it, and Insert appends the command as a new stage", async ({ page }) => {
+  await openSeededWorkspace(page);
+  await page.getByRole("button", { name: "Help" }).click();
+  await page.getByRole("menuitem", { name: "SPL command reference" }).click();
+
+  const dialog = page.getByRole("dialog", { name: "SPL reference" });
+  await expect(dialog).toBeVisible();
+  const filter = dialog.getByRole("searchbox", { name: "Filter the SPL reference" });
+  await expect(filter).toBeFocused();
+  await expect(filter).toHaveAttribute("aria-controls", "spl-reference-sections");
+  await expect(dialog.getByRole("navigation", { name: "Reference sections" }).getByRole("button")).toHaveCount(5);
+
+  await filter.fill("mvexpand");
+  const reference = page.getByTestId("spl-reference");
+  await expect(reference.locator(".workspace-dialog-reference-entry")).toHaveCount(1);
+  await expect(reference.locator(".workspace-dialog-reference-name")).toHaveText("mvexpand");
+  await expect(dialog.getByRole("navigation", { name: "Reference sections" }).getByRole("button")).toHaveCount(1);
+
+  await dialog.getByRole("button", { name: "Insert mvexpand" }).click();
+  await expect(dialog).toHaveCount(0);
+  const editor = page.getByTestId("search-input");
+  await expect(editor).toHaveValue(`${SEEDED_QUERY}\n| mvexpand tags limit=100`);
+  await expect(editor).toBeFocused();
+});
+
+test("unsupported commands in the SPL reference are flagged and cannot be inserted", async ({ page }) => {
+  await openSeededWorkspace(page);
+  await page.getByRole("button", { name: "Help" }).click();
+  await page.getByRole("menuitem", { name: "SPL command reference" }).click();
+  const dialog = page.getByRole("dialog", { name: "SPL reference" });
+  await dialog.getByRole("searchbox", { name: "Filter the SPL reference" }).fill("transaction");
+
+  const entry = page.getByTestId("spl-reference").locator(".workspace-dialog-reference-entry");
+  await expect(entry).toHaveCount(1);
+  await expect(entry).toHaveAttribute("data-supported", "false");
+  await expect(entry.getByText("Not supported")).toBeVisible();
+  await expect(dialog.getByRole("button", { name: /^Insert / })).toHaveCount(0);
+
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByTestId("search-input")).toHaveValue(SEEDED_QUERY);
+});
+
+test("? outside a text field opens the shortcut sheet and inside the editor types a question mark", async ({ page }) => {
+  await openSeededWorkspace(page);
+  const editor = page.getByTestId("search-input");
+  await focusEditorEnd(page);
+  await page.keyboard.press("Shift+?");
+  await expect(editor).toHaveValue(`${SEEDED_QUERY}?`);
+  await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Run search" }).focus();
+  await page.keyboard.press("Shift+?");
+  const dialog = page.getByRole("dialog", { name: "Keyboard shortcuts" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("heading", { level: 3 })).toHaveText(["Search editor", "Completion popup", "Anywhere in the workspace"]);
+  await expect(dialog.locator("kbd").first()).toHaveText("Ctrl");
+
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(editor).toHaveValue(`${SEEDED_QUERY}?`);
+});
+
+test("Help opens the shortcut sheet from the menu", async ({ page }) => {
+  await openSeededWorkspace(page);
+  await page.getByRole("button", { name: "Help" }).click();
+  await page.getByRole("menuitem", { name: "Keyboard shortcuts" }).click();
+  await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeVisible();
+  await expect(page.getByTestId("keyboard-shortcuts").locator("dd")).toHaveCount(9);
+});
+
+test("Help opens the examples gallery and Use loads a draft without running it", async ({ page }) => {
+  await openSeededWorkspace(page);
+  await page.getByRole("button", { name: "Help" }).click();
+  await page.getByRole("menuitem", { name: "Example searches" }).click();
+
+  const dialog = page.getByRole("dialog", { name: "Example searches" });
+  await expect(dialog).toBeVisible();
+  const gallery = page.getByTestId("example-searches");
+  await expect(gallery.getByRole("button", { name: /^Use / })).toHaveCount(7);
+  // The demo export keeps the preview index selectors; only a server drops them.
+  await expect(gallery.locator(".workspace-dialog-example-spl").first()).toHaveText("index=gradethis level=ERROR | stats count by service");
+  await expect(gallery.locator(".workspace-dialog-example-note")).toHaveCount(0);
+
+  await dialog.getByRole("button", { name: "Use Slowest API routes" }).click();
+  await expect(dialog).toHaveCount(0);
+  const editor = page.getByTestId("search-input");
+  await expect(editor).toHaveValue("index=gradethis duration_ms=* | stats p95(duration_ms) AS p95_ms BY path | sort -p95_ms");
+  await expect(editor).toBeFocused();
+  await expect(page.getByTestId("toast")).toContainText("Loaded “Slowest API routes” into the editor.");
+  await expect(page.getByTestId("run-search")).toHaveAttribute("aria-label", "Run search");
+});

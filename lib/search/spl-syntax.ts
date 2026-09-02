@@ -4,6 +4,10 @@ export interface SplPipelineCommandDefinition {
   readonly name: string;
   readonly insertion: string;
   readonly detail: string;
+  /** Usage line for the reference pane; the catalog may omit it. */
+  readonly syntax?: string;
+  /** Prose for the reference pane; the catalog may omit it. */
+  readonly documentation?: string;
 }
 
 export interface SplFunctionDefinition {
