@@ -2557,6 +2557,7 @@ func testCompiledQueriesAgainstClickHouse(
 	testSubstringAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testToStringAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testScalarPackAgainstClickHouse(ctx, t, store, connection, indexTime)
+	testCommandOptionPackAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testConcatAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testRoundAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testIntegralRoundingAgainstClickHouse(ctx, t, store, connection, indexTime)
