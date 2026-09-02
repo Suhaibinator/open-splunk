@@ -1,5 +1,7 @@
 import { useId, useMemo, useState } from "react";
 
+import { EXAMPLE_DRAFTS, type ExampleDraft, exampleDraftSpl } from "@/lib/search/example-drafts";
+
 import { AppIcon } from "../../_components/app-icon";
 import { Modal } from "../../_components/modal";
 
@@ -165,6 +167,52 @@ export function KeyboardShortcutsDialog({ onClose, platform }: KeyboardShortcuts
           </section>
         ))}
       </div>
+    </Modal>
+  );
+}
+
+export interface ExamplesDialogProps {
+  /** Whether a server is connected, which drops the preview index selectors. */
+  connected: boolean;
+  examples?: readonly ExampleDraft[];
+  onClose: () => void;
+  /** Places the example in the editor as a draft; the workspace never runs it. */
+  onUse: (example: ExampleDraft) => void;
+  returnFocus?: HTMLElement | null;
+}
+
+export function ExamplesDialog({
+  connected,
+  examples = EXAMPLE_DRAFTS,
+  onClose,
+  onUse,
+  returnFocus = null,
+}: ExamplesDialogProps) {
+  const headingPrefix = useId();
+  return (
+    <Modal
+      title="Example searches"
+      subtitle={connected
+        ? "Starting points to adapt. Use one to put it in the editor; it runs when you do."
+        : "Starting points over the preview data. Use one to put it in the editor; it runs when you do."}
+      onClose={onClose}
+      returnFocus={returnFocus}
+    >
+      <ul className="workspace-dialog-examples" data-testid="example-searches">
+        {examples.map((example, index) => (
+          <li className="workspace-dialog-example" aria-labelledby={`${headingPrefix}-${index}`} key={example.title}>
+            <div className="workspace-dialog-example-head">
+              <h3 id={`${headingPrefix}-${index}`}>{example.title}</h3>
+              <button className="button button--secondary button--compact" type="button" aria-label={`Use ${example.title}`} onClick={() => onUse(example)}>Use</button>
+            </div>
+            <pre className="workspace-dialog-example-spl"><code>{exampleDraftSpl(example, connected)}</code></pre>
+            <p className="workspace-dialog-example-prose">{example.description}</p>
+            {connected && example.needsIndex
+              ? <p className="workspace-dialog-example-note">Written against the preview data; without its index selector it runs in the selected app's indexes, so add <code>index=</code> to point it elsewhere.</p>
+              : null}
+          </li>
+        ))}
+      </ul>
     </Modal>
   );
 }

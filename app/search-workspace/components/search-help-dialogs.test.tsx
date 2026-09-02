@@ -3,9 +3,11 @@ import test from "node:test";
 
 import { renderToStaticMarkup } from "react-dom/server";
 
+import { EXAMPLE_DRAFTS, exampleDraft } from "@/lib/search/example-drafts";
+
 import { KEYBOARD_SHORTCUTS } from "../keyboard-shortcuts";
 import { SPL_REFERENCE_SECTIONS } from "../spl-reference-data";
-import { KeyboardShortcutsDialog, SplReferenceDialog } from "./search-help-dialogs";
+import { ExamplesDialog, KeyboardShortcutsDialog, SplReferenceDialog } from "./search-help-dialogs";
 
 const noop = () => undefined;
 
@@ -43,4 +45,39 @@ test("the shortcut sheet lists every shortcut as a definition with keycaps for t
   const other = renderToStaticMarkup(<KeyboardShortcutsDialog platform="other" onClose={noop} />);
   assert.match(other, /<kbd>Ctrl<\/kbd><kbd>Enter<\/kbd><\/span><\/dt><dd>Run the search<\/dd>/u);
   assert.doesNotMatch(other, /⌘/u);
+});
+
+test("the examples gallery offers Use for every example and shows the preview SPL as written", () => {
+  const markup = renderToStaticMarkup(<ExamplesDialog connected={false} onClose={noop} onUse={noop} />);
+  assert.match(markup, /<h2 id="[^"]+">Example searches<\/h2>/u);
+  assert.match(markup, /<ul class="workspace-dialog-examples" data-testid="example-searches">/u);
+  const useButtons = markup.match(/aria-label="Use [^"]+"/gu) ?? [];
+  assert.equal(useButtons.length, EXAMPLE_DRAFTS.length);
+  for (const example of EXAMPLE_DRAFTS) {
+    assert.match(markup, new RegExp(`<h3 id="[^"]+">${example.title}</h3>`, "u"));
+  }
+  assert.match(markup, /<pre class="workspace-dialog-example-spl"><code>index=gradethis level=ERROR \| stats count by service<\/code><\/pre>/u);
+  assert.doesNotMatch(markup, /workspace-dialog-example-note/u);
+});
+
+test("connected to a server the gallery drops the preview index selectors and says so", () => {
+  const markup = renderToStaticMarkup(<ExamplesDialog connected onClose={noop} onUse={noop} />);
+  assert.doesNotMatch(markup, /<code>index=gradethis/u);
+  assert.match(markup, /<pre class="workspace-dialog-example-spl"><code>level=ERROR \| stats count by service<\/code><\/pre>/u);
+  assert.match(markup, /<pre class="workspace-dialog-example-spl"><code>\* \| timechart span=5m count<\/code><\/pre>/u);
+  const notes = markup.match(/class="workspace-dialog-example-note"/gu) ?? [];
+  assert.equal(notes.length, EXAMPLE_DRAFTS.filter((example) => example.needsIndex).length);
+});
+
+test("the gallery lists exactly the examples it is given, each labelled by its heading", () => {
+  const example = exampleDraft("Slowest API routes");
+  const markup = renderToStaticMarkup(
+    <ExamplesDialog connected={false} examples={[example]} onClose={noop} onUse={noop} />,
+  );
+  const useButtons = markup.match(/aria-label="Use [^"]+"/gu) ?? [];
+  assert.deepEqual(useButtons, ['aria-label="Use Slowest API routes"']);
+  const labelled = /<li class="workspace-dialog-example" aria-labelledby="([^"]+)"><div class="workspace-dialog-example-head"><h3 id="([^"]+)">Slowest API routes<\/h3>/u.exec(markup);
+  assert.ok(labelled !== null);
+  assert.equal(labelled[1], labelled[2]);
+  assert.match(markup, /<p class="workspace-dialog-example-prose">Ranks request paths by their 95th-percentile latency, slowest at the top\.<\/p>/u);
 });

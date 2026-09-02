@@ -612,6 +612,7 @@
   background: var(--bg-canvas);
 }
 
+.workspace-dialog-example-head,
 .workspace-dialog-reference-entry-head {
   align-items: center;
   display: flex;
@@ -631,6 +632,8 @@
   text-decoration: line-through;
 }
 
+/* One code block for the reference's syntax lines and the gallery's drafts. */
+.workspace-dialog-example-spl,
 .workspace-dialog-reference-syntax {
   background: var(--bg-canvas);
   border: 1px solid var(--border-subtle);
@@ -645,6 +648,7 @@
   white-space: pre-wrap;
 }
 
+.workspace-dialog-example-prose,
 .workspace-dialog-reference-prose {
   color: var(--fg-secondary);
   font-size: var(--type-sm);
@@ -760,4 +764,36 @@
   min-width: 22px;
   padding: var(--space-1) 6px;
   text-align: center;
+}
+
+/* Examples gallery */
+.workspace-dialog-examples {
+  display: grid;
+  gap: var(--space-3);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.workspace-dialog-example {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px var(--space-3) var(--space-3);
+}
+
+.workspace-dialog-example-head h3 {
+  font-size: var(--type-md);
+  margin: 0;
+}
+
+.workspace-dialog-example-note {
+  border-left: 2px solid var(--border-strong);
+  color: var(--fg-secondary);
+  font-size: var(--type-xs);
+  line-height: 1.5;
+  margin: 0;
+  padding-left: var(--space-2);
 }

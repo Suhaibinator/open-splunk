@@ -109,6 +109,7 @@ import {
   type ServerSearchJobInspectionState,
 } from "@/lib/search/server-inspection";
 import { applyFieldPivot, type PivotMode } from "@/lib/search/query-pivots";
+import { type ExampleDraft, exampleDraftSpl } from "@/lib/search/example-drafts";
 import {
   boundedIndexSearchQuery,
   parseSearchLaunch,
@@ -186,7 +187,7 @@ import { SearchComposer } from "./search-workspace/components/search-composer";
 import type { CompletionItem } from "./search-workspace/components/search-editor";
 import { InactiveResultTabPanels } from "./search-workspace/components/inactive-result-tab-panels";
 import { SearchSharingDialog } from "./search-workspace/components/search-sharing-dialog";
-import { KeyboardShortcutsDialog, SplReferenceDialog } from "./search-workspace/components/search-help-dialogs";
+import { ExamplesDialog, KeyboardShortcutsDialog, SplReferenceDialog } from "./search-workspace/components/search-help-dialogs";
 import { WorkspaceDialogs } from "./search-workspace/components/workspace-dialogs";
 import { serializeRowsAsJsonLinesForClipboard, serializeRowsForClipboard } from "./search-workspace/clipboard-export";
 import { extendsFragment, localCompletions, typeaheadOpens } from "./search-workspace/completion-candidates";
@@ -5089,6 +5090,20 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     );
   }
 
+  // An example replaces the draft the way pasting it would: nothing runs, the
+  // history walk and any pinned rerun are forgotten, and the editor gets focus.
+  function loadExampleDraft(example: ExampleDraft) {
+    const nextQuery = exampleDraftSpl(example, backendEnabled);
+    setModal(null);
+    setQuery(nextQuery);
+    backendHistoryRerunRef.current = null;
+    historyRecallRef.current = null;
+    setEditorCaret(nextQuery.length);
+    setCompletionOpen(false);
+    showToast(`Loaded “${example.title}” into the editor. Run it when ready.`, "info");
+    focusEditor(nextQuery.length);
+  }
+
   function handleEditorChange(event: ChangeEvent<HTMLTextAreaElement>) {
     const nextQuery = event.target.value;
     const caret = event.target.selectionStart;
@@ -7033,6 +7048,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
             <span className="menu-label">Search help</span>
             <button role="menuitem" type="button" onClick={() => { setModal("spl-reference"); setMenu(null); }}>SPL command reference</button>
             <button role="menuitem" type="button" onClick={() => { setModal("shortcuts"); setMenu(null); }}>Keyboard shortcuts</button>
+            <button role="menuitem" type="button" onClick={() => { setModal("examples"); setMenu(null); }}>Example searches</button>
             <button role="menuitem" type="button" onClick={() => showToast(`Open Splunk ${OPEN_SPLUNK_BUILD_LABEL}`)}>About Open Splunk</button>
           </div>
         ) : null}
@@ -7109,6 +7125,14 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         />
       ) : null}
       {modal === "shortcuts" ? <KeyboardShortcutsDialog platform={keyboardPlatform} onClose={() => setModal(null)} /> : null}
+      {modal === "examples" ? (
+        <ExamplesDialog
+          connected={backendEnabled}
+          onClose={() => setModal(null)}
+          onUse={loadExampleDraft}
+          returnFocus={editorRef.current}
+        />
+      ) : null}
       <WorkspaceDialogs
         activeSavedSearchId={activeSavedSearchId}
         activeTab={activeTab}

@@ -355,3 +355,25 @@ test("Help opens the shortcut sheet from the menu", async ({ page }) => {
   await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeVisible();
   await expect(page.getByTestId("keyboard-shortcuts").locator("dd")).toHaveCount(9);
 });
+
+test("Help opens the examples gallery and Use loads a draft without running it", async ({ page }) => {
+  await openSeededWorkspace(page);
+  await page.getByRole("button", { name: "Help" }).click();
+  await page.getByRole("menuitem", { name: "Example searches" }).click();
+
+  const dialog = page.getByRole("dialog", { name: "Example searches" });
+  await expect(dialog).toBeVisible();
+  const gallery = page.getByTestId("example-searches");
+  await expect(gallery.getByRole("button", { name: /^Use / })).toHaveCount(7);
+  // The demo export keeps the preview index selectors; only a server drops them.
+  await expect(gallery.locator(".workspace-dialog-example-spl").first()).toHaveText("index=gradethis level=ERROR | stats count by service");
+  await expect(gallery.locator(".workspace-dialog-example-note")).toHaveCount(0);
+
+  await dialog.getByRole("button", { name: "Use Slowest API routes" }).click();
+  await expect(dialog).toHaveCount(0);
+  const editor = page.getByTestId("search-input");
+  await expect(editor).toHaveValue("index=gradethis duration_ms=* | stats p95(duration_ms) AS p95_ms BY path | sort -p95_ms");
+  await expect(editor).toBeFocused();
+  await expect(page.getByTestId("toast")).toContainText("Loaded “Slowest API routes” into the editor.");
+  await expect(page.getByTestId("run-search")).toHaveAttribute("aria-label", "Run search");
+});
