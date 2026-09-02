@@ -1246,7 +1246,6 @@ func TestCompileTimeBinRejectsForgedPlans(t *testing.T) {
 	}{
 		{name: "zero span", mutate: func(bucket *plan.TimeBucket) { bucket.Span = 0 }},
 		{name: "subsecond span", mutate: func(bucket *plan.TimeBucket) { bucket.Span = time.Millisecond }},
-		{name: "day span", mutate: func(bucket *plan.TimeBucket) { bucket.Span = 24 * time.Hour }},
 		{name: "oversized span", mutate: func(bucket *plan.TimeBucket) { bucket.Span = 25 * time.Hour }},
 		{name: "wrong field", mutate: func(bucket *plan.TimeBucket) {
 			bucket.Field = plan.FieldRef{Name: "status", Path: []string{"status"}}

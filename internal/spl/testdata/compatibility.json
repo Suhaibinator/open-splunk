@@ -2431,6 +2431,220 @@
         ]
       }
     },
+    "reference.calendar-spring-day": {
+      "runner": "reference",
+      "input": {
+        "schema": [
+          {
+            "name": "_time",
+            "kind": "time",
+            "nullable": false,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "time": 1772971200
+            }
+          ],
+          [
+            {
+              "time": 1773057600
+            }
+          ]
+        ]
+      },
+      "program": [
+        {
+          "op": "bin",
+          "field": "_time",
+          "output": "_time",
+          "calendar": "day",
+          "timezone": "America/New_York"
+        }
+      ],
+      "expected": {
+        "schema": [
+          {
+            "name": "_time",
+            "kind": "time",
+            "nullable": false,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "time": 1772946000
+            }
+          ],
+          [
+            {
+              "time": 1773028800
+            }
+          ]
+        ]
+      }
+    },
+    "reference.calendar-fall-day": {
+      "runner": "reference",
+      "input": {
+        "schema": [
+          {
+            "name": "_time",
+            "kind": "time",
+            "nullable": false,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "time": 1793534400
+            }
+          ],
+          [
+            {
+              "time": 1793620800
+            }
+          ]
+        ]
+      },
+      "program": [
+        {
+          "op": "bin",
+          "field": "_time",
+          "output": "_time",
+          "calendar": "day",
+          "timezone": "America/New_York"
+        }
+      ],
+      "expected": {
+        "schema": [
+          {
+            "name": "_time",
+            "kind": "time",
+            "nullable": false,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "time": 1793505600
+            }
+          ],
+          [
+            {
+              "time": 1793595600
+            }
+          ]
+        ]
+      }
+    },
+    "reference.calendar-utc-day": {
+      "runner": "reference",
+      "input": {
+        "schema": [
+          {
+            "name": "_time",
+            "kind": "time",
+            "nullable": false,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "time": 1784635200
+            }
+          ]
+        ]
+      },
+      "program": [
+        {
+          "op": "bin",
+          "field": "_time",
+          "output": "_time",
+          "calendar": "day",
+          "timezone": "UTC"
+        }
+      ],
+      "expected": {
+        "schema": [
+          {
+            "name": "_time",
+            "kind": "time",
+            "nullable": false,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "time": 1784592000
+            }
+          ]
+        ]
+      }
+    },
+    "reference.calendar-sunday-week": {
+      "runner": "reference",
+      "input": {
+        "schema": [
+          {
+            "name": "_time",
+            "kind": "time",
+            "nullable": false,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "time": 1798718400
+            }
+          ],
+          [
+            {
+              "time": 1798977600
+            }
+          ]
+        ]
+      },
+      "program": [
+        {
+          "op": "bin",
+          "field": "_time",
+          "output": "_time",
+          "calendar": "week",
+          "timezone": "UTC"
+        }
+      ],
+      "expected": {
+        "schema": [
+          {
+            "name": "_time",
+            "kind": "time",
+            "nullable": false,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "time": 1798329600
+            }
+          ],
+          [
+            {
+              "time": 1798934400
+            }
+          ]
+        ]
+      }
+    },
     "reference.composed-order": {
       "runner": "reference",
       "input": {
@@ -3378,6 +3592,62 @@
           "expect": {
             "parse": "accept",
             "commands": 11
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-CALENDAR-SPAN-001",
+      "summary": "Calendar bins accept only one local day or one Sunday-aligned local week in the effective IANA timezone.",
+      "cases": [
+        {
+          "name": "spring daylight-saving day",
+          "source": "index=main | bin _time span=1d",
+          "fixture": "reference.calendar-spring-day",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "fall daylight-saving day",
+          "source": "index=main | bin _time span=1d",
+          "fixture": "reference.calendar-fall-day",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "UTC day",
+          "source": "index=main | bin _time span=1d",
+          "fixture": "reference.calendar-utc-day",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "Sunday week across year",
+          "source": "index=main | bin _time span=1w",
+          "fixture": "reference.calendar-sunday-week",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "multi-day rejected",
+          "source": "index=main | timechart span=2d count",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_CALENDAR_SPAN",
+            "diagnostic_phase": "parser",
+            "suggestion": "span=1d"
+          }
+        },
+        {
+          "name": "multi-week rejected",
+          "source": "index=main | bin _time span=2w",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_CALENDAR_SPAN",
+            "diagnostic_phase": "parser",
+            "suggestion": "span=1d"
           }
         }
       ]

@@ -97,6 +97,7 @@ func TestProjectLogicalPlanCoversEveryCurrentOperator(t *testing.T) {
 			},
 			&plan.Timechart{
 				Time: plan.FieldRef{Name: "_time", Canonical: true},
+				Span: time.Minute,
 				Measure: plan.AggregateMeasure{
 					Function: plan.AggregateFunctionCountRows,
 					Output:   "count",

@@ -275,7 +275,7 @@ func TestAnalyzeAcceptsValidTimechartCountFieldMeasure(t *testing.T) {
 		},
 	} {
 		analysis, err := Analyze(&Query{Operators: []Operator{&Timechart{
-			Time: timeField, Measure: valid, Split: split,
+			Time: timeField, Measure: valid, Split: split, Span: time.Minute,
 		}}})
 		if err != nil {
 			t.Fatalf("Analyze(valid split=%t): %v", split != nil, err)
@@ -345,7 +345,7 @@ func TestAnalyzeRejectsForgedTimechartCountFieldMeasures(t *testing.T) {
 			t.Parallel()
 
 			_, err := Analyze(&Query{Operators: []Operator{&Timechart{
-				Time: timeField, Measure: test.measure, Split: test.split,
+				Time: timeField, Measure: test.measure, Split: test.split, Span: time.Minute,
 			}}})
 			if err == nil {
 				t.Fatal("Analyze succeeded, want forged timechart rejection")

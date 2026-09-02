@@ -1162,9 +1162,9 @@ func (*StreamStatsCommand) command()             {}
 func (*StreamStatsCommand) Name() string         { return "streamstats" }
 func (c *StreamStatsCommand) SourceRange() Range { return c.Range }
 
-// TimeSpanUnit identifies the fixed-duration units shared by the initial bin
-// and timechart compatibility slices. Calendar and subsecond spans require
-// separate alignment semantics and are rejected rather than approximated.
+// TimeSpanUnit identifies the duration and calendar units shared by bin and
+// timechart. Day and week are calendar units whose alignment is resolved by
+// the planner in the effective search timezone.
 type TimeSpanUnit uint8
 
 const (
@@ -1172,6 +1172,8 @@ const (
 	TimeSpanUnitSecond
 	TimeSpanUnitMinute
 	TimeSpanUnitHour
+	TimeSpanUnitDay
+	TimeSpanUnitWeek
 )
 
 // String returns the canonical SPL suffix for unit.
@@ -1183,12 +1185,16 @@ func (unit TimeSpanUnit) String() string {
 		return "m"
 	case TimeSpanUnitHour:
 		return "h"
+	case TimeSpanUnitDay:
+		return "d"
+	case TimeSpanUnitWeek:
+		return "w"
 	default:
 		return ""
 	}
 }
 
-// TimeSpan is one source-located positive fixed-duration span.
+// TimeSpan is one source-located positive duration or calendar span.
 type TimeSpan struct {
 	Magnitude uint64
 	Unit      TimeSpanUnit

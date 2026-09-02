@@ -784,6 +784,27 @@
       }
     },
     {
+      "id": "bin.span-day",
+      "command": "bin",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/bin",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "bin _time span=1d",
+        "verified_on": "2026-09-01"
+      },
+      "query": "index=main | bin _time span=1d",
+      "expect": {
+        "commands": ["bin"],
+        "facets": {
+          "field": "_time",
+          "output": "",
+          "span": "1d"
+        }
+      }
+    },
+    {
       "id": "bucket.time-span",
       "command": "bucket",
       "source": {
@@ -822,6 +843,30 @@
           "aggregate": "count",
           "limit": "10",
           "span": "1h",
+          "split_by": "",
+          "usenull": "true",
+          "useother": "true"
+        }
+      }
+    },
+    {
+      "id": "timechart.span-day",
+      "command": "timechart",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/timechart",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "timechart span=1d count",
+        "verified_on": "2026-09-01"
+      },
+      "query": "index=main | timechart span=1d count",
+      "expect": {
+        "commands": ["timechart"],
+        "facets": {
+          "aggregate": "count",
+          "limit": "10",
+          "span": "1d",
           "split_by": "",
           "usenull": "true",
           "useother": "true"
