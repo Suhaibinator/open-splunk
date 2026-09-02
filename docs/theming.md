@@ -78,11 +78,21 @@ To recolour an existing role, change its tier-2 mapping. Add a tier-2 token only
 when the role is genuinely new, with a one-line role comment. Never reference a
 tier-1 palette token from a component.
 
-The `:root[data-theme="dark"]` block restates tier 2 only. No product control
-currently sets that attribute, so it is an architectural theme definition, not
-a shipped user-selectable mode. A future theme switch must set the attribute at
-the document root, define persistence and initial-render behavior, and add
-computed-style contracts before it is advertised.
+The `:root[data-theme="dark"]` block restates tier 2 only. The attribute is
+owned by `lib/theme-preference.ts`: the user popover's Theme group (System,
+Light, Dark) stores an explicit `light` or `dark` under one `localStorage` key
+and removes it for System, and `resolveTheme` folds that choice together with
+`matchMedia("(prefers-color-scheme: dark)")` into the value written to
+`<html data-theme>`. `app/layout.tsx` inlines `THEME_BOOT_SCRIPT` -- the same
+resolution as a fixed string -- as the first child of `<head>`, ahead of every
+stylesheet, so a static-export page paints in the right theme on first load;
+`ThemeSync` then follows the operating system's own switch while the
+preference is System and picks up a choice made in another tab. The media
+query is read in JavaScript only: `.stylelintrc.json` keeps
+`prefers-color-scheme` out of the CSS so that one place decides the theme and
+the switch can always override it. `integration/style-contracts` pins the
+attribute's effect on the semantic tier, the editor, the completion menu and
+the toast.
 
 `tokens-scale.css` owns the named spacing, radius, typography, page-layer,
 elevation, motion, and font scales. Prefer the nearest existing semantic or

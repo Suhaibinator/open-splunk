@@ -937,7 +937,7 @@
   }
 
   .fields-mobile-dismiss {
-    background: color-mix(in srgb, var(--bg-inverse) 24%, transparent);
+    background: color-mix(in srgb, var(--bg-scrim) 24%, transparent);
     border: 0;
     display: block;
     inset: 0;
