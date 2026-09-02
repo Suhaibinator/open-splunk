@@ -510,3 +510,177 @@
     margin-bottom: 3px;
   }
 }
+
+/* SPL reference */
+.workspace-dialog-reference-count {
+  color: var(--fg-muted);
+  flex: 0 0 auto;
+  font-size: var(--type-xs);
+  white-space: nowrap;
+}
+
+.workspace-dialog-reference {
+  align-items: start;
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: 180px minmax(0, 1fr);
+}
+
+/* The section list stays in view while the entries scroll under it; the
+   modal body is the scroll container, so sticky is enough. */
+.workspace-dialog-reference-nav {
+  position: sticky;
+  top: 0;
+}
+
+.workspace-dialog-reference-nav ul {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.workspace-dialog-reference-nav button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--fg-secondary);
+  display: flex;
+  font-size: var(--type-sm);
+  gap: var(--space-2);
+  justify-content: space-between;
+  padding: 6px 9px;
+  text-align: left;
+  width: 100%;
+}
+
+.workspace-dialog-reference-nav button:hover {
+  background: var(--bg-raised);
+  color: var(--fg-text);
+}
+
+.workspace-dialog-reference-nav-count {
+  color: var(--fg-faint);
+  font-size: var(--type-xxs);
+  font-variant-numeric: tabular-nums;
+}
+
+.workspace-dialog-reference-sections {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
+.workspace-dialog-reference-section h3 {
+  font-size: var(--type-md);
+  margin: 0;
+}
+
+.workspace-dialog-reference-summary {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  margin: 3px 0 var(--space-3);
+}
+
+.workspace-dialog-reference-list {
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.workspace-dialog-reference-entry {
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px var(--space-3);
+}
+
+.workspace-dialog-reference-entry:last-child {
+  border-bottom: 0;
+}
+
+.workspace-dialog-reference-entry[data-supported="false"] {
+  background: var(--bg-canvas);
+}
+
+.workspace-dialog-reference-entry-head {
+  align-items: center;
+  display: flex;
+  gap: var(--space-2);
+  justify-content: space-between;
+}
+
+.workspace-dialog-reference-name {
+  color: var(--syntax-command);
+  font-family: var(--font-mono);
+  font-size: var(--type-md);
+  font-weight: 600;
+}
+
+.workspace-dialog-reference-entry[data-supported="false"] .workspace-dialog-reference-name {
+  color: var(--fg-muted);
+  text-decoration: line-through;
+}
+
+.workspace-dialog-reference-syntax {
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--fg-text);
+  font-family: var(--font-mono);
+  font-size: var(--type-xs);
+  line-height: 1.5;
+  margin: 0;
+  overflow-x: auto;
+  padding: 6px 9px;
+  white-space: pre-wrap;
+}
+
+.workspace-dialog-reference-prose {
+  color: var(--fg-secondary);
+  font-size: var(--type-sm);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.workspace-dialog-reference-contract {
+  font-size: var(--type-xs);
+}
+
+.workspace-dialog-reference-contract summary {
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.workspace-dialog-reference-contract p {
+  color: var(--fg-muted);
+  line-height: 1.5;
+  margin: var(--space-1) 0 0;
+}
+
+@media (max-width: 760px) {
+  .workspace-dialog-reference {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace-dialog-reference-nav {
+    position: static;
+  }
+
+  .workspace-dialog-reference-nav ul {
+    flex-flow: row wrap;
+  }
+
+  .workspace-dialog-reference-nav button {
+    width: auto;
+  }
+}

@@ -12,7 +12,7 @@ import (
 var completionCatalogJSON []byte
 
 type completionCatalogDocument struct {
-	Commands  []completionCatalogEntry  `json:"commands"`
+	Commands  []completionCommandEntry  `json:"commands"`
 	Functions []completionFunctionEntry `json:"functions"`
 	Keywords  []completionKeywordEntry  `json:"keywords"`
 }
@@ -21,6 +21,16 @@ type completionCatalogEntry struct {
 	Name      string `json:"name"`
 	Insertion string `json:"insertion"`
 	Detail    string `json:"detail"`
+}
+
+// completionCommandEntry adds the reference-pane fields a command may carry.
+// Both are optional so the catalog stays a completion catalog first, but an
+// entry that states one must not leave it blank: the UI renders whatever is
+// present, and an empty string would render as a missing row.
+type completionCommandEntry struct {
+	completionCatalogEntry
+	Syntax        *string `json:"syntax,omitempty"`
+	Documentation *string `json:"documentation,omitempty"`
 }
 
 type completionFunctionEntry struct {
@@ -56,7 +66,13 @@ func mustLoadCompletionCatalog() completionCatalogDocument {
 		seen[key] = entry.Name
 	}
 	for _, command := range catalog.Commands {
-		validateEntry("command", command)
+		validateEntry("command", command.completionCatalogEntry)
+		if command.Syntax != nil && *command.Syntax == "" {
+			panic(fmt.Sprintf("decode SPL completion catalog: blank syntax on command %q", command.Name))
+		}
+		if command.Documentation != nil && *command.Documentation == "" {
+			panic(fmt.Sprintf("decode SPL completion catalog: blank documentation on command %q", command.Name))
+		}
 	}
 	for _, function := range catalog.Functions {
 		validateEntry("function", function.completionCatalogEntry)

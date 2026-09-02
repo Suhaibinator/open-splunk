@@ -284,3 +284,46 @@ test("arrow keys move the selected result tab and focus follows it", async ({ pa
   await page.keyboard.press("Home");
   await expect(events).toHaveAttribute("aria-selected", "true");
 });
+
+test("Help opens the SPL reference, the filter narrows it, and Insert appends the command as a new stage", async ({ page }) => {
+  await openSeededWorkspace(page);
+  await page.getByRole("button", { name: "Help" }).click();
+  await page.getByRole("menuitem", { name: "SPL command reference" }).click();
+
+  const dialog = page.getByRole("dialog", { name: "SPL reference" });
+  await expect(dialog).toBeVisible();
+  const filter = dialog.getByRole("searchbox", { name: "Filter the SPL reference" });
+  await expect(filter).toBeFocused();
+  await expect(filter).toHaveAttribute("aria-controls", "spl-reference-sections");
+  await expect(dialog.getByRole("navigation", { name: "Reference sections" }).getByRole("button")).toHaveCount(5);
+
+  await filter.fill("mvexpand");
+  const reference = page.getByTestId("spl-reference");
+  await expect(reference.locator(".workspace-dialog-reference-entry")).toHaveCount(1);
+  await expect(reference.locator(".workspace-dialog-reference-name")).toHaveText("mvexpand");
+  await expect(dialog.getByRole("navigation", { name: "Reference sections" }).getByRole("button")).toHaveCount(1);
+
+  await dialog.getByRole("button", { name: "Insert mvexpand" }).click();
+  await expect(dialog).toHaveCount(0);
+  const editor = page.getByTestId("search-input");
+  await expect(editor).toHaveValue(`${SEEDED_QUERY}\n| mvexpand tags limit=100`);
+  await expect(editor).toBeFocused();
+});
+
+test("unsupported commands in the SPL reference are flagged and cannot be inserted", async ({ page }) => {
+  await openSeededWorkspace(page);
+  await page.getByRole("button", { name: "Help" }).click();
+  await page.getByRole("menuitem", { name: "SPL command reference" }).click();
+  const dialog = page.getByRole("dialog", { name: "SPL reference" });
+  await dialog.getByRole("searchbox", { name: "Filter the SPL reference" }).fill("transaction");
+
+  const entry = page.getByTestId("spl-reference").locator(".workspace-dialog-reference-entry");
+  await expect(entry).toHaveCount(1);
+  await expect(entry).toHaveAttribute("data-supported", "false");
+  await expect(entry.getByText("Not supported")).toBeVisible();
+  await expect(dialog.getByRole("button", { name: /^Insert / })).toHaveCount(0);
+
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByTestId("search-input")).toHaveValue(SEEDED_QUERY);
+});

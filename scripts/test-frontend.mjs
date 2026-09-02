@@ -98,6 +98,8 @@ const testFiles = [
   path.join("app", "search-workspace", "completion-groups.test.ts"),
   path.join("app", "search-workspace", "completion-candidates.test.ts"),
   path.join("lib", "search", "spl-diagnostic-markers.test.ts"),
+  path.join("app", "search-workspace", "spl-reference-data.test.ts"),
+  path.join("app", "search-workspace", "components", "search-help-dialogs.test.tsx"),
 ];
 
 function run(command, arguments_, environment = process.env) {

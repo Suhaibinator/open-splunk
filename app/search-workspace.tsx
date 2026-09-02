@@ -186,10 +186,12 @@ import { SearchComposer } from "./search-workspace/components/search-composer";
 import type { CompletionItem } from "./search-workspace/components/search-editor";
 import { InactiveResultTabPanels } from "./search-workspace/components/inactive-result-tab-panels";
 import { SearchSharingDialog } from "./search-workspace/components/search-sharing-dialog";
+import { SplReferenceDialog } from "./search-workspace/components/search-help-dialogs";
 import { WorkspaceDialogs } from "./search-workspace/components/workspace-dialogs";
 import { serializeRowsAsJsonLinesForClipboard, serializeRowsForClipboard } from "./search-workspace/clipboard-export";
 import { extendsFragment, localCompletions, typeaheadOpens } from "./search-workspace/completion-candidates";
 import { completionKindFromSuggestion, orderCompletions } from "./search-workspace/completion-groups";
+import type { SplReferenceEntry } from "./search-workspace/spl-reference-data";
 import { historyRecallAnnouncement, historyRecallDirection } from "./search-workspace/editor-history-recall";
 import {
   collapsePageEvents,
@@ -5040,10 +5042,12 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     recallCaretRef.current = recall.query.length;
   }
 
-  function insertCompletion(completion: CompletionItem) {
+  // `at` overrides the editor's selection; the reference pane passes the end
+  // of the query so a command it inserts always becomes a new trailing stage.
+  function insertCompletion(completion: CompletionItem, at?: number) {
     const editor = editorRef.current;
-    const selectionStart = editor?.selectionStart ?? editorCaret;
-    const selectionEnd = editor?.selectionEnd ?? selectionStart;
+    const selectionStart = at ?? editor?.selectionStart ?? editorCaret;
+    const selectionEnd = at ?? editor?.selectionEnd ?? selectionStart;
     const edited = insertCompletionIntoQuery(query, selectionStart, selectionEnd, completion);
     if (edited === null) {
       setCompletionOpen(false);
@@ -5055,6 +5059,17 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     setEditorCaret(edited.caret);
     setCompletionOpen(false);
     focusEditor(edited.caret);
+  }
+
+  // Commands from the reference pane go on the end of the pipeline; functions
+  // and keywords land at the caret, where the expression being written is.
+  function insertReferenceEntry(entry: SplReferenceEntry) {
+    if (entry.insertion === null) return;
+    setModal(null);
+    insertCompletion(
+      { kind: entry.kind, label: entry.name, insertion: entry.insertion, detail: entry.detail, relevance: 1 },
+      entry.kind === "command" ? query.length : undefined,
+    );
   }
 
   function handleEditorChange(event: ChangeEvent<HTMLTextAreaElement>) {
@@ -6999,7 +7014,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         {menu === "help" ? (
           <div className="floating-menu utility-menu help-menu" role="menu">
             <span className="menu-label">Search help</span>
-            <button role="menuitem" type="button" onClick={() => showToast("SPL reference will open in a documentation pane.")}>SPL command reference</button>
+            <button role="menuitem" type="button" onClick={() => { setModal("spl-reference"); setMenu(null); }}>SPL command reference</button>
             <button role="menuitem" type="button" onClick={() => showToast("Tip: press Ctrl+Space inside the editor for completions.")}>Keyboard shortcuts</button>
             <button role="menuitem" type="button" onClick={() => showToast(`Open Splunk ${OPEN_SPLUNK_BUILD_LABEL}`)}>About Open Splunk</button>
           </div>
@@ -7069,6 +7084,13 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           onClose={saveAsAlert.closeSecret}
         />
       )}
+      {modal === "spl-reference" ? (
+        <SplReferenceDialog
+          onClose={() => setModal(null)}
+          onInsert={insertReferenceEntry}
+          returnFocus={editorRef.current}
+        />
+      ) : null}
       <WorkspaceDialogs
         activeSavedSearchId={activeSavedSearchId}
         activeTab={activeTab}
