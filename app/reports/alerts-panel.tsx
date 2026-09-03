@@ -112,15 +112,21 @@ export function AlertsPanel({ apiBaseUrl, initialDraft }: AlertsPanelProps) {
   const [pendingAction, setPendingAction] = useState<PendingAlertAction | null>(null);
   const [history, setHistory] = useState<{ alert: ServerAlert; runs: ServerAlertRun[] } | null>(null);
   const creationRef = useRef(new AlertCreationSession());
-  const secretReturnFocusRef = useRef<HTMLElement | null>(null);
+  const [secretReturnFocus, setSecretReturnFocus] = useState<HTMLElement | null>(null);
   const issuance = useAlertSecretIssuance();
 
   const reload = useCallback(() => setGeneration((current) => current + 1), []);
-  useEffect(() => {
-    const controller = new AbortController();
+  const loadInput = { client, generation };
+  const [activeLoadInput, setActiveLoadInput] = useState(loadInput);
+  if (activeLoadInput.client !== loadInput.client || activeLoadInput.generation !== loadInput.generation) {
+    setActiveLoadInput(loadInput);
     setState("loading");
     setError(null);
     setAdministratorSignInRequired(false);
+  }
+  useEffect(() => {
+    if (activeLoadInput.generation !== generation) return;
+    const controller = new AbortController();
     void (async () => {
       try {
         const nextBootstrap = await getSystemBootstrap(client, undefined, { signal: controller.signal });
@@ -141,16 +147,16 @@ export function AlertsPanel({ apiBaseUrl, initialDraft }: AlertsPanelProps) {
       }
     })();
     return () => controller.abort();
-  }, [client, generation]);
+  }, [activeLoadInput, client, generation]);
 
   function replaceAlert(next: ServerAlert) {
     setAlerts((current) => current.map((alert) => alert.id === next.id ? next : alert));
   }
 
   function openNewAlert() {
-    secretReturnFocusRef.current = document.activeElement instanceof HTMLElement
+    setSecretReturnFocus(document.activeElement instanceof HTMLElement
       ? document.activeElement
-      : null;
+      : null);
     creationRef.current.reset();
     setError(null);
     setAdministratorSignInRequired(false);
@@ -235,9 +241,9 @@ export function AlertsPanel({ apiBaseUrl, initialDraft }: AlertsPanelProps) {
           break;
         }
         case "rotate": {
-          secretReturnFocusRef.current = document.activeElement instanceof HTMLElement
+          setSecretReturnFocus(document.activeElement instanceof HTMLElement
             ? document.activeElement
-            : null;
+            : null);
           const result = await rotateServerAlertSecret(client, bootstrap, alert);
           if (result.status === "unavailable") throw new Error("Secret rotation is unavailable.");
           replaceAlert(result.value.alert);
@@ -292,7 +298,7 @@ export function AlertsPanel({ apiBaseUrl, initialDraft }: AlertsPanelProps) {
       {state === "available" && alerts.length > 0 ? <div className="table-wrap"><table className="table table--cards alerts-table"><thead><tr><th scope="col">Alert</th><th scope="col">Schedule</th><th scope="col">Condition</th><th scope="col">Webhook</th><th scope="col">Last activity</th><th scope="col">Actions</th></tr></thead><tbody>{alerts.map((alert) => <tr key={alert.id}><td data-label="Alert"><strong>{alert.definition.name}</strong><small>{alert.definition.search?.spl}</small></td><td data-label="Schedule"><StatusLabel tone={alert.enabled ? "success" : "neutral"}>{alert.enabled ? "Enabled" : "Disabled"}</StatusLabel><small>{alert.definition.cron} · {alert.definition.timezone}</small><small>Next: {formatMediumDateTime(alert.nextRunAt, "Not scheduled")}</small></td><td data-label="Condition">{conditionLabel(alert)}<small>dispatch {alertEffectiveDispatchTTL(alert.definition)} · webhook {alertEffectiveWebhookTTL(alert.definition)}</small></td><td data-label="Webhook">{alert.webhookHostname}<small>Secret generation {alert.secretGeneration.toString()} · {formatMediumDateTime(alert.secretRotatedAt, "Unknown")}</small></td><td data-label="Last activity"><StatusLabel tone={alertOutcomeTone(alert.lastOutcome)}>{alert.lastOutcome === null ? "Not run" : alertRunOutcomeLabel(alert.lastOutcome)}</StatusLabel><small>Evaluated: {formatMediumDateTime(alert.lastEvaluatedAt, "Never")}</small><small>Delivered successfully: {formatMediumDateTime(alert.lastDeliveredAt, "Never")}</small></td><td data-label="Actions"><div className="alerts-actions"><button className="button button--ghost button--compact" aria-label={`Edit ${alert.definition.name}`} type="button" disabled={controlsBlocked} onClick={() => { setWizardTarget({ kind: "edit", alert }); setAdministratorSignInRequired(false); }}>Edit</button><button className="button button--ghost button--compact" aria-label={`${alert.enabled ? "Disable" : "Enable"} ${alert.definition.name}`} aria-busy={isPendingAlertAction(pendingAction, alert.id, "state")} type="button" disabled={controlsBlocked} onClick={() => void mutate(alert, "state")}>{alert.enabled ? "Disable" : "Enable"}</button><button className="button button--ghost button--compact" aria-label={`Run ${alert.definition.name} now`} aria-busy={isPendingAlertAction(pendingAction, alert.id, "run")} type="button" disabled={controlsBlocked} onClick={() => void mutate(alert, "run")}>Run now</button><button className="button button--ghost button--compact" aria-label={`Test ${alert.definition.name} webhook`} aria-busy={isPendingAlertAction(pendingAction, alert.id, "test")} type="button" disabled={controlsBlocked} onClick={() => void mutate(alert, "test")}>Test</button><button className="button button--ghost button--compact" aria-label={`Rotate ${alert.definition.name} secret`} aria-busy={isPendingAlertAction(pendingAction, alert.id, "rotate")} type="button" disabled={controlsBlocked} onClick={() => void mutate(alert, "rotate")}>Rotate secret</button><button className="button button--ghost button--compact" aria-label={`View ${alert.definition.name} history`} aria-busy={isPendingAlertAction(pendingAction, alert.id, "history")} type="button" disabled={controlsBlocked} onClick={() => void openHistory(alert)}>History</button><button aria-label={`Delete ${alert.definition.name}`} className="button button--danger button--compact" type="button" disabled={controlsBlocked} onClick={() => setDeleteTarget(alert)}>Delete</button></div></td></tr>)}</tbody></table></div> : null}
       {wizardTarget ? <AlertWizard applications={bootstrap?.apps.map((app) => ({ defaultIndexNames: app.defaultIndexNames, id: app.appId, name: app.displayName || app.slug || app.appId })) ?? []} administratorSignInRequired={administratorSignInRequired} existingWebhookHostname={wizardTarget.kind === "edit" ? wizardTarget.alert.webhookHostname : undefined} title={wizardTarget.kind === "create" ? "Save as alert" : `Edit ${wizardTarget.alert.definition.name}`} submitLabel={wizardTarget.kind === "create" ? "Create disabled alert" : "Save changes"} initialValue={wizardTarget.kind === "create" ? newAlertForm(bootstrap, initialDraft) : alertFormFromServer(wizardTarget.alert)} pending={pendingAction?.kind === "save"} submitError={pendingAction?.kind === "save" ? null : error} validateSchedule={(value, signal) => validateServerAlertSchedule(client, value, { signal })} onClose={() => { if (wizardTarget.kind === "create") creationRef.current.reset(); setWizardTarget(null); }} onSubmit={(value) => void createAlert(value)} /> : null}
       {pendingAction?.kind === "rotate" && issuance.phase === "issuing" ? <Modal title="Rotating webhook secret" subtitle="Keep this page open while the new one-time secret is issued." dismissible={false} onClose={() => {}}><output className="empty-state" aria-live="polite"><strong>Rotating secret…</strong><span>The recovery screen will appear as soon as the server responds.</span></output></Modal> : null}
-      {issuance.secret ? <AlertSecretRecovery alertName={issuance.secret.name} secret={issuance.secret.value} returnFocus={secretReturnFocusRef.current} onClose={issuance.closeRecovery} /> : null}
+      {issuance.secret ? <AlertSecretRecovery alertName={issuance.secret.name} secret={issuance.secret.value} returnFocus={secretReturnFocus} onClose={issuance.closeRecovery} /> : null}
       {history ? <AlertHistoryDialog alert={history.alert} runs={history.runs} onClose={() => setHistory(null)} /> : null}
       {deleteTarget ? <Modal title="Delete alert" subtitle={`Delete “${deleteTarget.definition.name}” and its run history?`} dismissible={pendingAction === null} onClose={() => setDeleteTarget(null)} footer={<><button className="button button--secondary" type="button" disabled={pendingAction !== null} onClick={() => setDeleteTarget(null)}>Cancel</button><button className="button button--danger" type="button" aria-busy={isPendingAlertAction(pendingAction, deleteTarget.id, "delete")} disabled={pendingAction !== null} onClick={() => void mutate(deleteTarget, "delete")}>Delete alert</button></>}><p>Deletion is rejected while a run is active. This action cannot be undone.</p></Modal> : null}
     </section>

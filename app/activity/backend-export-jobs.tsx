@@ -142,6 +142,7 @@ export function BackendExportJobs({ apiBaseUrl, bootstrap }: BackendExportJobsPr
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
   const [refreshedAt, setRefreshedAt] = useState<Date | null>(null);
   const [generation, setGeneration] = useState(0);
+  const activeLoadGenerationRef = useRef(0);
   const [action, setAction] = useState<{ id: string; kind: "cancel" | "download" } | null>(null);
   const [notice, setNotice] = useState<{ kind: "success" | "error"; message: string } | null>(null);
   const hasLoadedRef = useRef(false);
@@ -151,6 +152,7 @@ export function BackendExportJobs({ apiBaseUrl, bootstrap }: BackendExportJobsPr
   const reload = useCallback(() => setGeneration((current) => current + 1), []);
 
   useEffect(() => {
+    activeLoadGenerationRef.current = generation;
     const retainShell = hasLoadedRef.current;
     loadMoreAbortRef.current?.abort();
     loadMoreAbortRef.current = null;
@@ -178,7 +180,7 @@ export function BackendExportJobs({ apiBaseUrl, bootstrap }: BackendExportJobsPr
       setRefreshing(false);
       hasLoadedRef.current = true;
     }).catch((reason: unknown) => {
-      if (!current || controller.signal.aborted) return;
+      if (!current || controller.signal.aborted || activeLoadGenerationRef.current !== generation) return;
       if (isAdvertisedFeatureRouteUnavailable(reason)) {
         setState("unavailable");
         hasLoadedRef.current = false;

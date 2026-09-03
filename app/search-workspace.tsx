@@ -9,6 +9,7 @@ import {
   type RefObject,
   type SetStateAction,
   type UIEvent,
+  useCallback,
   useEffect,
   useEffectEvent,
   useLayoutEffect,
@@ -315,6 +316,7 @@ const TERMINAL_HISTORY_STATES = [
   SearchJobState.SEARCH_JOB_STATE_EXPIRED,
 ] as const;
 const DEFAULT_BACKEND_PAGE_SIZE = 1_000;
+const MOBILE_SEARCH_VIEWPORT = "(max-width: 760px)";
 // Result pages are reached by following opaque server cursors, so jumping ahead costs one request
 // per page crossed. Cap a single jump so a far page cannot fan out into hundreds of requests.
 const MAX_SEQUENTIAL_PAGE_WALK = 25;
@@ -352,6 +354,20 @@ function restoredTimeRange(range: SearchLaunchRange): TimeRange {
 }
 
 type BackendConnectionState = "loading" | "ready" | "error";
+
+function subscribeMobileSearchViewport(listener: () => void): () => void {
+  const viewport = window.matchMedia(MOBILE_SEARCH_VIEWPORT);
+  viewport.addEventListener("change", listener);
+  return () => viewport.removeEventListener("change", listener);
+}
+
+function mobileSearchViewportSnapshot(): boolean {
+  return window.matchMedia(MOBILE_SEARCH_VIEWPORT).matches;
+}
+
+function serverMobileSearchViewportSnapshot(): boolean {
+  return false;
+}
 
 /**
  * The visualization's time-series input. Statistics stay one server page; the
@@ -821,6 +837,7 @@ export function SearchWorkspace({
   const [backendConnectionError, setBackendConnectionError] = useState<string | null>(null);
   const [appSwitchingId, setAppSwitchingId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<ResultTab>(initialResultView);
+  const [observedInitialResultView, setObservedInitialResultView] = useState(initialResultView);
   const activeTabRef = useRef<ResultTab>(initialResultView);
   const pendingUrlResultViewRef = useRef<ResultTab | null>(initialResultView);
   const [resultViewUnavailable, setResultViewUnavailable] = useState(false);
@@ -879,11 +896,29 @@ export function SearchWorkspace({
   const [backendFieldsHasMore, setBackendFieldsHasMore] = useState(false);
   const [backendFieldSummaryLoading, setBackendFieldSummaryLoading] = useState(false);
   const [backendFieldSummaryError, setBackendFieldSummaryError] = useState<string | null>(null);
+  const [backendFieldSummaryRequestKey, setBackendFieldSummaryRequestKey] = useState<string | null>(null);
   const [statisticsDimension, setStatisticsDimension] = useState("level");
   const [activeField, setActiveField] = useState<string | null>(null);
   const [fieldFilter, setFieldFilter] = useState("");
-  const [fieldsCollapsed, setFieldsCollapsed] = useState(false);
+  const mobileSearchViewport = useSyncExternalStore(
+    subscribeMobileSearchViewport,
+    mobileSearchViewportSnapshot,
+    serverMobileSearchViewportSnapshot,
+  );
+  const [fieldsCollapsedOverride, setFieldsCollapsedOverride] = useState<boolean | null>(null);
+  const fieldsCollapsed = fieldsCollapsedOverride ?? mobileSearchViewport;
+  const setFieldsCollapsed = useCallback<Dispatch<SetStateAction<boolean>>>((next) => {
+    setFieldsCollapsedOverride((current) => {
+      const resolved = current ?? mobileSearchViewport;
+      return typeof next === "function" ? next(resolved) : next;
+    });
+  }, [mobileSearchViewport]);
   const [expandedEvents, setExpandedEvents] = useState<Set<string>>(new Set());
+  const [expandedEventsContext, setExpandedEventsContext] = useState({
+    mobile: false,
+    page: 1,
+    pageSize: 20,
+  });
   const [completionOpen, setCompletionOpen] = useState(false);
   const [completionIndex, setCompletionIndex] = useState(0);
   // Ctrl+Space asks for everything the caret could take; typing asks only
@@ -1247,19 +1282,21 @@ export function SearchWorkspace({
     }
     return orderCompletions(local);
   }, [backendCompletions, backendEnabled, completionContext, completionTrigger, fields]);
-  useEffect(() => {
-    // A popup that typing opened closes itself once nothing completes the
-    // word any more; one opened on purpose stays to say so.
-    if (!completionOpen || completionTrigger !== "typing" || extendsFragment(filteredCompletions)) return;
-    if (backendEnabled && backendCompletions === null) return;
+  const boundedCompletionIndex = Math.max(0, Math.min(completionIndex, filteredCompletions.length - 1));
+  if (completionIndex !== boundedCompletionIndex) setCompletionIndex(boundedCompletionIndex);
+  if (
+    completionOpen
+    && completionTrigger === "typing"
+    && !extendsFragment(filteredCompletions)
+    && (!backendEnabled || backendCompletions !== null)
+  ) {
     setCompletionOpen(false);
-  }, [backendCompletions, backendEnabled, completionOpen, completionTrigger, filteredCompletions]);
+  }
 
+  const backendCompletionEnabled = backendEnabled && completionOpen && backendBootstrapModel !== null;
+  if (!backendCompletionEnabled && backendCompletions !== null) setBackendCompletions(null);
   useEffect(() => {
-    if (!backendEnabled || !completionOpen || backendBootstrapModel === null) {
-      setBackendCompletions(null);
-      return;
-    }
+    if (!backendCompletionEnabled) return;
     const bootstrap = backendBootstrapRef.current;
     if (bootstrap === null) return;
     const controller = new AbortController();
@@ -1315,7 +1352,7 @@ export function SearchWorkspace({
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [apiClient, backendBootstrapModel, backendEnabled, completionOpen, editorCaret, query, timeRange]);
+  }, [apiClient, backendBootstrapModel, backendCompletionEnabled, editorCaret, query, timeRange]);
   const displayedBackendResults = backendDisplayingPreview
     ? backendPreviewDisplay.adapted
     : null;
@@ -1473,6 +1510,22 @@ export function SearchWorkspace({
       Math.max(eventPage, loadedResultPageCeiling),
     )
     : Math.max(1, Math.ceil(pageableEventCount / currentResultPageSize));
+  if (eventPage > eventPageCount) setEventPage(eventPageCount);
+  if (
+    expandedEventsContext.mobile !== mobileSearchViewport
+    || expandedEventsContext.page !== eventPage
+    || expandedEventsContext.pageSize !== currentResultPageSize
+  ) {
+    const enteringMobile = !expandedEventsContext.mobile && mobileSearchViewport;
+    const pageChanged = expandedEventsContext.page !== eventPage
+      || expandedEventsContext.pageSize !== currentResultPageSize;
+    setExpandedEventsContext({
+      mobile: mobileSearchViewport,
+      page: eventPage,
+      pageSize: currentResultPageSize,
+    });
+    if (enteringMobile || pageChanged) setExpandedEvents(new Set());
+  }
   const eventPageStart = backendEnabled
     ? backendStatisticsPageStart
     : pageableEventCount === 0 ? 0 : (eventPage - 1) * currentResultPageSize + 1;
@@ -1528,21 +1581,19 @@ export function SearchWorkspace({
     timeRange.timezone,
     timechartValueColumns.length,
   ]);
-  useEffect(() => {
-    if (
-      isTimechartResult
-      && timechartValueColumns.length > 1
-      && chartStyle !== "line"
-      && chartStyle !== "area"
-    ) {
-      setChartStyle("line");
-      if (!visualizationEditedRef.current) {
-        setSavedWorkspaceBaseline((current) => current === null
-          ? null
-          : { ...current, chartStyle: "line" });
-      }
+  if (
+    isTimechartResult
+    && timechartValueColumns.length > 1
+    && chartStyle !== "line"
+    && chartStyle !== "area"
+  ) {
+    setChartStyle("line");
+    if (!visualizationEditedRef.current) {
+      setSavedWorkspaceBaseline((current) => current === null
+        ? null
+        : { ...current, chartStyle: "line" });
     }
-  }, [chartStyle, isTimechartResult, timechartValueColumns.length]);
+  }
   const stackModeAvailable = isTimechartResult
     ? timechartValueColumns.length > 1
     : statisticsRows.some((row) => (row.series?.length ?? 0) > 0);
@@ -1556,23 +1607,21 @@ export function SearchWorkspace({
   // normalization resumes once the pending server/demo definition is consumed.
   const savedPresentationPending = demoSavedPresentationPending
     || (backendEnabled && pendingSavedVisualizationRef.current !== undefined);
-  useEffect(() => {
-    if (stackModeAvailable || savedPresentationPending || stackMode === "none") return;
+  if (!stackModeAvailable && !savedPresentationPending && stackMode !== "none") {
     setStackMode("none");
     if (!visualizationEditedRef.current) {
       setSavedWorkspaceBaseline((current) => current === null
         ? null
         : { ...current, stackMode: "none" });
     }
-  }, [savedPresentationPending, stackMode, stackModeAvailable]);
-  useEffect(() => {
-    if (
-      savedBaselineCaptureId === null
-      || currentSavedWorkspace?.savedSearchId !== savedBaselineCaptureId
-    ) return;
+  }
+  if (
+    savedBaselineCaptureId !== null
+    && currentSavedWorkspace?.savedSearchId === savedBaselineCaptureId
+  ) {
     setSavedWorkspaceBaseline(currentSavedWorkspace);
     setSavedBaselineCaptureId(null);
-  }, [currentSavedWorkspace, savedBaselineCaptureId]);
+  }
   const savedDefinitionDirty = currentSavedWorkspace !== null
     && savedWorkspaceBaseline?.savedSearchId === currentSavedWorkspace.savedSearchId
     && savedBaselineCaptureId === null
@@ -1893,14 +1942,15 @@ export function SearchWorkspace({
     document.getElementById(`tab-${activeTab}`)?.scrollIntoView({ behavior, block: "nearest", inline: "center" });
   }, [activeTab]);
 
-  useEffect(() => {
+  if (observedInitialResultView !== initialResultView) {
+    setObservedInitialResultView(initialResultView);
     if (activeTabRef.current !== initialResultView) {
       pendingUrlResultViewRef.current = null;
       setResultViewUnavailable(false);
     }
     activeTabRef.current = initialResultView;
     setActiveTab(initialResultView);
-  }, [initialResultView]);
+  }
 
   useEffect(() => {
     if (!canonicalizeParent) return;
@@ -1920,10 +1970,6 @@ export function SearchWorkspace({
       // The launch effect owns invalid-URL presentation.
     }
   }, [backendEnabled]);
-
-  useEffect(() => {
-    if (window.matchMedia("(max-width: 760px)").matches) setFieldsCollapsed(true);
-  }, []);
 
   function showToast(message: string, tone: ToastState["tone"] = "info") {
     setToast({ message, tone });
@@ -2335,6 +2381,7 @@ export function SearchWorkspace({
     setBackendFieldsLoading(false);
     setBackendFieldsLoadingMore(false);
     setBackendFieldsHasMore(false);
+    setBackendFieldSummaryRequestKey(null);
     setBackendFieldSummaryLoading(false);
     setBackendFieldSummaryError(null);
     setBackendResultKind(ResultSetKind.RESULT_SET_KIND_UNSPECIFIED);
@@ -2527,31 +2574,46 @@ export function SearchWorkspace({
     };
   }, [backendEnabled, backendExpiresAt, backendResultsExpired]);
 
+  const fieldSummaryJob = runningSearch.jobSnapshot().job;
+  const fieldSummaryBootstrap = backendBootstrapRef.current;
+  const nextBackendFieldSummaryRequestKey = backendEnabled
+    && activeField !== null
+    && phase === "completed"
+    && backendAuthoritativeFieldsRef.current
+    && fieldSummaryJob !== null
+    && fieldSummaryBootstrap !== null
+    ? `${fieldSummaryJob.searchJobId}:${activeField}`
+    : null;
+  if (backendFieldSummaryRequestKey !== nextBackendFieldSummaryRequestKey) {
+    const cached = nextBackendFieldSummaryRequestKey === null
+      ? undefined
+      : backendFieldSummaryCacheRef.current.get(nextBackendFieldSummaryRequestKey);
+    setBackendFieldSummaryRequestKey(nextBackendFieldSummaryRequestKey);
+    setBackendFieldSummaryError(cached ?? null);
+    setBackendFieldSummaryLoading(
+      nextBackendFieldSummaryRequestKey !== null
+      && !backendFieldSummaryCacheRef.current.has(nextBackendFieldSummaryRequestKey),
+    );
+  }
+
   useEffect(() => {
     backendFieldSummaryAbortRef.current?.abort();
-    setBackendFieldSummaryError(null);
     if (
       !backendEnabled
       || activeField === null
       || phase !== "completed"
       || !backendAuthoritativeFieldsRef.current
     ) {
-      setBackendFieldSummaryLoading(false);
       return;
     }
     const job = runningSearch.jobSnapshot().job;
     const bootstrap = backendBootstrapRef.current;
     if (job === null || bootstrap === null) return;
     const cacheKey = `${job.searchJobId}:${activeField}`;
-    if (backendFieldSummaryCacheRef.current.has(cacheKey)) {
-      setBackendFieldSummaryError(backendFieldSummaryCacheRef.current.get(cacheKey) ?? null);
-      setBackendFieldSummaryLoading(false);
-      return;
-    }
+    if (backendFieldSummaryCacheRef.current.has(cacheKey)) return;
     const controller = new AbortController();
     const generation = runningSearch.generationSnapshot();
     backendFieldSummaryAbortRef.current = controller;
-    setBackendFieldSummaryLoading(true);
     void getServerFieldSummary(apiClient, bootstrap.response, job.searchJobId, activeField, {
       maxValues: bootstrap.response.limits.maximumFieldSummaryValues || 10,
       signal: controller.signal,
@@ -2607,19 +2669,6 @@ export function SearchWorkspace({
     });
     return () => controller.abort();
   }, [activeField, apiClient, backendEnabled, phase, runningSearch]);
-
-  useEffect(() => {
-    const phoneViewport = window.matchMedia("(max-width: 760px)");
-    const collapseForPhone = (event?: MediaQueryListEvent) => {
-      if (event?.matches ?? phoneViewport.matches) {
-        setFieldsCollapsed(true);
-        setExpandedEvents(new Set());
-      }
-    };
-    collapseForPhone();
-    phoneViewport.addEventListener("change", collapseForPhone);
-    return () => phoneViewport.removeEventListener("change", collapseForPhone);
-  }, []);
 
   useEffect(() => {
     if (toast === null) return;
@@ -2980,10 +3029,10 @@ export function SearchWorkspace({
     }
   });
 
-  useEffect(
-    () => applyUrlLaunch({ initial: true }),
-    [backendEnabled],
-  );
+  const initializeSearchWorkspace = useCallback((node: HTMLDivElement | null) => {
+    if (node === null) return;
+    return applyUrlLaunch({ initial: true });
+  }, []);
 
   // Back and Forward land on entries this workspace wrote. The entry's URL
   // and remembered state say what to show; nothing here adds history, so a
@@ -3069,18 +3118,6 @@ export function SearchWorkspace({
     editor.focus();
     editor.setSelectionRange(safeOffset, safeOffset);
   }, [query]);
-
-  useEffect(() => {
-    setCompletionIndex((current) => Math.max(0, Math.min(current, filteredCompletions.length - 1)));
-  }, [filteredCompletions.length]);
-
-  useEffect(() => {
-    setEventPage((current) => Math.min(current, eventPageCount));
-  }, [eventPageCount]);
-
-  useEffect(() => {
-    setExpandedEvents(new Set());
-  }, [currentResultPageSize, eventPage]);
 
   // Escape closes the topmost transient surface; with nothing open it
   // cancels the running search, so a stray run is a keystroke away from
@@ -7143,7 +7180,7 @@ export function SearchWorkspace({
     : "Search & Reporting";
 
   const productAppSwitcher = (
-    <div className="suite-menu-anchor">
+    <div className="suite-menu-anchor" ref={initializeSearchWorkspace}>
       <button className="suite-app-switcher search-app-switcher" type="button" aria-haspopup="menu" aria-expanded={menu === "app"} aria-busy={appSwitchingId !== null || (backendEnabled && backendConnectionState === "loading")} onClick={() => setMenu(menu === "app" ? null : "app")} onKeyDown={(event) => openMenuFromKeyboard(event, "app")}>
         App: <strong>{workspaceAppName}</strong> <AppIcon name="chevron-down" size="xs" />
       </button>

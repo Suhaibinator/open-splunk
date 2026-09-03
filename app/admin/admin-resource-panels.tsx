@@ -93,7 +93,7 @@ function AppFields({ form, onChange, editing }: {
 export function AppsAdminPanel({ apiBaseUrl, bootstrap }: PanelProps) {
   const client = useMemo(() => createOpenSplunkApiClient({ baseUrl: apiBaseUrl }), [apiBaseUrl]);
   const capability = bootstrap === null ? null : bootstrap.features.has(ServerFeature.SERVER_FEATURE_APP_ADMIN);
-  const [state, setState] = useState<LoadState>("loading");
+  const [state, setState] = useState<LoadState>(capability === false ? "unavailable" : "loading");
   const [apps, setApps] = useState<AppWorkspace[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -116,16 +116,25 @@ export function AppsAdminPanel({ apiBaseUrl, bootstrap }: PanelProps) {
     : stateFilter === "archived" ? [AppState.APP_STATE_ARCHIVED] : [], [stateFilter]);
 
   const load = useCallback(() => setGeneration((value) => value + 1), []);
+  const loadInput = { appliedQuery, capability, client, filters, generation };
+  const [activeLoadInput, setActiveLoadInput] = useState(loadInput);
+  if (
+    activeLoadInput.appliedQuery !== loadInput.appliedQuery
+    || activeLoadInput.capability !== loadInput.capability
+    || activeLoadInput.client !== loadInput.client
+    || activeLoadInput.filters !== loadInput.filters
+    || activeLoadInput.generation !== loadInput.generation
+  ) {
+    setActiveLoadInput(loadInput);
+    setState(capability === false ? "unavailable" : "loading");
+    if (capability === false) setApps([]);
+    setError(null);
+  }
 
   useEffect(() => {
-    if (capability === false) {
-      setState("unavailable");
-      setApps([]);
-      return;
-    }
+    if (activeLoadInput.generation !== generation) return;
+    if (capability === false) return;
     const controller = new AbortController();
-    setState("loading");
-    setError(null);
     void client.apps.list({
       page: { pageSize: undefined, pageToken: undefined, includeTotalSize: true },
       stateFilters: filters,
@@ -150,7 +159,7 @@ export function AppsAdminPanel({ apiBaseUrl, bootstrap }: PanelProps) {
       }
     });
     return () => controller.abort();
-  }, [appliedQuery, capability, client, filters, generation]);
+  }, [activeLoadInput, appliedQuery, capability, client, filters, generation]);
 
   async function loadMore() {
     if (nextPageToken === null || loadingMore) return;
@@ -358,7 +367,7 @@ function InputRows({ inputs }: { inputs: CollectorInputHealth[] }) {
 export function CollectorFleetPanel({ apiBaseUrl, bootstrap }: PanelProps) {
   const client = useMemo(() => createOpenSplunkApiClient({ baseUrl: apiBaseUrl }), [apiBaseUrl]);
   const capability = bootstrap === null ? null : bootstrap.features.has(ServerFeature.SERVER_FEATURE_COLLECTOR_ADMIN);
-  const [state, setState] = useState<LoadState>("loading");
+  const [state, setState] = useState<LoadState>(capability === false ? "unavailable" : "loading");
   const [collectors, setCollectors] = useState<CollectorRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -385,16 +394,26 @@ export function CollectorFleetPanel({ apiBaseUrl, bootstrap }: PanelProps) {
     return [];
   }, [stateFilter]);
   const load = useCallback(() => setGeneration((value) => value + 1), []);
+  const loadInput = { appliedIndexFilter, appliedQuery, capability, client, filters, generation };
+  const [activeLoadInput, setActiveLoadInput] = useState(loadInput);
+  if (
+    activeLoadInput.appliedIndexFilter !== loadInput.appliedIndexFilter
+    || activeLoadInput.appliedQuery !== loadInput.appliedQuery
+    || activeLoadInput.capability !== loadInput.capability
+    || activeLoadInput.client !== loadInput.client
+    || activeLoadInput.filters !== loadInput.filters
+    || activeLoadInput.generation !== loadInput.generation
+  ) {
+    setActiveLoadInput(loadInput);
+    setState(capability === false ? "unavailable" : "loading");
+    if (capability === false) setCollectors([]);
+    setError(null);
+  }
 
   useEffect(() => {
-    if (capability === false) {
-      setState("unavailable");
-      setCollectors([]);
-      return;
-    }
+    if (activeLoadInput.generation !== generation) return;
+    if (capability === false) return;
     const controller = new AbortController();
-    setState("loading");
-    setError(null);
     void client.collectors.list({
       page: { pageSize: undefined, pageToken: undefined, includeTotalSize: true },
       stateFilters: filters,
@@ -420,7 +439,7 @@ export function CollectorFleetPanel({ apiBaseUrl, bootstrap }: PanelProps) {
       }
     });
     return () => controller.abort();
-  }, [appliedIndexFilter, appliedQuery, capability, client, filters, generation]);
+  }, [activeLoadInput, appliedIndexFilter, appliedQuery, capability, client, filters, generation]);
 
   async function loadMore() {
     if (nextPageToken === null || loadingMore) return;

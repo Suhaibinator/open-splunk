@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 
 import { OPEN_SPLUNK_BUILD_LABEL } from "@/lib/build-identity";
 import {
@@ -19,17 +19,23 @@ interface SignInScreenProps {
   dataMode: "backend" | "demo";
 }
 
+function subscribeToAdministratorSession(): () => void {
+  return () => undefined;
+}
+
 export function SignInScreen({ dataMode }: SignInScreenProps) {
   const localSession = dataMode === "backend";
   const router = useRouter();
   const [administratorToken, setAdministratorToken] = useState("");
-  const [administratorSessionActive, setAdministratorSessionActive] = useState(false);
+  const currentAdministratorSessionActive = useSyncExternalStore(
+    subscribeToAdministratorSession,
+    hasAdministratorBearerToken,
+    () => false,
+  );
+  const [administratorSessionOverride, setAdministratorSessionOverride] = useState<boolean | null>(null);
+  const administratorSessionActive = administratorSessionOverride ?? currentAdministratorSessionActive;
   const [showAdministratorToken, setShowAdministratorToken] = useState(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setAdministratorSessionActive(hasAdministratorBearerToken());
-  }, []);
 
   function openAdministratorSession(event: React.FormEvent<HTMLFormElement>): void {
     event.preventDefault();
@@ -41,7 +47,7 @@ export function SignInScreen({ dataMode }: SignInScreenProps) {
     setAdministratorBearerToken(token);
     setAdministratorToken("");
     setTokenError(null);
-    setAdministratorSessionActive(true);
+    setAdministratorSessionOverride(true);
     router.push("/admin/");
   }
 
@@ -49,7 +55,7 @@ export function SignInScreen({ dataMode }: SignInScreenProps) {
     clearAdministratorBearerToken();
     setAdministratorToken("");
     setTokenError(null);
-    setAdministratorSessionActive(false);
+    setAdministratorSessionOverride(false);
   }
 
   return (

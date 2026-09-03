@@ -4,7 +4,6 @@ import {
   type FocusEvent,
   type KeyboardEvent,
   type PointerEvent,
-  useEffect,
   useId,
   useMemo,
   useRef,
@@ -283,6 +282,7 @@ function CategoricalChart({
   const lastPointerTypeRef = useRef<string | null>(null);
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const [pinnedIndex, setPinnedIndex] = useState<number | null>(null);
+  const [activeRowCount, setActiveRowCount] = useState(rows.length);
   const stackedRows = useMemo(() => stackChartRows(
     rows.map((row) => series.map((definition) => rowSeries(row, definition).value)),
     stackMode,
@@ -300,10 +300,11 @@ function CategoricalChart({
       return `${definition.label} ${displaySeriesValue(value)}${value.coordinateApproximate ? "; displayed value exact, chart position approximate" : ""}`;
     }).join(", ")}.${activeRow.pivotable === false ? " Drilldown is unavailable for this typed value." : ` Activate to add this ${dimension} value to the search.`}`;
 
-  useEffect(() => {
+  if (activeRowCount !== rows.length) {
+    setActiveRowCount(rows.length);
     setActiveIndex((current) => current === null || rows.length === 0 ? null : Math.min(current, rows.length - 1));
     setPinnedIndex((current) => current === null || rows.length === 0 ? null : Math.min(current, rows.length - 1));
-  }, [rows.length]);
+  }
 
   function handleKeyDown(event: KeyboardEvent<HTMLButtonElement>, index: number) {
     if (event.key === "Enter" || event.key === " ") {

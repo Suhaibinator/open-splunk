@@ -415,11 +415,21 @@ export function LookupManagerPanel({
   const [notice, setNotice] = useState<{ kind: NoticeKind; message: string } | null>(null);
 
   const reload = useCallback(() => setGeneration((value) => value + 1), []);
-
-  useEffect(() => {
-    const controller = new AbortController();
+  const loadInput = { appId, client, generation };
+  const [activeLoadInput, setActiveLoadInput] = useState(loadInput);
+  if (
+    activeLoadInput.appId !== loadInput.appId
+    || activeLoadInput.client !== loadInput.client
+    || activeLoadInput.generation !== loadInput.generation
+  ) {
+    setActiveLoadInput(loadInput);
     setState("loading");
     setLoadError(null);
+  }
+
+  useEffect(() => {
+    if (activeLoadInput.generation !== generation) return;
+    const controller = new AbortController();
     void client.list(appId || undefined, { signal: controller.signal }).then((loaded) => {
       if (controller.signal.aborted) return;
       if (loaded.length > LOOKUP_MANAGER_CONTRACT.maximumManagedLookups) {
@@ -445,7 +455,7 @@ export function LookupManagerPanel({
       }
     });
     return () => controller.abort();
-  }, [appId, client, generation]);
+  }, [activeLoadInput, appId, client, generation]);
 
   const visibleLookups = useMemo(() => {
     const needle = filter.trim().toLowerCase();

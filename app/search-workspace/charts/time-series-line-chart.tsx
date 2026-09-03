@@ -136,6 +136,7 @@ export function TimeSeriesLineChart({
   const inspectButtonRef = useRef<HTMLButtonElement>(null);
   const hintId = useId();
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const [activePoints, setActivePoints] = useState(points);
   const [plotWidth, setPlotWidth] = useState(900);
   const [keyboardActive, setKeyboardActive] = useState(false);
   const seriesNames = useMemo(() => timelineSeriesNames(points, seriesLabel), [points, seriesLabel]);
@@ -154,15 +155,19 @@ export function TimeSeriesLineChart({
     const plot = plotRef.current;
     if (plot === null) return;
     const updateWidth = () => setPlotWidth(plot.getBoundingClientRect().width);
-    updateWidth();
+    const widthFrame = window.requestAnimationFrame(updateWidth);
     const observer = new ResizeObserver(updateWidth);
     observer.observe(plot);
-    return () => observer.disconnect();
+    return () => {
+      window.cancelAnimationFrame(widthFrame);
+      observer.disconnect();
+    };
   }, []);
 
-  useEffect(() => {
+  if (activePoints !== points) {
+    setActivePoints(points);
     setActiveIndex((current) => current === null || points.length === 0 ? null : Math.min(current, points.length - 1));
-  }, [points]);
+  }
 
   const seriesCoordinates = useMemo(() => seriesNames.map((name, seriesIndex) => ({
     name,

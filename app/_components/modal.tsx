@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useId, useRef } from "react";
+import { type ReactNode, useEffect, useEffectEvent, useId, useRef } from "react";
 
 import { installModalSurface } from "./modal-surface";
 import { AppIcon } from "./app-icon";
@@ -29,10 +29,9 @@ export function Modal({
   const titleId = useId();
   const subtitleId = useId();
   const dialogRef = useRef<HTMLDialogElement>(null);
-  const onCloseRef = useRef(onClose);
-  const dismissibleRef = useRef(dismissible);
-  onCloseRef.current = onClose;
-  dismissibleRef.current = dismissible;
+  const closeFromEscape = useEffectEvent(() => {
+    if (dismissible) onClose();
+  });
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -42,9 +41,7 @@ export function Modal({
     return installModalSurface({
       container: dialog,
       excludedSiblingClassNames: ["modal-backdrop"],
-      onEscape: () => {
-        if (dismissibleRef.current) onCloseRef.current();
-      },
+      onEscape: closeFromEscape,
       returnFocus: capturedReturnFocus,
     });
   }, [returnFocus]);
