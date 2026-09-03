@@ -31,7 +31,9 @@
 import { readFileSync } from "node:fs";
 import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
-import { createScanner, LanguageVariant, SyntaxKind } from "typescript/unstable/ast";
+import { NodeFlags, SyntaxKind } from "typescript/unstable/ast";
+import { createVirtualFileSystem } from "typescript/unstable/fs";
+import { API } from "typescript/unstable/sync";
 
 /* == 1. The layer ========================================================== */
 
@@ -2158,233 +2160,116 @@ const INLINE_LAYOUT_PROPERTIES = new Set([
   "textAlign", "textDecoration", "textOverflow", "top", "transform", "whiteSpace", "width", "zIndex",
 ]);
 
-const OPENING_DELIMITERS = new Map([["(", ")"], ["[", "]"], ["{", "}"]]);
+const INLINE_SOURCE_PREFIX = "/style-inventory-inline";
+let inlineParser;
 
-function scanTypeScript(source) {
-  const scanner = createScanner(true, LanguageVariant.JSX, source);
-  const tokens = [];
-  const templateDepths = [];
-  while (true) {
-    let kind = scanner.scan();
-    if (kind === SyntaxKind.EndOfFile) break;
-    if (templateDepths.length > 0 && kind === SyntaxKind.OpenBraceToken) {
-      templateDepths[templateDepths.length - 1] += 1;
-    } else if (templateDepths.length > 0 && kind === SyntaxKind.CloseBraceToken) {
-      const templateIndex = templateDepths.length - 1;
-      if (templateDepths[templateIndex] > 0) templateDepths[templateIndex] -= 1;
-      else {
-        kind = scanner.reScanTemplateToken(false);
-        if (kind === SyntaxKind.TemplateTail) templateDepths.pop();
-      }
-    }
-    tokens.push({
-      end: scanner.getTokenEnd(),
-      kind,
-      start: scanner.getTokenStart(),
-      text: scanner.getTokenText(),
-    });
-    if (kind === SyntaxKind.TemplateHead) templateDepths.push(0);
+function parsedTypeScript(source, collect) {
+  if (inlineParser === undefined) {
+    const fileSystem = createVirtualFileSystem({});
+    const api = new API({ cwd: "/", fs: fileSystem });
+    inlineParser = { api, fileSystem, sourcePath: null, version: 0 };
+    process.once("exit", () => api.close());
   }
-  return tokens;
+  const previousPath = inlineParser.sourcePath;
+  inlineParser.version += 1;
+  const sourcePath = `${INLINE_SOURCE_PREFIX}-${inlineParser.version}.tsx`;
+  inlineParser.fileSystem.writeFile(sourcePath, source);
+  const snapshot = inlineParser.api.updateSnapshot({
+    closeFiles: previousPath === null ? [] : [previousPath],
+    openFiles: [sourcePath],
+  });
+  if (previousPath !== null) inlineParser.fileSystem.removeFile(previousPath);
+  inlineParser.sourcePath = sourcePath;
+  try {
+    const project = snapshot.getDefaultProjectForFile(sourcePath);
+    const sourceFile = project?.program.getSourceFile(sourcePath);
+    return project === undefined || sourceFile === undefined ? [] : collect(sourceFile, project);
+  } finally {
+    snapshot.dispose();
+  }
 }
 
-function matchingDelimiter(tokens, start) {
-  const expected = OPENING_DELIMITERS.get(tokens[start]?.text);
-  if (expected === undefined) return -1;
-  const stack = [expected];
-  for (let index = start + 1; index < tokens.length; index += 1) {
-    const nested = OPENING_DELIMITERS.get(tokens[index].text);
-    if (nested !== undefined) stack.push(nested);
-    else if (tokens[index].text === stack.at(-1)) {
-      stack.pop();
-      if (stack.length === 0) return index;
-    }
-  }
-  return -1;
+function unwrapInlineExpression(expression) {
+  let current = expression;
+  while ([
+    SyntaxKind.AsExpression,
+    SyntaxKind.NonNullExpression,
+    SyntaxKind.ParenthesizedExpression,
+    SyntaxKind.SatisfiesExpression,
+    SyntaxKind.TypeAssertionExpression,
+  ].includes(current.kind)) current = current.expression;
+  return current;
 }
 
-function unwrapExpression(tokens, start, end) {
-  let first = start;
-  let last = end;
-  let previous;
-  do {
-    previous = `${first}:${last}`;
-    while (tokens[last - 1]?.text === "!") last -= 1;
-    while (tokens[first]?.text === "(" && matchingDelimiter(tokens, first) === last - 1) {
-      first += 1;
-      last -= 1;
-    }
-    let depth = 0;
-    for (let index = first; index < last; index += 1) {
-      const text = tokens[index].text;
-      if (OPENING_DELIMITERS.has(text)) depth += 1;
-      else if ([")", "]", "}"].includes(text)) depth -= 1;
-      else if (depth === 0 && (text === "as" || text === "satisfies")) {
-        last = index;
-        break;
-      }
-    }
-  } while (previous !== `${first}:${last}`);
-  return [first, last];
+function fixedInlineValue(expression) {
+  const current = unwrapInlineExpression(expression);
+  if ([
+    SyntaxKind.NoSubstitutionTemplateLiteral,
+    SyntaxKind.NumericLiteral,
+    SyntaxKind.StringLiteral,
+  ].includes(current.kind)) return true;
+  if (current.kind === SyntaxKind.PrefixUnaryExpression) {
+    return current.operator === SyntaxKind.MinusToken
+      && unwrapInlineExpression(current.operand).kind === SyntaxKind.NumericLiteral;
+  }
+  return current.kind === SyntaxKind.ConditionalExpression
+    && fixedInlineValue(current.whenTrue)
+    && fixedInlineValue(current.whenFalse);
 }
 
-function fixedInlineValue(tokens, start, end) {
-  const [first, last] = unwrapExpression(tokens, start, end);
-  if (last - first === 1) {
-    const token = tokens[first];
-    return token.kind === SyntaxKind.NumericLiteral
-      || token.kind === SyntaxKind.StringLiteral
-      || (token.text.startsWith("`") && token.text.endsWith("`") && !token.text.includes("${"));
-  }
-  if (last - first === 2 && tokens[first].text === "-" && tokens[first + 1].kind === SyntaxKind.NumericLiteral) return true;
-  let depth = 0;
-  let question = -1;
-  let nestedQuestions = 0;
-  for (let index = first; index < last; index += 1) {
-    const text = tokens[index].text;
-    if (OPENING_DELIMITERS.has(text)) depth += 1;
-    else if ([")", "]", "}"].includes(text)) depth -= 1;
-    else if (depth === 0 && text === "?") {
-      if (question === -1) question = index;
-      else nestedQuestions += 1;
-    } else if (depth === 0 && text === ":" && question !== -1) {
-      if (nestedQuestions > 0) nestedQuestions -= 1;
-      else return fixedInlineValue(tokens, question + 1, index)
-        && fixedInlineValue(tokens, index + 1, last);
-    }
-  }
-  return false;
+function objectLiteralExpression(expression) {
+  if (expression === undefined) return null;
+  const current = unwrapInlineExpression(expression);
+  return current.kind === SyntaxKind.ObjectLiteralExpression ? current : null;
 }
 
-function objectExpressionRange(tokens, start, end) {
-  const [first, last] = unwrapExpression(tokens, start, end);
-  if (tokens[first]?.text === "{" && matchingDelimiter(tokens, first) < last) {
-    return [first, matchingDelimiter(tokens, first)];
-  }
-  if (tokens[first]?.text === "<") {
-    const assertionEnd = tokens.findIndex((token, index) => index > first && index < last && token.text === ">");
-    if (assertionEnd !== -1 && tokens[assertionEnd + 1]?.text === "{") {
-      return [assertionEnd + 1, matchingDelimiter(tokens, assertionEnd + 1)];
-    }
-  }
-  return null;
-}
-
-function collectObjectDeclarations(source, tokens, range) {
+function collectObjectDeclarations(sourceFile, object) {
   const found = [];
-  let start = range[0] + 1;
-  for (let index = start; index <= range[1]; index += 1) {
-    if (index < range[1] && tokens[index].text !== ",") {
-      if (OPENING_DELIMITERS.has(tokens[index].text)) {
-        const matching = matchingDelimiter(tokens, index);
-        if (matching === -1) break;
-        index = matching;
-      }
+  for (const member of object.properties) {
+    if (member.kind === SyntaxKind.SpreadAssignment) {
+      const spread = objectLiteralExpression(member.expression);
+      if (spread !== null) found.push(...collectObjectDeclarations(sourceFile, spread));
       continue;
     }
-    const end = index;
-    let colon = -1;
-    for (let propertyIndex = start; propertyIndex < end; propertyIndex += 1) {
-      if (tokens[propertyIndex].text === ":") {
-        colon = propertyIndex;
-        break;
-      }
-      if (OPENING_DELIMITERS.has(tokens[propertyIndex].text)) propertyIndex = matchingDelimiter(tokens, propertyIndex);
+    if (member.kind !== SyntaxKind.PropertyAssignment) continue;
+    const property = [SyntaxKind.Identifier, SyntaxKind.StringLiteral].includes(member.name.kind)
+      ? member.name.text
+      : null;
+    if (property !== null && INLINE_LAYOUT_PROPERTIES.has(property) && fixedInlineValue(member.initializer)) {
+      found.push(`${property}: ${member.initializer.getText(sourceFile)}`);
     }
-    const key = tokens[start];
-    const property = key?.kind === SyntaxKind.Identifier
-      ? key.text
-      : key?.kind === SyntaxKind.StringLiteral
-        ? key.text.slice(1, -1)
-        : null;
-    if (colon !== -1 && colon === start + 1 && property !== null
-      && INLINE_LAYOUT_PROPERTIES.has(property) && fixedInlineValue(tokens, colon + 1, end)) {
-      found.push(`${property}: ${source.slice(tokens[colon + 1].start, tokens[end - 1].end).trim()}`);
-    }
-    start = index + 1;
   }
   return found;
 }
 
-function lexicalScopes(tokens) {
-  const root = { bindings: new Map(), parent: null };
-  const scopes = [];
-  let current = root;
-  for (let index = 0; index < tokens.length; index += 1) {
-    scopes[index] = current;
-    if (tokens[index].text === "{") current = { bindings: new Map(), parent: current };
-    else if (tokens[index].text === "}" && current.parent !== null) current = current.parent;
-  }
-  return { root, scopes };
-}
-
-function indexConstObjects(tokens, scopes) {
-  for (let index = 0; index < tokens.length; index += 1) {
-    if (tokens[index].text !== "const" || tokens[index - 1]?.text === "as") continue;
-    const name = tokens[index + 1];
-    if (name?.kind !== SyntaxKind.Identifier) continue;
-    let equals = index + 2;
-    while (equals < tokens.length && tokens[equals].text !== "=" && tokens[equals].text !== ";") equals += 1;
-    if (tokens[equals]?.text !== "=") continue;
-    let end = equals + 1;
-    while (end < tokens.length && tokens[end].text !== ";") {
-      if (OPENING_DELIMITERS.has(tokens[end].text)) {
-        const matching = matchingDelimiter(tokens, end);
-        if (matching === -1) break;
-        end = matching;
-      }
-      end += 1;
-    }
-    const object = objectExpressionRange(tokens, equals + 1, end);
-    if (object !== null) scopes[index].bindings.set(name.text, object);
-  }
-}
-
-function resolveConstObject(scope, name) {
-  for (let current = scope; current !== null; current = current.parent) {
-    if (current.bindings.has(name)) return current.bindings.get(name);
-  }
-  return null;
+function resolvedConstObject(identifier, project) {
+  const declaration = project.checker.getResolvedSymbol(identifier)?.valueDeclaration?.resolve(project);
+  if (declaration?.kind !== SyntaxKind.VariableDeclaration
+    || declaration.parent.kind !== SyntaxKind.VariableDeclarationList
+    || (declaration.parent.flags & NodeFlags.Const) === 0) return null;
+  return objectLiteralExpression(declaration.initializer);
 }
 
 export function collectFixedInlineLayoutDeclarations(source) {
-  const tokens = scanTypeScript(source);
-  const { scopes } = lexicalScopes(tokens);
-  indexConstObjects(tokens, scopes);
-  const found = [];
-  function collectInRange(start, end) {
-    let inOpeningTag = false;
-    for (let index = start; index < end - 3; index += 1) {
-      if (tokens[index].text === "<" && tokens[index + 1]?.kind === SyntaxKind.Identifier) {
-        inOpeningTag = true;
-        continue;
+  return parsedTypeScript(source, (sourceFile, project) => {
+    const found = [];
+    function visit(node) {
+      if (node.kind === SyntaxKind.JsxAttribute
+        && node.name.kind === SyntaxKind.Identifier
+        && node.name.text === "style"
+        && node.initializer?.kind === SyntaxKind.JsxExpression) {
+        const expression = node.initializer.expression;
+        const current = expression === undefined ? undefined : unwrapInlineExpression(expression);
+        const object = current?.kind === SyntaxKind.Identifier
+          ? resolvedConstObject(current, project)
+          : objectLiteralExpression(current);
+        if (object !== null) found.push(...collectObjectDeclarations(sourceFile, object));
       }
-      if (inOpeningTag && tokens[index].text === ">") {
-        inOpeningTag = false;
-        continue;
-      }
-      if (!inOpeningTag) continue;
-      if (tokens[index].kind === SyntaxKind.Identifier && tokens[index].text === "style"
-        && tokens[index + 1].text === "=" && tokens[index + 2].text === "{") {
-        const expressionEnd = matchingDelimiter(tokens, index + 2);
-        if (expressionEnd === -1) continue;
-        const [first, last] = unwrapExpression(tokens, index + 3, expressionEnd);
-        const object = objectExpressionRange(tokens, first, last)
-          ?? (last - first === 1 && tokens[first].kind === SyntaxKind.Identifier
-            ? resolveConstObject(scopes[first], tokens[first].text)
-            : null);
-        if (object !== null) found.push(...collectObjectDeclarations(source, tokens, object));
-        index = expressionEnd;
-      } else if (tokens[index].text === "{") {
-        const expressionEnd = matchingDelimiter(tokens, index);
-        if (expressionEnd === -1) continue;
-        collectInRange(index + 1, expressionEnd);
-        index = expressionEnd;
-      }
+      node.forEachChild(visit);
     }
-  }
-  collectInRange(0, tokens.length);
-  return found;
+    visit(sourceFile);
+    return found;
+  });
 }
 
 export async function collectApplicationFixedInlineLayoutDeclarations(root) {

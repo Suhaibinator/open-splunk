@@ -292,6 +292,27 @@ test("fixed layout values stay in stylesheets while runtime geometry stays inlin
   );
   assert.deepEqual(
     collectFixedInlineLayoutDeclarations(`
+      const runtimeStyle = getRuntimeStyle(), fixedStyle = { width: "72%" }, typedStyle: CSSProperties = { minHeight: 40 };
+      <section style={fixedStyle} />
+      <section style={typedStyle} />
+    `),
+    ["width: \"72%\"", "minHeight: 40"],
+  );
+  assert.deepEqual(
+    collectFixedInlineLayoutDeclarations(`
+      const comparison = left < right, fixedStyle = { width: "72%" };
+      <section style={fixedStyle} />
+    `),
+    ["width: \"72%\""],
+  );
+  assert.deepEqual(
+    collectFixedInlineLayoutDeclarations(`
+      <section style={{ ...{ width: "72%", height: runtimeHeight }, ...({ minWidth: 64 } as const) }} />
+    `),
+    ["width: \"72%\"", "minWidth: 64"],
+  );
+  assert.deepEqual(
+    collectFixedInlineLayoutDeclarations(`
       const shellStyle = { maxWidth: 420 };
       function Example() {
         const shellStyle = { maxWidth: runtimeWidth };
@@ -299,6 +320,54 @@ test("fixed layout values stay in stylesheets while runtime geometry stays inlin
       }
     `),
     [],
+  );
+  assert.deepEqual(
+    collectFixedInlineLayoutDeclarations(`
+      const shellStyle = { maxWidth: 420 };
+      function ParameterShadow(shellStyle: CSSProperties) {
+        return <section style={shellStyle} />;
+      }
+      function LetShadow() {
+        let otherStyle: CSSProperties, shellStyle: CSSProperties = getRuntimeStyle();
+        return <section style={shellStyle} />;
+      }
+      const ArrowShadow = (shellStyle: CSSProperties) => {
+        return <section style={shellStyle} />;
+      };
+    `),
+    [],
+  );
+  assert.deepEqual(
+    collectFixedInlineLayoutDeclarations(`
+      const shellStyle = { maxWidth: 420 };
+      const SingleShadow = shellStyle => <section style={shellStyle} />;
+      const ParenthesizedShadow = (shellStyle) => <section style={shellStyle} />;
+      const TypedShadow = (shellStyle: CSSProperties) => <section style={shellStyle} />;
+      const OuterReference = (value: CSSProperties) => <section style={shellStyle} />;
+      <section style={shellStyle} />
+    `),
+    ["maxWidth: 420", "maxWidth: 420"],
+  );
+  assert.deepEqual(
+    collectFixedInlineLayoutDeclarations(`
+      const shellStyle = { maxWidth: 420 };
+      const ParameterShadow = ({ shellStyle }: Props) => <section style={shellStyle} />;
+      function LocalShadow(props: Props) {
+        const { shellStyle } = props;
+        return <section style={shellStyle} />;
+      }
+    `),
+    [],
+  );
+  assert.deepEqual(
+    collectFixedInlineLayoutDeclarations(`
+      const shellStyle = { maxWidth: 420 };
+      for (let shellStyle of styles) {
+        <section style={shellStyle} />;
+      }
+      <section style={shellStyle} />;
+    `),
+    ["maxWidth: 420"],
   );
   assert.deepEqual(
     collectFixedInlineLayoutDeclarations(`

@@ -566,7 +566,7 @@
   white-space: nowrap;
 }
 
-.pattern-action:hover {
+.pattern-action.button--link:hover:not(:disabled, [aria-disabled="true"]) {
   background: var(--selection);
   text-decoration: underline;
 }

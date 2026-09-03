@@ -82,15 +82,15 @@
   --space-6: 24px;
   --space-7: 32px;
   --space-8: 40px;
-  --space-button-link-block-padding: 1px;
-  --space-button-link-inline-padding: 6px;
-  --space-button-notice-gap: 5px;
-  --space-button-toolbar-gap: 5px;
-  --space-button-toolbar-inline-padding: 10px;
+  --space-button-link-block-padding: 1px; /* Native link-action block padding. */
+  --space-button-link-inline-padding: 6px; /* Native link-action inline padding. */
+  --space-button-notice-gap: 5px; /* Notice-dismiss icon alignment gap. */
+  --space-button-toolbar-gap: 5px; /* Toolbar icon-and-label gap. */
+  --space-button-toolbar-inline-padding: 10px; /* Toolbar action inline padding. */
 
-  /* Resizable statistics-table geometry. These are read by the client so the
+  /* Statistics-table geometry. Column dimensions are read by the client so the
      pure layout reducer and the CSS surface share the same scale source. */
-  --space-statistics-cell-maximum: 420px;
+  --space-statistics-cell-maximum: 420px; /* Maximum width before a statistics cell clips its content. */
   --space-statistics-column-handle: 8px;
   --space-statistics-column-maximum: 480px;
   --space-statistics-column-minimum: 96px;

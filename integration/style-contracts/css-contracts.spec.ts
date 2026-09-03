@@ -148,7 +148,12 @@ test("button modifiers preserve notice, toolbar, and dataset-toggle geometry", a
     expect(width).toBeCloseTo(28, 0);
   }));
 
-  const [surface, border] = await resolveTokens(page, ["--bg-surface", "--border-strong"]);
+  const [surface, border, selection, subtle] = await resolveTokens(page, [
+    "--bg-surface",
+    "--border-strong",
+    "--selection",
+    "--bg-subtle",
+  ]);
   const toolbar = page.locator(".resource-toolbar .button");
   await expect(toolbar).toHaveCSS("background-color", surface ?? "");
   await expect(toolbar).toHaveCSS("border-color", border ?? "");
@@ -161,6 +166,8 @@ test("button modifiers preserve notice, toolbar, and dataset-toggle geometry", a
   await expect(toolbar).toHaveCSS("padding-left", "10px");
   await expect(toolbar).toHaveCSS("padding-right", "10px");
   expect(await contentWidth(page, ".resource-toolbar .button")).toBeCloseTo(76.02, 1);
+  await toolbar.hover();
+  await expect(toolbar).toHaveCSS("background-color", surface ?? "");
 
   const activeToggle = page.locator(".dataset-view-toggle .button").first();
   const inactiveToggle = page.locator(".dataset-view-toggle .button").last();
@@ -176,6 +183,10 @@ test("button modifiers preserve notice, toolbar, and dataset-toggle geometry", a
   await expect(inactiveToggle).toHaveCSS("border-left-width", "0px");
   expect(await contentWidth(page, ".dataset-view-toggle .button:first-of-type")).toBeCloseTo(69.36, 1);
   expect(await contentWidth(page, ".dataset-view-toggle .button:last-of-type")).toBeCloseTo(56.70, 1);
+  await activeToggle.hover();
+  await expect(activeToggle).toHaveCSS("background-color", subtle ?? "");
+  await inactiveToggle.hover();
+  await expect(inactiveToggle).toHaveCSS("background-color", surface ?? "");
 
   await expect(page.locator(".collector-card footer .button")).toHaveCSS("display", "none");
   const fieldAction = page.locator(".field-inspector footer .button");
@@ -203,6 +214,8 @@ test("button modifiers preserve notice, toolbar, and dataset-toggle geometry", a
   await expect(patternAction).toHaveCSS("min-height", "28px");
   await expect(patternAction).toHaveCSS("padding-left", "8px");
   await expect(patternAction).toHaveCSS("padding-right", "8px");
+  await patternAction.hover();
+  await expect(patternAction).toHaveCSS("background-color", selection ?? "");
 });
 
 test.describe("search workspace touch targets", () => {
