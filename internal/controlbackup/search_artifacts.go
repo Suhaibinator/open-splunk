@@ -29,6 +29,19 @@ var searchArtifactPolicy = privatefs.FilePolicy{
 	MaximumSize:  int64(maximumSearchArtifactBytes),
 }
 
+// The live store's staging-name format, mirrored from searchartifacts so this
+// package keeps its own exact-name vocabulary without importing the store.
+const (
+	searchArtifactTemporaryPrefix = ".search-result-"
+	searchArtifactTemporarySuffix = ".partial"
+)
+
+func liveSearchArtifactTemporaryName(name string) bool {
+	return strings.HasPrefix(name, searchArtifactTemporaryPrefix) &&
+		strings.HasSuffix(name, searchArtifactTemporarySuffix) &&
+		len(name) <= 128
+}
+
 func validSearchArtifactName(name string) bool {
 	if !strings.HasPrefix(name, searchArtifactPrefix) ||
 		!strings.HasSuffix(name, searchArtifactSuffix) {
@@ -97,6 +110,13 @@ func inspectSearchArtifactDirectory(
 			if closeErr := lock.Close(); closeErr != nil {
 				return DirectoryIdentity{}, nil, closeErr
 			}
+			continue
+		}
+		if allowLock && liveSearchArtifactTemporaryName(name) {
+			// The live store publishes through these staging names, including
+			// its startup rename probe, and removes any it finds at its next
+			// reconciliation. The control database never references them, so a
+			// backup of a live directory skips them instead of failing closed.
 			continue
 		}
 		if !validSearchArtifactName(name) {

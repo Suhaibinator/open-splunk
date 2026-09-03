@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/featureops"
+	"github.com/Suhaibinator/open-splunk/internal/privatefs"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchretention"
 )
@@ -28,16 +29,22 @@ const (
 )
 
 var (
-	ErrClosed         = errors.New("search artifact store is closed")
-	ErrConflict       = errors.New("retained search job state conflict")
-	ErrNotFound       = errors.New("retained search job not found")
-	ErrExpired        = errors.New("retained search job expired")
-	ErrNotReady       = errors.New("search result artifact is not ready")
-	ErrCapacity       = errors.New("search artifact capacity is exhausted")
-	ErrCorrupt        = errors.New("search result artifact is corrupt")
-	ErrInvalid        = errors.New("search artifact request is invalid")
-	ErrInvalidCursor  = errors.New("invalid search artifact pagination cursor")
-	ErrDirectoryInUse = errors.New("search artifact directory is already in use")
+	ErrClosed   = errors.New("search artifact store is closed")
+	ErrConflict = errors.New("retained search job state conflict")
+	ErrNotFound = errors.New("retained search job not found")
+	ErrExpired  = errors.New("retained search job expired")
+	ErrNotReady = errors.New("search result artifact is not ready")
+	// ErrResultsUnavailable means a failed, canceled, or interrupted durable
+	// record can never serve a result page.
+	ErrResultsUnavailable = errors.New("retained search results are unavailable")
+	// ErrResultsNotPersisted means the search completed but its exact artifact
+	// could not be published, so the computed rows were discarded.
+	ErrResultsNotPersisted = errors.New("retained search results were not persisted")
+	ErrCapacity            = errors.New("search artifact capacity is exhausted")
+	ErrCorrupt             = errors.New("search result artifact is corrupt")
+	ErrInvalid             = errors.New("search artifact request is invalid")
+	ErrInvalidCursor       = errors.New("invalid search artifact pagination cursor")
+	ErrDirectoryInUse      = errors.New("search artifact directory is already in use")
 )
 
 // Visibility is forward-compatible sharing metadata. Authorization remains
@@ -90,6 +97,28 @@ type Config struct {
 	TombstoneRetention time.Duration
 	ReapBatchSize      int
 	Observer           featureops.Observer
+	// renameProbe proves the directory supports atomic no-replace rename before
+	// the store accepts a job. Tests inject a failing probe; production always
+	// uses the real filesystem.
+	renameProbe func(*privatefs.Directory) error
+}
+
+// TerminalResultError explains why a terminal durable record cannot serve a
+// result page: ErrResultsNotPersisted when the search completed but its
+// artifact publication failed, ErrResultsUnavailable for any other failed,
+// canceled, or interrupted record, and nil for every other state.
+func TerminalResultError(record Record) error {
+	switch record.State {
+	case StateFailed:
+		if record.Job.Failure != nil && record.Job.Failure.Code == searchjobs.FailureResultsNotPersisted {
+			return ErrResultsNotPersisted
+		}
+		return ErrResultsUnavailable
+	case StateCanceled, StateInterrupted:
+		return ErrResultsUnavailable
+	default:
+		return nil
+	}
 }
 
 // AccessMode controls expiry behavior for a metadata read. Launch refreshes an
@@ -207,5 +236,16 @@ func resolvedConfig(config Config) (Config, error) {
 	if config.Clock == nil {
 		config.Clock = time.Now
 	}
+	if config.renameProbe == nil {
+		config.renameProbe = requireRetainedSearchDirectory
+	}
 	return config, nil
+}
+
+// requireRetainedSearchDirectory probes with the store's own staging names so
+// a probe file orphaned by a crash between create and unlink is an ordinary
+// stale temporary file that Reconcile removes at the next start, never an
+// unexpected entry that refuses startup.
+func requireRetainedSearchDirectory(directory *privatefs.Directory) error {
+	return privatefs.RequireRenameNoReplace(directory, "retained-search directory", randomTemporaryName)
 }

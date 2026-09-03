@@ -622,6 +622,7 @@ func validSearchJobListFailure(state searchjobs.State, failure *searchjobs.Failu
 		searchjobs.FailureResourceLimit,
 		searchjobs.FailureTimeout,
 		searchjobs.FailureStorageUnavailable,
+		searchjobs.FailureResultsNotPersisted,
 		searchjobs.FailureExecution,
 		searchjobs.FailureInternal:
 		return true

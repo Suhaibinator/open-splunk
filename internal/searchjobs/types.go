@@ -80,6 +80,10 @@ const (
 	FailureStorageUnavailable FailureCode = "storage_unavailable"
 	FailureExecution          FailureCode = "execution"
 	FailureInternal           FailureCode = "internal"
+	// FailureResultsNotPersisted means execution completed but the exact
+	// result artifact could not be published, so the rows were discarded. It is
+	// distinct from FailureStorageUnavailable, which describes event storage.
+	FailureResultsNotPersisted FailureCode = "results_not_persisted"
 )
 
 // Diagnostic is a source-located SPL parse or planning diagnostic. It contains

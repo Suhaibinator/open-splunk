@@ -193,6 +193,60 @@ func TestMixedSchemaRetainsConcreteCellType(t *testing.T) {
 	}
 }
 
+func TestSearchJobProjectsDiscardedResultsAsStableWarning(t *testing.T) {
+	job := completeJob("job-not-persisted")
+	job.State = searchjobs.StateFailed
+	job.Schema = nil
+	job.RowCount = 0
+	job.ResultBytes = 0
+	job.Failure = &searchjobs.Failure{
+		Code:    searchjobs.FailureResultsNotPersisted,
+		Message: searchjobs.ResultsNotPersistedUnsupportedFilesystemMessage,
+	}
+
+	converted, err := searchJobToProto(job, testNow)
+	if err != nil {
+		t.Fatalf("searchJobToProto: %v", err)
+	}
+	if converted.GetFailure().GetCode() != opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_RESULTS_NOT_PERSISTED {
+		t.Fatalf("failure code = %v", converted.GetFailure().GetCode())
+	}
+	warnings := converted.GetWarnings()
+	if len(warnings) != 1 || warnings[0].GetCode() != "RESULTS_NOT_PERSISTED" {
+		t.Fatalf("warnings = %+v", warnings)
+	}
+	if warnings[0].GetMessage() != searchjobs.ResultsNotPersistedUnsupportedFilesystemMessage {
+		t.Fatalf("warning message = %q, want the constant filesystem explanation", warnings[0].GetMessage())
+	}
+	if !warnings[0].GetOccurredAt().AsTime().Equal(job.FinishedAt) {
+		t.Fatalf("warning time = %s, want %s", warnings[0].GetOccurredAt().AsTime(), job.FinishedAt)
+	}
+
+	// Stored text that is not one of the constant messages is never echoed.
+	job.Failure = &searchjobs.Failure{
+		Code:    searchjobs.FailureResultsNotPersisted,
+		Message: "rename /var/lib/open-splunk/state/open-splunk.db.search-artifacts: invalid argument",
+	}
+	converted, err = searchJobToProto(job, testNow)
+	if err != nil {
+		t.Fatalf("searchJobToProto: %v", err)
+	}
+	if got := converted.GetWarnings()[0].GetMessage(); got != searchjobs.ResultsNotPersistedMessage {
+		t.Fatalf("raw failure text reached the warning: %q", got)
+	}
+
+	// Event-storage outages share no warning: only a discarded completed result
+	// is a RESULTS_NOT_PERSISTED notice.
+	job.Failure = &searchjobs.Failure{Code: searchjobs.FailureStorageUnavailable, Message: "search storage is unavailable"}
+	converted, err = searchJobToProto(job, testNow)
+	if err != nil {
+		t.Fatalf("searchJobToProto: %v", err)
+	}
+	if len(converted.GetWarnings()) != 0 {
+		t.Fatalf("storage-unavailable warnings = %+v, want none", converted.GetWarnings())
+	}
+}
+
 func TestSearchJobAndResultPageExposeRetainedResultTruncation(t *testing.T) {
 	job := completeJob("job-truncated")
 	job.ResultsTruncated = true

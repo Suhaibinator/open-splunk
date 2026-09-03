@@ -607,12 +607,13 @@ func (handler *apiHandler) getSearchResults(request *http.Request, input *opensp
 		if artifactErr != nil {
 			return nil, mapSearchArtifactError(artifactErr)
 		}
-		switch record.State {
-		case searchartifacts.StateFailed, searchartifacts.StateCanceled, searchartifacts.StateInterrupted:
-			// A terminal durable projection is authoritative for retained-result
-			// availability. In particular, publication compensation may mark the
-			// artifact failed while the in-memory executor remains completed.
-			return nil, mapSearchArtifactError(searchartifacts.ErrNotReady)
+		// A terminal durable projection is authoritative for retained-result
+		// availability. In particular, publication compensation may mark the
+		// artifact failed while the in-memory executor remains completed; that
+		// case is reported as a distinct, permanent error rather than "not
+		// ready" so clients do not wait for results that will never appear.
+		if terminalErr := searchartifacts.TerminalResultError(record); terminalErr != nil {
+			return nil, mapSearchArtifactError(terminalErr)
 		}
 	}
 	release, acquired := handler.acquireSerialization()

@@ -81,6 +81,8 @@ func FailureCode(code searchjobs.FailureCode) opensplunk.SearchFailureCode {
 		return opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_TIMEOUT
 	case searchjobs.FailureStorageUnavailable:
 		return opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_STORAGE_UNAVAILABLE
+	case searchjobs.FailureResultsNotPersisted:
+		return opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_RESULTS_NOT_PERSISTED
 	case searchjobs.FailureExecution:
 		return opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_EXECUTION
 	case searchjobs.FailureInternal:

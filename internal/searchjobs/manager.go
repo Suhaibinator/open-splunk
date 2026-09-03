@@ -99,6 +99,10 @@ var (
 	ErrResultsNotReady = errors.New("search job results are not ready")
 	// ErrResultsUnavailable means a failed or canceled job has no result page.
 	ErrResultsUnavailable = errors.New("search job results are unavailable")
+	// ErrResultStorageUnsupported is wrapped by a completed-result journal whose
+	// directory's filesystem refuses the atomic publication primitive. The
+	// manager uses it to explain the failure to clients without paths.
+	ErrResultStorageUnsupported = errors.New("retained result storage does not support atomic publication")
 	// ErrInvalidCursor intentionally covers malformed, tampered, stale, and
 	// cross-scope pagination cursors without revealing which check failed.
 	ErrInvalidCursor = errors.New("invalid search pagination cursor")

@@ -368,7 +368,7 @@ func validateFailure(state opensplunk.SearchJobState, failure *opensplunk.Search
 	if state != opensplunk.SearchJobState_SEARCH_JOB_STATE_FAILED {
 		return invalid("only failed history entries may contain a failure summary")
 	}
-	if failure.Code < opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_INVALID_SPL || failure.Code > opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_RESULT_EXPIRED {
+	if failure.Code < opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_INVALID_SPL || failure.Code > opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_RESULTS_NOT_PERSISTED {
 		return invalid("failure code is invalid")
 	}
 	if err := validateText("failure message", failure.Message, maximumFailureMessageBytes, false); err != nil {

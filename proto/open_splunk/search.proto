@@ -133,6 +133,9 @@ enum SearchFailureCode {
   SEARCH_FAILURE_CODE_EXECUTION = 9;
   SEARCH_FAILURE_CODE_INTERNAL = 10;
   SEARCH_FAILURE_CODE_RESULT_EXPIRED = 11;
+  // Execution completed, but the exact result artifact could not be persisted
+  // to retained storage, so the computed rows were discarded.
+  SEARCH_FAILURE_CODE_RESULTS_NOT_PERSISTED = 12;
 }
 
 message SearchFailure {

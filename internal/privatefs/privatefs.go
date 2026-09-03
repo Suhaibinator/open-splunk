@@ -29,10 +29,67 @@ const (
 )
 
 var (
-	ErrClosed              = errors.New("private filesystem directory is closed")
-	ErrDestinationExists   = errors.New("private filesystem destination already exists")
-	ErrUnsupportedPlatform = errors.New("private filesystem operation is unsupported on this platform")
+	ErrClosed            = errors.New("private filesystem directory is closed")
+	ErrDestinationExists = errors.New("private filesystem destination already exists")
+	// ErrUnsupportedFilesystem means the filesystem behind a pinned directory
+	// refused a primitive this package deliberately never emulates, such as
+	// atomic no-replace rename on the Linux NFS client. Every occurrence is an
+	// *UnsupportedFilesystemError, so callers can also name the directory.
+	ErrUnsupportedFilesystem = errors.New("private filesystem operation is unsupported by the filesystem")
 )
+
+// UnsupportedFilesystemError reports which pinned directory refused which
+// primitive. It matches ErrUnsupportedFilesystem through errors.Is, so callers
+// can branch on the class without inspecting text, and it carries the
+// directory's absolute path and filesystem type for operator-facing messages.
+type UnsupportedFilesystemError struct {
+	// Operation names the refused primitive, for example "no-replace rename".
+	Operation string
+	// Directory is the cleaned absolute path of the directory that refused it.
+	Directory string
+	// Filesystem is the filesystem type name when it could be resolved.
+	Filesystem string
+	// Err is the underlying syscall error.
+	Err error
+}
+
+func (err *UnsupportedFilesystemError) Error() string {
+	location := err.Directory
+	if err.Filesystem != "" {
+		location += " on " + err.Filesystem
+	}
+	return fmt.Sprintf("%s: %s in %s: %v", ErrUnsupportedFilesystem, err.Operation, location, err.Err)
+}
+
+// Is reports ErrUnsupportedFilesystem so sentinel checks keep working.
+func (err *UnsupportedFilesystemError) Is(target error) bool {
+	return errors.Is(target, ErrUnsupportedFilesystem)
+}
+
+// Unwrap exposes the underlying syscall error.
+func (err *UnsupportedFilesystemError) Unwrap() error {
+	return err.Err
+}
+
+// Guidance renders the operator-facing explanation for a directory serving
+// the named role, for example "retained-search directory".
+func (err *UnsupportedFilesystemError) Guidance(role string) string {
+	if err.Filesystem == "" {
+		return fmt.Sprintf(
+			"%s %s is on a filesystem that does not support atomic %s; place it on a local filesystem (ext4, xfs, btrfs)",
+			role,
+			err.Directory,
+			err.Operation,
+		)
+	}
+	return fmt.Sprintf(
+		"%s %s is on %s, which does not support atomic %s; place it on a local filesystem (ext4, xfs, btrfs)",
+		role,
+		err.Directory,
+		err.Filesystem,
+		err.Operation,
+	)
+}
 
 // NameGenerator returns one candidate exact path component. RandomName is the
 // production generator; accepting an injected generator keeps collision and
@@ -1084,7 +1141,7 @@ func (directory *Directory) renameNoReplaceWithStatus(
 		return outcome, errors.Join(observationErr, stabilityErr)
 	}
 	return outcome, errors.Join(
-		renameNoReplaceError(to, renameErr),
+		renameNoReplaceError(destination, to, renameErr),
 		observationErr,
 		stabilityErr,
 	)
@@ -1202,16 +1259,22 @@ func definitivelyUnchangedRenameError(err error) bool {
 	return classifyRenameNoReplaceFailure(err) != renameNoReplaceFailureOther
 }
 
-func renameNoReplaceError(to string, err error) error {
+func renameNoReplaceError(destination *Directory, to string, err error) error {
 	switch classifyRenameNoReplaceFailure(err) {
 	case renameNoReplaceFailureDestinationExists:
 		return fmt.Errorf("%w: %s", ErrDestinationExists, to)
 	case renameNoReplaceFailureUnsupported:
-		return fmt.Errorf(
-			"%w: no-replace rename: %w",
-			ErrUnsupportedPlatform,
-			err,
-		)
+		unsupported := &UnsupportedFilesystemError{
+			Operation: "no-replace rename",
+			Directory: destination.Path(),
+			Err:       err,
+		}
+		// The filesystem name is diagnostic; a failed lookup must not hide the
+		// refusal itself.
+		if filesystem, filesystemErr := destination.Filesystem(); filesystemErr == nil {
+			unsupported.Filesystem = filesystem.Name
+		}
+		return unsupported
 	default:
 		return fmt.Errorf("rename private child without replacement: %w", err)
 	}

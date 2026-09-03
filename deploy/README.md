@@ -270,7 +270,7 @@ The proxy must replace, rather than append to, `X-Forwarded-Proto`. For nginx:
 
 ```nginx
 location / {
-    proxy_pass http://192.168.2.13:3016;
+    proxy_pass http://127.0.0.1:8080;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -368,6 +368,8 @@ docker compose logs --follow server
 | `configure -http-trust-x-forwarded-proto from OPEN_SPLUNK_SERVER_HTTP_TRUST_X_FORWARDED_PROTO` | The reverse-proxy opt-in is not a valid Boolean value. Use the same syntax accepted by the CLI Boolean flag. |
 | ClickHouse connection failure at `localhost`, `9030`, or another host-published port | From the Open Splunk container, use the ClickHouse Compose service name and its container port, normally `per-clickhouse:9000`. Ensure both services share a network. |
 | ClickHouse authentication failure | `OPEN_SPLUNK_SERVER_CLICKHOUSE_USERNAME` and `OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD` must match the existing ClickHouse account's `CLICKHOUSE_USER` and `CLICKHOUSE_PASSWORD`. |
+| `retained-search directory … is on nfs, which does not support atomic no-replace rename` | The state volume is a network or FUSE mount. Retained-search publication, backups, and restores depend on atomic no-replace rename, which the Linux NFS and SMB clients refuse, so the server stops instead of losing every search result. Bind the state directory to a local filesystem (ext4, xfs, btrfs). |
+| `control database is on a network or FUSE filesystem; SQLite WAL mode is unsafe there` (logged at error level; the server keeps running) | The SQLite control plane is on NFS, SMB, or a FUSE bridge, where WAL mode can silently corrupt the database. Stop the server, move the state directory to a local filesystem, and start it again. |
 
 ## Transport and credential model
 
@@ -395,3 +397,13 @@ singleton lock, retained-search artifacts, and export artifacts in named
 volumes. ClickHouse data remains owned by the existing ClickHouse service. The
 default Compose deployment does not configure backup or restore jobs; back up
 both systems using your normal infrastructure procedures.
+
+The state volume must be a local filesystem such as ext4, xfs, or btrfs.
+Network and FUSE filesystems (NFS, SMB/CIFS, sshfs, and similar) are not
+supported for the control database or for the retained-search and export
+directories: SQLite WAL mode is unsafe without coherent shared memory and
+reliable locks, and the retained-search store publishes every result with an
+atomic no-replace rename that the Linux NFS and SMB clients refuse. The server
+checks both at startup; it refuses to start when the retained-search directory
+cannot publish, and logs an error when the control database is on a remote
+mount.

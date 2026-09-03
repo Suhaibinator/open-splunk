@@ -3,6 +3,8 @@ package searchjobs
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -122,7 +124,8 @@ func TestCompositeCompletedPublicationFailureProjectsTerminalStorageFailure(t *t
 	publicationJobs := append([]Job(nil), publication.finalJobs...)
 	publication.mu.Unlock()
 	if len(projected) != 1 || projected[0].State != StateFailed ||
-		projected[0].Failure == nil || projected[0].Failure.Code != FailureStorageUnavailable {
+		projected[0].Failure == nil || projected[0].Failure.Code != FailureResultsNotPersisted ||
+		projected[0].Failure.Message != ResultsNotPersistedMessage {
 		t.Fatalf("terminal metadata compensation = %#v", projected)
 	}
 	if len(publicationJobs) != 2 || publicationJobs[0].State != StateCompleted ||
@@ -131,6 +134,82 @@ func TestCompositeCompletedPublicationFailureProjectsTerminalStorageFailure(t *t
 	}
 	if projected[0].Schema != nil || projected[0].RowCount != 0 || projected[0].ResultBytes != 0 {
 		t.Fatalf("compensation exposed unavailable results: %#v", projected[0])
+	}
+}
+
+func TestCompositeCompletedPublicationFailureExplainsUnsupportedFilesystem(t *testing.T) {
+	t.Parallel()
+
+	publicationErr := fmt.Errorf(
+		"%w: private filesystem operation is unsupported by the filesystem: no-replace rename in /var/lib/open-splunk/state/open-splunk.db.search-artifacts on nfs: invalid argument",
+		ErrResultStorageUnsupported,
+	)
+	publication := &failingResultJournal{recordingJournal: recordingJournal{}, err: publicationErr}
+	projection := &recordingJournal{}
+	journal := NewCompositeJournal(projection, publication)
+	job := Job{ID: "failed-publication-nfs", State: StateCompleted}
+
+	outcome := journal.finalizeCompleted(context.Background(), job, &stubResultLease{})
+	if !errors.Is(outcome.Results, ErrResultStorageUnsupported) {
+		t.Fatalf("finalizeCompleted outcome = %#v", outcome)
+	}
+	projection.mu.Lock()
+	projected := append([]Job(nil), projection.finalJobs...)
+	projection.mu.Unlock()
+	if len(projected) != 1 || projected[0].Failure == nil {
+		t.Fatalf("terminal metadata compensation = %#v", projected)
+	}
+	failure := projected[0].Failure
+	if failure.Code != FailureResultsNotPersisted || failure.Message != ResultsNotPersistedUnsupportedFilesystemMessage {
+		t.Fatalf("compensation failure = %#v", failure)
+	}
+	for _, leaked := range []string{"/var/lib", "nfs", "invalid argument", "EINVAL"} {
+		if strings.Contains(failure.Message, leaked) {
+			t.Fatalf("client-facing failure message leaks %q: %q", leaked, failure.Message)
+		}
+	}
+	if !strings.Contains(failure.Message, "does not support atomic no-replace rename") {
+		t.Fatalf("failure message does not explain the filesystem fault: %q", failure.Message)
+	}
+}
+
+func TestSafeResultsNotPersistedMessageOnlyReturnsConstants(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		stored string
+		want   string
+	}{
+		{stored: ResultsNotPersistedMessage, want: ResultsNotPersistedMessage},
+		{stored: ResultsNotPersistedUnsupportedFilesystemMessage, want: ResultsNotPersistedUnsupportedFilesystemMessage},
+		{stored: "", want: ResultsNotPersistedMessage},
+		{stored: "rename /var/lib/state: invalid argument", want: ResultsNotPersistedMessage},
+	} {
+		got := SafeResultsNotPersistedMessage(Failure{Code: FailureResultsNotPersisted, Message: testCase.stored})
+		if got != testCase.want {
+			t.Fatalf("SafeResultsNotPersistedMessage(%q) = %q, want %q", testCase.stored, got, testCase.want)
+		}
+	}
+}
+
+func TestResultPublicationCompensationMessagesStayClientSafe(t *testing.T) {
+	t.Parallel()
+
+	generic := resultPublicationCompensation(Job{ID: "job", State: StateCompleted, RowCount: 3}, errors.New("disk full"))
+	if generic.State != StateFailed || generic.RowCount != 0 || generic.Failure == nil ||
+		generic.Failure.Code != FailureResultsNotPersisted || generic.Failure.Message != ResultsNotPersistedMessage {
+		t.Fatalf("generic compensation = %#v", generic)
+	}
+	if strings.Contains(generic.Failure.Message, "disk full") {
+		t.Fatalf("generic compensation leaked the cause: %q", generic.Failure.Message)
+	}
+	unsupported := resultPublicationCompensation(Job{ID: "job", State: StateCompleted}, ErrResultStorageUnsupported)
+	if unsupported.Failure == nil || unsupported.Failure.Message != ResultsNotPersistedUnsupportedFilesystemMessage {
+		t.Fatalf("unsupported compensation = %#v", unsupported)
+	}
+	nilCause := resultPublicationCompensation(Job{ID: "job", State: StateCompleted}, nil)
+	if nilCause.Failure == nil || nilCause.Failure.Message != ResultsNotPersistedMessage {
+		t.Fatalf("nil-cause compensation = %#v", nilCause)
 	}
 }
 

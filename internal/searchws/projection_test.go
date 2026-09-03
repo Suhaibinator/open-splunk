@@ -512,6 +512,7 @@ func TestProjectSearchMapsEveryFailureCode(t *testing.T) {
 		{name: "resource limit", code: searchjobs.FailureResourceLimit, want: opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_RESOURCE_LIMIT},
 		{name: "timeout", code: searchjobs.FailureTimeout, want: opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_TIMEOUT},
 		{name: "storage unavailable", code: searchjobs.FailureStorageUnavailable, want: opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_STORAGE_UNAVAILABLE},
+		{name: "results not persisted", code: searchjobs.FailureResultsNotPersisted, want: opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_RESULTS_NOT_PERSISTED},
 		{name: "execution", code: searchjobs.FailureExecution, want: opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_EXECUTION},
 		{name: "internal", code: searchjobs.FailureInternal, want: opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_INTERNAL},
 	}

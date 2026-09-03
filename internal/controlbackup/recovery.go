@@ -288,6 +288,17 @@ func createWithHooks(
 	defer func() {
 		returnedErr = errors.Join(returnedErr, destinationParent.Close())
 	}()
+	// Publication renames the staged bundle into place without replacement; a
+	// filesystem that refuses that primitive must be reported before any copy.
+	// The probe uses the staging name space, so a probe file orphaned by a
+	// crash is recognizable junk in the parent and never collides with a stage.
+	if err := privatefs.RequireRenameNoReplace(
+		destinationParent,
+		"backup destination directory",
+		privatefs.RandomName(".control-plane-backup-tmp-"),
+	); err != nil {
+		return Manifest{}, fmt.Errorf("create control-plane backup: %w", err)
+	}
 
 	masterKey, err := readSourceMasterKey(ctx, options.MasterKeyPath)
 	if err != nil {
@@ -823,6 +834,9 @@ func restoreWithHooks(
 		options.DatabaseLock,
 		cleanupRestoreStagesHooks{},
 	); err != nil {
+		return err
+	}
+	if err := probeRestoreDestinations(&plan); err != nil {
 		return err
 	}
 	if err := ensureRestoredSearchArtifacts(ctx, &plan, options.DatabaseLock); err != nil {
@@ -1379,6 +1393,74 @@ func restoreStageNames(recoverySetID string) []string {
 		".restore-" + recoverySetID + "-master-key",
 		".restore-" + recoverySetID + "-administrator-token",
 	}
+}
+
+// restoreProbeNames are the two names the rename probe cycles through in an
+// external search-artifact parent, derived from the artifact stage name so a
+// crash leaves recognizable, reclaimable files.
+func restoreProbeNames(artifactStageName string) []string {
+	return []string{
+		artifactStageName + "-rename-probe",
+		artifactStageName + "-rename-probe-moved",
+	}
+}
+
+// probeRestoreDestinations proves that every directory the restore publishes
+// into honors atomic no-replace rename before any bundle member is copied. It
+// runs only after stale stage cleanup and only during Restore, never during
+// the read-only preflight. The control-plane destination is an exact-set
+// namespace, so the probe cycles through two of the plan's own stage names:
+// a probe file orphaned by a crash is then a stale stage that the next
+// attempt's cleanup reclaims rather than an unrelated entry that refuses it.
+// An external search-artifact parent tolerates unrelated entries; its probe
+// names are removed here before probing for the same reason.
+func probeRestoreDestinations(plan *restorePlan) error {
+	if err := privatefs.RequireRenameNoReplace(
+		plan.destination,
+		"restore destination directory",
+		privatefs.FixedNames(plan.stageNames[0], plan.stageNames[1]),
+	); err != nil {
+		return fmt.Errorf("restore control-plane backup: %w", err)
+	}
+	if plan.artifactDestination == nil {
+		return nil
+	}
+	probeNames := restoreProbeNames(plan.artifactStageName)
+	if err := removeStaleRestoreFiles(plan.artifactDestination, probeNames); err != nil {
+		return fmt.Errorf("restore control-plane backup: reclaim stale search-artifact probe: %w", err)
+	}
+	if err := privatefs.RequireRenameNoReplace(
+		plan.artifactDestination,
+		"search-artifact restore destination directory",
+		privatefs.FixedNames(probeNames...),
+	); err != nil {
+		return fmt.Errorf("restore control-plane backup: %w", err)
+	}
+	return nil
+}
+
+// removeStaleRestoreFiles unlinks the named owner-private regular files when
+// present. Anything else under one of those names is refused, matching the
+// stale-stage policy for the control-plane destination.
+func removeStaleRestoreFiles(directory *privatefs.Directory, names []string) error {
+	for _, name := range names {
+		present, err := pinnedChildExists(directory, name)
+		if err != nil {
+			return err
+		}
+		if !present {
+			continue
+		}
+		file, err := directory.OpenRegular(name, anySizePrivateFilePolicy)
+		if err != nil {
+			return fmt.Errorf("unsafe stale file %q: %w", name, err)
+		}
+		unlinkErr := directory.UnlinkPinnedRegular(name, file)
+		if err := errors.Join(unlinkErr, file.Close()); err != nil {
+			return fmt.Errorf("remove stale file %q: %w", name, err)
+		}
+	}
+	return directory.Sync()
 }
 
 func validateRestoreNamespace(stageNames, finalNames []string) error {

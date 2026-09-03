@@ -237,6 +237,10 @@ func mapSearchArtifactError(err error) error {
 		return router.NewHTTPError(http.StatusGone, "search job results expired")
 	case errors.Is(err, searchartifacts.ErrNotReady):
 		return router.NewHTTPError(http.StatusConflict, "search results are not ready")
+	case errors.Is(err, searchartifacts.ErrResultsNotPersisted):
+		return router.NewHTTPError(http.StatusConflict, "search results were not persisted")
+	case errors.Is(err, searchartifacts.ErrResultsUnavailable):
+		return router.NewHTTPError(http.StatusConflict, "search results are unavailable")
 	case errors.Is(err, searchartifacts.ErrConflict):
 		return router.NewHTTPError(http.StatusConflict, "search job state conflicts with current state")
 	case errors.Is(err, searchartifacts.ErrCapacity), errors.Is(err, searchartifacts.ErrClosed):
