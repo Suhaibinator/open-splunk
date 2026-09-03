@@ -26,6 +26,7 @@ import (
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
+	"github.com/Suhaibinator/open-splunk/internal/visibility"
 )
 
 const (
@@ -44,7 +45,7 @@ const (
 	backendHECLoadWorkers              = 16
 	backendHECLoadJobCapacity          = 128
 	backendHECLoadFullEvents           = 1_000
-	backendHECLoadMaximumPending       = 64
+	backendHECLoadMaximumPending       = visibility.MaxPendingReservations
 	backendHECLoadMaximumPendingBytes  = 256 << 20
 	backendHECLoadMaximumRuntimeHeapMB = 512
 	backendHECLoadMaximumResidentMB    = 768
@@ -354,7 +355,12 @@ func TestBackendHECLoadPlanPinsDurablePressure(t *testing.T) {
 		plan.schedules()[0].targetEventsPerSec != 50 ||
 		plan.schedules()[1].interval != 1_052_631_579*time.Nanosecond ||
 		plan.schedules()[1].targetEventsPerSec != 950 ||
-		plan.plannedRequests() != 1_529 {
+		plan.plannedRequests() != 1_529 ||
+		backendHECLoadMaximumPending != visibility.MaxPendingReservations ||
+		backendInsertBurstRequests != 30 || backendInsertBurstConcurrency != 8 ||
+		backendInsertBurstEvents != 30_000 ||
+		backendInsertSteadyStateRequests != 40 || backendInsertSteadyStateWorkers != 40 ||
+		backendInsertSteadyStateEvents != 40_000 {
 		t.Fatalf("default HEC load plan = %+v", plan)
 	}
 }
@@ -640,6 +646,29 @@ func TestBackendHECDurableLoad(t *testing.T) {
 		baseURL,
 		administratorToken,
 	)
+	steadyStateTargets := []backendInsertBurstTarget{{
+		Credential: hecToken,
+		Channel:    backendInsertSteadyStateChannel,
+	}}
+	steadyStateTokenPrefixes := []string{hecMetadata.GetTokenPrefix()}
+	for _, channel := range []string{
+		backendInsertSteadyStateChannel2,
+		backendInsertSteadyStateChannel3,
+		backendInsertSteadyStateChannel4,
+	} {
+		credential, metadata := backendHECCreateToken(
+			t,
+			ctx,
+			httpClient,
+			baseURL,
+			administratorToken,
+		)
+		steadyStateTargets = append(steadyStateTargets, backendInsertBurstTarget{
+			Credential: credential,
+			Channel:    channel,
+		})
+		steadyStateTokenPrefixes = append(steadyStateTokenPrefixes, metadata.GetTokenPrefix())
+	}
 	pressureSecret, pressureToken := backendHECLoadCreatePressureToken(
 		t,
 		ctx,
@@ -720,6 +749,9 @@ func TestBackendHECDurableLoad(t *testing.T) {
 	if err := storage.Ping(ctx); err != nil {
 		t.Fatalf("ping ClickHouse HEC load inspection connection: %v", err)
 	}
+	if err := prepareBackendPhysicalInsertInspection(ctx, clickHouse); err != nil {
+		t.Fatalf("prepare ClickHouse physical insert inspection: %v", err)
+	}
 
 	protectedValues := []string{
 		administratorToken,
@@ -736,7 +768,16 @@ func TestBackendHECDurableLoad(t *testing.T) {
 		backendHECLoadFullChannel,
 		backendHECLoadSmallCanary,
 		backendHECLoadFullCanary,
+		backendInsertCoalescingChannel,
+		backendInsertSteadyStateChannel,
+		backendInsertSteadyStateChannel2,
+		backendInsertSteadyStateChannel3,
+		backendInsertSteadyStateChannel4,
 	}
+	for _, target := range steadyStateTargets {
+		protectedValues = append(protectedValues, target.Credential)
+	}
+	protectedValues = append(protectedValues, steadyStateTokenPrefixes...)
 
 	nativeCount := max(uint64(2), uint64(plan.Duration.Seconds()*float64(plan.NativeRate)))
 	nativePlan := backendLoadPlan{
@@ -802,6 +843,16 @@ func TestBackendHECDurableLoad(t *testing.T) {
 	if err := waitUntilBackendHECLoad(ctx, loadStarted.Add(plan.OutageAfter)); err != nil {
 		t.Fatal(err)
 	}
+	windowContext, windowCancel := context.WithTimeout(ctx, 20*time.Second)
+	physicalInsertWindowStarted, err := beginBackendPhysicalInsertWindow(
+		windowContext,
+		clickHouse,
+		storage,
+	)
+	windowCancel()
+	if err != nil {
+		t.Fatal(err)
+	}
 	clickHousePaused := false
 	backendHECDocker(t, ctx, "pause", clickHouse.Name)
 	clickHousePaused = true
@@ -827,6 +878,23 @@ func TestBackendHECDurableLoad(t *testing.T) {
 		outageEnds,
 		protectedValues...,
 	)
+	coalescingBurst, err := runBackendInsertBurst(
+		ctx,
+		httpClient,
+		baseURL,
+		backendInsertBurstRequests,
+		backendInsertBurstConcurrency,
+		[]backendInsertBurstTarget{{
+			Credential: hecToken,
+			Channel:    backendInsertCoalescingChannel,
+		}},
+		"/services/collector/event",
+		"application/json",
+		backendHECLoadFullBody(),
+	)
+	if err != nil {
+		t.Fatalf("submit durable coalescing burst: %v", err)
+	}
 	// Hold the pause for the rest of the planned outage so recovery and every
 	// later assertion still observe the full configured window.
 	if err := waitUntilBackendHECLoad(ctx, outageEnds); err != nil {
@@ -854,7 +922,40 @@ func TestBackendHECDurableLoad(t *testing.T) {
 		t.Fatal("HEC load control-plane pressure completed no mutations")
 	}
 
-	finalOperations := waitForBackendHECLoadDrain(
+	waitForBackendHECLoadDrain(
+		t,
+		ctx,
+		httpClient,
+		baseURL,
+		administratorToken,
+		serverProcess,
+		protectedValues...,
+	)
+	recoveryExpectedRows := nativeCount + load.acceptedEvents() + coalescingBurst.AcceptedEvents
+	waitForBackendLoadStorage(
+		t,
+		ctx,
+		storage,
+		collectorProcess,
+		backendHECTenantID,
+		backendHECIndexName,
+		recoveryExpectedRows,
+		2*time.Minute,
+		protectedValues...,
+	)
+	waitForCollectorCheckpoint(t, ctx, collectorStateDir, logPath, collectorProcess, nativeToken)
+	waitForCollectorWALAcknowledgedThroughCurrent(
+		t,
+		ctx,
+		collectorStateDir,
+		collectorProcess,
+		nativeToken,
+	)
+	assertBackendLoadDeadLetterEmpty(t, collectorStateDir)
+	// The collector checkpoint is independently durable from the HEC queue
+	// snapshot. Prove the server drained once more after the collector reached
+	// end-of-file so no trailing native flush can contaminate the live window.
+	recoveryOperations := waitForBackendHECLoadDrain(
 		t,
 		ctx,
 		httpClient,
@@ -886,7 +987,107 @@ func TestBackendHECDurableLoad(t *testing.T) {
 		t.Fatalf("HEC process resource high-water observation = %+v", operational)
 	}
 
-	expectedRows := nativeCount + load.acceptedEvents()
+	recoveryShapeContext, recoveryShapeCancel := context.WithTimeout(ctx, 20*time.Second)
+	recoveryPhysicalInsertShape, err := readBackendPhysicalInsertShape(
+		recoveryShapeContext,
+		clickHouse,
+		storage,
+		physicalInsertWindowStarted,
+	)
+	recoveryShapeCancel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recoveryPhysicalInsertShape.validate(coalescingBurst.AcceptedEvents, 2); err != nil {
+		t.Fatalf("ClickHouse recovery physical insert shape: %v", err)
+	}
+
+	inspectionContext, inspectionCancel := context.WithTimeout(ctx, 20*time.Second)
+	if err := waitForBackendPhysicalInsertQuiescence(
+		inspectionContext,
+		clickHouse,
+		storage,
+	); err != nil {
+		inspectionCancel()
+		t.Fatal(err)
+	}
+	pressureBefore, err := readBackendClickHousePressure(inspectionContext, storage)
+	if err != nil {
+		inspectionCancel()
+		t.Fatal(err)
+	}
+	steadyStateWindowStarted, err := beginBackendPhysicalInsertWindow(
+		inspectionContext,
+		clickHouse,
+		storage,
+	)
+	inspectionCancel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	steadyStateBurst, err := runBackendInsertBurst(
+		ctx,
+		httpClient,
+		baseURL,
+		backendInsertSteadyStateRequests,
+		backendInsertSteadyStateWorkers,
+		steadyStateTargets,
+		"/services/collector/raw",
+		"text/plain; charset=utf-8",
+		backendInsertSteadyStateBody(),
+	)
+	if err != nil {
+		t.Fatalf("submit live steady-state coalescing burst: %v", err)
+	}
+	finalOperations := waitForBackendHECLoadDrain(
+		t,
+		ctx,
+		httpClient,
+		baseURL,
+		administratorToken,
+		serverProcess,
+		protectedValues...,
+	)
+	shapeContext, shapeCancel := context.WithTimeout(ctx, 20*time.Second)
+	steadyStatePhysicalInsertShape, err := readBackendPhysicalInsertShape(
+		shapeContext,
+		clickHouse,
+		storage,
+		steadyStateWindowStarted,
+	)
+	if err != nil {
+		shapeCancel()
+		t.Fatal(err)
+	}
+	pressureAfter, err := readBackendClickHousePressure(shapeContext, storage)
+	shapeCancel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := steadyStatePhysicalInsertShape.validateSteadyState(
+		steadyStateBurst.AcceptedRequests,
+		steadyStateBurst.AcceptedEvents,
+	); err != nil {
+		t.Fatalf("ClickHouse live steady-state physical insert shape: %v", err)
+	}
+	if err := pressureAfter.validateWindow(
+		pressureBefore,
+		steadyStatePhysicalInsertShape,
+		steadyStateBurst.AcceptedEvents,
+	); err != nil {
+		t.Fatalf("ClickHouse live steady-state pressure: %v", err)
+	}
+	if err := validateBackendInsertCoalescingWindow(
+		recoveryOperations,
+		finalOperations,
+		steadyStateBurst,
+		steadyStatePhysicalInsertShape,
+	); err != nil {
+		t.Fatalf("administrator live insert-coalescing telemetry: %v", err)
+	}
+
+	expectedRows := nativeCount + load.acceptedEvents() + coalescingBurst.AcceptedEvents +
+		steadyStateBurst.AcceptedEvents
 	waitForBackendLoadStorage(
 		t,
 		ctx,
@@ -898,15 +1099,6 @@ func TestBackendHECDurableLoad(t *testing.T) {
 		2*time.Minute,
 		protectedValues...,
 	)
-	waitForCollectorCheckpoint(t, ctx, collectorStateDir, logPath, collectorProcess, nativeToken)
-	waitForCollectorWALAcknowledgedThroughCurrent(
-		t,
-		ctx,
-		collectorStateDir,
-		collectorProcess,
-		nativeToken,
-	)
-	assertBackendLoadDeadLetterEmpty(t, collectorStateDir)
 	for _, acknowledgment := range []struct {
 		channel string
 		id      int64
@@ -929,8 +1121,41 @@ func TestBackendHECDurableLoad(t *testing.T) {
 			t.Fatalf("HEC load acknowledgment %d remained pending after drain", acknowledgment.id)
 		}
 	}
-	if finalOperations.GetRequest().GetAcceptedRequests() != load.acceptedRequests() ||
-		finalOperations.GetRequest().GetEvents() != load.acceptedEvents() ||
+	burstAcknowledgments := backendHECQueryAcknowledgments(
+		t,
+		ctx,
+		httpClient,
+		baseURL,
+		hecToken,
+		backendInsertCoalescingChannel,
+		coalescingBurst.Acknowledgments...,
+	)
+	for _, acknowledgment := range coalescingBurst.Acknowledgments {
+		if !burstAcknowledgments[acknowledgment] {
+			t.Fatalf("coalescing burst acknowledgment %d remained pending after drain", acknowledgment)
+		}
+	}
+	for targetIndex, target := range steadyStateTargets {
+		acknowledgments := steadyStateBurst.AcknowledgmentsByTarget[targetIndex]
+		terminal := backendHECQueryAcknowledgments(
+			t,
+			ctx,
+			httpClient,
+			baseURL,
+			target.Credential,
+			target.Channel,
+			acknowledgments...,
+		)
+		for _, acknowledgment := range acknowledgments {
+			if !terminal[acknowledgment] {
+				t.Fatalf("live steady-state acknowledgment %d remained pending after drain", acknowledgment)
+			}
+		}
+	}
+	if finalOperations.GetRequest().GetAcceptedRequests() !=
+		load.acceptedRequests()+coalescingBurst.AcceptedRequests+steadyStateBurst.AcceptedRequests ||
+		finalOperations.GetRequest().GetEvents() !=
+			load.acceptedEvents()+coalescingBurst.AcceptedEvents+steadyStateBurst.AcceptedEvents ||
 		finalOperations.GetDurable().GetPendingOutboxReservations() != 0 ||
 		finalOperations.GetAcknowledgments().GetPendingRows() != 0 ||
 		!finalOperations.GetDurable().GetQueueAvailable() ||
@@ -973,7 +1198,7 @@ func TestBackendHECDurableLoad(t *testing.T) {
 
 	elapsed := time.Since(loadStarted)
 	t.Logf(
-		"durable HEC load: profile=%s configured_duration=%s elapsed=%s target_eps=%d planned_request_rows=%d small=%s full=%s native_events=%d control_mutations=%d rows=%d",
+		"durable HEC load: profile=%s configured_duration=%s elapsed=%s target_eps=%d planned_request_rows=%d small=%s full=%s recovery_burst_requests=%d recovery_burst_events=%d live_burst_requests=%d live_burst_events=%d native_events=%d control_mutations=%d rows=%d",
 		plan.Profile,
 		plan.Duration,
 		elapsed.Round(time.Millisecond),
@@ -981,6 +1206,10 @@ func TestBackendHECDurableLoad(t *testing.T) {
 		plan.plannedRequests(),
 		load.small.summary(plan.Duration),
 		load.full.summary(plan.Duration),
+		coalescingBurst.AcceptedRequests,
+		coalescingBurst.AcceptedEvents,
+		steadyStateBurst.AcceptedRequests,
+		steadyStateBurst.AcceptedEvents,
 		nativeCount,
 		control.mutations,
 		expectedRows,
@@ -1007,6 +1236,28 @@ func TestBackendHECDurableLoad(t *testing.T) {
 		operational.resourceSamples,
 		operational.maximumResidentMB,
 		operational.maximumProcessThreads,
+	)
+	t.Logf(
+		"durable HEC recovery physical insert shape: inserts=%d zero_row_finishes=%d rows=%d max_rows=%d raw_shape=%v",
+		recoveryPhysicalInsertShape.count(),
+		recoveryPhysicalInsertShape.ZeroRowFinishes,
+		recoveryPhysicalInsertShape.totalRows(),
+		recoveryPhysicalInsertShape.maximumRows(),
+		recoveryPhysicalInsertShape.Rows,
+	)
+	t.Logf(
+		"durable HEC live physical insert shape: logical_batches=%d inserts=%d zero_row_finishes=%d rows=%d max_rows=%d raw_shape=%v",
+		steadyStateBurst.AcceptedRequests,
+		steadyStatePhysicalInsertShape.count(),
+		steadyStatePhysicalInsertShape.ZeroRowFinishes,
+		steadyStatePhysicalInsertShape.totalRows(),
+		steadyStatePhysicalInsertShape.maximumRows(),
+		steadyStatePhysicalInsertShape.Rows,
+	)
+	t.Logf(
+		"durable HEC live ClickHouse pressure: before=%+v after=%+v",
+		pressureBefore,
+		pressureAfter,
 	)
 	backendHECLoadRequireRate(t, plan, load)
 }
@@ -1228,6 +1479,7 @@ func runBackendHECLoadTraffic(
 					baseURL+"/services/collector/event",
 					credential,
 					job.channel,
+					"application/json",
 					job.body,
 				)
 				if err != nil {
@@ -1336,6 +1588,7 @@ func backendHECLoadPost(
 	endpoint string,
 	credential string,
 	channel string,
+	contentType string,
 	body []byte,
 ) (backendHECLoadHTTPResponse, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
@@ -1343,7 +1596,7 @@ func backendHECLoadPost(
 		return backendHECLoadHTTPResponse{}, err
 	}
 	request.Header.Set("Authorization", "Splunk "+credential)
-	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Content-Type", contentType)
 	request.Header.Set("X-Splunk-Request-Channel", channel)
 	response, err := client.Do(request)
 	if err != nil {
@@ -1927,8 +2180,18 @@ func waitForBackendHECLoadDrain(
 			baseURL,
 			administratorToken,
 		)
-		if lastErr == nil && last.GetDurable().GetPendingOutboxReservations() == 0 &&
+		coalescing := last.GetInsertCoalescing()
+		queue := coalescing.GetQueue()
+		if lastErr == nil && coalescing != nil && queue != nil &&
+			last.GetDurable().GetPendingOutboxReservations() == 0 &&
 			last.GetAcknowledgments().GetPendingRows() == 0 &&
+			queue.GetPendingReservations() == 0 &&
+			queue.GetUngroupedReservations() == 0 &&
+			queue.GetReadyGroups() == 0 &&
+			queue.GetAmbiguousGroups() == 0 &&
+			queue.GetLeasedGroups() == 0 &&
+			queue.GetPendingOutboxBytes() == 0 &&
+			queue.GetPendingMetadataBytes() == 0 &&
 			last.GetDurable().GetQueueAvailable() &&
 			last.GetDurable().GetRequestCapacityAvailable() &&
 			last.GetReconciliation().GetAvailable() &&

@@ -50,6 +50,12 @@ const (
 	durableBatchRejectMetadataBytes    = 256 << 20
 	durableBatchRejectPruneWakeBytes   = durableBatchRejectMetadataBytes / 4
 	visibilityPruneBatch               = 1_000
+	writeGroupTargetRows               = 10_000
+	writeGroupTargetDecodedBytes       = 16 << 20
+	writeGroupMaxRows                  = 50_000
+	writeGroupMaxDecodedBytes          = 64 << 20
+	writeGroupMaxMembers               = 10_000
+	writeGroupMaxLinger                = time.Second
 
 	extendedTypeKey  = "\x00open_splunk_type"
 	extendedValueKey = "\x00open_splunk_value"
@@ -93,34 +99,46 @@ func (f RetentionProviderFunc) RetentionForIndex(ctx context.Context, tenantID, 
 
 // Config controls a native ClickHouse connection used by Store.
 type Config struct {
-	Addresses       []string
-	Database        string
-	Table           string
-	Username        string
-	Password        string
-	TLS             *tls.Config
-	DialTimeout     time.Duration
-	ReadTimeout     time.Duration
-	MaxOpenConns    int
-	MaxIdleConns    int
-	ConnMaxLifetime time.Duration
-	RetryAfter      time.Duration
+	Addresses                []string
+	Database                 string
+	Table                    string
+	Username                 string
+	Password                 string
+	TLS                      *tls.Config
+	DialTimeout              time.Duration
+	ReadTimeout              time.Duration
+	MaxOpenConns             int
+	MaxIdleConns             int
+	ConnMaxLifetime          time.Duration
+	RetryAfter               time.Duration
+	InsertTargetRows         uint64
+	InsertTargetDecodedBytes uint64
+	InsertMaxRows            uint64
+	InsertMaxDecodedBytes    uint64
+	InsertMaxMembers         uint32
+	InsertMaxLinger          time.Duration
 }
 
 // DefaultConfig returns conservative single-node native-protocol defaults.
 // Plaintext is accepted only for loopback addresses.
 func DefaultConfig() Config {
 	return Config{
-		Addresses:       []string{"127.0.0.1:9000"},
-		Database:        defaultDatabase,
-		Table:           defaultTable,
-		Username:        "default",
-		DialTimeout:     5 * time.Second,
-		ReadTimeout:     30 * time.Second,
-		MaxOpenConns:    8,
-		MaxIdleConns:    4,
-		ConnMaxLifetime: 30 * time.Minute,
-		RetryAfter:      time.Second,
+		Addresses:                []string{"127.0.0.1:9000"},
+		Database:                 defaultDatabase,
+		Table:                    defaultTable,
+		Username:                 "default",
+		DialTimeout:              5 * time.Second,
+		ReadTimeout:              30 * time.Second,
+		MaxOpenConns:             8,
+		MaxIdleConns:             4,
+		ConnMaxLifetime:          30 * time.Minute,
+		RetryAfter:               time.Second,
+		InsertTargetRows:         writeGroupTargetRows,
+		InsertTargetDecodedBytes: writeGroupTargetDecodedBytes,
+		InsertMaxRows:            writeGroupMaxRows,
+		InsertMaxDecodedBytes:    writeGroupMaxDecodedBytes,
+		InsertMaxMembers:         writeGroupMaxMembers,
+		InsertMaxLinger:          writeGroupMaxLinger,
 	}
 }
 
@@ -134,6 +152,9 @@ func DefaultConfig() Config {
 // The deletion protocol detects observable UUID drift, but ClickHouse ALTER
 // targets a table by name and cannot fence privileged out-of-band DDL.
 func Open(config Config, retention RetentionProvider, sequencer visibility.Sequencer) (*Store, error) {
+	if err := requireWriteGroupSequencer(sequencer); err != nil {
+		return nil, err
+	}
 	options, normalized, err := config.clickHouseOptions()
 	if err != nil {
 		return nil, err
@@ -155,6 +176,8 @@ func Open(config Config, retention RetentionProvider, sequencer visibility.Seque
 		_ = connection.Close()
 		return nil, err
 	}
+	store.writeGroupLimits = normalized.writeGroupLimits()
+	store.groupedProduction = true
 	store.startReconciler()
 	return store, nil
 }
@@ -173,6 +196,9 @@ func NewStore(connection clickhousedriver.Conn, retention RetentionProvider, seq
 	if connection == nil {
 		return nil, errors.New("ClickHouse connection is required")
 	}
+	if err := requireWriteGroupSequencer(sequencer); err != nil {
+		return nil, err
+	}
 	defaults := DefaultConfig()
 	store, err := newStore(
 		&nativeStoreConnection{connection: connection},
@@ -186,6 +212,7 @@ func NewStore(connection clickhousedriver.Conn, retention RetentionProvider, seq
 	if err != nil {
 		return nil, err
 	}
+	store.groupedProduction = true
 	store.startReconciler()
 	return store, nil
 }
@@ -215,6 +242,9 @@ func NewStoreWithDeletionConnection(
 			"ClickHouse deletion connection must be distinct from the ordinary connection",
 		)
 	}
+	if err := requireWriteGroupSequencer(sequencer); err != nil {
+		return nil, err
+	}
 	defaults := DefaultConfig()
 	store, err := newStoreWithDeletionConnection(
 		&nativeStoreConnection{connection: connection},
@@ -229,12 +259,23 @@ func NewStoreWithDeletionConnection(
 	if err != nil {
 		return nil, err
 	}
+	store.groupedProduction = true
 	store.startReconciler()
 	return store, nil
 }
 
-// Store implements ingest.EventStore using one synchronous native insert per
-// accepted protocol batch.
+func requireWriteGroupSequencer(sequencer visibility.Sequencer) error {
+	if sequencer == nil {
+		return errors.New("ClickHouse visibility sequencer is required")
+	}
+	if _, ok := sequencer.(visibility.WriteGroupSequencer); !ok {
+		return errors.New("ClickHouse visibility sequencer must support durable write groups")
+	}
+	return nil
+}
+
+// Store implements ingest.EventStore by durably staging logical batches and
+// coalescing them into bounded synchronous native inserts.
 type Store struct {
 	connection                storeConnection
 	deletionConnection        storeConnection
@@ -243,9 +284,12 @@ type Store struct {
 	insertSQL                 string
 	retention                 RetentionProvider
 	visibility                visibility.Sequencer
+	writeGroups               visibility.WriteGroupSequencer
+	groupedProduction         bool
 	attemptID                 func() (string, error)
 	clock                     func() time.Time
 	retryAfter                time.Duration
+	writeGroupLimits          visibility.WriteGroupLimits
 	writeAdmission            *writeAdmission
 	reconcileSlot             chan struct{}
 	lifecycleMu               sync.Mutex
@@ -256,7 +300,15 @@ type Store struct {
 	reconcileDone             chan struct{}
 	reconcileCancel           context.CancelCauseFunc
 	reconcileErr              error
+	nextLingerDeadline        time.Time
+	commitWaiters             *commitWaiters
+	coalescingMetrics         *CoalescerMetrics
 	closed                    bool
+	shutdownOnce              sync.Once
+	shutdownDone              chan struct{}
+	shutdownCancel            context.CancelFunc
+	shutdownInitiatedByClose  bool
+	shutdownErr               error
 	closeOnce                 sync.Once
 	closeErr                  error
 	terminalCount             atomic.Uint64
@@ -362,6 +414,7 @@ func newStoreWithConnections(
 	reconcileSlot := make(chan struct{}, 1)
 	reconcileSlot <- struct{}{}
 	lifecycleContext, lifecycleCancel := context.WithCancelCause(context.Background())
+	writeGroups, _ := sequencer.(visibility.WriteGroupSequencer)
 	return &Store{
 		connection:         connection,
 		deletionConnection: deletionConnection,
@@ -370,13 +423,18 @@ func newStoreWithConnections(
 		insertSQL:          buildEventsInsertSQL(database, table),
 		retention:          retention,
 		visibility:         sequencer,
+		writeGroups:        writeGroups,
 		attemptID:          randomAttemptID,
 		clock:              clock,
 		retryAfter:         retryAfter,
+		writeGroupLimits:   DefaultConfig().writeGroupLimits(),
 		writeAdmission:     newWriteAdmission(),
 		reconcileSlot:      reconcileSlot,
 		lifecycleContext:   lifecycleContext,
 		lifecycleCancel:    lifecycleCancel,
+		commitWaiters:      newCommitWaiters(visibility.MaxPendingReservations),
+		coalescingMetrics:  NewCoalescerMetrics(),
+		shutdownDone:       make(chan struct{}),
 	}, nil
 }
 
@@ -472,69 +530,145 @@ func (s *Store) Stage(
 }
 
 func (s *Store) stageAdmitted(ctx context.Context, batch ingest.StoreBatch) (ingest.StageResult, error) {
+	reservation, _, err := s.reserveStaged(ctx, batch, false)
+	if err != nil {
+		return ingest.StageResult{}, err
+	}
+	return stageResultForReservation(reservation)
+}
+
+// reserveStaged persists one immutable logical batch and relinquishes its
+// request attempt before returning. The bool reports whether the durable
+// identity existed before this call and therefore controls native duplicate
+// accounting after a group commits.
+func (s *Store) reserveStaged(
+	ctx context.Context,
+	batch ingest.StoreBatch,
+	existingOnly bool,
+) (visibility.Reservation, bool, error) {
 	source, sourceErr := ingest.CanonicalIngestionSource(batch.Source, batch.CollectorID)
 	if sourceErr != nil {
-		return ingest.StageResult{}, fmt.Errorf("stage ClickHouse batch: %w", sourceErr)
+		return visibility.Reservation{}, false, fmt.Errorf("stage ClickHouse batch: %w", sourceErr)
 	}
 	if batch.HECAdmission != nil {
 		if source.Kind != ingest.IngestionSourceKindHEC ||
 			batch.HECAdmission.TokenID != source.ID ||
 			batch.HECAdmission.RequestID != batch.BatchID {
-			return ingest.StageResult{}, errors.New("stage ClickHouse batch: HEC admission identity does not match batch source")
+			return visibility.Reservation{}, false, errors.New("stage ClickHouse batch: HEC admission identity does not match batch source")
 		}
 	}
 	deduplicationKey := deduplicationToken(batch)
 	sequenceKey := sequenceIdentityKey(batch)
 	payloadDigest, err := storePayloadDigest(batch)
 	if err != nil {
-		return ingest.StageResult{}, err
+		return visibility.Reservation{}, false, err
 	}
 	prior, found, err := s.visibility.Lookup(ctx, deduplicationKey, sequenceKey, payloadDigest)
 	if err != nil {
-		return ingest.StageResult{}, s.visibilityFailure("lookup staged ClickHouse visibility reservation", err)
+		return visibility.Reservation{}, false, s.visibilityFailure("lookup staged ClickHouse visibility reservation", err)
 	}
 	if found {
-		return stageResultForReservation(prior)
+		// Pending Lookup remains payload-light but includes stable durable HEC
+		// request/ACK IDs. Stage and native waiters consume only identity fields,
+		// so an exact retry must not disturb an existing reservation or group
+		// lease merely to hydrate its private replay payload.
+		if err := validatePendingHECIdentity(batch, prior); err != nil {
+			return visibility.Reservation{}, false, s.visibilityFailure(
+				"validate pending ClickHouse HEC identity",
+				err,
+			)
+		}
+		return prior, true, nil
+	}
+	if existingOnly {
+		return visibility.Reservation{}, false, s.visibilityFailure(
+			"resume staged ClickHouse visibility reservation",
+			visibility.ErrReservationGone,
+		)
 	}
 
 	metadata, outbox, indexTime, err := s.freshReservationPayload(ctx, batch)
 	if err != nil {
-		return ingest.StageResult{}, err
+		return visibility.Reservation{}, false, err
+	}
+	rowCount, decodedBytes, err := reservationAccounting(batch)
+	if err != nil {
+		return visibility.Reservation{}, false, err
 	}
 	attemptID, err := s.attemptID()
 	if err != nil {
-		return ingest.StageResult{}, s.classifyError(fmt.Errorf("create staged ClickHouse visibility attempt: %w", err))
+		return visibility.Reservation{}, false, s.classifyError(fmt.Errorf("create staged ClickHouse visibility attempt: %w", err))
 	}
 	reservation, err := s.visibility.Reserve(ctx, visibility.ReserveRequest{
-		BatchKey:         deduplicationKey,
-		SequenceKey:      sequenceKey,
-		AttemptID:        attemptID,
-		IndexTime:        indexTime,
-		PayloadSHA256:    payloadDigest,
-		Metadata:         metadata,
-		Outbox:           outbox,
-		QuotaAdmission:   batch.QuotaAdmission,
-		QuotaEvaluatedAt: batch.QuotaEvaluatedAt,
-		HECAdmission:     visibilityHECAdmission(batch),
+		BatchKey:          deduplicationKey,
+		SequenceKey:       sequenceKey,
+		AttemptID:         attemptID,
+		IndexTime:         indexTime,
+		PayloadSHA256:     payloadDigest,
+		Metadata:          metadata,
+		Outbox:            outbox,
+		StoredRowCount:    rowCount,
+		DecodedEventBytes: decodedBytes,
+		QuotaAdmission:    batch.QuotaAdmission,
+		QuotaEvaluatedAt:  batch.QuotaEvaluatedAt,
+		HECAdmission:      visibilityHECAdmission(batch),
 	})
 	if err != nil {
 		if _, ok := errors.AsType[*ingestquota.ExceededError](err); !ok {
 			s.wakeReconciler()
 		}
-		return ingest.StageResult{}, s.visibilityFailure("stage ClickHouse visibility reservation", err)
+		return visibility.Reservation{}, false, s.visibilityFailure("stage ClickHouse visibility reservation", err)
 	}
 	if reservation.AlreadyCommitted || reservation.Rejected {
-		return stageResultForReservation(reservation)
+		return reservation, true, nil
+	}
+	if err := validatePendingHECIdentity(batch, reservation); err != nil {
+		return visibility.Reservation{}, false, s.releaseAttempt(
+			reservation.Sequence,
+			attemptID,
+			s.visibilityFailure("validate pending ClickHouse HEC identity", err),
+		)
 	}
 	if err := s.releaseAttempt(reservation.Sequence, attemptID, nil); err != nil {
-		return ingest.StageResult{}, err
+		return visibility.Reservation{}, false, err
 	}
-	return ingest.StageResult{
-		VisibilitySequence:  reservation.Sequence,
-		State:               ingest.StoredBatchPending,
-		HECRequestSequence:  reservation.HECRequestSequence,
-		HECAcknowledgmentID: reservation.HECAcknowledgmentID,
-	}, nil
+	if !reservation.PreviouslyReserved {
+		s.coalescingMetrics.ObserveStaged(uint64(rowCount))
+	}
+	return reservation, reservation.PreviouslyReserved, nil
+}
+
+func validatePendingHECIdentity(batch ingest.StoreBatch, reservation visibility.Reservation) error {
+	if batch.HECAdmission == nil || reservation.AlreadyCommitted || reservation.Rejected {
+		return nil
+	}
+	if reservation.HECRequestSequence == 0 {
+		return errors.New("pending HEC reservation is missing its durable request sequence")
+	}
+	acknowledgmentPresent := reservation.HECAcknowledgmentID != 0
+	if acknowledgmentPresent != batch.HECAdmission.AcknowledgmentEnabled {
+		return errors.New("pending HEC reservation acknowledgment identity does not match the admission mode")
+	}
+	return nil
+}
+
+func reservationAccounting(batch ingest.StoreBatch) (uint32, uint64, error) {
+	rowCount, err := safecast.Conv[uint32](len(batch.Events))
+	if err != nil || rowCount == 0 {
+		return 0, 0, errors.New("store ClickHouse batch: accepted event count is out of range")
+	}
+	events := make([]*opensplunk.LogEvent, len(batch.Events))
+	for index, stored := range batch.Events {
+		if stored == nil || stored.Event == nil {
+			return 0, 0, fmt.Errorf("store ClickHouse batch: event %d is nil", index)
+		}
+		events[index] = stored.Event
+	}
+	decodedBytes := ingest.UncompressedEventBytes(events)
+	if decodedBytes == math.MaxUint64 {
+		return 0, 0, errors.New("store ClickHouse batch: decoded event bytes exceed uint64")
+	}
+	return rowCount, decodedBytes, nil
 }
 
 func visibilityHECAdmission(batch ingest.StoreBatch) *visibility.HECAdmissionRequest {
@@ -564,8 +698,10 @@ func visibilityHECIndexAuthorities(source []ingest.HECIndexAuthority) []visibili
 func stageResultForReservation(reservation visibility.Reservation) (ingest.StageResult, error) {
 	if !reservation.AlreadyCommitted && !reservation.Rejected {
 		return ingest.StageResult{
-			VisibilitySequence: reservation.Sequence,
-			State:              ingest.StoredBatchPending,
+			VisibilitySequence:  reservation.Sequence,
+			State:               ingest.StoredBatchPending,
+			HECRequestSequence:  reservation.HECRequestSequence,
+			HECAcknowledgmentID: reservation.HECAcknowledgmentID,
 		}, nil
 	}
 	outcome, err := resultForReservation(reservation, true)
@@ -679,8 +815,123 @@ func (s *Store) store(
 	if err := s.writeAdmission.enter(operationContext); err != nil {
 		return ingest.StoreResult{}, err
 	}
+	if s.groupedSendingEnabled() {
+		reservation, duplicate, stageErr := s.reserveStaged(operationContext, batch, resumeOnly)
+		// A native caller must not hold shared write admission while awaiting the
+		// server worker. Otherwise a queued exclusive freeze could block the worker
+		// while waiting for this caller, creating a drain deadlock.
+		s.writeAdmission.leave()
+		if stageErr != nil {
+			return ingest.StoreResult{}, stageErr
+		}
+		if reservation.AlreadyCommitted || reservation.Rejected {
+			return resultForReservation(reservation, true)
+		}
+		return s.waitForReservation(operationContext, reservation, duplicate || resumeOnly)
+	}
 	defer s.writeAdmission.leave()
 	return s.storeAdmitted(operationContext, batch, resumeOnly)
+}
+
+func (s *Store) groupedSendingEnabled() bool {
+	// newStore is an internal, deliberately unstarted constructor used by
+	// legacy sender unit tests. Every public constructor sets this immutable
+	// production mode before starting the reconciler and returning the Store.
+	return s.writeGroups != nil && s.groupedProduction
+}
+
+func (s *Store) waitForReservation(
+	ctx context.Context,
+	reservation visibility.Reservation,
+	duplicate bool,
+) (ingest.StoreResult, error) {
+	s.wakeReconciler()
+
+	for {
+		if err := ctx.Err(); err != nil {
+			return s.nativeWaitCanceled(err)
+		}
+		waiter, err := s.commitWaiters.registerObserved(
+			reservation.Sequence,
+			s.coalescingMetrics.AddNativeWaiter,
+		)
+		if err != nil {
+			s.wakeReconciler()
+			return ingest.StoreResult{}, &ingest.TransientStoreError{
+				Err:        err,
+				Reason:     opensplunk.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
+				RetryAfter: s.retryAfter,
+			}
+		}
+		removeWaiter := func() {
+			if s.commitWaiters.remove(waiter) {
+				s.coalescingMetrics.RemoveNativeWaiter()
+			}
+		}
+
+		// Register-before-lookup closes the commit-before-register race. The
+		// notification remains only a hint; every result comes from SQLite.
+		terminal, found, lookupErr := s.visibility.Lookup(
+			ctx,
+			reservation.BatchKey,
+			reservation.SequenceKey,
+			reservation.PayloadSHA256,
+		)
+		s.coalescingMetrics.ObserveNativeTerminalLookup()
+		if lookupErr != nil {
+			removeWaiter()
+			if ctx.Err() != nil {
+				return s.nativeWaitCanceled(ctx.Err())
+			}
+			return ingest.StoreResult{}, s.visibilityFailure("read grouped ClickHouse batch outcome", lookupErr)
+		}
+		if !found {
+			removeWaiter()
+			return ingest.StoreResult{}, s.visibilityFailure(
+				"read grouped ClickHouse batch outcome",
+				visibility.ErrReservationGone,
+			)
+		}
+		if terminal.AlreadyCommitted || terminal.Rejected {
+			removeWaiter()
+			return resultForReservation(terminal, duplicate)
+		}
+
+		select {
+		case <-waiter.done:
+			// Notification removed this waiter and is only a bounded hint. Register
+			// again before re-reading so a spurious or nonterminal wake cannot spin
+			// on a closed channel or lose the later authoritative commit wake.
+			continue
+		case <-ctx.Done():
+			removeWaiter()
+			return s.nativeWaitCanceled(ctx.Err())
+		}
+	}
+}
+
+func (s *Store) nativeWaitCanceled(err error) (ingest.StoreResult, error) {
+	s.coalescingMetrics.ObserveNativeWaiterCancellation()
+	// Preserve the canceled operation context as the cause. The private marker
+	// tells Store's outer lifecycle adapter to keep this retryable durable-pending
+	// disposition instead of rewriting it to ErrStoreClosed during shutdown.
+	return ingest.StoreResult{}, &ingest.TransientStoreError{
+		Err:        &durablePendingCancellationError{cause: err},
+		Reason:     opensplunk.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE,
+		RetryAfter: s.retryAfter,
+	}
+}
+
+type durablePendingCancellationError struct {
+	cause error
+}
+
+func (err *durablePendingCancellationError) Error() string {
+	return "wait for durable ClickHouse group completion: " + err.cause.Error()
+}
+
+func (err *durablePendingCancellationError) Unwrap() error {
+	return err.cause
 }
 
 func (s *Store) storeAdmitted(
@@ -705,6 +956,8 @@ func (s *Store) storeAdmitted(
 	metadata := prior.Metadata
 	outbox := prior.Outbox
 	indexTime := prior.IndexTime
+	rowCount := prior.StoredRowCount
+	decodedBytes := prior.DecodedEventBytes
 	// Lookup intentionally does not acquire a lease. A pending row may become
 	// terminal or be safely abandoned before Reserve starts, so observed pending
 	// rows first use the atomic existing-only path and never recreate anything
@@ -717,22 +970,28 @@ func (s *Store) storeAdmitted(
 		if err != nil {
 			return ingest.StoreResult{}, err
 		}
+		rowCount, decodedBytes, err = reservationAccounting(batch)
+		if err != nil {
+			return ingest.StoreResult{}, err
+		}
 	}
 	attemptID, err := s.attemptID()
 	if err != nil {
 		return ingest.StoreResult{}, s.classifyError(fmt.Errorf("create ClickHouse visibility attempt: %w", err))
 	}
 	request := visibility.ReserveRequest{
-		BatchKey:         deduplicationKey,
-		SequenceKey:      sequenceKey,
-		AttemptID:        attemptID,
-		ExistingOnly:     existingOnly,
-		IndexTime:        indexTime,
-		PayloadSHA256:    payloadDigest,
-		Metadata:         metadata,
-		Outbox:           outbox,
-		QuotaAdmission:   batch.QuotaAdmission,
-		QuotaEvaluatedAt: batch.QuotaEvaluatedAt,
+		BatchKey:          deduplicationKey,
+		SequenceKey:       sequenceKey,
+		AttemptID:         attemptID,
+		ExistingOnly:      existingOnly,
+		IndexTime:         indexTime,
+		PayloadSHA256:     payloadDigest,
+		Metadata:          metadata,
+		Outbox:            outbox,
+		StoredRowCount:    rowCount,
+		DecodedEventBytes: decodedBytes,
+		QuotaAdmission:    batch.QuotaAdmission,
+		QuotaEvaluatedAt:  batch.QuotaEvaluatedAt,
 	}
 	reservation, err := s.visibility.Reserve(ctx, request)
 	if found && !resumeOnly && errors.Is(err, visibility.ErrReservationGone) {
@@ -743,10 +1002,16 @@ func (s *Store) storeAdmitted(
 		if err != nil {
 			return ingest.StoreResult{}, err
 		}
+		rowCount, decodedBytes, err = reservationAccounting(batch)
+		if err != nil {
+			return ingest.StoreResult{}, err
+		}
 		request.ExistingOnly = false
 		request.IndexTime = indexTime
 		request.Metadata = metadata
 		request.Outbox = outbox
+		request.StoredRowCount = rowCount
+		request.DecodedEventBytes = decodedBytes
 		found = false
 		reservation, err = s.visibility.Reserve(ctx, request)
 	}
@@ -896,6 +1161,13 @@ func (s *Store) writeReservation(
 // joins shared write admission, so an exclusive frozen drain can bypass this
 // slot without deadlocking behind a queued reconciler.
 func (s *Store) ReconcilePending(ctx context.Context) (resultErr error) {
+	return s.reconcileOperation(ctx, true)
+}
+
+func (s *Store) reconcileOperation(
+	ctx context.Context,
+	forceSeal bool,
+) (resultErr error) {
 	if frozenCallbackActive(ctx, s) {
 		return ErrWriteFreezeReentrant
 	}
@@ -914,10 +1186,16 @@ func (s *Store) ReconcilePending(ctx context.Context) (resultErr error) {
 		return err
 	}
 	defer s.writeAdmission.leave()
+	if s.groupedSendingEnabled() {
+		return s.reconcileWriteGroups(operationContext, false, forceSeal)
+	}
 	return s.reconcilePending(operationContext, false)
 }
 
 func (s *Store) reconcilePending(ctx context.Context, proveDrained bool) error {
+	if s.groupedSendingEnabled() {
+		return s.reconcileWriteGroups(ctx, proveDrained, proveDrained)
+	}
 	var replayed uint32
 	for {
 		attemptID, err := s.attemptID()
@@ -973,6 +1251,84 @@ func (s *Store) reconcilePending(ctx context.Context, proveDrained bool) error {
 	}
 }
 
+func (s *Store) reconcileWriteGroups(
+	ctx context.Context,
+	proveDrained bool,
+	forceSeal bool,
+) error {
+	var replayedReservations uint32
+	for {
+		attemptID, err := s.attemptID()
+		if err != nil {
+			return s.classifyError(fmt.Errorf("create ClickHouse coalescer attempt: %w", err))
+		}
+		acquisition, err := s.writeGroups.FormOrAcquireWriteGroup(
+			ctx,
+			attemptID,
+			s.writeGroupLimits,
+			forceSeal,
+		)
+		if err != nil {
+			return s.visibilityFailure("form or acquire ClickHouse write group", err)
+		}
+		if !acquisition.Found {
+			s.setNextLingerDeadline(acquisition.NextLingerDeadline)
+			if proveDrained {
+				usage, usageErr := s.visibility.PendingUsage(ctx)
+				if usageErr != nil {
+					return s.visibilityFailure("prove ClickHouse coalescer is empty", usageErr)
+				}
+				if usage.Reservations != 0 || usage.OutboxBytes != 0 ||
+					usage.UngroupedReservations != 0 || usage.ReadyGroups != 0 ||
+					usage.AmbiguousGroups != 0 || usage.LeasedGroups != 0 {
+					return pendingOutboxError(usage.Reservations, usage.OutboxBytes)
+				}
+				return nil
+			}
+			return s.pruneTerminal(ctx)
+		}
+		s.setNextLingerDeadline(time.Time{})
+		group := acquisition.Group
+		if proveDrained && (group.MemberCount == 0 ||
+			replayedReservations > visibility.MaxPendingReservations-group.MemberCount) {
+			invariantErr := fmt.Errorf(
+				"%w: acquired more than %d reservations during one coalescer drain",
+				ErrPendingOutboxNotDrained,
+				visibility.MaxPendingReservations,
+			)
+			return s.releaseWriteGroup(group.ID, attemptID, invariantErr)
+		}
+		if proveDrained {
+			replayedReservations += group.MemberCount
+		}
+		if group.State == visibility.WriteGroupAmbiguous {
+			s.reconciliationAmbiguities.Add(1)
+			s.coalescingMetrics.ObserveAmbiguity()
+		}
+		if err := s.sendWriteGroup(
+			ctx,
+			group,
+			attemptID,
+			acquisition.FormationReason,
+		); err != nil {
+			if proveDrained {
+				return err
+			}
+			if pruneErr := s.pruneTerminal(ctx); pruneErr != nil {
+				return errors.Join(err, pruneErr)
+			}
+			return err
+		}
+		s.reconciliationSuccesses.Add(1)
+	}
+}
+
+func (s *Store) setNextLingerDeadline(deadline time.Time) {
+	s.lifecycleMu.Lock()
+	s.nextLingerDeadline = deadline
+	s.lifecycleMu.Unlock()
+}
+
 func (s *Store) pruneTerminal(ctx context.Context) error {
 	if pruner, ok := s.visibility.(hecTerminalPruner); ok {
 		deleted, err := pruner.PruneHECTerminalRequests(
@@ -1022,29 +1378,52 @@ func (s *Store) runReconciler(ctx context.Context, wake <-chan struct{}, done ch
 		<-timer.C
 	}
 	defer timer.Stop()
-	var retry <-chan time.Time
+	var timerChannel <-chan time.Time
+	retrying := false
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-wake:
-			if retry != nil {
+			if retrying {
 				continue
 			}
-		case <-retry:
-			retry = nil
+			stopReconcileTimer(timer)
+			timerChannel = nil
+		case <-timerChannel:
+			timerChannel = nil
+			retrying = false
 		}
-		err := s.ReconcilePending(ctx)
+		err := s.reconcileOperation(ctx, false)
 		s.lifecycleMu.Lock()
 		if !errors.Is(err, context.Canceled) {
 			s.reconcileErr = err
 		}
+		lingerDeadline := s.nextLingerDeadline
 		s.lifecycleMu.Unlock()
 		if err != nil && !errors.Is(err, context.Canceled) {
 			s.reconciliationRetries.Add(1)
+			s.coalescingMetrics.ObserveRetry()
 			timer.Reset(s.retryAfter)
-			retry = timer.C
+			timerChannel = timer.C
+			retrying = true
+			continue
 		}
+		if !lingerDeadline.IsZero() {
+			delay := max(time.Until(lingerDeadline), 0)
+			timer.Reset(delay)
+			timerChannel = timer.C
+		}
+	}
+}
+
+func stopReconcileTimer(timer *time.Timer) {
+	if timer.Stop() {
+		return
+	}
+	select {
+	case <-timer.C:
+	default:
 	}
 }
 
@@ -1343,27 +1722,215 @@ func (s *Store) HECReconciliationTelemetry() HECReconciliationSnapshot {
 	}
 }
 
-// Close releases all pooled ClickHouse connections.
-func (s *Store) Close() error {
-	s.closeOnce.Do(func() {
+// InsertCoalescingTelemetry returns bounded aggregate insert-shape, latency,
+// waiter, and durable queue observations. It never exposes payloads, tenant or
+// index identities, batch keys, HEC channels, group IDs, or error text.
+func (s *Store) InsertCoalescingTelemetry(
+	ctx context.Context,
+) (snapshot CoalescerMetricsSnapshot, resultErr error) {
+	operationContext, finishOperation, err := s.beginOperation(ctx, &resultErr)
+	if err != nil {
+		return CoalescerMetricsSnapshot{}, err
+	}
+	defer finishOperation()
+	usage, err := s.visibility.PendingUsage(operationContext)
+	if err != nil {
+		return CoalescerMetricsSnapshot{}, s.visibilityFailure(
+			"read ClickHouse coalescer queue telemetry",
+			err,
+		)
+	}
+	oldestAge := time.Duration(0)
+	if !usage.OldestPendingAt.IsZero() {
+		oldestAge = max(s.clock().UTC().Sub(usage.OldestPendingAt), 0)
+	}
+	s.coalescingMetrics.SetQueue(CoalescerQueueSnapshot{
+		PendingReservations:   uint64(usage.Reservations),
+		UngroupedReservations: uint64(usage.UngroupedReservations),
+		ReadyGroups:           uint64(usage.ReadyGroups),
+		AmbiguousGroups:       uint64(usage.AmbiguousGroups),
+		LeasedGroups:          uint64(usage.LeasedGroups),
+		PendingOutboxBytes:    usage.OutboxBytes,
+		PendingMetadataBytes:  usage.MetadataBytes,
+		OldestPendingAge:      oldestAge,
+	})
+	return s.coalescingMetrics.Snapshot(), nil
+}
+
+// Shutdown permanently stops admission, waits for admitted physical writers,
+// force-seals and drains every durable write group, then cancels and joins the
+// background reconciler. A deadline ends the graceful drain attempt and
+// returns promptly while cancellation and joining continue in the background;
+// durable outbox state is never discarded.
+func (s *Store) Shutdown(ctx context.Context) error {
+	if s == nil {
+		return ErrStoreClosed
+	}
+	if ctx == nil {
+		return errors.New("shutdown ClickHouse store: context is required")
+	}
+	s.startShutdown(ctx, false)
+	select {
+	case <-s.shutdownDone:
+		s.lifecycleMu.Lock()
+		err := s.shutdownErr
+		s.lifecycleMu.Unlock()
+		return err
+	default:
+	}
+	select {
+	case <-s.shutdownDone:
+		s.lifecycleMu.Lock()
+		err := s.shutdownErr
+		s.lifecycleMu.Unlock()
+		return err
+	case <-ctx.Done():
+		select {
+		case <-s.shutdownDone:
+			s.lifecycleMu.Lock()
+			err := s.shutdownErr
+			s.lifecycleMu.Unlock()
+			return err
+		default:
+		}
+		return fmt.Errorf("shutdown ClickHouse store: %w", ctx.Err())
+	}
+}
+
+func (s *Store) startShutdown(ctx context.Context, initiatedByClose bool) {
+	s.shutdownOnce.Do(func() {
+		shutdownContext, cancel := context.WithCancel(ctx)
 		s.lifecycleMu.Lock()
 		s.closed = true
-		lifecycleCancel := s.lifecycleCancel
-		writeAdmission := s.writeAdmission
-		if writeAdmission != nil {
-			writeAdmission.close()
-		}
-		cancel := s.reconcileCancel
-		done := s.reconcileDone
+		s.shutdownCancel = cancel
+		s.shutdownInitiatedByClose = initiatedByClose
 		s.lifecycleMu.Unlock()
-		if lifecycleCancel != nil {
-			lifecycleCancel(context.Canceled)
+		stopForcedCancellation := context.AfterFunc(
+			shutdownContext,
+			s.cancelShutdownOperations,
+		)
+		go s.runShutdown(shutdownContext, stopForcedCancellation)
+	})
+}
+
+func (s *Store) runShutdown(ctx context.Context, stopForcedCancellation func() bool) {
+	s.lifecycleMu.Lock()
+	writeAdmission := s.writeAdmission
+	reconcileDone := s.reconcileDone
+	s.lifecycleMu.Unlock()
+
+	var shutdownErr error
+	quiesced := false
+	if writeAdmission != nil {
+		if err := writeAdmission.closeAndWait(ctx); err != nil {
+			shutdownErr = fmt.Errorf("quiesce ClickHouse writers for shutdown: %w", err)
+		} else {
+			quiesced = true
 		}
-		if cancel != nil {
-			cancel(context.Canceled)
-			<-done
+	}
+	if quiesced {
+		if err := ctx.Err(); err != nil {
+			shutdownErr = errors.Join(
+				shutdownErr,
+				fmt.Errorf("drain ClickHouse writes during shutdown: %w", err),
+			)
+		} else {
+			select {
+			case <-ctx.Done():
+				shutdownErr = errors.Join(
+					shutdownErr,
+					fmt.Errorf("drain ClickHouse writes during shutdown: %w", ctx.Err()),
+				)
+			case <-s.reconcileSlot:
+				drainErr := ctx.Err()
+				if drainErr == nil {
+					drainErr = s.reconcilePending(ctx, true)
+				}
+				s.reconcileSlot <- struct{}{}
+				if drainErr != nil {
+					shutdownErr = errors.Join(
+						shutdownErr,
+						fmt.Errorf("drain ClickHouse writes during shutdown: %w", drainErr),
+					)
+				}
+				if drainErr == nil && ctx.Err() != nil {
+					shutdownErr = errors.Join(
+						shutdownErr,
+						fmt.Errorf("drain ClickHouse writes during shutdown: %w", ctx.Err()),
+					)
+				}
+			}
 		}
+	}
+
+	operationsDone := make(chan struct{})
+	go func() {
 		s.operations.Wait()
+		close(operationsDone)
+	}()
+	if shutdownErr == nil {
+		// A successful durable drain has already issued authoritative commit
+		// hints. Give admitted native callers the remaining shutdown budget to
+		// re-read those outcomes before lifecycle cancellation.
+		select {
+		case <-operationsDone:
+		case <-ctx.Done():
+			shutdownErr = fmt.Errorf(
+				"finish admitted ClickHouse operations during shutdown: %w",
+				ctx.Err(),
+			)
+		}
+	}
+
+	if stopForcedCancellation != nil {
+		stopForcedCancellation()
+	}
+	s.cancelShutdownOperations()
+	if reconcileDone != nil {
+		<-reconcileDone
+	}
+	<-operationsDone
+
+	s.lifecycleMu.Lock()
+	s.shutdownErr = shutdownErr
+	s.lifecycleMu.Unlock()
+	close(s.shutdownDone)
+}
+
+func (s *Store) cancelShutdownOperations() {
+	s.lifecycleMu.Lock()
+	lifecycleCancel := s.lifecycleCancel
+	reconcileCancel := s.reconcileCancel
+	s.lifecycleMu.Unlock()
+	if lifecycleCancel != nil {
+		lifecycleCancel(context.Canceled)
+	}
+	if reconcileCancel != nil {
+		reconcileCancel(context.Canceled)
+	}
+	// A group-wide hint plus lifecycle cancellation releases pending native
+	// callers even when a driver ignores the shutdown context. Re-registration
+	// remains safe and immediately observes the canceled operation context.
+	s.notifyAllNativeWaiters()
+}
+
+// Close gracefully drains durable grouped writes when it initiates shutdown,
+// then releases all pooled ClickHouse connections. If a bounded Shutdown is
+// already underway, Close force-cancels and joins it before closing resources.
+func (s *Store) Close() error {
+	// Legacy stores do not have durable grouped work to force-seal. Preserve
+	// their immediate Close cancellation semantics while production grouped
+	// stores use Close as an unbounded graceful shutdown entry point.
+	s.startShutdown(context.Background(), s.groupedProduction)
+	s.lifecycleMu.Lock()
+	shutdownCancel := s.shutdownCancel
+	shutdownInitiatedByClose := s.shutdownInitiatedByClose
+	s.lifecycleMu.Unlock()
+	if shutdownCancel != nil && !shutdownInitiatedByClose {
+		shutdownCancel()
+	}
+	<-s.shutdownDone
+	s.closeOnce.Do(func() {
 		var closeErrors []error
 		if s.deletionConnection != nil {
 			if err := s.deletionConnection.Close(); err != nil {
@@ -2390,6 +2957,24 @@ func (config Config) clickHouseOptions() (*clickhousedriver.Options, Config, err
 	if config.RetryAfter == 0 {
 		config.RetryAfter = defaults.RetryAfter
 	}
+	if config.InsertTargetRows == 0 {
+		config.InsertTargetRows = defaults.InsertTargetRows
+	}
+	if config.InsertTargetDecodedBytes == 0 {
+		config.InsertTargetDecodedBytes = defaults.InsertTargetDecodedBytes
+	}
+	if config.InsertMaxRows == 0 {
+		config.InsertMaxRows = defaults.InsertMaxRows
+	}
+	if config.InsertMaxDecodedBytes == 0 {
+		config.InsertMaxDecodedBytes = defaults.InsertMaxDecodedBytes
+	}
+	if config.InsertMaxMembers == 0 {
+		config.InsertMaxMembers = defaults.InsertMaxMembers
+	}
+	if config.InsertMaxLinger == 0 {
+		config.InsertMaxLinger = defaults.InsertMaxLinger
+	}
 	if !physicalIdentifier.MatchString(config.Database) || !physicalIdentifier.MatchString(config.Table) {
 		return nil, Config{}, errors.New("invalid ClickHouse database or table identifier")
 	}
@@ -2401,6 +2986,36 @@ func (config Config) clickHouseOptions() (*clickhousedriver.Options, Config, err
 	}
 	if config.MaxOpenConns <= 0 || config.MaxIdleConns < 0 || config.MaxIdleConns > config.MaxOpenConns {
 		return nil, Config{}, errors.New("invalid ClickHouse connection pool limits")
+	}
+	if config.InsertTargetRows > config.InsertMaxRows ||
+		config.InsertMaxRows > visibility.MaxWriteGroupRows ||
+		config.InsertMaxRows < uint64(ingest.HardMaxBatchEvents) {
+		return nil, Config{}, fmt.Errorf(
+			"ClickHouse insert row limits must satisfy target <= max and %d <= max <= %d",
+			ingest.HardMaxBatchEvents,
+			visibility.MaxWriteGroupRows,
+		)
+	}
+	if config.InsertTargetDecodedBytes > config.InsertMaxDecodedBytes ||
+		config.InsertMaxDecodedBytes > visibility.MaxWriteGroupDecodedBytes ||
+		config.InsertMaxDecodedBytes < ingest.HardMaxBatchBytes {
+		return nil, Config{}, fmt.Errorf(
+			"ClickHouse insert byte limits must satisfy target <= max and %d <= max <= %d",
+			ingest.HardMaxBatchBytes,
+			visibility.MaxWriteGroupDecodedBytes,
+		)
+	}
+	if config.InsertMaxMembers > visibility.MaxWriteGroupMembers {
+		return nil, Config{}, fmt.Errorf(
+			"ClickHouse insert member limit cannot exceed %d",
+			visibility.MaxWriteGroupMembers,
+		)
+	}
+	if config.InsertMaxLinger <= 0 || config.InsertMaxLinger > writeGroupMaxLinger {
+		return nil, Config{}, fmt.Errorf(
+			"ClickHouse insert maximum linger must be positive and at most %s",
+			writeGroupMaxLinger,
+		)
 	}
 	for i, address := range config.Addresses {
 		host, port, err := net.SplitHostPort(address)
@@ -2429,4 +3044,15 @@ func (config Config) clickHouseOptions() (*clickhousedriver.Options, Config, err
 		Compression:      &clickhousedriver.Compression{Method: clickhousedriver.CompressionLZ4},
 		ConnOpenStrategy: clickhousedriver.ConnOpenRoundRobin,
 	}, config, nil
+}
+
+func (config Config) writeGroupLimits() visibility.WriteGroupLimits {
+	return visibility.WriteGroupLimits{
+		TargetRows:         config.InsertTargetRows,
+		TargetDecodedBytes: config.InsertTargetDecodedBytes,
+		MaxRows:            config.InsertMaxRows,
+		MaxDecodedBytes:    config.InsertMaxDecodedBytes,
+		MaxMembers:         config.InsertMaxMembers,
+		MaxLinger:          config.InsertMaxLinger,
+	}
 }

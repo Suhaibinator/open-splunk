@@ -338,6 +338,477 @@ func (x *HECReconciliationOperationalMetrics) GetAmbiguities() uint64 {
 	return 0
 }
 
+// FixedHistogram is emitted only from compile-time bounded server buckets.
+// upper_bounds has 13 entries and bucket_counts has one overflow entry (14).
+type FixedHistogram struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UpperBounds   []uint64               `protobuf:"varint,1,rep,packed,name=upper_bounds,json=upperBounds,proto3" json:"upper_bounds,omitempty"`
+	BucketCounts  []uint64               `protobuf:"varint,2,rep,packed,name=bucket_counts,json=bucketCounts,proto3" json:"bucket_counts,omitempty"`
+	Count         uint64                 `protobuf:"varint,3,opt,name=count,proto3" json:"count,omitempty"`
+	Sum           uint64                 `protobuf:"varint,4,opt,name=sum,proto3" json:"sum,omitempty"`
+	Max           uint64                 `protobuf:"varint,5,opt,name=max,proto3" json:"max,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FixedHistogram) Reset() {
+	*x = FixedHistogram{}
+	mi := &file_open_splunk_hec_admin_api_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FixedHistogram) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FixedHistogram) ProtoMessage() {}
+
+func (x *FixedHistogram) ProtoReflect() protoreflect.Message {
+	mi := &file_open_splunk_hec_admin_api_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FixedHistogram.ProtoReflect.Descriptor instead.
+func (*FixedHistogram) Descriptor() ([]byte, []int) {
+	return file_open_splunk_hec_admin_api_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *FixedHistogram) GetUpperBounds() []uint64 {
+	if x != nil {
+		return x.UpperBounds
+	}
+	return nil
+}
+
+func (x *FixedHistogram) GetBucketCounts() []uint64 {
+	if x != nil {
+		return x.BucketCounts
+	}
+	return nil
+}
+
+func (x *FixedHistogram) GetCount() uint64 {
+	if x != nil {
+		return x.Count
+	}
+	return 0
+}
+
+func (x *FixedHistogram) GetSum() uint64 {
+	if x != nil {
+		return x.Sum
+	}
+	return 0
+}
+
+func (x *FixedHistogram) GetMax() uint64 {
+	if x != nil {
+		return x.Max
+	}
+	return 0
+}
+
+// FixedLatencyHistogram records microseconds and is bounded to 11 upper
+// bounds plus one overflow bucket.
+type FixedLatencyHistogram struct {
+	state                   protoimpl.MessageState `protogen:"open.v1"`
+	UpperBoundsMicroseconds []uint64               `protobuf:"varint,1,rep,packed,name=upper_bounds_microseconds,json=upperBoundsMicroseconds,proto3" json:"upper_bounds_microseconds,omitempty"`
+	BucketCounts            []uint64               `protobuf:"varint,2,rep,packed,name=bucket_counts,json=bucketCounts,proto3" json:"bucket_counts,omitempty"`
+	Count                   uint64                 `protobuf:"varint,3,opt,name=count,proto3" json:"count,omitempty"`
+	SumMicroseconds         uint64                 `protobuf:"varint,4,opt,name=sum_microseconds,json=sumMicroseconds,proto3" json:"sum_microseconds,omitempty"`
+	MaxMicroseconds         uint64                 `protobuf:"varint,5,opt,name=max_microseconds,json=maxMicroseconds,proto3" json:"max_microseconds,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
+}
+
+func (x *FixedLatencyHistogram) Reset() {
+	*x = FixedLatencyHistogram{}
+	mi := &file_open_splunk_hec_admin_api_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FixedLatencyHistogram) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FixedLatencyHistogram) ProtoMessage() {}
+
+func (x *FixedLatencyHistogram) ProtoReflect() protoreflect.Message {
+	mi := &file_open_splunk_hec_admin_api_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FixedLatencyHistogram.ProtoReflect.Descriptor instead.
+func (*FixedLatencyHistogram) Descriptor() ([]byte, []int) {
+	return file_open_splunk_hec_admin_api_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *FixedLatencyHistogram) GetUpperBoundsMicroseconds() []uint64 {
+	if x != nil {
+		return x.UpperBoundsMicroseconds
+	}
+	return nil
+}
+
+func (x *FixedLatencyHistogram) GetBucketCounts() []uint64 {
+	if x != nil {
+		return x.BucketCounts
+	}
+	return nil
+}
+
+func (x *FixedLatencyHistogram) GetCount() uint64 {
+	if x != nil {
+		return x.Count
+	}
+	return 0
+}
+
+func (x *FixedLatencyHistogram) GetSumMicroseconds() uint64 {
+	if x != nil {
+		return x.SumMicroseconds
+	}
+	return 0
+}
+
+func (x *FixedLatencyHistogram) GetMaxMicroseconds() uint64 {
+	if x != nil {
+		return x.MaxMicroseconds
+	}
+	return 0
+}
+
+type HECInsertCoalescingQueueMetrics struct {
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	PendingReservations   uint64                 `protobuf:"varint,1,opt,name=pending_reservations,json=pendingReservations,proto3" json:"pending_reservations,omitempty"`
+	UngroupedReservations uint64                 `protobuf:"varint,2,opt,name=ungrouped_reservations,json=ungroupedReservations,proto3" json:"ungrouped_reservations,omitempty"`
+	ReadyGroups           uint64                 `protobuf:"varint,3,opt,name=ready_groups,json=readyGroups,proto3" json:"ready_groups,omitempty"`
+	AmbiguousGroups       uint64                 `protobuf:"varint,4,opt,name=ambiguous_groups,json=ambiguousGroups,proto3" json:"ambiguous_groups,omitempty"`
+	LeasedGroups          uint64                 `protobuf:"varint,5,opt,name=leased_groups,json=leasedGroups,proto3" json:"leased_groups,omitempty"`
+	PendingOutboxBytes    uint64                 `protobuf:"varint,6,opt,name=pending_outbox_bytes,json=pendingOutboxBytes,proto3" json:"pending_outbox_bytes,omitempty"`
+	PendingMetadataBytes  uint64                 `protobuf:"varint,7,opt,name=pending_metadata_bytes,json=pendingMetadataBytes,proto3" json:"pending_metadata_bytes,omitempty"`
+	OldestPendingAge      *durationpb.Duration   `protobuf:"bytes,8,opt,name=oldest_pending_age,json=oldestPendingAge,proto3" json:"oldest_pending_age,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
+}
+
+func (x *HECInsertCoalescingQueueMetrics) Reset() {
+	*x = HECInsertCoalescingQueueMetrics{}
+	mi := &file_open_splunk_hec_admin_api_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HECInsertCoalescingQueueMetrics) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HECInsertCoalescingQueueMetrics) ProtoMessage() {}
+
+func (x *HECInsertCoalescingQueueMetrics) ProtoReflect() protoreflect.Message {
+	mi := &file_open_splunk_hec_admin_api_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HECInsertCoalescingQueueMetrics.ProtoReflect.Descriptor instead.
+func (*HECInsertCoalescingQueueMetrics) Descriptor() ([]byte, []int) {
+	return file_open_splunk_hec_admin_api_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *HECInsertCoalescingQueueMetrics) GetPendingReservations() uint64 {
+	if x != nil {
+		return x.PendingReservations
+	}
+	return 0
+}
+
+func (x *HECInsertCoalescingQueueMetrics) GetUngroupedReservations() uint64 {
+	if x != nil {
+		return x.UngroupedReservations
+	}
+	return 0
+}
+
+func (x *HECInsertCoalescingQueueMetrics) GetReadyGroups() uint64 {
+	if x != nil {
+		return x.ReadyGroups
+	}
+	return 0
+}
+
+func (x *HECInsertCoalescingQueueMetrics) GetAmbiguousGroups() uint64 {
+	if x != nil {
+		return x.AmbiguousGroups
+	}
+	return 0
+}
+
+func (x *HECInsertCoalescingQueueMetrics) GetLeasedGroups() uint64 {
+	if x != nil {
+		return x.LeasedGroups
+	}
+	return 0
+}
+
+func (x *HECInsertCoalescingQueueMetrics) GetPendingOutboxBytes() uint64 {
+	if x != nil {
+		return x.PendingOutboxBytes
+	}
+	return 0
+}
+
+func (x *HECInsertCoalescingQueueMetrics) GetPendingMetadataBytes() uint64 {
+	if x != nil {
+		return x.PendingMetadataBytes
+	}
+	return 0
+}
+
+func (x *HECInsertCoalescingQueueMetrics) GetOldestPendingAge() *durationpb.Duration {
+	if x != nil {
+		return x.OldestPendingAge
+	}
+	return nil
+}
+
+// HECInsertCoalescingOperationalMetrics is a process-wide, payload-free
+// projection. groups_by_fill_reason has the closed seven-value domain defined
+// by the server and all histogram vectors have fixed lengths.
+type HECInsertCoalescingOperationalMetrics struct {
+	state                     protoimpl.MessageState           `protogen:"open.v1"`
+	StagedLogicalBatches      uint64                           `protobuf:"varint,1,opt,name=staged_logical_batches,json=stagedLogicalBatches,proto3" json:"staged_logical_batches,omitempty"`
+	StagedLogicalRows         uint64                           `protobuf:"varint,2,opt,name=staged_logical_rows,json=stagedLogicalRows,proto3" json:"staged_logical_rows,omitempty"`
+	FormedGroups              uint64                           `protobuf:"varint,3,opt,name=formed_groups,json=formedGroups,proto3" json:"formed_groups,omitempty"`
+	PhysicalSends             uint64                           `protobuf:"varint,4,opt,name=physical_sends,json=physicalSends,proto3" json:"physical_sends,omitempty"`
+	SuccessfulGroups          uint64                           `protobuf:"varint,5,opt,name=successful_groups,json=successfulGroups,proto3" json:"successful_groups,omitempty"`
+	Retries                   uint64                           `protobuf:"varint,6,opt,name=retries,proto3" json:"retries,omitempty"`
+	Ambiguities               uint64                           `protobuf:"varint,7,opt,name=ambiguities,proto3" json:"ambiguities,omitempty"`
+	GroupsByFillReason        []uint64                         `protobuf:"varint,8,rep,packed,name=groups_by_fill_reason,json=groupsByFillReason,proto3" json:"groups_by_fill_reason,omitempty"`
+	MemberBatchesPerGroup     *FixedHistogram                  `protobuf:"bytes,9,opt,name=member_batches_per_group,json=memberBatchesPerGroup,proto3" json:"member_batches_per_group,omitempty"`
+	RowsPerGroup              *FixedHistogram                  `protobuf:"bytes,10,opt,name=rows_per_group,json=rowsPerGroup,proto3" json:"rows_per_group,omitempty"`
+	DecodedBytesPerGroup      *FixedHistogram                  `protobuf:"bytes,11,opt,name=decoded_bytes_per_group,json=decodedBytesPerGroup,proto3" json:"decoded_bytes_per_group,omitempty"`
+	MonthlyPartitionsPerGroup *FixedHistogram                  `protobuf:"bytes,12,opt,name=monthly_partitions_per_group,json=monthlyPartitionsPerGroup,proto3" json:"monthly_partitions_per_group,omitempty"`
+	RowsPerPhysicalInsert     *FixedHistogram                  `protobuf:"bytes,13,opt,name=rows_per_physical_insert,json=rowsPerPhysicalInsert,proto3" json:"rows_per_physical_insert,omitempty"`
+	CreationToSeal            *FixedLatencyHistogram           `protobuf:"bytes,14,opt,name=creation_to_seal,json=creationToSeal,proto3" json:"creation_to_seal,omitempty"`
+	CreationToSend            *FixedLatencyHistogram           `protobuf:"bytes,15,opt,name=creation_to_send,json=creationToSend,proto3" json:"creation_to_send,omitempty"`
+	CreationToCommit          *FixedLatencyHistogram           `protobuf:"bytes,16,opt,name=creation_to_commit,json=creationToCommit,proto3" json:"creation_to_commit,omitempty"`
+	NativeWaiters             uint64                           `protobuf:"varint,17,opt,name=native_waiters,json=nativeWaiters,proto3" json:"native_waiters,omitempty"`
+	PeakNativeWaiters         uint64                           `protobuf:"varint,18,opt,name=peak_native_waiters,json=peakNativeWaiters,proto3" json:"peak_native_waiters,omitempty"`
+	NativeWaiterWakeups       uint64                           `protobuf:"varint,19,opt,name=native_waiter_wakeups,json=nativeWaiterWakeups,proto3" json:"native_waiter_wakeups,omitempty"`
+	NativeWaiterCancels       uint64                           `protobuf:"varint,20,opt,name=native_waiter_cancels,json=nativeWaiterCancels,proto3" json:"native_waiter_cancels,omitempty"`
+	NativeTerminalLookups     uint64                           `protobuf:"varint,21,opt,name=native_terminal_lookups,json=nativeTerminalLookups,proto3" json:"native_terminal_lookups,omitempty"`
+	Queue                     *HECInsertCoalescingQueueMetrics `protobuf:"bytes,22,opt,name=queue,proto3" json:"queue,omitempty"`
+	unknownFields             protoimpl.UnknownFields
+	sizeCache                 protoimpl.SizeCache
+}
+
+func (x *HECInsertCoalescingOperationalMetrics) Reset() {
+	*x = HECInsertCoalescingOperationalMetrics{}
+	mi := &file_open_splunk_hec_admin_api_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HECInsertCoalescingOperationalMetrics) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HECInsertCoalescingOperationalMetrics) ProtoMessage() {}
+
+func (x *HECInsertCoalescingOperationalMetrics) ProtoReflect() protoreflect.Message {
+	mi := &file_open_splunk_hec_admin_api_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HECInsertCoalescingOperationalMetrics.ProtoReflect.Descriptor instead.
+func (*HECInsertCoalescingOperationalMetrics) Descriptor() ([]byte, []int) {
+	return file_open_splunk_hec_admin_api_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *HECInsertCoalescingOperationalMetrics) GetStagedLogicalBatches() uint64 {
+	if x != nil {
+		return x.StagedLogicalBatches
+	}
+	return 0
+}
+
+func (x *HECInsertCoalescingOperationalMetrics) GetStagedLogicalRows() uint64 {
+	if x != nil {
+		return x.StagedLogicalRows
+	}
+	return 0
+}
+
+func (x *HECInsertCoalescingOperationalMetrics) GetFormedGroups() uint64 {
+	if x != nil {
+		return x.FormedGroups
+	}
+	return 0
+}
+
+func (x *HECInsertCoalescingOperationalMetrics) GetPhysicalSends() uint64 {
+	if x != nil {
+		return x.PhysicalSends
+	}
+	return 0
+}
+
+func (x *HECInsertCoalescingOperationalMetrics) GetSuccessfulGroups() uint64 {
+	if x != nil {
+		return x.SuccessfulGroups
+	}
+	return 0
+}
+
+func (x *HECInsertCoalescingOperationalMetrics) GetRetries() uint64 {
+	if x != nil {
+		return x.Retries
+	}
+	return 0
+}
+
+func (x *HECInsertCoalescingOperationalMetrics) GetAmbiguities() uint64 {
+	if x != nil {
+		return x.Ambiguities
+	}
+	return 0
+}
+
+func (x *HECInsertCoalescingOperationalMetrics) GetGroupsByFillReason() []uint64 {
+	if x != nil {
+		return x.GroupsByFillReason
+	}
+	return nil
+}
+
+func (x *HECInsertCoalescingOperationalMetrics) GetMemberBatchesPerGroup() *FixedHistogram {
+	if x != nil {
+		return x.MemberBatchesPerGroup
+	}
+	return nil
+}
+
+func (x *HECInsertCoalescingOperationalMetrics) GetRowsPerGroup() *FixedHistogram {
+	if x != nil {
+		return x.RowsPerGroup
+	}
+	return nil
+}
+
+func (x *HECInsertCoalescingOperationalMetrics) GetDecodedBytesPerGroup() *FixedHistogram {
+	if x != nil {
+		return x.DecodedBytesPerGroup
+	}
+	return nil
+}
+
+func (x *HECInsertCoalescingOperationalMetrics) GetMonthlyPartitionsPerGroup() *FixedHistogram {
+	if x != nil {
+		return x.MonthlyPartitionsPerGroup
+	}
+	return nil
+}
+
+func (x *HECInsertCoalescingOperationalMetrics) GetRowsPerPhysicalInsert() *FixedHistogram {
+	if x != nil {
+		return x.RowsPerPhysicalInsert
+	}
+	return nil
+}
+
+func (x *HECInsertCoalescingOperationalMetrics) GetCreationToSeal() *FixedLatencyHistogram {
+	if x != nil {
+		return x.CreationToSeal
+	}
+	return nil
+}
+
+func (x *HECInsertCoalescingOperationalMetrics) GetCreationToSend() *FixedLatencyHistogram {
+	if x != nil {
+		return x.CreationToSend
+	}
+	return nil
+}
+
+func (x *HECInsertCoalescingOperationalMetrics) GetCreationToCommit() *FixedLatencyHistogram {
+	if x != nil {
+		return x.CreationToCommit
+	}
+	return nil
+}
+
+func (x *HECInsertCoalescingOperationalMetrics) GetNativeWaiters() uint64 {
+	if x != nil {
+		return x.NativeWaiters
+	}
+	return 0
+}
+
+func (x *HECInsertCoalescingOperationalMetrics) GetPeakNativeWaiters() uint64 {
+	if x != nil {
+		return x.PeakNativeWaiters
+	}
+	return 0
+}
+
+func (x *HECInsertCoalescingOperationalMetrics) GetNativeWaiterWakeups() uint64 {
+	if x != nil {
+		return x.NativeWaiterWakeups
+	}
+	return 0
+}
+
+func (x *HECInsertCoalescingOperationalMetrics) GetNativeWaiterCancels() uint64 {
+	if x != nil {
+		return x.NativeWaiterCancels
+	}
+	return 0
+}
+
+func (x *HECInsertCoalescingOperationalMetrics) GetNativeTerminalLookups() uint64 {
+	if x != nil {
+		return x.NativeTerminalLookups
+	}
+	return 0
+}
+
+func (x *HECInsertCoalescingOperationalMetrics) GetQueue() *HECInsertCoalescingQueueMetrics {
+	if x != nil {
+		return x.Queue
+	}
+	return nil
+}
+
 type HECAcknowledgmentOperationalMetrics struct {
 	state                  protoimpl.MessageState `protogen:"open.v1"`
 	Available              bool                   `protobuf:"varint,1,opt,name=available,proto3" json:"available,omitempty"`
@@ -356,7 +827,7 @@ type HECAcknowledgmentOperationalMetrics struct {
 
 func (x *HECAcknowledgmentOperationalMetrics) Reset() {
 	*x = HECAcknowledgmentOperationalMetrics{}
-	mi := &file_open_splunk_hec_admin_api_proto_msgTypes[4]
+	mi := &file_open_splunk_hec_admin_api_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -368,7 +839,7 @@ func (x *HECAcknowledgmentOperationalMetrics) String() string {
 func (*HECAcknowledgmentOperationalMetrics) ProtoMessage() {}
 
 func (x *HECAcknowledgmentOperationalMetrics) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_hec_admin_api_proto_msgTypes[4]
+	mi := &file_open_splunk_hec_admin_api_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -381,7 +852,7 @@ func (x *HECAcknowledgmentOperationalMetrics) ProtoReflect() protoreflect.Messag
 
 // Deprecated: Use HECAcknowledgmentOperationalMetrics.ProtoReflect.Descriptor instead.
 func (*HECAcknowledgmentOperationalMetrics) Descriptor() ([]byte, []int) {
-	return file_open_splunk_hec_admin_api_proto_rawDescGZIP(), []int{4}
+	return file_open_splunk_hec_admin_api_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *HECAcknowledgmentOperationalMetrics) GetAvailable() bool {
@@ -467,7 +938,7 @@ type HECProtocolFailureMetric struct {
 
 func (x *HECProtocolFailureMetric) Reset() {
 	*x = HECProtocolFailureMetric{}
-	mi := &file_open_splunk_hec_admin_api_proto_msgTypes[5]
+	mi := &file_open_splunk_hec_admin_api_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -479,7 +950,7 @@ func (x *HECProtocolFailureMetric) String() string {
 func (*HECProtocolFailureMetric) ProtoMessage() {}
 
 func (x *HECProtocolFailureMetric) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_hec_admin_api_proto_msgTypes[5]
+	mi := &file_open_splunk_hec_admin_api_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -492,7 +963,7 @@ func (x *HECProtocolFailureMetric) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HECProtocolFailureMetric.ProtoReflect.Descriptor instead.
 func (*HECProtocolFailureMetric) Descriptor() ([]byte, []int) {
-	return file_open_splunk_hec_admin_api_proto_rawDescGZIP(), []int{5}
+	return file_open_splunk_hec_admin_api_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *HECProtocolFailureMetric) GetCode() uint32 {
@@ -510,20 +981,21 @@ func (x *HECProtocolFailureMetric) GetCount() uint64 {
 }
 
 type GetHECOperationalSnapshotResponse struct {
-	state            protoimpl.MessageState               `protogen:"open.v1"`
-	ObservedAt       *timestamppb.Timestamp               `protobuf:"bytes,1,opt,name=observed_at,json=observedAt,proto3" json:"observed_at,omitempty"`
-	Request          *HECRequestOperationalMetrics        `protobuf:"bytes,2,opt,name=request,proto3" json:"request,omitempty"`
-	Durable          *HECDurableOperationalMetrics        `protobuf:"bytes,3,opt,name=durable,proto3" json:"durable,omitempty"`
-	Reconciliation   *HECReconciliationOperationalMetrics `protobuf:"bytes,4,opt,name=reconciliation,proto3" json:"reconciliation,omitempty"`
-	Acknowledgments  *HECAcknowledgmentOperationalMetrics `protobuf:"bytes,5,opt,name=acknowledgments,proto3" json:"acknowledgments,omitempty"`
-	ProtocolFailures []*HECProtocolFailureMetric          `protobuf:"bytes,6,rep,name=protocol_failures,json=protocolFailures,proto3" json:"protocol_failures,omitempty"`
+	state            protoimpl.MessageState                 `protogen:"open.v1"`
+	ObservedAt       *timestamppb.Timestamp                 `protobuf:"bytes,1,opt,name=observed_at,json=observedAt,proto3" json:"observed_at,omitempty"`
+	Request          *HECRequestOperationalMetrics          `protobuf:"bytes,2,opt,name=request,proto3" json:"request,omitempty"`
+	Durable          *HECDurableOperationalMetrics          `protobuf:"bytes,3,opt,name=durable,proto3" json:"durable,omitempty"`
+	Reconciliation   *HECReconciliationOperationalMetrics   `protobuf:"bytes,4,opt,name=reconciliation,proto3" json:"reconciliation,omitempty"`
+	Acknowledgments  *HECAcknowledgmentOperationalMetrics   `protobuf:"bytes,5,opt,name=acknowledgments,proto3" json:"acknowledgments,omitempty"`
+	ProtocolFailures []*HECProtocolFailureMetric            `protobuf:"bytes,6,rep,name=protocol_failures,json=protocolFailures,proto3" json:"protocol_failures,omitempty"`
+	InsertCoalescing *HECInsertCoalescingOperationalMetrics `protobuf:"bytes,7,opt,name=insert_coalescing,json=insertCoalescing,proto3" json:"insert_coalescing,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
 
 func (x *GetHECOperationalSnapshotResponse) Reset() {
 	*x = GetHECOperationalSnapshotResponse{}
-	mi := &file_open_splunk_hec_admin_api_proto_msgTypes[6]
+	mi := &file_open_splunk_hec_admin_api_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -535,7 +1007,7 @@ func (x *GetHECOperationalSnapshotResponse) String() string {
 func (*GetHECOperationalSnapshotResponse) ProtoMessage() {}
 
 func (x *GetHECOperationalSnapshotResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_hec_admin_api_proto_msgTypes[6]
+	mi := &file_open_splunk_hec_admin_api_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -548,7 +1020,7 @@ func (x *GetHECOperationalSnapshotResponse) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use GetHECOperationalSnapshotResponse.ProtoReflect.Descriptor instead.
 func (*GetHECOperationalSnapshotResponse) Descriptor() ([]byte, []int) {
-	return file_open_splunk_hec_admin_api_proto_rawDescGZIP(), []int{6}
+	return file_open_splunk_hec_admin_api_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *GetHECOperationalSnapshotResponse) GetObservedAt() *timestamppb.Timestamp {
@@ -593,6 +1065,13 @@ func (x *GetHECOperationalSnapshotResponse) GetProtocolFailures() []*HECProtocol
 	return nil
 }
 
+func (x *GetHECOperationalSnapshotResponse) GetInsertCoalescing() *HECInsertCoalescingOperationalMetrics {
+	if x != nil {
+		return x.InsertCoalescing
+	}
+	return nil
+}
+
 var File_open_splunk_hec_admin_api_proto protoreflect.FileDescriptor
 
 const file_open_splunk_hec_admin_api_proto_rawDesc = "" +
@@ -623,7 +1102,53 @@ const file_open_splunk_hec_admin_api_proto_rawDesc = "" +
 	"\tavailable\x18\x01 \x01(\bR\tavailable\x12\x1c\n" +
 	"\tsuccesses\x18\x02 \x01(\x04R\tsuccesses\x12\x18\n" +
 	"\aretries\x18\x03 \x01(\x04R\aretries\x12 \n" +
-	"\vambiguities\x18\x04 \x01(\x04R\vambiguities\"\x8f\x03\n" +
+	"\vambiguities\x18\x04 \x01(\x04R\vambiguities\"\x92\x01\n" +
+	"\x0eFixedHistogram\x12!\n" +
+	"\fupper_bounds\x18\x01 \x03(\x04R\vupperBounds\x12#\n" +
+	"\rbucket_counts\x18\x02 \x03(\x04R\fbucketCounts\x12\x14\n" +
+	"\x05count\x18\x03 \x01(\x04R\x05count\x12\x10\n" +
+	"\x03sum\x18\x04 \x01(\x04R\x03sum\x12\x10\n" +
+	"\x03max\x18\x05 \x01(\x04R\x03max\"\xe4\x01\n" +
+	"\x15FixedLatencyHistogram\x12:\n" +
+	"\x19upper_bounds_microseconds\x18\x01 \x03(\x04R\x17upperBoundsMicroseconds\x12#\n" +
+	"\rbucket_counts\x18\x02 \x03(\x04R\fbucketCounts\x12\x14\n" +
+	"\x05count\x18\x03 \x01(\x04R\x05count\x12)\n" +
+	"\x10sum_microseconds\x18\x04 \x01(\x04R\x0fsumMicroseconds\x12)\n" +
+	"\x10max_microseconds\x18\x05 \x01(\x04R\x0fmaxMicroseconds\"\xaf\x03\n" +
+	"\x1fHECInsertCoalescingQueueMetrics\x121\n" +
+	"\x14pending_reservations\x18\x01 \x01(\x04R\x13pendingReservations\x125\n" +
+	"\x16ungrouped_reservations\x18\x02 \x01(\x04R\x15ungroupedReservations\x12!\n" +
+	"\fready_groups\x18\x03 \x01(\x04R\vreadyGroups\x12)\n" +
+	"\x10ambiguous_groups\x18\x04 \x01(\x04R\x0fambiguousGroups\x12#\n" +
+	"\rleased_groups\x18\x05 \x01(\x04R\fleasedGroups\x120\n" +
+	"\x14pending_outbox_bytes\x18\x06 \x01(\x04R\x12pendingOutboxBytes\x124\n" +
+	"\x16pending_metadata_bytes\x18\a \x01(\x04R\x14pendingMetadataBytes\x12G\n" +
+	"\x12oldest_pending_age\x18\b \x01(\v2\x19.google.protobuf.DurationR\x10oldestPendingAge\"\xbf\n" +
+	"\n" +
+	"%HECInsertCoalescingOperationalMetrics\x124\n" +
+	"\x16staged_logical_batches\x18\x01 \x01(\x04R\x14stagedLogicalBatches\x12.\n" +
+	"\x13staged_logical_rows\x18\x02 \x01(\x04R\x11stagedLogicalRows\x12#\n" +
+	"\rformed_groups\x18\x03 \x01(\x04R\fformedGroups\x12%\n" +
+	"\x0ephysical_sends\x18\x04 \x01(\x04R\rphysicalSends\x12+\n" +
+	"\x11successful_groups\x18\x05 \x01(\x04R\x10successfulGroups\x12\x18\n" +
+	"\aretries\x18\x06 \x01(\x04R\aretries\x12 \n" +
+	"\vambiguities\x18\a \x01(\x04R\vambiguities\x121\n" +
+	"\x15groups_by_fill_reason\x18\b \x03(\x04R\x12groupsByFillReason\x12T\n" +
+	"\x18member_batches_per_group\x18\t \x01(\v2\x1b.open_splunk.FixedHistogramR\x15memberBatchesPerGroup\x12A\n" +
+	"\x0erows_per_group\x18\n" +
+	" \x01(\v2\x1b.open_splunk.FixedHistogramR\frowsPerGroup\x12R\n" +
+	"\x17decoded_bytes_per_group\x18\v \x01(\v2\x1b.open_splunk.FixedHistogramR\x14decodedBytesPerGroup\x12\\\n" +
+	"\x1cmonthly_partitions_per_group\x18\f \x01(\v2\x1b.open_splunk.FixedHistogramR\x19monthlyPartitionsPerGroup\x12T\n" +
+	"\x18rows_per_physical_insert\x18\r \x01(\v2\x1b.open_splunk.FixedHistogramR\x15rowsPerPhysicalInsert\x12L\n" +
+	"\x10creation_to_seal\x18\x0e \x01(\v2\".open_splunk.FixedLatencyHistogramR\x0ecreationToSeal\x12L\n" +
+	"\x10creation_to_send\x18\x0f \x01(\v2\".open_splunk.FixedLatencyHistogramR\x0ecreationToSend\x12P\n" +
+	"\x12creation_to_commit\x18\x10 \x01(\v2\".open_splunk.FixedLatencyHistogramR\x10creationToCommit\x12%\n" +
+	"\x0enative_waiters\x18\x11 \x01(\x04R\rnativeWaiters\x12.\n" +
+	"\x13peak_native_waiters\x18\x12 \x01(\x04R\x11peakNativeWaiters\x122\n" +
+	"\x15native_waiter_wakeups\x18\x13 \x01(\x04R\x13nativeWaiterWakeups\x122\n" +
+	"\x15native_waiter_cancels\x18\x14 \x01(\x04R\x13nativeWaiterCancels\x126\n" +
+	"\x17native_terminal_lookups\x18\x15 \x01(\x04R\x15nativeTerminalLookups\x12B\n" +
+	"\x05queue\x18\x16 \x01(\v2,.open_splunk.HECInsertCoalescingQueueMetricsR\x05queue\"\x8f\x03\n" +
 	"#HECAcknowledgmentOperationalMetrics\x12\x1c\n" +
 	"\tavailable\x18\x01 \x01(\bR\tavailable\x12'\n" +
 	"\x0factive_channels\x18\x02 \x01(\x04R\x0eactiveChannels\x12+\n" +
@@ -639,7 +1164,7 @@ const file_open_splunk_hec_admin_api_proto_rawDesc = "" +
 	" \x01(\x04R\x06misses\"D\n" +
 	"\x18HECProtocolFailureMetric\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\rR\x04code\x12\x14\n" +
-	"\x05count\x18\x02 \x01(\x04R\x05count\"\xf4\x03\n" +
+	"\x05count\x18\x02 \x01(\x04R\x05count\"\xd5\x04\n" +
 	"!GetHECOperationalSnapshotResponse\x12;\n" +
 	"\vobserved_at\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"observedAt\x12C\n" +
@@ -647,7 +1172,8 @@ const file_open_splunk_hec_admin_api_proto_rawDesc = "" +
 	"\adurable\x18\x03 \x01(\v2).open_splunk.HECDurableOperationalMetricsR\adurable\x12X\n" +
 	"\x0ereconciliation\x18\x04 \x01(\v20.open_splunk.HECReconciliationOperationalMetricsR\x0ereconciliation\x12Z\n" +
 	"\x0facknowledgments\x18\x05 \x01(\v20.open_splunk.HECAcknowledgmentOperationalMetricsR\x0facknowledgments\x12R\n" +
-	"\x11protocol_failures\x18\x06 \x03(\v2%.open_splunk.HECProtocolFailureMetricR\x10protocolFailuresBCZAgithub.com/Suhaibinator/open-splunk/gen/go/open_splunk;opensplunkb\x06proto3"
+	"\x11protocol_failures\x18\x06 \x03(\v2%.open_splunk.HECProtocolFailureMetricR\x10protocolFailures\x12_\n" +
+	"\x11insert_coalescing\x18\a \x01(\v22.open_splunk.HECInsertCoalescingOperationalMetricsR\x10insertCoalescingBCZAgithub.com/Suhaibinator/open-splunk/gen/go/open_splunk;opensplunkb\x06proto3"
 
 var (
 	file_open_splunk_hec_admin_api_proto_rawDescOnce sync.Once
@@ -661,32 +1187,47 @@ func file_open_splunk_hec_admin_api_proto_rawDescGZIP() []byte {
 	return file_open_splunk_hec_admin_api_proto_rawDescData
 }
 
-var file_open_splunk_hec_admin_api_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_open_splunk_hec_admin_api_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_open_splunk_hec_admin_api_proto_goTypes = []any{
-	(*GetHECOperationalSnapshotRequest)(nil),    // 0: open_splunk.GetHECOperationalSnapshotRequest
-	(*HECRequestOperationalMetrics)(nil),        // 1: open_splunk.HECRequestOperationalMetrics
-	(*HECDurableOperationalMetrics)(nil),        // 2: open_splunk.HECDurableOperationalMetrics
-	(*HECReconciliationOperationalMetrics)(nil), // 3: open_splunk.HECReconciliationOperationalMetrics
-	(*HECAcknowledgmentOperationalMetrics)(nil), // 4: open_splunk.HECAcknowledgmentOperationalMetrics
-	(*HECProtocolFailureMetric)(nil),            // 5: open_splunk.HECProtocolFailureMetric
-	(*GetHECOperationalSnapshotResponse)(nil),   // 6: open_splunk.GetHECOperationalSnapshotResponse
-	(*durationpb.Duration)(nil),                 // 7: google.protobuf.Duration
-	(*timestamppb.Timestamp)(nil),               // 8: google.protobuf.Timestamp
+	(*GetHECOperationalSnapshotRequest)(nil),      // 0: open_splunk.GetHECOperationalSnapshotRequest
+	(*HECRequestOperationalMetrics)(nil),          // 1: open_splunk.HECRequestOperationalMetrics
+	(*HECDurableOperationalMetrics)(nil),          // 2: open_splunk.HECDurableOperationalMetrics
+	(*HECReconciliationOperationalMetrics)(nil),   // 3: open_splunk.HECReconciliationOperationalMetrics
+	(*FixedHistogram)(nil),                        // 4: open_splunk.FixedHistogram
+	(*FixedLatencyHistogram)(nil),                 // 5: open_splunk.FixedLatencyHistogram
+	(*HECInsertCoalescingQueueMetrics)(nil),       // 6: open_splunk.HECInsertCoalescingQueueMetrics
+	(*HECInsertCoalescingOperationalMetrics)(nil), // 7: open_splunk.HECInsertCoalescingOperationalMetrics
+	(*HECAcknowledgmentOperationalMetrics)(nil),   // 8: open_splunk.HECAcknowledgmentOperationalMetrics
+	(*HECProtocolFailureMetric)(nil),              // 9: open_splunk.HECProtocolFailureMetric
+	(*GetHECOperationalSnapshotResponse)(nil),     // 10: open_splunk.GetHECOperationalSnapshotResponse
+	(*durationpb.Duration)(nil),                   // 11: google.protobuf.Duration
+	(*timestamppb.Timestamp)(nil),                 // 12: google.protobuf.Timestamp
 }
 var file_open_splunk_hec_admin_api_proto_depIdxs = []int32{
-	7, // 0: open_splunk.HECRequestOperationalMetrics.staging_duration:type_name -> google.protobuf.Duration
-	7, // 1: open_splunk.HECDurableOperationalMetrics.oldest_pending_outbox_age:type_name -> google.protobuf.Duration
-	8, // 2: open_splunk.GetHECOperationalSnapshotResponse.observed_at:type_name -> google.protobuf.Timestamp
-	1, // 3: open_splunk.GetHECOperationalSnapshotResponse.request:type_name -> open_splunk.HECRequestOperationalMetrics
-	2, // 4: open_splunk.GetHECOperationalSnapshotResponse.durable:type_name -> open_splunk.HECDurableOperationalMetrics
-	3, // 5: open_splunk.GetHECOperationalSnapshotResponse.reconciliation:type_name -> open_splunk.HECReconciliationOperationalMetrics
-	4, // 6: open_splunk.GetHECOperationalSnapshotResponse.acknowledgments:type_name -> open_splunk.HECAcknowledgmentOperationalMetrics
-	5, // 7: open_splunk.GetHECOperationalSnapshotResponse.protocol_failures:type_name -> open_splunk.HECProtocolFailureMetric
-	8, // [8:8] is the sub-list for method output_type
-	8, // [8:8] is the sub-list for method input_type
-	8, // [8:8] is the sub-list for extension type_name
-	8, // [8:8] is the sub-list for extension extendee
-	0, // [0:8] is the sub-list for field type_name
+	11, // 0: open_splunk.HECRequestOperationalMetrics.staging_duration:type_name -> google.protobuf.Duration
+	11, // 1: open_splunk.HECDurableOperationalMetrics.oldest_pending_outbox_age:type_name -> google.protobuf.Duration
+	11, // 2: open_splunk.HECInsertCoalescingQueueMetrics.oldest_pending_age:type_name -> google.protobuf.Duration
+	4,  // 3: open_splunk.HECInsertCoalescingOperationalMetrics.member_batches_per_group:type_name -> open_splunk.FixedHistogram
+	4,  // 4: open_splunk.HECInsertCoalescingOperationalMetrics.rows_per_group:type_name -> open_splunk.FixedHistogram
+	4,  // 5: open_splunk.HECInsertCoalescingOperationalMetrics.decoded_bytes_per_group:type_name -> open_splunk.FixedHistogram
+	4,  // 6: open_splunk.HECInsertCoalescingOperationalMetrics.monthly_partitions_per_group:type_name -> open_splunk.FixedHistogram
+	4,  // 7: open_splunk.HECInsertCoalescingOperationalMetrics.rows_per_physical_insert:type_name -> open_splunk.FixedHistogram
+	5,  // 8: open_splunk.HECInsertCoalescingOperationalMetrics.creation_to_seal:type_name -> open_splunk.FixedLatencyHistogram
+	5,  // 9: open_splunk.HECInsertCoalescingOperationalMetrics.creation_to_send:type_name -> open_splunk.FixedLatencyHistogram
+	5,  // 10: open_splunk.HECInsertCoalescingOperationalMetrics.creation_to_commit:type_name -> open_splunk.FixedLatencyHistogram
+	6,  // 11: open_splunk.HECInsertCoalescingOperationalMetrics.queue:type_name -> open_splunk.HECInsertCoalescingQueueMetrics
+	12, // 12: open_splunk.GetHECOperationalSnapshotResponse.observed_at:type_name -> google.protobuf.Timestamp
+	1,  // 13: open_splunk.GetHECOperationalSnapshotResponse.request:type_name -> open_splunk.HECRequestOperationalMetrics
+	2,  // 14: open_splunk.GetHECOperationalSnapshotResponse.durable:type_name -> open_splunk.HECDurableOperationalMetrics
+	3,  // 15: open_splunk.GetHECOperationalSnapshotResponse.reconciliation:type_name -> open_splunk.HECReconciliationOperationalMetrics
+	8,  // 16: open_splunk.GetHECOperationalSnapshotResponse.acknowledgments:type_name -> open_splunk.HECAcknowledgmentOperationalMetrics
+	9,  // 17: open_splunk.GetHECOperationalSnapshotResponse.protocol_failures:type_name -> open_splunk.HECProtocolFailureMetric
+	7,  // 18: open_splunk.GetHECOperationalSnapshotResponse.insert_coalescing:type_name -> open_splunk.HECInsertCoalescingOperationalMetrics
+	19, // [19:19] is the sub-list for method output_type
+	19, // [19:19] is the sub-list for method input_type
+	19, // [19:19] is the sub-list for extension type_name
+	19, // [19:19] is the sub-list for extension extendee
+	0,  // [0:19] is the sub-list for field type_name
 }
 
 func init() { file_open_splunk_hec_admin_api_proto_init() }
@@ -700,7 +1241,7 @@ func file_open_splunk_hec_admin_api_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_open_splunk_hec_admin_api_proto_rawDesc), len(file_open_splunk_hec_admin_api_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   7,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

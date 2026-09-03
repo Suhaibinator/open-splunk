@@ -20,6 +20,8 @@ a document explicitly says otherwise.
   outside them.
 - [Ingestion](ingestion.md) covers native collectors, token constraints,
   quotas, and collector operations.
+- [Server-side ClickHouse insert coalescing](insert-coalescing.md) defines the
+  implementation and operator contract for larger replay-safe insert blocks.
 - [Collector configuration](collector-configuration.md) enumerates the
   collector CLI, YAML schema, defaults, environment templating, processors,
   and TLS boundaries.

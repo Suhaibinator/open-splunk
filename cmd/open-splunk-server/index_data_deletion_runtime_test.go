@@ -268,8 +268,12 @@ func TestIndexDataDeletionRuntimeClosesCoordinatorBeforeStore(t *testing.T) {
 		},
 	}
 	store := &runtimeDeletionStore{
+		shutdown: func(context.Context) error {
+			record("shutdown")
+			return nil
+		},
 		close: func() error {
-			record("store")
+			record("close")
 			return nil
 		},
 	}
@@ -294,8 +298,9 @@ func TestIndexDataDeletionRuntimeClosesCoordinatorBeforeStore(t *testing.T) {
 	}
 	mutex.Lock()
 	defer mutex.Unlock()
-	if len(events) != 2 || events[0] != "coordinator" || events[1] != "store" {
-		t.Fatalf("close events = %v, want [coordinator store]", events)
+	if len(events) != 3 || events[0] != "coordinator" ||
+		events[1] != "shutdown" || events[2] != "close" {
+		t.Fatalf("close events = %v, want [coordinator shutdown close]", events)
 	}
 }
 
@@ -613,7 +618,9 @@ func (*runtimeDeletionControl) GetIndexDataDeletionCompletion(
 
 type runtimeDeletionStore struct {
 	physicalCalls atomic.Uint32
+	shutdownCalls atomic.Uint32
 	closeCalls    atomic.Uint32
+	shutdown      func(context.Context) error
 	close         func() error
 }
 
@@ -633,6 +640,14 @@ func (store *runtimeDeletionStore) WithWritesFrozen(
 ) error {
 	store.physicalCalls.Add(1)
 	return errors.New("unexpected WithWritesFrozen call")
+}
+
+func (store *runtimeDeletionStore) Shutdown(ctx context.Context) error {
+	store.shutdownCalls.Add(1)
+	if store.shutdown != nil {
+		return store.shutdown(ctx)
+	}
+	return ctx.Err()
 }
 
 func (store *runtimeDeletionStore) Close() error {

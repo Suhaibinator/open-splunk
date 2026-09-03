@@ -253,6 +253,67 @@ type HECOperationalSnapshot struct {
 	AcknowledgmentMisses      uint64
 	ShutdownRejections        uint64
 	ProtocolFailures          [28]uint64
+	InsertCoalescing          HECInsertCoalescingSnapshot
+}
+
+// HECCoalescingHistogramSnapshot is a fixed-cardinality, payload-free
+// histogram. Counts includes one overflow bucket beyond Bounds.
+type HECCoalescingHistogramSnapshot struct {
+	Bounds [13]uint64
+	Counts [14]uint64
+	Count  uint64
+	Sum    uint64
+	Max    uint64
+}
+
+// HECCoalescingLatencyHistogramSnapshot records microseconds in fixed buckets.
+type HECCoalescingLatencyHistogramSnapshot struct {
+	BoundsMicroseconds [11]uint64
+	Counts             [12]uint64
+	Count              uint64
+	SumMicroseconds    uint64
+	MaxMicroseconds    uint64
+}
+
+// HECInsertCoalescingQueueSnapshot is one bounded durable queue observation.
+type HECInsertCoalescingQueueSnapshot struct {
+	PendingReservations   uint64
+	UngroupedReservations uint64
+	ReadyGroups           uint64
+	AmbiguousGroups       uint64
+	LeasedGroups          uint64
+	PendingOutboxBytes    uint64
+	PendingMetadataBytes  uint64
+	OldestPendingAge      time.Duration
+}
+
+// HECInsertCoalescingSnapshot exposes only fixed-cardinality aggregate insert
+// shape, latency, waiter, and queue state to administrators.
+type HECInsertCoalescingSnapshot struct {
+	StagedLogicalBatches uint64
+	StagedLogicalRows    uint64
+	FormedGroups         uint64
+	PhysicalSends        uint64
+	SuccessfulGroups     uint64
+	Retries              uint64
+	Ambiguities          uint64
+	GroupsByFillReason   [7]uint64
+
+	MemberBatchesPerGroup     HECCoalescingHistogramSnapshot
+	RowsPerGroup              HECCoalescingHistogramSnapshot
+	DecodedBytesPerGroup      HECCoalescingHistogramSnapshot
+	MonthlyPartitionsPerGroup HECCoalescingHistogramSnapshot
+	RowsPerPhysicalInsert     HECCoalescingHistogramSnapshot
+	CreationToSeal            HECCoalescingLatencyHistogramSnapshot
+	CreationToSend            HECCoalescingLatencyHistogramSnapshot
+	CreationToCommit          HECCoalescingLatencyHistogramSnapshot
+
+	NativeWaiters         uint64
+	PeakNativeWaiters     uint64
+	NativeWaiterWakeups   uint64
+	NativeWaiterCancels   uint64
+	NativeTerminalLookups uint64
+	Queue                 HECInsertCoalescingQueueSnapshot
 }
 
 // HECOperationalSnapshotter reads one bounded aggregate without returning

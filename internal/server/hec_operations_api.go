@@ -41,9 +41,11 @@ func hecOperationalSnapshotToProto(
 	observedAt := timestamppb.New(snapshot.ObservedAt.Round(0).UTC())
 	stagingDuration := durationpb.New(snapshot.StagingDuration)
 	oldestPendingAge := durationpb.New(snapshot.OldestPendingOutboxAge)
+	coalescingOldestPendingAge := durationpb.New(snapshot.InsertCoalescing.Queue.OldestPendingAge)
 	if snapshot.ObservedAt.IsZero() || observedAt.CheckValid() != nil || stagingDuration.CheckValid() != nil ||
-		oldestPendingAge.CheckValid() != nil || snapshot.StagingDuration < 0 ||
-		snapshot.OldestPendingOutboxAge < 0 {
+		oldestPendingAge.CheckValid() != nil || coalescingOldestPendingAge.CheckValid() != nil ||
+		snapshot.StagingDuration < 0 || snapshot.OldestPendingOutboxAge < 0 ||
+		snapshot.InsertCoalescing.Queue.OldestPendingAge < 0 {
 		return nil, internalError()
 	}
 	protocolFailures := make([]*opensplunk.HECProtocolFailureMetric, 0, len(snapshot.ProtocolFailures)-1)
@@ -95,7 +97,74 @@ func hecOperationalSnapshotToProto(
 			Misses:                 snapshot.AcknowledgmentMisses,
 		},
 		ProtocolFailures: protocolFailures,
+		InsertCoalescing: hecInsertCoalescingSnapshotToProto(
+			snapshot.InsertCoalescing,
+			coalescingOldestPendingAge,
+		),
 	}, nil
+}
+
+func hecInsertCoalescingSnapshotToProto(
+	snapshot HECInsertCoalescingSnapshot,
+	oldestPendingAge *durationpb.Duration,
+) *opensplunk.HECInsertCoalescingOperationalMetrics {
+	return &opensplunk.HECInsertCoalescingOperationalMetrics{
+		StagedLogicalBatches:      snapshot.StagedLogicalBatches,
+		StagedLogicalRows:         snapshot.StagedLogicalRows,
+		FormedGroups:              snapshot.FormedGroups,
+		PhysicalSends:             snapshot.PhysicalSends,
+		SuccessfulGroups:          snapshot.SuccessfulGroups,
+		Retries:                   snapshot.Retries,
+		Ambiguities:               snapshot.Ambiguities,
+		GroupsByFillReason:        snapshot.GroupsByFillReason[:],
+		MemberBatchesPerGroup:     hecCoalescingHistogramToProto(snapshot.MemberBatchesPerGroup),
+		RowsPerGroup:              hecCoalescingHistogramToProto(snapshot.RowsPerGroup),
+		DecodedBytesPerGroup:      hecCoalescingHistogramToProto(snapshot.DecodedBytesPerGroup),
+		MonthlyPartitionsPerGroup: hecCoalescingHistogramToProto(snapshot.MonthlyPartitionsPerGroup),
+		RowsPerPhysicalInsert:     hecCoalescingHistogramToProto(snapshot.RowsPerPhysicalInsert),
+		CreationToSeal:            hecCoalescingLatencyHistogramToProto(snapshot.CreationToSeal),
+		CreationToSend:            hecCoalescingLatencyHistogramToProto(snapshot.CreationToSend),
+		CreationToCommit:          hecCoalescingLatencyHistogramToProto(snapshot.CreationToCommit),
+		NativeWaiters:             snapshot.NativeWaiters,
+		PeakNativeWaiters:         snapshot.PeakNativeWaiters,
+		NativeWaiterWakeups:       snapshot.NativeWaiterWakeups,
+		NativeWaiterCancels:       snapshot.NativeWaiterCancels,
+		NativeTerminalLookups:     snapshot.NativeTerminalLookups,
+		Queue: &opensplunk.HECInsertCoalescingQueueMetrics{
+			PendingReservations:   snapshot.Queue.PendingReservations,
+			UngroupedReservations: snapshot.Queue.UngroupedReservations,
+			ReadyGroups:           snapshot.Queue.ReadyGroups,
+			AmbiguousGroups:       snapshot.Queue.AmbiguousGroups,
+			LeasedGroups:          snapshot.Queue.LeasedGroups,
+			PendingOutboxBytes:    snapshot.Queue.PendingOutboxBytes,
+			PendingMetadataBytes:  snapshot.Queue.PendingMetadataBytes,
+			OldestPendingAge:      oldestPendingAge,
+		},
+	}
+}
+
+func hecCoalescingHistogramToProto(
+	snapshot HECCoalescingHistogramSnapshot,
+) *opensplunk.FixedHistogram {
+	return &opensplunk.FixedHistogram{
+		UpperBounds:  snapshot.Bounds[:],
+		BucketCounts: snapshot.Counts[:],
+		Count:        snapshot.Count,
+		Sum:          snapshot.Sum,
+		Max:          snapshot.Max,
+	}
+}
+
+func hecCoalescingLatencyHistogramToProto(
+	snapshot HECCoalescingLatencyHistogramSnapshot,
+) *opensplunk.FixedLatencyHistogram {
+	return &opensplunk.FixedLatencyHistogram{
+		UpperBoundsMicroseconds: snapshot.BoundsMicroseconds[:],
+		BucketCounts:            snapshot.Counts[:],
+		Count:                   snapshot.Count,
+		SumMicroseconds:         snapshot.SumMicroseconds,
+		MaxMicroseconds:         snapshot.MaxMicroseconds,
+	}
 }
 
 func (handler *apiHandler) hecOperationalRoutes(

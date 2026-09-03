@@ -2,6 +2,7 @@ package visibility
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -45,6 +46,7 @@ const (
 type processLeases struct {
 	mu              sync.Mutex
 	active          map[string]uint64
+	groups          map[string]string
 	possiblyDurable bool
 }
 
@@ -74,6 +76,17 @@ func (leases *processLeases) bind(id string, sequence uint64) {
 	leases.mu.Lock()
 	if _, exists := leases.active[id]; exists {
 		leases.active[id] = sequence
+		delete(leases.groups, id)
+		leases.possiblyDurable = true
+	}
+	leases.mu.Unlock()
+}
+
+func (leases *processLeases) bindGroup(id, groupID string) {
+	leases.mu.Lock()
+	if _, exists := leases.active[id]; exists {
+		leases.active[id] = 0
+		leases.groups[id] = groupID
 		leases.possiblyDurable = true
 	}
 	leases.mu.Unlock()
@@ -82,7 +95,15 @@ func (leases *processLeases) bind(id string, sequence uint64) {
 func (leases *processLeases) deactivate(id string) {
 	leases.mu.Lock()
 	delete(leases.active, id)
+	delete(leases.groups, id)
 	leases.mu.Unlock()
+}
+
+func (leases *processLeases) ownsGroup(id, groupID string) bool {
+	leases.mu.Lock()
+	ownedGroup, exists := leases.groups[id]
+	leases.mu.Unlock()
+	return exists && ownedGroup == groupID
 }
 
 func (leases *processLeases) contains(id string) bool {
@@ -108,6 +129,7 @@ func (leases *processLeases) mayHaveDurableLease() bool {
 func (leases *processLeases) clear() {
 	leases.mu.Lock()
 	clear(leases.active)
+	clear(leases.groups)
 	leases.possiblyDurable = false
 	leases.mu.Unlock()
 }
@@ -122,6 +144,10 @@ type SQLiteSequencer struct {
 	leases               *processLeases
 	now                  func() time.Time
 	hecAcknowledgmentIDs hecAcknowledgmentIDSource
+	// observeWriteGroupHydration is an optional package-test hook. Formation
+	// calls it only when a group has become sealable and its replay blobs are
+	// about to be loaded; sparse sub-target probes must never call it.
+	observeWriteGroupHydration func()
 
 	lifecycleMu sync.Mutex
 	closed      bool
@@ -152,8 +178,11 @@ func NewSQLite(ctx context.Context, db *control.DB) (*SQLiteSequencer, error) {
 		return nil, err
 	}
 	sequencer := &SQLiteSequencer{
-		db:                   db.SQLDB(),
-		leases:               &processLeases{active: make(map[string]uint64)},
+		db: db.SQLDB(),
+		leases: &processLeases{
+			active: make(map[string]uint64),
+			groups: make(map[string]string),
+		},
 		now:                  time.Now,
 		hecAcknowledgmentIDs: hecAcknowledgmentIDs,
 		terminalDone:         make(chan struct{}),
@@ -220,6 +249,12 @@ func releaseDurableAttemptLeases(
 		SET attempt_id = ''
 		WHERE state = 'reserved' AND attempt_id <> ''`); err != nil {
 		return fmt.Errorf("release durable leases during %s: %w", operation, err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE ingest_write_groups
+		SET attempt_id = ''
+		WHERE state IN ('ready', 'ambiguous') AND attempt_id <> ''`); err != nil {
+		return fmt.Errorf("release durable write-group leases during %s: %w", operation, err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit %s: %w", operation, err)
@@ -326,8 +361,9 @@ func (sequencer *SQLiteSequencer) finishShutdown(shutdownErr error) {
 // Lookup reads an active disposition without acquiring its attempt lease. Both
 // independently stable identities must resolve to the same immutable digest.
 // Terminal dispositions include their durable replay payload. Pending
-// dispositions return only their stable identity and sequence; Reserve or
-// AcquirePending hydrates the replay payload after it wins the attempt lease.
+// dispositions return only their stable identity, sequence, and small durable
+// HEC response IDs; Reserve or AcquirePending hydrates the replay payload after
+// it wins the attempt lease.
 func (sequencer *SQLiteSequencer) Lookup(
 	ctx context.Context,
 	batchKey string,
@@ -389,11 +425,21 @@ func (sequencer *SQLiteSequencer) Lookup(
 		if decodeErr != nil {
 			return Reservation{}, false, fmt.Errorf("decode pending visibility sequence: %w", decodeErr)
 		}
+		hecRequestSequence, hecAcknowledgmentID, hecErr := queryReservationHECIdentity(
+			ctx,
+			tx,
+			activeSequence,
+		)
+		if hecErr != nil {
+			return Reservation{}, false, hecErr
+		}
 		reservation = Reservation{
-			BatchKey:      identity.BatchKey,
-			SequenceKey:   identity.SequenceKey,
-			Sequence:      sequence,
-			PayloadSHA256: identity.PayloadSHA256,
+			BatchKey:            identity.BatchKey,
+			SequenceKey:         identity.SequenceKey,
+			Sequence:            sequence,
+			PayloadSHA256:       identity.PayloadSHA256,
+			HECRequestSequence:  hecRequestSequence,
+			HECAcknowledgmentID: hecAcknowledgmentID,
 		}
 	default:
 		return Reservation{}, false, fmt.Errorf(
@@ -496,6 +542,17 @@ func (sequencer *SQLiteSequencer) Reserve(ctx context.Context, request ReserveRe
 		if state != reservationReserved {
 			return Reservation{}, fmt.Errorf("visibility reservation has invalid state %q", state)
 		}
+		var grouped int
+		if err := tx.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM ingest_write_group_members
+				WHERE visibility_sequence = ?
+			)`, sequence).Scan(&grouped); err != nil {
+			return Reservation{}, fmt.Errorf("read visibility reservation group ownership: %w", err)
+		}
+		if grouped != 0 {
+			return Reservation{}, ErrAttemptInProgress
+		}
 		if owner != "" && owner != request.AttemptID && sequencer.leases.contains(owner) {
 			return Reservation{}, ErrAttemptInProgress
 		}
@@ -548,7 +605,12 @@ func (sequencer *SQLiteSequencer) Reserve(ctx context.Context, request ReserveRe
 		// neither extend token authority nor backdate its durable quota charge.
 		request.QuotaEvaluatedAt = checkedAt
 	}
-	if capacityErr := ensurePendingCapacity(ctx, tx, len(request.Outbox)); capacityErr != nil {
+	if capacityErr := ensurePendingCapacity(
+		ctx,
+		tx,
+		len(request.Outbox),
+		len(metadata),
+	); capacityErr != nil {
 		return Reservation{}, capacityErr
 	}
 	quotaPlan, err := planQuotaReservation(ctx, tx, request)
@@ -563,7 +625,8 @@ func (sequencer *SQLiteSequencer) Reserve(ctx context.Context, request ReserveRe
 	if decodeErr != nil {
 		return Reservation{}, fmt.Errorf("decode allocated visibility sequence: %w", decodeErr)
 	}
-	createdAt := time.Now().UTC().UnixMicro()
+	createdAt := checkedAt.UnixMicro()
+	outboxSHA256 := sha256.Sum256(request.Outbox)
 	if !identityExists {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO ingest_batch_identities
@@ -584,10 +647,12 @@ func (sequencer *SQLiteSequencer) Reserve(ctx context.Context, request ReserveRe
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO ingest_visibility_reservations
 			(sequence, batch_key, state, phase, attempt_id, index_time_unix_milli,
-			 metadata, outbox, created_at_unix_micro, committed_at_unix_micro)
-		VALUES (?, ?, 'reserved', 'unsent', ?, ?, ?, ?, ?, NULL)`,
+			 metadata, outbox, outbox_sha256, stored_row_count,
+			 decoded_event_bytes, created_at_unix_micro, committed_at_unix_micro)
+		VALUES (?, ?, 'reserved', 'unsent', ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
 		sequence, request.BatchKey, request.AttemptID, indexTimeMillis,
-		metadata, request.Outbox, createdAt); err != nil {
+		metadata, request.Outbox, outboxSHA256[:], request.StoredRowCount,
+		request.DecodedEventBytes, createdAt); err != nil {
 		if sqliteConstraint(err) {
 			return Reservation{}, ErrConflict
 		}
@@ -621,6 +686,10 @@ func (sequencer *SQLiteSequencer) Reserve(ctx context.Context, request ReserveRe
 		PayloadSHA256:       request.PayloadSHA256,
 		Metadata:            slices.Clone(metadata),
 		Outbox:              slices.Clone(request.Outbox),
+		StoredRowCount:      request.StoredRowCount,
+		DecodedEventBytes:   request.DecodedEventBytes,
+		OutboxSHA256:        outboxSHA256,
+		CreatedAt:           time.UnixMicro(createdAt).UTC(),
 		HECRequestSequence:  hecRequestSequence,
 		HECAcknowledgmentID: hecAcknowledgmentID,
 	}, nil
@@ -741,7 +810,7 @@ func (sequencer *SQLiteSequencer) Reject(
 	if err != nil {
 		return Reservation{}, fmt.Errorf("decode allocated rejection sequence: %w", err)
 	}
-	createdAt := time.Now().UTC().UnixMicro()
+	createdAt := sequencer.currentTime().UnixMicro()
 	if !identityExists {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO ingest_batch_identities
@@ -762,8 +831,9 @@ func (sequencer *SQLiteSequencer) Reject(
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO ingest_visibility_reservations
 			(sequence, batch_key, state, phase, attempt_id, index_time_unix_milli,
-			 metadata, outbox, created_at_unix_micro, committed_at_unix_micro)
-		VALUES (?, ?, 'rejected', 'final', '', ?, ?, X'', ?, ?)`,
+			 metadata, outbox, outbox_sha256, stored_row_count,
+			 decoded_event_bytes, created_at_unix_micro, committed_at_unix_micro)
+		VALUES (?, ?, 'rejected', 'final', '', ?, ?, X'', X'', 0, 0, ?, ?)`,
 		sequence,
 		request.BatchKey,
 		indexTimeMillis,
@@ -792,6 +862,7 @@ func (sequencer *SQLiteSequencer) Reject(
 		PayloadSHA256: request.PayloadSHA256,
 		Metadata:      slices.Clone(metadata),
 		Outbox:        []byte{},
+		CreatedAt:     time.UnixMicro(createdAt).UTC(),
 		RejectedAt:    time.UnixMicro(rejectedAtMicros).UTC(),
 	}, nil
 }
@@ -825,6 +896,10 @@ func (sequencer *SQLiteSequencer) AcquirePending(ctx context.Context, attemptID 
 		SELECT sequence, attempt_id
 		FROM ingest_visibility_reservations
 		WHERE state = 'reserved'
+		  AND NOT EXISTS (
+		      SELECT 1 FROM ingest_write_group_members AS member
+		      WHERE member.visibility_sequence = ingest_visibility_reservations.sequence
+		  )
 		ORDER BY CASE phase WHEN 'ambiguous' THEN 0 ELSE 1 END, sequence`)
 	if err != nil {
 		return Reservation{}, false, fmt.Errorf("read pending visibility reservations: %w", err)
@@ -980,7 +1055,8 @@ func scanReservation(row scanner) (Reservation, error) {
 	var reservation Reservation
 	var sequence, indexTimeMillis int64
 	var state, phase string
-	var digest, metadata, outbox []byte
+	var digest, metadata, outbox, outboxDigest []byte
+	var storedRowCount, decodedEventBytes, createdAtMicros int64
 	var committedAt sql.NullInt64
 	if err := row.Scan(
 		&sequence,
@@ -992,6 +1068,10 @@ func scanReservation(row scanner) (Reservation, error) {
 		&digest,
 		&metadata,
 		&outbox,
+		&outboxDigest,
+		&storedRowCount,
+		&decodedEventBytes,
+		&createdAtMicros,
 		&committedAt,
 	); err != nil {
 		return Reservation{}, err
@@ -1006,6 +1086,13 @@ func scanReservation(row scanner) (Reservation, error) {
 	reservation.MayHaveReachedStorage = phase == phaseAmbiguous || state == reservationCommitted
 	reservation.IndexTime = time.UnixMilli(indexTimeMillis).UTC()
 	copy(reservation.PayloadSHA256[:], digest)
+	copy(reservation.OutboxSHA256[:], outboxDigest)
+	if storedRowCount < 0 || storedRowCount > math.MaxUint32 || decodedEventBytes < 0 {
+		return Reservation{}, errors.New("visibility reservation has invalid stored accounting")
+	}
+	reservation.StoredRowCount = uint32(storedRowCount)
+	reservation.DecodedEventBytes = uint64(decodedEventBytes)
+	reservation.CreatedAt = time.UnixMicro(createdAtMicros).UTC()
 	// database/sql Scan into *[]byte already returns caller-owned copies. Keep
 	// those directly so hydrating a maximum-size replay outbox does not copy it
 	// a second time in process memory.
@@ -1024,13 +1111,56 @@ func scanReservation(row scanner) (Reservation, error) {
 }
 
 func queryReservationBySequence(ctx context.Context, q queryer, sequence int64) (Reservation, error) {
-	return scanReservation(q.QueryRowContext(ctx, `
+	reservation, err := scanReservation(q.QueryRowContext(ctx, `
 		SELECT r.sequence, i.batch_key, i.sequence_key, r.state, r.phase,
 		       r.index_time_unix_milli, i.payload_sha256, r.metadata, r.outbox,
+		       r.outbox_sha256, r.stored_row_count, r.decoded_event_bytes,
+		       r.created_at_unix_micro,
 		       r.committed_at_unix_micro
 		FROM ingest_visibility_reservations AS r
 		JOIN ingest_batch_identities AS i ON i.batch_key = r.batch_key
 		WHERE r.sequence = ?`, sequence))
+	if err != nil {
+		return Reservation{}, err
+	}
+	requestSequence, acknowledgmentID, err := queryReservationHECIdentity(ctx, q, sequence)
+	if err != nil {
+		return Reservation{}, err
+	}
+	reservation.HECRequestSequence = requestSequence
+	reservation.HECAcknowledgmentID = acknowledgmentID
+	return reservation, nil
+}
+
+func queryReservationHECIdentity(
+	ctx context.Context,
+	q queryer,
+	sequence int64,
+) (uint64, uint64, error) {
+	var requestSequence, acknowledgmentID int64
+	err := q.QueryRowContext(ctx, `
+		SELECT request.request_sequence,
+		       COALESCE(acknowledgment.acknowledgment_id, 0)
+		FROM hec_requests AS request
+		LEFT JOIN hec_acknowledgments AS acknowledgment
+		  ON acknowledgment.tenant_id = request.tenant_id
+		 AND acknowledgment.ingestion_token_id = request.ingestion_token_id
+		 AND acknowledgment.request_sequence = request.request_sequence
+		WHERE request.visibility_sequence = ?`, sequence).Scan(
+		&requestSequence,
+		&acknowledgmentID,
+	)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return 0, 0, nil
+	case err != nil:
+		return 0, 0, fmt.Errorf("read reservation HEC identity: %w", err)
+	case requestSequence < 1 || acknowledgmentID < 0 ||
+		uint64(acknowledgmentID) > maximumHECAcknowledgmentID:
+		return 0, 0, errors.New("reservation contains invalid HEC identity")
+	default:
+		return uint64(requestSequence), uint64(acknowledgmentID), nil
+	}
 }
 
 func queryActiveDisposition(
@@ -1080,6 +1210,12 @@ func validateReserveRequest(ctx context.Context, request ReserveRequest) error {
 	}
 	if len(request.Outbox) == 0 || len(request.Outbox) > MaxOutboxBytes {
 		return fmt.Errorf("%w: outbox must contain 1 to %d bytes", ErrInvalidArgument, MaxOutboxBytes)
+	}
+	if request.StoredRowCount == 0 || request.StoredRowCount > 1_000 {
+		return fmt.Errorf("%w: stored row count must be between 1 and 1000", ErrInvalidArgument)
+	}
+	if request.DecodedEventBytes == 0 || request.DecodedEventBytes > 8<<20 {
+		return fmt.Errorf("%w: decoded event bytes must be between 1 and %d", ErrInvalidArgument, 8<<20)
 	}
 	if err := validateHECAdmissionRequest(request.HECAdmission); err != nil {
 		return err
@@ -1487,58 +1623,123 @@ func persistQuotaUpdates(
 	return nil
 }
 
-func ensurePendingCapacity(ctx context.Context, tx *sql.Tx, additionalBytes int) error {
+func ensurePendingCapacity(
+	ctx context.Context,
+	tx *sql.Tx,
+	additionalOutboxBytes int,
+	additionalMetadataBytes int,
+) error {
 	usage, err := readPendingUsage(ctx, tx)
 	if err != nil {
 		return fmt.Errorf("read pending visibility capacity: %w", err)
 	}
 
 	totalBytes := safecast.MustConv[int64](usage.OutboxBytes)
+	totalMetadataBytes := safecast.MustConv[int64](usage.MetadataBytes)
 	if pendingCapacityExceeded(
 		int64(usage.Reservations),
 		totalBytes,
-		int64(additionalBytes),
+		int64(additionalOutboxBytes),
+		totalMetadataBytes,
+		int64(additionalMetadataBytes),
 	) {
 		return ErrPendingCapacity
 	}
 	return nil
 }
 
-func pendingCapacityExceeded(count, totalBytes, additionalBytes int64) bool {
+func pendingCapacityExceeded(
+	count, totalBytes, additionalBytes, totalMetadataBytes, additionalMetadataBytes int64,
+) bool {
 	return count >= MaxPendingReservations ||
-		totalBytes > MaxPendingOutboxBytes-additionalBytes
+		totalBytes > MaxPendingOutboxBytes-additionalBytes ||
+		totalMetadataBytes > MaxPendingMetadataBytes-additionalMetadataBytes
 }
 
 func readPendingUsage(ctx context.Context, q queryer) (PendingUsage, error) {
-	var reservations, outboxBytes, validOutboxes int64
+	var reservations, outboxBytes, metadataBytes, validOutboxes int64
+	var ungrouped, readyGroups, ambiguousGroups, leasedGroups int64
+	var oldestPendingAt sql.NullInt64
 	if err := q.QueryRowContext(ctx, `
 		SELECT
 			count(*),
 			COALESCE(sum(length(outbox)), 0),
+			COALESCE(sum(length(metadata)), 0),
+			min(created_at_unix_micro),
 			COALESCE(sum(
 				CASE WHEN length(outbox) BETWEEN 1 AND ? THEN 1 ELSE 0 END
-			), 0)
+			), 0),
+			(SELECT count(*)
+			 FROM ingest_visibility_reservations AS ungrouped_reservation
+			 WHERE ungrouped_reservation.state = 'reserved'
+			   AND NOT EXISTS (
+			       SELECT 1 FROM ingest_write_group_members AS member
+			       WHERE member.visibility_sequence = ungrouped_reservation.sequence)),
+			(SELECT count(*) FROM ingest_write_groups WHERE state = 'ready'),
+			(SELECT count(*) FROM ingest_write_groups WHERE state = 'ambiguous'),
+			(SELECT count(*) FROM ingest_write_groups
+			 WHERE state IN ('ready', 'ambiguous') AND attempt_id <> '')
 		FROM ingest_visibility_reservations
 		WHERE state = 'reserved'`, MaxOutboxBytes).Scan(
 		&reservations,
 		&outboxBytes,
+		&metadataBytes,
+		&oldestPendingAt,
 		&validOutboxes,
+		&ungrouped,
+		&readyGroups,
+		&ambiguousGroups,
+		&leasedGroups,
 	); err != nil {
 		return PendingUsage{}, fmt.Errorf("read pending visibility usage: %w", err)
 	}
-	return decodePendingUsage(reservations, outboxBytes, validOutboxes)
+	usage, err := decodePendingUsage(
+		reservations,
+		outboxBytes,
+		metadataBytes,
+		validOutboxes,
+		ungrouped,
+		readyGroups,
+		ambiguousGroups,
+		leasedGroups,
+	)
+	if err != nil {
+		return PendingUsage{}, err
+	}
+	if oldestPendingAt.Valid {
+		if oldestPendingAt.Int64 < 1 {
+			return PendingUsage{}, errors.New("invalid oldest pending visibility timestamp")
+		}
+		usage.OldestPendingAt = time.UnixMicro(oldestPendingAt.Int64).UTC()
+	} else if usage.Reservations != 0 {
+		return PendingUsage{}, errors.New("missing oldest pending visibility timestamp")
+	}
+	return usage, nil
 }
 
 func decodePendingUsage(
 	reservations int64,
 	outboxBytes int64,
+	metadataBytes int64,
 	validOutboxes int64,
+	ungrouped int64,
+	readyGroups int64,
+	ambiguousGroups int64,
+	leasedGroups int64,
 ) (PendingUsage, error) {
 	switch {
 	case reservations < 0:
 		return PendingUsage{}, fmt.Errorf("invalid pending visibility reservation count %d", reservations)
 	case outboxBytes < 0:
 		return PendingUsage{}, fmt.Errorf("invalid pending visibility outbox byte count %d", outboxBytes)
+	case metadataBytes < 0 || metadataBytes > MaxPendingMetadataBytes:
+		return PendingUsage{}, fmt.Errorf("invalid pending visibility metadata byte count %d", metadataBytes)
+	case ungrouped < 0 || ungrouped > reservations:
+		return PendingUsage{}, fmt.Errorf("invalid ungrouped visibility reservation count %d", ungrouped)
+	case readyGroups < 0 || ambiguousGroups < 0 || leasedGroups < 0 ||
+		readyGroups > reservations || ambiguousGroups > reservations ||
+		leasedGroups > reservations || leasedGroups > readyGroups+ambiguousGroups:
+		return PendingUsage{}, errors.New("invalid pending write-group usage")
 	case validOutboxes < 0:
 		return PendingUsage{}, fmt.Errorf("invalid valid pending visibility outbox count %d", validOutboxes)
 	case reservations > MaxPendingReservations:
@@ -1579,8 +1780,13 @@ func decodePendingUsage(
 		)
 	default:
 		return PendingUsage{
-			Reservations: uint32(reservations),
-			OutboxBytes:  uint64(outboxBytes),
+			Reservations:          safecast.MustConv[uint32](reservations),
+			OutboxBytes:           safecast.MustConv[uint64](outboxBytes),
+			MetadataBytes:         safecast.MustConv[uint64](metadataBytes),
+			UngroupedReservations: safecast.MustConv[uint32](ungrouped),
+			ReadyGroups:           safecast.MustConv[uint32](readyGroups),
+			AmbiguousGroups:       safecast.MustConv[uint32](ambiguousGroups),
+			LeasedGroups:          safecast.MustConv[uint32](leasedGroups),
 		}, nil
 	}
 }
@@ -1620,6 +1826,10 @@ func (sequencer *SQLiteSequencer) orphanedAmbiguousExists(
 		SELECT sequence, attempt_id
 		FROM ingest_visibility_reservations
 		WHERE state = 'reserved' AND phase = 'ambiguous'
+		  AND NOT EXISTS (
+		      SELECT 1 FROM ingest_write_group_members AS member
+		      WHERE member.visibility_sequence = ingest_visibility_reservations.sequence
+		  )
 		ORDER BY sequence`)
 	if err != nil {
 		return false, fmt.Errorf("read ambiguous visibility barrier: %w", err)
@@ -1823,6 +2033,7 @@ func (sequencer *SQLiteSequencer) finish(ctx context.Context, sequence uint64, a
 			result, err = tx.ExecContext(ctx, `
 				UPDATE ingest_visibility_reservations
 				SET state = 'committed', phase = 'final', attempt_id = '', outbox = X'',
+				    outbox_sha256 = X'', stored_row_count = 0, decoded_event_bytes = 0,
 				    committed_at_unix_micro = ?
 				WHERE sequence = ? AND state = 'reserved' AND attempt_id = ?`,
 				committedAtMicros, storedSequence, attemptID)
@@ -1830,6 +2041,7 @@ func (sequencer *SQLiteSequencer) finish(ctx context.Context, sequence uint64, a
 			result, err = tx.ExecContext(ctx, `
 				UPDATE ingest_visibility_reservations
 				SET state = 'abandoned', phase = 'final', attempt_id = '', outbox = X'',
+				    outbox_sha256 = X'', stored_row_count = 0, decoded_event_bytes = 0,
 				    committed_at_unix_micro = NULL
 				WHERE sequence = ? AND state = 'reserved' AND attempt_id = ?`,
 				storedSequence, attemptID)
@@ -1987,14 +2199,32 @@ func (sequencer *SQLiteSequencer) PruneTerminal(
 	if err != nil {
 		return 0, err
 	}
+	// Terminal membership is diagnostic only. Delete it before the referenced
+	// logical reservations, in the same bounded maintenance transaction. The
+	// reservation delete below also excludes any membership not selected by
+	// this bounded cleanup, so foreign-key authority is never bypassed.
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM ingest_write_groups
+		WHERE write_group_id IN (
+			SELECT write_group_id FROM ingest_write_groups
+			WHERE state = 'committed' AND ? AND last_sequence <= ?
+			ORDER BY first_sequence
+			LIMIT 1
+		)`, committedEligible, committedThreshold); err != nil {
+		return 0, fmt.Errorf("delete terminal write groups: %w", err)
+	}
 	result, err := tx.ExecContext(ctx, `
 		DELETE FROM ingest_visibility_reservations
 		WHERE sequence IN (
 			SELECT sequence
 			FROM ingest_visibility_reservations
-			WHERE (state = 'abandoned' AND ? AND sequence <= ?)
-			   OR (state = 'committed' AND ? AND sequence <= ?)
-			   OR (state = 'rejected' AND ? AND sequence <= ?)
+				WHERE ((state = 'abandoned' AND ? AND sequence <= ?)
+				   OR (state = 'committed' AND ? AND sequence <= ?)
+				   OR (state = 'rejected' AND ? AND sequence <= ?))
+				  AND NOT EXISTS (
+				      SELECT 1 FROM ingest_write_group_members AS member
+				      WHERE member.visibility_sequence = ingest_visibility_reservations.sequence
+				  )
 			ORDER BY sequence
 			LIMIT ?
 		)`,

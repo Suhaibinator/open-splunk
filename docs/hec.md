@@ -296,6 +296,16 @@ curl --silent --show-error --fail-with-body \
 header optionally verifies one HEC token without exposing its details. General
 process health remains `/healthz` and readiness `/readyz`.
 
+Administrators can read the bounded, process-wide ingestion snapshot with
+`POST /api/hec/operations/get`. Its `insert_coalescing` field exposes staged
+logical batches/rows, group/send/success/retry/ambiguity counters, the closed
+fill-reason vector, fixed-bound group/physical-row and latency histograms,
+native waiter counters, and current durable group/reservation/byte/age gauges.
+The schema deliberately has no tenant, index, collector, batch, group, channel,
+token, payload, or error-text dimensions. Use the queue and oldest-age gauges
+for capacity/recovery diagnosis and the histogram distributions to distinguish
+sparse linger flushes from sustained undersized inserts.
+
 ## Backup and recovery
 
 HEC has no standalone backup. Token profiles, channels, ACK rows, schedules,
@@ -336,9 +346,33 @@ go test ./integration -run '^TestBackendHECDurableLoad$' \
 
 Its default mixed profile offers 1,000 events/second for 30 seconds and checks
 shape-specific acceptance, scheduler lag, bounded pending work, memory,
-goroutines, threads, full drain, and duplicate-free event identity. The
-`small-only` and `batch-only` profiles measure request-rate and batching
-behavior separately; observational measurements are not product SLAs.
+goroutines, threads, full drain, and duplicate-free event identity. While
+ClickHouse is paused, the gate also durably stages 30 independent 1,000-event
+requests and retains the recovery and terminal-ACK assertions. After complete
+recovery it runs a separate 40-request live phase with ClickHouse available.
+The live gate scopes finished query-log inserts to `open_splunk.events`, proves
+exactly 40 logical batches and 40,000 physical rows, applies the documented
+median/tail/reduction/hard-limit envelope, and compares active parts,
+delayed/rejected inserts, and merge pressure with a clean pre-window baseline.
+The administrator operations delta independently verifies staged batches and
+rows, physical sends, successful groups, histogram count/sum, zero live
+retry/ambiguity delta, and complete coalescer queue drain.
+
+The `small-only` profile keeps the same outage, ACK, identity, resource, and
+drain assertions while sustaining only one-event requests:
+
+```sh
+OPEN_SPLUNK_HEC_LOAD=1 \
+OPEN_SPLUNK_HEC_LOAD_PROFILE=small-only \
+OPEN_SPLUNK_HEC_LOAD_EVENTS_PER_SECOND=1000 \
+go test ./integration -run '^TestBackendHECDurableLoad$' \
+  -count=1 -timeout=15m -v
+```
+
+This one-event profile validates bounded sparse-linger behavior; it does not
+claim 10,000-row inserts when fewer than 10,000 rows arrive before maximum
+linger. The `batch-only` profile measures batched behavior separately.
+Observational measurements are not product SLAs.
 
 The production 30-second read-deadline gate holds all 16 per-token slots with
 authenticated gzip/chunked TLS clients, proves bounded cleanup, then performs a

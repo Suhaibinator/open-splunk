@@ -15,6 +15,7 @@ import (
 // by ingestion and physical index deletion. The runtime owns its final close.
 type indexDataDeletionRuntimeStore interface {
 	indexes.DeletionStore
+	Shutdown(context.Context) error
 	Close() error
 }
 
@@ -93,7 +94,7 @@ func (runtime *indexDataDeletionRuntime) Close(ctx context.Context) error {
 		runtime.lifecycleMu.Lock()
 		runtime.closing = true
 		runtime.lifecycleMu.Unlock()
-		go runtime.close()
+		go runtime.close(ctx)
 	})
 	select {
 	case <-runtime.closeDone:
@@ -116,7 +117,7 @@ func (runtime *indexDataDeletionRuntime) Close(ctx context.Context) error {
 	}
 }
 
-func (runtime *indexDataDeletionRuntime) close() {
+func (runtime *indexDataDeletionRuntime) close(ctx context.Context) {
 	defer close(runtime.closeDone)
 	if err := runtime.coordinator.Close(context.Background()); err != nil {
 		runtime.closeErr = fmt.Errorf(
@@ -125,7 +126,18 @@ func (runtime *indexDataDeletionRuntime) close() {
 		)
 		return
 	}
-	if err := runtime.store.Close(); err != nil {
+	shutdownErr := runtime.store.Shutdown(ctx)
+	closeErr := runtime.store.Close()
+	if ctx.Err() != nil && errors.Is(shutdownErr, ctx.Err()) {
+		// Close force-joins the Store's already-started shutdown. Read its final
+		// result once more without the initiating caller's expired wait budget so
+		// later joiners retain a real drain failure but not caller-local timeout.
+		shutdownErr = runtime.store.Shutdown(context.Background())
+		if errors.Is(shutdownErr, ctx.Err()) {
+			shutdownErr = nil
+		}
+	}
+	if err := errors.Join(shutdownErr, closeErr); err != nil {
 		runtime.closeErr = fmt.Errorf(
 			"close index data deletion ClickHouse store: %w",
 			err,

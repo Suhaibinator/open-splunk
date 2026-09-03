@@ -46,6 +46,71 @@ export interface HECReconciliationOperationalMetrics {
   ambiguities: bigint;
 }
 
+/**
+ * FixedHistogram is emitted only from compile-time bounded server buckets.
+ * upper_bounds has 13 entries and bucket_counts has one overflow entry (14).
+ */
+export interface FixedHistogram {
+  upperBounds: bigint[];
+  bucketCounts: bigint[];
+  count: bigint;
+  sum: bigint;
+  max: bigint;
+}
+
+/**
+ * FixedLatencyHistogram records microseconds and is bounded to 11 upper
+ * bounds plus one overflow bucket.
+ */
+export interface FixedLatencyHistogram {
+  upperBoundsMicroseconds: bigint[];
+  bucketCounts: bigint[];
+  count: bigint;
+  sumMicroseconds: bigint;
+  maxMicroseconds: bigint;
+}
+
+export interface HECInsertCoalescingQueueMetrics {
+  pendingReservations: bigint;
+  ungroupedReservations: bigint;
+  readyGroups: bigint;
+  ambiguousGroups: bigint;
+  leasedGroups: bigint;
+  pendingOutboxBytes: bigint;
+  pendingMetadataBytes: bigint;
+  oldestPendingAge: Duration | undefined;
+}
+
+/**
+ * HECInsertCoalescingOperationalMetrics is a process-wide, payload-free
+ * projection. groups_by_fill_reason has the closed seven-value domain defined
+ * by the server and all histogram vectors have fixed lengths.
+ */
+export interface HECInsertCoalescingOperationalMetrics {
+  stagedLogicalBatches: bigint;
+  stagedLogicalRows: bigint;
+  formedGroups: bigint;
+  physicalSends: bigint;
+  successfulGroups: bigint;
+  retries: bigint;
+  ambiguities: bigint;
+  groupsByFillReason: bigint[];
+  memberBatchesPerGroup: FixedHistogram | undefined;
+  rowsPerGroup: FixedHistogram | undefined;
+  decodedBytesPerGroup: FixedHistogram | undefined;
+  monthlyPartitionsPerGroup: FixedHistogram | undefined;
+  rowsPerPhysicalInsert: FixedHistogram | undefined;
+  creationToSeal: FixedLatencyHistogram | undefined;
+  creationToSend: FixedLatencyHistogram | undefined;
+  creationToCommit: FixedLatencyHistogram | undefined;
+  nativeWaiters: bigint;
+  peakNativeWaiters: bigint;
+  nativeWaiterWakeups: bigint;
+  nativeWaiterCancels: bigint;
+  nativeTerminalLookups: bigint;
+  queue: HECInsertCoalescingQueueMetrics | undefined;
+}
+
 export interface HECAcknowledgmentOperationalMetrics {
   available: boolean;
   activeChannels: bigint;
@@ -76,6 +141,7 @@ export interface GetHECOperationalSnapshotResponse {
   reconciliation: HECReconciliationOperationalMetrics | undefined;
   acknowledgments: HECAcknowledgmentOperationalMetrics | undefined;
   protocolFailures: HECProtocolFailureMetric[];
+  insertCoalescing: HECInsertCoalescingOperationalMetrics | undefined;
 }
 
 function createBaseGetHECOperationalSnapshotRequest(): GetHECOperationalSnapshotRequest {
@@ -793,6 +859,1245 @@ export const HECReconciliationOperationalMetrics: MessageFns<HECReconciliationOp
   },
 };
 
+function createBaseFixedHistogram(): FixedHistogram {
+  return { upperBounds: [], bucketCounts: [], count: 0n, sum: 0n, max: 0n };
+}
+
+export const FixedHistogram: MessageFns<FixedHistogram> = {
+  encode(message: FixedHistogram, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    writer.uint32(10).fork();
+    for (const v of message.upperBounds) {
+      if (BigInt.asUintN(64, v) !== v) {
+        throw new globalThis.Error("a value provided in array field upperBounds of type uint64 is too large");
+      }
+      writer.uint64(v);
+    }
+    writer.join();
+    writer.uint32(18).fork();
+    for (const v of message.bucketCounts) {
+      if (BigInt.asUintN(64, v) !== v) {
+        throw new globalThis.Error("a value provided in array field bucketCounts of type uint64 is too large");
+      }
+      writer.uint64(v);
+    }
+    writer.join();
+    if (message.count !== 0n) {
+      if (BigInt.asUintN(64, message.count) !== message.count) {
+        throw new globalThis.Error("value provided for field message.count of type uint64 too large");
+      }
+      writer.uint32(24).uint64(message.count);
+    }
+    if (message.sum !== 0n) {
+      if (BigInt.asUintN(64, message.sum) !== message.sum) {
+        throw new globalThis.Error("value provided for field message.sum of type uint64 too large");
+      }
+      writer.uint32(32).uint64(message.sum);
+    }
+    if (message.max !== 0n) {
+      if (BigInt.asUintN(64, message.max) !== message.max) {
+        throw new globalThis.Error("value provided for field message.max of type uint64 too large");
+      }
+      writer.uint32(40).uint64(message.max);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): FixedHistogram {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseFixedHistogram();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag === 8) {
+              message.upperBounds.push(reader.uint64() as bigint);
+
+              continue;
+            }
+
+            if (tag === 10) {
+              const end2 = reader.uint32() + reader.pos;
+              while (reader.pos < end2) {
+                message.upperBounds.push(reader.uint64() as bigint);
+              }
+
+              continue;
+            }
+
+            break;
+          }
+          case 2: {
+            if (tag === 16) {
+              message.bucketCounts.push(reader.uint64() as bigint);
+
+              continue;
+            }
+
+            if (tag === 18) {
+              const end2 = reader.uint32() + reader.pos;
+              while (reader.pos < end2) {
+                message.bucketCounts.push(reader.uint64() as bigint);
+              }
+
+              continue;
+            }
+
+            break;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.count = reader.uint64() as bigint;
+            continue;
+          }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+
+            message.sum = reader.uint64() as bigint;
+            continue;
+          }
+          case 5: {
+            if (tag !== 40) {
+              break;
+            }
+
+            message.max = reader.uint64() as bigint;
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): FixedHistogram {
+    return {
+      upperBounds: globalThis.Array.isArray(object?.upperBounds)
+        ? object.upperBounds.map((e: any) => BigInt(e))
+        : globalThis.Array.isArray(object?.upper_bounds)
+        ? object.upper_bounds.map((e: any) => BigInt(e))
+        : [],
+      bucketCounts: globalThis.Array.isArray(object?.bucketCounts)
+        ? object.bucketCounts.map((e: any) => BigInt(e))
+        : globalThis.Array.isArray(object?.bucket_counts)
+        ? object.bucket_counts.map((e: any) => BigInt(e))
+        : [],
+      count: isSet(object.count) ? BigInt(object.count) : 0n,
+      sum: isSet(object.sum) ? BigInt(object.sum) : 0n,
+      max: isSet(object.max) ? BigInt(object.max) : 0n,
+    };
+  },
+
+  toJSON(message: FixedHistogram): unknown {
+    const obj: any = {};
+    if (message.upperBounds?.length) {
+      obj.upperBounds = message.upperBounds.map((e) => e.toString());
+    }
+    if (message.bucketCounts?.length) {
+      obj.bucketCounts = message.bucketCounts.map((e) => e.toString());
+    }
+    if (message.count !== 0n) {
+      obj.count = message.count.toString();
+    }
+    if (message.sum !== 0n) {
+      obj.sum = message.sum.toString();
+    }
+    if (message.max !== 0n) {
+      obj.max = message.max.toString();
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<FixedHistogram>, I>>(base?: I): FixedHistogram {
+    return FixedHistogram.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<FixedHistogram>, I>>(object: I): FixedHistogram {
+    const message = createBaseFixedHistogram();
+    message.upperBounds = object.upperBounds?.map((e) => BigInt(e)) || [];
+    message.bucketCounts = object.bucketCounts?.map((e) => BigInt(e)) || [];
+    message.count = (object.count !== undefined && object.count !== null) ? BigInt(object.count) : 0n;
+    message.sum = (object.sum !== undefined && object.sum !== null) ? BigInt(object.sum) : 0n;
+    message.max = (object.max !== undefined && object.max !== null) ? BigInt(object.max) : 0n;
+    return message;
+  },
+};
+
+function createBaseFixedLatencyHistogram(): FixedLatencyHistogram {
+  return { upperBoundsMicroseconds: [], bucketCounts: [], count: 0n, sumMicroseconds: 0n, maxMicroseconds: 0n };
+}
+
+export const FixedLatencyHistogram: MessageFns<FixedLatencyHistogram> = {
+  encode(message: FixedLatencyHistogram, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    writer.uint32(10).fork();
+    for (const v of message.upperBoundsMicroseconds) {
+      if (BigInt.asUintN(64, v) !== v) {
+        throw new globalThis.Error(
+          "a value provided in array field upperBoundsMicroseconds of type uint64 is too large",
+        );
+      }
+      writer.uint64(v);
+    }
+    writer.join();
+    writer.uint32(18).fork();
+    for (const v of message.bucketCounts) {
+      if (BigInt.asUintN(64, v) !== v) {
+        throw new globalThis.Error("a value provided in array field bucketCounts of type uint64 is too large");
+      }
+      writer.uint64(v);
+    }
+    writer.join();
+    if (message.count !== 0n) {
+      if (BigInt.asUintN(64, message.count) !== message.count) {
+        throw new globalThis.Error("value provided for field message.count of type uint64 too large");
+      }
+      writer.uint32(24).uint64(message.count);
+    }
+    if (message.sumMicroseconds !== 0n) {
+      if (BigInt.asUintN(64, message.sumMicroseconds) !== message.sumMicroseconds) {
+        throw new globalThis.Error("value provided for field message.sumMicroseconds of type uint64 too large");
+      }
+      writer.uint32(32).uint64(message.sumMicroseconds);
+    }
+    if (message.maxMicroseconds !== 0n) {
+      if (BigInt.asUintN(64, message.maxMicroseconds) !== message.maxMicroseconds) {
+        throw new globalThis.Error("value provided for field message.maxMicroseconds of type uint64 too large");
+      }
+      writer.uint32(40).uint64(message.maxMicroseconds);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): FixedLatencyHistogram {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseFixedLatencyHistogram();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag === 8) {
+              message.upperBoundsMicroseconds.push(reader.uint64() as bigint);
+
+              continue;
+            }
+
+            if (tag === 10) {
+              const end2 = reader.uint32() + reader.pos;
+              while (reader.pos < end2) {
+                message.upperBoundsMicroseconds.push(reader.uint64() as bigint);
+              }
+
+              continue;
+            }
+
+            break;
+          }
+          case 2: {
+            if (tag === 16) {
+              message.bucketCounts.push(reader.uint64() as bigint);
+
+              continue;
+            }
+
+            if (tag === 18) {
+              const end2 = reader.uint32() + reader.pos;
+              while (reader.pos < end2) {
+                message.bucketCounts.push(reader.uint64() as bigint);
+              }
+
+              continue;
+            }
+
+            break;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.count = reader.uint64() as bigint;
+            continue;
+          }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+
+            message.sumMicroseconds = reader.uint64() as bigint;
+            continue;
+          }
+          case 5: {
+            if (tag !== 40) {
+              break;
+            }
+
+            message.maxMicroseconds = reader.uint64() as bigint;
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): FixedLatencyHistogram {
+    return {
+      upperBoundsMicroseconds: globalThis.Array.isArray(object?.upperBoundsMicroseconds)
+        ? object.upperBoundsMicroseconds.map((e: any) => BigInt(e))
+        : globalThis.Array.isArray(object?.upper_bounds_microseconds)
+        ? object.upper_bounds_microseconds.map((e: any) => BigInt(e))
+        : [],
+      bucketCounts: globalThis.Array.isArray(object?.bucketCounts)
+        ? object.bucketCounts.map((e: any) => BigInt(e))
+        : globalThis.Array.isArray(object?.bucket_counts)
+        ? object.bucket_counts.map((e: any) => BigInt(e))
+        : [],
+      count: isSet(object.count) ? BigInt(object.count) : 0n,
+      sumMicroseconds: isSet(object.sumMicroseconds)
+        ? BigInt(object.sumMicroseconds)
+        : isSet(object.sum_microseconds)
+        ? BigInt(object.sum_microseconds)
+        : 0n,
+      maxMicroseconds: isSet(object.maxMicroseconds)
+        ? BigInt(object.maxMicroseconds)
+        : isSet(object.max_microseconds)
+        ? BigInt(object.max_microseconds)
+        : 0n,
+    };
+  },
+
+  toJSON(message: FixedLatencyHistogram): unknown {
+    const obj: any = {};
+    if (message.upperBoundsMicroseconds?.length) {
+      obj.upperBoundsMicroseconds = message.upperBoundsMicroseconds.map((e) => e.toString());
+    }
+    if (message.bucketCounts?.length) {
+      obj.bucketCounts = message.bucketCounts.map((e) => e.toString());
+    }
+    if (message.count !== 0n) {
+      obj.count = message.count.toString();
+    }
+    if (message.sumMicroseconds !== 0n) {
+      obj.sumMicroseconds = message.sumMicroseconds.toString();
+    }
+    if (message.maxMicroseconds !== 0n) {
+      obj.maxMicroseconds = message.maxMicroseconds.toString();
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<FixedLatencyHistogram>, I>>(base?: I): FixedLatencyHistogram {
+    return FixedLatencyHistogram.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<FixedLatencyHistogram>, I>>(object: I): FixedLatencyHistogram {
+    const message = createBaseFixedLatencyHistogram();
+    message.upperBoundsMicroseconds = object.upperBoundsMicroseconds?.map((e) => BigInt(e)) || [];
+    message.bucketCounts = object.bucketCounts?.map((e) => BigInt(e)) || [];
+    message.count = (object.count !== undefined && object.count !== null) ? BigInt(object.count) : 0n;
+    message.sumMicroseconds = (object.sumMicroseconds !== undefined && object.sumMicroseconds !== null)
+      ? BigInt(object.sumMicroseconds)
+      : 0n;
+    message.maxMicroseconds = (object.maxMicroseconds !== undefined && object.maxMicroseconds !== null)
+      ? BigInt(object.maxMicroseconds)
+      : 0n;
+    return message;
+  },
+};
+
+function createBaseHECInsertCoalescingQueueMetrics(): HECInsertCoalescingQueueMetrics {
+  return {
+    pendingReservations: 0n,
+    ungroupedReservations: 0n,
+    readyGroups: 0n,
+    ambiguousGroups: 0n,
+    leasedGroups: 0n,
+    pendingOutboxBytes: 0n,
+    pendingMetadataBytes: 0n,
+    oldestPendingAge: undefined,
+  };
+}
+
+export const HECInsertCoalescingQueueMetrics: MessageFns<HECInsertCoalescingQueueMetrics> = {
+  encode(message: HECInsertCoalescingQueueMetrics, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.pendingReservations !== 0n) {
+      if (BigInt.asUintN(64, message.pendingReservations) !== message.pendingReservations) {
+        throw new globalThis.Error("value provided for field message.pendingReservations of type uint64 too large");
+      }
+      writer.uint32(8).uint64(message.pendingReservations);
+    }
+    if (message.ungroupedReservations !== 0n) {
+      if (BigInt.asUintN(64, message.ungroupedReservations) !== message.ungroupedReservations) {
+        throw new globalThis.Error("value provided for field message.ungroupedReservations of type uint64 too large");
+      }
+      writer.uint32(16).uint64(message.ungroupedReservations);
+    }
+    if (message.readyGroups !== 0n) {
+      if (BigInt.asUintN(64, message.readyGroups) !== message.readyGroups) {
+        throw new globalThis.Error("value provided for field message.readyGroups of type uint64 too large");
+      }
+      writer.uint32(24).uint64(message.readyGroups);
+    }
+    if (message.ambiguousGroups !== 0n) {
+      if (BigInt.asUintN(64, message.ambiguousGroups) !== message.ambiguousGroups) {
+        throw new globalThis.Error("value provided for field message.ambiguousGroups of type uint64 too large");
+      }
+      writer.uint32(32).uint64(message.ambiguousGroups);
+    }
+    if (message.leasedGroups !== 0n) {
+      if (BigInt.asUintN(64, message.leasedGroups) !== message.leasedGroups) {
+        throw new globalThis.Error("value provided for field message.leasedGroups of type uint64 too large");
+      }
+      writer.uint32(40).uint64(message.leasedGroups);
+    }
+    if (message.pendingOutboxBytes !== 0n) {
+      if (BigInt.asUintN(64, message.pendingOutboxBytes) !== message.pendingOutboxBytes) {
+        throw new globalThis.Error("value provided for field message.pendingOutboxBytes of type uint64 too large");
+      }
+      writer.uint32(48).uint64(message.pendingOutboxBytes);
+    }
+    if (message.pendingMetadataBytes !== 0n) {
+      if (BigInt.asUintN(64, message.pendingMetadataBytes) !== message.pendingMetadataBytes) {
+        throw new globalThis.Error("value provided for field message.pendingMetadataBytes of type uint64 too large");
+      }
+      writer.uint32(56).uint64(message.pendingMetadataBytes);
+    }
+    if (message.oldestPendingAge !== undefined) {
+      Duration.encode(message.oldestPendingAge, writer.uint32(66).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): HECInsertCoalescingQueueMetrics {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseHECInsertCoalescingQueueMetrics();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 8) {
+              break;
+            }
+
+            message.pendingReservations = reader.uint64() as bigint;
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.ungroupedReservations = reader.uint64() as bigint;
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.readyGroups = reader.uint64() as bigint;
+            continue;
+          }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+
+            message.ambiguousGroups = reader.uint64() as bigint;
+            continue;
+          }
+          case 5: {
+            if (tag !== 40) {
+              break;
+            }
+
+            message.leasedGroups = reader.uint64() as bigint;
+            continue;
+          }
+          case 6: {
+            if (tag !== 48) {
+              break;
+            }
+
+            message.pendingOutboxBytes = reader.uint64() as bigint;
+            continue;
+          }
+          case 7: {
+            if (tag !== 56) {
+              break;
+            }
+
+            message.pendingMetadataBytes = reader.uint64() as bigint;
+            continue;
+          }
+          case 8: {
+            if (tag !== 66) {
+              break;
+            }
+
+            message.oldestPendingAge = Duration.decode(reader, reader.uint32());
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): HECInsertCoalescingQueueMetrics {
+    return {
+      pendingReservations: isSet(object.pendingReservations)
+        ? BigInt(object.pendingReservations)
+        : isSet(object.pending_reservations)
+        ? BigInt(object.pending_reservations)
+        : 0n,
+      ungroupedReservations: isSet(object.ungroupedReservations)
+        ? BigInt(object.ungroupedReservations)
+        : isSet(object.ungrouped_reservations)
+        ? BigInt(object.ungrouped_reservations)
+        : 0n,
+      readyGroups: isSet(object.readyGroups)
+        ? BigInt(object.readyGroups)
+        : isSet(object.ready_groups)
+        ? BigInt(object.ready_groups)
+        : 0n,
+      ambiguousGroups: isSet(object.ambiguousGroups)
+        ? BigInt(object.ambiguousGroups)
+        : isSet(object.ambiguous_groups)
+        ? BigInt(object.ambiguous_groups)
+        : 0n,
+      leasedGroups: isSet(object.leasedGroups)
+        ? BigInt(object.leasedGroups)
+        : isSet(object.leased_groups)
+        ? BigInt(object.leased_groups)
+        : 0n,
+      pendingOutboxBytes: isSet(object.pendingOutboxBytes)
+        ? BigInt(object.pendingOutboxBytes)
+        : isSet(object.pending_outbox_bytes)
+        ? BigInt(object.pending_outbox_bytes)
+        : 0n,
+      pendingMetadataBytes: isSet(object.pendingMetadataBytes)
+        ? BigInt(object.pendingMetadataBytes)
+        : isSet(object.pending_metadata_bytes)
+        ? BigInt(object.pending_metadata_bytes)
+        : 0n,
+      oldestPendingAge: isSet(object.oldestPendingAge)
+        ? Duration.fromJSON(object.oldestPendingAge)
+        : isSet(object.oldest_pending_age)
+        ? Duration.fromJSON(object.oldest_pending_age)
+        : undefined,
+    };
+  },
+
+  toJSON(message: HECInsertCoalescingQueueMetrics): unknown {
+    const obj: any = {};
+    if (message.pendingReservations !== 0n) {
+      obj.pendingReservations = message.pendingReservations.toString();
+    }
+    if (message.ungroupedReservations !== 0n) {
+      obj.ungroupedReservations = message.ungroupedReservations.toString();
+    }
+    if (message.readyGroups !== 0n) {
+      obj.readyGroups = message.readyGroups.toString();
+    }
+    if (message.ambiguousGroups !== 0n) {
+      obj.ambiguousGroups = message.ambiguousGroups.toString();
+    }
+    if (message.leasedGroups !== 0n) {
+      obj.leasedGroups = message.leasedGroups.toString();
+    }
+    if (message.pendingOutboxBytes !== 0n) {
+      obj.pendingOutboxBytes = message.pendingOutboxBytes.toString();
+    }
+    if (message.pendingMetadataBytes !== 0n) {
+      obj.pendingMetadataBytes = message.pendingMetadataBytes.toString();
+    }
+    if (message.oldestPendingAge !== undefined) {
+      obj.oldestPendingAge = Duration.toJSON(message.oldestPendingAge);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<HECInsertCoalescingQueueMetrics>, I>>(base?: I): HECInsertCoalescingQueueMetrics {
+    return HECInsertCoalescingQueueMetrics.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<HECInsertCoalescingQueueMetrics>, I>>(
+    object: I,
+  ): HECInsertCoalescingQueueMetrics {
+    const message = createBaseHECInsertCoalescingQueueMetrics();
+    message.pendingReservations = (object.pendingReservations !== undefined && object.pendingReservations !== null)
+      ? BigInt(object.pendingReservations)
+      : 0n;
+    message.ungroupedReservations =
+      (object.ungroupedReservations !== undefined && object.ungroupedReservations !== null)
+        ? BigInt(object.ungroupedReservations)
+        : 0n;
+    message.readyGroups = (object.readyGroups !== undefined && object.readyGroups !== null)
+      ? BigInt(object.readyGroups)
+      : 0n;
+    message.ambiguousGroups = (object.ambiguousGroups !== undefined && object.ambiguousGroups !== null)
+      ? BigInt(object.ambiguousGroups)
+      : 0n;
+    message.leasedGroups = (object.leasedGroups !== undefined && object.leasedGroups !== null)
+      ? BigInt(object.leasedGroups)
+      : 0n;
+    message.pendingOutboxBytes = (object.pendingOutboxBytes !== undefined && object.pendingOutboxBytes !== null)
+      ? BigInt(object.pendingOutboxBytes)
+      : 0n;
+    message.pendingMetadataBytes = (object.pendingMetadataBytes !== undefined && object.pendingMetadataBytes !== null)
+      ? BigInt(object.pendingMetadataBytes)
+      : 0n;
+    message.oldestPendingAge = (object.oldestPendingAge !== undefined && object.oldestPendingAge !== null)
+      ? Duration.fromPartial(object.oldestPendingAge)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseHECInsertCoalescingOperationalMetrics(): HECInsertCoalescingOperationalMetrics {
+  return {
+    stagedLogicalBatches: 0n,
+    stagedLogicalRows: 0n,
+    formedGroups: 0n,
+    physicalSends: 0n,
+    successfulGroups: 0n,
+    retries: 0n,
+    ambiguities: 0n,
+    groupsByFillReason: [],
+    memberBatchesPerGroup: undefined,
+    rowsPerGroup: undefined,
+    decodedBytesPerGroup: undefined,
+    monthlyPartitionsPerGroup: undefined,
+    rowsPerPhysicalInsert: undefined,
+    creationToSeal: undefined,
+    creationToSend: undefined,
+    creationToCommit: undefined,
+    nativeWaiters: 0n,
+    peakNativeWaiters: 0n,
+    nativeWaiterWakeups: 0n,
+    nativeWaiterCancels: 0n,
+    nativeTerminalLookups: 0n,
+    queue: undefined,
+  };
+}
+
+export const HECInsertCoalescingOperationalMetrics: MessageFns<HECInsertCoalescingOperationalMetrics> = {
+  encode(message: HECInsertCoalescingOperationalMetrics, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.stagedLogicalBatches !== 0n) {
+      if (BigInt.asUintN(64, message.stagedLogicalBatches) !== message.stagedLogicalBatches) {
+        throw new globalThis.Error("value provided for field message.stagedLogicalBatches of type uint64 too large");
+      }
+      writer.uint32(8).uint64(message.stagedLogicalBatches);
+    }
+    if (message.stagedLogicalRows !== 0n) {
+      if (BigInt.asUintN(64, message.stagedLogicalRows) !== message.stagedLogicalRows) {
+        throw new globalThis.Error("value provided for field message.stagedLogicalRows of type uint64 too large");
+      }
+      writer.uint32(16).uint64(message.stagedLogicalRows);
+    }
+    if (message.formedGroups !== 0n) {
+      if (BigInt.asUintN(64, message.formedGroups) !== message.formedGroups) {
+        throw new globalThis.Error("value provided for field message.formedGroups of type uint64 too large");
+      }
+      writer.uint32(24).uint64(message.formedGroups);
+    }
+    if (message.physicalSends !== 0n) {
+      if (BigInt.asUintN(64, message.physicalSends) !== message.physicalSends) {
+        throw new globalThis.Error("value provided for field message.physicalSends of type uint64 too large");
+      }
+      writer.uint32(32).uint64(message.physicalSends);
+    }
+    if (message.successfulGroups !== 0n) {
+      if (BigInt.asUintN(64, message.successfulGroups) !== message.successfulGroups) {
+        throw new globalThis.Error("value provided for field message.successfulGroups of type uint64 too large");
+      }
+      writer.uint32(40).uint64(message.successfulGroups);
+    }
+    if (message.retries !== 0n) {
+      if (BigInt.asUintN(64, message.retries) !== message.retries) {
+        throw new globalThis.Error("value provided for field message.retries of type uint64 too large");
+      }
+      writer.uint32(48).uint64(message.retries);
+    }
+    if (message.ambiguities !== 0n) {
+      if (BigInt.asUintN(64, message.ambiguities) !== message.ambiguities) {
+        throw new globalThis.Error("value provided for field message.ambiguities of type uint64 too large");
+      }
+      writer.uint32(56).uint64(message.ambiguities);
+    }
+    writer.uint32(66).fork();
+    for (const v of message.groupsByFillReason) {
+      if (BigInt.asUintN(64, v) !== v) {
+        throw new globalThis.Error("a value provided in array field groupsByFillReason of type uint64 is too large");
+      }
+      writer.uint64(v);
+    }
+    writer.join();
+    if (message.memberBatchesPerGroup !== undefined) {
+      FixedHistogram.encode(message.memberBatchesPerGroup, writer.uint32(74).fork()).join();
+    }
+    if (message.rowsPerGroup !== undefined) {
+      FixedHistogram.encode(message.rowsPerGroup, writer.uint32(82).fork()).join();
+    }
+    if (message.decodedBytesPerGroup !== undefined) {
+      FixedHistogram.encode(message.decodedBytesPerGroup, writer.uint32(90).fork()).join();
+    }
+    if (message.monthlyPartitionsPerGroup !== undefined) {
+      FixedHistogram.encode(message.monthlyPartitionsPerGroup, writer.uint32(98).fork()).join();
+    }
+    if (message.rowsPerPhysicalInsert !== undefined) {
+      FixedHistogram.encode(message.rowsPerPhysicalInsert, writer.uint32(106).fork()).join();
+    }
+    if (message.creationToSeal !== undefined) {
+      FixedLatencyHistogram.encode(message.creationToSeal, writer.uint32(114).fork()).join();
+    }
+    if (message.creationToSend !== undefined) {
+      FixedLatencyHistogram.encode(message.creationToSend, writer.uint32(122).fork()).join();
+    }
+    if (message.creationToCommit !== undefined) {
+      FixedLatencyHistogram.encode(message.creationToCommit, writer.uint32(130).fork()).join();
+    }
+    if (message.nativeWaiters !== 0n) {
+      if (BigInt.asUintN(64, message.nativeWaiters) !== message.nativeWaiters) {
+        throw new globalThis.Error("value provided for field message.nativeWaiters of type uint64 too large");
+      }
+      writer.uint32(136).uint64(message.nativeWaiters);
+    }
+    if (message.peakNativeWaiters !== 0n) {
+      if (BigInt.asUintN(64, message.peakNativeWaiters) !== message.peakNativeWaiters) {
+        throw new globalThis.Error("value provided for field message.peakNativeWaiters of type uint64 too large");
+      }
+      writer.uint32(144).uint64(message.peakNativeWaiters);
+    }
+    if (message.nativeWaiterWakeups !== 0n) {
+      if (BigInt.asUintN(64, message.nativeWaiterWakeups) !== message.nativeWaiterWakeups) {
+        throw new globalThis.Error("value provided for field message.nativeWaiterWakeups of type uint64 too large");
+      }
+      writer.uint32(152).uint64(message.nativeWaiterWakeups);
+    }
+    if (message.nativeWaiterCancels !== 0n) {
+      if (BigInt.asUintN(64, message.nativeWaiterCancels) !== message.nativeWaiterCancels) {
+        throw new globalThis.Error("value provided for field message.nativeWaiterCancels of type uint64 too large");
+      }
+      writer.uint32(160).uint64(message.nativeWaiterCancels);
+    }
+    if (message.nativeTerminalLookups !== 0n) {
+      if (BigInt.asUintN(64, message.nativeTerminalLookups) !== message.nativeTerminalLookups) {
+        throw new globalThis.Error("value provided for field message.nativeTerminalLookups of type uint64 too large");
+      }
+      writer.uint32(168).uint64(message.nativeTerminalLookups);
+    }
+    if (message.queue !== undefined) {
+      HECInsertCoalescingQueueMetrics.encode(message.queue, writer.uint32(178).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): HECInsertCoalescingOperationalMetrics {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseHECInsertCoalescingOperationalMetrics();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 8) {
+              break;
+            }
+
+            message.stagedLogicalBatches = reader.uint64() as bigint;
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.stagedLogicalRows = reader.uint64() as bigint;
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.formedGroups = reader.uint64() as bigint;
+            continue;
+          }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+
+            message.physicalSends = reader.uint64() as bigint;
+            continue;
+          }
+          case 5: {
+            if (tag !== 40) {
+              break;
+            }
+
+            message.successfulGroups = reader.uint64() as bigint;
+            continue;
+          }
+          case 6: {
+            if (tag !== 48) {
+              break;
+            }
+
+            message.retries = reader.uint64() as bigint;
+            continue;
+          }
+          case 7: {
+            if (tag !== 56) {
+              break;
+            }
+
+            message.ambiguities = reader.uint64() as bigint;
+            continue;
+          }
+          case 8: {
+            if (tag === 64) {
+              message.groupsByFillReason.push(reader.uint64() as bigint);
+
+              continue;
+            }
+
+            if (tag === 66) {
+              const end2 = reader.uint32() + reader.pos;
+              while (reader.pos < end2) {
+                message.groupsByFillReason.push(reader.uint64() as bigint);
+              }
+
+              continue;
+            }
+
+            break;
+          }
+          case 9: {
+            if (tag !== 74) {
+              break;
+            }
+
+            message.memberBatchesPerGroup = FixedHistogram.decode(reader, reader.uint32());
+            continue;
+          }
+          case 10: {
+            if (tag !== 82) {
+              break;
+            }
+
+            message.rowsPerGroup = FixedHistogram.decode(reader, reader.uint32());
+            continue;
+          }
+          case 11: {
+            if (tag !== 90) {
+              break;
+            }
+
+            message.decodedBytesPerGroup = FixedHistogram.decode(reader, reader.uint32());
+            continue;
+          }
+          case 12: {
+            if (tag !== 98) {
+              break;
+            }
+
+            message.monthlyPartitionsPerGroup = FixedHistogram.decode(reader, reader.uint32());
+            continue;
+          }
+          case 13: {
+            if (tag !== 106) {
+              break;
+            }
+
+            message.rowsPerPhysicalInsert = FixedHistogram.decode(reader, reader.uint32());
+            continue;
+          }
+          case 14: {
+            if (tag !== 114) {
+              break;
+            }
+
+            message.creationToSeal = FixedLatencyHistogram.decode(reader, reader.uint32());
+            continue;
+          }
+          case 15: {
+            if (tag !== 122) {
+              break;
+            }
+
+            message.creationToSend = FixedLatencyHistogram.decode(reader, reader.uint32());
+            continue;
+          }
+          case 16: {
+            if (tag !== 130) {
+              break;
+            }
+
+            message.creationToCommit = FixedLatencyHistogram.decode(reader, reader.uint32());
+            continue;
+          }
+          case 17: {
+            if (tag !== 136) {
+              break;
+            }
+
+            message.nativeWaiters = reader.uint64() as bigint;
+            continue;
+          }
+          case 18: {
+            if (tag !== 144) {
+              break;
+            }
+
+            message.peakNativeWaiters = reader.uint64() as bigint;
+            continue;
+          }
+          case 19: {
+            if (tag !== 152) {
+              break;
+            }
+
+            message.nativeWaiterWakeups = reader.uint64() as bigint;
+            continue;
+          }
+          case 20: {
+            if (tag !== 160) {
+              break;
+            }
+
+            message.nativeWaiterCancels = reader.uint64() as bigint;
+            continue;
+          }
+          case 21: {
+            if (tag !== 168) {
+              break;
+            }
+
+            message.nativeTerminalLookups = reader.uint64() as bigint;
+            continue;
+          }
+          case 22: {
+            if (tag !== 178) {
+              break;
+            }
+
+            message.queue = HECInsertCoalescingQueueMetrics.decode(reader, reader.uint32());
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): HECInsertCoalescingOperationalMetrics {
+    return {
+      stagedLogicalBatches: isSet(object.stagedLogicalBatches)
+        ? BigInt(object.stagedLogicalBatches)
+        : isSet(object.staged_logical_batches)
+        ? BigInt(object.staged_logical_batches)
+        : 0n,
+      stagedLogicalRows: isSet(object.stagedLogicalRows)
+        ? BigInt(object.stagedLogicalRows)
+        : isSet(object.staged_logical_rows)
+        ? BigInt(object.staged_logical_rows)
+        : 0n,
+      formedGroups: isSet(object.formedGroups)
+        ? BigInt(object.formedGroups)
+        : isSet(object.formed_groups)
+        ? BigInt(object.formed_groups)
+        : 0n,
+      physicalSends: isSet(object.physicalSends)
+        ? BigInt(object.physicalSends)
+        : isSet(object.physical_sends)
+        ? BigInt(object.physical_sends)
+        : 0n,
+      successfulGroups: isSet(object.successfulGroups)
+        ? BigInt(object.successfulGroups)
+        : isSet(object.successful_groups)
+        ? BigInt(object.successful_groups)
+        : 0n,
+      retries: isSet(object.retries) ? BigInt(object.retries) : 0n,
+      ambiguities: isSet(object.ambiguities) ? BigInt(object.ambiguities) : 0n,
+      groupsByFillReason: globalThis.Array.isArray(object?.groupsByFillReason)
+        ? object.groupsByFillReason.map((e: any) => BigInt(e))
+        : globalThis.Array.isArray(object?.groups_by_fill_reason)
+        ? object.groups_by_fill_reason.map((e: any) => BigInt(e))
+        : [],
+      memberBatchesPerGroup: isSet(object.memberBatchesPerGroup)
+        ? FixedHistogram.fromJSON(object.memberBatchesPerGroup)
+        : isSet(object.member_batches_per_group)
+        ? FixedHistogram.fromJSON(object.member_batches_per_group)
+        : undefined,
+      rowsPerGroup: isSet(object.rowsPerGroup)
+        ? FixedHistogram.fromJSON(object.rowsPerGroup)
+        : isSet(object.rows_per_group)
+        ? FixedHistogram.fromJSON(object.rows_per_group)
+        : undefined,
+      decodedBytesPerGroup: isSet(object.decodedBytesPerGroup)
+        ? FixedHistogram.fromJSON(object.decodedBytesPerGroup)
+        : isSet(object.decoded_bytes_per_group)
+        ? FixedHistogram.fromJSON(object.decoded_bytes_per_group)
+        : undefined,
+      monthlyPartitionsPerGroup: isSet(object.monthlyPartitionsPerGroup)
+        ? FixedHistogram.fromJSON(object.monthlyPartitionsPerGroup)
+        : isSet(object.monthly_partitions_per_group)
+        ? FixedHistogram.fromJSON(object.monthly_partitions_per_group)
+        : undefined,
+      rowsPerPhysicalInsert: isSet(object.rowsPerPhysicalInsert)
+        ? FixedHistogram.fromJSON(object.rowsPerPhysicalInsert)
+        : isSet(object.rows_per_physical_insert)
+        ? FixedHistogram.fromJSON(object.rows_per_physical_insert)
+        : undefined,
+      creationToSeal: isSet(object.creationToSeal)
+        ? FixedLatencyHistogram.fromJSON(object.creationToSeal)
+        : isSet(object.creation_to_seal)
+        ? FixedLatencyHistogram.fromJSON(object.creation_to_seal)
+        : undefined,
+      creationToSend: isSet(object.creationToSend)
+        ? FixedLatencyHistogram.fromJSON(object.creationToSend)
+        : isSet(object.creation_to_send)
+        ? FixedLatencyHistogram.fromJSON(object.creation_to_send)
+        : undefined,
+      creationToCommit: isSet(object.creationToCommit)
+        ? FixedLatencyHistogram.fromJSON(object.creationToCommit)
+        : isSet(object.creation_to_commit)
+        ? FixedLatencyHistogram.fromJSON(object.creation_to_commit)
+        : undefined,
+      nativeWaiters: isSet(object.nativeWaiters)
+        ? BigInt(object.nativeWaiters)
+        : isSet(object.native_waiters)
+        ? BigInt(object.native_waiters)
+        : 0n,
+      peakNativeWaiters: isSet(object.peakNativeWaiters)
+        ? BigInt(object.peakNativeWaiters)
+        : isSet(object.peak_native_waiters)
+        ? BigInt(object.peak_native_waiters)
+        : 0n,
+      nativeWaiterWakeups: isSet(object.nativeWaiterWakeups)
+        ? BigInt(object.nativeWaiterWakeups)
+        : isSet(object.native_waiter_wakeups)
+        ? BigInt(object.native_waiter_wakeups)
+        : 0n,
+      nativeWaiterCancels: isSet(object.nativeWaiterCancels)
+        ? BigInt(object.nativeWaiterCancels)
+        : isSet(object.native_waiter_cancels)
+        ? BigInt(object.native_waiter_cancels)
+        : 0n,
+      nativeTerminalLookups: isSet(object.nativeTerminalLookups)
+        ? BigInt(object.nativeTerminalLookups)
+        : isSet(object.native_terminal_lookups)
+        ? BigInt(object.native_terminal_lookups)
+        : 0n,
+      queue: isSet(object.queue) ? HECInsertCoalescingQueueMetrics.fromJSON(object.queue) : undefined,
+    };
+  },
+
+  toJSON(message: HECInsertCoalescingOperationalMetrics): unknown {
+    const obj: any = {};
+    if (message.stagedLogicalBatches !== 0n) {
+      obj.stagedLogicalBatches = message.stagedLogicalBatches.toString();
+    }
+    if (message.stagedLogicalRows !== 0n) {
+      obj.stagedLogicalRows = message.stagedLogicalRows.toString();
+    }
+    if (message.formedGroups !== 0n) {
+      obj.formedGroups = message.formedGroups.toString();
+    }
+    if (message.physicalSends !== 0n) {
+      obj.physicalSends = message.physicalSends.toString();
+    }
+    if (message.successfulGroups !== 0n) {
+      obj.successfulGroups = message.successfulGroups.toString();
+    }
+    if (message.retries !== 0n) {
+      obj.retries = message.retries.toString();
+    }
+    if (message.ambiguities !== 0n) {
+      obj.ambiguities = message.ambiguities.toString();
+    }
+    if (message.groupsByFillReason?.length) {
+      obj.groupsByFillReason = message.groupsByFillReason.map((e) => e.toString());
+    }
+    if (message.memberBatchesPerGroup !== undefined) {
+      obj.memberBatchesPerGroup = FixedHistogram.toJSON(message.memberBatchesPerGroup);
+    }
+    if (message.rowsPerGroup !== undefined) {
+      obj.rowsPerGroup = FixedHistogram.toJSON(message.rowsPerGroup);
+    }
+    if (message.decodedBytesPerGroup !== undefined) {
+      obj.decodedBytesPerGroup = FixedHistogram.toJSON(message.decodedBytesPerGroup);
+    }
+    if (message.monthlyPartitionsPerGroup !== undefined) {
+      obj.monthlyPartitionsPerGroup = FixedHistogram.toJSON(message.monthlyPartitionsPerGroup);
+    }
+    if (message.rowsPerPhysicalInsert !== undefined) {
+      obj.rowsPerPhysicalInsert = FixedHistogram.toJSON(message.rowsPerPhysicalInsert);
+    }
+    if (message.creationToSeal !== undefined) {
+      obj.creationToSeal = FixedLatencyHistogram.toJSON(message.creationToSeal);
+    }
+    if (message.creationToSend !== undefined) {
+      obj.creationToSend = FixedLatencyHistogram.toJSON(message.creationToSend);
+    }
+    if (message.creationToCommit !== undefined) {
+      obj.creationToCommit = FixedLatencyHistogram.toJSON(message.creationToCommit);
+    }
+    if (message.nativeWaiters !== 0n) {
+      obj.nativeWaiters = message.nativeWaiters.toString();
+    }
+    if (message.peakNativeWaiters !== 0n) {
+      obj.peakNativeWaiters = message.peakNativeWaiters.toString();
+    }
+    if (message.nativeWaiterWakeups !== 0n) {
+      obj.nativeWaiterWakeups = message.nativeWaiterWakeups.toString();
+    }
+    if (message.nativeWaiterCancels !== 0n) {
+      obj.nativeWaiterCancels = message.nativeWaiterCancels.toString();
+    }
+    if (message.nativeTerminalLookups !== 0n) {
+      obj.nativeTerminalLookups = message.nativeTerminalLookups.toString();
+    }
+    if (message.queue !== undefined) {
+      obj.queue = HECInsertCoalescingQueueMetrics.toJSON(message.queue);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<HECInsertCoalescingOperationalMetrics>, I>>(
+    base?: I,
+  ): HECInsertCoalescingOperationalMetrics {
+    return HECInsertCoalescingOperationalMetrics.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<HECInsertCoalescingOperationalMetrics>, I>>(
+    object: I,
+  ): HECInsertCoalescingOperationalMetrics {
+    const message = createBaseHECInsertCoalescingOperationalMetrics();
+    message.stagedLogicalBatches = (object.stagedLogicalBatches !== undefined && object.stagedLogicalBatches !== null)
+      ? BigInt(object.stagedLogicalBatches)
+      : 0n;
+    message.stagedLogicalRows = (object.stagedLogicalRows !== undefined && object.stagedLogicalRows !== null)
+      ? BigInt(object.stagedLogicalRows)
+      : 0n;
+    message.formedGroups = (object.formedGroups !== undefined && object.formedGroups !== null)
+      ? BigInt(object.formedGroups)
+      : 0n;
+    message.physicalSends = (object.physicalSends !== undefined && object.physicalSends !== null)
+      ? BigInt(object.physicalSends)
+      : 0n;
+    message.successfulGroups = (object.successfulGroups !== undefined && object.successfulGroups !== null)
+      ? BigInt(object.successfulGroups)
+      : 0n;
+    message.retries = (object.retries !== undefined && object.retries !== null) ? BigInt(object.retries) : 0n;
+    message.ambiguities = (object.ambiguities !== undefined && object.ambiguities !== null)
+      ? BigInt(object.ambiguities)
+      : 0n;
+    message.groupsByFillReason = object.groupsByFillReason?.map((e) => BigInt(e)) || [];
+    message.memberBatchesPerGroup =
+      (object.memberBatchesPerGroup !== undefined && object.memberBatchesPerGroup !== null)
+        ? FixedHistogram.fromPartial(object.memberBatchesPerGroup)
+        : undefined;
+    message.rowsPerGroup = (object.rowsPerGroup !== undefined && object.rowsPerGroup !== null)
+      ? FixedHistogram.fromPartial(object.rowsPerGroup)
+      : undefined;
+    message.decodedBytesPerGroup = (object.decodedBytesPerGroup !== undefined && object.decodedBytesPerGroup !== null)
+      ? FixedHistogram.fromPartial(object.decodedBytesPerGroup)
+      : undefined;
+    message.monthlyPartitionsPerGroup =
+      (object.monthlyPartitionsPerGroup !== undefined && object.monthlyPartitionsPerGroup !== null)
+        ? FixedHistogram.fromPartial(object.monthlyPartitionsPerGroup)
+        : undefined;
+    message.rowsPerPhysicalInsert =
+      (object.rowsPerPhysicalInsert !== undefined && object.rowsPerPhysicalInsert !== null)
+        ? FixedHistogram.fromPartial(object.rowsPerPhysicalInsert)
+        : undefined;
+    message.creationToSeal = (object.creationToSeal !== undefined && object.creationToSeal !== null)
+      ? FixedLatencyHistogram.fromPartial(object.creationToSeal)
+      : undefined;
+    message.creationToSend = (object.creationToSend !== undefined && object.creationToSend !== null)
+      ? FixedLatencyHistogram.fromPartial(object.creationToSend)
+      : undefined;
+    message.creationToCommit = (object.creationToCommit !== undefined && object.creationToCommit !== null)
+      ? FixedLatencyHistogram.fromPartial(object.creationToCommit)
+      : undefined;
+    message.nativeWaiters = (object.nativeWaiters !== undefined && object.nativeWaiters !== null)
+      ? BigInt(object.nativeWaiters)
+      : 0n;
+    message.peakNativeWaiters = (object.peakNativeWaiters !== undefined && object.peakNativeWaiters !== null)
+      ? BigInt(object.peakNativeWaiters)
+      : 0n;
+    message.nativeWaiterWakeups = (object.nativeWaiterWakeups !== undefined && object.nativeWaiterWakeups !== null)
+      ? BigInt(object.nativeWaiterWakeups)
+      : 0n;
+    message.nativeWaiterCancels = (object.nativeWaiterCancels !== undefined && object.nativeWaiterCancels !== null)
+      ? BigInt(object.nativeWaiterCancels)
+      : 0n;
+    message.nativeTerminalLookups =
+      (object.nativeTerminalLookups !== undefined && object.nativeTerminalLookups !== null)
+        ? BigInt(object.nativeTerminalLookups)
+        : 0n;
+    message.queue = (object.queue !== undefined && object.queue !== null)
+      ? HECInsertCoalescingQueueMetrics.fromPartial(object.queue)
+      : undefined;
+    return message;
+  },
+};
+
 function createBaseHECAcknowledgmentOperationalMetrics(): HECAcknowledgmentOperationalMetrics {
   return {
     available: false,
@@ -1187,6 +2492,7 @@ function createBaseGetHECOperationalSnapshotResponse(): GetHECOperationalSnapsho
     reconciliation: undefined,
     acknowledgments: undefined,
     protocolFailures: [],
+    insertCoalescing: undefined,
   };
 }
 
@@ -1209,6 +2515,9 @@ export const GetHECOperationalSnapshotResponse: MessageFns<GetHECOperationalSnap
     }
     for (const v of message.protocolFailures) {
       HECProtocolFailureMetric.encode(v!, writer.uint32(50).fork()).join();
+    }
+    if (message.insertCoalescing !== undefined) {
+      HECInsertCoalescingOperationalMetrics.encode(message.insertCoalescing, writer.uint32(58).fork()).join();
     }
     return writer;
   },
@@ -1274,6 +2583,14 @@ export const GetHECOperationalSnapshotResponse: MessageFns<GetHECOperationalSnap
             message.protocolFailures.push(HECProtocolFailureMetric.decode(reader, reader.uint32()));
             continue;
           }
+          case 7: {
+            if (tag !== 58) {
+              break;
+            }
+
+            message.insertCoalescing = HECInsertCoalescingOperationalMetrics.decode(reader, reader.uint32());
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -1306,6 +2623,11 @@ export const GetHECOperationalSnapshotResponse: MessageFns<GetHECOperationalSnap
         : globalThis.Array.isArray(object?.protocol_failures)
         ? object.protocol_failures.map((e: any) => HECProtocolFailureMetric.fromJSON(e))
         : [],
+      insertCoalescing: isSet(object.insertCoalescing)
+        ? HECInsertCoalescingOperationalMetrics.fromJSON(object.insertCoalescing)
+        : isSet(object.insert_coalescing)
+        ? HECInsertCoalescingOperationalMetrics.fromJSON(object.insert_coalescing)
+        : undefined,
     };
   },
 
@@ -1328,6 +2650,9 @@ export const GetHECOperationalSnapshotResponse: MessageFns<GetHECOperationalSnap
     }
     if (message.protocolFailures?.length) {
       obj.protocolFailures = message.protocolFailures.map((e) => HECProtocolFailureMetric.toJSON(e));
+    }
+    if (message.insertCoalescing !== undefined) {
+      obj.insertCoalescing = HECInsertCoalescingOperationalMetrics.toJSON(message.insertCoalescing);
     }
     return obj;
   },
@@ -1355,6 +2680,9 @@ export const GetHECOperationalSnapshotResponse: MessageFns<GetHECOperationalSnap
       ? HECAcknowledgmentOperationalMetrics.fromPartial(object.acknowledgments)
       : undefined;
     message.protocolFailures = object.protocolFailures?.map((e) => HECProtocolFailureMetric.fromPartial(e)) || [];
+    message.insertCoalescing = (object.insertCoalescing !== undefined && object.insertCoalescing !== null)
+      ? HECInsertCoalescingOperationalMetrics.fromPartial(object.insertCoalescing)
+      : undefined;
     return message;
   },
 };

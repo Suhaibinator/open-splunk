@@ -286,6 +286,72 @@ func TestHECAdmissionAndAcknowledgmentAreAtomicWithVisibility(t *testing.T) {
 	}
 }
 
+func TestHECPendingExistingOnlyReacquisitionRestoresDurableIDsAfterReopen(t *testing.T) {
+	t.Parallel()
+	sequencer, db := openTestSequencer(t)
+	sequencer.hecAcknowledgmentIDs = &scriptedHECAcknowledgmentIDSource{ids: []uint64{515}}
+	insertHECTestToken(t, db.SQLDB(), "hec-reacquire-token", 1, true)
+	request := reserveRequest("hec-reacquire", "hec-original-owner")
+	request.HECAdmission = &HECAdmissionRequest{
+		TenantID:              "tenant-a",
+		TokenID:               "hec-reacquire-token",
+		TokenVersion:          1,
+		AuthorizedIndexes:     []HECIndexAuthority{{Name: "main", Version: 1}},
+		RequestID:             "hec-reacquire-request",
+		Acknowledgment:        true,
+		AcknowledgmentChannel: "hec-reacquire-channel",
+		CreatedAt:             request.IndexTime,
+	}
+	original, err := sequencer.Reserve(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if original.HECRequestSequence != 1 || original.HECAcknowledgmentID != 515 {
+		t.Fatalf("original HEC IDs = request %d ack %d", original.HECRequestSequence, original.HECAcknowledgmentID)
+	}
+	if err := sequencer.Release(
+		context.Background(), original.Sequence, request.AttemptID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := sequencer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := NewSQLite(context.Background(), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	lookedUp, found, err := reopened.Lookup(
+		context.Background(),
+		request.BatchKey,
+		request.SequenceKey,
+		request.PayloadSHA256,
+	)
+	if err != nil || !found || lookedUp.HECRequestSequence != original.HECRequestSequence ||
+		lookedUp.HECAcknowledgmentID != original.HECAcknowledgmentID {
+		t.Fatalf("pending Lookup = %+v found=%v error=%v", lookedUp, found, err)
+	}
+
+	retry := request
+	retry.AttemptID = "hec-reopened-owner"
+	retry.ExistingOnly = true
+	reacquired, err := reopened.Reserve(context.Background(), retry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reacquired.PreviouslyReserved || reacquired.Sequence != original.Sequence ||
+		reacquired.HECRequestSequence != original.HECRequestSequence ||
+		reacquired.HECAcknowledgmentID != original.HECAcknowledgmentID {
+		t.Fatalf("reacquired reservation = %+v, want durable HEC IDs from %+v", reacquired, original)
+	}
+	if err := reopened.Release(
+		context.Background(), reacquired.Sequence, retry.AttemptID,
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestHECTerminalFailurePersistsAcrossRestartAndCleanupAllocatesOpaqueID(t *testing.T) {
 	t.Parallel()
 	sequencer, db := openTestSequencer(t)

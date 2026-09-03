@@ -115,6 +115,196 @@ func TestHECAcknowledgmentStaysPendingAcrossAmbiguousSendUntilReconciliation(t *
 	}
 }
 
+func TestHECExactPendingStagePreservesDurableIDsSameProcessAndAfterReopen(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	controlPath := filepath.Join(t.TempDir(), "control.sqlite")
+	firstDB, err := control.Open(ctx, controlPath)
+	if err != nil {
+		t.Fatalf("open first control database: %v", err)
+	}
+	firstSequencer, err := visibility.NewSQLite(ctx, firstDB)
+	if err != nil {
+		t.Fatalf("open first sequencer: %v", err)
+	}
+	seedHECAcknowledgmentAuthority(t, ctx, firstDB)
+	firstStore := mustTestStoreWithVisibility(
+		t,
+		&fakeStoreConnection{},
+		fixedRetention(time.Hour),
+		firstSequencer,
+	)
+	batch := validStoreBatch()
+	batch.Source = ingest.HECSource("hec-ack-token")
+	batch.CollectorID = ""
+	batch.BatchID = "hec-exact-pending-request"
+	batch.SourceBatchSHA256 = testSourceBatchDigest(batch.BatchID)
+	batch.Events[0].Source = batch.Source
+	batch.Events[0].CollectorID = ""
+	batch.Events[0].BatchID = batch.BatchID
+	batch.HECAdmission = &ingest.HECStageAdmission{
+		TokenID:               "hec-ack-token",
+		TokenVersion:          1,
+		AuthorizedIndexes:     []ingest.HECIndexAuthority{{Name: "main", Version: 1}},
+		RequestID:             batch.BatchID,
+		AcknowledgmentEnabled: true,
+		Channel:               "exact-pending-channel",
+		CreatedAt:             batch.ReceivedAt,
+	}
+
+	first, err := firstStore.Stage(ctx, batch)
+	if err != nil {
+		t.Fatalf("first Stage: %v", err)
+	}
+	reacquired, err := firstStore.Stage(ctx, batch)
+	if err != nil {
+		t.Fatalf("same-process exact Stage: %v", err)
+	}
+	assertSamePendingHECStageIdentity(t, first, reacquired)
+
+	groupAttempt := "hec-exact-pending-group"
+	acquisition, err := firstSequencer.FormOrAcquireWriteGroup(
+		ctx,
+		groupAttempt,
+		DefaultConfig().writeGroupLimits(),
+		true,
+	)
+	if err != nil || !acquisition.Found {
+		t.Fatalf("seal pending HEC group = %+v, %v", acquisition, err)
+	}
+	if err := firstSequencer.ReleaseWriteGroup(
+		ctx,
+		acquisition.Group.ID,
+		groupAttempt,
+	); err != nil {
+		t.Fatalf("release pending HEC group: %v", err)
+	}
+	grouped, err := firstStore.Stage(ctx, batch)
+	if err != nil {
+		t.Fatalf("same-process grouped exact Stage: %v", err)
+	}
+	assertSamePendingHECStageIdentity(t, first, grouped)
+
+	if err := firstStore.Close(); err != nil {
+		t.Fatalf("close first Store: %v", err)
+	}
+	if err := firstSequencer.Close(); err != nil {
+		t.Fatalf("close first sequencer: %v", err)
+	}
+	if err := firstDB.Close(); err != nil {
+		t.Fatalf("close first control database: %v", err)
+	}
+
+	secondDB, err := control.Open(ctx, controlPath)
+	if err != nil {
+		t.Fatalf("reopen control database: %v", err)
+	}
+	defer func() { _ = secondDB.Close() }()
+	secondSequencer, err := visibility.NewSQLite(ctx, secondDB)
+	if err != nil {
+		t.Fatalf("open second sequencer: %v", err)
+	}
+	defer func() { _ = secondSequencer.Close() }()
+	secondStore := mustTestStoreWithVisibility(
+		t,
+		&fakeStoreConnection{},
+		fixedRetention(time.Hour),
+		secondSequencer,
+	)
+	defer func() { _ = secondStore.Close() }()
+	reopened, err := secondStore.Stage(ctx, batch)
+	if err != nil {
+		t.Fatalf("reopened exact Stage: %v", err)
+	}
+	assertSamePendingHECStageIdentity(t, first, reopened)
+}
+
+func TestHECExactPendingStageReturnsDurableIDsBehindOlderAmbiguousGroup(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	controlDB, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	if err != nil {
+		t.Fatalf("open control database: %v", err)
+	}
+	defer func() { _ = controlDB.Close() }()
+	sequencer, err := visibility.NewSQLite(ctx, controlDB)
+	if err != nil {
+		t.Fatalf("open sequencer: %v", err)
+	}
+	defer func() { _ = sequencer.Close() }()
+	seedHECAcknowledgmentAuthority(t, ctx, controlDB)
+	connection := &fakeStoreConnection{}
+	store := mustTestStoreWithVisibility(
+		t,
+		connection,
+		fixedRetention(time.Hour),
+		sequencer,
+	)
+	defer func() { _ = store.Close() }()
+	store.groupedProduction = true
+	store.writeGroupLimits.MaxMembers = 1
+
+	older := validStoreBatch()
+	older.BatchID = "older-ambiguous-native"
+	older.SourceBatchSHA256 = testSourceBatchDigest(older.BatchID)
+	older.Events[0].BatchID = older.BatchID
+	older.Events[0].Event.EventId = "older-ambiguous-event"
+	if _, err := store.Stage(ctx, older); err != nil {
+		t.Fatalf("stage older batch: %v", err)
+	}
+
+	hec := validStoreBatch()
+	hec.Source = ingest.HECSource("hec-ack-token")
+	hec.CollectorID = ""
+	hec.BatchID = "hec-behind-ambiguous-request"
+	hec.BatchSequence = 2
+	hec.SourceBatchSHA256 = testSourceBatchDigest(hec.BatchID)
+	hec.Events[0].Source = hec.Source
+	hec.Events[0].CollectorID = ""
+	hec.Events[0].BatchID = hec.BatchID
+	hec.Events[0].Event.EventId = "hec-behind-ambiguous-event"
+	hec.HECAdmission = &ingest.HECStageAdmission{
+		TokenID:               "hec-ack-token",
+		TokenVersion:          1,
+		AuthorizedIndexes:     []ingest.HECIndexAuthority{{Name: "main", Version: 1}},
+		RequestID:             hec.BatchID,
+		AcknowledgmentEnabled: true,
+		Channel:               "behind-ambiguous-channel",
+		CreatedAt:             hec.ReceivedAt,
+	}
+	first, err := store.Stage(ctx, hec)
+	if err != nil {
+		t.Fatalf("stage HEC batch: %v", err)
+	}
+	connection.batch = &fakeWriteBatch{sendErr: io.ErrUnexpectedEOF}
+	if err := store.ReconcilePending(ctx); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("make older group ambiguous: %v", err)
+	}
+	usage, err := sequencer.PendingUsage(ctx)
+	if err != nil || usage.AmbiguousGroups != 1 || usage.UngroupedReservations != 1 {
+		t.Fatalf("pending work behind ambiguous group = %+v, %v", usage, err)
+	}
+	replayed, err := store.Stage(ctx, hec)
+	if err != nil {
+		t.Fatalf("exact pending HEC Stage behind ambiguous group: %v", err)
+	}
+	assertSamePendingHECStageIdentity(t, first, replayed)
+}
+
+func assertSamePendingHECStageIdentity(t *testing.T, want, got ingest.StageResult) {
+	t.Helper()
+	if want.State != ingest.StoredBatchPending || want.VisibilitySequence == 0 ||
+		want.HECRequestSequence == 0 || want.HECAcknowledgmentID == 0 {
+		t.Fatalf("initial HEC Stage identity is incomplete: %+v", want)
+	}
+	if got.State != ingest.StoredBatchPending ||
+		got.VisibilitySequence != want.VisibilitySequence ||
+		got.HECRequestSequence != want.HECRequestSequence ||
+		got.HECAcknowledgmentID != want.HECAcknowledgmentID {
+		t.Fatalf("exact pending HEC Stage = %+v, want identity %+v", got, want)
+	}
+}
+
 func seedHECAcknowledgmentAuthority(t *testing.T, ctx context.Context, controlDB *control.DB) {
 	t.Helper()
 	nowMicros := time.Date(2026, time.July, 21, 0, 0, 0, 0, time.UTC).UnixMicro()

@@ -61,7 +61,8 @@ func readHECReadiness(ctx context.Context, database *sql.DB) (HECReadinessSnapsh
 	}
 	return HECReadinessSnapshot{
 		QueueAvailable: usage.Reservations < MaxPendingReservations &&
-			usage.OutboxBytes < MaxPendingOutboxBytes,
+			usage.OutboxBytes < MaxPendingOutboxBytes &&
+			usage.MetadataBytes < MaxPendingMetadataBytes,
 		AcknowledgmentAvailable: acknowledgmentAvailable,
 	}, nil
 }
@@ -111,7 +112,8 @@ func (sequencer *SQLiteSequencer) HECOperationalHealth(
 	snapshot.PendingOutboxReservations = uint64(usage.Reservations)
 	snapshot.PendingOutboxBytes = usage.OutboxBytes
 	snapshot.QueueAvailable = usage.Reservations < MaxPendingReservations &&
-		usage.OutboxBytes < MaxPendingOutboxBytes
+		usage.OutboxBytes < MaxPendingOutboxBytes &&
+		usage.MetadataBytes < MaxPendingMetadataBytes
 	observedAt := time.Now().UTC()
 	if sequencer.now != nil {
 		observedAt = sequencer.now().Round(0).UTC()

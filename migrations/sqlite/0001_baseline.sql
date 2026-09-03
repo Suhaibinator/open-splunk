@@ -131,7 +131,10 @@ CREATE TABLE ingest_visibility_reservations (
     index_time_unix_milli INTEGER NOT NULL,
     metadata BLOB NOT NULL CHECK (length(metadata) <= 1048576),
     outbox BLOB NOT NULL CHECK (length(outbox) <= 16777216),
-    created_at_unix_micro INTEGER NOT NULL,
+    outbox_sha256 BLOB NOT NULL CHECK (length(outbox_sha256) IN (0, 32)),
+    stored_row_count INTEGER NOT NULL CHECK (stored_row_count BETWEEN 0 AND 1000),
+    decoded_event_bytes INTEGER NOT NULL CHECK (decoded_event_bytes BETWEEN 0 AND 8388608),
+    created_at_unix_micro INTEGER NOT NULL CHECK (created_at_unix_micro >= 1),
     committed_at_unix_micro INTEGER,
     CHECK (length(batch_key) BETWEEN 1 AND 512),
     CHECK (length(attempt_id) <= 128),
@@ -141,11 +144,17 @@ CREATE TABLE ingest_visibility_reservations (
         (state = 'reserved'
             AND phase IN ('unsent', 'ambiguous')
             AND length(outbox) BETWEEN 1 AND 16777216
+            AND length(outbox_sha256) = 32
+            AND stored_row_count BETWEEN 1 AND 1000
+            AND decoded_event_bytes BETWEEN 1 AND 8388608
             AND committed_at_unix_micro IS NULL)
         OR (state = 'committed'
             AND phase = 'final'
             AND attempt_id = ''
             AND length(outbox) = 0
+            AND length(outbox_sha256) = 0
+            AND stored_row_count = 0
+            AND decoded_event_bytes = 0
             AND committed_at_unix_micro IS NOT NULL)
         -- The column name predates rejected dispositions; for every final
         -- active outcome it stores that disposition's terminal timestamp.
@@ -153,14 +162,161 @@ CREATE TABLE ingest_visibility_reservations (
             AND phase = 'final'
             AND attempt_id = ''
             AND length(outbox) = 0
+            AND length(outbox_sha256) = 0
+            AND stored_row_count = 0
+            AND decoded_event_bytes = 0
             AND committed_at_unix_micro IS NOT NULL)
         OR (state = 'abandoned'
             AND phase = 'final'
             AND attempt_id = ''
             AND length(outbox) = 0
+            AND length(outbox_sha256) = 0
+            AND stored_row_count = 0
+            AND decoded_event_bytes = 0
             AND committed_at_unix_micro IS NULL)
     )
 ) STRICT;
+CREATE TABLE ingest_write_groups (
+    write_group_id TEXT PRIMARY KEY NOT NULL COLLATE BINARY,
+    state TEXT NOT NULL CHECK (state IN ('ready', 'ambiguous', 'committed')),
+    attempt_id TEXT NOT NULL DEFAULT '' COLLATE BINARY,
+    member_count INTEGER NOT NULL CHECK (member_count BETWEEN 1 AND 10000),
+    row_count INTEGER NOT NULL CHECK (row_count BETWEEN 1 AND 50000),
+    decoded_bytes INTEGER NOT NULL CHECK (decoded_bytes BETWEEN 1 AND 67108864),
+    membership_sha256 BLOB NOT NULL CHECK (length(membership_sha256) = 32),
+    first_sequence INTEGER NOT NULL CHECK (first_sequence >= 1),
+    last_sequence INTEGER NOT NULL CHECK (last_sequence >= first_sequence),
+    created_at_unix_micro INTEGER NOT NULL CHECK (created_at_unix_micro >= 1),
+    sending_at_unix_micro INTEGER,
+    committed_at_unix_micro INTEGER,
+    CHECK (length(write_group_id) BETWEEN 1 AND 128),
+    CHECK (length(attempt_id) <= 128),
+    CHECK (
+        (state = 'ready'
+            AND sending_at_unix_micro IS NULL
+            AND committed_at_unix_micro IS NULL)
+        OR (state = 'ambiguous'
+            AND sending_at_unix_micro IS NOT NULL
+            AND sending_at_unix_micro >= created_at_unix_micro
+            AND committed_at_unix_micro IS NULL)
+        OR (state = 'committed'
+            AND attempt_id = ''
+            AND sending_at_unix_micro IS NOT NULL
+            AND sending_at_unix_micro >= created_at_unix_micro
+            AND committed_at_unix_micro IS NOT NULL
+            AND committed_at_unix_micro >= sending_at_unix_micro)
+    )
+) STRICT;
+CREATE TABLE ingest_write_group_members (
+    write_group_id TEXT NOT NULL COLLATE BINARY
+        REFERENCES ingest_write_groups (write_group_id)
+            ON UPDATE RESTRICT ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL CHECK (ordinal BETWEEN 0 AND 9999),
+    visibility_sequence INTEGER NOT NULL UNIQUE
+        REFERENCES ingest_visibility_reservations (sequence)
+            ON UPDATE RESTRICT ON DELETE RESTRICT,
+    row_count INTEGER NOT NULL CHECK (row_count BETWEEN 1 AND 1000),
+    decoded_bytes INTEGER NOT NULL CHECK (decoded_bytes BETWEEN 1 AND 8388608),
+    outbox_sha256 BLOB NOT NULL CHECK (length(outbox_sha256) = 32),
+    PRIMARY KEY (write_group_id, ordinal)
+) STRICT, WITHOUT ROWID;
+CREATE TRIGGER ingest_write_groups_state_transition
+BEFORE UPDATE OF state ON ingest_write_groups
+WHEN NOT (
+    OLD.state = NEW.state
+    OR (OLD.state = 'ready' AND NEW.state = 'ambiguous')
+    OR (OLD.state = 'ambiguous' AND NEW.state = 'committed')
+)
+BEGIN
+    SELECT RAISE(ABORT, 'illegal ingest write group state transition');
+END;
+CREATE TRIGGER ingest_write_groups_membership_immutable
+BEFORE UPDATE OF member_count, row_count, decoded_bytes, membership_sha256,
+                 first_sequence, last_sequence, created_at_unix_micro
+ON ingest_write_groups
+BEGIN
+    SELECT RAISE(ABORT, 'ingest write group identity is immutable');
+END;
+CREATE TRIGGER ingest_write_groups_validate_seal_before_sending
+BEFORE UPDATE OF state ON ingest_write_groups
+WHEN OLD.state = 'ready' AND NEW.state = 'ambiguous' AND (
+    OLD.member_count <> (
+        SELECT count(*) FROM ingest_write_group_members
+        WHERE write_group_id = OLD.write_group_id
+    )
+    OR OLD.row_count <> (
+        SELECT COALESCE(sum(row_count), 0) FROM ingest_write_group_members
+        WHERE write_group_id = OLD.write_group_id
+    )
+    OR OLD.decoded_bytes <> (
+        SELECT COALESCE(sum(decoded_bytes), 0) FROM ingest_write_group_members
+        WHERE write_group_id = OLD.write_group_id
+    )
+    OR OLD.first_sequence <> (
+        SELECT min(visibility_sequence) FROM ingest_write_group_members
+        WHERE write_group_id = OLD.write_group_id
+    )
+    OR OLD.last_sequence <> (
+        SELECT max(visibility_sequence) FROM ingest_write_group_members
+        WHERE write_group_id = OLD.write_group_id
+    )
+)
+BEGIN
+    SELECT RAISE(ABORT, 'invalid ingest write group seal');
+END;
+CREATE TRIGGER ingest_write_group_members_valid_insert
+BEFORE INSERT ON ingest_write_group_members
+WHEN NOT EXISTS (
+    SELECT 1
+    FROM ingest_write_groups AS g
+    JOIN ingest_visibility_reservations AS r
+      ON r.sequence = NEW.visibility_sequence
+    WHERE g.write_group_id = NEW.write_group_id
+      AND g.state = 'ready'
+      AND r.state = 'reserved'
+      AND r.phase = 'unsent'
+      AND r.attempt_id = ''
+      AND r.stored_row_count = NEW.row_count
+      AND r.decoded_event_bytes = NEW.decoded_bytes
+      AND r.outbox_sha256 = NEW.outbox_sha256
+)
+BEGIN
+    SELECT RAISE(ABORT, 'invalid ingest write group member');
+END;
+CREATE TRIGGER ingest_write_group_members_contiguous_insert
+BEFORE INSERT ON ingest_write_group_members
+WHEN NEW.ordinal <> (
+    SELECT count(*)
+    FROM ingest_write_group_members
+    WHERE write_group_id = NEW.write_group_id
+)
+BEGIN
+    SELECT RAISE(ABORT, 'noncontiguous ingest write group member ordinal');
+END;
+CREATE TRIGGER ingest_write_group_members_ordered_insert
+BEFORE INSERT ON ingest_write_group_members
+WHEN NEW.ordinal > 0 AND NEW.visibility_sequence <= (
+    SELECT max(visibility_sequence)
+    FROM ingest_write_group_members
+    WHERE write_group_id = NEW.write_group_id
+)
+BEGIN
+    SELECT RAISE(ABORT, 'unordered ingest write group member sequence');
+END;
+CREATE TRIGGER ingest_write_group_members_immutable_update
+BEFORE UPDATE ON ingest_write_group_members
+BEGIN
+    SELECT RAISE(ABORT, 'ingest write group membership is immutable');
+END;
+CREATE TRIGGER ingest_write_group_members_immutable_delete
+BEFORE DELETE ON ingest_write_group_members
+WHEN EXISTS (
+    SELECT 1 FROM ingest_write_groups
+    WHERE write_group_id = OLD.write_group_id AND state <> 'committed'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'pending ingest write group membership is immutable');
+END;
 CREATE TABLE saved_searches (
     saved_search_id TEXT PRIMARY KEY NOT NULL COLLATE BINARY,
     version INTEGER NOT NULL CHECK (version >= 1),
@@ -6926,6 +7082,13 @@ CREATE UNIQUE INDEX ingest_visibility_reservations_active_batch_idx
     WHERE state IN ('reserved', 'committed', 'rejected');
 CREATE UNIQUE INDEX ingest_visibility_reservations_attempt_idx
     ON ingest_visibility_reservations (attempt_id)
+    WHERE attempt_id <> '';
+CREATE INDEX ingest_visibility_reservations_group_formation_idx
+    ON ingest_visibility_reservations (state, phase, attempt_id, sequence);
+CREATE INDEX ingest_write_groups_recovery_idx
+    ON ingest_write_groups (state, first_sequence);
+CREATE UNIQUE INDEX ingest_write_groups_attempt_idx
+    ON ingest_write_groups (attempt_id)
     WHERE attempt_id <> '';
 CREATE INDEX saved_searches_app_name_id_idx
     ON saved_searches (app_id, name, saved_search_id);

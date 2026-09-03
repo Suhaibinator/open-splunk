@@ -118,6 +118,63 @@ It starts the repository-pinned ClickHouse image unless
 `OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE` deliberately selects another digest-pinned
 image.
 
+## Coalesced HEC and native ingestion load
+
+`backend_hec_load_test.go` combines paced one-event and 1,000-event HEC
+traffic with the native collector. During an actual ClickHouse pause it submits
+a bounded 30,000-event recovery burst as 30 independent HEC requests and keeps
+the existing outage, ACK, identity, pressure, and complete-drain assertions.
+After recovery, collector checkpoint convergence, and five stable flushed
+query-log samples, it submits a distinct 40-request/40,000-event phase while
+ClickHouse remains available. That live phase requires exact physical/logical
+row accounting, a 10,000-row lower median, at least 90% of physical inserts at
+or above 5,000 rows, no insert above 50,000 rows, and at most one physical
+insert per ten accepted logical batches.
+
+The query-log inspection is bounded by a ClickHouse-clock baseline and filters
+finished inserts through `databases` and `tables` metadata so only
+`open_splunk.events` contributes. Before/after `system.parts`, `system.events`,
+and `system.merges` snapshots require exact active-row growth, bounded
+active-part growth, no delayed or rejected inserts where those pinned-image
+counters exist, and bounded merge work. Temporary system-table grants exist
+only inside the disposable integration fixture. The administrator telemetry
+delta independently proves the exact staged batch/row count, physical send and
+success count, zero retry/ambiguity delta, histogram count/sum, and final queue
+drain.
+
+The acceptance run for the 1-second bounded-linger default produced the live
+physical vector `[10000 10000 10000 10000]` for exactly 40 logical batches and
+40,000 rows. Active parts changed from 2 to 6, active rows from 63,489 to
+103,489, and the global `MergedRows` counter advanced by 24,557 while active
+merges remained zero. The pinned fixture did not publish `DelayedInserts`,
+`RejectedInserts`, or `MergesTimeMilliseconds`; the gate records those signals
+as unsupported and never treats their absent values as observed zeros.
+
+Run the mixed outage and physical-shape gate with:
+
+```sh
+OPEN_SPLUNK_HEC_LOAD=1 \
+  go test ./integration -run '^TestBackendHECDurableLoad$' \
+    -count=1 -timeout=15m -v
+```
+
+Run the same outage, recovery, ACK, duplicate, resource, and final-drain
+assertions with sustained one-event requests only by selecting the small-only
+profile:
+
+```sh
+OPEN_SPLUNK_HEC_LOAD=1 \
+OPEN_SPLUNK_HEC_LOAD_PROFILE=small-only \
+OPEN_SPLUNK_HEC_LOAD_EVENTS_PER_SECOND=1000 \
+  go test ./integration -run '^TestBackendHECDurableLoad$' \
+    -count=1 -timeout=15m -v
+```
+
+Sparse one-event traffic is expected to flush at maximum linger below the row
+target. The paused burst proves durable recovery; only the separate
+continuously eligible, ClickHouse-available phase is used for the published
+steady-state insert-shape envelope.
+
 ## Browser stream recovery and cancellation
 
 Five deterministic shipped-browser gates exercise expired retained sequences,

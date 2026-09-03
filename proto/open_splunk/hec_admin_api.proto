@@ -42,6 +42,65 @@ message HECReconciliationOperationalMetrics {
   uint64 ambiguities = 4;
 }
 
+// FixedHistogram is emitted only from compile-time bounded server buckets.
+// upper_bounds has 13 entries and bucket_counts has one overflow entry (14).
+message FixedHistogram {
+  repeated uint64 upper_bounds = 1;
+  repeated uint64 bucket_counts = 2;
+  uint64 count = 3;
+  uint64 sum = 4;
+  uint64 max = 5;
+}
+
+// FixedLatencyHistogram records microseconds and is bounded to 11 upper
+// bounds plus one overflow bucket.
+message FixedLatencyHistogram {
+  repeated uint64 upper_bounds_microseconds = 1;
+  repeated uint64 bucket_counts = 2;
+  uint64 count = 3;
+  uint64 sum_microseconds = 4;
+  uint64 max_microseconds = 5;
+}
+
+message HECInsertCoalescingQueueMetrics {
+  uint64 pending_reservations = 1;
+  uint64 ungrouped_reservations = 2;
+  uint64 ready_groups = 3;
+  uint64 ambiguous_groups = 4;
+  uint64 leased_groups = 5;
+  uint64 pending_outbox_bytes = 6;
+  uint64 pending_metadata_bytes = 7;
+  google.protobuf.Duration oldest_pending_age = 8;
+}
+
+// HECInsertCoalescingOperationalMetrics is a process-wide, payload-free
+// projection. groups_by_fill_reason has the closed seven-value domain defined
+// by the server and all histogram vectors have fixed lengths.
+message HECInsertCoalescingOperationalMetrics {
+  uint64 staged_logical_batches = 1;
+  uint64 staged_logical_rows = 2;
+  uint64 formed_groups = 3;
+  uint64 physical_sends = 4;
+  uint64 successful_groups = 5;
+  uint64 retries = 6;
+  uint64 ambiguities = 7;
+  repeated uint64 groups_by_fill_reason = 8;
+  FixedHistogram member_batches_per_group = 9;
+  FixedHistogram rows_per_group = 10;
+  FixedHistogram decoded_bytes_per_group = 11;
+  FixedHistogram monthly_partitions_per_group = 12;
+  FixedHistogram rows_per_physical_insert = 13;
+  FixedLatencyHistogram creation_to_seal = 14;
+  FixedLatencyHistogram creation_to_send = 15;
+  FixedLatencyHistogram creation_to_commit = 16;
+  uint64 native_waiters = 17;
+  uint64 peak_native_waiters = 18;
+  uint64 native_waiter_wakeups = 19;
+  uint64 native_waiter_cancels = 20;
+  uint64 native_terminal_lookups = 21;
+  HECInsertCoalescingQueueMetrics queue = 22;
+}
+
 message HECAcknowledgmentOperationalMetrics {
   bool available = 1;
   uint64 active_channels = 2;
@@ -70,4 +129,5 @@ message GetHECOperationalSnapshotResponse {
   HECReconciliationOperationalMetrics reconciliation = 4;
   HECAcknowledgmentOperationalMetrics acknowledgments = 5;
   repeated HECProtocolFailureMetric protocol_failures = 6;
+  HECInsertCoalescingOperationalMetrics insert_coalescing = 7;
 }

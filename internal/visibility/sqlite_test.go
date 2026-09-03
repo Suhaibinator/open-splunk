@@ -410,15 +410,9 @@ func TestSQLiteSequencerExistingOnlyReserveClosesLookupRaces(t *testing.T) {
 
 func TestSQLiteSequencerRejectDoesNotConsumePendingCapacity(t *testing.T) {
 	t.Parallel()
-	sequencer, _ := openTestSequencer(t)
+	sequencer, db := openTestSequencer(t)
 	ctx := context.Background()
-	for i := range MaxPendingReservations {
-		attemptID := fmt.Sprintf("pending-owner-%d", i)
-		reservation := reserve(t, sequencer, fmt.Sprintf("pending-batch-%d", i), attemptID)
-		if err := sequencer.Release(ctx, reservation.Sequence, attemptID); err != nil {
-			t.Fatal(err)
-		}
-	}
+	seedPendingReservations(t, db, MaxPendingReservations, "pending-batch-")
 	if _, err := sequencer.Reserve(
 		ctx,
 		reserveRequest("over-capacity", "over-capacity"),
@@ -706,7 +700,12 @@ func TestDecodePendingUsageRejectsHostileValues(t *testing.T) {
 			got, err := decodePendingUsage(
 				test.reservations,
 				test.outboxBytes,
+				0,
 				test.validOutboxes,
+				0,
+				0,
+				0,
+				0,
 			)
 			if (err != nil) != test.wantError {
 				t.Fatalf("decodePendingUsage() error = %v, wantError %v", err, test.wantError)
@@ -1386,6 +1385,7 @@ func TestSQLiteSequencerShutdownCleansOutcomeAmbiguousLeaseBeforeBind(t *testing
 		t.Fatal(err)
 	}
 	defer rollback(tx)
+	outboxSHA256 := sha256.Sum256(request.Outbox)
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE ingest_visibility_state
 		SET last_assigned = 1
@@ -1407,14 +1407,17 @@ func TestSQLiteSequencerShutdownCleansOutcomeAmbiguousLeaseBeforeBind(t *testing
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO ingest_visibility_reservations (
 			sequence, batch_key, state, phase, attempt_id,
-			index_time_unix_milli, metadata, outbox,
+			index_time_unix_milli, metadata, outbox, outbox_sha256,
+			stored_row_count, decoded_event_bytes,
 			created_at_unix_micro, committed_at_unix_micro
-		) VALUES (1, ?, 'reserved', 'unsent', ?, ?, ?, ?, ?, NULL)`,
+		) VALUES (1, ?, 'reserved', 'unsent', ?, ?, ?, ?, ?, 1, ?, ?, NULL)`,
 		request.BatchKey,
 		request.AttemptID,
 		request.IndexTime.UnixMilli(),
 		request.Metadata,
 		request.Outbox,
+		outboxSHA256[:],
+		request.DecodedEventBytes,
 		time.Now().UTC().UnixMicro(),
 	); err != nil {
 		t.Fatal(err)
@@ -1695,15 +1698,9 @@ func TestSQLiteSequencerRestartClearsLeaseAndPreservesOutbox(t *testing.T) {
 
 func TestSQLiteSequencerEnforcesPendingCapacity(t *testing.T) {
 	t.Parallel()
-	sequencer, _ := openTestSequencer(t)
+	sequencer, db := openTestSequencer(t)
 	ctx := context.Background()
-	for i := range MaxPendingReservations {
-		attempt := fmt.Sprintf("attempt-%d", i)
-		reservation := reserve(t, sequencer, fmt.Sprintf("batch-%d", i), attempt)
-		if err := sequencer.Release(ctx, reservation.Sequence, attempt); err != nil {
-			t.Fatal(err)
-		}
-	}
+	seedPendingReservations(t, db, MaxPendingReservations, "batch-")
 	if _, err := sequencer.Reserve(ctx, reserveRequest("over-capacity", "over-capacity")); !errors.Is(err, ErrPendingCapacity) {
 		t.Fatalf("Reserve() error = %v, want ErrPendingCapacity", err)
 	}
@@ -1721,19 +1718,29 @@ func TestSQLiteSequencerEnforcesPendingCapacity(t *testing.T) {
 func TestPendingCapacityByteBoundaries(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name       string
-		count      int64
-		stored     int64
-		additional int64
-		want       bool
+		name               string
+		count              int64
+		stored             int64
+		additional         int64
+		metadata           int64
+		additionalMetadata int64
+		want               bool
 	}{
 		{name: "just fits", stored: MaxPendingOutboxBytes - MaxOutboxBytes, additional: MaxOutboxBytes},
 		{name: "one byte too many", stored: MaxPendingOutboxBytes - MaxOutboxBytes + 1, additional: MaxOutboxBytes, want: true},
+		{name: "metadata just fits", metadata: MaxPendingMetadataBytes - MaxMetadataBytes, additionalMetadata: MaxMetadataBytes},
+		{name: "metadata one byte too many", metadata: MaxPendingMetadataBytes - MaxMetadataBytes + 1, additionalMetadata: MaxMetadataBytes, want: true},
 		{name: "count full", count: MaxPendingReservations, want: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := pendingCapacityExceeded(test.count, test.stored, test.additional); got != test.want {
+			if got := pendingCapacityExceeded(
+				test.count,
+				test.stored,
+				test.additional,
+				test.metadata,
+				test.additionalMetadata,
+			); got != test.want {
 				t.Fatalf("pendingCapacityExceeded() = %v, want %v", got, test.want)
 			}
 		})
@@ -2495,14 +2502,78 @@ func markAndCommit(t *testing.T, sequencer *SQLiteSequencer, sequence uint64, at
 }
 
 func reserveRequest(key, attemptID string) ReserveRequest {
+	outbox := []byte("clickhouse-block-for-" + key)
 	return ReserveRequest{
-		BatchKey:      key,
-		SequenceKey:   "sequence-" + key,
-		AttemptID:     attemptID,
-		IndexTime:     time.Date(2026, time.July, 21, 1, 2, 3, 456000000, time.UTC),
-		PayloadSHA256: sha256.Sum256([]byte(key)),
-		Metadata:      []byte("retention-v1"),
-		Outbox:        []byte("clickhouse-block-for-" + key),
+		BatchKey:          key,
+		SequenceKey:       "sequence-" + key,
+		AttemptID:         attemptID,
+		IndexTime:         time.Date(2026, time.July, 21, 1, 2, 3, 456000000, time.UTC),
+		PayloadSHA256:     sha256.Sum256([]byte(key)),
+		Metadata:          []byte("retention-v1"),
+		Outbox:            outbox,
+		StoredRowCount:    1,
+		DecodedEventBytes: uint64(len(outbox)),
+	}
+}
+
+func seedPendingReservations(t *testing.T, db *control.DB, count int, prefix string) {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := db.SQLDB().BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rollback(tx)
+	identityStatement, err := tx.PrepareContext(ctx, `
+		INSERT INTO ingest_batch_identities (
+			batch_key, sequence_key, payload_sha256, first_visibility_seq,
+			created_at_unix_micro
+		) VALUES (?, ?, ?, ?, ?)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer identityStatement.Close()
+	reservationStatement, err := tx.PrepareContext(ctx, `
+		INSERT INTO ingest_visibility_reservations (
+			sequence, batch_key, state, phase, attempt_id, index_time_unix_milli,
+			metadata, outbox, outbox_sha256, stored_row_count,
+			decoded_event_bytes, created_at_unix_micro, committed_at_unix_micro
+		) VALUES (?, ?, 'reserved', 'unsent', '', ?, X'', ?, ?, 1, ?, ?, NULL)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reservationStatement.Close()
+	createdAt := time.Now().UTC().UnixMicro()
+	for index := range count {
+		sequence := index + 1
+		key := fmt.Sprintf("%s%d", prefix, index)
+		payloadSHA256 := sha256.Sum256([]byte(key))
+		outbox := []byte("x")
+		outboxSHA256 := sha256.Sum256(outbox)
+		if _, err := identityStatement.ExecContext(
+			ctx, key, "sequence-"+key, payloadSHA256[:], sequence, createdAt,
+		); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := reservationStatement.ExecContext(
+			ctx,
+			sequence,
+			key,
+			time.Date(2026, time.July, 21, 1, 2, 3, 456000000, time.UTC).UnixMilli(),
+			outbox,
+			outboxSHA256[:],
+			len(outbox),
+			createdAt,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE ingest_visibility_state SET last_assigned = ? WHERE singleton = 1`, count); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -2598,6 +2669,10 @@ func sameDurableReservation(first, second Reservation) bool {
 		first.PayloadSHA256 == second.PayloadSHA256 &&
 		slices.Equal(first.Metadata, second.Metadata) &&
 		slices.Equal(first.Outbox, second.Outbox) &&
+		first.StoredRowCount == second.StoredRowCount &&
+		first.DecodedEventBytes == second.DecodedEventBytes &&
+		first.OutboxSHA256 == second.OutboxSHA256 &&
+		first.CreatedAt.Equal(second.CreatedAt) &&
 		first.CommittedAt.Equal(second.CommittedAt) &&
 		first.RejectedAt.Equal(second.RejectedAt)
 }

@@ -95,7 +95,7 @@ func (admission *writeAdmission) leave() {
 		panic("release ClickHouse write admission without an active writer")
 	}
 	admission.active--
-	if admission.active == 0 && admission.waiters.Len() > 0 {
+	if admission.active == 0 && (admission.closed || admission.waiters.Len() > 0) {
 		admission.notifyLocked()
 	}
 	admission.mu.Unlock()
@@ -157,15 +157,35 @@ func (admission *writeAdmission) releaseFreeze() {
 	admission.mu.Unlock()
 }
 
-func (admission *writeAdmission) close() {
-	admission.mu.Lock()
-	if admission.closed {
-		admission.mu.Unlock()
-		return
+// closeAndWait permanently rejects new admissions and waits for every writer
+// or exclusive maintenance callback that entered before the close to leave.
+// Native commit waiters deliberately do not hold write admission, so they do
+// not prevent the shutdown drain that will resolve their durable reservations.
+func (admission *writeAdmission) closeAndWait(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("close ClickHouse write admission: context is required")
 	}
-	admission.closed = true
-	admission.notifyLocked()
+	admission.mu.Lock()
+	if !admission.closed {
+		admission.closed = true
+		admission.notifyLocked()
+	}
+	for admission.active != 0 || admission.frozen {
+		if err := ctx.Err(); err != nil {
+			admission.mu.Unlock()
+			return err
+		}
+		changed := admission.changed
+		admission.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-changed:
+		}
+		admission.mu.Lock()
+	}
 	admission.mu.Unlock()
+	return nil
 }
 
 func (admission *writeAdmission) waitingFreezes() int {
@@ -387,6 +407,9 @@ func frozenCallbackActive(ctx context.Context, store *Store) bool {
 }
 
 func (s *Store) operationError(callerContext context.Context, err error) error {
+	if _, ok := errors.AsType[*durablePendingCancellationError](err); ok {
+		return err
+	}
 	if err == nil || (!errors.Is(err, context.Canceled) &&
 		!errors.Is(err, context.DeadlineExceeded)) {
 		return err

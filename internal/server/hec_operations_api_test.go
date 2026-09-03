@@ -78,8 +78,32 @@ func TestHECOperationalSnapshotRouteIsBoundedAndAdministratorOnly(t *testing.T) 
 		AcknowledgmentIDsQueried:  24,
 		AcknowledgmentMisses:      25,
 		ShutdownRejections:        26,
+		InsertCoalescing: HECInsertCoalescingSnapshot{
+			StagedLogicalBatches: 29,
+			StagedLogicalRows:    30,
+			FormedGroups:         31,
+			PhysicalSends:        32,
+			SuccessfulGroups:     33,
+			Retries:              34,
+			Ambiguities:          35,
+			NativeWaiters:        36,
+			Queue: HECInsertCoalescingQueueSnapshot{
+				PendingReservations:   37,
+				UngroupedReservations: 38,
+				ReadyGroups:           39,
+				AmbiguousGroups:       40,
+				LeasedGroups:          41,
+				PendingOutboxBytes:    42,
+				PendingMetadataBytes:  43,
+				OldestPendingAge:      44 * time.Second,
+			},
+		},
 	}}
 	service.snapshot.ProtocolFailures[4] = 27
+	service.snapshot.InsertCoalescing.GroupsByFillReason[4] = 45
+	service.snapshot.InsertCoalescing.RowsPerPhysicalInsert.Bounds[0] = 1_000
+	service.snapshot.InsertCoalescing.RowsPerPhysicalInsert.Counts[0] = 46
+	service.snapshot.InsertCoalescing.RowsPerPhysicalInsert.Count = 46
 	handler := newHECOperationsHTTPHandler(t, service)
 
 	unauthorized := postHECOperations(t, handler, "")
@@ -109,7 +133,14 @@ func TestHECOperationalSnapshotRouteIsBoundedAndAdministratorOnly(t *testing.T) 
 		decoded.GetAcknowledgments().GetActiveChannels() != 17 ||
 		decoded.GetAcknowledgments().GetRetainedChannels() != 18 ||
 		decoded.GetAcknowledgments().GetExpiredRows() != 21 ||
-		decoded.GetAcknowledgments().GetMisses() != 25 {
+		decoded.GetAcknowledgments().GetMisses() != 25 ||
+		decoded.GetInsertCoalescing().GetStagedLogicalBatches() != 29 ||
+		decoded.GetInsertCoalescing().GetPhysicalSends() != 32 ||
+		decoded.GetInsertCoalescing().GetQueue().GetUngroupedReservations() != 38 ||
+		decoded.GetInsertCoalescing().GetQueue().GetOldestPendingAge().AsDuration() != 44*time.Second ||
+		decoded.GetInsertCoalescing().GetGroupsByFillReason()[4] != 45 ||
+		decoded.GetInsertCoalescing().GetRowsPerPhysicalInsert().GetUpperBounds()[0] != 1_000 ||
+		decoded.GetInsertCoalescing().GetRowsPerPhysicalInsert().GetBucketCounts()[0] != 46 {
 		t.Fatalf("HEC operational response = %+v", &decoded)
 	}
 	if len(decoded.GetProtocolFailures()) != 27 ||
@@ -131,6 +162,16 @@ func TestHECOperationalSnapshotErrorsAreSanitized(t *testing.T) {
 		{name: "dependency", err: errors.New("private sqlite path and token material"), status: http.StatusServiceUnavailable},
 		{name: "invalid observed time", snapshot: HECOperationalSnapshot{}, status: http.StatusInternalServerError},
 		{name: "negative age", snapshot: HECOperationalSnapshot{ObservedAt: time.Now(), OldestPendingOutboxAge: -1}, status: http.StatusInternalServerError},
+		{
+			name: "negative coalescing age",
+			snapshot: HECOperationalSnapshot{
+				ObservedAt: time.Now(),
+				InsertCoalescing: HECInsertCoalescingSnapshot{
+					Queue: HECInsertCoalescingQueueSnapshot{OldestPendingAge: -1},
+				},
+			},
+			status: http.StatusInternalServerError,
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			service := &staticHECOperationalSnapshotter{snapshot: test.snapshot, err: test.err}
@@ -212,20 +253,32 @@ func postHECOperations(
 
 func assertHECOperationalSnapshotHasNoIdentityFields(t *testing.T) {
 	t.Helper()
-	typeOfSnapshot := reflect.TypeFor[HECOperationalSnapshot]()
-	for field := range typeOfSnapshot.Fields() {
-		kind := field.Type.Kind()
-		if field.Type == reflect.TypeFor[time.Time]() || kind == reflect.Bool ||
-			kind == reflect.Uint64 || kind == reflect.Int64 ||
-			kind == reflect.Array && field.Type.Elem().Kind() == reflect.Uint64 {
-			continue
-		}
-		t.Errorf("identity-capable HEC operational field %s has type %s", field.Name, field.Type)
-	}
+	assertHECOperationalTypeHasNoIdentityFields(t, reflect.TypeFor[HECOperationalSnapshot](), "")
 	formatted := fmt.Sprintf("%+v", HECOperationalSnapshot{})
 	for _, private := range []string{"Token", "ChannelID", "IndexName", "RequestID", "EventField"} {
 		if strings.Contains(formatted, private) {
 			t.Errorf("HEC operational snapshot shape contains private field %q", private)
+		}
+	}
+}
+
+func assertHECOperationalTypeHasNoIdentityFields(t *testing.T, value reflect.Type, path string) {
+	t.Helper()
+	for field := range value.Fields() {
+		fieldPath := field.Name
+		if path != "" {
+			fieldPath = path + "." + field.Name
+		}
+		kind := field.Type.Kind()
+		switch {
+		case field.Type == reflect.TypeFor[time.Time](), kind == reflect.Bool,
+			kind == reflect.Uint64, kind == reflect.Int64,
+			kind == reflect.Array && field.Type.Elem().Kind() == reflect.Uint64:
+			continue
+		case kind == reflect.Struct:
+			assertHECOperationalTypeHasNoIdentityFields(t, field.Type, fieldPath)
+		default:
+			t.Errorf("identity-capable HEC operational field %s has type %s", fieldPath, field.Type)
 		}
 	}
 }

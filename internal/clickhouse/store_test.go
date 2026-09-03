@@ -207,6 +207,95 @@ func TestStageDurablyQueuesHECWithoutSynchronousClickHouseWrite(t *testing.T) {
 	}
 }
 
+func TestStageFailsClosedForInvalidPendingHECDurableIdentity(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name                  string
+		acknowledgmentEnabled bool
+		reservation           visibility.Reservation
+	}{
+		{
+			name:                  "missing request sequence",
+			acknowledgmentEnabled: true,
+			reservation: visibility.Reservation{
+				Sequence:            17,
+				HECAcknowledgmentID: 9,
+			},
+		},
+		{
+			name:                  "missing enabled acknowledgment",
+			acknowledgmentEnabled: true,
+			reservation: visibility.Reservation{
+				Sequence:           17,
+				HECRequestSequence: 4,
+			},
+		},
+		{
+			name: "unexpected disabled acknowledgment",
+			reservation: visibility.Reservation{
+				Sequence:            17,
+				HECRequestSequence:  4,
+				HECAcknowledgmentID: 9,
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for _, existing := range []bool{false, true} {
+				path := "fresh reservation"
+				if existing {
+					path = "existing reservation"
+				}
+				t.Run(path, func(t *testing.T) {
+					sequencer := &fakeVisibilitySequencer{
+						reservation:    test.reservation,
+						hasReservation: existing,
+					}
+					connection := &fakeStoreConnection{batch: &fakeWriteBatch{}}
+					store := mustTestStoreWithVisibility(
+						t,
+						connection,
+						fixedRetention(time.Hour),
+						sequencer,
+					)
+					batch := validStoreBatch()
+					batch.Source = ingest.HECSource("ingestion-token-record")
+					batch.CollectorID = ""
+					batch.Events[0].Source = batch.Source
+					batch.Events[0].CollectorID = ""
+					batch.HECAdmission = &ingest.HECStageAdmission{
+						TokenID:               "ingestion-token-record",
+						TokenVersion:          3,
+						RequestID:             batch.BatchID,
+						AcknowledgmentEnabled: test.acknowledgmentEnabled,
+						Channel:               "channel-a",
+						CreatedAt:             batch.ReceivedAt,
+					}
+
+					if _, err := store.Stage(context.Background(), batch); !isTransient(err) ||
+						!strings.Contains(err.Error(), "pending HEC reservation") {
+						t.Fatalf("Stage with corrupt identity error = %v, want transient invariant failure", err)
+					}
+					if connection.prepareCalls != 0 {
+						t.Fatalf("Stage with corrupt identity wrote ClickHouse %d times", connection.prepareCalls)
+					}
+					if existing {
+						if len(sequencer.reserveRequests) != 0 || len(sequencer.released) != 0 {
+							t.Fatalf(
+								"existing corrupt identity mutated reservation: reserves=%d releases=%v",
+								len(sequencer.reserveRequests),
+								sequencer.released,
+							)
+						}
+					} else if !slices.Equal(sequencer.released, []uint64{17}) {
+						t.Fatalf("fresh corrupt identity released sequences = %v, want [17]", sequencer.released)
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestStageAcceptsIndependentHECRequestsFromOneToken(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -443,13 +532,15 @@ func TestStoreRebuildsFreshReservationAfterObservedPendingIsAbandoned(t *testing
 	}
 	const staleAttemptID = "stale-normalization-owner"
 	pending, err := sequencer.Reserve(ctx, visibility.ReserveRequest{
-		BatchKey:      deduplicationToken(stale),
-		SequenceKey:   sequenceIdentityKey(stale),
-		AttemptID:     staleAttemptID,
-		IndexTime:     stale.ReceivedAt,
-		PayloadSHA256: payloadDigest,
-		Metadata:      metadata,
-		Outbox:        outbox,
+		BatchKey:          deduplicationToken(stale),
+		SequenceKey:       sequenceIdentityKey(stale),
+		AttemptID:         staleAttemptID,
+		IndexTime:         stale.ReceivedAt,
+		PayloadSHA256:     payloadDigest,
+		Metadata:          metadata,
+		Outbox:            outbox,
+		StoredRowCount:    1,
+		DecodedEventBytes: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -874,9 +965,11 @@ func TestReconcilePendingBoundsTerminalPruneDuringPersistentReplayFailure(t *tes
 		)
 		INSERT INTO ingest_visibility_reservations
 			(sequence, batch_key, state, phase, attempt_id, index_time_unix_milli,
-			 metadata, outbox, created_at_unix_micro, committed_at_unix_micro)
+			 metadata, outbox, outbox_sha256, stored_row_count,
+			 decoded_event_bytes, created_at_unix_micro, committed_at_unix_micro)
 		SELECT sequence, printf('retention-reject-%d', sequence),
-		       'rejected', 'final', '', 0, X'', X'', sequence, sequence
+		       'rejected', 'final', '', 0, X'', X'', X'', 0, 0,
+		       sequence, sequence
 		FROM sequences`, lastSequence); err != nil {
 		_ = tx.Rollback()
 		t.Fatal(err)
@@ -2121,12 +2214,14 @@ func (c *fakeStoreConnection) Close() error {
 }
 
 type gatedStoreConnection struct {
-	entered          chan struct{}
-	resume           chan struct{}
-	exited           chan struct{}
-	closed           chan struct{}
-	closedBeforeExit chan struct{}
-	err              error
+	entered            chan struct{}
+	resume             chan struct{}
+	exited             chan struct{}
+	closed             chan struct{}
+	closedBeforeExit   chan struct{}
+	ignoreCancellation bool
+	batch              writeBatch
+	err                error
 }
 
 func (connection *gatedStoreConnection) prepare(ctx context.Context, _ string, _ clickhousedriver.Settings) (writeBatch, error) {
@@ -2134,8 +2229,18 @@ func (connection *gatedStoreConnection) prepare(ctx context.Context, _ string, _
 	if connection.exited != nil {
 		defer close(connection.exited)
 	}
+	if connection.ignoreCancellation {
+		<-connection.resume
+		if connection.err == nil && connection.batch != nil {
+			return connection.batch, nil
+		}
+		return nil, connection.err
+	}
 	select {
 	case <-connection.resume:
+		if connection.err == nil && connection.batch != nil {
+			return connection.batch, nil
+		}
 		return nil, connection.err
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -2187,7 +2292,7 @@ func (connection *gatedStoreConnection) Close() error {
 
 type fakeWriteBatch struct {
 	rows                              [][]any
-	appendErr, sendErr                error
+	appendErr, sendErr, closeErr      error
 	sendCalls, abortCalls, closeCalls int
 }
 
@@ -2200,7 +2305,7 @@ func (b *fakeWriteBatch) Append(values ...any) error {
 }
 func (b *fakeWriteBatch) Send() error  { b.sendCalls++; return b.sendErr }
 func (b *fakeWriteBatch) Abort() error { b.abortCalls++; return nil }
-func (b *fakeWriteBatch) Close() error { b.closeCalls++; return nil }
+func (b *fakeWriteBatch) Close() error { b.closeCalls++; return b.closeErr }
 
 type fakeRetentionProvider struct {
 	periods map[string]time.Duration

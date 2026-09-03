@@ -60,10 +60,18 @@ const (
 	MaxMetadataBytes = 1 << 20
 	// MaxOutboxBytes bounds the durable replay payload for one reservation.
 	MaxOutboxBytes = 16 << 20
-	// MaxPendingReservations bounds unresolved visibility reservations.
-	MaxPendingReservations = 64
+	// MaxPendingReservations bounds unresolved visibility reservations while
+	// allowing one maximum-member group in flight and another to assemble.
+	MaxPendingReservations = 20_000
 	// MaxPendingOutboxBytes bounds all unresolved replay payloads together.
 	MaxPendingOutboxBytes = 256 << 20
+	// MaxPendingMetadataBytes independently bounds replay-result metadata.
+	MaxPendingMetadataBytes = 64 << 20
+	// Physical write-group bounds are also enforced by the fresh-state schema.
+	MaxWriteGroupRows         = 50_000
+	MaxWriteGroupDecodedBytes = 64 << 20
+	MaxWriteGroupMembers      = 10_000
+	MaxWriteGroupIDBytes      = 128
 	// MaxPruneLimit bounds work performed by one terminal-ledger prune call.
 	MaxPruneLimit = 10_000
 	// MaxHECChannelsPerToken bounds retained channel identities for one token.
@@ -118,6 +126,10 @@ type ReserveRequest struct {
 	PayloadSHA256 [32]byte
 	Metadata      []byte
 	Outbox        []byte
+	// StoredRowCount and DecodedEventBytes are server-derived accounting for
+	// the accepted normalized events represented by Outbox.
+	StoredRowCount    uint32
+	DecodedEventBytes uint64
 	// QuotaAdmission is present only for fresh normalized ingestion. It is
 	// ignored by existing-only and active durable replay paths. Nil preserves
 	// the legacy non-quota reservation contract.
@@ -166,21 +178,88 @@ type Reservation struct {
 	PayloadSHA256         [32]byte
 	Metadata              []byte
 	Outbox                []byte
+	StoredRowCount        uint32
+	DecodedEventBytes     uint64
+	OutboxSHA256          [32]byte
+	CreatedAt             time.Time
 	CommittedAt           time.Time
 	RejectedAt            time.Time
-	// HECAcknowledgmentID is positive only when this Reserve call allocated the
-	// channel-scoped durable acknowledgment in the same transaction.
+	// HECAcknowledgmentID is positive when the durable HEC request has a
+	// channel-scoped acknowledgment, including on pending reacquisition.
 	HECAcknowledgmentID uint64
-	// HECRequestSequence is the positive per-token sequence allocated in the
-	// same transaction as this fresh HEC reservation.
+	// HECRequestSequence is the positive durable per-token request sequence,
+	// including on pending reacquisition.
 	HECRequestSequence uint64
 }
 
 // PendingUsage reports durable reservations that have not reached a terminal
 // state, including reservations currently owned by a live attempt.
 type PendingUsage struct {
-	Reservations uint32
-	OutboxBytes  uint64
+	Reservations          uint32
+	OutboxBytes           uint64
+	MetadataBytes         uint64
+	UngroupedReservations uint32
+	ReadyGroups           uint32
+	AmbiguousGroups       uint32
+	LeasedGroups          uint32
+	OldestPendingAt       time.Time
+}
+
+// WriteGroupState is the durable physical-insert state of a sealed group.
+type WriteGroupState string
+
+const (
+	WriteGroupReady     WriteGroupState = "ready"
+	WriteGroupAmbiguous WriteGroupState = "ambiguous"
+	WriteGroupCommitted WriteGroupState = "committed"
+)
+
+// WriteGroupFillReason reports why a newly sealed group became eligible.
+type WriteGroupFillReason string
+
+const (
+	WriteGroupFillRowTarget    WriteGroupFillReason = "row_target"
+	WriteGroupFillByteTarget   WriteGroupFillReason = "byte_target"
+	WriteGroupFillHardBoundary WriteGroupFillReason = "hard_boundary"
+	WriteGroupFillLinger       WriteGroupFillReason = "linger"
+	WriteGroupFillDrain        WriteGroupFillReason = "drain"
+	WriteGroupFillRecovery     WriteGroupFillReason = "recovery"
+)
+
+// WriteGroupLimits bounds one immutable physical insert. Soft targets control
+// normal sealing; hard maxima are never exceeded.
+type WriteGroupLimits struct {
+	TargetRows         uint64
+	TargetDecodedBytes uint64
+	MaxRows            uint64
+	MaxDecodedBytes    uint64
+	MaxMembers         uint32
+	MaxLinger          time.Duration
+}
+
+// WriteGroup is one immutable ordered physical insert and its logical members.
+type WriteGroup struct {
+	ID               string
+	State            WriteGroupState
+	Members          []Reservation
+	MemberCount      uint32
+	RowCount         uint64
+	DecodedBytes     uint64
+	MembershipSHA256 [32]byte
+	FirstSequence    uint64
+	LastSequence     uint64
+	CreatedAt        time.Time
+	SendingAt        time.Time
+	CommittedAt      time.Time
+}
+
+// WriteGroupAcquisition contains either leased work or the exact durable
+// deadline at which the oldest sparse reservation must be flushed.
+type WriteGroupAcquisition struct {
+	Group              WriteGroup
+	Found              bool
+	NextLingerDeadline time.Time
+	FormationReason    WriteGroupFillReason
 }
 
 // TerminalRetention independently bounds successful ClickHouse commits and
@@ -208,4 +287,14 @@ type Sequencer interface {
 	Abandon(context.Context, uint64, string) error
 	Cutoff(context.Context) (uint64, error)
 	PruneTerminal(context.Context, TerminalRetention, uint32) (uint32, error)
+}
+
+// WriteGroupSequencer adds durable server-side coalescing while keeping the
+// legacy Sequencer surface available to existing test doubles during rollout.
+type WriteGroupSequencer interface {
+	Sequencer
+	FormOrAcquireWriteGroup(context.Context, string, WriteGroupLimits, bool) (WriteGroupAcquisition, error)
+	MarkWriteGroupSending(context.Context, string, string) error
+	CommitWriteGroup(context.Context, string, string, time.Time) ([]uint64, error)
+	ReleaseWriteGroup(context.Context, string, string) error
 }

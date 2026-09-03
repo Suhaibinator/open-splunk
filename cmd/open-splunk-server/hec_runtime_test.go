@@ -73,6 +73,8 @@ type runtimeHECTestStore struct {
 	err                       error
 	reconciliationUnavailable bool
 	reconciliationTelemetry   clickhouse.HECReconciliationSnapshot
+	coalescingTelemetry       clickhouse.CoalescerMetricsSnapshot
+	coalescingErr             error
 }
 
 func (store *runtimeHECTestStore) HECReconciliationAvailable() bool {
@@ -93,6 +95,14 @@ func (store *runtimeHECTestStore) HECReconciliationTelemetry() clickhouse.HECRec
 	snapshot := store.reconciliationTelemetry
 	snapshot.Available = !store.reconciliationUnavailable
 	return snapshot
+}
+
+func (store *runtimeHECTestStore) InsertCoalescingTelemetry(
+	context.Context,
+) (clickhouse.CoalescerMetricsSnapshot, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	return store.coalescingTelemetry, store.coalescingErr
 }
 
 func (store *runtimeHECTestStore) Store(
@@ -380,6 +390,20 @@ func TestRuntimeHECHandlerOwnsNamespaceDelegatesBrowserAndStagesDurably(t *testi
 		Retries:     2,
 		Ambiguities: 1,
 	}
+	store.coalescingTelemetry = clickhouse.CoalescerMetricsSnapshot{
+		StagedLogicalBatches: 12,
+		StagedLogicalRows:    13,
+		FormedGroups:         14,
+		PhysicalSends:        15,
+		SuccessfulGroups:     16,
+		NativeWaiters:        17,
+		Queue: clickhouse.CoalescerQueueSnapshot{
+			UngroupedReservations: 18,
+			ReadyGroups:           19,
+			AmbiguousGroups:       20,
+			OldestPendingAge:      21 * time.Second,
+		},
+	}
 	store.mu.Unlock()
 	sequencer.mu.Lock()
 	sequencer.operational = visibility.HECOperationalSnapshot{
@@ -418,7 +442,11 @@ func TestRuntimeHECHandlerOwnsNamespaceDelegatesBrowserAndStagesDurably(t *testi
 		operational.ReconciliationAmbiguities != 1 || operational.ActiveChannels != 5 ||
 		operational.RetainedChannels != 6 || operational.PendingAcknowledgments != 7 ||
 		operational.IndexedAcknowledgments != 8 || operational.ExpiredAcknowledgments != 9 ||
-		operational.TerminalFailedRequests != 10 || !operational.AcknowledgmentAvailable {
+		operational.TerminalFailedRequests != 10 || !operational.AcknowledgmentAvailable ||
+		operational.InsertCoalescing.StagedLogicalBatches != 12 ||
+		operational.InsertCoalescing.PhysicalSends != 15 ||
+		operational.InsertCoalescing.Queue.UngroupedReservations != 18 ||
+		operational.InsertCoalescing.Queue.OldestPendingAge != 21*time.Second {
 		t.Fatalf("composed HEC operational snapshot = %+v", operational)
 	}
 }
@@ -442,6 +470,22 @@ func TestNewRuntimeHECOperationsRequiresCompleteDependencies(t *testing.T) {
 				t.Fatalf("newRuntimeHECOperations = (%v, %v)", operations, err)
 			}
 		})
+	}
+}
+
+func TestRuntimeHECOperationsRequiresCoalescingTelemetry(t *testing.T) {
+	t.Parallel()
+	want := errors.New("private coalescer failure")
+	operations, err := newRuntimeHECOperations(
+		hechttp.NewMetrics(),
+		&runtimeHECTestSequencer{},
+		&runtimeHECTestStore{coalescingErr: want},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := operations.HECOperationalSnapshot(context.Background()); !errors.Is(err, want) {
+		t.Fatalf("HECOperationalSnapshot error = %v, want %v", err, want)
 	}
 }
 

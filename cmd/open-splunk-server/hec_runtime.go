@@ -29,6 +29,7 @@ type runtimeHECStore interface {
 	ingest.StagingEventStore
 	HECReconciliationAvailable() bool
 	HECReconciliationTelemetry() clickhouse.HECReconciliationSnapshot
+	InsertCoalescingTelemetry(context.Context) (clickhouse.CoalescerMetricsSnapshot, error)
 }
 
 type runtimeHECOperations struct {
@@ -67,6 +68,10 @@ func (operations *runtimeHECOperations) HECOperationalSnapshot(
 	}
 	requests := operations.metrics.Snapshot()
 	reconciliation := operations.store.HECReconciliationTelemetry()
+	coalescing, err := operations.store.InsertCoalescingTelemetry(ctx)
+	if err != nil {
+		return server.HECOperationalSnapshot{}, err
+	}
 	now := operations.now
 	if now == nil {
 		now = time.Now
@@ -105,7 +110,70 @@ func (operations *runtimeHECOperations) HECOperationalSnapshot(
 		AcknowledgmentMisses:      requests.AcknowledgmentMisses,
 		ShutdownRejections:        requests.ShutdownRejections,
 		ProtocolFailures:          requests.ProtocolFailures,
+		InsertCoalescing:          hecInsertCoalescingSnapshot(coalescing),
 	}, nil
+}
+
+func hecInsertCoalescingSnapshot(
+	snapshot clickhouse.CoalescerMetricsSnapshot,
+) server.HECInsertCoalescingSnapshot {
+	return server.HECInsertCoalescingSnapshot{
+		StagedLogicalBatches:      snapshot.StagedLogicalBatches,
+		StagedLogicalRows:         snapshot.StagedLogicalRows,
+		FormedGroups:              snapshot.FormedGroups,
+		PhysicalSends:             snapshot.PhysicalSends,
+		SuccessfulGroups:          snapshot.SuccessfulGroups,
+		Retries:                   snapshot.Retries,
+		Ambiguities:               snapshot.Ambiguities,
+		GroupsByFillReason:        snapshot.GroupsByFillReason,
+		MemberBatchesPerGroup:     hecCoalescingHistogram(snapshot.MemberBatchesPerGroup),
+		RowsPerGroup:              hecCoalescingHistogram(snapshot.RowsPerGroup),
+		DecodedBytesPerGroup:      hecCoalescingHistogram(snapshot.DecodedBytesPerGroup),
+		MonthlyPartitionsPerGroup: hecCoalescingHistogram(snapshot.MonthlyPartitionsPerGroup),
+		RowsPerPhysicalInsert:     hecCoalescingHistogram(snapshot.RowsPerPhysicalInsert),
+		CreationToSeal:            hecCoalescingLatencyHistogram(snapshot.CreationToSeal),
+		CreationToSend:            hecCoalescingLatencyHistogram(snapshot.CreationToSend),
+		CreationToCommit:          hecCoalescingLatencyHistogram(snapshot.CreationToCommit),
+		NativeWaiters:             snapshot.NativeWaiters,
+		PeakNativeWaiters:         snapshot.PeakNativeWaiters,
+		NativeWaiterWakeups:       snapshot.NativeWaiterWakeups,
+		NativeWaiterCancels:       snapshot.NativeWaiterCancels,
+		NativeTerminalLookups:     snapshot.NativeTerminalLookups,
+		Queue: server.HECInsertCoalescingQueueSnapshot{
+			PendingReservations:   snapshot.Queue.PendingReservations,
+			UngroupedReservations: snapshot.Queue.UngroupedReservations,
+			ReadyGroups:           snapshot.Queue.ReadyGroups,
+			AmbiguousGroups:       snapshot.Queue.AmbiguousGroups,
+			LeasedGroups:          snapshot.Queue.LeasedGroups,
+			PendingOutboxBytes:    snapshot.Queue.PendingOutboxBytes,
+			PendingMetadataBytes:  snapshot.Queue.PendingMetadataBytes,
+			OldestPendingAge:      snapshot.Queue.OldestPendingAge,
+		},
+	}
+}
+
+func hecCoalescingHistogram(
+	snapshot clickhouse.CoalescerHistogramSnapshot,
+) server.HECCoalescingHistogramSnapshot {
+	return server.HECCoalescingHistogramSnapshot{
+		Bounds: snapshot.Bounds,
+		Counts: snapshot.Counts,
+		Count:  snapshot.Count,
+		Sum:    snapshot.Sum,
+		Max:    snapshot.Max,
+	}
+}
+
+func hecCoalescingLatencyHistogram(
+	snapshot clickhouse.CoalescerLatencyHistogramSnapshot,
+) server.HECCoalescingLatencyHistogramSnapshot {
+	return server.HECCoalescingLatencyHistogramSnapshot{
+		BoundsMicroseconds: snapshot.BoundsMicroseconds,
+		Counts:             snapshot.Counts,
+		Count:              snapshot.Count,
+		SumMicroseconds:    snapshot.SumMicroseconds,
+		MaxMicroseconds:    snapshot.MaxMicroseconds,
+	}
 }
 
 type runtimeHECConfig struct {
