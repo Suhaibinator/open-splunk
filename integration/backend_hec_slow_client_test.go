@@ -335,10 +335,11 @@ func TestBackendHECSlowCompressedReadDeadline(t *testing.T) {
 			// documented invalid-data response rather than an internal failure.
 		default:
 			t.Fatalf(
-				"slow HEC client %d timeout outcome = status %d code %d read_error=%t",
+				"slow HEC client %d timeout outcome = status %d code %d text %q read_error=%t",
 				result.index,
 				result.status,
 				result.code,
+				result.text,
 				result.err != nil,
 			)
 		}
@@ -493,6 +494,7 @@ type backendHECSlowClientResult struct {
 	duration time.Duration
 	status   int
 	code     int
+	text     string
 	err      error
 }
 
@@ -607,6 +609,7 @@ func (client *backendHECSlowClient) wait(index int) backendHECSlowClientResult {
 	var decoded backendHECResponse
 	if len(wire) <= 1<<20 && json.Unmarshal(wire, &decoded) == nil {
 		result.code = decoded.Code
+		result.text = decoded.Text
 	}
 	return result
 }
@@ -626,7 +629,7 @@ func waitForBackendHECSlowBusy(
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		status, code, err := backendHECSlowBusyProbe(
+		status, code, text, err := backendHECSlowBusyProbe(
 			ctx,
 			address,
 			rootCAs,
@@ -645,9 +648,10 @@ func waitForBackendHECSlowBusy(
 			)
 		case <-deadline.C:
 			t.Fatalf(
-				"shipped HEC handler did not expose its held per-token envelope: last probe status/code/error = %d/%d/%v",
+				"shipped HEC handler did not expose its held per-token envelope: last probe status/code/text/error = %d/%d/%q/%v",
 				status,
 				code,
+				text,
 				err,
 			)
 		case <-ticker.C:
@@ -661,12 +665,12 @@ func backendHECSlowBusyProbe(
 	rootCAs *x509.CertPool,
 	credential string,
 	channel string,
-) (int, int, error) {
+) (int, int, string, error) {
 	dialContext, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	host, _, err := net.SplitHostPort(address)
 	if err != nil {
-		return 0, 0, fmt.Errorf("split shipped HEC listener address: %w", err)
+		return 0, 0, "", fmt.Errorf("split shipped HEC listener address: %w", err)
 	}
 	dialer := &tls.Dialer{Config: &tls.Config{
 		MinVersion: tls.VersionTLS12,
@@ -676,11 +680,11 @@ func backendHECSlowBusyProbe(
 	}}
 	connection, err := dialer.DialContext(dialContext, "tcp", address)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, "", err
 	}
 	defer connection.Close()
 	if err := connection.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
-		return 0, 0, err
+		return 0, 0, "", err
 	}
 	request := bufio.NewWriter(connection)
 	if _, err := fmt.Fprintf(
@@ -697,28 +701,28 @@ func backendHECSlowBusyProbe(
 		credential,
 		channel,
 	); err != nil {
-		return 0, 0, err
+		return 0, 0, "", err
 	}
 	if err := request.Flush(); err != nil {
-		return 0, 0, err
+		return 0, 0, "", err
 	}
 	response, err := http.ReadResponse(
 		bufio.NewReader(connection),
 		&http.Request{Method: http.MethodPost},
 	)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, "", err
 	}
 	defer response.Body.Close()
 	wire, err := io.ReadAll(io.LimitReader(response.Body, (1<<20)+1))
 	if err != nil {
-		return response.StatusCode, 0, err
+		return response.StatusCode, 0, "", err
 	}
 	var decoded backendHECResponse
 	if len(wire) > 1<<20 || json.Unmarshal(wire, &decoded) != nil {
-		return response.StatusCode, 0, nil
+		return response.StatusCode, 0, "", nil
 	}
-	return response.StatusCode, decoded.Code, nil
+	return response.StatusCode, decoded.Code, decoded.Text, nil
 }
 
 type backendHECSlowSchedulerSnapshot struct {

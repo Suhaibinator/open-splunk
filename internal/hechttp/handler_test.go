@@ -455,6 +455,22 @@ func TestHandlerAuthenticatesBeforeReadingBodyAndMapsTokenFailures(t *testing.T)
 			wantBody:      `{"text":"Token disabled","code":1}`,
 			wantAuthCalls: 1,
 		},
+		{
+			name:          "authentication temporarily unavailable",
+			header:        "Splunk private-secret",
+			authError:     auth.ErrHECAuthenticationTemporarilyUnavailable,
+			wantStatus:    http.StatusServiceUnavailable,
+			wantBody:      `{"text":"Server is busy","code":9}`,
+			wantAuthCalls: 1,
+		},
+		{
+			name:          "internal authentication failure",
+			header:        "Splunk private-secret",
+			authError:     errors.New("private authentication integrity failure"),
+			wantStatus:    http.StatusInternalServerError,
+			wantBody:      `{"text":"Internal server error","code":8}`,
+			wantAuthCalls: 1,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

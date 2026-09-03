@@ -86,6 +86,12 @@ var (
 	// valid, unexpired HEC token whose explicit state is disabled; the HEC
 	// compatibility contract exposes that one closed protocol distinction.
 	ErrInactiveToken = errors.New("auth: collector token is inactive")
+	// ErrHECAuthenticationTemporarilyUnavailable means a valid authentication
+	// decision could not complete because the control database was temporarily
+	// contended. Callers may retry but must not treat the credential as valid.
+	ErrHECAuthenticationTemporarilyUnavailable = errors.New(
+		"auth: HEC authentication is temporarily unavailable",
+	)
 	// ErrAuditActorUnavailable means a security-sensitive administrative
 	// mutation reached the production store without the trusted actor that the
 	// authenticated route must install. It is a server wiring failure, not a
@@ -938,13 +944,16 @@ func (store *Store) AuthenticateHEC(
 	checkedAt := databaseTime(store.now())
 	tx := store.orm.WithContext(ctx).Begin()
 	if tx.Error != nil {
-		return Authentication{}, fmt.Errorf(
+		return Authentication{}, classifyHECAuthenticationError(fmt.Errorf(
 			"begin HEC token authentication: %w",
 			tx.Error,
-		)
+		))
 	}
 	finished := false
-	defer finishTokenTransaction(tx, &finished, &returnedErr)
+	defer func() {
+		finishTokenTransaction(tx, &finished, &returnedErr)
+		returnedErr = classifyHECAuthenticationError(returnedErr)
+	}()
 
 	authentication, err := store.authenticateHEC(tx, plaintext, checkedAt)
 	if err != nil {
@@ -966,6 +975,14 @@ func (store *Store) AuthenticateHEC(
 	}
 	finished = true
 	return authentication, nil
+}
+
+func classifyHECAuthenticationError(err error) error {
+	if err == nil || errors.Is(err, ErrHECAuthenticationTemporarilyUnavailable) ||
+		!control.IsDatabaseContention(err) {
+		return err
+	}
+	return errors.Join(ErrHECAuthenticationTemporarilyUnavailable, err)
 }
 
 func (store *Store) authenticate(

@@ -234,7 +234,7 @@ func retrySQLiteBusy(
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
-		if !sqliteBusyOrLocked(err) || !time.Now().Before(deadline) {
+		if !IsDatabaseContention(err) || !time.Now().Before(deadline) {
 			return err
 		}
 
@@ -258,7 +258,11 @@ func retrySQLiteBusy(
 	}
 }
 
-func sqliteBusyOrLocked(err error) bool {
+// IsDatabaseContention reports whether err is SQLite's transient writer or
+// shared-cache contention result. Callers use it to preserve retryable
+// dependency failures across package boundaries without treating corruption
+// or other database failures as temporary.
+func IsDatabaseContention(err error) bool {
 	var sqliteErr *sqlite.Error
 	if !errors.As(err, &sqliteErr) {
 		return false
