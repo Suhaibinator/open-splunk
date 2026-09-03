@@ -42,7 +42,7 @@
 .health-service-list b { color: var(--accent); font-size: var(--type-xs); }
 .health-service-list .warning-copy { color: var(--status-warning); }
 .admin-overview-grid > .suite-card:first-child .suite-card-header > button,
-.collector-card footer button,
+.collector-card footer .button,
 .token-section .row-overflow,
 .danger-zone button { display: none; }
 .admin-activity-list { list-style: none; margin: 0; padding: var(--space-2) 14px; }
@@ -613,7 +613,7 @@ button.knowledge-manager__row.knowledge-manager__row--selected:hover { backgroun
   .collector-card dl { gap: 9px 0; grid-template-columns: repeat(2, 1fr); }
   .collector-card dl div:nth-child(2) { border-right: 0; }
   .collector-card footer { grid-template-columns: 1fr auto; }
-  .collector-card footer button { grid-column: 1 / -1; min-height: 39px; }
+  .collector-card footer .button { grid-column: 1 / -1; min-height: 39px; }
   .token-section .table { min-width: 650px; }
   .user-row { grid-template-columns: auto minmax(0, 1fr) auto; }
   .user-row > b { display: none; }

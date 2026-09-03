@@ -548,7 +548,7 @@ export function BackendReportsConsole({ apiBaseUrl, onViewChange, view }: Backen
         <>
           {refreshing ? <output className="backend-list-notice">Refreshing saved searches. Existing definitions remain visible until the request completes.</output> : null}
           {error === null ? null : <div className="backend-inline-error" role="alert">The latest refresh failed; the previous saved-search snapshot remains visible. {error}</div>}
-          {actionNotice === null ? null : <output className="reports-action-notice"><span>{actionNotice}</span><button type="button" aria-label="Dismiss saved-search action message" onClick={() => setActionNotice(null)}><AppIcon name="close" size="md" /></button></output>}
+          {actionNotice === null ? null : <output className="reports-action-notice"><span>{actionNotice}</span><button className="button button--notice-dismiss" type="button" aria-label="Dismiss saved-search action message" onClick={() => setActionNotice(null)}><AppIcon name="close" size="md" /></button></output>}
           <section className="reports-summary" aria-label="Saved search summary">
             <article><span className="reports-metric-icon" aria-hidden="true">▤</span><div><strong>{displayedTotal}</strong><small>{totalSizeExact ? "Matching saved searches" : "Matching definitions loaded"}</small></div></article>
             <article><span className="reports-metric-icon" aria-hidden="true">♙</span><div><strong>{savedSearches.length.toLocaleString()}</strong><small>Definitions loaded</small></div></article>

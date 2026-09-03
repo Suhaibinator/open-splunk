@@ -538,7 +538,7 @@ export function BackendIndexes({ actions, catalog }: BackendIndexesProps) {
   return (
     <div className="admin-section-stack">
       <header className="admin-section-header"><div><h2>Indexes</h2><p>Authoritative index definitions from the connected server.</p></div><span>{loadedCount}</span></header>
-      <div className="resource-toolbar"><label><span className="sr-only">Filter loaded indexes</span><i aria-hidden="true"><AppIcon name="search" size="sm" /></i><input value={catalog.filter} onChange={(event) => actions.setFilter(event.target.value)} placeholder="Filter loaded indexes" /></label><button type="button" onClick={actions.reload}><AppIcon name="refresh" size="sm" /> Refresh</button></div>
+      <div className="resource-toolbar"><label><span className="sr-only">Filter loaded indexes</span><i aria-hidden="true"><AppIcon name="search" size="sm" /></i><input value={catalog.filter} onChange={(event) => actions.setFilter(event.target.value)} placeholder="Filter loaded indexes" /></label><button className="button button--toolbar" type="button" onClick={actions.reload}><AppIcon name="refresh" size="sm" /> Refresh</button></div>
       {catalog.indexes.length === 0 ? (
         <BackendResourceState kind="empty" title={catalog.totalIndexes === 0 ? "No indexes configured" : "No matching indexes"} message={catalog.totalIndexes === 0 ? "Create an index to begin accepting and searching data." : "Try another index name or description."} action={catalog.totalIndexes > 0 && catalog.filter.trim().length > 0 ? <button type="button" onClick={() => actions.setFilter("")}>Clear filter</button> : undefined} />
       ) : (
