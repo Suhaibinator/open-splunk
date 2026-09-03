@@ -48,7 +48,7 @@ interface ResultPageFetch extends Omit<ResultPageRequest, "pageToken" | "include
   onNotice: (message: string) => void;
 }
 
-function equalResultSchemas(left: ResultSchema, right: ResultSchema): boolean {
+export function equalResultSchemas(left: ResultSchema, right: ResultSchema): boolean {
   const leftBytes = ResultSchemaCodec.encode(left).finish();
   const rightBytes = ResultSchemaCodec.encode(right).finish();
   return leftBytes.length === rightBytes.length

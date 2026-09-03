@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
 import Link from "next/link";
 
 import { SharingScope, SortDirection } from "@/gen/ts/open_splunk/common";
@@ -97,6 +97,19 @@ function launchHref(savedSearch: ServerSavedSearch): string {
   );
 }
 
+function subscribeToInitialReportLocation(): () => void {
+  return () => undefined;
+}
+
+function scheduledReportLocationSnapshot(): string {
+  try {
+    const target = scheduledReportConfigurationTarget(new URL(window.location.href).searchParams);
+    return target === null ? "" : `target:${target}`;
+  } catch (reason) {
+    return `error:${reason instanceof Error ? reason.message : "The report schedule link is invalid."}`;
+  }
+}
+
 export function BackendReportsConsole({ apiBaseUrl, onViewChange, view }: BackendReportsConsoleProps) {
   const client = useMemo(() => createOpenSplunkApiClient({ baseUrl: apiBaseUrl }), [apiBaseUrl]);
   const [state, setState] = useState<LoadState>("loading");
@@ -110,7 +123,7 @@ export function BackendReportsConsole({ apiBaseUrl, onViewChange, view }: Backen
   const [totalSize, setTotalSize] = useState<bigint | null>(null);
   const [totalSizeExact, setTotalSizeExact] = useState(false);
   const [generation, setGeneration] = useState(0);
-  const activeLoadGenerationRef = useRef(0);
+  const [hasLoaded, setHasLoaded] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [query, setQuery] = useState("");
   const [effectiveQuery, setEffectiveQuery] = useState("");
@@ -130,7 +143,6 @@ export function BackendReportsConsole({ apiBaseUrl, onViewChange, view }: Backen
   const loadMoreAbortRef = useRef<AbortController | null>(null);
   const actionAbortRef = useRef<AbortController | null>(null);
   const pageTokensSeenRef = useRef<Set<string>>(new Set());
-  const hasLoadedRef = useRef(false);
   const reload = useCallback(() => setGeneration((current) => current + 1), []);
   const clearScheduleTarget = useCallback(() => {
     setScheduleTargetId(null);
@@ -141,51 +153,69 @@ export function BackendReportsConsole({ apiBaseUrl, onViewChange, view }: Backen
 
   useEffect(() => () => actionAbortRef.current?.abort(), []);
 
+  const reportLocation = useSyncExternalStore(
+    subscribeToInitialReportLocation,
+    scheduledReportLocationSnapshot,
+    () => "",
+  );
+  const [activeReportLocation, setActiveReportLocation] = useState("");
+  if (activeReportLocation !== reportLocation) {
+    setActiveReportLocation(reportLocation);
+    if (reportLocation.startsWith("target:")) {
+      setScheduleTargetId(reportLocation.slice("target:".length));
+    } else if (reportLocation.startsWith("error:")) {
+      setScheduleTargetId(null);
+      setActionNotice(reportLocation.slice("error:".length));
+    }
+  }
   useEffect(() => {
-    const frame = window.requestAnimationFrame(() => {
-      try {
-        setScheduleTargetId(scheduledReportConfigurationTarget(new URL(window.location.href).searchParams));
-      } catch (reason) {
-        setActionNotice(reason instanceof Error ? reason.message : "The report schedule link is invalid.");
-        clearScheduleTarget();
-      }
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [clearScheduleTarget]);
+    if (!reportLocation.startsWith("error:")) return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete(SCHEDULE_REPORT_QUERY_PARAMETER);
+    window.history.replaceState(window.history.state, "", url);
+  }, [reportLocation]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setEffectiveQuery(query.trim()), 250);
     return () => window.clearTimeout(timer);
   }, [query]);
 
+  const loadInput = { appFilter, client, effectiveQuery, generation, scope, sort };
+  const [activeLoadInput, setActiveLoadInput] = useState({ ...loadInput, retainShell: false });
+  if (
+    activeLoadInput.appFilter !== loadInput.appFilter
+    || activeLoadInput.client !== loadInput.client
+    || activeLoadInput.effectiveQuery !== loadInput.effectiveQuery
+    || activeLoadInput.generation !== loadInput.generation
+    || activeLoadInput.scope !== loadInput.scope
+    || activeLoadInput.sort !== loadInput.sort
+  ) {
+    setActiveLoadInput({ ...loadInput, retainShell: hasLoaded });
+    if (!hasLoaded) {
+      setState("loading");
+      setNextPageToken(null);
+      setSystemBootstrap(null);
+    }
+    setRefreshing(hasLoaded);
+    setError(null);
+    setLoadMoreError(null);
+    setLoadingMore(false);
+  }
+
   useEffect(() => {
-    activeLoadGenerationRef.current = generation;
-    const retainShell = hasLoadedRef.current;
+    const retainShell = activeLoadInput.retainShell;
     loadMoreAbortRef.current?.abort();
     loadMoreAbortRef.current = null;
     const controller = new AbortController();
     let current = true;
-    queueMicrotask(() => {
-      if (!current) return;
-      if (!retainShell) setState("loading");
-      setRefreshing(retainShell);
-      setError(null);
-      setLoadMoreError(null);
-      setLoadingMore(false);
-    });
     if (!retainShell) {
       bootstrapRef.current = null;
       pageTokensSeenRef.current.clear();
-      queueMicrotask(() => {
-        if (!current || activeLoadGenerationRef.current !== generation) return;
-        setNextPageToken(null);
-        setSystemBootstrap(null);
-      });
     }
     void (async () => {
       try {
         const bootstrap = await getSystemBootstrap(client, undefined, { signal: controller.signal });
-        if (!current || activeLoadGenerationRef.current !== generation) return;
+        if (!current) return;
         bootstrapRef.current = bootstrap;
         setSystemBootstrap(bootstrap);
         setAppNames(Object.fromEntries(
@@ -207,7 +237,7 @@ export function BackendReportsConsole({ apiBaseUrl, onViewChange, view }: Backen
         });
         if (!current) return;
         if (result.status === "unavailable") {
-          hasLoadedRef.current = false;
+          setHasLoaded(false);
           setSavedSearches([]);
           setRefreshing(false);
           setState("unavailable");
@@ -223,7 +253,7 @@ export function BackendReportsConsole({ apiBaseUrl, onViewChange, view }: Backen
         ));
         setTotalSize(result.value.totalSize);
         setTotalSizeExact(result.value.totalSizeExact);
-        hasLoadedRef.current = true;
+        setHasLoaded(true);
         setRefreshing(false);
         setState("available");
       } catch (reason) {
@@ -233,7 +263,7 @@ export function BackendReportsConsole({ apiBaseUrl, onViewChange, view }: Backen
         if (retainShell) {
           setState("available");
         } else {
-          hasLoadedRef.current = false;
+          setHasLoaded(false);
           setSavedSearches([]);
           setState("error");
         }
@@ -245,7 +275,7 @@ export function BackendReportsConsole({ apiBaseUrl, onViewChange, view }: Backen
       loadMoreAbortRef.current?.abort();
       loadMoreAbortRef.current = null;
     };
-  }, [appFilter, client, effectiveQuery, generation, scope, sort]);
+  }, [activeLoadInput, appFilter, client, effectiveQuery, scope, sort]);
 
   useEffect(() => {
     const bootstrap = bootstrapRef.current;

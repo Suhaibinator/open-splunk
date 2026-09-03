@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
 import { SortDirection } from "@/gen/ts/open_splunk/common";
@@ -135,7 +135,6 @@ export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsolePro
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [generation, setGeneration] = useState(0);
-  const activeLoadGenerationRef = useRef(0);
   const [filter, setFilter] = useState("");
   const [view, setView] = useState<"cards" | "table">("cards");
   const [definitionState, setDefinitionState] = useState<DefinitionLoadState>("idle");
@@ -143,23 +142,25 @@ export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsolePro
   const [definitionError, setDefinitionError] = useState<string | null>(null);
   const [observedIndexId, setObservedIndexId] = useState<string | null>(null);
   const reload = useCallback(() => setGeneration((current) => current + 1), []);
+  const loadInput = { client, generation };
+  const [activeLoadInput, setActiveLoadInput] = useState(loadInput);
+  if (activeLoadInput.client !== loadInput.client || activeLoadInput.generation !== loadInput.generation) {
+    setActiveLoadInput(loadInput);
+    setLoading(true);
+    setError(null);
+    setDefinitionState("idle");
+    setDefinitions(new Map());
+    setDefinitionError(null);
+  }
 
   useEffect(() => {
-    activeLoadGenerationRef.current = generation;
+    if (activeLoadInput.generation !== generation) return;
     const controller = new AbortController();
     let current = true;
-    queueMicrotask(() => {
-      if (!current) return;
-      setLoading(true);
-      setError(null);
-      setDefinitionState("idle");
-      setDefinitions(new Map());
-      setDefinitionError(null);
-    });
     void (async () => {
       try {
         const response = await getSystemBootstrap(client, undefined, { signal: controller.signal });
-        if (!current || activeLoadGenerationRef.current !== generation) return;
+        if (!current) return;
         setBootstrap(response);
         setLoading(false);
         setDefinitionState("loading");
@@ -181,7 +182,7 @@ export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsolePro
       current = false;
       controller.abort();
     };
-  }, [client, generation]);
+  }, [activeLoadInput, client, generation]);
 
   const visible = useMemo(() => {
     const normalized = filter.trim().toLowerCase();

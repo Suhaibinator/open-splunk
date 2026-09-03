@@ -1,4 +1,4 @@
-import { type Dispatch, type FormEvent, type KeyboardEvent, type PointerEvent, type SetStateAction, useEffect, useMemo, useRef, useState } from "react";
+import { type Dispatch, type FormEvent, type KeyboardEvent, type PointerEvent, type SetStateAction, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import type { DemoEvent, DemoField, DemoScalar, TimelinePoint } from "@/lib/demo/search-data";
 import type { PivotMode } from "@/lib/search/query-pivots";
@@ -15,6 +15,18 @@ import {
   formatFieldValue,
   highlightedRaw,
 } from "../workspace-utils";
+
+const PHONE_VIEWPORT = "(max-width: 760px)";
+
+function subscribePhoneViewport(listener: () => void): () => void {
+  const query = window.matchMedia(PHONE_VIEWPORT);
+  query.addEventListener("change", listener);
+  return () => query.removeEventListener("change", listener);
+}
+
+function phoneViewportSnapshot(): boolean {
+  return window.matchMedia(PHONE_VIEWPORT).matches;
+}
 
 interface EventsPanelProps {
   activeField: string | null;
@@ -197,7 +209,7 @@ export function EventsPanel({
   canZoomOut,
 }: EventsPanelProps) {
   const [timelineKeyboardIndex, setTimelineKeyboardIndex] = useState(0);
-  const [mobileFieldsMode, setMobileFieldsMode] = useState(false);
+  const mobileFieldsMode = useSyncExternalStore(subscribePhoneViewport, phoneViewportSnapshot, () => false);
   const [pageJumpDraft, setPageJumpDraft] = useState({ page: eventPage, value: String(eventPage) });
   const fieldsRailRef = useRef<HTMLElement>(null);
   const fieldsReturnFocusRef = useRef<HTMLElement | null>(null);
@@ -274,17 +286,6 @@ export function EventsPanel({
     setTimelinePointCount(timelinePoints.length);
     setTimelineKeyboardIndex((current) => Math.min(current, Math.max(0, timelinePoints.length - 1)));
   }
-
-  useEffect(() => {
-    const phoneViewport = window.matchMedia("(max-width: 760px)");
-    const updateMode = () => setMobileFieldsMode(phoneViewport.matches);
-    const modeFrame = window.requestAnimationFrame(updateMode);
-    phoneViewport.addEventListener("change", updateMode);
-    return () => {
-      window.cancelAnimationFrame(modeFrame);
-      phoneViewport.removeEventListener("change", updateMode);
-    };
-  }, []);
 
   useEffect(() => {
     if (fieldsCollapsed || !window.matchMedia("(max-width: 760px)").matches) return;

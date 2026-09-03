@@ -107,7 +107,6 @@ export function AlertsPanel({ apiBaseUrl, initialDraft }: AlertsPanelProps) {
   const [administratorSignInRequired, setAdministratorSignInRequired] = useState(false);
   const [notice, setNotice] = useState<AlertNotice | null>(null);
   const [generation, setGeneration] = useState(0);
-  const activeLoadGenerationRef = useRef(0);
   const [wizardTarget, setWizardTarget] = useState<AlertWizardTarget | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ServerAlert | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingAlertAction | null>(null);
@@ -117,20 +116,22 @@ export function AlertsPanel({ apiBaseUrl, initialDraft }: AlertsPanelProps) {
   const issuance = useAlertSecretIssuance();
 
   const reload = useCallback(() => setGeneration((current) => current + 1), []);
+  const loadInput = { client, generation };
+  const [activeLoadInput, setActiveLoadInput] = useState(loadInput);
+  if (activeLoadInput.client !== loadInput.client || activeLoadInput.generation !== loadInput.generation) {
+    setActiveLoadInput(loadInput);
+    setState("loading");
+    setError(null);
+    setAdministratorSignInRequired(false);
+  }
   useEffect(() => {
-    activeLoadGenerationRef.current = generation;
+    if (activeLoadInput.generation !== generation) return;
     const controller = new AbortController();
-    queueMicrotask(() => {
-      if (controller.signal.aborted) return;
-      setState("loading");
-      setError(null);
-      setAdministratorSignInRequired(false);
-    });
     void (async () => {
       try {
         const nextBootstrap = await getSystemBootstrap(client, undefined, { signal: controller.signal });
         const result = await listServerAlerts(client, nextBootstrap, { signal: controller.signal });
-        if (controller.signal.aborted || activeLoadGenerationRef.current !== generation) return;
+        if (controller.signal.aborted) return;
         setBootstrap(nextBootstrap);
         if (result.status === "unavailable") {
           setState("unavailable");
@@ -146,7 +147,7 @@ export function AlertsPanel({ apiBaseUrl, initialDraft }: AlertsPanelProps) {
       }
     })();
     return () => controller.abort();
-  }, [client, generation]);
+  }, [activeLoadInput, client, generation]);
 
   function replaceAlert(next: ServerAlert) {
     setAlerts((current) => current.map((alert) => alert.id === next.id ? next : alert));

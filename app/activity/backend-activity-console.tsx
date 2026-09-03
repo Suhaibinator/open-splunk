@@ -345,7 +345,6 @@ function BackendSearchHistory({ apiBaseUrl }: BackendActivityViewProps) {
   const [totalSize, setTotalSize] = useState<bigint | null>(null);
   const [totalSizeExact, setTotalSizeExact] = useState(false);
   const [generation, setGeneration] = useState(0);
-  const activeLoadGenerationRef = useRef(0);
   const [filter, setFilter] = useState<ActivityFilter>("all");
   const [query, setQuery] = useState("");
   const [textFilter, setTextFilter] = useState("");
@@ -358,6 +357,21 @@ function BackendSearchHistory({ apiBaseUrl }: BackendActivityViewProps) {
   const actionAbortRef = useRef<AbortController | null>(null);
   const pageTokensSeenRef = useRef<Set<string>>(new Set());
   const reload = useCallback(() => setGeneration((current) => current + 1), []);
+  const loadInput = { client, filter, generation, textFilter };
+  const [activeLoadInput, setActiveLoadInput] = useState(loadInput);
+  if (
+    activeLoadInput.client !== loadInput.client
+    || activeLoadInput.filter !== loadInput.filter
+    || activeLoadInput.generation !== loadInput.generation
+    || activeLoadInput.textFilter !== loadInput.textFilter
+  ) {
+    setActiveLoadInput(loadInput);
+    setState("loading");
+    setError(null);
+    setLoadMoreError(null);
+    setLoadingMore(false);
+    setNextPageToken(null);
+  }
 
   useEffect(() => {
     const timeout = window.setTimeout(() => setTextFilter(query.trim()), 300);
@@ -367,19 +381,11 @@ function BackendSearchHistory({ apiBaseUrl }: BackendActivityViewProps) {
   useEffect(() => () => actionAbortRef.current?.abort(), []);
 
   useEffect(() => {
-    activeLoadGenerationRef.current = generation;
+    if (activeLoadInput.generation !== generation) return;
     loadMoreAbortRef.current?.abort();
     loadMoreAbortRef.current = null;
     const controller = new AbortController();
     let current = true;
-    queueMicrotask(() => {
-      if (!current) return;
-      setState("loading");
-      setError(null);
-      setLoadMoreError(null);
-      setLoadingMore(false);
-      setNextPageToken(null);
-    });
     bootstrapRef.current = null;
     pageTokensSeenRef.current.clear();
     void (async () => {
@@ -396,7 +402,7 @@ function BackendSearchHistory({ apiBaseUrl }: BackendActivityViewProps) {
           pageSize: Math.max(1, Math.min(bootstrap.limits.maximumPageSize || 50, 100)),
           maximumPages: 1,
         });
-        if (!current || activeLoadGenerationRef.current !== generation) return;
+        if (!current) return;
         if (result.status === "unavailable") {
           setEntries([]);
           setState("unavailable");
@@ -425,7 +431,7 @@ function BackendSearchHistory({ apiBaseUrl }: BackendActivityViewProps) {
       loadMoreAbortRef.current?.abort();
       loadMoreAbortRef.current = null;
     };
-  }, [client, filter, generation, textFilter]);
+  }, [activeLoadInput, client, filter, generation, textFilter]);
 
   const loadMore = useCallback(async () => {
     const bootstrap = bootstrapRef.current;

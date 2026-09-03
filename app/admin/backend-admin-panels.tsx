@@ -408,68 +408,76 @@ export function TokenScopePicker({ idPrefix, options, selected, onChange, disabl
   );
 }
 
-interface BackendOverviewProps {
-  bootstrap: SystemBootstrapModel | null;
-  bootstrapError: string | null;
-  indexState: ResourceState;
-  indexCount: number;
-  indexTotalSize: bigint | null;
-  indexTotalSizeExact: boolean;
-  activeIndexes: number;
-  tokenState: ResourceState;
-  tokenCount: number;
-  tokenTotalSize: bigint | null;
-  tokenTotalSizeExact: boolean;
-  activeTokens: number;
-  onNavigate: (section: AdminSection) => void;
-  onReload: () => void;
+interface BackendOverviewResourceSnapshot {
+  activeCount: number;
+  loadedCount: number;
+  state: ResourceState;
+  totalSize: bigint | null;
+  totalSizeExact: boolean;
 }
 
-export function BackendOverview(props: BackendOverviewProps) {
-  const { bootstrap } = props;
+interface BackendOverviewSnapshot {
+  bootstrap: SystemBootstrapModel | null;
+  bootstrapError: string | null;
+  indexes: BackendOverviewResourceSnapshot;
+  tokens: BackendOverviewResourceSnapshot;
+}
+
+interface BackendOverviewActions {
+  navigate: (section: AdminSection) => void;
+  reload: () => void;
+}
+
+interface BackendOverviewProps {
+  actions: BackendOverviewActions;
+  snapshot: BackendOverviewSnapshot;
+}
+
+export function BackendOverview({ actions, snapshot }: BackendOverviewProps) {
+  const { bootstrap, indexes, tokens } = snapshot;
   const indexCount = countLabel(
-    props.indexCount,
-    props.indexTotalSize,
-    props.indexTotalSizeExact,
+    indexes.loadedCount,
+    indexes.totalSize,
+    indexes.totalSizeExact,
     "index",
     "indexes",
   );
   const tokenCount = countLabel(
-    props.tokenCount,
-    props.tokenTotalSize,
-    props.tokenTotalSizeExact,
+    tokens.loadedCount,
+    tokens.totalSize,
+    tokens.totalSizeExact,
     "token",
     "tokens",
   );
-  const indexDetail = props.indexState === "available"
-    ? `${props.activeIndexes.toLocaleString()} active in loaded records`
-    : props.indexState === "loading"
+  const indexDetail = indexes.state === "available"
+    ? `${indexes.activeCount.toLocaleString()} active in loaded records`
+    : indexes.state === "loading"
       ? "Loading catalog…"
-      : props.indexState === "error"
+      : indexes.state === "error"
         ? "Load failed"
         : "Route unavailable";
-  const tokenDetail = props.tokenState === "available"
-    ? `${props.activeTokens.toLocaleString()} active in loaded records`
-    : props.tokenState === "loading"
+  const tokenDetail = tokens.state === "available"
+    ? `${tokens.activeCount.toLocaleString()} active in loaded records`
+    : tokens.state === "loading"
       ? "Loading tokens…"
-      : props.tokenState === "error"
+      : tokens.state === "error"
         ? "Load failed"
         : "Route unavailable";
   return (
     <div className="admin-section-stack">
-      <header className="admin-section-header"><div><h2>System overview</h2><p>Capabilities reported by the available server routes.</p></div><button className="button" type="button" onClick={props.onReload}>Refresh</button></header>
+      <header className="admin-section-header"><div><h2>System overview</h2><p>Capabilities reported by the available server routes.</p></div><button className="button" type="button" onClick={actions.reload}>Refresh</button></header>
       <div className="admin-summary-grid">
-        <article><span className="summary-icon summary-icon--green" aria-hidden="true">▦</span><div><small>Indexes</small><strong>{props.indexState === "available" ? indexCount : "—"}</strong><p>{indexDetail}</p></div><button type="button" onClick={() => props.onNavigate("indexes")}>Manage</button></article>
-        <article><span className="summary-icon summary-icon--blue" aria-hidden="true">⇣</span><div><small>Ingestion tokens</small><strong>{props.tokenState === "available" ? tokenCount : "—"}</strong><p>{tokenDetail}</p></div><button type="button" onClick={() => props.onNavigate("collectors")}>Inspect</button></article>
+        <article><span className="summary-icon summary-icon--green" aria-hidden="true">▦</span><div><small>Indexes</small><strong>{indexes.state === "available" ? indexCount : "—"}</strong><p>{indexDetail}</p></div><button type="button" onClick={() => actions.navigate("indexes")}>Manage</button></article>
+        <article><span className="summary-icon summary-icon--blue" aria-hidden="true">⇣</span><div><small>Ingestion tokens</small><strong>{tokens.state === "available" ? tokenCount : "—"}</strong><p>{tokenDetail}</p></div><button type="button" onClick={() => actions.navigate("collectors")}>Inspect</button></article>
         <article><span className="summary-icon summary-icon--violet" aria-hidden="true">⌕</span><div><small>Source revision</small><strong>{bootstrap?.build?.sourceRevision.slice(0, 12) || "—"}</strong><p>{bootstrap === null ? "Bootstrap unavailable" : bootstrap.build === null ? "Not reported" : "Build identity"}</p></div><Link href="/search/events/">Search</Link></article>
-        <article><span className="summary-icon summary-icon--orange" aria-hidden="true">↻</span><div><small>Result retention</small><strong>{bootstrap !== null && bootstrap.limits.searchResultRetentionMs > 0 ? `${Math.round(bootstrap.limits.searchResultRetentionMs / 60_000)}m` : "—"}</strong><p>{bootstrap === null ? "Bootstrap unavailable" : "Read-only server limit"}</p></div><button type="button" onClick={() => props.onNavigate("server")}>Limits</button></article>
+        <article><span className="summary-icon summary-icon--orange" aria-hidden="true">↻</span><div><small>Result retention</small><strong>{bootstrap !== null && bootstrap.limits.searchResultRetentionMs > 0 ? `${Math.round(bootstrap.limits.searchResultRetentionMs / 60_000)}m` : "—"}</strong><p>{bootstrap === null ? "Bootstrap unavailable" : "Read-only server limit"}</p></div><button type="button" onClick={() => actions.navigate("server")}>Limits</button></article>
       </div>
       {bootstrap === null ? (
         <BackendResourceState
           kind="error"
           title="System bootstrap could not be loaded"
-          message={`${props.bootstrapError ?? "The bootstrap route did not return a usable response."} Index and token routes were checked independently and remain available where shown.`}
-          action={<button type="button" onClick={props.onReload}>Retry bootstrap</button>}
+          message={`${snapshot.bootstrapError ?? "The bootstrap route did not return a usable response."} Index and token routes were checked independently and remain available where shown.`}
+          action={<button type="button" onClick={actions.reload}>Retry bootstrap</button>}
         />
       ) : (
         <section className="suite-card">
@@ -486,35 +494,43 @@ export function BackendOverview(props: BackendOverviewProps) {
   );
 }
 
-interface BackendIndexesProps {
-  state: ResourceState;
+interface BackendIndexCatalogSnapshot {
+  busy: string | null;
   error: string | null;
   filter: string;
-  indexes: Index[];
+  hasMore: boolean;
+  indexes: readonly Index[];
+  loadingMore: boolean;
+  paginationError: string | null;
+  state: ResourceState;
   totalIndexes: number;
   totalSize: bigint | null;
   totalSizeExact: boolean;
-  hasMore: boolean;
-  loadingMore: boolean;
-  paginationError: string | null;
-  busy: string | null;
-  onFilterChange: (value: string) => void;
-  onLoadMore: () => void;
-  onReload: () => void;
-  onEdit: (index: Index) => void;
-  onChangeState: (index: Index) => void;
-  onDelete: (index: Index) => void;
 }
 
-export function BackendIndexes(props: BackendIndexesProps) {
-  if (props.state === "loading") return <BackendResourceState kind="loading" title="Loading indexes" message="Reading the server index catalog…" />;
-  if (props.state === "unavailable") return <BackendResourceState kind="unavailable" title="Index administration is unavailable" message="The connected server did not register the index administration routes." action={<button type="button" onClick={props.onReload}>Retry</button>} />;
-  if (props.state === "error") return <BackendResourceState kind="error" title="Indexes could not be loaded" message={props.error ?? "The server rejected the index catalog request."} action={<button type="button" onClick={props.onReload}>Retry</button>} />;
+interface BackendIndexActions {
+  changeState: (index: Index) => void;
+  delete: (index: Index) => void;
+  edit: (index: Index) => void;
+  loadMore: () => void;
+  reload: () => void;
+  setFilter: (value: string) => void;
+}
+
+interface BackendIndexesProps {
+  actions: BackendIndexActions;
+  catalog: BackendIndexCatalogSnapshot;
+}
+
+export function BackendIndexes({ actions, catalog }: BackendIndexesProps) {
+  if (catalog.state === "loading") return <BackendResourceState kind="loading" title="Loading indexes" message="Reading the server index catalog…" />;
+  if (catalog.state === "unavailable") return <BackendResourceState kind="unavailable" title="Index administration is unavailable" message="The connected server did not register the index administration routes." action={<button type="button" onClick={actions.reload}>Retry</button>} />;
+  if (catalog.state === "error") return <BackendResourceState kind="error" title="Indexes could not be loaded" message={catalog.error ?? "The server rejected the index catalog request."} action={<button type="button" onClick={actions.reload}>Retry</button>} />;
 
   const loadedCount = countLabel(
-    props.totalIndexes,
-    props.totalSize,
-    props.totalSizeExact,
+    catalog.totalIndexes,
+    catalog.totalSize,
+    catalog.totalSizeExact,
     "index",
     "indexes",
   );
@@ -522,16 +538,16 @@ export function BackendIndexes(props: BackendIndexesProps) {
   return (
     <div className="admin-section-stack">
       <header className="admin-section-header"><div><h2>Indexes</h2><p>Authoritative index definitions from the connected server.</p></div><span>{loadedCount}</span></header>
-      <div className="resource-toolbar"><label><span className="sr-only">Filter loaded indexes</span><i aria-hidden="true"><AppIcon name="search" size="sm" /></i><input value={props.filter} onChange={(event) => props.onFilterChange(event.target.value)} placeholder="Filter loaded indexes" /></label><button className="button button--toolbar" type="button" onClick={props.onReload}><AppIcon name="refresh" size="sm" /> Refresh</button></div>
-      {props.indexes.length === 0 ? (
-        <BackendResourceState kind="empty" title={props.totalIndexes === 0 ? "No indexes configured" : "No matching indexes"} message={props.totalIndexes === 0 ? "Create an index to begin accepting and searching data." : "Try another index name or description."} action={props.totalIndexes > 0 && props.filter.trim().length > 0 ? <button type="button" onClick={() => props.onFilterChange("")}>Clear filter</button> : undefined} />
+      <div className="resource-toolbar"><label><span className="sr-only">Filter loaded indexes</span><i aria-hidden="true"><AppIcon name="search" size="sm" /></i><input value={catalog.filter} onChange={(event) => actions.setFilter(event.target.value)} placeholder="Filter loaded indexes" /></label><button className="button button--toolbar" type="button" onClick={actions.reload}><AppIcon name="refresh" size="sm" /> Refresh</button></div>
+      {catalog.indexes.length === 0 ? (
+        <BackendResourceState kind="empty" title={catalog.totalIndexes === 0 ? "No indexes configured" : "No matching indexes"} message={catalog.totalIndexes === 0 ? "Create an index to begin accepting and searching data." : "Try another index name or description."} action={catalog.totalIndexes > 0 && catalog.filter.trim().length > 0 ? <button type="button" onClick={() => actions.setFilter("")}>Clear filter</button> : undefined} />
       ) : (
         <div className="suite-card resource-table-card">
           <div className="table-wrap">
             <table className="table admin-resource-table">
               <caption className="sr-only">Configured indexes</caption>
               <thead><tr><th scope="col">Name</th><th scope="col">State</th><th scope="col">Ingestion</th><th scope="col">Search</th><th scope="col">Retention</th><th scope="col">Updated</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
-              <tbody>{props.indexes.map((index) => {
+              <tbody>{catalog.indexes.map((index) => {
                 const definition = index.definition;
                 const name = definition?.name || index.indexId;
                 const state = indexStateLabel(index.state);
@@ -551,7 +567,7 @@ export function BackendIndexes(props: BackendIndexesProps) {
                     <td>{indexAccessLabel(definition?.searchAccess)}</td>
                     <td>{formatDuration(definition?.retentionPeriod?.seconds)}</td>
                     <td>{formatDate(index.updatedAt)}</td>
-                    <td><div className="row-actions"><button className="table-action" type="button" aria-label={`Edit index ${name}`} disabled={!canEdit || props.busy !== null} onClick={() => props.onEdit(index)}>{props.busy === `read-index-${index.indexId}` ? "Loading…" : "Edit"}</button><button className="table-action" type="button" aria-label={`${index.state === IndexState.INDEX_STATE_ACTIVE ? "Archive" : "Reactivate"} index ${name}`} disabled={!canChange || props.busy !== null} onClick={() => props.onChangeState(index)}>{props.busy === `index-${index.indexId}` ? "Updating…" : index.state === IndexState.INDEX_STATE_ACTIVE ? "Archive" : "Reactivate"}</button><button className="table-action table-action--danger" type="button" aria-label={`Delete index ${name}`} disabled={!canEdit || props.busy !== null} onClick={() => props.onDelete(index)}>Delete</button></div></td>
+                    <td><div className="row-actions"><button className="table-action" type="button" aria-label={`Edit index ${name}`} disabled={!canEdit || catalog.busy !== null} onClick={() => actions.edit(index)}>{catalog.busy === `read-index-${index.indexId}` ? "Loading…" : "Edit"}</button><button className="table-action" type="button" aria-label={`${index.state === IndexState.INDEX_STATE_ACTIVE ? "Archive" : "Reactivate"} index ${name}`} disabled={!canChange || catalog.busy !== null} onClick={() => actions.changeState(index)}>{catalog.busy === `index-${index.indexId}` ? "Updating…" : index.state === IndexState.INDEX_STATE_ACTIVE ? "Archive" : "Reactivate"}</button><button className="table-action table-action--danger" type="button" aria-label={`Delete index ${name}`} disabled={!canEdit || catalog.busy !== null} onClick={() => actions.delete(index)}>Delete</button></div></td>
                   </tr>
                 );
               })}</tbody>
@@ -562,11 +578,11 @@ export function BackendIndexes(props: BackendIndexesProps) {
       <div className="admin-pagination-footer" aria-live="polite">
         <div>
           <strong>{loadedCount}</strong>
-          {props.filter.trim().length === 0 ? null : <small>{props.indexes.length.toLocaleString()} matching loaded records</small>}
-          {props.paginationError === null ? null : <small className="table-warning-detail">{props.paginationError}</small>}
+          {catalog.filter.trim().length === 0 ? null : <small>{catalog.indexes.length.toLocaleString()} matching loaded records</small>}
+          {catalog.paginationError === null ? null : <small className="table-warning-detail">{catalog.paginationError}</small>}
         </div>
-        {props.hasMore
-          ? <button className="button button--secondary" type="button" disabled={props.loadingMore || props.busy !== null} onClick={props.onLoadMore}>{props.loadingMore ? "Loading…" : "Load more indexes"}</button>
+        {catalog.hasMore
+          ? <button className="button button--secondary" type="button" disabled={catalog.loadingMore || catalog.busy !== null} onClick={actions.loadMore}>{catalog.loadingMore ? "Loading…" : "Load more indexes"}</button>
           : null}
       </div>
       <p className="resource-footnote">Event counts, storage use, and the bounded field catalog are available from the Datasets page. Delete uses a current version, an exact-name confirmation, and an explicit physical-data mode.</p>
@@ -574,89 +590,105 @@ export function BackendIndexes(props: BackendIndexesProps) {
   );
 }
 
-interface BackendTokensProps {
-  state: ResourceState;
+interface BackendTokenCatalogSnapshot {
+  busy: string | null;
   error: string | null;
-  indexState: ResourceState;
-  indexError: string | null;
-  scopeSource: TokenScopeSource;
-  tokens: IngestionToken[];
-  totalSize: bigint | null;
-  totalSizeExact: boolean;
   hasMore: boolean;
   loadingMore: boolean;
   paginationError: string | null;
-  busy: string | null;
-  canCreate: boolean;
-  createBlockReason: string | null;
-  recoveryActionLabel: string | null;
-  onResolveRecovery: () => void;
-  onEdit: (token: IngestionToken) => void;
-  onLoadMore: () => void;
-  onReload: () => void;
-  onRevoke: (token: IngestionToken) => void;
-  onSetEnabled: (token: IngestionToken, enabled: boolean) => void;
+  state: ResourceState;
+  tokens: readonly IngestionToken[];
+  totalSize: bigint | null;
+  totalSizeExact: boolean;
 }
 
-export function BackendTokens(props: BackendTokensProps) {
-  if (props.state === "loading") return <BackendResourceState kind="loading" title="Loading ingestion tokens" message="Reading token metadata from the server…" />;
-  if (props.state === "unavailable") return <BackendResourceState kind="unavailable" title="Ingestion tokens are unavailable" message="The connected server did not register the ingestion-token routes. Collector fleet status is loaded independently from its own capability-gated panel." action={<button type="button" onClick={props.onReload}>Retry</button>} />;
-  if (props.state === "error") return <BackendResourceState kind="error" title="Ingestion tokens could not be loaded" message={props.error ?? "The server rejected the token list request."} action={<button type="button" onClick={props.onReload}>Retry</button>} />;
+interface BackendTokenCreationSnapshot {
+  canCreate: boolean;
+  blockReason: string | null;
+  recoveryActionLabel: string | null;
+}
+
+interface BackendTokenScopeSnapshot {
+  error: string | null;
+  source: TokenScopeSource;
+  state: ResourceState;
+}
+
+interface BackendTokenActions {
+  edit: (token: IngestionToken) => void;
+  loadMore: () => void;
+  reload: () => void;
+  resolveRecovery: () => void;
+  revoke: (token: IngestionToken) => void;
+  setEnabled: (token: IngestionToken, enabled: boolean) => void;
+}
+
+interface BackendTokensProps {
+  actions: BackendTokenActions;
+  catalog: BackendTokenCatalogSnapshot;
+  creation: BackendTokenCreationSnapshot;
+  scope: BackendTokenScopeSnapshot;
+}
+
+export function BackendTokens({ actions, catalog, creation, scope }: BackendTokensProps) {
+  if (catalog.state === "loading") return <BackendResourceState kind="loading" title="Loading ingestion tokens" message="Reading token metadata from the server…" />;
+  if (catalog.state === "unavailable") return <BackendResourceState kind="unavailable" title="Ingestion tokens are unavailable" message="The connected server did not register the ingestion-token routes. Collector fleet status is loaded independently from its own capability-gated panel." action={<button type="button" onClick={actions.reload}>Retry</button>} />;
+  if (catalog.state === "error") return <BackendResourceState kind="error" title="Ingestion tokens could not be loaded" message={catalog.error ?? "The server rejected the token list request."} action={<button type="button" onClick={actions.reload}>Retry</button>} />;
   const loadedCount = countLabel(
-    props.tokens.length,
-    props.totalSize,
-    props.totalSizeExact,
+    catalog.tokens.length,
+    catalog.totalSize,
+    catalog.totalSizeExact,
     "token",
     "tokens",
   );
-  const indexAdminDetail = props.indexState === "loading"
+  const indexAdminDetail = scope.state === "loading"
     ? "The versioned index catalog is still loading."
-    : props.indexError ?? "The versioned index catalog route is unavailable.";
+    : scope.error ?? "The versioned index catalog route is unavailable.";
 
   return (
     <div className="admin-section-stack">
       <header className="admin-section-header"><div><h2>Ingestion tokens</h2><p>Manage server-issued ingestion credentials and their index scopes.</p></div></header>
-      {props.createBlockReason === null ? null : (
+      {creation.blockReason === null ? null : (
         <div id="ingestion-token-create-disabled-reason" className="access-mode-notice token-create-disabled-reason" role="note">
           <span>!</span>
           <div>
             <strong>Token generation is locked</strong>
-            <p>{props.createBlockReason}</p>
-            {props.recoveryActionLabel === null ? null : (
-              <button className="button button--secondary" type="button" onClick={props.onResolveRecovery}>
-                {props.recoveryActionLabel}
+            <p>{creation.blockReason}</p>
+            {creation.recoveryActionLabel === null ? null : (
+              <button className="button button--secondary" type="button" onClick={actions.resolveRecovery}>
+                {creation.recoveryActionLabel}
               </button>
             )}
           </div>
         </div>
       )}
-      {props.indexState === "available" ? null : (
+      {scope.state === "available" ? null : (
         <div className="access-mode-notice" role="note">
           <span>!</span>
           <div>
-            <strong>{props.scopeSource === "bootstrap" ? "Using bootstrap index summaries" : "Index scope data unavailable"}</strong>
-            <p>{props.scopeSource === "bootstrap"
+            <strong>{scope.source === "bootstrap" ? "Using bootstrap index summaries" : "Index scope data unavailable"}</strong>
+            <p>{scope.source === "bootstrap"
               ? `${indexAdminDetail} Token generation and scope edits remain available using bootstrap eligibility data.`
-              : props.indexError === null
+              : scope.error === null
                 ? "Existing tokens can still be inspected, edited, and revoked. Token generation and index-scope changes require an authoritative index summary."
-                : `${props.indexError} Existing tokens remain available, but token generation and index-scope changes are disabled.`}</p>
+                : `${scope.error} Existing tokens remain available, but token generation and index-scope changes are disabled.`}</p>
           </div>
         </div>
       )}
       <section className="suite-card token-section token-section--credentials">
-        <header className="suite-card-header"><div><h3>Issued credentials</h3><p>Token secrets are never returned after creation. {loadedCount}.</p></div><button type="button" onClick={props.onReload}>Refresh</button></header>
-        {props.tokens.length === 0 ? (
+        <header className="suite-card-header"><div><h3>Issued credentials</h3><p>Token secrets are never returned after creation. {loadedCount}.</p></div><button type="button" onClick={actions.reload}>Refresh</button></header>
+        {catalog.tokens.length === 0 ? (
           <BackendResourceState
             kind="empty"
             title="No ingestion tokens"
-            message={props.canCreate
+            message={creation.canCreate
               ? "Generate a token scoped to an active, ingestible index."
-              : props.scopeSource !== "unavailable"
+              : scope.source !== "unavailable"
                 ? "No active, ingestion-enabled index is currently available for a new token."
                 : "The token route is available, but generation is disabled until an authoritative index summary loads."}
           />
         ) : (
-          <div className="table-wrap"><table className="table"><caption className="sr-only">Issued ingestion credentials</caption><thead><tr><th scope="col">Name</th><th scope="col">Purpose</th><th scope="col">Prefix</th><th scope="col">Allowed indexes</th><th scope="col">Expires</th><th scope="col">Last used</th><th scope="col">State</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead><tbody>{props.tokens.map((token) => {
+          <div className="table-wrap"><table className="table"><caption className="sr-only">Issued ingestion credentials</caption><thead><tr><th scope="col">Name</th><th scope="col">Purpose</th><th scope="col">Prefix</th><th scope="col">Allowed indexes</th><th scope="col">Expires</th><th scope="col">Last used</th><th scope="col">State</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead><tbody>{catalog.tokens.map((token) => {
             const state = tokenStateLabel(token.state);
             const canRevoke = tokenCanBeRevoked(token);
             const canSetEnabled = tokenCanSetEnabled(token);
@@ -664,16 +696,16 @@ export function BackendTokens(props: BackendTokensProps) {
             const hecToken = tokenUsesHEC(token.purpose);
             const nativeToken = token.purpose === IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR;
             const canEdit = canRevoke && (hecToken || nativeToken);
-            return <tr key={token.ingestionTokenId}><td><strong>{token.name}</strong>{token.description ? <small className="table-secondary">{token.description}</small> : null}</td><td><strong>{tokenPurposeLabel(token.purpose)}</strong><small className="table-secondary">{hecToken ? `Indexer ACK ${token.hecProfile?.indexerAcknowledgment ? "enabled" : "disabled"}` : nativeToken ? "gRPC ingestion" : "Transport unavailable"}</small>{hecToken ? <small className="table-secondary">{hecProfileSummary(token.hecProfile)}</small> : null}</td><td><code>{token.tokenPrefix}</code></td><td className="table-long-value">{token.constraints?.allowedIndexNames.join(", ") || "None"}<small className="table-secondary">{hecToken ? token.hecProfile?.defaultIndexName ? `Default ${token.hecProfile.defaultIndexName}` : "No token default index" : nativeToken ? token.constraints?.boundCollectorId === undefined ? "Native collector binding required" : `Collector ${token.constraints.boundCollectorId}` : "Purpose unavailable"}</small></td><td>{formatDate(token.expiresAt)}</td><td>{formatDate(token.lastUsedAt)}</td><td><StatusLabel tone={statusTone(state)}>{state}</StatusLabel></td><td><div className="row-actions"><button className="table-action" type="button" aria-label={`Edit token ${token.name}`} disabled={!canEdit || props.busy !== null} onClick={() => props.onEdit(token)}>{props.busy === `read-token-${token.ingestionTokenId}` ? "Loading…" : "Edit"}</button><button className="table-action" type="button" aria-label={`${enable ? "Enable" : "Disable"} token ${token.name}`} disabled={!canSetEnabled || props.busy !== null} onClick={() => props.onSetEnabled(token, enable)}>{props.busy === `token-state-${token.ingestionTokenId}` ? enable ? "Enabling…" : "Disabling…" : canSetEnabled ? enable ? "Enable" : "Disable" : "—"}</button><button className="table-action" type="button" aria-label={`Revoke token ${token.name}`} disabled={!canRevoke || props.busy !== null} onClick={() => props.onRevoke(token)}>{props.busy === `token-${token.ingestionTokenId}` ? "Revoking…" : canRevoke ? "Revoke" : "—"}</button></div></td></tr>;
+            return <tr key={token.ingestionTokenId}><td><strong>{token.name}</strong>{token.description ? <small className="table-secondary">{token.description}</small> : null}</td><td><strong>{tokenPurposeLabel(token.purpose)}</strong><small className="table-secondary">{hecToken ? `Indexer ACK ${token.hecProfile?.indexerAcknowledgment ? "enabled" : "disabled"}` : nativeToken ? "gRPC ingestion" : "Transport unavailable"}</small>{hecToken ? <small className="table-secondary">{hecProfileSummary(token.hecProfile)}</small> : null}</td><td><code>{token.tokenPrefix}</code></td><td className="table-long-value">{token.constraints?.allowedIndexNames.join(", ") || "None"}<small className="table-secondary">{hecToken ? token.hecProfile?.defaultIndexName ? `Default ${token.hecProfile.defaultIndexName}` : "No token default index" : nativeToken ? token.constraints?.boundCollectorId === undefined ? "Native collector binding required" : `Collector ${token.constraints.boundCollectorId}` : "Purpose unavailable"}</small></td><td>{formatDate(token.expiresAt)}</td><td>{formatDate(token.lastUsedAt)}</td><td><StatusLabel tone={statusTone(state)}>{state}</StatusLabel></td><td><div className="row-actions"><button className="table-action" type="button" aria-label={`Edit token ${token.name}`} disabled={!canEdit || catalog.busy !== null} onClick={() => actions.edit(token)}>{catalog.busy === `read-token-${token.ingestionTokenId}` ? "Loading…" : "Edit"}</button><button className="table-action" type="button" aria-label={`${enable ? "Enable" : "Disable"} token ${token.name}`} disabled={!canSetEnabled || catalog.busy !== null} onClick={() => actions.setEnabled(token, enable)}>{catalog.busy === `token-state-${token.ingestionTokenId}` ? enable ? "Enabling…" : "Disabling…" : canSetEnabled ? enable ? "Enable" : "Disable" : "—"}</button><button className="table-action" type="button" aria-label={`Revoke token ${token.name}`} disabled={!canRevoke || catalog.busy !== null} onClick={() => actions.revoke(token)}>{catalog.busy === `token-${token.ingestionTokenId}` ? "Revoking…" : canRevoke ? "Revoke" : "—"}</button></div></td></tr>;
           })}</tbody></table></div>
         )}
         <div className="admin-pagination-footer admin-pagination-footer--inset" aria-live="polite">
           <div>
             <strong>{loadedCount}</strong>
-            {props.paginationError === null ? null : <small className="table-warning-detail">{props.paginationError}</small>}
+            {catalog.paginationError === null ? null : <small className="table-warning-detail">{catalog.paginationError}</small>}
           </div>
-          {props.hasMore
-            ? <button className="button button--secondary" type="button" disabled={props.loadingMore || props.busy !== null} onClick={props.onLoadMore}>{props.loadingMore ? "Loading…" : "Load more tokens"}</button>
+          {catalog.hasMore
+            ? <button className="button button--secondary" type="button" disabled={catalog.loadingMore || catalog.busy !== null} onClick={actions.loadMore}>{catalog.loadingMore ? "Loading…" : "Load more tokens"}</button>
             : null}
         </div>
       </section>

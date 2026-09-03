@@ -185,7 +185,6 @@ export function ProductShell({
   );
   const [backendAppCatalogError, setBackendAppCatalogError] = useState<string | null>(null);
   const [backendAppCatalogGeneration, setBackendAppCatalogGeneration] = useState(0);
-  const activeCatalogGenerationRef = useRef(0);
   const apiClient = useMemo(
     () => createOpenSplunkApiClient({ baseUrl: apiBaseUrl }),
     [apiBaseUrl],
@@ -229,7 +228,24 @@ export function ProductShell({
                 ? "Search-performance summaries use retained backend history when the server advertises it."
                 : activeSection === "dashboards"
                   ? "Dashboard definitions and panel searches use registered backend routes when available."
-                  : "This page uses the configured backend where the server advertises support.";
+              : "This page uses the configured backend where the server advertises support.";
+  const catalogInput = useMemo(() => ({
+    apiClient,
+    dataMode,
+    generation: backendAppCatalogGeneration,
+    ownsCatalog,
+    preferredAppId,
+  }), [apiClient, backendAppCatalogGeneration, dataMode, ownsCatalog, preferredAppId]);
+  const [activeCatalogInput, setActiveCatalogInput] = useState(catalogInput);
+  if (activeCatalogInput !== catalogInput) {
+    setActiveCatalogInput(catalogInput);
+    if (catalogInput.ownsCatalog) {
+      if (catalogInput.dataMode !== "backend") setBackendApps([]);
+      setSelectedBackendAppId(null);
+      setBackendAppCatalogError(null);
+      setBackendAppCatalogState(catalogInput.dataMode === "backend" ? "loading" : "idle");
+    }
+  }
 
   function toggleMenu(nextMenu: ProductMenu, trigger: HTMLButtonElement) {
     menuTriggerRef.current = trigger;
@@ -277,32 +293,14 @@ export function ProductShell({
   }, []);
 
   useEffect(() => {
-    activeCatalogGenerationRef.current = backendAppCatalogGeneration;
-    if (!ownsCatalog) return;
-    let current = true;
-    if (dataMode !== "backend") {
-      queueMicrotask(() => {
-        if (!current || activeCatalogGenerationRef.current !== backendAppCatalogGeneration) return;
-        setBackendApps([]);
-        setSelectedBackendAppId(null);
-        setBackendAppCatalogError(null);
-        setBackendAppCatalogState("idle");
-      });
-      return () => {
-        current = false;
-      };
-    }
+    if (!catalogInput.ownsCatalog) return;
+    if (catalogInput.dataMode !== "backend") return;
     const controller = new AbortController();
-    queueMicrotask(() => {
-      if (!current) return;
-      setSelectedBackendAppId(null);
-      setBackendAppCatalogState("loading");
-      setBackendAppCatalogError(null);
-    });
-    void getSystemBootstrap(apiClient, preferredAppId, { signal: controller.signal })
+    let current = true;
+    void getSystemBootstrap(catalogInput.apiClient, catalogInput.preferredAppId, { signal: controller.signal })
       .then((bootstrap) => {
         if (!current) return;
-        const canonicalAppId = canonicalBackendAppId(preferredAppId, bootstrap.selectedAppId);
+        const canonicalAppId = canonicalBackendAppId(catalogInput.preferredAppId, bootstrap.selectedAppId);
         if (canonicalAppId !== undefined) replaceBackendAppId(canonicalAppId);
         setBackendApps(bootstrap.apps);
         setSelectedBackendAppId(bootstrap.selectedAppId);
@@ -319,7 +317,7 @@ export function ProductShell({
       current = false;
       controller.abort();
     };
-  }, [apiClient, backendAppCatalogGeneration, dataMode, ownsCatalog, preferredAppId]);
+  }, [catalogInput]);
 
   useEffect(() => {
     if (menu === null) return;
