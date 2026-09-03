@@ -81,37 +81,42 @@ function useAuditTraversal<T extends { sequence: bigint }>(
   const [loadMoreError, setLoadMoreError] = useState<AuditErrorPresentation | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [generation, setGeneration] = useState(0);
-  const activeLoadGenerationRef = useRef(0);
   const initialAbortRef = useRef<AbortController | null>(null);
   const moreAbortRef = useRef<AbortController | null>(null);
   const tokensSeenRef = useRef(new Set<string>());
   const sequencesSeenRef = useRef(new Set<bigint>());
   const reload = useCallback(() => setGeneration((value) => value + 1), []);
+  const loadInput = { generation, label, loadPage };
+  const [activeLoadInput, setActiveLoadInput] = useState(loadInput);
+  if (
+    activeLoadInput.generation !== loadInput.generation
+    || activeLoadInput.label !== loadInput.label
+    || activeLoadInput.loadPage !== loadInput.loadPage
+  ) {
+    setActiveLoadInput(loadInput);
+    setState("loading");
+    setItems([]);
+    setTotalSize(0n);
+    setNextPageToken(null);
+    setError(null);
+    setLoadMoreError(null);
+    setLoadingMore(false);
+  }
 
   useEffect(() => {
-    activeLoadGenerationRef.current = generation;
+    if (activeLoadInput.generation !== generation) return;
     initialAbortRef.current?.abort();
     moreAbortRef.current?.abort();
     moreAbortRef.current = null;
     const controller = new AbortController();
     initialAbortRef.current = controller;
     let current = true;
-    queueMicrotask(() => {
-      if (!current) return;
-      setState("loading");
-      setItems([]);
-      setTotalSize(0n);
-      setNextPageToken(null);
-      setError(null);
-      setLoadMoreError(null);
-      setLoadingMore(false);
-    });
     tokensSeenRef.current.clear();
     sequencesSeenRef.current.clear();
     void (async () => {
       try {
         const page = await loadPage(undefined, controller.signal);
-        if (!current || controller.signal.aborted || activeLoadGenerationRef.current !== generation) return;
+        if (!current || controller.signal.aborted) return;
         for (const item of page.items) sequencesSeenRef.current.add(item.sequence);
         setItems(page.items);
         setTotalSize(page.totalSize);
@@ -127,7 +132,7 @@ function useAuditTraversal<T extends { sequence: bigint }>(
       current = false;
       controller.abort();
     };
-  }, [generation, label, loadPage]);
+  }, [activeLoadInput, generation, label, loadPage]);
 
   useEffect(() => () => {
     initialAbortRef.current?.abort();

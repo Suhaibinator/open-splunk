@@ -71,6 +71,25 @@ function preferredDashboardAppID(): string | undefined {
   return preferredBackendAppId(globalThis.location.search);
 }
 
+async function fetchDashboardCatalog(
+  client: ReturnType<typeof createOpenSplunkApiClient>,
+  preferredAppId: string | undefined,
+  mode: DashboardLoadMode,
+  signal: AbortSignal,
+) {
+  const bootstrap = await getSystemBootstrap(client, preferredAppId, { signal });
+  if (!bootstrap.features.has(ServerFeature.SERVER_FEATURE_DASHBOARDS)) {
+    return { available: false as const };
+  }
+  const selectedApp = bootstrap.apps.find((app) => app.appId === bootstrap.selectedAppId) ?? bootstrap.apps[0];
+  if (!selectedApp) throw new Error("No active app is available for dashboards.");
+  if (mode === "switch" && preferredAppId !== undefined && selectedApp.appId !== preferredAppId) {
+    throw new Error("The requested dashboard app is no longer available.");
+  }
+  const response = await client.dashboards.list({ appIdFilter: selectedApp.appId }, { signal });
+  return { available: true as const, bootstrap, dashboards: response.dashboards, selectedApp };
+}
+
 function newPanel(appId: string, indexName: string, row: number): DashboardPanel {
   return {
     panelId: panelID(),
@@ -175,45 +194,33 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
     loadRequests.current.clear();
     const controller = new AbortController();
     loadRequests.current.add(controller);
-    if (mode === "initial") setLoading(true);
-    if (mode === "reload") setRefreshing(true);
-    if (mode === "switch") {
-      setSwitchingAppID(preferredAppId ?? "");
-    }
-    setError(null);
     try {
-      const bootstrap = await getSystemBootstrap(client, preferredAppId, { signal: controller.signal });
-      if (!bootstrap.features.has(ServerFeature.SERVER_FEATURE_DASHBOARDS)) {
+      const result = await fetchDashboardCatalog(client, preferredAppId, mode, controller.signal);
+      if (!result.available) {
         if (mode === "initial") {
           if (generation === loadGeneration.current) setAvailable(false);
           return false;
         }
         throw new Error("The backend no longer advertises persisted dashboard support.");
       }
-      const selectedApp = bootstrap.apps.find((app) => app.appId === bootstrap.selectedAppId) ?? bootstrap.apps[0];
-      if (!selectedApp) throw new Error("No active app is available for dashboards.");
-      if (mode === "switch" && preferredAppId !== undefined && selectedApp.appId !== preferredAppId) {
-        throw new Error("The requested dashboard app is no longer available.");
-      }
-      const response = await client.dashboards.list({ appIdFilter: selectedApp.appId }, { signal: controller.signal });
       if (generation !== loadGeneration.current) return false;
       const retainedID = mode === "switch" ? "" : selectedIDRef.current;
-      const nextSelected = response.dashboards.find((dashboard) => dashboard.dashboardId === retainedID)
-        ?? response.dashboards[0]
+      const nextSelected = result.dashboards.find((dashboard) => dashboard.dashboardId === retainedID)
+        ?? result.dashboards[0]
         ?? null;
       if (mode !== "initial") stopAllPanelRuns(mode === "switch" ? "Dashboard app changed" : "Dashboards reloaded");
       setAvailable(true);
-      setApps(bootstrap.apps);
-      setAppID(selectedApp.appId);
-      setAppName(selectedApp.displayName || selectedApp.slug || "Dashboard workspace");
-      setIndexNames(bootstrap.indexes.filter((index) => index.searchable).map((index) => index.name));
-      setDefaultSearchTimeoutMs(bootstrap.limits.defaultSearchTimeoutMs);
-      setDashboards(response.dashboards);
+      setApps(result.bootstrap.apps);
+      setAppID(result.selectedApp.appId);
+      setAppName(result.selectedApp.displayName || result.selectedApp.slug || "Dashboard workspace");
+      setIndexNames(result.bootstrap.indexes.filter((index) => index.searchable).map((index) => index.name));
+      setDefaultSearchTimeoutMs(result.bootstrap.limits.defaultSearchTimeoutMs);
+      setDashboards(result.dashboards);
       selectedIDRef.current = nextSelected?.dashboardId ?? "";
       setSelectedID(selectedIDRef.current);
       setDraft(nextSelected?.definition ? cloneDashboardDefinition(nextSelected.definition) : null);
       setPanelResults({});
-      if (mode === "switch") replaceBackendAppId(selectedApp.appId);
+      if (mode === "switch") replaceBackendAppId(result.selectedApp.appId);
       return true;
     } catch (requestError) {
       if (!controller.signal.aborted && generation === loadGeneration.current) {
@@ -230,14 +237,50 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
     }
   }, [client, stopAllPanelRuns]);
 
+  const beginLoad = useCallback((preferredAppId: string | undefined, mode: DashboardLoadMode) => {
+    if (mode === "initial") setLoading(true);
+    if (mode === "reload") setRefreshing(true);
+    if (mode === "switch") setSwitchingAppID(preferredAppId ?? "");
+    setError(null);
+    void load(preferredAppId, mode);
+  }, [load]);
+
   useEffect(() => {
     const requests = loadRequests.current;
     const runs = activePanelRuns.current;
-    const loadFrame = window.requestAnimationFrame(() => {
-      void load(preferredDashboardAppID(), "initial");
+    const preferredAppId = preferredDashboardAppID();
+    const generation = ++loadGeneration.current;
+    const controller = new AbortController();
+    requests.add(controller);
+    void fetchDashboardCatalog(client, preferredAppId, "initial", controller.signal).then((result) => {
+      if (controller.signal.aborted || generation !== loadGeneration.current) return;
+      if (!result.available) {
+        setAvailable(false);
+        return;
+      }
+      const nextSelected = result.dashboards.find((dashboard) => dashboard.dashboardId === selectedIDRef.current)
+        ?? result.dashboards[0]
+        ?? null;
+      setAvailable(true);
+      setApps(result.bootstrap.apps);
+      setAppID(result.selectedApp.appId);
+      setAppName(result.selectedApp.displayName || result.selectedApp.slug || "Dashboard workspace");
+      setIndexNames(result.bootstrap.indexes.filter((index) => index.searchable).map((index) => index.name));
+      setDefaultSearchTimeoutMs(result.bootstrap.limits.defaultSearchTimeoutMs);
+      setDashboards(result.dashboards);
+      selectedIDRef.current = nextSelected?.dashboardId ?? "";
+      setSelectedID(selectedIDRef.current);
+      setDraft(nextSelected?.definition ? cloneDashboardDefinition(nextSelected.definition) : null);
+      setPanelResults({});
+    }).catch((requestError: unknown) => {
+      if (!controller.signal.aborted && generation === loadGeneration.current) {
+        setError(dashboardLoadError(errorMessage(requestError), "initial", preferredAppId));
+      }
+    }).finally(() => {
+      requests.delete(controller);
+      if (generation === loadGeneration.current) setLoading(false);
     });
     return () => {
-      window.cancelAnimationFrame(loadFrame);
       loadGeneration.current += 1;
       for (const request of requests) request.abort();
       requests.clear();
@@ -249,7 +292,7 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
       }
       runs.clear();
     };
-  }, [client, load]);
+  }, [client]);
 
   useEffect(() => {
     if (!dirty) return;
@@ -471,7 +514,7 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
 
   function selectApp(nextAppID: string) {
     if (!nextAppID || nextAppID === appID || workspaceBusy || !confirmDiscardChanges()) return;
-    void load(nextAppID, "switch");
+    beginLoad(nextAppID, "switch");
   }
 
   function selectDashboard(nextDashboardID: string) {
@@ -488,7 +531,7 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
   function retryDashboardLoad() {
     const retry = error?.retry;
     if (!retry || workspaceBusy || !confirmDiscardChanges()) return;
-    void load(retry.appId, retry.mode);
+    beginLoad(retry.appId, retry.mode);
   }
 
   function removePanel(panelIdValue: string) {

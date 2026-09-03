@@ -1,7 +1,7 @@
 "use client";
 
 import type { FormEvent } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
 import {
@@ -407,7 +407,6 @@ export function LookupManagerPanel({
   const [appId, setAppId] = useState<string>(defaultAppId);
   const [filter, setFilter] = useState("");
   const [generation, setGeneration] = useState(0);
-  const activeLoadGenerationRef = useRef(0);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [modal, setModal] = useState<LookupModal | null>(null);
   const [target, setTarget] = useState<Lookup | null>(null);
@@ -416,15 +415,21 @@ export function LookupManagerPanel({
   const [notice, setNotice] = useState<{ kind: NoticeKind; message: string } | null>(null);
 
   const reload = useCallback(() => setGeneration((value) => value + 1), []);
+  const loadInput = { appId, client, generation };
+  const [activeLoadInput, setActiveLoadInput] = useState(loadInput);
+  if (
+    activeLoadInput.appId !== loadInput.appId
+    || activeLoadInput.client !== loadInput.client
+    || activeLoadInput.generation !== loadInput.generation
+  ) {
+    setActiveLoadInput(loadInput);
+    setState("loading");
+    setLoadError(null);
+  }
 
   useEffect(() => {
-    activeLoadGenerationRef.current = generation;
+    if (activeLoadInput.generation !== generation) return;
     const controller = new AbortController();
-    queueMicrotask(() => {
-      if (controller.signal.aborted || activeLoadGenerationRef.current !== generation) return;
-      setState("loading");
-      setLoadError(null);
-    });
     void client.list(appId || undefined, { signal: controller.signal }).then((loaded) => {
       if (controller.signal.aborted) return;
       if (loaded.length > LOOKUP_MANAGER_CONTRACT.maximumManagedLookups) {
@@ -450,7 +455,7 @@ export function LookupManagerPanel({
       }
     });
     return () => controller.abort();
-  }, [appId, client, generation]);
+  }, [activeLoadInput, appId, client, generation]);
 
   const visibleLookups = useMemo(() => {
     const needle = filter.trim().toLowerCase();

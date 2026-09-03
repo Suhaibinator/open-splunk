@@ -1,7 +1,7 @@
 "use client";
 
 import type { FormEvent } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { AppState, type AppWorkspace } from "@/gen/ts/open_splunk/app";
 import { AppSortBy } from "@/gen/ts/open_splunk/app_api";
@@ -93,7 +93,7 @@ function AppFields({ form, onChange, editing }: {
 export function AppsAdminPanel({ apiBaseUrl, bootstrap }: PanelProps) {
   const client = useMemo(() => createOpenSplunkApiClient({ baseUrl: apiBaseUrl }), [apiBaseUrl]);
   const capability = bootstrap === null ? null : bootstrap.features.has(ServerFeature.SERVER_FEATURE_APP_ADMIN);
-  const [state, setState] = useState<LoadState>("loading");
+  const [state, setState] = useState<LoadState>(capability === false ? "unavailable" : "loading");
   const [apps, setApps] = useState<AppWorkspace[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -104,7 +104,6 @@ export function AppsAdminPanel({ apiBaseUrl, bootstrap }: PanelProps) {
   const [totalExact, setTotalExact] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [generation, setGeneration] = useState(0);
-  const activeLoadGenerationRef = useRef(0);
   const [modal, setModal] = useState<"create" | "edit" | "delete" | null>(null);
   const [target, setTarget] = useState<AppWorkspace | null>(null);
   const [form, setForm] = useState<AppFormState>(blankAppForm);
@@ -117,26 +116,25 @@ export function AppsAdminPanel({ apiBaseUrl, bootstrap }: PanelProps) {
     : stateFilter === "archived" ? [AppState.APP_STATE_ARCHIVED] : [], [stateFilter]);
 
   const load = useCallback(() => setGeneration((value) => value + 1), []);
+  const loadInput = { appliedQuery, capability, client, filters, generation };
+  const [activeLoadInput, setActiveLoadInput] = useState(loadInput);
+  if (
+    activeLoadInput.appliedQuery !== loadInput.appliedQuery
+    || activeLoadInput.capability !== loadInput.capability
+    || activeLoadInput.client !== loadInput.client
+    || activeLoadInput.filters !== loadInput.filters
+    || activeLoadInput.generation !== loadInput.generation
+  ) {
+    setActiveLoadInput(loadInput);
+    setState(capability === false ? "unavailable" : "loading");
+    if (capability === false) setApps([]);
+    setError(null);
+  }
 
   useEffect(() => {
-    activeLoadGenerationRef.current = generation;
-    let current = true;
-    if (capability === false) {
-      queueMicrotask(() => {
-        if (!current) return;
-        setState("unavailable");
-        setApps([]);
-      });
-      return () => {
-        current = false;
-      };
-    }
+    if (activeLoadInput.generation !== generation) return;
+    if (capability === false) return;
     const controller = new AbortController();
-    queueMicrotask(() => {
-      if (!current) return;
-      setState("loading");
-      setError(null);
-    });
     void client.apps.list({
       page: { pageSize: undefined, pageToken: undefined, includeTotalSize: true },
       stateFilters: filters,
@@ -144,7 +142,7 @@ export function AppsAdminPanel({ apiBaseUrl, bootstrap }: PanelProps) {
       sortBy: AppSortBy.APP_SORT_BY_DISPLAY_NAME,
       sortDirection: SortDirection.SORT_DIRECTION_ASCENDING,
     }, { signal: controller.signal }).then((response) => {
-      if (controller.signal.aborted || activeLoadGenerationRef.current !== generation) return;
+      if (controller.signal.aborted) return;
       setApps(response.apps);
       setNextPageToken(response.page?.nextPageToken?.trim() || null);
       setTotal(response.page?.totalSize ?? null);
@@ -160,11 +158,8 @@ export function AppsAdminPanel({ apiBaseUrl, bootstrap }: PanelProps) {
         setError(errorMessage(loadError));
       }
     });
-    return () => {
-      current = false;
-      controller.abort();
-    };
-  }, [appliedQuery, capability, client, filters, generation]);
+    return () => controller.abort();
+  }, [activeLoadInput, appliedQuery, capability, client, filters, generation]);
 
   async function loadMore() {
     if (nextPageToken === null || loadingMore) return;
@@ -372,7 +367,7 @@ function InputRows({ inputs }: { inputs: CollectorInputHealth[] }) {
 export function CollectorFleetPanel({ apiBaseUrl, bootstrap }: PanelProps) {
   const client = useMemo(() => createOpenSplunkApiClient({ baseUrl: apiBaseUrl }), [apiBaseUrl]);
   const capability = bootstrap === null ? null : bootstrap.features.has(ServerFeature.SERVER_FEATURE_COLLECTOR_ADMIN);
-  const [state, setState] = useState<LoadState>("loading");
+  const [state, setState] = useState<LoadState>(capability === false ? "unavailable" : "loading");
   const [collectors, setCollectors] = useState<CollectorRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -385,7 +380,6 @@ export function CollectorFleetPanel({ apiBaseUrl, bootstrap }: PanelProps) {
   const [totalExact, setTotalExact] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [generation, setGeneration] = useState(0);
-  const activeLoadGenerationRef = useRef(0);
   const [target, setTarget] = useState<CollectorRecord | null>(null);
   const [modal, setModal] = useState<"details" | "rename" | null>(null);
   const [displayName, setDisplayName] = useState("");
@@ -400,26 +394,26 @@ export function CollectorFleetPanel({ apiBaseUrl, bootstrap }: PanelProps) {
     return [];
   }, [stateFilter]);
   const load = useCallback(() => setGeneration((value) => value + 1), []);
+  const loadInput = { appliedIndexFilter, appliedQuery, capability, client, filters, generation };
+  const [activeLoadInput, setActiveLoadInput] = useState(loadInput);
+  if (
+    activeLoadInput.appliedIndexFilter !== loadInput.appliedIndexFilter
+    || activeLoadInput.appliedQuery !== loadInput.appliedQuery
+    || activeLoadInput.capability !== loadInput.capability
+    || activeLoadInput.client !== loadInput.client
+    || activeLoadInput.filters !== loadInput.filters
+    || activeLoadInput.generation !== loadInput.generation
+  ) {
+    setActiveLoadInput(loadInput);
+    setState(capability === false ? "unavailable" : "loading");
+    if (capability === false) setCollectors([]);
+    setError(null);
+  }
 
   useEffect(() => {
-    activeLoadGenerationRef.current = generation;
-    let current = true;
-    if (capability === false) {
-      queueMicrotask(() => {
-        if (!current) return;
-        setState("unavailable");
-        setCollectors([]);
-      });
-      return () => {
-        current = false;
-      };
-    }
+    if (activeLoadInput.generation !== generation) return;
+    if (capability === false) return;
     const controller = new AbortController();
-    queueMicrotask(() => {
-      if (!current) return;
-      setState("loading");
-      setError(null);
-    });
     void client.collectors.list({
       page: { pageSize: undefined, pageToken: undefined, includeTotalSize: true },
       stateFilters: filters,
@@ -428,7 +422,7 @@ export function CollectorFleetPanel({ apiBaseUrl, bootstrap }: PanelProps) {
       sortBy: CollectorSortBy.COLLECTOR_SORT_BY_DISPLAY_NAME,
       sortDirection: SortDirection.SORT_DIRECTION_ASCENDING,
     }, { signal: controller.signal }).then((response) => {
-      if (controller.signal.aborted || activeLoadGenerationRef.current !== generation) return;
+      if (controller.signal.aborted) return;
       setCollectors(response.collectors);
       setNextPageToken(response.page?.nextPageToken?.trim() || null);
       setTotal(response.page?.totalSize ?? null);
@@ -444,11 +438,8 @@ export function CollectorFleetPanel({ apiBaseUrl, bootstrap }: PanelProps) {
         setError(errorMessage(loadError));
       }
     });
-    return () => {
-      current = false;
-      controller.abort();
-    };
-  }, [appliedIndexFilter, appliedQuery, capability, client, filters, generation]);
+    return () => controller.abort();
+  }, [activeLoadInput, appliedIndexFilter, appliedQuery, capability, client, filters, generation]);
 
   async function loadMore() {
     if (nextPageToken === null || loadingMore) return;

@@ -232,7 +232,6 @@ export function KnowledgeManagerPanel({
   const [loadingMore, setLoadingMore] = useState(false);
   const [continuationStale, setContinuationStale] = useState(false);
   const [reloadGeneration, setReloadGeneration] = useState(0);
-  const activeListGenerationRef = useRef(0);
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
   const [selectedObject, setSelectedObject] = useState<KnowledgeObjectDisplay | null>(null);
   const [detailState, setDetailState] = useState<DetailState>("closed");
@@ -295,13 +294,48 @@ export function KnowledgeManagerPanel({
     }
   }, [selectedObjectId]);
 
+  const listInput = {
+    advancedFilters,
+    appId,
+    client,
+    lifecycleState,
+    objectType,
+    pageSize,
+    reloadGeneration,
+    sort,
+  };
+  const [activeListInput, setActiveListInput] = useState(listInput);
+  if (
+    activeListInput.advancedFilters !== listInput.advancedFilters
+    || activeListInput.appId !== listInput.appId
+    || activeListInput.client !== listInput.client
+    || activeListInput.lifecycleState !== listInput.lifecycleState
+    || activeListInput.objectType !== listInput.objectType
+    || activeListInput.pageSize !== listInput.pageSize
+    || activeListInput.reloadGeneration !== listInput.reloadGeneration
+    || activeListInput.sort !== listInput.sort
+  ) {
+    setActiveListInput(listInput);
+    setListState("loading");
+    setPage(null);
+    setLoadingMore(false);
+    setContinuationStale(false);
+    setSelectedObjectId(null);
+    setSelectedObject(null);
+    setDetailState("closed");
+    setDetail(null);
+    setDetailAuthority(null);
+    setMutationSurfaceGeneration((value) => value + 1);
+  }
+
   useEffect(() => {
-    activeListGenerationRef.current = reloadGeneration;
-    queueMicrotask(() => resetForQueryChange());
-    if (!advancedFilterRequestAllowedRef.current) {
-      queueMicrotask(() => setListState("unavailable"));
-      return;
-    }
+    if (activeListInput.reloadGeneration !== reloadGeneration) return;
+    listRequestRef.current?.abort();
+    detailRequestRef.current?.abort();
+    consumedPageTokensRef.current = new Set();
+    rowRefs.current.clear();
+    focusDetailWhenReadyRef.current = false;
+    if (!advancedFilterRequestAllowedRef.current) return;
     const controller = new AbortController();
     listRequestRef.current = controller;
 
@@ -317,7 +351,6 @@ export function KnowledgeManagerPanel({
       if (
         controller.signal.aborted
         || listRequestRef.current !== controller
-        || activeListGenerationRef.current !== reloadGeneration
       ) return;
       listRequestRef.current = null;
       if (result.status === "unavailable") {
@@ -335,8 +368,8 @@ export function KnowledgeManagerPanel({
     lifecycleState,
     objectType,
     pageSize,
+    activeListInput,
     reloadGeneration,
-    resetForQueryChange,
     sort,
   ]);
 
@@ -1194,7 +1227,6 @@ function KnowledgeRelationshipSection({
   const [page, setPage] = useState<KnowledgeRelationshipPageDisplay | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [reloadGeneration, setReloadGeneration] = useState(0);
-  const activeRelationshipGenerationRef = useRef(0);
   const requestRef = useRef<AbortController | null>(null);
   const inspectorRequestRef = useRef<AbortController | null>(null);
   const inspectorEdgeRef = useRef<KnowledgeRelationshipEdgeDisplay | null>(null);
@@ -1255,8 +1287,32 @@ function KnowledgeRelationshipSection({
     startInspectorRequest(edge);
   }, [startInspectorRequest]);
 
+  const relationshipInput = {
+    client,
+    direction,
+    knowledgeObjectId,
+    pageSize,
+    reloadGeneration,
+    version,
+  };
+  const [activeRelationshipInput, setActiveRelationshipInput] = useState(relationshipInput);
+  if (
+    activeRelationshipInput.client !== relationshipInput.client
+    || activeRelationshipInput.direction !== relationshipInput.direction
+    || activeRelationshipInput.knowledgeObjectId !== relationshipInput.knowledgeObjectId
+    || activeRelationshipInput.pageSize !== relationshipInput.pageSize
+    || activeRelationshipInput.reloadGeneration !== relationshipInput.reloadGeneration
+    || activeRelationshipInput.version !== relationshipInput.version
+  ) {
+    setActiveRelationshipInput(relationshipInput);
+    setState("loading");
+    setPage(null);
+    setLoadingMore(false);
+    setInspector({ state: "closed" });
+  }
+
   useEffect(() => {
-    activeRelationshipGenerationRef.current = reloadGeneration;
+    if (activeRelationshipInput.reloadGeneration !== reloadGeneration) return;
     const cleanup = knowledgeRelationshipUnmountCleanup(requestRef, inspectorRequestRef);
     abortKnowledgeRequests(requestRef, inspectorRequestRef);
     inspectorEdgeRef.current = null;
@@ -1264,13 +1320,6 @@ function KnowledgeRelationshipSection({
     consumedPageTokensRef.current = new Set();
     const controller = new AbortController();
     requestRef.current = controller;
-    queueMicrotask(() => {
-      if (controller.signal.aborted) return;
-      setState("loading");
-      setPage(null);
-      setLoadingMore(false);
-      setInspector({ state: "closed" });
-    });
     void loadKnowledgeRelationshipPage(client, {
       direction,
       knowledgeObjectId,
@@ -1281,7 +1330,6 @@ function KnowledgeRelationshipSection({
       if (
         controller.signal.aborted
         || requestRef.current !== controller
-        || activeRelationshipGenerationRef.current !== reloadGeneration
       ) return;
       requestRef.current = null;
       if (result.status === "unavailable") {
@@ -1292,7 +1340,7 @@ function KnowledgeRelationshipSection({
       setState("available");
     });
     return cleanup;
-  }, [client, direction, knowledgeObjectId, pageSize, reloadGeneration, version]);
+  }, [activeRelationshipInput, client, direction, knowledgeObjectId, pageSize, reloadGeneration, version]);
 
   const loadMore = useCallback(async () => {
     const requestedPageToken = page?.nextPageToken;
