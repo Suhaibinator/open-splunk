@@ -123,7 +123,7 @@ export function SignInScreen({ dataMode }: SignInScreenProps) {
           ) : (
             <>
               <div className="signin-help-notice" role="note"><span aria-hidden="true"><AppIcon name="info" size="sm" /></span>Do not enter credentials. This preview does not check or store passwords.</div>
-              <Link className="signin-submit" href="/" style={{ textDecoration: "none" }}>Continue to preview</Link>
+              <Link className="signin-submit" href="/">Continue to preview</Link>
             </>
           )}
           <div className="signin-divider"><span>or</span></div>

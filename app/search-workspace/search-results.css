@@ -524,6 +524,17 @@
   text-decoration: underline;
 }
 
+.statistics-cell--multivalue,
+.statistics-cell--single-line {
+  max-width: var(--space-statistics-cell-maximum);
+  overflow: hidden;
+}
+
+.statistics-cell--single-line {
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .numeric-unit {
   color: var(--fg-muted);
 }

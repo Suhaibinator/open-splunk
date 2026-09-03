@@ -63,6 +63,23 @@
   color: var(--fg-muted);
 }
 
+.button--link {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  color: var(--fg-link);
+  display: block;
+  font-weight: inherit;
+  gap: normal;
+  justify-content: normal;
+  min-height: 0;
+  padding: var(--space-button-link-block-padding) var(--space-button-link-inline-padding);
+}
+
+.button.button--link:hover:not(:disabled, [aria-disabled="true"]) {
+  background: transparent;
+}
+
 .button--icon {
   padding: 0;
   width: var(--space-7);
@@ -73,38 +90,35 @@
   padding: 0 var(--space-2);
 }
 
+.button--toolbar {
+  border-radius: 0;
+  font-weight: inherit;
+  gap: var(--space-button-toolbar-gap);
+  height: var(--space-7);
+  justify-content: normal;
+  padding: 0 var(--space-button-toolbar-inline-padding);
+}
+
 .button--block {
   width: 100%;
 }
 
-/* Shared feature actions that have not yet adopted the class-based button
-   modifiers. Keeping each visual role here gives it one declaration site. */
-.history-action-notice button,
-.reports-action-notice button {
+.button--notice-dismiss {
   background: transparent;
   border: 0;
+  border-radius: 0;
   color: var(--status-success-strong);
   font-size: var(--type-xl);
-  height: 28px;
-  width: 28px;
+  font-weight: inherit;
+  gap: var(--space-button-notice-gap);
+  justify-content: normal;
+  min-height: calc(var(--space-7) - var(--space-1));
+  padding: var(--space-button-link-block-padding) var(--space-button-link-inline-padding);
+  width: calc(var(--space-7) - var(--space-1));
 }
 
-.collector-card footer button,
-.field-inspector > footer button,
-.pattern-table article > button {
+.button.button--notice-dismiss:hover:not(:disabled, [aria-disabled="true"]) {
   background: transparent;
-  border: 0;
-  color: var(--fg-link);
-  font-size: var(--type-xs);
-}
-
-.resource-toolbar > button,
-.dataset-view-toggle button {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-strong);
-  font-size: var(--type-xs);
-  height: 32px;
-  padding: 0 10px;
 }
 
 .button[aria-disabled="true"] {

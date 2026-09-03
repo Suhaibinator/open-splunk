@@ -219,8 +219,8 @@ export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsolePro
             <label><span className="sr-only">Filter datasets</span><i aria-hidden="true"><AppIcon name="search" size="sm" /></i><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Find an index" /></label>
             <fieldset className="dataset-view-toggle">
               <legend className="sr-only">Dataset view</legend>
-              <button className={view === "cards" ? "active" : undefined} type="button" aria-pressed={view === "cards"} onClick={() => setView("cards")}><AppIcon name="dashboard" size="sm" /> Cards</button>
-              <button className={view === "table" ? "active" : undefined} type="button" aria-pressed={view === "table"} onClick={() => setView("table")}><span aria-hidden="true">☷</span> Table</button>
+              <button className={`button button--toolbar${view === "cards" ? " active" : ""}`} type="button" aria-pressed={view === "cards"} onClick={() => setView("cards")}><AppIcon name="dashboard" size="sm" /> Cards</button>
+              <button className={`button button--toolbar${view === "table" ? " active" : ""}`} type="button" aria-pressed={view === "table"} onClick={() => setView("table")}><span aria-hidden="true">☷</span> Table</button>
             </fieldset>
           </div>
           {definitionState === "loading" ? <output className="dataset-definition-notice">Loading retention and index metadata from the registered administration route…</output> : null}

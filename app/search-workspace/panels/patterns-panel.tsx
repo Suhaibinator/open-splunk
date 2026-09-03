@@ -67,7 +67,7 @@ export function PatternsPanel({
               <code title={pattern.signature}>{pattern.signature}</code>
               <strong className="pattern-event-count">{NUMBER_FORMAT.format(pattern.count)}<span> events</span></strong>
               <div className="pattern-coverage"><span style={{ width: `${Math.max(0, Math.min(100, roundedPercent))}%` }} /><b>{roundedPercent.toFixed(1)}%</b></div>
-              <button className="pattern-action" type="button" onClick={() => { onTabChange("events"); onViewEvents(pattern.signature); }}>View events <AppIcon name="chevron-right" size="xs" /></button>
+              <button className="button button--link pattern-action" type="button" onClick={() => { onTabChange("events"); onViewEvents(pattern.signature); }}>View events <AppIcon name="chevron-right" size="xs" /></button>
             </article>
           );
         })}

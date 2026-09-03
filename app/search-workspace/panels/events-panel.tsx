@@ -576,7 +576,7 @@ export function EventsPanel({
                 </div>
                 <footer>
                   <span>Showing top {activeFieldData.values.length} values</span>
-                  <button type="button" disabled={firstPivotableFieldValue === undefined} onClick={() => {
+                  <button className="button button--link" type="button" disabled={firstPivotableFieldValue === undefined} onClick={() => {
                     if (firstPivotableFieldValue !== undefined) {
                       applyPivot(activeFieldData.name, firstPivotableFieldValue.value, "new", true);
                     }

@@ -40,6 +40,8 @@ import test from "node:test";
 
 import {
   collectContainerQueries,
+  collectApplicationFixedInlineLayoutDeclarations,
+  collectFixedInlineLayoutDeclarations,
   collectFontShorthandLiterals,
   collectImportantCounts,
   collectInlineStyleColourLiterals,
@@ -257,6 +259,79 @@ test("an inline style may not write a colour the stylesheet sweep would reject",
       + "a named colour and every modern colour function. The weaker of the two definitions guards the\n"
       + "stronger position: an inline style outranks every rule in the cascade, so a colour written here\n"
       + `survives a retheme that repaints the whole stylesheet layer:\n${describeList(inline)}`,
+  );
+});
+
+test("fixed layout values stay in stylesheets while runtime geometry stays inline", async () => {
+  assert.deepEqual(
+    await collectApplicationFixedInlineLayoutDeclarations(workspace),
+    [],
+    "Fixed inline layout declarations outrank the feature stylesheet and cannot be reused. Move them to a class or model the value as runtime domain data.",
+  );
+  assert.deepEqual(
+    collectFixedInlineLayoutDeclarations(`
+      <div style={{ width: "72%", maxWidth: 420, overflow: "hidden", overflowWrap: "anywhere", whiteSpace: \`nowrap\` }} />
+      <div style={{ width: kind === "large" ? "64%" : kind === "medium" ? "42%" : "18%", height: runtimeHeight }} />
+      <div style={({ "paddingInline": "6px", 'textOverflow': "ellipsis" } as const)} />
+      <div title={format({ nested: true }) > threshold ? "wide" : "narrow"} style={{ minWidth: -12 }} />
+    `),
+    ["width: \"72%\"", "maxWidth: 420", "overflow: \"hidden\"", "overflowWrap: \"anywhere\"", "whiteSpace: `nowrap`", "width: kind === \"large\" ? \"64%\" : kind === \"medium\" ? \"42%\" : \"18%\"", "paddingInline: \"6px\"", "textOverflow: \"ellipsis\"", "minWidth: -12"],
+  );
+  assert.deepEqual(
+    collectFixedInlineLayoutDeclarations(`
+      const fixedStyle: CSSProperties = ({ "maxWidth": 420, overflow: ("hidden" as const) } satisfies CSSProperties);
+      const tableShellStyle: CSSProperties = {
+        "--statistics-header-height": \`\${headerHeight}px\`,
+        minWidth: 96,
+        ...(virtualized ? { maxHeight: viewportHeight } : {}),
+      };
+      <section style={fixedStyle} />
+      <section style={(tableShellStyle as CSSProperties)!} />
+    `),
+    ["maxWidth: 420", "overflow: (\"hidden\" as const)", "minWidth: 96"],
+  );
+  assert.deepEqual(
+    collectFixedInlineLayoutDeclarations(`
+      const shellStyle = { maxWidth: 420 };
+      function Example() {
+        const shellStyle = { maxWidth: runtimeWidth };
+        return <section style={shellStyle} />;
+      }
+    `),
+    [],
+  );
+  assert.deepEqual(
+    collectFixedInlineLayoutDeclarations(`
+      <div children={<span style={{ width: "72%" }} />} />
+    `),
+    ["width: \"72%\""],
+  );
+  assert.deepEqual(
+    collectFixedInlineLayoutDeclarations(`
+      <div children={<><Panel style={{ height: "40px" }} /><span style={{ paddingLeft: 12 }} /></>} style={{ maxWidth: 420 }} />
+    `),
+    ["height: \"40px\"", "paddingLeft: 12", "maxWidth: 420"],
+  );
+  assert.deepEqual(
+    collectFixedInlineLayoutDeclarations(`
+      <div children={<span style={{ width: \`${"${percent}"}%\` }} />} />
+    `),
+    [],
+  );
+  assert.deepEqual(
+    collectFixedInlineLayoutDeclarations(`
+      const data = { width: "72%" };
+      const html = '<span style={{ height: "40px" }} />';
+      <div data-shape={{ maxWidth: 420 }} />
+    `),
+    [],
+  );
+  assert.deepEqual(
+    collectFixedInlineLayoutDeclarations(`
+      <span style={{ width: \`${"${percent}"}%\`, left: geometry.left, "--signal-height": "38%" }} />
+      <stop style={{ stopColor: "var(--chart-series-1)", stopOpacity: 0.24 }} />
+    `),
+    [],
   );
 });
 

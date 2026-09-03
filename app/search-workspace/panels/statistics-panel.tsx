@@ -910,10 +910,9 @@ export function StatisticsPanel({
                           if (members !== undefined) {
                             return (
                               <td
-                                className={column.numeric ? "numeric-cell" : undefined}
+                                className={`statistics-cell--multivalue${column.numeric ? " numeric-cell" : ""}`}
                                 key={column.key}
                                 title={statsMultivalueTitle(members)}
-                                style={{ maxWidth: 420, overflow: "hidden" }}
                               >
                                 <StatsMultivalueList
                                   fieldName={column.fieldName}
@@ -941,15 +940,9 @@ export function StatisticsPanel({
                           const pivotValue = row.pivotValues[column.key];
                           return (
                             <td
-                              className={column.numeric ? "numeric-cell" : undefined}
+                              className={`statistics-cell--single-line${column.numeric ? " numeric-cell" : ""}`}
                               key={column.key}
                               title={value === null ? "Null" : serializedGenericValue(value)}
-                              style={{
-                                maxWidth: 420,
-                                overflow: "hidden",
-                                textOverflow: "ellipsis",
-                                whiteSpace: "nowrap",
-                              }}
                             >
                               {column.pivotable && pivotValue !== undefined ? (
                                 <button

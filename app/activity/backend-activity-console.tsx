@@ -601,7 +601,7 @@ function BackendSearchHistory({ apiBaseUrl }: BackendActivityViewProps) {
 
       {state === "available" ? (
         <>
-          {actionNotice === null ? null : <output className="history-action-notice"><span>{actionNotice}</span><button type="button" aria-label="Dismiss history action message" onClick={() => setActionNotice(null)}><AppIcon name="close" size="md" /></button></output>}
+          {actionNotice === null ? null : <output className="history-action-notice"><span>{actionNotice}</span><button className="button button--notice-dismiss" type="button" aria-label="Dismiss history action message" onClick={() => setActionNotice(null)}><AppIcon name="close" size="md" /></button></output>}
           <output className="live-jobs-snapshot history-snapshot">
             <span><i aria-hidden="true" />This view contains persisted terminal-search metadata, not the transient job list.</span>
             <div className="history-snapshot-actions">

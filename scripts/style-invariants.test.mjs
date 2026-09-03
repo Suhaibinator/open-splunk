@@ -99,6 +99,7 @@ import {
   relativePosix,
   stripCssComments,
   tokenKind,
+  universalSpacingSteps,
   valueComponents,
   withoutImportant,
 } from "./style-inventory.mjs";
@@ -1802,6 +1803,16 @@ test("collectRuntimeCustomProperties sees inline style objects and setProperty",
     'const style = { "--point-x": x, "--point-y": y };',
   ].join("\n"));
   assert.deepEqual([...runtime].toSorted(), ["--bar-height", "--point-x", "--point-y"]);
+});
+
+test("universal spacing misses exclude semantic component geometry", () => {
+  const steps = universalSpacingSteps(new Map([
+    ["--space-1", "4px"],
+    ["--space-2", "8px"],
+    ["--space-button-toolbar-gap", "5px"],
+    ["--space-statistics-cell-maximum", "420px"],
+  ]));
+  assert.deepEqual([...steps], [["4px", "--space-1"], ["8px", "--space-2"]]);
 });
 
 test("collectDeclarationComments pairs a comment with the declaration it trails", () => {
