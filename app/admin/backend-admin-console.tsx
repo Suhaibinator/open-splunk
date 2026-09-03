@@ -3312,41 +3312,50 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
         <section className="admin-content">
           {section === "overview" ? (
             <BackendOverview
-              bootstrap={bootstrap}
-              bootstrapError={bootstrapError}
-              indexState={indexState}
-              indexCount={indexes.length}
-              indexTotalSize={indexTotalSize}
-              indexTotalSizeExact={indexTotalSizeExact}
-              activeIndexes={activeIndexes}
-              tokenState={tokenState}
-              tokenCount={tokens.length}
-              tokenTotalSize={tokenTotalSize}
-              tokenTotalSizeExact={tokenTotalSizeExact}
-              activeTokens={activeTokens}
-              onNavigate={navigateSection}
-              onReload={load}
+              actions={{ navigate: navigateSection, reload: load }}
+              snapshot={{
+                bootstrap,
+                bootstrapError,
+                indexes: {
+                  activeCount: activeIndexes,
+                  loadedCount: indexes.length,
+                  state: indexState,
+                  totalSize: indexTotalSize,
+                  totalSizeExact: indexTotalSizeExact,
+                },
+                tokens: {
+                  activeCount: activeTokens,
+                  loadedCount: tokens.length,
+                  state: tokenState,
+                  totalSize: tokenTotalSize,
+                  totalSizeExact: tokenTotalSizeExact,
+                },
+              }}
             />
           ) : null}
           {section === "indexes" ? (
             <BackendIndexes
-              state={indexState}
-              error={indexError}
-              filter={filter}
-              indexes={visibleIndexes}
-              totalIndexes={indexes.length}
-              totalSize={indexTotalSize}
-              totalSizeExact={indexTotalSizeExact}
-              hasMore={indexNextPageToken !== null}
-              loadingMore={indexLoadingMore}
-              paginationError={indexPaginationError}
-              busy={busy}
-              onFilterChange={setFilter}
-              onLoadMore={() => void loadMoreIndexes()}
-              onReload={load}
-              onEdit={(index) => void openIndexEditor(index)}
-              onChangeState={(index) => void changeIndexState(index)}
-              onDelete={(index) => void openIndexDeleteDialog(index)}
+              actions={{
+                changeState: (index) => void changeIndexState(index),
+                delete: (index) => void openIndexDeleteDialog(index),
+                edit: (index) => void openIndexEditor(index),
+                loadMore: () => void loadMoreIndexes(),
+                reload: load,
+                setFilter,
+              }}
+              catalog={{
+                busy,
+                error: indexError,
+                filter,
+                hasMore: indexNextPageToken !== null,
+                indexes: visibleIndexes,
+                loadingMore: indexLoadingMore,
+                paginationError: indexPaginationError,
+                state: indexState,
+                totalIndexes: indexes.length,
+                totalSize: indexTotalSize,
+                totalSizeExact: indexTotalSizeExact,
+              }}
             />
           ) : null}
           {section === "apps" ? (
@@ -3373,27 +3382,35 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
           ) : null}
           {section === "collectors" ? (
             <BackendTokens
-              state={tokenState}
-              error={tokenError}
-              tokens={tokens}
-              totalSize={tokenTotalSize}
-              totalSizeExact={tokenTotalSizeExact}
-              hasMore={tokenNextPageToken !== null}
-              loadingMore={tokenLoadingMore}
-              paginationError={tokenPaginationError}
-              busy={busy}
-              onEdit={(token) => void openTokenEditor(token)}
-              onReload={load}
-              onLoadMore={() => void loadMoreTokens()}
-              onRevoke={setRevokeTarget}
-              onSetEnabled={(token, enabled) => void setTokenEnabled(token, enabled)}
-              canCreate={ingestibleTokenScopes.length > 0 && tokenCreationBlockReason === null}
-              createBlockReason={tokenCreateDisabledReason}
-              recoveryActionLabel={tokenResolutionOpen ? "Resolve token creation" : null}
-              onResolveRecovery={openTokenRecoveryDialog}
-              indexState={indexState}
-              indexError={indexError}
-              scopeSource={tokenScopeSource}
+              actions={{
+                edit: (token) => void openTokenEditor(token),
+                loadMore: () => void loadMoreTokens(),
+                reload: load,
+                resolveRecovery: openTokenRecoveryDialog,
+                revoke: setRevokeTarget,
+                setEnabled: (token, enabled) => void setTokenEnabled(token, enabled),
+              }}
+              catalog={{
+                busy,
+                error: tokenError,
+                hasMore: tokenNextPageToken !== null,
+                loadingMore: tokenLoadingMore,
+                paginationError: tokenPaginationError,
+                state: tokenState,
+                tokens,
+                totalSize: tokenTotalSize,
+                totalSizeExact: tokenTotalSizeExact,
+              }}
+              creation={{
+                blockReason: tokenCreateDisabledReason,
+                canCreate: ingestibleTokenScopes.length > 0 && tokenCreationBlockReason === null,
+                recoveryActionLabel: tokenResolutionOpen ? "Resolve token creation" : null,
+              }}
+              scope={{
+                error: indexError,
+                source: tokenScopeSource,
+                state: indexState,
+              }}
             />
           ) : null}
           {section === "access" ? (
