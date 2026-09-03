@@ -107,6 +107,11 @@ func (operations *runtimeHECOperations) HECOperationalSnapshot(
 		WriteGroupRows:            reconciliation.GroupRows,
 		WriteGroupDecodedBytes:    reconciliation.GroupDecodedBytes,
 		WriteGroupMonthlyParts:    reconciliation.GroupMonthlyPartitions,
+		MemberBatchesPerGroup:     hecFixedHistogram(reconciliation.MemberBatchesPerGroup),
+		RowsPerGroup:              hecFixedHistogram(reconciliation.RowsPerGroup),
+		DecodedBytesPerGroup:      hecFixedHistogram(reconciliation.DecodedBytesPerGroup),
+		MonthlyPartitionsPerGroup: hecFixedHistogram(reconciliation.MonthlyPartitionsPerGroup),
+		RowsPerPhysicalInsert:     hecFixedHistogram(reconciliation.RowsPerPhysicalInsert),
 		FillRowTarget:             reconciliation.FillRowTarget,
 		FillByteTarget:            reconciliation.FillByteTarget,
 		FillHardBoundary:          reconciliation.FillHardBoundary,
@@ -114,12 +119,14 @@ func (operations *runtimeHECOperations) HECOperationalSnapshot(
 		FillDrain:                 reconciliation.FillDrain,
 		FillRecovery:              reconciliation.FillRecovery,
 		NativeWaiters:             reconciliation.NativeWaiters,
+		PeakNativeWaiters:         reconciliation.PeakNativeWaiters,
 		NativeWaiterWakeups:       reconciliation.NativeWaiterWakeups,
 		NativeWaiterCancellations: reconciliation.NativeWaiterCancellations,
 		NativeTerminalLookups:     reconciliation.NativeTerminalLookups,
 		SealLatencyBuckets:        reconciliation.SealLatency,
 		SendLatencyBuckets:        reconciliation.SendLatency,
 		CommitLatencyBuckets:      reconciliation.CommitLatency,
+		LatencyUpperBoundsMicros:  clickhouse.CoalescingDurationUpperBoundsMicroseconds(),
 		ActiveChannels:            durable.ActiveChannels,
 		RetainedChannels:          durable.RetainedChannels,
 		PendingAcknowledgments:    durable.PendingAcknowledgments,
@@ -133,6 +140,18 @@ func (operations *runtimeHECOperations) HECOperationalSnapshot(
 		ShutdownRejections:        requests.ShutdownRejections,
 		ProtocolFailures:          requests.ProtocolFailures,
 	}, nil
+}
+
+func hecFixedHistogram(
+	snapshot clickhouse.CoalescingHistogramSnapshot,
+) server.HECFixedHistogramSnapshot {
+	return server.HECFixedHistogramSnapshot{
+		UpperBounds:  snapshot.UpperBounds,
+		BucketCounts: snapshot.BucketCounts,
+		Count:        snapshot.Count,
+		Sum:          snapshot.Sum,
+		Max:          snapshot.Max,
+	}
 }
 
 type runtimeHECConfig struct {

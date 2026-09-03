@@ -710,13 +710,14 @@ func (sequencer *SQLiteSequencer) MarkWriteGroupSending(ctx context.Context, gro
 	}
 	defer rollback(tx)
 	var state, owner string
-	var firstSequence int64
+	var firstSequence, createdAtMicros int64
 	if err := tx.QueryRowContext(ctx, `
-		SELECT state, attempt_id, first_sequence
+		SELECT state, attempt_id, first_sequence, created_at_unix_micro
 		FROM ingest_write_groups WHERE write_group_id = ?`, groupID).Scan(
 		&state,
 		&owner,
 		&firstSequence,
+		&createdAtMicros,
 	); errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	} else if err != nil {
@@ -784,6 +785,10 @@ func (sequencer *SQLiteSequencer) MarkWriteGroupSending(ctx context.Context, gro
 		if sequencer.now != nil {
 			sendingAt = sequencer.now().UTC()
 		}
+		createdAt := time.UnixMicro(createdAtMicros).UTC()
+		if sendingAt.Before(createdAt) {
+			sendingAt = createdAt
+		}
 		result, err := tx.ExecContext(ctx, `
 			UPDATE ingest_write_groups
 			SET state = 'ambiguous', sending_at_unix_micro = ?
@@ -833,19 +838,24 @@ func (sequencer *SQLiteSequencer) CommitWriteGroup(
 	defer rollback(tx)
 	var state, owner string
 	var memberCount int64
+	var sendingAtMicros sql.NullInt64
 	if err := tx.QueryRowContext(ctx, `
-		SELECT state, attempt_id, member_count
+		SELECT state, attempt_id, member_count, sending_at_unix_micro
 		FROM ingest_write_groups WHERE write_group_id = ?`, groupID).Scan(
 		&state,
 		&owner,
 		&memberCount,
+		&sendingAtMicros,
 	); errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	} else if err != nil {
 		return fmt.Errorf("read write group before commit: %w", err)
 	}
-	if state != string(WriteGroupAmbiguous) || owner != attemptID {
+	if state != string(WriteGroupAmbiguous) || owner != attemptID || !sendingAtMicros.Valid {
 		return ErrAttemptLease
+	}
+	if committedAtMicros < sendingAtMicros.Int64 {
+		committedAtMicros = sendingAtMicros.Int64
 	}
 	statement, err := tx.PrepareContext(ctx, `
 		UPDATE ingest_visibility_reservations

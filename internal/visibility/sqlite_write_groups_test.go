@@ -92,6 +92,59 @@ func TestSQLiteWriteGroupLingerFormationAndAtomicCommit(t *testing.T) {
 	}
 }
 
+func TestSQLiteWriteGroupClampsBackwardLifecycleClock(t *testing.T) {
+	t.Parallel()
+	sequencer, db := openTestSequencer(t)
+	ctx := context.Background()
+	createdAt := time.Date(2026, time.August, 1, 4, 5, 6, 0, time.UTC)
+	sequencer.now = func() time.Time { return createdAt }
+	member := stageWriteGroupMember(t, sequencer, "backward-clock", 1, 10)
+	limits := testWriteGroupLimits()
+	limits.ForceSeal = true
+	group, found, _, err := sequencer.FormOrAcquireWriteGroup(ctx, "backward-owner", limits, createdAt)
+	if err != nil || !found {
+		t.Fatalf("form backward-clock group found=%v error=%v", found, err)
+	}
+	sequencer.now = func() time.Time { return createdAt.Add(-time.Hour) }
+	if err := sequencer.MarkWriteGroupSending(ctx, group.ID, "backward-owner"); err != nil {
+		t.Fatal(err)
+	}
+	if err := sequencer.CommitWriteGroup(
+		ctx,
+		group.ID,
+		"backward-owner",
+		createdAt.Add(-time.Minute),
+	); err != nil {
+		t.Fatal(err)
+	}
+	var sendingAt, groupCommittedAt, memberCommittedAt int64
+	if err := db.SQLDB().QueryRowContext(ctx, `
+		SELECT sending_at_unix_micro, committed_at_unix_micro
+		FROM ingest_write_groups WHERE write_group_id = ?`, group.ID).Scan(
+		&sendingAt,
+		&groupCommittedAt,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SQLDB().QueryRowContext(ctx, `
+		SELECT committed_at_unix_micro
+		FROM ingest_visibility_reservations WHERE sequence = ?`, member.Sequence).Scan(
+		&memberCommittedAt,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if sendingAt != createdAt.UnixMicro() || groupCommittedAt != sendingAt ||
+		memberCommittedAt != sendingAt {
+		t.Fatalf(
+			"backward-clock timestamps = sending %d group %d member %d, want %d",
+			sendingAt,
+			groupCommittedAt,
+			memberCommittedAt,
+			createdAt.UnixMicro(),
+		)
+	}
+}
+
 func TestSQLiteWriteGroupHardBoundaryAndDurableRestartRecovery(t *testing.T) {
 	t.Parallel()
 	sequencer, db := openTestSequencer(t)
@@ -280,6 +333,111 @@ func TestSQLiteWriteGroupCommitRollsBackEveryMember(t *testing.T) {
 	}
 }
 
+func TestSQLiteWriteGroupMarkSendingRollsBackEveryMember(t *testing.T) {
+	t.Parallel()
+	sequencer, db := openTestSequencer(t)
+	ctx := context.Background()
+	now := time.Date(2026, time.August, 4, 6, 7, 8, 0, time.UTC)
+	sequencer.now = func() time.Time { return now }
+	_ = stageWriteGroupMember(t, sequencer, "mark-rollback-first", 1, 10)
+	second := stageWriteGroupMember(t, sequencer, "mark-rollback-second", 1, 10)
+	limits := testWriteGroupLimits()
+	limits.ForceSeal = true
+	group, found, _, err := sequencer.FormOrAcquireWriteGroup(ctx, "mark-rollback-owner", limits, now)
+	if err != nil || !found {
+		t.Fatalf("form mark rollback group found=%v error=%v", found, err)
+	}
+	if _, err := db.SQLDB().ExecContext(ctx, `
+		CREATE TRIGGER test_fail_second_group_mark_sending
+		BEFORE UPDATE OF phase ON ingest_visibility_reservations
+		WHEN NEW.phase = 'ambiguous' AND NEW.sequence = `+writeTestUint(second.Sequence)+`
+		BEGIN
+			SELECT RAISE(ABORT, 'injected group sending failure');
+		END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := sequencer.MarkWriteGroupSending(ctx, group.ID, "mark-rollback-owner"); err == nil {
+		t.Fatal("MarkWriteGroupSending() succeeded through injected member failure")
+	}
+	assertWriteGroupMemberPhases(t, db, group.ID, phaseUnsent, reservationReserved, true)
+	var state string
+	var sendingAt any
+	if err := db.SQLDB().QueryRowContext(ctx, `
+		SELECT state, sending_at_unix_micro
+		FROM ingest_write_groups WHERE write_group_id = ?`, group.ID).Scan(
+		&state,
+		&sendingAt,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if state != string(WriteGroupReady) || sendingAt != nil {
+		t.Fatalf("rolled-back group = state %q sending_at %v", state, sendingAt)
+	}
+}
+
+func TestSQLiteWriteGroupCommitTransitionsAllHECAcknowledgments(t *testing.T) {
+	t.Parallel()
+	sequencer, db := openTestSequencer(t)
+	ctx := context.Background()
+	now := time.Date(2026, time.July, 21, 2, 3, 4, 0, time.UTC)
+	sequencer.now = func() time.Time { return now }
+	sequencer.hecAcknowledgmentIDs = &scriptedHECAcknowledgmentIDSource{ids: []uint64{701, 702}}
+	insertHECTestToken(t, db.SQLDB(), "group-hec-token", 1, true)
+	for index, key := range []string{"group-hec-first", "group-hec-second"} {
+		request := reserveRequest(key, "stage-"+key)
+		request.HECAdmission = &HECAdmissionRequest{
+			TenantID:              "tenant-a",
+			TokenID:               "group-hec-token",
+			TokenVersion:          1,
+			AuthorizedIndexes:     []HECIndexAuthority{{Name: "main", Version: 1}},
+			RequestID:             "request-" + key,
+			Acknowledgment:        true,
+			AcknowledgmentChannel: "group-channel",
+			CreatedAt:             now.Add(time.Duration(index) * time.Microsecond),
+		}
+		reservation, err := sequencer.Reserve(ctx, request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := sequencer.Release(ctx, reservation.Sequence, request.AttemptID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	limits := testWriteGroupLimits()
+	limits.ForceSeal = true
+	group, found, _, err := sequencer.FormOrAcquireWriteGroup(ctx, "hec-group-owner", limits, now)
+	if err != nil || !found {
+		t.Fatalf("form HEC group found=%v error=%v", found, err)
+	}
+	if err := sequencer.MarkWriteGroupSending(ctx, group.ID, "hec-group-owner"); err != nil {
+		t.Fatal(err)
+	}
+	committedAt := now.Add(time.Second)
+	if err := sequencer.CommitWriteGroup(ctx, group.ID, "hec-group-owner", committedAt); err != nil {
+		t.Fatal(err)
+	}
+	statuses, err := sequencer.LookupHECAcknowledgments(
+		ctx,
+		"tenant-a",
+		"group-hec-token",
+		"group-channel",
+		[]uint64{701, 702},
+	)
+	if err != nil || !statuses[701] || !statuses[702] {
+		t.Fatalf("group HEC statuses=%v error=%v", statuses, err)
+	}
+	var indexed, distinctTerminalTimes int
+	if err := db.SQLDB().QueryRowContext(ctx, `
+		SELECT count(*) FILTER (WHERE state = 'indexed'),
+		       count(DISTINCT terminal_at_unix_micro)
+		FROM hec_requests`).Scan(&indexed, &distinctTerminalTimes); err != nil {
+		t.Fatal(err)
+	}
+	if indexed != 2 || distinctTerminalTimes != 1 {
+		t.Fatalf("HEC indexed=%d terminal-times=%d", indexed, distinctTerminalTimes)
+	}
+}
+
 func TestSQLiteWriteGroupOutboxCorruptionFailsClosed(t *testing.T) {
 	t.Parallel()
 	sequencer, db := openTestSequencer(t)
@@ -341,6 +499,81 @@ func TestSQLiteWriteGroupSchemaRejectsInvalidMembershipAndTransitions(t *testing
 	); err == nil {
 		t.Fatal("schema accepted duplicate/gapped write group membership")
 	}
+	mismatched := stageWriteGroupMember(t, sequencer, "schema-mismatched", 3, 30)
+	mismatchedDigest := sha256.Sum256(mismatched.Outbox)
+	if _, err := db.SQLDB().ExecContext(ctx, `
+		INSERT INTO ingest_write_groups
+			(write_group_id, state, attempt_id, member_count, row_count, decoded_bytes,
+			 membership_sha256, first_sequence, last_sequence, created_at_unix_micro,
+			 sending_at_unix_micro, committed_at_unix_micro)
+		VALUES ('schema-incomplete', 'ready', 'schema-incomplete-owner', 2, 3, 30,
+		        ?, ?, ?, ?, NULL, NULL)`,
+		mismatchedDigest[:],
+		mismatched.Sequence,
+		mismatched.Sequence,
+		now.UnixMicro(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQLDB().ExecContext(ctx, `
+		INSERT INTO ingest_write_group_members
+			(write_group_id, ordinal, visibility_sequence, row_count, decoded_bytes, outbox_sha256)
+		VALUES ('schema-incomplete', 0, ?, 2, 30, ?)`,
+		mismatched.Sequence,
+		mismatchedDigest[:],
+	); err == nil {
+		t.Fatal("schema accepted write group member accounting that disagrees with its reservation")
+	}
+	if _, err := db.SQLDB().ExecContext(ctx, `
+		INSERT INTO ingest_write_group_members
+			(write_group_id, ordinal, visibility_sequence, row_count, decoded_bytes, outbox_sha256)
+		VALUES ('schema-incomplete', 0, ?, 3, 30, ?)`,
+		mismatched.Sequence,
+		mismatchedDigest[:],
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQLDB().ExecContext(ctx, `
+		UPDATE ingest_write_groups
+		SET state = 'ambiguous', sending_at_unix_micro = ?
+		WHERE write_group_id = 'schema-incomplete'`, now.UnixMicro()); err == nil {
+		t.Fatal("schema accepted a sealed group whose header does not match its members")
+	}
+	orderedFirst := stageWriteGroupMember(t, sequencer, "schema-ordered-first", 1, 10)
+	orderedSecond := stageWriteGroupMember(t, sequencer, "schema-ordered-second", 1, 10)
+	orderedFirstDigest := sha256.Sum256(orderedFirst.Outbox)
+	orderedSecondDigest := sha256.Sum256(orderedSecond.Outbox)
+	if _, err := db.SQLDB().ExecContext(ctx, `
+		INSERT INTO ingest_write_groups
+			(write_group_id, state, attempt_id, member_count, row_count, decoded_bytes,
+			 membership_sha256, first_sequence, last_sequence, created_at_unix_micro,
+			 sending_at_unix_micro, committed_at_unix_micro)
+		VALUES ('schema-unordered', 'ready', '', 2, 2, 20, ?, ?, ?, ?, NULL, NULL)`,
+		orderedFirstDigest[:],
+		orderedFirst.Sequence,
+		orderedSecond.Sequence,
+		now.UnixMicro(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQLDB().ExecContext(ctx, `
+		INSERT INTO ingest_write_group_members
+			(write_group_id, ordinal, visibility_sequence, row_count, decoded_bytes, outbox_sha256)
+		VALUES ('schema-unordered', 0, ?, 1, 10, ?)`,
+		orderedSecond.Sequence,
+		orderedSecondDigest[:],
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQLDB().ExecContext(ctx, `
+		INSERT INTO ingest_write_group_members
+			(write_group_id, ordinal, visibility_sequence, row_count, decoded_bytes, outbox_sha256)
+		VALUES ('schema-unordered', 1, ?, 1, 10, ?)`,
+		orderedFirst.Sequence,
+		orderedFirstDigest[:],
+	); err == nil {
+		t.Fatal("schema accepted unordered write group member sequences")
+	}
 	for _, invalid := range []struct {
 		name        string
 		state       string
@@ -369,6 +602,45 @@ func TestSQLiteWriteGroupSchemaRejectsInvalidMembershipAndTransitions(t *testing
 				invalid.committedAt,
 			); err == nil {
 				t.Fatalf("schema accepted invalid %s timestamp", invalid.name)
+			}
+		})
+	}
+}
+
+func TestSQLiteWriteGroupLogicalBatchBoundsFitPhysicalGroup(t *testing.T) {
+	t.Parallel()
+	if uint64(MaxReservationRows) > MaxWriteGroupRows {
+		t.Fatalf("logical row bound %d exceeds physical group bound %d", MaxReservationRows, MaxWriteGroupRows)
+	}
+	if MaxReservationDecodedBytes > MaxWriteGroupDecodedBytes {
+		t.Fatalf(
+			"logical byte bound %d exceeds physical group bound %d",
+			MaxReservationDecodedBytes,
+			MaxWriteGroupDecodedBytes,
+		)
+	}
+
+	sequencer, db := openTestSequencer(t)
+	ctx := context.Background()
+	now := time.Date(2026, time.August, 6, 8, 9, 10, 0, time.UTC)
+	sequencer.now = func() time.Time { return now }
+	reservation := stageWriteGroupMember(t, sequencer, "schema-logical-bounds", 1, 10)
+	for _, invalid := range []struct {
+		name   string
+		column string
+		value  uint64
+	}{
+		{name: "rows", column: "stored_row_count", value: uint64(MaxReservationRows) + 1},
+		{name: "decoded bytes", column: "decoded_event_bytes", value: MaxReservationDecodedBytes + 1},
+	} {
+		t.Run(invalid.name, func(t *testing.T) {
+			if _, err := db.SQLDB().ExecContext(
+				ctx,
+				"UPDATE ingest_visibility_reservations SET "+invalid.column+" = ? WHERE sequence = ?",
+				invalid.value,
+				reservation.Sequence,
+			); err == nil {
+				t.Fatalf("schema accepted over-limit logical %s", invalid.name)
 			}
 		})
 	}

@@ -88,8 +88,16 @@ func TestGroupedStoreStagesWaitsAndCoalescesOrderedLogicalBatches(t *testing.T) 
 		telemetry.SuccessfulGroups != 1 || telemetry.GroupMemberBatches != 2 ||
 		telemetry.GroupRows != 2 || telemetry.GroupDecodedBytes == 0 ||
 		telemetry.GroupMonthlyPartitions != 1 || telemetry.FillRowTarget != 1 ||
-		telemetry.NativeWaiters != 0 || telemetry.NativeWaiterWakeups != 2 ||
+		telemetry.NativeWaiters != 0 || telemetry.PeakNativeWaiters != 2 ||
+		telemetry.NativeWaiterWakeups != 2 ||
 		telemetry.NativeWaiterCancellations != 0 || telemetry.NativeTerminalLookups != 2 ||
+		telemetry.MemberBatchesPerGroup.Count != 1 || telemetry.MemberBatchesPerGroup.Sum != 2 ||
+		telemetry.MemberBatchesPerGroup.Max != 2 || telemetry.RowsPerGroup.Count != 1 ||
+		telemetry.RowsPerGroup.Sum != 2 || telemetry.RowsPerGroup.Max != 2 ||
+		telemetry.DecodedBytesPerGroup.Count != 1 || telemetry.DecodedBytesPerGroup.Sum == 0 ||
+		telemetry.MonthlyPartitionsPerGroup.Count != 1 ||
+		telemetry.MonthlyPartitionsPerGroup.Sum != 1 ||
+		telemetry.RowsPerPhysicalInsert.Count != 1 || telemetry.RowsPerPhysicalInsert.Sum != 2 ||
 		histogramObservations(telemetry.SealLatency) != 1 ||
 		histogramObservations(telemetry.SendLatency) != 1 ||
 		histogramObservations(telemetry.CommitLatency) != 1 {

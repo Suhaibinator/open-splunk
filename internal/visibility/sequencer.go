@@ -68,6 +68,10 @@ const (
 	MaxPendingOutboxBytes = 256 << 20
 	// MaxPendingMetadataBytes bounds all unresolved compact response metadata.
 	MaxPendingMetadataBytes = 256 << 20
+	// MaxReservationRows bounds one admitted logical batch.
+	MaxReservationRows = uint32(ingestquota.HardMaxAdmissionEvents)
+	// MaxReservationDecodedBytes bounds one admitted logical batch.
+	MaxReservationDecodedBytes = ingestquota.HardMaxAdmissionUncompressedBytes
 	// MaxWriteGroupRows is the hard physical insert row bound.
 	MaxWriteGroupRows = 50_000
 	// MaxWriteGroupDecodedBytes is the hard physical insert decoded-byte bound.

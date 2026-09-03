@@ -388,6 +388,11 @@ func TestRuntimeHECHandlerOwnsNamespaceDelegatesBrowserAndStagesDurably(t *testi
 		GroupRows:                 18,
 		GroupDecodedBytes:         19,
 		GroupMonthlyPartitions:    20,
+		MemberBatchesPerGroup:     testCoalescingHistogram(31),
+		RowsPerGroup:              testCoalescingHistogram(32),
+		DecodedBytesPerGroup:      testCoalescingHistogram(33),
+		MonthlyPartitionsPerGroup: testCoalescingHistogram(34),
+		RowsPerPhysicalInsert:     testCoalescingHistogram(35),
 		FillRowTarget:             21,
 		FillByteTarget:            22,
 		FillHardBoundary:          23,
@@ -395,6 +400,7 @@ func TestRuntimeHECHandlerOwnsNamespaceDelegatesBrowserAndStagesDurably(t *testi
 		FillDrain:                 25,
 		FillRecovery:              26,
 		NativeWaiters:             27,
+		PeakNativeWaiters:         36,
 		NativeWaiterWakeups:       28,
 		NativeWaiterCancellations: 29,
 		NativeTerminalLookups:     30,
@@ -450,19 +456,37 @@ func TestRuntimeHECHandlerOwnsNamespaceDelegatesBrowserAndStagesDurably(t *testi
 		operational.PhysicalInsertSends != 15 || operational.SuccessfulWriteGroups != 16 ||
 		operational.WriteGroupMemberBatches != 17 || operational.WriteGroupRows != 18 ||
 		operational.WriteGroupDecodedBytes != 19 || operational.WriteGroupMonthlyParts != 20 ||
+		operational.MemberBatchesPerGroup.Count != 31 || operational.RowsPerGroup.Count != 32 ||
+		operational.DecodedBytesPerGroup.Count != 33 ||
+		operational.MonthlyPartitionsPerGroup.Count != 34 ||
+		operational.RowsPerPhysicalInsert.Count != 35 ||
 		operational.FillRowTarget != 21 || operational.FillByteTarget != 22 ||
 		operational.FillHardBoundary != 23 || operational.FillLinger != 24 ||
 		operational.FillDrain != 25 || operational.FillRecovery != 26 ||
-		operational.NativeWaiters != 27 || operational.NativeWaiterWakeups != 28 ||
+		operational.NativeWaiters != 27 || operational.PeakNativeWaiters != 36 ||
+		operational.NativeWaiterWakeups != 28 ||
 		operational.NativeWaiterCancellations != 29 || operational.NativeTerminalLookups != 30 ||
 		operational.SealLatencyBuckets != [8]uint64{1, 2, 3, 4, 5, 6, 7, 8} ||
 		operational.SendLatencyBuckets != [8]uint64{8, 7, 6, 5, 4, 3, 2, 1} ||
 		operational.CommitLatencyBuckets != [8]uint64{9, 10, 11, 12, 13, 14, 15, 16} ||
+		operational.LatencyUpperBoundsMicros != [7]uint64{
+			1_000, 10_000, 50_000, 200_000, 1_000_000, 5_000_000, 30_000_000,
+		} ||
 		operational.ActiveChannels != 5 ||
 		operational.RetainedChannels != 6 || operational.PendingAcknowledgments != 7 ||
 		operational.IndexedAcknowledgments != 8 || operational.ExpiredAcknowledgments != 9 ||
 		operational.TerminalFailedRequests != 10 || !operational.AcknowledgmentAvailable {
 		t.Fatalf("composed HEC operational snapshot = %+v", operational)
+	}
+}
+
+func testCoalescingHistogram(count uint64) clickhouse.CoalescingHistogramSnapshot {
+	return clickhouse.CoalescingHistogramSnapshot{
+		UpperBounds:  [13]uint64{1, 10, 64, 100, 500, 1_000, 2_500, 5_000, 10_000, 16_384, 32_768, 50_000, 65_536},
+		BucketCounts: [14]uint64{count},
+		Count:        count,
+		Sum:          count + 1,
+		Max:          count + 2,
 	}
 }
 

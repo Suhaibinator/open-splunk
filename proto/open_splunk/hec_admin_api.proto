@@ -40,6 +40,16 @@ message HECDurableOperationalMetrics {
   uint64 live_write_group_leases = 11;
 }
 
+// HECFixedHistogram has compile-time bounded inclusive upper bounds and one
+// final overflow bucket. It never contains request-derived labels.
+message HECFixedHistogram {
+  repeated uint64 upper_bounds = 1;
+  repeated uint64 bucket_counts = 2;
+  uint64 count = 3;
+  uint64 sum = 4;
+  uint64 max = 5;
+}
+
 message HECReconciliationOperationalMetrics {
   bool available = 1;
   uint64 successes = 2;
@@ -67,6 +77,13 @@ message HECReconciliationOperationalMetrics {
   repeated uint64 seal_latency_buckets = 24;
   repeated uint64 send_latency_buckets = 25;
   repeated uint64 commit_latency_buckets = 26;
+  uint64 peak_native_waiters = 27;
+  repeated uint64 latency_upper_bounds_microseconds = 28;
+  HECFixedHistogram member_batches_per_group = 29;
+  HECFixedHistogram rows_per_group = 30;
+  HECFixedHistogram decoded_bytes_per_group = 31;
+  HECFixedHistogram monthly_partitions_per_group = 32;
+  HECFixedHistogram rows_per_physical_insert = 33;
 }
 
 message HECAcknowledgmentOperationalMetrics {

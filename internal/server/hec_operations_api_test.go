@@ -81,6 +81,11 @@ func TestHECOperationalSnapshotRouteIsBoundedAndAdministratorOnly(t *testing.T) 
 		WriteGroupRows:            40,
 		WriteGroupDecodedBytes:    41,
 		WriteGroupMonthlyParts:    42,
+		MemberBatchesPerGroup:     testHECFixedHistogram(53),
+		RowsPerGroup:              testHECFixedHistogram(54),
+		DecodedBytesPerGroup:      testHECFixedHistogram(55),
+		MonthlyPartitionsPerGroup: testHECFixedHistogram(56),
+		RowsPerPhysicalInsert:     testHECFixedHistogram(57),
 		FillRowTarget:             43,
 		FillByteTarget:            44,
 		FillHardBoundary:          45,
@@ -88,12 +93,14 @@ func TestHECOperationalSnapshotRouteIsBoundedAndAdministratorOnly(t *testing.T) 
 		FillDrain:                 47,
 		FillRecovery:              48,
 		NativeWaiters:             49,
+		PeakNativeWaiters:         58,
 		NativeWaiterWakeups:       50,
 		NativeWaiterCancellations: 51,
 		NativeTerminalLookups:     52,
 		SealLatencyBuckets:        [8]uint64{1, 2, 3, 4, 5, 6, 7, 8},
 		SendLatencyBuckets:        [8]uint64{8, 7, 6, 5, 4, 3, 2, 1},
 		CommitLatencyBuckets:      [8]uint64{9, 10, 11, 12, 13, 14, 15, 16},
+		LatencyUpperBoundsMicros:  [7]uint64{1_000, 10_000, 50_000, 200_000, 1_000_000, 5_000_000, 30_000_000},
 		ActiveChannels:            17,
 		RetainedChannels:          18,
 		PendingAcknowledgments:    19,
@@ -154,12 +161,31 @@ func TestHECOperationalSnapshotRouteIsBoundedAndAdministratorOnly(t *testing.T) 
 		decoded.GetReconciliation().GetFillDrain() != 47 ||
 		decoded.GetReconciliation().GetFillRecovery() != 48 ||
 		decoded.GetReconciliation().GetNativeWaiters() != 49 ||
+		decoded.GetReconciliation().GetPeakNativeWaiters() != 58 ||
 		decoded.GetReconciliation().GetNativeWaiterWakeups() != 50 ||
 		decoded.GetReconciliation().GetNativeWaiterCancellations() != 51 ||
 		decoded.GetReconciliation().GetNativeTerminalLookups() != 52 ||
 		!reflect.DeepEqual(decoded.GetReconciliation().GetSealLatencyBuckets(), []uint64{1, 2, 3, 4, 5, 6, 7, 8}) ||
 		!reflect.DeepEqual(decoded.GetReconciliation().GetSendLatencyBuckets(), []uint64{8, 7, 6, 5, 4, 3, 2, 1}) ||
 		!reflect.DeepEqual(decoded.GetReconciliation().GetCommitLatencyBuckets(), []uint64{9, 10, 11, 12, 13, 14, 15, 16}) ||
+		!reflect.DeepEqual(decoded.GetReconciliation().GetLatencyUpperBoundsMicroseconds(), []uint64{
+			1_000, 10_000, 50_000, 200_000, 1_000_000, 5_000_000, 30_000_000,
+		}) ||
+		decoded.GetReconciliation().GetMemberBatchesPerGroup().GetCount() != 53 ||
+		decoded.GetReconciliation().GetMemberBatchesPerGroup().GetSum() != 54 ||
+		decoded.GetReconciliation().GetMemberBatchesPerGroup().GetMax() != 55 ||
+		!reflect.DeepEqual(
+			decoded.GetReconciliation().GetMemberBatchesPerGroup().GetUpperBounds(),
+			[]uint64{1, 10, 64, 100, 500, 1_000, 2_500, 5_000, 10_000, 16_384, 32_768, 50_000, 65_536},
+		) ||
+		!reflect.DeepEqual(
+			decoded.GetReconciliation().GetMemberBatchesPerGroup().GetBucketCounts(),
+			[]uint64{53, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+		) ||
+		decoded.GetReconciliation().GetRowsPerGroup().GetCount() != 54 ||
+		decoded.GetReconciliation().GetDecodedBytesPerGroup().GetCount() != 55 ||
+		decoded.GetReconciliation().GetMonthlyPartitionsPerGroup().GetCount() != 56 ||
+		decoded.GetReconciliation().GetRowsPerPhysicalInsert().GetCount() != 57 ||
 		decoded.GetAcknowledgments().GetActiveChannels() != 17 ||
 		decoded.GetAcknowledgments().GetRetainedChannels() != 18 ||
 		decoded.GetAcknowledgments().GetExpiredRows() != 21 ||
@@ -172,6 +198,16 @@ func TestHECOperationalSnapshotRouteIsBoundedAndAdministratorOnly(t *testing.T) 
 		t.Fatalf("protocol failure projection = %+v", decoded.GetProtocolFailures())
 	}
 	assertHECOperationalSnapshotHasNoIdentityFields(t)
+}
+
+func testHECFixedHistogram(count uint64) HECFixedHistogramSnapshot {
+	return HECFixedHistogramSnapshot{
+		UpperBounds:  [13]uint64{1, 10, 64, 100, 500, 1_000, 2_500, 5_000, 10_000, 16_384, 32_768, 50_000, 65_536},
+		BucketCounts: [14]uint64{count},
+		Count:        count,
+		Sum:          count + 1,
+		Max:          count + 2,
+	}
 }
 
 func TestHECOperationalSnapshotErrorsAreSanitized(t *testing.T) {
@@ -271,7 +307,8 @@ func assertHECOperationalSnapshotHasNoIdentityFields(t *testing.T) {
 		kind := field.Type.Kind()
 		if field.Type == reflect.TypeFor[time.Time]() || kind == reflect.Bool ||
 			kind == reflect.Uint64 || kind == reflect.Int64 ||
-			kind == reflect.Array && field.Type.Elem().Kind() == reflect.Uint64 {
+			kind == reflect.Array && field.Type.Elem().Kind() == reflect.Uint64 ||
+			field.Type == reflect.TypeFor[HECFixedHistogramSnapshot]() {
 			continue
 		}
 		t.Errorf("identity-capable HEC operational field %s has type %s", field.Name, field.Type)

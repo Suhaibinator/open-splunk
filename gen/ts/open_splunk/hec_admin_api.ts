@@ -44,6 +44,18 @@ export interface HECDurableOperationalMetrics {
   liveWriteGroupLeases: bigint;
 }
 
+/**
+ * HECFixedHistogram has compile-time bounded inclusive upper bounds and one
+ * final overflow bucket. It never contains request-derived labels.
+ */
+export interface HECFixedHistogram {
+  upperBounds: bigint[];
+  bucketCounts: bigint[];
+  count: bigint;
+  sum: bigint;
+  max: bigint;
+}
+
 export interface HECReconciliationOperationalMetrics {
   available: boolean;
   successes: bigint;
@@ -71,6 +83,13 @@ export interface HECReconciliationOperationalMetrics {
   sealLatencyBuckets: bigint[];
   sendLatencyBuckets: bigint[];
   commitLatencyBuckets: bigint[];
+  peakNativeWaiters: bigint;
+  latencyUpperBoundsMicroseconds: bigint[];
+  memberBatchesPerGroup: HECFixedHistogram | undefined;
+  rowsPerGroup: HECFixedHistogram | undefined;
+  decodedBytesPerGroup: HECFixedHistogram | undefined;
+  monthlyPartitionsPerGroup: HECFixedHistogram | undefined;
+  rowsPerPhysicalInsert: HECFixedHistogram | undefined;
 }
 
 export interface HECAcknowledgmentOperationalMetrics {
@@ -818,6 +837,186 @@ export const HECDurableOperationalMetrics: MessageFns<HECDurableOperationalMetri
   },
 };
 
+function createBaseHECFixedHistogram(): HECFixedHistogram {
+  return { upperBounds: [], bucketCounts: [], count: 0n, sum: 0n, max: 0n };
+}
+
+export const HECFixedHistogram: MessageFns<HECFixedHistogram> = {
+  encode(message: HECFixedHistogram, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    writer.uint32(10).fork();
+    for (const v of message.upperBounds) {
+      if (BigInt.asUintN(64, v) !== v) {
+        throw new globalThis.Error("a value provided in array field upperBounds of type uint64 is too large");
+      }
+      writer.uint64(v);
+    }
+    writer.join();
+    writer.uint32(18).fork();
+    for (const v of message.bucketCounts) {
+      if (BigInt.asUintN(64, v) !== v) {
+        throw new globalThis.Error("a value provided in array field bucketCounts of type uint64 is too large");
+      }
+      writer.uint64(v);
+    }
+    writer.join();
+    if (message.count !== 0n) {
+      if (BigInt.asUintN(64, message.count) !== message.count) {
+        throw new globalThis.Error("value provided for field message.count of type uint64 too large");
+      }
+      writer.uint32(24).uint64(message.count);
+    }
+    if (message.sum !== 0n) {
+      if (BigInt.asUintN(64, message.sum) !== message.sum) {
+        throw new globalThis.Error("value provided for field message.sum of type uint64 too large");
+      }
+      writer.uint32(32).uint64(message.sum);
+    }
+    if (message.max !== 0n) {
+      if (BigInt.asUintN(64, message.max) !== message.max) {
+        throw new globalThis.Error("value provided for field message.max of type uint64 too large");
+      }
+      writer.uint32(40).uint64(message.max);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): HECFixedHistogram {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseHECFixedHistogram();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag === 8) {
+              message.upperBounds.push(reader.uint64() as bigint);
+
+              continue;
+            }
+
+            if (tag === 10) {
+              const end2 = reader.uint32() + reader.pos;
+              while (reader.pos < end2) {
+                message.upperBounds.push(reader.uint64() as bigint);
+              }
+
+              continue;
+            }
+
+            break;
+          }
+          case 2: {
+            if (tag === 16) {
+              message.bucketCounts.push(reader.uint64() as bigint);
+
+              continue;
+            }
+
+            if (tag === 18) {
+              const end2 = reader.uint32() + reader.pos;
+              while (reader.pos < end2) {
+                message.bucketCounts.push(reader.uint64() as bigint);
+              }
+
+              continue;
+            }
+
+            break;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.count = reader.uint64() as bigint;
+            continue;
+          }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+
+            message.sum = reader.uint64() as bigint;
+            continue;
+          }
+          case 5: {
+            if (tag !== 40) {
+              break;
+            }
+
+            message.max = reader.uint64() as bigint;
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): HECFixedHistogram {
+    return {
+      upperBounds: globalThis.Array.isArray(object?.upperBounds)
+        ? object.upperBounds.map((e: any) => BigInt(e))
+        : globalThis.Array.isArray(object?.upper_bounds)
+        ? object.upper_bounds.map((e: any) => BigInt(e))
+        : [],
+      bucketCounts: globalThis.Array.isArray(object?.bucketCounts)
+        ? object.bucketCounts.map((e: any) => BigInt(e))
+        : globalThis.Array.isArray(object?.bucket_counts)
+        ? object.bucket_counts.map((e: any) => BigInt(e))
+        : [],
+      count: isSet(object.count) ? BigInt(object.count) : 0n,
+      sum: isSet(object.sum) ? BigInt(object.sum) : 0n,
+      max: isSet(object.max) ? BigInt(object.max) : 0n,
+    };
+  },
+
+  toJSON(message: HECFixedHistogram): unknown {
+    const obj: any = {};
+    if (message.upperBounds?.length) {
+      obj.upperBounds = message.upperBounds.map((e) => e.toString());
+    }
+    if (message.bucketCounts?.length) {
+      obj.bucketCounts = message.bucketCounts.map((e) => e.toString());
+    }
+    if (message.count !== 0n) {
+      obj.count = message.count.toString();
+    }
+    if (message.sum !== 0n) {
+      obj.sum = message.sum.toString();
+    }
+    if (message.max !== 0n) {
+      obj.max = message.max.toString();
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<HECFixedHistogram>, I>>(base?: I): HECFixedHistogram {
+    return HECFixedHistogram.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<HECFixedHistogram>, I>>(object: I): HECFixedHistogram {
+    const message = createBaseHECFixedHistogram();
+    message.upperBounds = object.upperBounds?.map((e) => BigInt(e)) || [];
+    message.bucketCounts = object.bucketCounts?.map((e) => BigInt(e)) || [];
+    message.count = (object.count !== undefined && object.count !== null) ? BigInt(object.count) : 0n;
+    message.sum = (object.sum !== undefined && object.sum !== null) ? BigInt(object.sum) : 0n;
+    message.max = (object.max !== undefined && object.max !== null) ? BigInt(object.max) : 0n;
+    return message;
+  },
+};
+
 function createBaseHECReconciliationOperationalMetrics(): HECReconciliationOperationalMetrics {
   return {
     available: false,
@@ -846,6 +1045,13 @@ function createBaseHECReconciliationOperationalMetrics(): HECReconciliationOpera
     sealLatencyBuckets: [],
     sendLatencyBuckets: [],
     commitLatencyBuckets: [],
+    peakNativeWaiters: 0n,
+    latencyUpperBoundsMicroseconds: [],
+    memberBatchesPerGroup: undefined,
+    rowsPerGroup: undefined,
+    decodedBytesPerGroup: undefined,
+    monthlyPartitionsPerGroup: undefined,
+    rowsPerPhysicalInsert: undefined,
   };
 }
 
@@ -1014,6 +1220,37 @@ export const HECReconciliationOperationalMetrics: MessageFns<HECReconciliationOp
       writer.uint64(v);
     }
     writer.join();
+    if (message.peakNativeWaiters !== 0n) {
+      if (BigInt.asUintN(64, message.peakNativeWaiters) !== message.peakNativeWaiters) {
+        throw new globalThis.Error("value provided for field message.peakNativeWaiters of type uint64 too large");
+      }
+      writer.uint32(216).uint64(message.peakNativeWaiters);
+    }
+    writer.uint32(226).fork();
+    for (const v of message.latencyUpperBoundsMicroseconds) {
+      if (BigInt.asUintN(64, v) !== v) {
+        throw new globalThis.Error(
+          "a value provided in array field latencyUpperBoundsMicroseconds of type uint64 is too large",
+        );
+      }
+      writer.uint64(v);
+    }
+    writer.join();
+    if (message.memberBatchesPerGroup !== undefined) {
+      HECFixedHistogram.encode(message.memberBatchesPerGroup, writer.uint32(234).fork()).join();
+    }
+    if (message.rowsPerGroup !== undefined) {
+      HECFixedHistogram.encode(message.rowsPerGroup, writer.uint32(242).fork()).join();
+    }
+    if (message.decodedBytesPerGroup !== undefined) {
+      HECFixedHistogram.encode(message.decodedBytesPerGroup, writer.uint32(250).fork()).join();
+    }
+    if (message.monthlyPartitionsPerGroup !== undefined) {
+      HECFixedHistogram.encode(message.monthlyPartitionsPerGroup, writer.uint32(258).fork()).join();
+    }
+    if (message.rowsPerPhysicalInsert !== undefined) {
+      HECFixedHistogram.encode(message.rowsPerPhysicalInsert, writer.uint32(266).fork()).join();
+    }
     return writer;
   },
 
@@ -1268,6 +1505,72 @@ export const HECReconciliationOperationalMetrics: MessageFns<HECReconciliationOp
 
             break;
           }
+          case 27: {
+            if (tag !== 216) {
+              break;
+            }
+
+            message.peakNativeWaiters = reader.uint64() as bigint;
+            continue;
+          }
+          case 28: {
+            if (tag === 224) {
+              message.latencyUpperBoundsMicroseconds.push(reader.uint64() as bigint);
+
+              continue;
+            }
+
+            if (tag === 226) {
+              const end2 = reader.uint32() + reader.pos;
+              while (reader.pos < end2) {
+                message.latencyUpperBoundsMicroseconds.push(reader.uint64() as bigint);
+              }
+
+              continue;
+            }
+
+            break;
+          }
+          case 29: {
+            if (tag !== 234) {
+              break;
+            }
+
+            message.memberBatchesPerGroup = HECFixedHistogram.decode(reader, reader.uint32());
+            continue;
+          }
+          case 30: {
+            if (tag !== 242) {
+              break;
+            }
+
+            message.rowsPerGroup = HECFixedHistogram.decode(reader, reader.uint32());
+            continue;
+          }
+          case 31: {
+            if (tag !== 250) {
+              break;
+            }
+
+            message.decodedBytesPerGroup = HECFixedHistogram.decode(reader, reader.uint32());
+            continue;
+          }
+          case 32: {
+            if (tag !== 258) {
+              break;
+            }
+
+            message.monthlyPartitionsPerGroup = HECFixedHistogram.decode(reader, reader.uint32());
+            continue;
+          }
+          case 33: {
+            if (tag !== 266) {
+              break;
+            }
+
+            message.rowsPerPhysicalInsert = HECFixedHistogram.decode(reader, reader.uint32());
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -1396,6 +1699,41 @@ export const HECReconciliationOperationalMetrics: MessageFns<HECReconciliationOp
         : globalThis.Array.isArray(object?.commit_latency_buckets)
         ? object.commit_latency_buckets.map((e: any) => BigInt(e))
         : [],
+      peakNativeWaiters: isSet(object.peakNativeWaiters)
+        ? BigInt(object.peakNativeWaiters)
+        : isSet(object.peak_native_waiters)
+        ? BigInt(object.peak_native_waiters)
+        : 0n,
+      latencyUpperBoundsMicroseconds: globalThis.Array.isArray(object?.latencyUpperBoundsMicroseconds)
+        ? object.latencyUpperBoundsMicroseconds.map((e: any) => BigInt(e))
+        : globalThis.Array.isArray(object?.latency_upper_bounds_microseconds)
+        ? object.latency_upper_bounds_microseconds.map((e: any) => BigInt(e))
+        : [],
+      memberBatchesPerGroup: isSet(object.memberBatchesPerGroup)
+        ? HECFixedHistogram.fromJSON(object.memberBatchesPerGroup)
+        : isSet(object.member_batches_per_group)
+        ? HECFixedHistogram.fromJSON(object.member_batches_per_group)
+        : undefined,
+      rowsPerGroup: isSet(object.rowsPerGroup)
+        ? HECFixedHistogram.fromJSON(object.rowsPerGroup)
+        : isSet(object.rows_per_group)
+        ? HECFixedHistogram.fromJSON(object.rows_per_group)
+        : undefined,
+      decodedBytesPerGroup: isSet(object.decodedBytesPerGroup)
+        ? HECFixedHistogram.fromJSON(object.decodedBytesPerGroup)
+        : isSet(object.decoded_bytes_per_group)
+        ? HECFixedHistogram.fromJSON(object.decoded_bytes_per_group)
+        : undefined,
+      monthlyPartitionsPerGroup: isSet(object.monthlyPartitionsPerGroup)
+        ? HECFixedHistogram.fromJSON(object.monthlyPartitionsPerGroup)
+        : isSet(object.monthly_partitions_per_group)
+        ? HECFixedHistogram.fromJSON(object.monthly_partitions_per_group)
+        : undefined,
+      rowsPerPhysicalInsert: isSet(object.rowsPerPhysicalInsert)
+        ? HECFixedHistogram.fromJSON(object.rowsPerPhysicalInsert)
+        : isSet(object.rows_per_physical_insert)
+        ? HECFixedHistogram.fromJSON(object.rows_per_physical_insert)
+        : undefined,
     };
   },
 
@@ -1479,6 +1817,27 @@ export const HECReconciliationOperationalMetrics: MessageFns<HECReconciliationOp
     if (message.commitLatencyBuckets?.length) {
       obj.commitLatencyBuckets = message.commitLatencyBuckets.map((e) => e.toString());
     }
+    if (message.peakNativeWaiters !== 0n) {
+      obj.peakNativeWaiters = message.peakNativeWaiters.toString();
+    }
+    if (message.latencyUpperBoundsMicroseconds?.length) {
+      obj.latencyUpperBoundsMicroseconds = message.latencyUpperBoundsMicroseconds.map((e) => e.toString());
+    }
+    if (message.memberBatchesPerGroup !== undefined) {
+      obj.memberBatchesPerGroup = HECFixedHistogram.toJSON(message.memberBatchesPerGroup);
+    }
+    if (message.rowsPerGroup !== undefined) {
+      obj.rowsPerGroup = HECFixedHistogram.toJSON(message.rowsPerGroup);
+    }
+    if (message.decodedBytesPerGroup !== undefined) {
+      obj.decodedBytesPerGroup = HECFixedHistogram.toJSON(message.decodedBytesPerGroup);
+    }
+    if (message.monthlyPartitionsPerGroup !== undefined) {
+      obj.monthlyPartitionsPerGroup = HECFixedHistogram.toJSON(message.monthlyPartitionsPerGroup);
+    }
+    if (message.rowsPerPhysicalInsert !== undefined) {
+      obj.rowsPerPhysicalInsert = HECFixedHistogram.toJSON(message.rowsPerPhysicalInsert);
+    }
     return obj;
   },
 
@@ -1561,6 +1920,28 @@ export const HECReconciliationOperationalMetrics: MessageFns<HECReconciliationOp
     message.sealLatencyBuckets = object.sealLatencyBuckets?.map((e) => BigInt(e)) || [];
     message.sendLatencyBuckets = object.sendLatencyBuckets?.map((e) => BigInt(e)) || [];
     message.commitLatencyBuckets = object.commitLatencyBuckets?.map((e) => BigInt(e)) || [];
+    message.peakNativeWaiters = (object.peakNativeWaiters !== undefined && object.peakNativeWaiters !== null)
+      ? BigInt(object.peakNativeWaiters)
+      : 0n;
+    message.latencyUpperBoundsMicroseconds = object.latencyUpperBoundsMicroseconds?.map((e) => BigInt(e)) || [];
+    message.memberBatchesPerGroup =
+      (object.memberBatchesPerGroup !== undefined && object.memberBatchesPerGroup !== null)
+        ? HECFixedHistogram.fromPartial(object.memberBatchesPerGroup)
+        : undefined;
+    message.rowsPerGroup = (object.rowsPerGroup !== undefined && object.rowsPerGroup !== null)
+      ? HECFixedHistogram.fromPartial(object.rowsPerGroup)
+      : undefined;
+    message.decodedBytesPerGroup = (object.decodedBytesPerGroup !== undefined && object.decodedBytesPerGroup !== null)
+      ? HECFixedHistogram.fromPartial(object.decodedBytesPerGroup)
+      : undefined;
+    message.monthlyPartitionsPerGroup =
+      (object.monthlyPartitionsPerGroup !== undefined && object.monthlyPartitionsPerGroup !== null)
+        ? HECFixedHistogram.fromPartial(object.monthlyPartitionsPerGroup)
+        : undefined;
+    message.rowsPerPhysicalInsert =
+      (object.rowsPerPhysicalInsert !== undefined && object.rowsPerPhysicalInsert !== null)
+        ? HECFixedHistogram.fromPartial(object.rowsPerPhysicalInsert)
+        : undefined;
     return message;
   },
 };

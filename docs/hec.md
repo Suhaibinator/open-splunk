@@ -320,6 +320,13 @@ as index deletion: no ungrouped reservation, ready group, ambiguous group, or
 live group lease may be omitted. Restore replays the oldest ambiguous group
 with its original membership and token before sending newer work.
 
+The administrator operational snapshot exposes fixed-cardinality histograms
+for member batches, rows, decoded bytes, and monthly partitions per group, plus
+rows per physical insert. Each histogram includes its inclusive bounds, an
+overflow bucket, count, sum, and maximum. The same snapshot reports current and
+peak native waiters and publishes the fixed latency-bucket bounds in
+microseconds; none of these metrics carries request-derived labels.
+
 ## Load, soak, and slow-client gates
 
 The always-on real TLS transport gate is:

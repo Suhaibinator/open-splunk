@@ -284,10 +284,16 @@ type Store struct {
 	groupRows                 atomic.Uint64
 	groupDecodedBytes         atomic.Uint64
 	groupMonthlyPartitions    atomic.Uint64
+	memberBatchesPerGroup     coalescingHistogram
+	rowsPerGroup              coalescingHistogram
+	decodedBytesPerGroup      coalescingHistogram
+	monthlyPartitionsPerGroup coalescingHistogram
+	rowsPerPhysicalInsert     coalescingHistogram
 	groupFillReasons          writeGroupFillCounters
 	groupSealLatency          coalescingDurationHistogram
 	groupSendLatency          coalescingDurationHistogram
 	groupCommitLatency        coalescingDurationHistogram
+	peakNativeWaiters         atomic.Uint64
 	waiterWakeups             atomic.Uint64
 	waiterCancellations       atomic.Uint64
 	waiterTerminalLookups     atomic.Uint64
@@ -309,6 +315,11 @@ type HECReconciliationSnapshot struct {
 	GroupRows                 uint64
 	GroupDecodedBytes         uint64
 	GroupMonthlyPartitions    uint64
+	MemberBatchesPerGroup     CoalescingHistogramSnapshot
+	RowsPerGroup              CoalescingHistogramSnapshot
+	DecodedBytesPerGroup      CoalescingHistogramSnapshot
+	MonthlyPartitionsPerGroup CoalescingHistogramSnapshot
+	RowsPerPhysicalInsert     CoalescingHistogramSnapshot
 	FillRowTarget             uint64
 	FillByteTarget            uint64
 	FillHardBoundary          uint64
@@ -316,6 +327,7 @@ type HECReconciliationSnapshot struct {
 	FillDrain                 uint64
 	FillRecovery              uint64
 	NativeWaiters             uint64
+	PeakNativeWaiters         uint64
 	NativeWaiterWakeups       uint64
 	NativeWaiterCancellations uint64
 	NativeTerminalLookups     uint64
@@ -437,6 +449,11 @@ func newStoreWithConnections(
 		lifecycleCancel:  lifecycleCancel,
 	}
 	store.writeGroupVisibility, _ = sequencer.(visibility.WriteGroupSequencer)
+	store.memberBatchesPerGroup = newCoalescingHistogram(coalescingShapeBounds)
+	store.rowsPerGroup = newCoalescingHistogram(coalescingShapeBounds)
+	store.decodedBytesPerGroup = newCoalescingHistogram(coalescingByteBounds)
+	store.monthlyPartitionsPerGroup = newCoalescingHistogram(coalescingShapeBounds)
+	store.rowsPerPhysicalInsert = newCoalescingHistogram(coalescingShapeBounds)
 	return store, nil
 }
 
@@ -783,6 +800,7 @@ func (s *Store) storeGrouped(
 		}
 		return ingest.StoreResult{}, capacityErr
 	}
+	s.observeNativeWaiterCount()
 	defer func() { cancelWaiter() }()
 	if attemptID != "" {
 		if err := s.releaseAttempt(reservation.Sequence, attemptID, nil); err != nil {
@@ -840,9 +858,14 @@ func (s *Store) storeGrouped(
 					RetryAfter: s.retryAfter,
 				}
 			}
+			s.observeNativeWaiterCount()
 		case <-poll.C:
 		}
 	}
+}
+
+func (s *Store) observeNativeWaiterCount() {
+	atomicMaximum(&s.peakNativeWaiters, uint64(s.commitWaiters.size()))
 }
 
 func stopStoreTimer(timer *time.Timer) {
@@ -1411,7 +1434,9 @@ func (s *Store) writeGroup(
 		rows = append(rows, memberRows...)
 	}
 	if group.NewlyFormed {
-		s.groupMonthlyPartitions.Add(distinctWriteGroupMonthlyPartitions(rows))
+		monthlyPartitions := distinctWriteGroupMonthlyPartitions(rows)
+		s.groupMonthlyPartitions.Add(monthlyPartitions)
+		s.monthlyPartitionsPerGroup.observe(monthlyPartitions)
 	}
 
 	settings := insertSettings(group.ID)
@@ -1439,6 +1464,7 @@ func (s *Store) writeGroup(
 			s.finalizationFailure("mark ClickHouse write group sending", err))
 	}
 	s.physicalSends.Add(1)
+	s.rowsPerPhysicalInsert.observe(uint64(group.RowCount))
 	if err := prepared.Send(); err != nil {
 		_ = prepared.Abort()
 		return s.releaseWriteGroup(group.ID, attemptID,
@@ -1486,6 +1512,9 @@ func (s *Store) noteFormedWriteGroup(group visibility.WriteGroup) {
 	s.groupMemberBatches.Add(uint64(len(group.Members)))
 	s.groupRows.Add(uint64(group.RowCount))
 	s.groupDecodedBytes.Add(group.DecodedBytes)
+	s.memberBatchesPerGroup.observe(uint64(len(group.Members)))
+	s.rowsPerGroup.observe(uint64(group.RowCount))
+	s.decodedBytesPerGroup.observe(group.DecodedBytes)
 	s.groupFillReasons.add(group.FillReason)
 	if len(group.Members) != 0 {
 		s.groupSealLatency.observe(nonnegativeDuration(group.CreatedAt, group.Members[0].Reservation.CreatedAt))
@@ -2058,6 +2087,11 @@ func (s *Store) HECReconciliationTelemetry() HECReconciliationSnapshot {
 		GroupRows:                 s.groupRows.Load(),
 		GroupDecodedBytes:         s.groupDecodedBytes.Load(),
 		GroupMonthlyPartitions:    s.groupMonthlyPartitions.Load(),
+		MemberBatchesPerGroup:     s.memberBatchesPerGroup.snapshot(),
+		RowsPerGroup:              s.rowsPerGroup.snapshot(),
+		DecodedBytesPerGroup:      s.decodedBytesPerGroup.snapshot(),
+		MonthlyPartitionsPerGroup: s.monthlyPartitionsPerGroup.snapshot(),
+		RowsPerPhysicalInsert:     s.rowsPerPhysicalInsert.snapshot(),
 		FillRowTarget:             s.groupFillReasons.rowTarget.Load(),
 		FillByteTarget:            s.groupFillReasons.byteTarget.Load(),
 		FillHardBoundary:          s.groupFillReasons.hardBoundary.Load(),
@@ -2065,6 +2099,7 @@ func (s *Store) HECReconciliationTelemetry() HECReconciliationSnapshot {
 		FillDrain:                 s.groupFillReasons.drain.Load(),
 		FillRecovery:              s.groupFillReasons.recovery.Load(),
 		NativeWaiters:             uint64(s.commitWaiters.size()),
+		PeakNativeWaiters:         s.peakNativeWaiters.Load(),
 		NativeWaiterWakeups:       s.waiterWakeups.Load(),
 		NativeWaiterCancellations: s.waiterCancellations.Load(),
 		NativeTerminalLookups:     s.waiterTerminalLookups.Load(),

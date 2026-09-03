@@ -1180,11 +1180,11 @@ func validateReserveRequest(ctx context.Context, request ReserveRequest) error {
 	if len(request.Outbox) == 0 || len(request.Outbox) > MaxOutboxBytes {
 		return fmt.Errorf("%w: outbox must contain 1 to %d bytes", ErrInvalidArgument, MaxOutboxBytes)
 	}
-	if request.StoredRowCount == 0 || request.StoredRowCount > MaxWriteGroupRows {
-		return fmt.Errorf("%w: stored row count must be between 1 and %d", ErrInvalidArgument, MaxWriteGroupRows)
+	if request.StoredRowCount == 0 || request.StoredRowCount > MaxReservationRows {
+		return fmt.Errorf("%w: stored row count must be between 1 and %d", ErrInvalidArgument, MaxReservationRows)
 	}
-	if request.DecodedEventBytes == 0 || request.DecodedEventBytes > MaxWriteGroupDecodedBytes {
-		return fmt.Errorf("%w: decoded event bytes must be between 1 and %d", ErrInvalidArgument, MaxWriteGroupDecodedBytes)
+	if request.DecodedEventBytes == 0 || request.DecodedEventBytes > MaxReservationDecodedBytes {
+		return fmt.Errorf("%w: decoded event bytes must be between 1 and %d", ErrInvalidArgument, MaxReservationDecodedBytes)
 	}
 	if err := validateHECAdmissionRequest(request.HECAdmission); err != nil {
 		return err
