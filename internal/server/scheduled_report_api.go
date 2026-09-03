@@ -61,7 +61,7 @@ func (handler *apiHandler) setSavedSearchSchedule(request *http.Request, input *
 		Cron: schedule.GetCron(), Timezone: schedule.GetTimezone(), DispatchTTL: schedule.GetDispatchTtl(), Enabled: schedule.GetEnabled(),
 	})
 	if err != nil {
-		return nil, mapScheduledReportError(err)
+		return nil, mapScheduledReportCallError(request.Context(), err)
 	}
 	projected, err := handler.cloneSavedSearch(record)
 	if err != nil {
@@ -77,7 +77,7 @@ func (handler *apiHandler) runSavedSearch(request *http.Request, input *opensplu
 		scheduledreports.DefaultOneOffSchedulePeriod,
 	)
 	if err != nil {
-		return nil, mapScheduledReportError(err)
+		return nil, mapScheduledReportCallError(request.Context(), err)
 	}
 	return &opensplunk.RunSavedSearchResponse{ScheduledSearchRunId: run.RunID, SearchJobId: run.SearchJobID}, nil
 }
@@ -90,7 +90,7 @@ func (handler *apiHandler) listScheduledSearchRuns(request *http.Request, input 
 		Limit: int(pageSize), PageToken: pageToken, IncludeTotal: includeTotal,
 	})
 	if err != nil {
-		return nil, mapScheduledReportError(err)
+		return nil, mapScheduledReportCallError(request.Context(), err)
 	}
 	retainedByJobID := make(map[string]searchartifacts.Record)
 	if inspector, ok := handler.searchArtifacts.(searchArtifactMetadataBatchInspector); ok {
@@ -323,7 +323,13 @@ func scheduledReportOutcomeToProto(outcome scheduledreports.RunOutcome) opensplu
 	}
 }
 
-func mapScheduledReportError(err error) error {
+func mapScheduledReportCallError(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if requestContextFailure(ctx, err) != nil {
+		return router.NewHTTPError(http.StatusRequestTimeout, "scheduled report request was canceled")
+	}
 	switch {
 	case errors.Is(err, scheduledreports.ErrInvalidArgument):
 		return badRequestError("scheduled report configuration is invalid")

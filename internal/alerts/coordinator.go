@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/Suhaibinator/open-splunk/internal/errorreport"
 )
 
 const (
@@ -66,7 +68,7 @@ type Coordinator struct {
 	claimLimit          int
 	completionTimeout   time.Duration
 	completionRetryWait CompletionRetryWaitFunc
-	onError             func(error)
+	errorReports        errorreport.SingleFlight
 	executorContext     context.Context
 	cancelExecutor      context.CancelFunc
 	completionContext   context.Context
@@ -142,7 +144,8 @@ func NewCoordinator(options CoordinatorOptions) (*Coordinator, error) {
 		results: options.Results, retention: options.Retention, authorizer: options.Authorizer,
 		deliverer: options.Deliverer, poller: poller, clock: clock, deliveryID: deliveryID,
 		publicBaseURL: options.PublicBaseURL, claimLimit: claimLimit,
-		completionTimeout: completionTimeout, completionRetryWait: completionRetryWait, onError: options.OnError,
+		completionTimeout: completionTimeout, completionRetryWait: completionRetryWait,
+		errorReports:    errorreport.SingleFlight{Callback: options.OnError},
 		executorContext: executorContext, cancelExecutor: cancelExecutor,
 		completionContext: completionContext, cancelCompletion: cancelCompletion,
 		queue: make(chan RunSnapshot, queueCapacity), slots: make(chan struct{}, queueCapacity),
@@ -333,10 +336,9 @@ func (coordinator *Coordinator) release(count int) {
 func (coordinator *Coordinator) worker() {
 	defer coordinator.workers.Done()
 	for snapshot := range coordinator.queue {
-		if _, err := coordinator.execute(coordinator.executorContext, snapshot); err != nil && coordinator.onError != nil {
-			coordinator.onError(err)
-		}
+		_, err := coordinator.execute(coordinator.executorContext, snapshot)
 		coordinator.release(1)
+		coordinator.errorReports.Report(err)
 	}
 }
 

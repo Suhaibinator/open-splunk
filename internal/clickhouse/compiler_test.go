@@ -252,7 +252,8 @@ func TestCompileFieldNotEqualRequiresExistence(t *testing.T) {
 	t.Parallel()
 
 	compiled := compileSPL(t, `index=gradethis status!=500`)
-	if !strings.Contains(compiled.SQL, `has("__os_field_names", ?) AND NOT ifNull(if((dynamicType("__os_fields"."status") IN (`) ||
+	if !strings.Contains(compiled.SQL, `has("__os_field_names", ?) AND NOT ifNull(if(`) ||
+		!strings.Contains(compiled.SQL, `dynamicType("__os_fields"."status") IN (`) ||
 		!strings.Contains(compiled.SQL, `__os_exact_order_left`) {
 		t.Fatalf("!= does not enforce presence:\n%s", compiled.SQL)
 	}
@@ -265,7 +266,8 @@ func TestCompileNOTComparisonIncludesMissingField(t *testing.T) {
 	t.Parallel()
 
 	compiled := compileSPL(t, `index=gradethis NOT status=500`)
-	if !strings.Contains(compiled.SQL, `NOT ((has("__os_field_names", ?) AND ifNull(if((dynamicType("__os_fields"."status") IN (`) ||
+	if !strings.Contains(compiled.SQL, `NOT ((has("__os_field_names", ?) AND ifNull(if(`) ||
+		!strings.Contains(compiled.SQL, `dynamicType("__os_fields"."status") IN (`) ||
 		!strings.Contains(compiled.SQL, `__os_exact_order_left`) {
 		t.Fatalf("NOT comparison grouping is unsafe:\n%s", compiled.SQL)
 	}
@@ -2878,7 +2880,7 @@ func TestCompileWhereKeepsAtomicDynamicComparisonDirect(t *testing.T) {
 
 	compiled := compileSPL(t, `index=gradethis | where unsigned>18446744073709551614`)
 	for _, required := range []string{
-		`multiIf(startsWith(dynamicType("__os_fields"."unsigned"), 'Float')`,
+		`if(startsWith(dynamicType("__os_fields"."unsigned"), 'Float')`,
 		`__os_exact_order_text`,
 		`tupleElement(__os_exact_order_left, 1) != 0`,
 		`tuple(toUInt8(1), toUInt8(2), toInt64(20), CAST('18446744073709551614' AS String))`,

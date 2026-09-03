@@ -420,13 +420,10 @@ func compileTypeOfScalar(
 		kind:           fieldKindDynamic,
 	}
 	typeSQL := dynamicScalarTypeSQL(bound)
-	stringSQL := "dynamicElement(" + valueAlias + ", 'String')"
-	limit := fmt.Sprint(MaximumArithmeticDynamicStringBytes)
-	boundedString := "if(length(" + stringSQL + ") <= " + limit + ", " +
-		stringSQL + ", CAST('' AS String))"
-	numericText := "(" + typeSQL + " = 'String' AND length(" + stringSQL +
-		") <= " + limit + " AND isValidUTF8(" + boundedString + ") AND match(" +
-		boundedString + ", " + decimalNumericStringPattern + "))"
+	numericText, _ := dynamicNumericStringTextWithLimit(
+		bound,
+		MaximumArithmeticDynamicStringBytes,
+	)
 	taggedDecimal, _ := dynamicTaggedDecimalTextWithLimit(bound, MaximumArithmeticDynamicStringBytes)
 	body := "multiIf(" +
 		existsAlias + " = 0 OR isNull(" + valueAlias + "), 'Invalid', " +

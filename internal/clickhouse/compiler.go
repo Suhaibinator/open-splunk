@@ -6322,17 +6322,14 @@ func dynamicComparisonBody(
 				numericScalarSQL(dynamic, false),
 				numericScalarSQL(fixed, false),
 			)
-			return "multiIf(startsWith(" + typeSQL + ", 'Float'), " +
-				floating + ", " + dynamicNumericValuePredicate(dynamic) +
-				", " + exact + ", " + nullBool + ")", 1, true
+			return "if(startsWith(" + typeSQL + ", 'Float'), " +
+				floating + ", " + exact + ")", 1, true
 		}
-		return "if(" + dynamicNumericValuePredicate(dynamic) + ", " +
-			exactNumericKeyComparisonSQL(
-				exactNumericScalarKeySQL(left),
-				exactNumericScalarKeySQL(right),
-				operator,
-			) +
-			", " + nullBool + ")", 1, true
+		return exactNumericKeyComparisonSQL(
+			exactNumericScalarKeySQL(left),
+			exactNumericScalarKeySQL(right),
+			operator,
+		), 1, true
 	case fieldKindTime:
 		return "if(" + dynamicNumericValuePredicate(dynamic) + ", " +
 			comparison(numericScalarSQL(dynamic, false), numericScalarSQL(fixed, false)) +
@@ -6528,11 +6525,48 @@ func dynamicNumericTypePredicate(typeSQL string) string {
 	return "(" + dynamicIntegerTypePredicate(typeSQL) + " OR startsWith(" + typeSQL + ", 'Float') OR startsWith(" + typeSQL + ", 'Decimal'))"
 }
 
+// dynamicNumericStringTextWithLimit returns the shared runtime classifier and
+// bounded text for an open-schema String that SPL treats as numeric. Keep this
+// as the single definition used by typeof, arithmetic, and comparisons so a
+// value cannot be numeric on one expression surface but textual on another.
+func dynamicNumericStringTextWithLimit(
+	value compiledScalar,
+	maximumBytes int,
+) (condition, boundedText string) {
+	typeSQL := dynamicScalarTypeSQL(value)
+	stringSQL := dynamicStringScalarSQL(value)
+	limit := strconv.Itoa(maximumBytes)
+	boundedText = "if(length(" + stringSQL + ") <= " + limit + ", " +
+		stringSQL + ", CAST('' AS String))"
+	// Over-limit text is replaced with empty text, which the complete-number
+	// grammar rejects, so a separate raw-length term would only duplicate the
+	// attacker-controlled expression in every comparison.
+	const textAlias = "__os_numeric_string_text"
+	validText := "isValidUTF8(" + textAlias + ") AND match(" + textAlias +
+		", " + decimalNumericStringPattern + ")"
+	condition = "(" + typeSQL + " = 'String' AND " + bindSQLExpressions(
+		[]string{textAlias},
+		[]string{boundedText},
+		validText,
+	) + ")"
+	return condition, boundedText
+}
+
+func dynamicNumericStringPredicate(value compiledScalar) string {
+	condition, _ := dynamicNumericStringTextWithLimit(
+		value,
+		MaximumArithmeticDynamicStringBytes,
+	)
+	return condition
+}
+
 func dynamicNumericValuePredicate(value compiledScalar) string {
 	if value.dynamicNumericEligibleSQL != "" {
 		return value.dynamicNumericEligibleSQL
 	}
-	return "(" + dynamicNumericTypePredicate(dynamicScalarTypeSQL(value)) + " OR " + dynamicTaggedDecimalCondition(value) + ")"
+	return "(" + dynamicNumericTypePredicate(dynamicScalarTypeSQL(value)) + " OR " +
+		dynamicNumericStringPredicate(value) + " OR " +
+		dynamicTaggedDecimalCondition(value) + ")"
 }
 
 func dynamicExactIntegerPredicate(value compiledScalar, typeSQL string) string {
@@ -6967,11 +7001,14 @@ func equalityPredicate(expression *plan.ComparisonExpression, field fieldState, 
 			&expression.Value,
 			"=",
 		)
-		return "if(" + dynamicExactIntegerPredicate(dynamic, typeSQL) + ", " +
+		eligible := "(" + dynamicExactIntegerPredicate(dynamic, typeSQL) + " OR " +
+			dynamicNumericStringPredicate(dynamic) + ")"
+		return "if(" + eligible + ", " +
 			exact + ", 0)", 0
 	case plan.ValueKindFloat64:
 		exactCondition := "(startsWith(" + typeSQL + ", 'Decimal') OR " +
-			dynamicTaggedDecimalCondition(dynamic) + ")"
+			dynamicTaggedDecimalCondition(dynamic) + " OR " +
+			dynamicNumericStringPredicate(dynamic) + ")"
 		exact := exactNumericLiteralFieldComparisonSQL(
 			dynamic,
 			&expression.Value,
