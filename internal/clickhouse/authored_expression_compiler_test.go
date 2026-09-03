@@ -331,13 +331,15 @@ func TestCompileAuthoredMembershipBindsOnlyRequiredDynamicClassifiers(t *testing
 	numeric := compile(t, authoredExpressionIntLiteral(2))
 	for _, required := range []string{
 		"__os_membership_left_type",
-		"__os_membership_left_numeric",
 		"__os_membership_left_key",
 		"__os_exact_order_",
 	} {
 		if !strings.Contains(numeric, required) {
 			t.Fatalf("numeric membership omitted required %q helper:\n%s", required, numeric)
 		}
+	}
+	if strings.Contains(numeric, "__os_membership_left_numeric") {
+		t.Fatalf("numeric membership retained redundant eligibility helper:\n%s", numeric)
 	}
 }
 
