@@ -3,7 +3,13 @@ import type { SearchJob } from "@/gen/ts/open_splunk/search";
 import type { SearchWebSocketClient } from "@/lib/api";
 
 import type { LivePreviewSnapshot } from "./live-preview";
-import type { ProgressRevisionState } from "./progress-revision";
+import {
+  isVersionedSearchRevision,
+  reconcileSearchProgress,
+  type ProgressDecision,
+  type ProgressRevisionState,
+  type SearchProgressSource,
+} from "./progress-revision";
 
 export type RunningPreviewStatus =
   | "disabled"
@@ -16,93 +22,131 @@ export type RunningPreviewStatus =
   | "finalization-error";
 
 export class RunningSearchController {
-  readonly abortRef = { current: null as AbortController | null };
-  readonly cancelPendingRef = { current: false };
-  readonly cancelRequestedRef = { current: false };
-  readonly generationRef = { current: 0 };
-  readonly jobIdRef = { current: null as string | null };
-  readonly jobRef = { current: null as SearchJob | null };
-  readonly jobVersionRef = { current: 0n };
-  readonly launchRef = { current: false };
-  readonly liveUpdateEpochRef = { current: 0n };
-  readonly previewRef = { current: null as LivePreviewSnapshot | null };
-  readonly previewRowLimitRef = { current: 0 };
-  readonly previewSchemasRef = { current: new Map<string, ResultSchema>() };
-  readonly previewStatusRef = { current: "disabled" as RunningPreviewStatus };
-  readonly progressRevisionRef = { current: null as ProgressRevisionState };
-  readonly socketRef = { current: null as SearchWebSocketClient | null };
+  private abortController: AbortController | null = null;
+  private cancelPending = false;
+  private cancelRequested = false;
+  private generation = 0;
+  private jobId: string | null = null;
+  private job: SearchJob | null = null;
+  private jobVersion = 0n;
+  private launchLocked = false;
+  private liveUpdateEpoch = 0n;
+  private preview: LivePreviewSnapshot | null = null;
+  private previewRowLimit = 0;
+  private readonly previewSchemas = new Map<string, ResultSchema>();
+  private previewStatus: RunningPreviewStatus = "disabled";
+  private progressRevision: ProgressRevisionState = null;
+  private socket: SearchWebSocketClient | null = null;
   private timers: number[] = [];
 
   beginGeneration(): number {
-    this.generationRef.current += 1;
-    return this.generationRef.current;
+    this.generation += 1;
+    return this.generation;
   }
 
   resetBackendRun(abortRelatedRequests: () => void) {
-    const supersededJobId = this.jobIdRef.current;
-    this.abortRef.current?.abort();
+    const supersededJobId = this.jobId;
+    this.abortRequest();
     abortRelatedRequests();
     this.stopLiveUpdates();
     const controller = new AbortController();
-    this.abortRef.current = controller;
+    this.abortController = controller;
     this.clearJob();
-    this.cancelPendingRef.current = false;
-    this.cancelRequestedRef.current = false;
+    this.cancelPending = false;
+    this.cancelRequested = false;
     return { controller, supersededJobId };
   }
 
   beginCancel(): number | null {
-    if (this.cancelPendingRef.current) return null;
-    this.cancelPendingRef.current = true;
-    this.cancelRequestedRef.current = true;
-    return this.generationRef.current;
+    if (this.cancelPending) return null;
+    this.cancelPending = true;
+    this.cancelRequested = true;
+    return this.generation;
   }
 
-  acceptAuthoritativeJob(job: SearchJob, progressRevision: NonNullable<ProgressRevisionState>) {
-    this.jobVersionRef.current = job.stateVersion;
-    this.progressRevisionRef.current = progressRevision;
-    this.jobRef.current = job;
+  adoptAuthoritativeJob(
+    generation: number,
+    job: SearchJob,
+  ): NonNullable<ProgressRevisionState> {
+    if (!this.canAdoptJob(generation, job.searchJobId)) {
+      throw new DOMException("Search was superseded.", "AbortError");
+    }
+    if (!isVersionedSearchRevision(job.stateVersion)) {
+      throw new Error("The server returned a search job without a valid state revision.");
+    }
+    if (
+      job.stateVersion < this.jobVersion
+      || (
+        this.progressRevision !== null
+        && job.stateVersion < this.progressRevision.revision
+      )
+    ) {
+      throw new Error("The search job snapshot was older than the applied live state.");
+    }
+    if (job.progress === undefined) {
+      throw new Error("The server returned a search job without progress.");
+    }
+    const decision = reconcileSearchProgress(
+      this.progressRevision,
+      job.progress,
+      { kind: "authoritative", envelopeRevision: job.stateVersion },
+    );
+    if (decision.kind === "ignore") {
+      throw new Error("The search job progress was older than the applied live progress.");
+    }
+    if (decision.kind === "recover") {
+      throw new Error(`The server returned inconsistent search progress (${decision.reason}).`);
+    }
+    this.jobId = job.searchJobId;
+    this.jobVersion = job.stateVersion;
+    this.progressRevision = decision.state;
+    this.job = job;
+    return decision.state;
   }
 
-  attachSocket(socket: SearchWebSocketClient) {
-    this.socketRef.current = socket;
+  replaceSocket(socket: SearchWebSocketClient) {
+    const replaced = this.socket;
+    this.socket = socket;
+    if (replaced !== socket) replaced?.dispose();
   }
 
   captureLiveUpdateEpoch(): bigint {
-    return this.liveUpdateEpochRef.current;
+    return this.liveUpdateEpoch;
   }
 
   finishCancel(generation: number) {
-    if (this.generationRef.current !== generation) return;
-    this.cancelPendingRef.current = false;
-    this.cancelRequestedRef.current = false;
+    if (this.generation !== generation) return;
+    this.cancelPending = false;
+    this.cancelRequested = false;
   }
 
   isCurrent(generation: number, searchJobId?: string): boolean {
-    return this.generationRef.current === generation
-      && (searchJobId === undefined || this.jobIdRef.current === searchJobId);
+    return this.generation === generation
+      && (searchJobId === undefined || this.jobId === searchJobId);
   }
 
   liveUpdateEpochIs(epoch: bigint): boolean {
-    return this.liveUpdateEpochRef.current === epoch;
+    return this.liveUpdateEpoch === epoch;
   }
 
-  recordUnversionedLiveUpdate() {
-    this.liveUpdateEpochRef.current += 1n;
+  advanceLiveUpdateEpoch() {
+    this.liveUpdateEpoch += 1n;
   }
 
-  releaseSocket(socket: SearchWebSocketClient | null) {
-    if (this.socketRef.current === socket) this.socketRef.current = null;
+  disposeSocket(socket: SearchWebSocketClient | null) {
+    if (this.socket !== socket) return;
+    this.socket = null;
+    socket?.dispose();
   }
 
   launchIsLocked(): boolean {
-    return this.launchRef.current;
+    return this.launchLocked;
   }
 
   lockLaunch() {
-    this.launchRef.current = true;
+    this.launchLocked = true;
     window.setTimeout(() => {
-      this.launchRef.current = false;
+      this.launchLocked = false;
     }, 0);
   }
 
@@ -111,19 +155,116 @@ export class RunningSearchController {
   }
 
   stopLiveUpdates() {
-    this.socketRef.current?.dispose();
-    this.socketRef.current = null;
+    this.disposeSocket(this.socket);
   }
 
   clearJob() {
-    this.jobIdRef.current = null;
-    this.jobRef.current = null;
-    this.jobVersionRef.current = 0n;
-    this.liveUpdateEpochRef.current = 0n;
+    this.jobId = null;
+    this.job = null;
+    this.jobVersion = 0n;
+    this.liveUpdateEpoch = 0n;
+    this.progressRevision = null;
   }
 
-  resetProgress() {
-    this.progressRevisionRef.current = null;
+  abortRequest() {
+    const controller = this.abortController;
+    this.abortController = null;
+    controller?.abort();
+  }
+
+  cancelIsPending(): boolean {
+    return this.cancelPending;
+  }
+
+  cancelWasRequested(): boolean {
+    return this.cancelRequested;
+  }
+
+  generationSnapshot(): number {
+    return this.generation;
+  }
+
+  jobSnapshot() {
+    return {
+      id: this.jobId,
+      job: this.job,
+      version: this.jobVersion,
+    } as const;
+  }
+
+  previewSchema(schemaId: string): ResultSchema | undefined {
+    return this.previewSchemas.get(schemaId);
+  }
+
+  previewSnapshot() {
+    return {
+      rowLimit: this.previewRowLimit,
+      snapshot: this.preview,
+      status: this.previewStatus,
+    } as const;
+  }
+
+  private canAdoptJob(generation: number, searchJobId: string): boolean {
+    return this.generation === generation
+      && (this.jobId === null || this.jobId === searchJobId);
+  }
+
+  applyPreview(preview: LivePreviewSnapshot, status: RunningPreviewStatus) {
+    this.preview = preview;
+    this.previewStatus = status;
+  }
+
+  configurePreview(limit: number) {
+    this.previewRowLimit = limit;
+  }
+
+  registerPreviewSchema(schema: ResultSchema) {
+    this.previewSchemas.set(schema.schemaId, schema);
+  }
+
+  transitionPreview(status: RunningPreviewStatus) {
+    this.previewStatus = status;
+  }
+
+  clearPreview(status: RunningPreviewStatus) {
+    this.preview = null;
+    this.previewStatus = status;
+  }
+
+  reconcileProgress(
+    progress: Parameters<typeof reconcileSearchProgress>[1],
+    source: SearchProgressSource,
+  ): ProgressDecision {
+    const decision = reconcileSearchProgress(this.progressRevision, progress, source);
+    if (decision.kind === "apply") this.progressRevision = decision.state;
+    return decision;
+  }
+
+  reconcileLiveJobVersion(version: bigint): "stale" | "current" | "advanced" {
+    if (version < this.jobVersion) return "stale";
+    if (version === this.jobVersion) return "current";
+    this.jobVersion = version;
+    return "advanced";
+  }
+
+  releaseRequest(controller: AbortController) {
+    if (this.abortController === controller) this.abortController = null;
+  }
+
+  replaceRequest(controller: AbortController) {
+    if (this.abortController !== controller) this.abortController?.abort();
+    this.abortController = controller;
+  }
+
+  resetPreview() {
+    this.preview = null;
+    this.previewRowLimit = 0;
+    this.previewSchemas.clear();
+    this.previewStatus = "disabled";
+  }
+
+  clearPreviewSchemas() {
+    this.previewSchemas.clear();
   }
 
   clearTimers = () => {
