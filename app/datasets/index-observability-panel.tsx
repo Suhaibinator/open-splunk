@@ -61,6 +61,7 @@ export function IndexObservabilityPanel({ client, index }: IndexObservabilityPan
   const [loadingMore, setLoadingMore] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [generation, setGeneration] = useState(0);
+  const activeLoadGenerationRef = useRef(0);
   const snapshotRef = useRef<IndexFieldSnapshot | null>(null);
   const moreControllerRef = useRef<AbortController | null>(null);
 
@@ -84,22 +85,26 @@ export function IndexObservabilityPanel({ client, index }: IndexObservabilityPan
   }
 
   useEffect(() => {
+    activeLoadGenerationRef.current = generation;
     const controller = new AbortController();
     let current = true;
     moreControllerRef.current?.abort();
     moreControllerRef.current = null;
     snapshotRef.current = null;
-    setStatsState("loading");
-    setStats(null);
-    setStatsError(null);
-    setFieldsState("loading");
-    setFieldSnapshot(null);
-    setFieldsError(null);
-    setLoadingMore(false);
+    queueMicrotask(() => {
+      if (!current) return;
+      setStatsState("loading");
+      setStats(null);
+      setStatsError(null);
+      setFieldsState("loading");
+      setFieldSnapshot(null);
+      setFieldsError(null);
+      setLoadingMore(false);
+    });
 
     void client.indexes.stats({ selector }, { signal: controller.signal }).then(
       (response) => {
-        if (!current) return;
+        if (!current || activeLoadGenerationRef.current !== generation) return;
         if (response.stats === undefined || response.stats.indexId !== index.id) {
           throw new TypeError("The server did not return statistics for the selected index.");
         }

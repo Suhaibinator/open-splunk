@@ -110,6 +110,7 @@ export function BackendReportsConsole({ apiBaseUrl, onViewChange, view }: Backen
   const [totalSize, setTotalSize] = useState<bigint | null>(null);
   const [totalSizeExact, setTotalSizeExact] = useState(false);
   const [generation, setGeneration] = useState(0);
+  const activeLoadGenerationRef = useRef(0);
   const [refreshing, setRefreshing] = useState(false);
   const [query, setQuery] = useState("");
   const [effectiveQuery, setEffectiveQuery] = useState("");
@@ -122,6 +123,7 @@ export function BackendReportsConsole({ apiBaseUrl, onViewChange, view }: Backen
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [scheduleTargetId, setScheduleTargetId] = useState<string | null>(null);
+  const [systemBootstrap, setSystemBootstrap] = useState<SystemBootstrapModel | null>(null);
   const alertsTabRef = useRef<HTMLButtonElement>(null);
   const savedSearchesTabRef = useRef<HTMLButtonElement>(null);
   const bootstrapRef = useRef<SystemBootstrapModel | null>(null);
@@ -140,12 +142,15 @@ export function BackendReportsConsole({ apiBaseUrl, onViewChange, view }: Backen
   useEffect(() => () => actionAbortRef.current?.abort(), []);
 
   useEffect(() => {
-    try {
-      setScheduleTargetId(scheduledReportConfigurationTarget(new URL(window.location.href).searchParams));
-    } catch (reason) {
-      setActionNotice(reason instanceof Error ? reason.message : "The report schedule link is invalid.");
-      clearScheduleTarget();
-    }
+    const frame = window.requestAnimationFrame(() => {
+      try {
+        setScheduleTargetId(scheduledReportConfigurationTarget(new URL(window.location.href).searchParams));
+      } catch (reason) {
+        setActionNotice(reason instanceof Error ? reason.message : "The report schedule link is invalid.");
+        clearScheduleTarget();
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [clearScheduleTarget]);
 
   useEffect(() => {
@@ -154,25 +159,35 @@ export function BackendReportsConsole({ apiBaseUrl, onViewChange, view }: Backen
   }, [query]);
 
   useEffect(() => {
+    activeLoadGenerationRef.current = generation;
     const retainShell = hasLoadedRef.current;
     loadMoreAbortRef.current?.abort();
     loadMoreAbortRef.current = null;
     const controller = new AbortController();
     let current = true;
-    if (!retainShell) setState("loading");
-    setRefreshing(retainShell);
-    setError(null);
-    setLoadMoreError(null);
-    setLoadingMore(false);
+    queueMicrotask(() => {
+      if (!current) return;
+      if (!retainShell) setState("loading");
+      setRefreshing(retainShell);
+      setError(null);
+      setLoadMoreError(null);
+      setLoadingMore(false);
+    });
     if (!retainShell) {
-      setNextPageToken(null);
       bootstrapRef.current = null;
       pageTokensSeenRef.current.clear();
+      queueMicrotask(() => {
+        if (!current || activeLoadGenerationRef.current !== generation) return;
+        setNextPageToken(null);
+        setSystemBootstrap(null);
+      });
     }
     void (async () => {
       try {
         const bootstrap = await getSystemBootstrap(client, undefined, { signal: controller.signal });
+        if (!current || activeLoadGenerationRef.current !== generation) return;
         bootstrapRef.current = bootstrap;
+        setSystemBootstrap(bootstrap);
         setAppNames(Object.fromEntries(
           bootstrap.apps.map((app) => [app.appId, app.displayName || app.slug || app.appId]),
         ));
@@ -331,7 +346,7 @@ export function BackendReportsConsole({ apiBaseUrl, onViewChange, view }: Backen
   const refreshPending = state === "loading" || refreshing;
   const controlsPending = refreshPending || actionPending !== null;
   const actionNameError = savedSearchNameValidationError(actionName);
-  const currentBootstrap = bootstrapRef.current;
+  const currentBootstrap = systemBootstrap;
   const schedulingAvailable = currentBootstrap !== null
     && supportsServerFeature(currentBootstrap, ServerFeature.SERVER_FEATURE_SCHEDULED_SEARCHES);
 

@@ -81,6 +81,7 @@ function useAuditTraversal<T extends { sequence: bigint }>(
   const [loadMoreError, setLoadMoreError] = useState<AuditErrorPresentation | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [generation, setGeneration] = useState(0);
+  const activeLoadGenerationRef = useRef(0);
   const initialAbortRef = useRef<AbortController | null>(null);
   const moreAbortRef = useRef<AbortController | null>(null);
   const tokensSeenRef = useRef(new Set<string>());
@@ -88,25 +89,29 @@ function useAuditTraversal<T extends { sequence: bigint }>(
   const reload = useCallback(() => setGeneration((value) => value + 1), []);
 
   useEffect(() => {
+    activeLoadGenerationRef.current = generation;
     initialAbortRef.current?.abort();
     moreAbortRef.current?.abort();
     moreAbortRef.current = null;
     const controller = new AbortController();
     initialAbortRef.current = controller;
     let current = true;
-    setState("loading");
-    setItems([]);
-    setTotalSize(0n);
-    setNextPageToken(null);
-    setError(null);
-    setLoadMoreError(null);
-    setLoadingMore(false);
+    queueMicrotask(() => {
+      if (!current) return;
+      setState("loading");
+      setItems([]);
+      setTotalSize(0n);
+      setNextPageToken(null);
+      setError(null);
+      setLoadMoreError(null);
+      setLoadingMore(false);
+    });
     tokensSeenRef.current.clear();
     sequencesSeenRef.current.clear();
     void (async () => {
       try {
         const page = await loadPage(undefined, controller.signal);
-        if (!current || controller.signal.aborted) return;
+        if (!current || controller.signal.aborted || activeLoadGenerationRef.current !== generation) return;
         for (const item of page.items) sequencesSeenRef.current.add(item.sequence);
         setItems(page.items);
         setTotalSize(page.totalSize);

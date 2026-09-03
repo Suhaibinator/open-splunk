@@ -615,6 +615,7 @@ function BackendAnalyticsConsole({ apiBaseUrl }: { apiBaseUrl: string }) {
   const [coverageFilter, setCoverageFilter] = useState<CoverageFilter>("all");
   const [fieldSort, setFieldSort] = useState<FieldSort>("coverage");
   const [generation, setGeneration] = useState(0);
+  const activeLoadGenerationRef = useRef(0);
   const [bootstrapState, setBootstrapState] = useState<Exclude<BackendLoadState, "unavailable">>("loading");
   const [bootstrap, setBootstrap] = useState<SystemBootstrapModel | null>(null);
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
@@ -635,21 +636,25 @@ function BackendAnalyticsConsole({ apiBaseUrl }: { apiBaseUrl: string }) {
   const refresh = useCallback(() => setGeneration((current) => current + 1), []);
 
   useEffect(() => {
+    activeLoadGenerationRef.current = generation;
     const controller = new AbortController();
     let current = true;
     historyControllerRef.current?.abort();
     fieldControllerRef.current?.abort();
-    setBootstrapState("loading");
-    setBootstrapError(null);
-    setBootstrap(null);
-    setHistoryState("loading");
-    setHistorySnapshot(null);
-    setHistoryRange(null);
-    setFieldState("idle");
-    setFieldSnapshot(null);
+    queueMicrotask(() => {
+      if (!current) return;
+      setBootstrapState("loading");
+      setBootstrapError(null);
+      setBootstrap(null);
+      setHistoryState("loading");
+      setHistorySnapshot(null);
+      setHistoryRange(null);
+      setFieldState("idle");
+      setFieldSnapshot(null);
+    });
     void getSystemBootstrap(client, preferredAppId, { signal: controller.signal }).then(
       (loaded) => {
-        if (!current) return;
+        if (!current || activeLoadGenerationRef.current !== generation) return;
         const synchronizeAppScope = !appliedAppPreferenceRef.current.initialized
           || appliedAppPreferenceRef.current.value !== preferredAppId;
         appliedAppPreferenceRef.current = { initialized: true, value: preferredAppId };
@@ -696,16 +701,23 @@ function BackendAnalyticsConsole({ apiBaseUrl }: { apiBaseUrl: string }) {
     const controller = new AbortController();
     historyControllerRef.current = controller;
     let current = true;
-    setHistorySnapshot(null);
-    setHistoryError(null);
+    queueMicrotask(() => {
+      if (!current) return;
+      setHistorySnapshot(null);
+      setHistoryError(null);
+    });
     if (!supportsServerFeature(bootstrap, ServerFeature.SERVER_FEATURE_SEARCH_HISTORY)) {
-      setHistoryState("unavailable");
+      queueMicrotask(() => {
+        if (current) setHistoryState("unavailable");
+      });
       return () => {
         current = false;
         controller.abort();
       };
     }
-    setHistoryState("loading");
+    queueMicrotask(() => {
+      if (current) setHistoryState("loading");
+    });
     const end = new Date(bootstrap.serverTime);
     const start = new Date(end.valueOf() - rangeMilliseconds(rangeKey));
     void loadAnalyticsHistory(client, {
@@ -744,23 +756,32 @@ function BackendAnalyticsConsole({ apiBaseUrl }: { apiBaseUrl: string }) {
     const controller = new AbortController();
     fieldControllerRef.current = controller;
     let current = true;
-    setFieldSnapshot(null);
-    setFieldError(null);
+    queueMicrotask(() => {
+      if (!current) return;
+      setFieldSnapshot(null);
+      setFieldError(null);
+    });
     if (!supportsServerFeature(bootstrap, ServerFeature.SERVER_FEATURE_INDEX_ADMIN)) {
-      setFieldState("unavailable");
+      queueMicrotask(() => {
+        if (current) setFieldState("unavailable");
+      });
       return () => {
         current = false;
         controller.abort();
       };
     }
     if (fieldIndexName.length === 0) {
-      setFieldState("idle");
+      queueMicrotask(() => {
+        if (current) setFieldState("idle");
+      });
       return () => {
         current = false;
         controller.abort();
       };
     }
-    setFieldState("loading");
+    queueMicrotask(() => {
+      if (current) setFieldState("loading");
+    });
     void loadAnalyticsFields(client, {
       signal: controller.signal,
       maximumPageSize: bootstrap.limits.maximumPageSize,

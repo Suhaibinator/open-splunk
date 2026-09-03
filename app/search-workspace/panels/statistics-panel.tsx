@@ -385,7 +385,8 @@ export function StatisticsPanel({
   const timechartSeries = timechartValueColumns;
   const [columnScale, setColumnScale] = useState<StatisticsColumnScale | null>(null);
   useEffect(() => {
-    setColumnScale(readStatisticsColumnScale());
+    const frame = window.requestAnimationFrame(() => setColumnScale(readStatisticsColumnScale()));
+    return () => window.cancelAnimationFrame(frame);
   }, []);
   const timechartColumns = useMemo<StatisticsPanelColumn[]>(() => [
     {
@@ -468,7 +469,10 @@ export function StatisticsPanel({
   });
   const columnLayout = columnLayoutState.query === layoutQueryKey
     ? reconcileColumnLayout(columnLayoutState.layout, panelColumns)
-    : createColumnLayout(panelColumns);
+    : reconcileColumnLayout(
+        columnLayoutStore.get(layoutQueryKey) ?? createColumnLayout(panelColumns),
+        panelColumns,
+      );
   const visibleColumnLayout = visibleColumns(columnLayout);
   const visibleColumnIds = new Set(visibleColumnLayout.map((column) => column.id));
   const visiblePanelColumns = panelColumns.filter((column) => visibleColumnIds.has(column.id));
@@ -478,18 +482,8 @@ export function StatisticsPanel({
   const tableMinimumWidth = visibleColumnWidth(columnLayout);
 
   useEffect(() => {
-    if (columnScale === null) return;
-    setColumnLayoutState((current) => {
-      const stored = current.query === layoutQueryKey
-        ? current.layout
-        : columnLayoutStore.get(layoutQueryKey);
-      const layout = stored === undefined
-        ? createColumnLayout(panelColumns)
-        : reconcileColumnLayout(stored, panelColumns);
-      columnLayoutStore.set(layoutQueryKey, layout);
-      return { layout, query: layoutQueryKey };
-    });
-  }, [columnLayoutStore, columnScale, layoutQueryKey, panelColumns]);
+    if (columnScale !== null) columnLayoutStore.set(layoutQueryKey, columnLayout);
+  }, [columnLayout, columnLayoutStore, columnScale, layoutQueryKey]);
 
   function updateColumnLayout(
     transform: (layout: StatisticsColumnLayout) => StatisticsColumnLayout,
@@ -593,18 +587,16 @@ export function StatisticsPanel({
     const updateViewportHeight = (): void => {
       setTableViewportHeight(Math.max(1, shell.clientHeight - STATISTICS_HEADER_HEIGHT));
     };
-    updateViewportHeight();
+    const viewportFrame = window.requestAnimationFrame(updateViewportHeight);
     const observer = new ResizeObserver(updateViewportHeight);
     observer.observe(shell);
-    return () => observer.disconnect();
+    return () => {
+      window.cancelAnimationFrame(viewportFrame);
+      observer.disconnect();
+    };
   }, [virtualWindow.virtualized]);
 
-  useEffect(() => {
-    const shell = tableShellRef.current;
-    if (shell !== null) shell.scrollTop = 0;
-    setVerticalScrollTop(0);
-    setMultivalueDialog(null);
-  }, [
+  const scrollResetKey = JSON.stringify([
     genericStatsSort,
     pageNumber,
     resultIdentity,
@@ -613,6 +605,18 @@ export function StatisticsPanel({
     timechartSeriesSort,
     timechartSort,
   ]);
+  const [activeScrollResetKey, setActiveScrollResetKey] = useState(scrollResetKey);
+  if (activeScrollResetKey !== scrollResetKey) {
+    setActiveScrollResetKey(scrollResetKey);
+    setVerticalScrollTop(0);
+    setMultivalueDialog(null);
+  }
+
+  useEffect(() => {
+    if (activeScrollResetKey !== scrollResetKey) return;
+    const shell = tableShellRef.current;
+    if (shell !== null) shell.scrollTop = 0;
+  }, [activeScrollResetKey, scrollResetKey]);
 
   useEffect(() => {
     const maximumScrollTop = maximumVirtualTableScrollTop({

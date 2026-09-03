@@ -508,28 +508,31 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     tokenLoadMoreRequestRef.current = null;
     const controller = new AbortController();
     let current = true;
-    setBootstrap(null);
-    setBootstrapError(null);
-    setServerClockAnchor(null);
-    setHECSnapshot(null);
-    setHECState("loading");
-    setHECError(null);
-    setIndexState("loading");
-    setIndexError(null);
-    setIndexNextPageToken(null);
-    setIndexTotalSize(null);
-    setIndexTotalSizeExact(false);
-    setIndexLoadingMore(false);
-    setIndexPaginationError(null);
     indexSeenPageTokensRef.current = new Set();
-    setTokenState("loading");
-    setTokenError(null);
-    setTokenNextPageToken(null);
-    setTokenTotalSize(null);
-    setTokenTotalSizeExact(false);
-    setTokenLoadingMore(false);
-    setTokenPaginationError(null);
     tokenSeenPageTokensRef.current = new Set();
+    queueMicrotask(() => {
+      if (!current) return;
+      setBootstrap(null);
+      setBootstrapError(null);
+      setServerClockAnchor(null);
+      setHECSnapshot(null);
+      setHECState("loading");
+      setHECError(null);
+      setIndexState("loading");
+      setIndexError(null);
+      setIndexNextPageToken(null);
+      setIndexTotalSize(null);
+      setIndexTotalSizeExact(false);
+      setIndexLoadingMore(false);
+      setIndexPaginationError(null);
+      setTokenState("loading");
+      setTokenError(null);
+      setTokenNextPageToken(null);
+      setTokenTotalSize(null);
+      setTokenTotalSizeExact(false);
+      setTokenLoadingMore(false);
+      setTokenPaginationError(null);
+    });
 
     const bootstrapStartedMonotonicMs = performance.now();
     void getSystemBootstrap(client, undefined, { signal: controller.signal }).then(
@@ -640,11 +643,12 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
         tokenRecoveryEnvironmentCanPoll(document.visibilityState, navigator.onLine),
       );
     };
-    updateRecoveryEnvironment();
+    const environmentFrame = window.requestAnimationFrame(updateRecoveryEnvironment);
     document.addEventListener("visibilitychange", updateRecoveryEnvironment);
     window.addEventListener("online", updateRecoveryEnvironment);
     window.addEventListener("offline", updateRecoveryEnvironment);
     return () => {
+      window.cancelAnimationFrame(environmentFrame);
       document.removeEventListener("visibilitychange", updateRecoveryEnvironment);
       window.removeEventListener("online", updateRecoveryEnvironment);
       window.removeEventListener("offline", updateRecoveryEnvironment);
@@ -652,14 +656,21 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
   }, []);
 
   useEffect(() => {
-    try {
-      setNormalizedApiBaseUrl(normalizeApiBaseUrl(apiBaseUrl, window.location.origin));
-      setApiBaseNormalizationError(null);
-    } catch (error) {
-      setNormalizedApiBaseUrl(null);
-      setApiBaseNormalizationError(errorMessage(error));
-      setTokenCreateGuardStorageState("unavailable");
-    }
+    let current = true;
+    queueMicrotask(() => {
+      if (!current) return;
+      try {
+        setNormalizedApiBaseUrl(normalizeApiBaseUrl(apiBaseUrl, window.location.origin));
+        setApiBaseNormalizationError(null);
+      } catch (error) {
+        setNormalizedApiBaseUrl(null);
+        setApiBaseNormalizationError(errorMessage(error));
+        setTokenCreateGuardStorageState("unavailable");
+      }
+    });
+    return () => {
+      current = false;
+    };
   }, [apiBaseUrl]);
 
   useEffect(() => {
@@ -2956,7 +2967,15 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
   });
 
   useEffect(
-    () => reconcilePersistedTokenCreate(),
+    () => {
+      let current = true;
+      queueMicrotask(() => {
+        if (current) reconcilePersistedTokenCreate();
+      });
+      return () => {
+        current = false;
+      };
+    },
     [client, normalizedApiBaseUrl, tokenRecoveryAcquireGeneration],
   );
 
@@ -2997,7 +3016,13 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
 
   useEffect(() => {
     if (!tokenRecoveryEnvironmentReady) return;
-    resumeScheduledTokenRecovery();
+    let current = true;
+    queueMicrotask(() => {
+      if (current) resumeScheduledTokenRecovery();
+    });
+    return () => {
+      current = false;
+    };
   }, [tokenRecoveryEnvironmentReady]);
 
   const loadedIndexScopeOptions: TokenIndexScopeOption[] = indexes.flatMap((index) => {
@@ -3186,9 +3211,12 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       );
       setSection(next);
     }
-    restoreSectionFromHistory();
+    const sectionFrame = window.requestAnimationFrame(restoreSectionFromHistory);
     window.addEventListener("popstate", restoreSectionFromHistory);
-    return () => window.removeEventListener("popstate", restoreSectionFromHistory);
+    return () => {
+      window.cancelAnimationFrame(sectionFrame);
+      window.removeEventListener("popstate", restoreSectionFromHistory);
+    };
   }, []);
   useEffect(() => {
     if (bootstrap === null && bootstrapError === null) return;
@@ -3196,8 +3224,15 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       (section === "knowledge" && !knowledgeAdvertised)
       || (section === "lookups" && !lookupAdvertised)
     ) {
-      setSection("overview");
-      window.history.replaceState(null, "", adminSectionPath(window.location.href, "overview"));
+      let current = true;
+      queueMicrotask(() => {
+        if (!current) return;
+        setSection("overview");
+        window.history.replaceState(null, "", adminSectionPath(window.location.href, "overview"));
+      });
+      return () => {
+        current = false;
+      };
     }
   }, [bootstrap, bootstrapError, knowledgeAdvertised, lookupAdvertised, section]);
   function navigateSection(next: AdminSection) {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 
 import { SortDirection } from "@/gen/ts/open_splunk/common";
@@ -135,6 +135,7 @@ export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsolePro
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [generation, setGeneration] = useState(0);
+  const activeLoadGenerationRef = useRef(0);
   const [filter, setFilter] = useState("");
   const [view, setView] = useState<"cards" | "table">("cards");
   const [definitionState, setDefinitionState] = useState<DefinitionLoadState>("idle");
@@ -144,17 +145,21 @@ export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsolePro
   const reload = useCallback(() => setGeneration((current) => current + 1), []);
 
   useEffect(() => {
+    activeLoadGenerationRef.current = generation;
     const controller = new AbortController();
     let current = true;
-    setLoading(true);
-    setError(null);
-    setDefinitionState("idle");
-    setDefinitions(new Map());
-    setDefinitionError(null);
+    queueMicrotask(() => {
+      if (!current) return;
+      setLoading(true);
+      setError(null);
+      setDefinitionState("idle");
+      setDefinitions(new Map());
+      setDefinitionError(null);
+    });
     void (async () => {
       try {
         const response = await getSystemBootstrap(client, undefined, { signal: controller.signal });
-        if (!current) return;
+        if (!current || activeLoadGenerationRef.current !== generation) return;
         setBootstrap(response);
         setLoading(false);
         setDefinitionState("loading");
@@ -185,9 +190,11 @@ export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsolePro
       || `${index.name} ${index.displayName}`.toLowerCase().includes(normalized));
   }, [bootstrap, filter]);
   const observedIndex = visible.find((index) => index.id === observedIndexId) ?? null;
-  useEffect(() => {
+  const [observedVisibleIndexes, setObservedVisibleIndexes] = useState(visible);
+  if (observedVisibleIndexes !== visible) {
+    setObservedVisibleIndexes(visible);
     setObservedIndexId((current) => retainVisibleObservedIndexId(current, visible.map((index) => index.id)));
-  }, [visible]);
+  }
 
   function toggleObservedIndex(indexId: string) {
     setObservedIndexId((current) => nextObservedIndexId(current, indexId));

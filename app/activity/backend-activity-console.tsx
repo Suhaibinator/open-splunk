@@ -154,9 +154,11 @@ export function BackendActivityConsole({ apiBaseUrl, onViewChange, view }: Backe
     };
   }, [client]);
 
-  useEffect(() => {
+  const [visitedView, setVisitedView] = useState(view);
+  if (visitedView !== view) {
+    setVisitedView(view);
     setVisited((current) => new Set(current).add(view));
-  }, [view]);
+  }
 
   function selectView(nextView: ActivityView) {
     onViewChange(nextView);
@@ -343,6 +345,7 @@ function BackendSearchHistory({ apiBaseUrl }: BackendActivityViewProps) {
   const [totalSize, setTotalSize] = useState<bigint | null>(null);
   const [totalSizeExact, setTotalSizeExact] = useState(false);
   const [generation, setGeneration] = useState(0);
+  const activeLoadGenerationRef = useRef(0);
   const [filter, setFilter] = useState<ActivityFilter>("all");
   const [query, setQuery] = useState("");
   const [textFilter, setTextFilter] = useState("");
@@ -364,15 +367,19 @@ function BackendSearchHistory({ apiBaseUrl }: BackendActivityViewProps) {
   useEffect(() => () => actionAbortRef.current?.abort(), []);
 
   useEffect(() => {
+    activeLoadGenerationRef.current = generation;
     loadMoreAbortRef.current?.abort();
     loadMoreAbortRef.current = null;
     const controller = new AbortController();
     let current = true;
-    setState("loading");
-    setError(null);
-    setLoadMoreError(null);
-    setLoadingMore(false);
-    setNextPageToken(null);
+    queueMicrotask(() => {
+      if (!current) return;
+      setState("loading");
+      setError(null);
+      setLoadMoreError(null);
+      setLoadingMore(false);
+      setNextPageToken(null);
+    });
     bootstrapRef.current = null;
     pageTokensSeenRef.current.clear();
     void (async () => {
@@ -389,7 +396,7 @@ function BackendSearchHistory({ apiBaseUrl }: BackendActivityViewProps) {
           pageSize: Math.max(1, Math.min(bootstrap.limits.maximumPageSize || 50, 100)),
           maximumPages: 1,
         });
-        if (!current) return;
+        if (!current || activeLoadGenerationRef.current !== generation) return;
         if (result.status === "unavailable") {
           setEntries([]);
           setState("unavailable");

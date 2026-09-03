@@ -17,8 +17,6 @@ export function KnowledgeManagerGate(panelProps: KnowledgeManagerPanelProps) {
 
   useEffect(() => {
     let current = true;
-    setPanel(null);
-    setFailed(false);
     void importKnowledgeManagerPanel().then(
       (module) => {
         if (current) setPanel(() => module.KnowledgeManagerPanel);

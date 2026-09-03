@@ -89,6 +89,7 @@ export function useSearchSharing(options: UseSearchSharingOptions): SearchSharin
   const requestAbortRef = useRef<AbortController | null>(null);
   const requestEpochRef = useRef(0);
   const jobID = options.job?.searchJobId ?? null;
+  const activeRequestJobIDRef = useRef(jobID);
   const durableJobsSupported = options.bootstrap !== null && supportsServerFeature(
     options.bootstrap,
     ServerFeature.SERVER_FEATURE_DURABLE_SEARCH_JOBS,
@@ -109,15 +110,22 @@ export function useSearchSharing(options: UseSearchSharingOptions): SearchSharin
     && !requestAbortRef.current?.signal.aborted
   ), [options.job?.searchJobId]);
 
-  useEffect(() => {
-    requestAbortRef.current?.abort();
-    requestAbortRef.current = null;
-    requestEpochRef.current += 1;
+  const [dialogJobID, setDialogJobID] = useState(jobID);
+  if (dialogJobID !== jobID) {
+    setDialogJobID(jobID);
     setDialog(null);
     setSettings(null);
     setLoadState({ status: "idle" });
     setMutationState({ status: "idle" });
     setManualCopyValue(null);
+  }
+
+  useEffect(() => {
+    if (activeRequestJobIDRef.current === jobID) return;
+    activeRequestJobIDRef.current = jobID;
+    requestAbortRef.current?.abort();
+    requestAbortRef.current = null;
+    requestEpochRef.current += 1;
   }, [jobID]);
 
   useEffect(() => () => {

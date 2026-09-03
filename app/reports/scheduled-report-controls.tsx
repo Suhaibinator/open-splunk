@@ -115,15 +115,24 @@ export function ScheduledReportActions({
 
   useEffect(() => {
     if (!autoOpenSchedule || autoOpenedRef.current) return;
-    autoOpenedRef.current = true;
-    setError(null);
-    setDialog("schedule");
-    onScheduleOpened?.();
+    let current = true;
+    queueMicrotask(() => {
+      if (!current) return;
+      autoOpenedRef.current = true;
+      setError(null);
+      setDialog("schedule");
+      onScheduleOpened?.();
+    });
+    return () => {
+      current = false;
+    };
   }, [autoOpenSchedule, onScheduleOpened]);
 
-  useEffect(() => {
+  const [configurationOwner, setConfigurationOwner] = useState({ dialog, savedSearch });
+  if (configurationOwner.dialog !== dialog || configurationOwner.savedSearch !== savedSearch) {
+    setConfigurationOwner({ dialog, savedSearch });
     if (dialog === null) setConfiguration(initialConfiguration(savedSearch));
-  }, [dialog, savedSearch]);
+  }
 
   const validationErrors = useMemo(() => dialog === "schedule" ? {
     ...serverValidationErrors,

@@ -233,8 +233,11 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
   useEffect(() => {
     const requests = loadRequests.current;
     const runs = activePanelRuns.current;
-    void load(preferredDashboardAppID(), "initial");
+    const loadFrame = window.requestAnimationFrame(() => {
+      void load(preferredDashboardAppID(), "initial");
+    });
     return () => {
+      window.cancelAnimationFrame(loadFrame);
       loadGeneration.current += 1;
       for (const request of requests) request.abort();
       requests.clear();

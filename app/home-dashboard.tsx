@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 
 import {
@@ -66,6 +66,7 @@ function BackendRecentSearches({
   const [entries, setEntries] = useState<ServerSearchHistoryEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [generation, setGeneration] = useState(0);
+  const activeLoadGenerationRef = useRef(0);
   const [selectedAppId, setSelectedAppId] = useState<string | null>(null);
   const navigationAppId = selectedAppId ?? preferredAppId;
   const contextualHref = (href: string) => navigationAppId === undefined
@@ -73,15 +74,19 @@ function BackendRecentSearches({
     : backendAppHref(href, navigationAppId);
 
   useEffect(() => {
+    activeLoadGenerationRef.current = generation;
     const controller = new AbortController();
     let current = true;
-    setState("loading");
-    setError(null);
-    setSelectedAppId(null);
+    queueMicrotask(() => {
+      if (!current) return;
+      setState("loading");
+      setError(null);
+      setSelectedAppId(null);
+    });
     void (async () => {
       try {
         const bootstrap = await getSystemBootstrap(client, preferredAppId, { signal: controller.signal });
-        if (!current) return;
+        if (!current || activeLoadGenerationRef.current !== generation) return;
         setSelectedAppId(bootstrap.selectedAppId);
         const result = await listServerSearchHistory(client, bootstrap, {
           appId: bootstrap.selectedAppId ?? undefined,

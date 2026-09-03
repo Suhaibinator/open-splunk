@@ -1,7 +1,7 @@
 "use client";
 
 import type { FormEvent } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 
 import {
@@ -407,6 +407,7 @@ export function LookupManagerPanel({
   const [appId, setAppId] = useState<string>(defaultAppId);
   const [filter, setFilter] = useState("");
   const [generation, setGeneration] = useState(0);
+  const activeLoadGenerationRef = useRef(0);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [modal, setModal] = useState<LookupModal | null>(null);
   const [target, setTarget] = useState<Lookup | null>(null);
@@ -417,9 +418,13 @@ export function LookupManagerPanel({
   const reload = useCallback(() => setGeneration((value) => value + 1), []);
 
   useEffect(() => {
+    activeLoadGenerationRef.current = generation;
     const controller = new AbortController();
-    setState("loading");
-    setLoadError(null);
+    queueMicrotask(() => {
+      if (controller.signal.aborted || activeLoadGenerationRef.current !== generation) return;
+      setState("loading");
+      setLoadError(null);
+    });
     void client.list(appId || undefined, { signal: controller.signal }).then((loaded) => {
       if (controller.signal.aborted) return;
       if (loaded.length > LOOKUP_MANAGER_CONTRACT.maximumManagedLookups) {
