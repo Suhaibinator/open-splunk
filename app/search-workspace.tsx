@@ -269,7 +269,6 @@ import {
 } from "./search-workspace/live-preview";
 import {
   isVersionedSearchRevision,
-  reconcileSearchProgress,
   type SearchProgressSource,
 } from "./search-workspace/progress-revision";
 import {
@@ -1118,15 +1117,16 @@ export function SearchWorkspace({
     client: apiClient,
     bootstrap: backendBootstrapModel,
     backendEnabled,
-    job: runningSearch.currentJob(),
+    job: runningSearch.jobSnapshot().job,
     activeSavedSearchId,
     query: submittedQuery,
     resultView: activeTab,
     timeRange: submittedTimeRange,
     copyText: copyShareText,
     onJobUpdated: (job) => {
-      if (job.searchJobId === runningSearch.currentJobId() && job.stateVersion > runningSearch.currentJobVersion()) {
-        applyBackendJob(job, runningSearch.currentGeneration());
+      const runningJob = runningSearch.jobSnapshot();
+      if (job.searchJobId === runningJob.id && job.stateVersion > runningJob.version) {
+        applyBackendJob(job, runningSearch.generationSnapshot());
       }
     },
   });
@@ -1633,7 +1633,7 @@ export function SearchWorkspace({
       ? exportSourceTab === "events"
       : exportSourceTab === "statistics" || exportSourceTab === "visualization";
     const jobReady = phase === "completed"
-      && runningSearch.currentJob() !== null
+      && runningSearch.jobSnapshot().job !== null
       && backendAuthoritativeResultsReady
       && !backendResultsExpired
       && exportSourceTab !== "patterns"
@@ -2266,16 +2266,17 @@ export function SearchWorkspace({
     status: BackendPreviewStatus,
     announcement?: string,
   ) {
-    runningSearch.recordPreviewStatus(status);
+    runningSearch.transitionPreview(status);
     setBackendPreviewStatus(status);
     if (announcement !== undefined) setBackendPreviewAnnouncement(announcement);
   }
 
   function markBackendPreviewFinalizing() {
-    if (runningSearch.currentPreviewStatus() === "finalizing") return;
+    const preview = runningSearch.previewSnapshot();
+    if (preview.status === "finalizing") return;
     updateBackendPreviewStatus(
       "finalizing",
-      runningSearch.currentPreview() === null
+      preview.snapshot === null
         ? "Search complete. Loading authoritative results."
         : "Search complete. Replacing the live preview with authoritative results.",
     );
@@ -2285,9 +2286,10 @@ export function SearchWorkspace({
     status: BackendPreviewStatus = "disabled",
     announcement?: string,
   ) {
-    runningSearch.recordPreview(null);
+    runningSearch.clearPreview(status);
     setBackendPreviewDisplay(null);
-    updateBackendPreviewStatus(status, announcement);
+    setBackendPreviewStatus(status);
+    if (announcement !== undefined) setBackendPreviewAnnouncement(announcement);
   }
 
   function resetBackendInspection() {
@@ -2317,7 +2319,6 @@ export function SearchWorkspace({
   function resetBackendResultState() {
     resetBackendInspection();
     setEventPageLoading(false);
-    runningSearch.resetProgress();
     const pageSize = backendBootstrapRef.current === null
       ? eventPageSize
       : normalizedBackendPageSize(eventPageSize, backendBootstrapRef.current);
@@ -2538,7 +2539,7 @@ export function SearchWorkspace({
       setBackendFieldSummaryLoading(false);
       return;
     }
-    const job = runningSearch.currentJob();
+    const job = runningSearch.jobSnapshot().job;
     const bootstrap = backendBootstrapRef.current;
     if (job === null || bootstrap === null) return;
     const cacheKey = `${job.searchJobId}:${activeField}`;
@@ -2548,7 +2549,7 @@ export function SearchWorkspace({
       return;
     }
     const controller = new AbortController();
-    const generation = runningSearch.currentGeneration();
+    const generation = runningSearch.generationSnapshot();
     backendFieldSummaryAbortRef.current = controller;
     setBackendFieldSummaryLoading(true);
     void getServerFieldSummary(apiClient, bootstrap.response, job.searchJobId, activeField, {
@@ -3188,7 +3189,7 @@ export function SearchWorkspace({
     setScannedBytes(summarizeByteQuantity(jobProgress.resultBytes));
     const matchedEvents = jobProgress.matchedEvents;
     const count = matchedEvents || jobProgress.producedRows;
-    const job = runningSearch.currentJob();
+    const job = runningSearch.jobSnapshot().job;
     const resultKind = job?.resultKind !== undefined
       && job.resultKind !== ResultSetKind.RESULT_SET_KIND_UNSPECIFIED
       ? job.resultKind
@@ -3209,41 +3210,11 @@ export function SearchWorkspace({
   }
 
   function applyBackendJob(job: SearchJob, generation: number) {
-    if (!runningSearch.isCurrent(generation, job.searchJobId)) {
-      throw new DOMException("Search was superseded.", "AbortError");
-    }
-    if (!isVersionedSearchRevision(job.stateVersion)) {
-      throw new Error("The server returned a search job without a valid state revision.");
-    }
-    const progressRevision = runningSearch.currentProgressRevision();
-    if (
-      job.stateVersion < runningSearch.currentJobVersion()
-      || (
-        progressRevision !== null
-        && job.stateVersion < progressRevision.revision
-      )
-    ) {
-      throw new Error("The search job snapshot was older than the applied live state.");
-    }
-    if (job.progress === undefined) {
-      throw new Error("The server returned a search job without progress.");
-    }
-    const progressDecision = reconcileSearchProgress(
-      progressRevision,
-      job.progress,
-      { kind: "authoritative", envelopeRevision: job.stateVersion },
-    );
-    if (progressDecision.kind === "ignore") {
-      throw new Error("The search job progress was older than the applied live progress.");
-    }
-    if (progressDecision.kind === "recover") {
-      throw new Error(`The server returned inconsistent search progress (${progressDecision.reason}).`);
-    }
-    runningSearch.acceptAuthoritativeJob(job, progressDecision.state);
+    const progressRevision = runningSearch.adoptAuthoritativeJob(generation, job);
     setResolvedTimeRangeLabel(formatResolvedBackendTimeRange(job.resolvedTimeRange));
     const nextPhase = backendJobPhase(job.state);
     setPhase(nextPhase);
-    applyBackendProgressMetrics(progressDecision.state.progress, nextPhase, generation);
+    applyBackendProgressMetrics(progressRevision.progress, nextPhase, generation);
     const kind = job.resultKind !== ResultSetKind.RESULT_SET_KIND_UNSPECIFIED
       ? job.resultKind
       : job.resultSchema?.resultKind ?? ResultSetKind.RESULT_SET_KIND_UNSPECIFIED;
@@ -3260,7 +3231,7 @@ export function SearchWorkspace({
       page.schema,
       page.rows,
       timechartSpanMilliseconds(
-        runningSearch.currentJob()?.definition?.spl ?? submittedQuery,
+        runningSearch.jobSnapshot().job?.definition?.spl ?? submittedQuery,
       ) ?? undefined,
     );
     clearBackendPreview("disabled", "Authoritative search results loaded.");
@@ -3567,7 +3538,7 @@ export function SearchWorkspace({
 
   async function loadMoreBackendFields() {
     const bootstrap = backendBootstrapRef.current;
-    const job = runningSearch.currentJob();
+    const job = runningSearch.jobSnapshot().job;
     const pageToken = backendFieldCatalogNextPageTokenRef.current;
     if (
       bootstrap === null
@@ -3577,7 +3548,7 @@ export function SearchWorkspace({
       || !backendAuthoritativeFieldsRef.current
     ) return;
     const controller = new AbortController();
-    const generation = runningSearch.currentGeneration();
+    const generation = runningSearch.generationSnapshot();
     backendFieldCatalogAbortRef.current = controller;
     setBackendFieldsLoadingMore(true);
     try {
@@ -3698,7 +3669,7 @@ export function SearchWorkspace({
     }
 
     const existing = runningSearch.previewSchema(schema.schemaId);
-    const currentPreview = runningSearch.currentPreview();
+    const currentPreview = runningSearch.previewSnapshot().snapshot;
     if (
       currentPreview !== null
       && currentPreview.schemaId !== schema.schemaId
@@ -3722,7 +3693,7 @@ export function SearchWorkspace({
         ));
         return false;
       }
-      if (runningSearch.currentPreview()?.schemaId === schema.schemaId) {
+      if (runningSearch.previewSnapshot().snapshot?.schemaId === schema.schemaId) {
         clearBackendPreview(
           "waiting",
           "The live result schema changed. Waiting for a fresh preview snapshot.",
@@ -3730,7 +3701,7 @@ export function SearchWorkspace({
       }
     }
 
-    runningSearch.recordPreviewSchema(schema);
+    runningSearch.registerPreviewSchema(schema);
     setBackendResultSchema(schema);
     setBackendResultKind(schema.resultKind);
     return true;
@@ -3759,12 +3730,13 @@ export function SearchWorkspace({
       return;
     }
 
-    const previous = runningSearch.currentPreview();
+    const previewState = runningSearch.previewSnapshot();
+    const previous = previewState.snapshot;
     const applied = applyLiveResultPreview(
       previous,
       schema,
       preview,
-      runningSearch.currentPreviewRowLimit(),
+      previewState.rowLimit,
     );
     if (applied.status === "ignored") return;
     if (applied.status === "invalid") {
@@ -3779,11 +3751,12 @@ export function SearchWorkspace({
       return;
     }
 
-    runningSearch.recordPreview(applied.snapshot);
     if (applied.snapshot.rows.length === 0) {
+      const status = applied.snapshot.truncated ? "limited" : "waiting";
+      runningSearch.applyPreview(applied.snapshot, status);
       setBackendPreviewDisplay(null);
-      updateBackendPreviewStatus(
-        applied.snapshot.truncated ? "limited" : "waiting",
+      setBackendPreviewStatus(status);
+      setBackendPreviewAnnouncement(
         applied.snapshot.truncated
           ? "The bounded live preview could not include a complete row. Waiting for authoritative results."
           : "Live preview is waiting for result rows.",
@@ -3796,10 +3769,11 @@ export function SearchWorkspace({
         schema,
         applied.snapshot.rows,
         timechartSpanMilliseconds(
-          runningSearch.currentJob()?.definition?.spl ?? submittedQuery,
+          runningSearch.jobSnapshot().job?.definition?.spl ?? submittedQuery,
         ) ?? undefined,
       );
       setBackendPreviewDisplay({ schema, snapshot: applied.snapshot, adapted });
+      runningSearch.applyPreview(applied.snapshot, "live");
       setBackendResultSchema(schema);
       setBackendResultKind(schema.resultKind);
       selectAutomaticResultView(
@@ -3809,12 +3783,12 @@ export function SearchWorkspace({
         schema.resultKind,
       );
       const firstVisibleSnapshot = previous === null || previous.rows.length === 0;
-      updateBackendPreviewStatus(
-        "live",
-        firstVisibleSnapshot
-          ? `Live preview available with ${NUMBER_FORMAT.format(applied.snapshot.rows.length)} provisional rows.`
-          : undefined,
-      );
+      setBackendPreviewStatus("live");
+      if (firstVisibleSnapshot) {
+        setBackendPreviewAnnouncement(
+          `Live preview available with ${NUMBER_FORMAT.format(applied.snapshot.rows.length)} provisional rows.`,
+        );
+      }
     } catch (error) {
       clearBackendPreview(
         "resyncing",
@@ -3843,7 +3817,7 @@ export function SearchWorkspace({
     const negotiatedPreviewRows = previewsEnabled
       ? Math.min(maximumPreviewRows, Math.max(1, backendResultPages.pageSize))
       : 0;
-    runningSearch.recordPreviewRowLimit(negotiatedPreviewRows);
+    runningSearch.configurePreview(negotiatedPreviewRows);
     if (previewsEnabled) {
       updateBackendPreviewStatus(
         "waiting",
@@ -3877,8 +3851,7 @@ export function SearchWorkspace({
         if (recoveryTimer !== null) window.clearTimeout(recoveryTimer);
         for (const dispose of cleanups) dispose();
         if (socket !== null && subscriptionId !== null) socket.unsubscribe(subscriptionId);
-        socket?.dispose();
-        runningSearch.releaseSocket(socket);
+        runningSearch.disposeSocket(socket);
       }
 
       function finish(job: SearchJob) {
@@ -4013,13 +3986,8 @@ export function SearchWorkspace({
           );
           return false;
         }
-        const decision = reconcileSearchProgress(
-          runningSearch.currentProgressRevision(),
-          projectedProgress,
-          source,
-        );
+        const decision = runningSearch.reconcileProgress(projectedProgress, source);
         if (decision.kind === "apply") {
-          runningSearch.recordProgressRevision(decision.state);
           applyBackendProgressMetrics(
             decision.state.progress,
             presentationPhase,
@@ -4055,8 +4023,9 @@ export function SearchWorkspace({
           );
           return "recovering";
         }
-        if (stateVersion < runningSearch.currentJobVersion()) return "stale";
-        if (stateVersion === runningSearch.currentJobVersion()) {
+        const versionDecision = runningSearch.reconcileLiveJobVersion(stateVersion);
+        if (versionDecision === "stale") return "stale";
+        if (versionDecision === "current") {
           if (nextPhase !== latestPhase) {
             requestAuthoritativeJobRecovery(
               "Live job states conflicted at one revision; refreshing from the server…",
@@ -4066,7 +4035,6 @@ export function SearchWorkspace({
           }
           return "accepted";
         }
-        runningSearch.recordJobVersion(stateVersion);
         latestPhase = nextPhase;
         setPhase(latestPhase);
         return "accepted";
@@ -4081,7 +4049,7 @@ export function SearchWorkspace({
         return;
       }
 
-      runningSearch.attachSocket(socket);
+      runningSearch.replaceSocket(socket);
       cleanups.push(socket.onEvent((event) => {
         if (settled) return;
         if (event.payload?.$case === "subscriptionAcknowledged") {
@@ -4105,7 +4073,7 @@ export function SearchWorkspace({
           // State and progress have their own monotonic revision fences. Keep
           // the broader epoch only for versionless schema, preview, warning,
           // and unknown target updates.
-          runningSearch.recordUnversionedLiveUpdate();
+          runningSearch.advanceLiveUpdateEpoch();
         }
         switch (event.payload?.$case) {
           case "searchProgress":
@@ -4170,7 +4138,7 @@ export function SearchWorkspace({
             if (
               stateStatus === "accepted"
               && terminalPhase === "completed"
-              && runningSearch.currentPreviewStatus() !== "disabled"
+              && runningSearch.previewSnapshot().status !== "disabled"
             ) {
               markBackendPreviewFinalizing();
             }
@@ -4197,7 +4165,7 @@ export function SearchWorkspace({
       cleanups.push(socket.onConnectionStateChange((state) => {
         if (settled || !previewsEnabled) return;
         if (state === "reconnecting" || state === "closed") {
-          if (runningSearch.currentPreview()?.rows.length) {
+          if (runningSearch.previewSnapshot().snapshot?.rows.length) {
             updateBackendPreviewStatus(
               "paused",
               "Live preview paused while the connection is restored. The last provisional rows remain visible.",
@@ -4205,15 +4173,15 @@ export function SearchWorkspace({
           }
           return;
         }
-        if (state === "open" && runningSearch.currentPreviewStatus() === "paused") {
+        if (state === "open" && runningSearch.previewSnapshot().status === "paused") {
           updateBackendPreviewStatus(
-            runningSearch.currentPreview()?.rows.length ? "live" : "waiting",
+            runningSearch.previewSnapshot().snapshot?.rows.length ? "live" : "waiting",
             "Live preview connection restored.",
           );
         }
       }));
       cleanups.push(socket.onError(() => {
-        if (previewsEnabled && runningSearch.currentPreview()?.rows.length) {
+        if (previewsEnabled && runningSearch.previewSnapshot().snapshot?.rows.length) {
           updateBackendPreviewStatus(
             "paused",
             "Live preview paused while the connection is restored. The last provisional rows remain visible.",
@@ -4233,7 +4201,7 @@ export function SearchWorkspace({
           previewFallbackAttempted = true;
           previewSubscriptionPending = false;
           previewsEnabled = false;
-          runningSearch.recordPreviewRowLimit(0);
+          runningSearch.configurePreview(0);
           clearBackendPreview(
             "disabled",
             "This server declined live previews. Search progress remains connected.",
@@ -4321,7 +4289,7 @@ export function SearchWorkspace({
     if (terminalPhase === "completed") {
       setPhase("finalizing");
       setProgress(96);
-      if (runningSearch.currentPreviewStatus() !== "disabled") {
+      if (runningSearch.previewSnapshot().status !== "disabled") {
         markBackendPreviewFinalizing();
       }
       try {
@@ -4516,7 +4484,7 @@ export function SearchWorkspace({
   ) {
     const initialRange = timeRange;
     clearDisplayedJobForDraft(initialRange);
-    const generation = runningSearch.currentGeneration();
+    const generation = runningSearch.generationSnapshot();
     setPhase("queued");
     setProgress(1);
     const bootstrap = await ensureBackendBootstrap();
@@ -4544,7 +4512,6 @@ export function SearchWorkspace({
     activeSavedSearchIdRef.current = savedSearchID;
     setActiveSavedSearchId(savedSearchID);
     restoreBackendPresentation(definition);
-    runningSearch.recordJobId(job.searchJobId);
     applyBackendJob(job, generation);
     if (ACTIVE_PHASES.has(backendJobPhase(job.state))) {
       job = await monitorBackendJob(job, bootstrap, signal, generation);
@@ -4726,10 +4693,9 @@ export function SearchWorkspace({
         ).catch(() => undefined);
         return;
       }
-      runningSearch.recordJobId(job.searchJobId);
+      applyBackendJob(job, generation);
       // Back and Forward reopen this job instead of running the search again.
       stampSearchLaunchState({ searchJobId: job.searchJobId });
-      applyBackendJob(job, generation);
       if (runningSearch.cancelWasRequested()) {
         try {
           const cancellation = await apiClient.search.cancel({
@@ -4768,7 +4734,7 @@ export function SearchWorkspace({
       await applyBackendTerminalJob(job, bootstrap, controller.signal, generation);
     } catch (error) {
       if (controller.signal.aborted || !runningSearch.isCurrent(generation)) return;
-      if (runningSearch.cancelWasRequested() && runningSearch.currentJobId() === null) {
+      if (runningSearch.cancelWasRequested() && runningSearch.jobSnapshot().id === null) {
         runningSearch.finishCancel(generation);
         setPhase("canceled");
         setProgress(100);
@@ -5005,7 +4971,7 @@ export function SearchWorkspace({
   function cancelSearch() {
     if (!isRunning) return;
     if (backendEnabled) {
-      const searchJobId = runningSearch.currentJobId();
+      const searchJobId = runningSearch.jobSnapshot().id;
       if (runningSearch.beginCancel() === null) return;
       setCancelError(null);
       showToast("Canceling search…");
@@ -5081,7 +5047,7 @@ export function SearchWorkspace({
       setBackendInspection({ status: "idle" });
       return;
     }
-    const searchJobId = runningSearch.currentJobId();
+    const searchJobId = runningSearch.jobSnapshot().id;
     if (searchJobId === null) {
       setBackendInspection({ status: "error", error: "Run a backend search before requesting its plan." });
       return;
@@ -5099,7 +5065,7 @@ export function SearchWorkspace({
     const isCurrentInspection = () => (
       !controller.signal.aborted
       && backendInspectionAbortRef.current === controller
-      && runningSearch.currentJobId() === searchJobId
+      && runningSearch.jobSnapshot().id === searchJobId
     );
     const exposeKnowledge = supportsServerFeature(
       backendBootstrapModel,
@@ -5283,7 +5249,7 @@ export function SearchWorkspace({
       value,
       mode,
       mode === "new" && backendEnabled
-        ? runningSearch.currentJob()?.effectiveIndexScope
+        ? runningSearch.jobSnapshot().job?.effectiveIndexScope
         : undefined,
     );
     if (nextQuery === query) {
@@ -5376,9 +5342,9 @@ export function SearchWorkspace({
   }
 
   async function openBackendEventPage(pageNumber: number) {
-    const job = runningSearch.currentJob();
+    const job = runningSearch.jobSnapshot().job;
     const bootstrap = backendBootstrapRef.current;
-    const generation = runningSearch.currentGeneration();
+    const generation = runningSearch.generationSnapshot();
     const pageSize = backendResultPages.pageSize;
     if (!backendEnabled || job === null || bootstrap === null || phase !== "completed") return;
     const requestedPage = Math.max(1, pageNumber);
@@ -5893,7 +5859,7 @@ export function SearchWorkspace({
     return {
       ...launchHistoryState(query, timeRange),
       resultView: activeTabRef.current,
-      searchJobId: runningSearch.currentJobId() ?? undefined,
+      searchJobId: runningSearch.jobSnapshot().id ?? undefined,
     };
   }
 
@@ -5941,7 +5907,7 @@ export function SearchWorkspace({
   // Clears the workspace for a history navigation and, when a backend job was
   // still running, asks the server to stop it so it does not run unattended.
   function abandonDisplayedJob(nextRange: TimeRange) {
-    const supersededJobId = runningSearch.currentJobId();
+    const supersededJobId = runningSearch.jobSnapshot().id;
     const wasRunning = isRunning;
     clearDisplayedJobForDraft(nextRange);
     if (backendEnabled && wasRunning && supersededJobId !== null) {
@@ -6538,7 +6504,7 @@ export function SearchWorkspace({
 
   async function prepareExport() {
     const exportEpoch = ++exportEpochRef.current;
-    const requestId = `export-${Date.now()}-${runningSearch.currentGeneration()}`;
+    const requestId = `export-${Date.now()}-${runningSearch.generationSnapshot()}`;
     setExportRequestId(requestId);
     setExportRetryable(true);
     setDemoExportSize(0);
@@ -6548,7 +6514,7 @@ export function SearchWorkspace({
       return;
     }
     const bootstrap = backendBootstrapRef.current;
-    const job = runningSearch.currentJob();
+    const job = runningSearch.jobSnapshot().job;
     if (
       bootstrap === null
       || job === null
@@ -7424,7 +7390,7 @@ export function SearchWorkspace({
         resolvedTimeRangeLabel={resolvedTimeRangeLabel}
         scannedRows={scannedRows}
         scannedRowsApproximate={scannedRowsApproximate}
-        searchId={backendEnabled ? runningSearch.currentJobId() ?? "Pending dispatch" : `scheduler_admin_search_${runningSearch.currentGeneration() || 1}`}
+        searchId={backendEnabled ? runningSearch.jobSnapshot().id ?? "Pending dispatch" : `scheduler_admin_search_${runningSearch.generationSnapshot() || 1}`}
         searchMode={backendEnabled ? "Server controlled" : searchMode}
         searchSettingsCapabilities={searchSettingsCapabilities}
         submittedQuery={submittedQuery}
@@ -7950,7 +7916,7 @@ export function SearchWorkspace({
           pageNumber={backendEnabled ? eventPage : 1}
           pageStart={backendStatisticsPageStart}
           previewTruncated={backendPreviewDisplay?.snapshot.truncated === true}
-          resultIdentity={runningSearch.currentGeneration()}
+          resultIdentity={runningSearch.generationSnapshot()}
           resultTotalExact={backendDisplayingPreview
             ? backendPreviewDisplay?.snapshot.truncated !== true
             : !backendEnabled || backendResultTotalExact}
