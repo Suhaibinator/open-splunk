@@ -152,7 +152,7 @@ jobs:
           version: v2.13.1
           # The inherited inventory is clean; enforce the complete Go tree on
           # every push rather than retaining a historical diff-only baseline.
-          args: --timeout=5m
+          args: --timeout=10m
 
   go-test:
     name: Go tests (${{ matrix.label }})
