@@ -6,7 +6,7 @@ import type {
   SetStateAction,
   UIEvent,
 } from "react";
-import { useEffect, useEffectEvent, useState } from "react";
+import { useEffect, useEffectEvent, useSyncExternalStore } from "react";
 
 import { resolveAbsoluteTimeRange } from "@/lib/search/backend-data";
 import type { EditorProblem } from "@/lib/search/spl-diagnostic-markers";
@@ -20,6 +20,26 @@ import { AppIcon, StatusIcon } from "../../_components/app-icon";
 import { Button } from "../../_components/button";
 import type { KeyboardPlatform } from "../keyboard-shortcuts";
 import { SearchEditor, type CompletionItem } from "./search-editor";
+
+const PHONE_VIEWPORT = "(max-width: 760px)";
+
+function subscribePhoneViewport(listener: () => void): () => void {
+  const query = window.matchMedia(PHONE_VIEWPORT);
+  query.addEventListener("change", listener);
+  return () => query.removeEventListener("change", listener);
+}
+
+function phoneViewportSnapshot(): boolean {
+  return window.matchMedia(PHONE_VIEWPORT).matches;
+}
+
+function localTimeZoneSnapshot(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || "Local browser time";
+}
+
+function subscribeToStableBrowserValue(): () => void {
+  return () => undefined;
+}
 
 interface SearchComposerProps {
   absoluteEnd: string;
@@ -123,8 +143,12 @@ export function SearchComposer({
   onTimePickerSectionChange,
   onTimeRangeChange,
 }: SearchComposerProps) {
-  const [mobileTimePicker, setMobileTimePicker] = useState(false);
-  const [localTimeZone, setLocalTimeZone] = useState("Local browser time");
+  const mobileTimePicker = useSyncExternalStore(subscribePhoneViewport, phoneViewportSnapshot, () => false);
+  const localTimeZone = useSyncExternalStore(
+    subscribeToStableBrowserValue,
+    localTimeZoneSnapshot,
+    () => "Local browser time",
+  );
   const closeTimePicker = useEffectEvent(onCloseTimePicker);
   let draftTimeRangeInvalid = backendTimeSyntax
     ? serverTimeRangeValidationError(draftTimeRange) !== null
@@ -141,20 +165,6 @@ export function SearchComposer({
       serverTimeRangeValidationError(preset) === null
     )
     : TIME_PRESETS;
-
-  useEffect(() => {
-    const phoneViewport = window.matchMedia("(max-width: 760px)");
-    const updateViewport = () => setMobileTimePicker(phoneViewport.matches);
-    const timeZoneFrame = window.requestAnimationFrame(() => {
-      updateViewport();
-      setLocalTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone || "Local browser time");
-    });
-    phoneViewport.addEventListener("change", updateViewport);
-    return () => {
-      window.cancelAnimationFrame(timeZoneFrame);
-      phoneViewport.removeEventListener("change", updateViewport);
-    };
-  }, []);
 
   useEffect(() => {
     if (modal !== "time" || !mobileTimePicker) return;

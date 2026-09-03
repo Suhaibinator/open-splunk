@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
 import { ScheduleValidationMode } from "@/gen/ts/open_splunk/schedule_api";
@@ -111,22 +111,16 @@ export function ScheduledReportActions({
   const [error, setError] = useState<string | null>(null);
   const [serverValidationErrors, setServerValidationErrors] = useState<ReturnType<typeof validateScheduledReportConfigurationFields>>({});
   const [history, setHistory] = useState<ServerScheduledReportRun[]>([]);
-  const autoOpenedRef = useRef(false);
+  const [autoOpened, setAutoOpened] = useState(false);
+  if (autoOpenSchedule && !autoOpened) {
+    setAutoOpened(true);
+    setError(null);
+    setDialog("schedule");
+  }
 
   useEffect(() => {
-    if (!autoOpenSchedule || autoOpenedRef.current) return;
-    let current = true;
-    queueMicrotask(() => {
-      if (!current) return;
-      autoOpenedRef.current = true;
-      setError(null);
-      setDialog("schedule");
-      onScheduleOpened?.();
-    });
-    return () => {
-      current = false;
-    };
-  }, [autoOpenSchedule, onScheduleOpened]);
+    if (autoOpenSchedule && autoOpened) onScheduleOpened?.();
+  }, [autoOpenSchedule, autoOpened, onScheduleOpened]);
 
   const [configurationOwner, setConfigurationOwner] = useState({ dialog, savedSearch });
   if (configurationOwner.dialog !== dialog || configurationOwner.savedSearch !== savedSearch) {

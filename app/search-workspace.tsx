@@ -317,6 +317,7 @@ const TERMINAL_HISTORY_STATES = [
   SearchJobState.SEARCH_JOB_STATE_EXPIRED,
 ] as const;
 const DEFAULT_BACKEND_PAGE_SIZE = 1_000;
+const MOBILE_SEARCH_VIEWPORT = "(max-width: 760px)";
 // Result pages are reached by following opaque server cursors, so jumping ahead costs one request
 // per page crossed. Cap a single jump so a far page cannot fan out into hundreds of requests.
 const MAX_SEQUENTIAL_PAGE_WALK = 25;
@@ -354,6 +355,20 @@ function restoredTimeRange(range: SearchLaunchRange): TimeRange {
 }
 
 type BackendConnectionState = "loading" | "ready" | "error";
+
+function subscribeMobileSearchViewport(listener: () => void): () => void {
+  const viewport = window.matchMedia(MOBILE_SEARCH_VIEWPORT);
+  viewport.addEventListener("change", listener);
+  return () => viewport.removeEventListener("change", listener);
+}
+
+function mobileSearchViewportSnapshot(): boolean {
+  return window.matchMedia(MOBILE_SEARCH_VIEWPORT).matches;
+}
+
+function serverMobileSearchViewportSnapshot(): boolean {
+  return false;
+}
 
 /**
  * The visualization's time-series input. Statistics stay one server page; the
@@ -893,9 +908,25 @@ export function SearchWorkspace({
   const [statisticsDimension, setStatisticsDimension] = useState("level");
   const [activeField, setActiveField] = useState<string | null>(null);
   const [fieldFilter, setFieldFilter] = useState("");
-  const [fieldsCollapsed, setFieldsCollapsed] = useState(false);
+  const mobileSearchViewport = useSyncExternalStore(
+    subscribeMobileSearchViewport,
+    mobileSearchViewportSnapshot,
+    serverMobileSearchViewportSnapshot,
+  );
+  const [fieldsCollapsedOverride, setFieldsCollapsedOverride] = useState<boolean | null>(null);
+  const fieldsCollapsed = fieldsCollapsedOverride ?? mobileSearchViewport;
+  const setFieldsCollapsed = useCallback<Dispatch<SetStateAction<boolean>>>((next) => {
+    setFieldsCollapsedOverride((current) => {
+      const resolved = current ?? mobileSearchViewport;
+      return typeof next === "function" ? next(resolved) : next;
+    });
+  }, [mobileSearchViewport]);
   const [expandedEvents, setExpandedEvents] = useState<Set<string>>(new Set());
-  const [expandedEventsContext, setExpandedEventsContext] = useState({ page: 1, pageSize: 20 });
+  const [expandedEventsContext, setExpandedEventsContext] = useState({
+    mobile: false,
+    page: 1,
+    pageSize: 20,
+  });
   const [completionOpen, setCompletionOpen] = useState(false);
   const [completionIndex, setCompletionIndex] = useState(0);
   // Ctrl+Space asks for everything the caret could take; typing asks only
@@ -1504,11 +1535,19 @@ export function SearchWorkspace({
     : Math.max(1, Math.ceil(pageableEventCount / currentResultPageSize));
   if (eventPage > eventPageCount) setEventPage(eventPageCount);
   if (
-    expandedEventsContext.page !== eventPage
+    expandedEventsContext.mobile !== mobileSearchViewport
+    || expandedEventsContext.page !== eventPage
     || expandedEventsContext.pageSize !== currentResultPageSize
   ) {
-    setExpandedEventsContext({ page: eventPage, pageSize: currentResultPageSize });
-    setExpandedEvents(new Set());
+    const enteringMobile = !expandedEventsContext.mobile && mobileSearchViewport;
+    const pageChanged = expandedEventsContext.page !== eventPage
+      || expandedEventsContext.pageSize !== currentResultPageSize;
+    setExpandedEventsContext({
+      mobile: mobileSearchViewport,
+      page: eventPage,
+      pageSize: currentResultPageSize,
+    });
+    if (enteringMobile || pageChanged) setExpandedEvents(new Set());
   }
   const eventPageStart = backendEnabled
     ? backendStatisticsPageStart
@@ -2656,19 +2695,6 @@ export function SearchWorkspace({
     });
     return () => controller.abort();
   }, [activeField, apiClient, backendEnabled, backendJobIdRef, backendJobRef, generationRef, phase]);
-
-  useEffect(() => {
-    const phoneViewport = window.matchMedia("(max-width: 760px)");
-    const collapseForPhone = (event?: MediaQueryListEvent) => {
-      if (event?.matches ?? phoneViewport.matches) {
-        setFieldsCollapsed(true);
-        setExpandedEvents(new Set());
-      }
-    };
-    collapseForPhone();
-    phoneViewport.addEventListener("change", collapseForPhone);
-    return () => phoneViewport.removeEventListener("change", collapseForPhone);
-  }, []);
 
   useEffect(() => {
     if (toast === null) return;

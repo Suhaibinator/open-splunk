@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 
 import {
@@ -66,27 +66,32 @@ function BackendRecentSearches({
   const [entries, setEntries] = useState<ServerSearchHistoryEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [generation, setGeneration] = useState(0);
-  const activeLoadGenerationRef = useRef(0);
   const [selectedAppId, setSelectedAppId] = useState<string | null>(null);
   const navigationAppId = selectedAppId ?? preferredAppId;
   const contextualHref = (href: string) => navigationAppId === undefined
     ? href
     : backendAppHref(href, navigationAppId);
+  const loadInput = { client, generation, preferredAppId };
+  const [activeLoadInput, setActiveLoadInput] = useState(loadInput);
+  if (
+    activeLoadInput.client !== loadInput.client
+    || activeLoadInput.generation !== loadInput.generation
+    || activeLoadInput.preferredAppId !== loadInput.preferredAppId
+  ) {
+    setActiveLoadInput(loadInput);
+    setState("loading");
+    setError(null);
+    setSelectedAppId(null);
+  }
 
   useEffect(() => {
-    activeLoadGenerationRef.current = generation;
+    if (activeLoadInput.generation !== generation) return;
     const controller = new AbortController();
     let current = true;
-    queueMicrotask(() => {
-      if (!current) return;
-      setState("loading");
-      setError(null);
-      setSelectedAppId(null);
-    });
     void (async () => {
       try {
         const bootstrap = await getSystemBootstrap(client, preferredAppId, { signal: controller.signal });
-        if (!current || activeLoadGenerationRef.current !== generation) return;
+        if (!current) return;
         setSelectedAppId(bootstrap.selectedAppId);
         const result = await listServerSearchHistory(client, bootstrap, {
           appId: bootstrap.selectedAppId ?? undefined,
@@ -113,7 +118,7 @@ function BackendRecentSearches({
       current = false;
       controller.abort();
     };
-  }, [client, generation, preferredAppId]);
+  }, [activeLoadInput, client, generation, preferredAppId]);
 
   let content;
   if (state === "loading") {
