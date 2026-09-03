@@ -1,7 +1,9 @@
-.PHONY: build release oci build-ui build-server build-collector build-loggen dev-tools dev-build-server dev-clickhouse dev-down run docs-check lint proto proto-lint proto-tools release-go-deps test clean
+.PHONY: build release oci build-ui build-server build-collector build-loggen dev-tools dev-build-server dev-clickhouse dev-down run docs-check go-lint-tools lint proto proto-lint proto-tools release-go-deps test verify clean
 
 override PROTOC_GEN_GO_VERSION := v1.36.12
 override PROTOC_GEN_GO_GRPC_VERSION := v1.6.2
+override GOLANGCI_LINT_VERSION := v2.13.1
+override GO_LINT_TOOL_BIN := $(CURDIR)/.cache/go-lint-tools
 override PROTO_TOOL_BIN := $(CURDIR)/.cache/proto-tools
 override PROTO_LINT_CACHE := $(CURDIR)/.cache/buf
 override RELEASE_GO_VERSION := 1.27.0
@@ -202,6 +204,10 @@ proto-tools:
 	$(GO_TOOL_ENV) GOBIN="$(PROTO_TOOL_BIN)" go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@$(PROTOC_GEN_GO_GRPC_VERSION)
 	npm ci --include=dev
 
+go-lint-tools:
+	mkdir -p "$(GO_LINT_TOOL_BIN)"
+	$(GO_TOOL_ENV) GOBIN="$(GO_LINT_TOOL_BIN)" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+
 release-go-deps:
 	$(GO_TOOL_ENV) go mod download all
 	$(GO_TOOL_ENV) go mod verify
@@ -230,6 +236,16 @@ test: docs-check lint
 	npm run test:frontend
 	npm run test:contracts
 	npm run typecheck
+
+verify:
+	scripts/verify-protobuf-generation.sh $(MAKE) build
+	$(MAKE) test
+	env OPEN_SPLUNK_DATA_MODE=demo npm run build
+	npm run test:workspace
+	$(GO_TOOL_ENV) go build ./...
+	$(GO_TEST_ENV) go vet ./...
+	$(MAKE) go-lint-tools
+	$(GO_TOOL_ENV) GOOS=linux GOARCH=amd64 "$(GO_LINT_TOOL_BIN)/golangci-lint" run --timeout=10m --max-issues-per-linter=0 --max-same-issues=0 ./...
 
 clean:
 	$(GO_TOOL_ENV) go clean

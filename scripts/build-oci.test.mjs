@@ -507,7 +507,7 @@ test("official product publication is guarded by the GitHub Release workflow", a
   assert.match(ciWorkflow, /release:\n\s+types:\n\s+- published/);
   assert.match(ciWorkflow, /run: scripts\/publish-release\.sh/);
   const publishJob = ciWorkflow.slice(ciWorkflow.indexOf("\n  publish-release:"));
-  assert.match(publishJob, /uses: actions\/setup-go@v7/);
+  assert.match(publishJob, /uses: actions\/setup-go@[0-9a-f]{40}/);
   assert.match(publishJob, /go-version: \$\{\{ env\.GO_VERSION \}\}/);
   assert.doesNotMatch(publishJob, /visibility=public/);
   assert.doesNotMatch(publishJob, /\/user\/packages\/container/);

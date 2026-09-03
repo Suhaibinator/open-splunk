@@ -92,10 +92,12 @@ rm -rf -- \
 ## Build and test
 
 ```sh
-make proto
-make test
-make build
+make verify
 ```
+
+`make test` remains the faster unit, lint, type, and stylesheet-contract loop.
+`make verify` additionally checks generated protobufs, production builds,
+workspace behavior, Go vet, and the Linux CI lint configuration.
 
 `make proto` lints and compiles every schema under `proto/` into
 `gen/go/open_splunk` and `gen/ts/open_splunk`. Generation uses pinned Buf and
