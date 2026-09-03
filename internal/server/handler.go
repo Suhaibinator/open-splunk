@@ -708,9 +708,6 @@ func NewHandler(config Config) (*Handler, error) {
 	if isNilDependency(config.SearchJobs) {
 		return nil, errors.New("create server handler: search job service is required")
 	}
-	if isNilDependency(config.Indexes) {
-		return nil, errors.New("create server handler: index catalog is required")
-	}
 	runtimeReadiness := config.RuntimeReadiness
 	if isNilDependency(runtimeReadiness) {
 		runtimeReadiness = nil
@@ -719,204 +716,55 @@ func NewHandler(config Config) (*Handler, error) {
 	if isNilDependency(trustedSearchAdmission) {
 		trustedSearchAdmission = nil
 	}
-	indexAdmin := config.IndexAdmin
-	if isNilDependency(indexAdmin) {
-		if inferred, ok := config.Indexes.(IndexAdministration); ok && !isNilDependency(inferred) {
-			indexAdmin = inferred
-		} else {
-			indexAdmin = nil
-		}
+	indexServices, err := normalizeHandlerIndexServices(config)
+	if err != nil {
+		return nil, err
 	}
-	indexStatistics := config.IndexStatistics
-	if isNilDependency(indexStatistics) {
-		indexStatistics = nil
+	knowledgeServices, err := normalizeHandlerKnowledgeServices(config)
+	if err != nil {
+		return nil, err
 	}
-	indexStatisticsSnapshotter := config.IndexStatisticsSnapshotter
-	if isNilDependency(indexStatisticsSnapshotter) {
-		indexStatisticsSnapshotter = nil
+	lookupServices, err := normalizeHandlerLookupServices(config)
+	if err != nil {
+		return nil, err
 	}
-	if (indexStatistics == nil) != (indexStatisticsSnapshotter == nil) {
-		return nil, errors.New(
-			"create server handler: index statistics and snapshotter must be configured together",
-		)
-	}
-	if indexStatistics != nil && indexAdmin == nil {
-		return nil, errors.New(
-			"create server handler: index statistics requires index administration",
-		)
-	}
-	indexFields := config.IndexFields
-	if isNilDependency(indexFields) {
-		indexFields = nil
-	}
-	if indexFields != nil && indexAdmin == nil {
-		return nil, errors.New(
-			"create server handler: index fields require index administration",
-		)
-	}
-	indexDataDeletionAdmission := config.IndexDataDeletionAdmission
-	if isNilDependency(indexDataDeletionAdmission) {
-		indexDataDeletionAdmission = nil
-	}
-	indexDataDeletionWaker := config.IndexDataDeletionWaker
-	if isNilDependency(indexDataDeletionWaker) {
-		indexDataDeletionWaker = nil
-	}
-	if (indexDataDeletionAdmission == nil) !=
-		(indexDataDeletionWaker == nil) {
-		return nil, errors.New(
-			"create server handler: index data deletion admission and waker must be configured together",
-		)
-	}
-	if indexDataDeletionAdmission != nil && indexAdmin == nil {
-		return nil, errors.New(
-			"create server handler: index data deletion requires index administration",
-		)
-	}
-	ingestionTokens := config.IngestionTokens
-	if isNilDependency(ingestionTokens) {
-		ingestionTokens = nil
-	}
-	hecOperations := config.HECOperations
-	if isNilDependency(hecOperations) {
-		hecOperations = nil
-	}
-	auditEvents := config.AuditEvents
-	if isNilDependency(auditEvents) {
-		auditEvents = nil
-	}
-	searchAttemptAuditEvents := config.SearchAttemptAuditEvents
-	if isNilDependency(searchAttemptAuditEvents) {
-		searchAttemptAuditEvents = nil
-	}
-	serverSettings := config.ServerSettings
-	if isNilDependency(serverSettings) {
-		serverSettings = nil
-	}
-	collectorAdmin := config.CollectorAdmin
-	if isNilDependency(collectorAdmin) {
-		collectorAdmin = nil
-	}
-	appAdmin := config.AppAdmin
-	if isNilDependency(appAdmin) {
-		appAdmin = nil
-	}
-	knowledgeAdmission := knowledgeSearchAdmissionEnabled(config.SearchJobs)
-	lookupAdmission := lookupSearchAdmissionEnabled(config.SearchJobs)
-	appCatalog := config.AppCatalog
-	if isNilDependency(appCatalog) {
-		appCatalog = nil
-	}
-	if knowledgeAdmission && appCatalog == nil {
-		return nil, errors.New(
-			"create server handler: knowledge-aware search admission requires a live app catalog",
-		)
-	}
-	if appCatalog != nil && len(config.Bootstrap.Apps) != 0 {
-		return nil, errors.New(
-			"create server handler: live app catalog and static bootstrap apps cannot both be configured",
-		)
-	}
-	knowledgeCatalog := config.KnowledgeCatalog
-	if isNilDependency(knowledgeCatalog) {
-		knowledgeCatalog = nil
-	}
-	knowledgeWriter := config.KnowledgeWriter
-	if isNilDependency(knowledgeWriter) {
-		knowledgeWriter = nil
-	}
-	knowledgeApps := config.KnowledgeApps
-	if isNilDependency(knowledgeApps) {
-		knowledgeApps = nil
-	}
-	knowledgeAttempts := config.KnowledgeAttempts
-	if isNilDependency(knowledgeAttempts) {
-		knowledgeAttempts = nil
-	}
-	knowledgeDependenciesConfigured := []bool{
-		knowledgeCatalog != nil,
-		knowledgeWriter != nil,
-		knowledgeApps != nil,
-		knowledgeAttempts != nil,
-	}
-	configuredKnowledgeDependencies := 0
-	for _, configured := range knowledgeDependenciesConfigured {
-		if configured {
-			configuredKnowledgeDependencies++
-		}
-	}
-	if configuredKnowledgeDependencies != 0 &&
-		configuredKnowledgeDependencies != len(knowledgeDependenciesConfigured) {
-		return nil, errors.New(
-			"create server handler: knowledge management dependencies must be configured together",
-		)
-	}
-	if configuredKnowledgeDependencies == len(knowledgeDependenciesConfigured) &&
-		!replaysUnavailableActiveMutations(knowledgeWriter) {
-		return nil, errors.New(
-			"create server handler: knowledge management requires the concrete catalog writer",
-		)
-	}
-	knowledgePreview := config.KnowledgePreview
-	if knowledgePreview != nil &&
-		(configuredKnowledgeDependencies != len(knowledgeDependenciesConfigured) ||
-			!knowledgePreview.Ready()) {
-		return nil, errors.New(
-			"create server handler: knowledge preview requires the complete ready knowledge management family",
-		)
-	}
-	lookupManagement := config.LookupManagement
-	if isNilDependency(lookupManagement) {
-		lookupManagement = nil
-	} else if !lookupManagement.Ready() {
-		return nil, errors.New(
-			"create server handler: lookup management service is not ready",
-		)
-	}
-	alertCoordinator := config.AlertCoordinator
-	if isNilDependency(alertCoordinator) {
-		alertCoordinator = nil
-	}
-	completeAlertFamily := config.AlertService != nil &&
-		!isNilDependency(config.AlertRepository) &&
-		!isNilDependency(config.AlertDeliverer) &&
-		alertCoordinator != nil
-	browserAuthenticator := config.BrowserAuthenticator
-	if isNilDependency(browserAuthenticator) {
-		browserAuthenticator = nil
-	}
+	alertServices := normalizeHandlerAlertServices(config)
 	inspectionService := config.SearchInspections
 	if isNilDependency(inspectionService) {
 		inspectionService = nil
 	}
-	if (indexAdmin != nil ||
-		indexStatistics != nil ||
-		indexFields != nil ||
-		ingestionTokens != nil ||
-		hecOperations != nil ||
-		auditEvents != nil ||
-		searchAttemptAuditEvents != nil ||
-		serverSettings != nil ||
-		collectorAdmin != nil ||
-		appAdmin != nil ||
-		knowledgeCatalog != nil ||
-		lookupManagement != nil ||
-		inspectionService != nil ||
-		completeAlertFamily) &&
-		browserAuthenticator == nil {
-		return nil, errors.New(
-			"create server handler: administrative services require browser authentication",
-		)
+	adminServices, err := normalizeHandlerAdministrativeServices(
+		config, indexServices, knowledgeServices, lookupServices, alertServices, inspectionService,
+	)
+	if err != nil {
+		return nil, err
 	}
-	var appCursorKey []byte
-	if appAdmin != nil {
-		if len(config.AppCursorKey) < 32 || len(config.AppCursorKey) > 1<<10 {
-			return nil, errors.New(
-				"create server handler: app cursor key must contain between 32 and 1024 bytes",
-			)
-		}
-		appCursorKey = slices.Clone(config.AppCursorKey)
-	}
+	indexAdmin := indexServices.administration
+	indexStatistics := indexServices.statistics
+	indexStatisticsSnapshotter := indexServices.statisticsSnapshot
+	indexFields := indexServices.fields
+	indexDataDeletionAdmission := indexServices.deletionAdmission
+	indexDataDeletionWaker := indexServices.deletionWaker
+	ingestionTokens := adminServices.ingestionTokens
+	hecOperations := adminServices.hecOperations
+	auditEvents := adminServices.auditEvents
+	searchAttemptAuditEvents := adminServices.searchAttemptAuditEvents
+	serverSettings := adminServices.serverSettings
+	collectorAdmin := adminServices.collectorAdmin
+	appAdmin := adminServices.appAdmin
+	browserAuthenticator := adminServices.browserAuthenticator
+	appCursorKey := adminServices.appCursorKey
+	appCatalog := knowledgeServices.appCatalog
+	knowledgeCatalog := knowledgeServices.catalog
+	knowledgeWriter := knowledgeServices.writer
+	knowledgeApps := knowledgeServices.apps
+	knowledgeAttempts := knowledgeServices.attempts
+	knowledgePreview := knowledgeServices.preview
+	knowledgeAdmission := knowledgeServices.admission
+	lookupManagement := lookupServices.management
+	lookupAdmission := lookupServices.admission
+	alertCoordinator := alertServices.coordinator
+	completeAlertFamily := alertServices.complete
 	if isNilDependency(config.SavedSearches) {
 		return nil, errors.New("create server handler: saved search service is required")
 	}
@@ -964,26 +812,9 @@ func NewHandler(config Config) (*Handler, error) {
 			return nil, fmt.Errorf("create server handler: field summary maximum values must be between 1 and %d", clickhouse.MaximumFieldSummaryValues)
 		}
 	}
-	maxIndexFieldCatalogFields := uint32(0)
-	maxIndexFieldPageSize := uint32(0)
-	if indexFields != nil {
-		maxIndexFieldCatalogFields = indexFields.MaximumFields()
-		maxIndexFieldPageSize = indexFields.MaximumPageSize()
-		if maxIndexFieldCatalogFields == 0 ||
-			maxIndexFieldCatalogFields > clickhouse.MaximumFieldCatalogFields {
-			return nil, fmt.Errorf(
-				"create server handler: index field catalog maximum fields must be between 1 and %d",
-				clickhouse.MaximumFieldCatalogFields,
-			)
-		}
-		if maxIndexFieldPageSize == 0 ||
-			maxIndexFieldPageSize > maxIndexFieldCatalogFields ||
-			maxIndexFieldPageSize > maximumSearchFieldPageSize {
-			return nil, fmt.Errorf(
-				"create server handler: index field catalog maximum page size must be between 1 and %d and cannot exceed maximum fields",
-				maximumSearchFieldPageSize,
-			)
-		}
+	maxIndexFieldCatalogFields, maxIndexFieldPageSize, err := indexServices.limits()
+	if err != nil {
+		return nil, err
 	}
 	suggestionService := config.SearchSuggestions
 	if isNilDependency(suggestionService) {
@@ -1073,13 +904,9 @@ func NewHandler(config Config) (*Handler, error) {
 	if validateBoundedIdentifier(ownerID, maximumSavedSearchOwnerBytes, false) != nil || validateBoundedIdentifier(tenantID, maximumIdentityBytes, false) != nil {
 		return nil, errors.New("create server handler: owner or tenant identity is invalid")
 	}
-	completeKnowledgeFamily :=
-		configuredKnowledgeDependencies == len(knowledgeDependenciesConfigured) &&
-			knowledgePreview != nil && knowledgePreview.Ready() &&
-			knowledgeAdmission &&
-			inspectionService != nil && searchHistoryService != nil &&
-			exportService != nil && timelineService != nil &&
-			fieldService != nil && suggestionService != nil
+	completeKnowledgeFamily := knowledgeServices.complete(
+		inspectionService, searchHistoryService, exportService, timelineService, fieldService, suggestionService,
+	)
 	completeLookupFamily := completeKnowledgeFamily &&
 		lookupManagement != nil && lookupAdmission
 	_, knowledgeQuarantineReady := readyKnowledgeQuarantine(knowledgeWriter)
@@ -1161,7 +988,7 @@ func NewHandler(config Config) (*Handler, error) {
 		jobs:                       config.SearchJobs,
 		searchArtifacts:            searchArtifacts,
 		trustedSearchAdmission:     trustedSearchAdmission,
-		indexes:                    config.Indexes,
+		indexes:                    indexServices.catalog,
 		indexAdmin:                 indexAdmin,
 		indexStatistics:            indexStatistics,
 		indexStatisticsSnapshotter: indexStatisticsSnapshotter,

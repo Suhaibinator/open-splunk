@@ -20,8 +20,6 @@ import (
 
 	opensplunkroot "github.com/Suhaibinator/open-splunk"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
-	"github.com/Suhaibinator/open-splunk/internal/alerts"
-	"github.com/Suhaibinator/open-splunk/internal/alertstore"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/buildinfo"
@@ -30,22 +28,13 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/dashboards"
-	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/featureaudit"
 	"github.com/Suhaibinator/open-splunk/internal/hechttp"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
-	"github.com/Suhaibinator/open-splunk/internal/knowledgepreview"
 	"github.com/Suhaibinator/open-splunk/internal/logging"
-	"github.com/Suhaibinator/open-splunk/internal/queryexec"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
-	"github.com/Suhaibinator/open-splunk/internal/scheduledreports"
-	"github.com/Suhaibinator/open-splunk/internal/scheduler"
-	"github.com/Suhaibinator/open-splunk/internal/searchartifacts"
 	"github.com/Suhaibinator/open-splunk/internal/searchaudit"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
-	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
-	"github.com/Suhaibinator/open-splunk/internal/searchlimits"
-	"github.com/Suhaibinator/open-splunk/internal/searchws"
 	"github.com/Suhaibinator/open-splunk/internal/server"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
 	"github.com/Suhaibinator/open-splunk/migrations"
@@ -624,339 +613,56 @@ func runWithOptions(config options) error {
 		}()
 	}
 
-	indexStatistics, err := newRuntimeIndexStatisticsReader(
-		connection,
-		internalclickhouse.IndexStatisticsConfig{
-			Database: "open_splunk",
-			Table:    "events",
-		},
-		indexReads.admission,
-	)
-	if err != nil {
-		return fmt.Errorf("create index statistics reader: %w", err)
-	}
-	serverSettingsStore, err := control.NewServerSearchSettingsStore(
-		controlDB,
-		config.tenantID,
-		securityStores.auditEvents,
-	)
-	if err != nil {
-		return fmt.Errorf("create server settings store: %w", err)
-	}
-	initialServerSettings, err := serverSettingsStore.Get(startupContext)
-	if err != nil {
-		return fmt.Errorf("load server settings: %w", err)
-	}
-	searchLimitSource, err := searchlimits.NewSource(initialServerSettings.Limits)
-	if err != nil {
-		return fmt.Errorf("load server settings policy: %w", err)
-	}
-	queryConfig, err := queryexec.ConfigFromPolicy(initialServerSettings.Limits)
-	if err != nil {
-		return fmt.Errorf("derive server settings query policy: %w", err)
-	}
-	executor, err := newRuntimeQueryExecutor(
-		connection,
-		queryConfig,
-		indexReads.admission,
-	)
-	if err != nil {
-		return fmt.Errorf("create query executor: %w", err)
-	}
-	if err := executor.BindLimitSource(searchLimitSource); err != nil {
-		return fmt.Errorf("bind query executor search limits: %w", err)
-	}
-	compiler := internalclickhouse.Compiler{
-		Database: "open_splunk",
-		Table:    "events",
-	}
-	historyJobJournal, err := searchhistory.NewJobJournal(searchHistory)
-	if err != nil {
-		return fmt.Errorf("create search-history job journal: %w", err)
-	}
-	searchArtifactStore, err := searchartifacts.New(startupContext, searchartifacts.Config{
-		DB:        controlDB.SQLDB(),
-		Directory: config.searchArtifactDir,
-		Observer:  featureOperations,
+	searchLifecycle, err := newRuntimeSearchLifecycle(runtimeSearchLifecycleConfig{
+		ctx: startupContext, controlDB: controlDB, connection: connection,
+		clickHouseOptions: clickHouseOptions.runtime, indexReads: indexReads, sequencer: sequencer,
+		history: searchHistory, auditAppender: securityStores.auditEvents,
+		featureOperations: featureOperations, exportSettings: exportSettings,
+		masterKeyPath: config.masterKeyPath, searchArtifactDirectory: config.searchArtifactDir,
+		exportArtifactDirectory: config.exportArtifactDir, tenantID: config.tenantID,
+		ownerID: defaultOwnerID, logger: logger, closeTimeout: shutdownTimeout,
 	})
-	if err != nil {
-		return fmt.Errorf("open durable search artifacts: %w", err)
-	}
-	defer func() {
-		if err := searchArtifactStore.Close(); err != nil {
-			logger.Warn("close durable search artifacts", zap.Error(err))
-		}
-	}()
-	scheduledReportJournal, err := newRuntimeScheduledReportJournal(runtimeScheduledReportJournalOptions{})
-	if err != nil {
-		return fmt.Errorf("create scheduled-report completion journal: %w", err)
-	}
-	// Register this before the search manager's close so LIFO shutdown lets the
-	// manager publish every terminal scheduled-job outcome before retry workers
-	// are stopped. The artifact store remains alive until both have closed.
-	defer scheduledReportJournal.Close()
-	jobJournal := searchjobs.NewCompositeJournal(searchArtifactStore, historyJobJournal, scheduledReportJournal)
-	// Construct the catalog and its immutable resolver before search admission.
-	// Manager captures this exact resolver in its private configuration; no
-	// later HTTP composition can rotate search-time knowledge authority.
-	knowledgeManagement, err := newRuntimeKnowledgeManagement(
-		startupContext,
-		controlDB,
-		config.masterKeyPath,
-		securityStores.auditEvents,
-	)
 	if err != nil {
 		return err
 	}
-	jobs, err := searchjobs.New(searchjobs.Config{
-		Executor:          executor,
-		Snapshotter:       visibilitySnapshotter{sequencer: sequencer},
-		Journal:           jobJournal,
-		KnowledgeResolver: knowledgeManagement.resolver,
-		LookupResolver:    knowledgeManagement.lookupResolver,
-		OnJournalError: func(err error) {
-			logger.Warn("persist search-job history", zap.Error(err))
-		},
-		OnFailure: func(notification searchjobs.FailureNotification) {
-			logSearchFailure(logger, notification)
-		},
-		Compiler:      compiler,
-		MaxConcurrent: int(searchlimits.SupportedRange().Maximum.MaxConcurrent),
-		MaxRows:       initialServerSettings.Limits.MaxResultRows,
-		MaxBytes:      initialServerSettings.Limits.MaxResultBytes,
-		MaxTotalBytes: initialServerSettings.Limits.MaxTotalResultBytes,
-		MaxRuntime:    initialServerSettings.Limits.MaxRuntime,
-		RetentionTTL:  initialServerSettings.Limits.ResultRetention,
-		LimitSource:   searchLimitSource,
+	defer searchLifecycle.Close()
+	indexStatistics := searchLifecycle.indexStatistics
+	liveServerSettings := searchLifecycle.serverSettings
+	searchArtifactStore := searchLifecycle.artifacts
+	knowledgeManagement := searchLifecycle.knowledge
+	jobs := searchLifecycle.jobs
+	knowledgePreview := searchLifecycle.preview
+	inspection := searchLifecycle.inspection
+	exports := searchLifecycle.exports
+	analysis := searchLifecycle.analysis
+	searchWebSocket := searchLifecycle.webSocket
+	alertLifecycle, err := newRuntimeAlertLifecycle(runtimeAlertLifecycleConfig{
+		ctx: startupContext, controlDB: controlDB, jobs: jobs, artifacts: searchArtifactStore,
+		auditAppender: securityStores.auditEvents, featureOperations: featureOperations,
+		masterKeyPath: config.masterKeyPath, tenantID: config.tenantID, ownerID: defaultOwnerID,
+		publicBaseURL: config.alertPublicBaseURL, privateWebhookHostsCSV: config.alertPrivateWebhookHostsCSV,
+		logger: logger, closeTimeout: shutdownTimeout,
 	})
-	if err != nil {
-		return fmt.Errorf("create search job manager: %w", err)
-	}
-	defer func() {
-		if err := jobs.Close(); err != nil {
-			logger.Warn("close search jobs", zap.Error(err))
-		}
-	}()
-	liveServerSettings := &runtimeServerSettings{
-		store: serverSettingsStore, source: searchLimitSource,
-		jobs: jobs, current: initialServerSettings,
-	}
-	knowledgePreview, err := knowledgepreview.NewService(knowledgepreview.Config{
-		Searches: jobs,
-		Writer:   knowledgeManagement.writer,
-		Compiler: knowledgepreview.ProductionCompilerAdapter{Compiler: compiler},
-		Executor: executor,
-	})
-	if err != nil {
-		return fmt.Errorf("create knowledge preview service: %w", err)
-	}
-	inspection, err := newRuntimeSearchInspection(
-		runtimeSearchInspectionConfig{
-			Searches:          jobs,
-			Compiler:          compiler,
-			ClickHouseOptions: clickHouseOptions.runtime,
-		},
-	)
-	if err != nil {
-		return fmt.Errorf("create search inspection services: %w", err)
-	}
-	// Registered after jobs so LIFO shutdown first stops inspection admission,
-	// waits for active requests, and closes its isolated EXPLAIN lanes. The
-	// borrowed search manager and shared ClickHouse connection remain alive
-	// until afterward.
-	defer func() {
-		if err := inspection.Close(); err != nil {
-			logger.Warn("close search inspection services", zap.Error(err))
-		}
-	}()
-	exportExecutorConfig := exportSettings.queryExecutorConfig()
-	exportExecutor, err := newRuntimeQueryExecutor(
-		connection,
-		exportExecutorConfig,
-		indexReads.admission,
-	)
-	if err != nil {
-		return fmt.Errorf("create export query executor: %w", err)
-	}
-	exportSource, err := exportjobs.NewReexecutionSource(exportjobs.ReexecutionSourceConfig{
-		Searches:   jobs,
-		Executor:   exportExecutor,
-		Compiler:   compiler,
-		MaxRuntime: exportSettings.reexecutionMaxRuntime,
-	})
-	if err != nil {
-		return fmt.Errorf("create export re-execution source: %w", err)
-	}
-	exports, err := exportjobs.New(exportSettings.managerConfig(
-		exportSource,
-		config.exportArtifactDir,
-		newExportCleanupErrorReporter(logger),
-	))
-	if err != nil {
-		return fmt.Errorf("create export manager: %w", err)
-	}
-	// Registered after jobs so LIFO shutdown always cancels export workers and
-	// releases their search leases before the search-job manager is closed.
-	defer func() {
-		if err := exports.Close(); err != nil {
-			logger.Warn("close exports", zap.Error(err))
-		}
-	}()
-	analysis, err := newRuntimeSearchAnalysis(runtimeSearchAnalysisConfig{
-		Searches:         jobs,
-		Compiler:         compiler,
-		Executor:         executor,
-		FieldCursorScope: "open-splunk-server/search-fields",
-	})
-	if err != nil {
-		return fmt.Errorf("create search analysis services: %w", err)
-	}
-	// Registered after exports and jobs so LIFO shutdown cancels and joins all
-	// suggestion operations and detached field-catalog workers before either
-	// borrowed dependency closes. The later WebSocket safety close still runs
-	// first.
-	defer func() {
-		if err := analysis.Close(); err != nil {
-			logger.Warn("close search analysis services", zap.Error(err))
-		}
-	}()
-
-	searchWebSocket, err := searchws.New(searchws.Config{
-		Searches: jobs,
-		Exports:  exports,
-		Access: searchjobs.AccessScope{
-			TenantID: config.tenantID,
-			OwnerID:  defaultOwnerID,
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("create search websocket service: %w", err)
-	}
-	// This safety close executes before export/search manager defers. Normal
-	// runtime shutdown closes the same service through server.Handler first.
-	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-		defer cancel()
-		if err := searchWebSocket.Close(ctx); err != nil {
-			logger.Warn("close search websocket service", zap.Error(err))
-		}
-	}()
-	appCatalog, appCursorKey, err := newRuntimeAuditedAppCatalog(
-		startupContext,
-		controlDB,
-		config.masterKeyPath,
-		securityStores.auditEvents,
-	)
 	if err != nil {
 		return err
 	}
-	defer clear(appCursorKey)
-	trustedScheduledAdmission := &runtimeTrustedSearchAdmission{
-		jobs: jobs, indexes: controlDB, apps: appCatalog,
+	defer alertLifecycle.Close()
+	appCatalog := alertLifecycle.appCatalog
+	appCursorKey := alertLifecycle.appCursorKey
+	trustedScheduledAdmission := alertLifecycle.admission
+	alertService := alertLifecycle.service
+	alertLifecycleRepository := alertLifecycle.repository
+	alertTestDeliverer := alertLifecycle.testDeliverer
+	alertCoordinator := alertLifecycle.coordinator
+	alertEngine := alertLifecycle.engine
+	scheduledReportLifecycle := searchLifecycle.scheduledReports
+	if err := scheduledReportLifecycle.Configure(
+		startupContext, controlDB, trustedScheduledAdmission, featureOperations,
+	); err != nil {
+		return err
 	}
-	alertRepository, err := alertstore.NewSQLRepository(controlDB, alertstore.SQLRepositoryOptions{TenantID: config.tenantID})
-	if err != nil {
-		clear(appCursorKey)
-		return fmt.Errorf("open alert repository: %w", err)
-	}
-	alertObservability := alerts.ObservabilityOptions{Observer: featureOperations}
-	alertLifecycleRepository := alerts.ObserveRepository(alertRepository, alertObservability)
-	alertRunRepository := alerts.ObserveRunRepository(alertRepository, alertObservability)
-	alertKeyMaterial, err := loadVerifiedMasterKey(startupContext, controlDB, config.masterKeyPath)
-	if err != nil {
-		clear(appCursorKey)
-		return fmt.Errorf("open alert encryption key: %w", err)
-	}
-	alertKey, err := deriveServerKey(alertKeyMaterial, "webhook-alert-secrets")
-	clear(alertKeyMaterial)
-	if err != nil {
-		clear(appCursorKey)
-		return fmt.Errorf("derive alert encryption key: %w", err)
-	}
-	alertCipher, err := alerts.NewAESGCMCipher(alertKey, nil)
-	clear(alertKey)
-	if err != nil {
-		clear(appCursorKey)
-		return fmt.Errorf("create alert encryption: %w", err)
-	}
-	alertService, err := alerts.NewService(alertLifecycleRepository, alertCipher, alerts.ServiceOptions{PublicBaseURL: config.alertPublicBaseURL})
-	if err != nil {
-		clear(appCursorKey)
-		return fmt.Errorf("create alert service: %w", err)
-	}
-	if err := alertService.ValidateEnabledRuntime(startupContext, defaultOwnerID); err != nil {
-		clear(appCursorKey)
-		return fmt.Errorf("validate enabled alerts: %w", err)
-	}
-	alertDeliverer, err := alerts.NewDeliverer(alerts.DeliveryOptions{DestinationPolicy: alerts.DestinationPolicy{
-		PrivateHostAllowlist: splitConfiguredValues(config.alertPrivateWebhookHostsCSV),
-	}})
-	if err != nil {
-		clear(appCursorKey)
-		return fmt.Errorf("create alert deliverer: %w", err)
-	}
-	alertTestDeliverer := alerts.ObserveTestWebhookDeliverer(alertDeliverer, alertObservability)
-	alertArtifacts, err := newRuntimeAlertArtifacts(searchArtifactStore, config.tenantID)
-	if err != nil {
-		clear(appCursorKey)
-		return fmt.Errorf("create alert artifact runtime: %w", err)
-	}
-	alertCoordinator, err := alerts.NewCoordinator(alerts.CoordinatorOptions{
-		RunRepository: alertRunRepository, Admission: trustedScheduledAdmission,
-		Jobs: alertArtifacts, Results: alertArtifacts, Retention: alertArtifacts,
-		Authorizer: alertService, Deliverer: alertDeliverer, PublicBaseURL: config.alertPublicBaseURL,
-	})
-	if err != nil {
-		clear(appCursorKey)
-		return fmt.Errorf("create alert coordinator: %w", err)
-	}
-	// Coordinator workers deliberately outlive individual scheduler and HTTP
-	// request contexts. Register shutdown immediately so every later startup
-	// failure joins them before artifact and database teardown. The timeout
-	// bounds durable-completion retry grace; Close still joins every worker.
-	// The scheduler shutdown defer is registered below and therefore runs first.
-	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-		defer cancel()
-		if err := alertCoordinator.Close(ctx); err != nil {
-			logger.Warn("close alert coordinator", zap.Error(err))
-		}
-	}()
-	if _, err := alertCoordinator.Recover(startupContext); err != nil {
-		clear(appCursorKey)
-		return fmt.Errorf("recover alert runs: %w", err)
-	}
-	alertEngine, err := scheduler.NewEngine(scheduler.EngineOptions{Stepper: alertCoordinator})
-	if err != nil {
-		clear(appCursorKey)
-		return fmt.Errorf("create alert scheduler: %w", err)
-	}
-	scheduledReportRepository, err := scheduledreports.NewRepository(controlDB.GORMDB(), scheduledreports.RepositoryOptions{})
-	if err != nil {
-		clear(appCursorKey)
-		return fmt.Errorf("open scheduled reports: %w", err)
-	}
-	scheduledReportService, err := scheduledreports.NewService(scheduledreports.ServiceOptions{
-		Store: scheduledReportRepository, Admitter: trustedScheduledAdmission,
-		Observer: featureOperations,
-	})
-	if err != nil {
-		clear(appCursorKey)
-		return fmt.Errorf("create scheduled report service: %w", err)
-	}
-	if _, err := scheduledReportService.Recover(startupContext); err != nil {
-		clear(appCursorKey)
-		return fmt.Errorf("recover scheduled reports: %w", err)
-	}
-	if err := scheduledReportJournal.Bind(scheduledReportService); err != nil {
-		clear(appCursorKey)
-		return fmt.Errorf("bind scheduled-report completion journal: %w", err)
-	}
-	scheduledReportEngine, err := scheduler.NewEngine(scheduler.EngineOptions{Stepper: scheduledReportService})
-	if err != nil {
-		clear(appCursorKey)
-		return fmt.Errorf("create scheduled report scheduler: %w", err)
-	}
+	scheduledReportService := scheduledReportLifecycle.service
+	scheduledReportEngine := scheduledReportLifecycle.engine
 	collectorAdministration, err := newRuntimeCollectorAdministration(
 		startupContext,
 		controlDB,
@@ -965,7 +671,7 @@ func runWithOptions(config options) error {
 		config.masterKeyPath,
 	)
 	if err != nil {
-		clear(appCursorKey)
+		alertLifecycle.EraseCursorKey()
 		return err
 	}
 	httpConfig := server.Config{
@@ -1021,7 +727,7 @@ func runWithOptions(config options) error {
 			eventStore,
 		)
 		if operationsErr != nil {
-			clear(appCursorKey)
+			alertLifecycle.EraseCursorKey()
 			return fmt.Errorf("create HEC operational telemetry: %w", operationsErr)
 		}
 		httpConfig.HECOperations = hecOperations
@@ -1036,13 +742,13 @@ func runWithOptions(config options) error {
 		appCatalog,
 		knowledgePreview,
 	); err != nil {
-		clear(appCursorKey)
+		alertLifecycle.EraseCursorKey()
 		return err
 	}
 	browserHandler, err := newRuntimeHTTPHandler(httpConfig, analysis)
 	// NewHandler clones the key before returning. Erase this temporary caller
 	// copy immediately on both success and failure.
-	clear(appCursorKey)
+	alertLifecycle.EraseCursorKey()
 	if err != nil {
 		return fmt.Errorf("create HTTP handler: %w", err)
 	}
