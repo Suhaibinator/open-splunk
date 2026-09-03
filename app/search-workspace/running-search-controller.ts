@@ -16,93 +16,93 @@ export type RunningPreviewStatus =
   | "finalization-error";
 
 export class RunningSearchController {
-  readonly abortRef = { current: null as AbortController | null };
-  readonly cancelPendingRef = { current: false };
-  readonly cancelRequestedRef = { current: false };
-  readonly generationRef = { current: 0 };
-  readonly jobIdRef = { current: null as string | null };
-  readonly jobRef = { current: null as SearchJob | null };
-  readonly jobVersionRef = { current: 0n };
-  readonly launchRef = { current: false };
-  readonly liveUpdateEpochRef = { current: 0n };
-  readonly previewRef = { current: null as LivePreviewSnapshot | null };
-  readonly previewRowLimitRef = { current: 0 };
-  readonly previewSchemasRef = { current: new Map<string, ResultSchema>() };
-  readonly previewStatusRef = { current: "disabled" as RunningPreviewStatus };
-  readonly progressRevisionRef = { current: null as ProgressRevisionState };
-  readonly socketRef = { current: null as SearchWebSocketClient | null };
+  private abortController: AbortController | null = null;
+  private cancelPending = false;
+  private cancelRequested = false;
+  private generation = 0;
+  private jobId: string | null = null;
+  private job: SearchJob | null = null;
+  private jobVersion = 0n;
+  private launchLocked = false;
+  private liveUpdateEpoch = 0n;
+  private preview: LivePreviewSnapshot | null = null;
+  private previewRowLimit = 0;
+  private readonly previewSchemas = new Map<string, ResultSchema>();
+  private previewStatus: RunningPreviewStatus = "disabled";
+  private progressRevision: ProgressRevisionState = null;
+  private socket: SearchWebSocketClient | null = null;
   private timers: number[] = [];
 
   beginGeneration(): number {
-    this.generationRef.current += 1;
-    return this.generationRef.current;
+    this.generation += 1;
+    return this.generation;
   }
 
   resetBackendRun(abortRelatedRequests: () => void) {
-    const supersededJobId = this.jobIdRef.current;
-    this.abortRef.current?.abort();
+    const supersededJobId = this.jobId;
+    this.abortController?.abort();
     abortRelatedRequests();
     this.stopLiveUpdates();
     const controller = new AbortController();
-    this.abortRef.current = controller;
+    this.abortController = controller;
     this.clearJob();
-    this.cancelPendingRef.current = false;
-    this.cancelRequestedRef.current = false;
+    this.cancelPending = false;
+    this.cancelRequested = false;
     return { controller, supersededJobId };
   }
 
   beginCancel(): number | null {
-    if (this.cancelPendingRef.current) return null;
-    this.cancelPendingRef.current = true;
-    this.cancelRequestedRef.current = true;
-    return this.generationRef.current;
+    if (this.cancelPending) return null;
+    this.cancelPending = true;
+    this.cancelRequested = true;
+    return this.generation;
   }
 
   acceptAuthoritativeJob(job: SearchJob, progressRevision: NonNullable<ProgressRevisionState>) {
-    this.jobVersionRef.current = job.stateVersion;
-    this.progressRevisionRef.current = progressRevision;
-    this.jobRef.current = job;
+    this.jobVersion = job.stateVersion;
+    this.progressRevision = progressRevision;
+    this.job = job;
   }
 
   attachSocket(socket: SearchWebSocketClient) {
-    this.socketRef.current = socket;
+    this.socket = socket;
   }
 
   captureLiveUpdateEpoch(): bigint {
-    return this.liveUpdateEpochRef.current;
+    return this.liveUpdateEpoch;
   }
 
   finishCancel(generation: number) {
-    if (this.generationRef.current !== generation) return;
-    this.cancelPendingRef.current = false;
-    this.cancelRequestedRef.current = false;
+    if (this.generation !== generation) return;
+    this.cancelPending = false;
+    this.cancelRequested = false;
   }
 
   isCurrent(generation: number, searchJobId?: string): boolean {
-    return this.generationRef.current === generation
-      && (searchJobId === undefined || this.jobIdRef.current === searchJobId);
+    return this.generation === generation
+      && (searchJobId === undefined || this.jobId === searchJobId);
   }
 
   liveUpdateEpochIs(epoch: bigint): boolean {
-    return this.liveUpdateEpochRef.current === epoch;
+    return this.liveUpdateEpoch === epoch;
   }
 
   recordUnversionedLiveUpdate() {
-    this.liveUpdateEpochRef.current += 1n;
+    this.liveUpdateEpoch += 1n;
   }
 
   releaseSocket(socket: SearchWebSocketClient | null) {
-    if (this.socketRef.current === socket) this.socketRef.current = null;
+    if (this.socket === socket) this.socket = null;
   }
 
   launchIsLocked(): boolean {
-    return this.launchRef.current;
+    return this.launchLocked;
   }
 
   lockLaunch() {
-    this.launchRef.current = true;
+    this.launchLocked = true;
     window.setTimeout(() => {
-      this.launchRef.current = false;
+      this.launchLocked = false;
     }, 0);
   }
 
@@ -111,19 +111,114 @@ export class RunningSearchController {
   }
 
   stopLiveUpdates() {
-    this.socketRef.current?.dispose();
-    this.socketRef.current = null;
+    this.socket?.dispose();
+    this.socket = null;
   }
 
   clearJob() {
-    this.jobIdRef.current = null;
-    this.jobRef.current = null;
-    this.jobVersionRef.current = 0n;
-    this.liveUpdateEpochRef.current = 0n;
+    this.jobId = null;
+    this.job = null;
+    this.jobVersion = 0n;
+    this.liveUpdateEpoch = 0n;
   }
 
   resetProgress() {
-    this.progressRevisionRef.current = null;
+    this.progressRevision = null;
+  }
+
+  abortRequest() {
+    this.abortController?.abort();
+  }
+
+  cancelIsPending(): boolean {
+    return this.cancelPending;
+  }
+
+  cancelWasRequested(): boolean {
+    return this.cancelRequested;
+  }
+
+  currentGeneration(): number {
+    return this.generation;
+  }
+
+  currentJob(): SearchJob | null {
+    return this.job;
+  }
+
+  currentJobId(): string | null {
+    return this.jobId;
+  }
+
+  currentJobVersion(): bigint {
+    return this.jobVersion;
+  }
+
+  currentPreview(): LivePreviewSnapshot | null {
+    return this.preview;
+  }
+
+  currentPreviewRowLimit(): number {
+    return this.previewRowLimit;
+  }
+
+  currentPreviewStatus(): RunningPreviewStatus {
+    return this.previewStatus;
+  }
+
+  currentProgressRevision(): ProgressRevisionState {
+    return this.progressRevision;
+  }
+
+  previewSchema(schemaId: string): ResultSchema | undefined {
+    return this.previewSchemas.get(schemaId);
+  }
+
+  recordJobId(jobId: string | null) {
+    this.jobId = jobId;
+  }
+
+  recordJobVersion(version: bigint) {
+    this.jobVersion = version;
+  }
+
+  recordPreview(preview: LivePreviewSnapshot | null) {
+    this.preview = preview;
+  }
+
+  recordPreviewRowLimit(limit: number) {
+    this.previewRowLimit = limit;
+  }
+
+  recordPreviewSchema(schema: ResultSchema) {
+    this.previewSchemas.set(schema.schemaId, schema);
+  }
+
+  recordPreviewStatus(status: RunningPreviewStatus) {
+    this.previewStatus = status;
+  }
+
+  recordProgressRevision(revision: ProgressRevisionState) {
+    this.progressRevision = revision;
+  }
+
+  releaseRequest(controller: AbortController) {
+    if (this.abortController === controller) this.abortController = null;
+  }
+
+  replaceRequest(controller: AbortController) {
+    this.abortController = controller;
+  }
+
+  resetPreview() {
+    this.preview = null;
+    this.previewRowLimit = 0;
+    this.previewSchemas.clear();
+    this.previewStatus = "disabled";
+  }
+
+  clearPreviewSchemas() {
+    this.previewSchemas.clear();
   }
 
   clearTimers = () => {
