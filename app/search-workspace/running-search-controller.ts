@@ -3,7 +3,13 @@ import type { SearchJob } from "@/gen/ts/open_splunk/search";
 import type { SearchWebSocketClient } from "@/lib/api";
 
 import type { LivePreviewSnapshot } from "./live-preview";
-import type { ProgressRevisionState } from "./progress-revision";
+import {
+  isVersionedSearchRevision,
+  reconcileSearchProgress,
+  type ProgressDecision,
+  type ProgressRevisionState,
+  type SearchProgressSource,
+} from "./progress-revision";
 
 export type RunningPreviewStatus =
   | "disabled"
@@ -40,7 +46,7 @@ export class RunningSearchController {
 
   resetBackendRun(abortRelatedRequests: () => void) {
     const supersededJobId = this.jobId;
-    this.abortController?.abort();
+    this.abortRequest();
     abortRelatedRequests();
     this.stopLiveUpdates();
     const controller = new AbortController();
@@ -58,14 +64,50 @@ export class RunningSearchController {
     return this.generation;
   }
 
-  acceptAuthoritativeJob(job: SearchJob, progressRevision: NonNullable<ProgressRevisionState>) {
+  adoptAuthoritativeJob(
+    generation: number,
+    job: SearchJob,
+  ): NonNullable<ProgressRevisionState> {
+    if (!this.canAdoptJob(generation, job.searchJobId)) {
+      throw new DOMException("Search was superseded.", "AbortError");
+    }
+    if (!isVersionedSearchRevision(job.stateVersion)) {
+      throw new Error("The server returned a search job without a valid state revision.");
+    }
+    if (
+      job.stateVersion < this.jobVersion
+      || (
+        this.progressRevision !== null
+        && job.stateVersion < this.progressRevision.revision
+      )
+    ) {
+      throw new Error("The search job snapshot was older than the applied live state.");
+    }
+    if (job.progress === undefined) {
+      throw new Error("The server returned a search job without progress.");
+    }
+    const decision = reconcileSearchProgress(
+      this.progressRevision,
+      job.progress,
+      { kind: "authoritative", envelopeRevision: job.stateVersion },
+    );
+    if (decision.kind === "ignore") {
+      throw new Error("The search job progress was older than the applied live progress.");
+    }
+    if (decision.kind === "recover") {
+      throw new Error(`The server returned inconsistent search progress (${decision.reason}).`);
+    }
+    this.jobId = job.searchJobId;
     this.jobVersion = job.stateVersion;
-    this.progressRevision = progressRevision;
+    this.progressRevision = decision.state;
     this.job = job;
+    return decision.state;
   }
 
-  attachSocket(socket: SearchWebSocketClient) {
+  replaceSocket(socket: SearchWebSocketClient) {
+    const replaced = this.socket;
     this.socket = socket;
+    if (replaced !== socket) replaced?.dispose();
   }
 
   captureLiveUpdateEpoch(): bigint {
@@ -87,12 +129,14 @@ export class RunningSearchController {
     return this.liveUpdateEpoch === epoch;
   }
 
-  recordUnversionedLiveUpdate() {
+  advanceLiveUpdateEpoch() {
     this.liveUpdateEpoch += 1n;
   }
 
-  releaseSocket(socket: SearchWebSocketClient | null) {
-    if (this.socket === socket) this.socket = null;
+  disposeSocket(socket: SearchWebSocketClient | null) {
+    if (this.socket !== socket) return;
+    this.socket = null;
+    socket?.dispose();
   }
 
   launchIsLocked(): boolean {
@@ -111,8 +155,7 @@ export class RunningSearchController {
   }
 
   stopLiveUpdates() {
-    this.socket?.dispose();
-    this.socket = null;
+    this.disposeSocket(this.socket);
   }
 
   clearJob() {
@@ -120,14 +163,13 @@ export class RunningSearchController {
     this.job = null;
     this.jobVersion = 0n;
     this.liveUpdateEpoch = 0n;
-  }
-
-  resetProgress() {
     this.progressRevision = null;
   }
 
   abortRequest() {
-    this.abortController?.abort();
+    const controller = this.abortController;
+    this.abortController = null;
+    controller?.abort();
   }
 
   cancelIsPending(): boolean {
@@ -138,68 +180,71 @@ export class RunningSearchController {
     return this.cancelRequested;
   }
 
-  currentGeneration(): number {
+  generationSnapshot(): number {
     return this.generation;
   }
 
-  currentJob(): SearchJob | null {
-    return this.job;
-  }
-
-  currentJobId(): string | null {
-    return this.jobId;
-  }
-
-  currentJobVersion(): bigint {
-    return this.jobVersion;
-  }
-
-  currentPreview(): LivePreviewSnapshot | null {
-    return this.preview;
-  }
-
-  currentPreviewRowLimit(): number {
-    return this.previewRowLimit;
-  }
-
-  currentPreviewStatus(): RunningPreviewStatus {
-    return this.previewStatus;
-  }
-
-  currentProgressRevision(): ProgressRevisionState {
-    return this.progressRevision;
+  jobSnapshot() {
+    return {
+      id: this.jobId,
+      job: this.job,
+      version: this.jobVersion,
+    } as const;
   }
 
   previewSchema(schemaId: string): ResultSchema | undefined {
     return this.previewSchemas.get(schemaId);
   }
 
-  recordJobId(jobId: string | null) {
-    this.jobId = jobId;
+  previewSnapshot() {
+    return {
+      rowLimit: this.previewRowLimit,
+      snapshot: this.preview,
+      status: this.previewStatus,
+    } as const;
   }
 
-  recordJobVersion(version: bigint) {
-    this.jobVersion = version;
+  private canAdoptJob(generation: number, searchJobId: string): boolean {
+    return this.generation === generation
+      && (this.jobId === null || this.jobId === searchJobId);
   }
 
-  recordPreview(preview: LivePreviewSnapshot | null) {
+  applyPreview(preview: LivePreviewSnapshot, status: RunningPreviewStatus) {
     this.preview = preview;
-  }
-
-  recordPreviewRowLimit(limit: number) {
-    this.previewRowLimit = limit;
-  }
-
-  recordPreviewSchema(schema: ResultSchema) {
-    this.previewSchemas.set(schema.schemaId, schema);
-  }
-
-  recordPreviewStatus(status: RunningPreviewStatus) {
     this.previewStatus = status;
   }
 
-  recordProgressRevision(revision: ProgressRevisionState) {
-    this.progressRevision = revision;
+  configurePreview(limit: number) {
+    this.previewRowLimit = limit;
+  }
+
+  registerPreviewSchema(schema: ResultSchema) {
+    this.previewSchemas.set(schema.schemaId, schema);
+  }
+
+  transitionPreview(status: RunningPreviewStatus) {
+    this.previewStatus = status;
+  }
+
+  clearPreview(status: RunningPreviewStatus) {
+    this.preview = null;
+    this.previewStatus = status;
+  }
+
+  reconcileProgress(
+    progress: Parameters<typeof reconcileSearchProgress>[1],
+    source: SearchProgressSource,
+  ): ProgressDecision {
+    const decision = reconcileSearchProgress(this.progressRevision, progress, source);
+    if (decision.kind === "apply") this.progressRevision = decision.state;
+    return decision;
+  }
+
+  reconcileLiveJobVersion(version: bigint): "stale" | "current" | "advanced" {
+    if (version < this.jobVersion) return "stale";
+    if (version === this.jobVersion) return "current";
+    this.jobVersion = version;
+    return "advanced";
   }
 
   releaseRequest(controller: AbortController) {
@@ -207,6 +252,7 @@ export class RunningSearchController {
   }
 
   replaceRequest(controller: AbortController) {
+    if (this.abortController !== controller) this.abortController?.abort();
     this.abortController = controller;
   }
 
