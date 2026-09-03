@@ -2574,7 +2574,7 @@ export function SearchWorkspace({
     };
   }, [backendEnabled, backendExpiresAt, backendResultsExpired]);
 
-  const fieldSummaryJob = backendJobRef.current;
+  const fieldSummaryJob = runningSearch.jobSnapshot().job;
   const fieldSummaryBootstrap = backendBootstrapRef.current;
   const nextBackendFieldSummaryRequestKey = backendEnabled
     && activeField !== null
