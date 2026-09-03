@@ -46,6 +46,7 @@ const testFiles = [
   path.join("app", "admin", "lookup-manager-panel.test.ts"),
   path.join("app", "admin", "knowledge-manager-preview-data.test.ts"),
   path.join("app", "activity", "backend-audit-data.test.ts"),
+  path.join("app", "activity", "backend-export-jobs.test.ts"),
   path.join("app", "search-workspace", "live-preview.test.ts"),
   path.join("app", "search-workspace", "progress-revision.test.ts"),
   path.join("app", "search-workspace", "categorical-interaction.test.ts"),

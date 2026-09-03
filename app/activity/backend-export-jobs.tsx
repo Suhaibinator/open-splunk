@@ -7,6 +7,7 @@ import {
   ExportJobState,
   type ExportJob,
 } from "@/gen/ts/open_splunk/export";
+import type { ListExportJobsRequest } from "@/gen/ts/open_splunk/export_api";
 import {
   createOpenSplunkApiClient,
   isAdvertisedFeatureRouteUnavailable,
@@ -63,6 +64,18 @@ const errorMessage = createErrorMessage("The server did not return a usable expo
 
 function filterStates(filter: ExportFilter): readonly ExportJobState[] {
   return FILTERS.find((candidate) => candidate.key === filter)?.states ?? [];
+}
+
+export function buildExportListRequest(
+  filter: ExportFilter,
+  searchJobIdFilter: string,
+  pageToken?: string,
+): ListExportJobsRequest {
+  return {
+    page: { pageToken, includeTotalSize: true },
+    stateFilters: [...filterStates(filter)],
+    searchJobIdFilter: searchJobIdFilter || undefined,
+  };
 }
 
 function exportStateLabel(state: ExportJobState): string {
@@ -136,7 +149,6 @@ export function BackendExportJobs({ apiBaseUrl, bootstrap }: BackendExportJobsPr
   const jobIdsSeenRef = useRef<Set<string>>(new Set());
   const loadMoreAbortRef = useRef<AbortController | null>(null);
   const reload = useCallback(() => setGeneration((current) => current + 1), []);
-  const pageSize = Math.max(1, Math.min(bootstrap.limits.maximumPageSize || 20, 20));
 
   useEffect(() => {
     const retainShell = hasLoadedRef.current;
@@ -154,11 +166,7 @@ export function BackendExportJobs({ apiBaseUrl, bootstrap }: BackendExportJobsPr
     pageTokensSeenRef.current.clear();
     jobIdsSeenRef.current.clear();
 
-    void client.exports.list({
-      page: { pageSize, pageToken: undefined, includeTotalSize: true },
-      stateFilters: [...filterStates(filter)],
-      searchJobIdFilter: searchJobIdFilter || undefined,
-    }, { signal: controller.signal }).then((response) => {
+    void client.exports.list(buildExportListRequest(filter, searchJobIdFilter), { signal: controller.signal }).then((response) => {
       if (!current) return;
       for (const job of response.exportJobs) jobIdsSeenRef.current.add(job.exportJobId);
       setJobs(response.exportJobs);
@@ -187,7 +195,7 @@ export function BackendExportJobs({ apiBaseUrl, bootstrap }: BackendExportJobsPr
       loadMoreAbortRef.current?.abort();
       loadMoreAbortRef.current = null;
     };
-  }, [client, filter, generation, pageSize, searchJobIdFilter]);
+  }, [client, filter, generation, searchJobIdFilter]);
 
   const loadMore = useCallback(async () => {
     if (nextPageToken === null || loadMoreAbortRef.current !== null) return;
@@ -197,11 +205,10 @@ export function BackendExportJobs({ apiBaseUrl, bootstrap }: BackendExportJobsPr
     setLoadingMore(true);
     setLoadMoreError(null);
     try {
-      const response = await client.exports.list({
-        page: { pageSize, pageToken, includeTotalSize: true },
-        stateFilters: [...filterStates(filter)],
-        searchJobIdFilter: searchJobIdFilter || undefined,
-      }, { signal: controller.signal });
+      const response = await client.exports.list(
+        buildExportListRequest(filter, searchJobIdFilter, pageToken),
+        { signal: controller.signal },
+      );
       if (controller.signal.aborted) return;
       const duplicate = response.exportJobs.find((job) => jobIdsSeenRef.current.has(job.exportJobId));
       if (duplicate !== undefined) throw new TypeError(`Export jobs repeated ${duplicate.exportJobId} on a later page.`);
@@ -225,7 +232,7 @@ export function BackendExportJobs({ apiBaseUrl, bootstrap }: BackendExportJobsPr
         setLoadingMore(false);
       }
     }
-  }, [client, filter, nextPageToken, pageSize, searchJobIdFilter]);
+  }, [client, filter, nextPageToken, searchJobIdFilter]);
 
   const cancelJob = useCallback(async (job: ExportJob) => {
     if (action !== null) return;
