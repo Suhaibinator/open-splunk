@@ -101,12 +101,8 @@ jobs:
         run: npm run check:docs
 
       - name: Lint
-        run: npm run lint
+        run: npx --no-install oxlint .
 
-      # `npm run lint` already ends with `npm run lint:css`. It is named again
-      # here so a stylesheet failure is its own red step rather than the tail of
-      # a step whose name says oxlint, and so removing it from the npm script
-      # cannot quietly take the CSS gate out of CI with it.
       - name: Lint stylesheets
         run: npm run lint:css
 

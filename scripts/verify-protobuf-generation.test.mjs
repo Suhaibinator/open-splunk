@@ -23,7 +23,7 @@ ${makeBody}
   await chmod(path.join(directory, "make"), 0o755);
   t.after(async () => { await rm(directory, { recursive: true, force: true }); });
   try {
-    const result = await execute(verifier, [], {
+    const result = await execute(verifier, ["make", "build"], {
       cwd: directory,
       env: { ...process.env, PATH: `${directory}${path.delimiter}${process.env.PATH}` },
     });
@@ -34,7 +34,10 @@ ${makeBody}
 }
 
 test("accepts already-edited protobuf sources and matching generated output", async (t) => {
-  const result = await fixture(t, ":");
+  const result = await fixture(t, `
+test "$#" -eq 1
+test "$1" = build
+`);
   assert.equal(result.code, 0);
 });
 
@@ -43,4 +46,8 @@ test("rejects generation that changes the current protobuf snapshot", async (t) 
   assert.notEqual(result.code, 0);
   assert.match(result.stdout, /edited output/u);
   assert.match(result.stdout, /changed/u);
+});
+
+test("requires a command that generates protobuf output", async () => {
+  await assert.rejects(execute(verifier, []));
 });

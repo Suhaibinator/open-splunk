@@ -32,9 +32,8 @@ test("the full local verification target covers release-equivalent checks", asyn
   const makefile = await readFile(path.join(workspace, "Makefile"), "utf8");
   const verify = makefile.slice(makefile.indexOf("verify:\n"), makefile.indexOf("\nclean:\n"));
   for (const command of [
-    "scripts/verify-protobuf-generation.sh",
+    "scripts/verify-protobuf-generation.sh $(MAKE) build",
     "$(MAKE) test",
-    "$(MAKE) build",
     "OPEN_SPLUNK_DATA_MODE=demo npm run build",
     "npm run test:workspace",
     "go build ./...",
@@ -43,10 +42,19 @@ test("the full local verification target covers release-equivalent checks", asyn
   ]) {
     assert.match(verify, new RegExp(command.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"));
   }
+  assert.equal((verify.match(/scripts\/verify-protobuf-generation\.sh \$\(MAKE\) build/gu) ?? []).length, 1);
+  assert.doesNotMatch(verify, /^\t\$\(MAKE\) build$/mu);
   assert.match(verify, /golangci-lint" run/u);
   assert.match(verify, /GOOS=linux GOARCH=amd64/u);
   assert.match(makefile, /go install github\.com\/golangci\/golangci-lint\/v2\/cmd\/golangci-lint@\$\(GOLANGCI_LINT_VERSION\)/u);
   const lintVersion = makefile.match(/^override GOLANGCI_LINT_VERSION := (v\d+\.\d+\.\d+)$/mu)?.[1];
   assert.ok(lintVersion);
   assert.match(await readFile(workflowPath, "utf8"), new RegExp(`version: ${lintVersion}$`, "mu"));
+});
+
+test("frontend CI runs code and stylesheet lint once each", async () => {
+  const workflow = await readFile(workflowPath, "utf8");
+  assert.equal((workflow.match(/run: npx --no-install oxlint \./gu) ?? []).length, 1);
+  assert.equal((workflow.match(/run: npm run lint:css/gu) ?? []).length, 1);
+  assert.doesNotMatch(workflow, /run: npm run lint$/mu);
 });

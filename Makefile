@@ -238,9 +238,8 @@ test: docs-check lint
 	npm run typecheck
 
 verify:
-	scripts/verify-protobuf-generation.sh
+	scripts/verify-protobuf-generation.sh $(MAKE) build
 	$(MAKE) test
-	$(MAKE) build
 	env OPEN_SPLUNK_DATA_MODE=demo npm run build
 	npm run test:workspace
 	$(GO_TOOL_ENV) go build ./...

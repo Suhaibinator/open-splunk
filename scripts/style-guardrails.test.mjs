@@ -177,7 +177,7 @@ test("the two stylelint exemptions name exactly the files they document", async 
 
 test("CI runs every gate the guardrail layer is made of", async () => {
   const workflow = await readFile(workflowPath, "utf8");
-  const missing = ["npm run check:docs", "npm run lint", "npm run lint:css", "npm run typecheck",
+  const missing = ["npm run check:docs", "npx --no-install oxlint .", "npm run lint:css", "npm run typecheck",
     "npm run test:contracts", "npm run test:frontend"]
     .filter((command) => !workflow.includes(`run: ${command}`));
   assert.deepEqual(
