@@ -15,6 +15,7 @@ permissions:
 
 env:
   GO_VERSION: "1.27.0"
+  OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE: clickhouse/clickhouse-server:26.7.5.10-alpine@sha256:0a45b864c73322d4360dea1973ee9b77f29c51af1242ad2d47409908071fa56e
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -31,19 +32,19 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
           cache-dependency-path: go.sum
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version-file: .node-version
           cache: npm
@@ -71,19 +72,19 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version-file: .node-version
           cache: npm
           cache-dependency-path: package-lock.json
 
       - name: Cache Next.js
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: .next/cache
           key: ${{ runner.os }}-next-${{ hashFiles('.node-version', 'package-lock.json') }}-${{ hashFiles('app/**', 'next.config.ts', 'tsconfig.json') }}
@@ -137,22 +138,22 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
           cache-dependency-path: go.sum
 
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v9
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a
         with:
           version: v2.13.1
           # The inherited inventory is clean; enforce the complete Go tree on
           # every push rather than retaining a historical diff-only baseline.
-          args: --timeout=10m
+          args: --timeout=10m --max-issues-per-linter=0 --max-same-issues=0
 
   go-test:
     name: Go tests (${{ matrix.label }})
@@ -223,10 +224,10 @@ jobs:
             job_timeout_minutes: 45
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -267,7 +268,7 @@ jobs:
 
       - name: Upload Go coverage
         if: matrix.upload_coverage
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: go-coverage
           path: coverage.out
@@ -358,10 +359,10 @@ jobs:
               ^FuzzCompileSpecifier$ 200000x
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -435,7 +436,7 @@ jobs:
 
       - name: Upload fuzz failure evidence
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: knowledge-object-fuzz-${{ matrix.label }}-failure
           path: |
@@ -448,31 +449,19 @@ jobs:
     name: GradeThis compatibility corpus
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    env:
-      OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE: clickhouse/clickhouse-server:26.7.5.10-alpine@sha256:0a45b864c73322d4360dea1973ee9b77f29c51af1242ad2d47409908071fa56e
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
           cache-dependency-path: go.sum
 
       - name: Pre-pull pinned ClickHouse image with retry
-        run: |
-          set -euo pipefail
-          for attempt in 1 2 3; do
-            if docker pull "$OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE"; then
-              exit 0
-            fi
-            if [[ "$attempt" -eq 3 ]]; then
-              exit 1
-            fi
-            sleep "$((attempt * 5))"
-          done
+        run: scripts/pull-clickhouse-test-image.sh
 
       - name: Execute exact GradeThis corpus and plans against pinned ClickHouse
         env:
@@ -489,31 +478,19 @@ jobs:
     name: Knowledge runtime ClickHouse matrix
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    env:
-      OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE: clickhouse/clickhouse-server:26.7.5.10-alpine@sha256:0a45b864c73322d4360dea1973ee9b77f29c51af1242ad2d47409908071fa56e
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
           cache-dependency-path: go.sum
 
       - name: Pre-pull pinned ClickHouse image with retry
-        run: |
-          set -euo pipefail
-          for attempt in 1 2 3; do
-            if docker pull "$OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE"; then
-              exit 0
-            fi
-            if [[ "$attempt" -eq 3 ]]; then
-              exit 1
-            fi
-            sleep "$((attempt * 5))"
-          done
+        run: scripts/pull-clickhouse-test-image.sh
 
       - name: Execute exact production knowledge runtime matrix
         env:
@@ -545,23 +522,21 @@ jobs:
     name: SPL pipeline pinned ClickHouse verticals
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    env:
-      OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE: clickhouse/clickhouse-server:26.7.5.10-alpine@sha256:0a45b864c73322d4360dea1973ee9b77f29c51af1242ad2d47409908071fa56e
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
           cache-dependency-path: go.sum
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version-file: .node-version
 
@@ -616,17 +591,7 @@ jobs:
             TestLookupRuntimeManagerAgainstClickHouse
 
       - name: Pre-pull pinned ClickHouse image with retry
-        run: |
-          set -euo pipefail
-          for attempt in 1 2 3; do
-            if docker pull "$OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE"; then
-              exit 0
-            fi
-            if [[ "$attempt" -eq 3 ]]; then
-              exit 1
-            fi
-            sleep "$((attempt * 5))"
-          done
+        run: scripts/pull-clickhouse-test-image.sh
 
       - name: Execute cumulative stats-BY and semantic String/Bytes matrix
         env:
@@ -777,14 +742,12 @@ jobs:
           - label: rate-gated 1,000 EPS batch-only throughput and outage recovery
             events_per_second: "1000"
             profile: batch-only
-    env:
-      OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE: clickhouse/clickhouse-server:26.7.5.10-alpine@sha256:0a45b864c73322d4360dea1973ee9b77f29c51af1242ad2d47409908071fa56e
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -804,7 +767,7 @@ jobs:
           done
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version-file: .node-version
           cache: npm
@@ -814,17 +777,7 @@ jobs:
         run: npm ci
 
       - name: Pre-pull pinned ClickHouse image with retry
-        run: |
-          set -euo pipefail
-          for attempt in 1 2 3; do
-            if docker pull "$OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE"; then
-              exit 0
-            fi
-            if [[ "$attempt" -eq 3 ]]; then
-              exit 1
-            fi
-            sleep "$((attempt * 5))"
-          done
+        run: scripts/pull-clickhouse-test-image.sh
 
       - name: Run ${{ matrix.label }}
         env:
@@ -845,14 +798,12 @@ jobs:
     # Leave setup, the 30-minute general vertical, and the isolated HEC
     # functional checks enough headroom to fail on their own bounded deadlines.
     timeout-minutes: 45
-    env:
-      OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE: clickhouse/clickhouse-server:26.7.5.10-alpine@sha256:0a45b864c73322d4360dea1973ee9b77f29c51af1242ad2d47409908071fa56e
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -872,20 +823,10 @@ jobs:
           done
 
       - name: Pre-pull pinned ClickHouse image with retry
-        run: |
-          set -euo pipefail
-          for attempt in 1 2 3; do
-            if docker pull "$OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE"; then
-              exit 0
-            fi
-            if [[ "$attempt" -eq 3 ]]; then
-              exit 1
-            fi
-            sleep "$((attempt * 5))"
-          done
+        run: scripts/pull-clickhouse-test-image.sh
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version-file: .node-version
           cache: npm
@@ -951,7 +892,7 @@ jobs:
 
       - name: Upload browser failure artifacts
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: backend-vertical-browser-failure
           path: |
@@ -966,7 +907,7 @@ jobs:
 
       - name: Upload browser rendering measurements
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: browser-fixed-result-rendering
           path: test-results/browser-fixed-result-rendering
@@ -979,24 +920,23 @@ jobs:
     timeout-minutes: 50
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
           cache-dependency-path: go.sum
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version-file: .node-version
 
       - name: Build and test release images with production Compose
         env:
           OPEN_SPLUNK_OCI_INTEGRATION: "1"
-          OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE: clickhouse/clickhouse-server:26.7.5.10-alpine@sha256:0a45b864c73322d4360dea1973ee9b77f29c51af1242ad2d47409908071fa56e
         run: >-
           go test ./integration
           -run '^TestReleaseOCIComposeContract$'
@@ -1078,7 +1018,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Scan reachable Go code
-        uses: golang/govulncheck-action@v1
+        uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f
         with:
           go-version-input: ${{ env.GO_VERSION }}
           cache-dependency-path: go.sum
@@ -1111,16 +1051,16 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version-file: .node-version
 
@@ -1152,7 +1092,7 @@ jobs:
           cp build/binary-identities.txt release-proof/binary-identities.txt
 
       - name: Upload release proof
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: release-proof-${{ matrix.label }}
           path: release-proof
@@ -1180,7 +1120,7 @@ jobs:
 
       - name: Upload binaries
         if: matrix.label == 'linux-amd64'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: open-splunk-linux-amd64
           path: open-splunk-linux-amd64.tar.gz
@@ -1196,13 +1136,13 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Download Linux release proof
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: release-proof-linux-amd64
           path: release-proof/linux
 
       - name: Download macOS release proof
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: release-proof-macos
           path: release-proof/macos
@@ -1225,26 +1165,26 @@ jobs:
       packages: write
     steps:
       - name: Check out release tag
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: false
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version-file: .node-version
 
       - name: Sign in to GHCR
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
