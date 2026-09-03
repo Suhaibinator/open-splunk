@@ -734,6 +734,9 @@ GRANT ALL ON open_splunk.* TO open_splunk;
 GRANT SELECT ON system.tables TO open_splunk;
 GRANT SELECT ON system.parts TO open_splunk;
 GRANT SELECT ON system.mutations TO open_splunk;
+GRANT SELECT(type, query_start_time_microseconds, query_kind, tables, written_rows, written_bytes, exception_code) ON system.query_log TO open_splunk;
+GRANT SELECT(event_time_microseconds, event_type, database, table, rows) ON system.part_log TO open_splunk;
+GRANT SELECT(event, value) ON system.events TO open_splunk;
 `, password, password)
 }
 
@@ -770,10 +773,7 @@ CREATE USER IF NOT EXISTS open_splunk_runtime
 ALTER USER open_splunk_runtime
     IDENTIFIED WITH sha256_password BY '%s';
 GRANT SELECT, INSERT ON open_splunk.events TO open_splunk_runtime;
-GRANT SELECT(database, table, active, rows, bytes_on_disk, data_compressed_bytes, data_uncompressed_bytes) ON system.parts TO open_splunk_runtime;
-GRANT SELECT(type, query_start_time_microseconds, query_kind, tables, written_rows, written_bytes, exception_code) ON system.query_log TO open_splunk_runtime;
-GRANT SELECT(event_time_microseconds, event_type, database, table, rows) ON system.part_log TO open_splunk_runtime;
-GRANT SELECT(event, value) ON system.events TO open_splunk_runtime;
+GRANT SELECT(database, table, active, rows, bytes_on_disk) ON system.parts TO open_splunk_runtime;
 
 CREATE USER IF NOT EXISTS open_splunk_deletion
     IDENTIFIED WITH sha256_password BY '%s';

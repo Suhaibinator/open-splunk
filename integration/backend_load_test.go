@@ -398,12 +398,14 @@ func runBackendSustainedLoad(t *testing.T, plan backendLoadPlan) {
 	collectorProcess := startCollector()
 	waitForCollectorDiscovery(t, ctx, collectorStateDir, logPath, collectorProcess, plaintextToken)
 
+	// Load evidence needs test-only system telemetry that is deliberately
+	// excluded from the server's least-privilege runtime principal.
 	storage, err := clickhousedriver.Open(&clickhousedriver.Options{
 		Addr: []string{clickhouse.Address},
 		Auth: clickhousedriver.Auth{
 			Database: clickhouse.Database,
-			Username: clickhouse.RuntimeUsername,
-			Password: clickhouse.RuntimePassword,
+			Username: clickhouse.Username,
+			Password: clickhouse.Password,
 		},
 		DialTimeout: 5 * time.Second,
 	})

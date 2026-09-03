@@ -524,12 +524,14 @@ func TestQueryPhysicalInsertShapeAgainstClickHouse(t *testing.T) {
 	if err := migrator.Close(); err != nil {
 		t.Fatalf("close ClickHouse migration connection: %v", err)
 	}
+	// Load evidence needs test-only system telemetry that is deliberately
+	// excluded from the server's least-privilege runtime principal.
 	connection, err := clickhousedriver.Open(&clickhousedriver.Options{
 		Addr: []string{container.Address},
 		Auth: clickhousedriver.Auth{
 			Database: container.Database,
-			Username: container.RuntimeUsername,
-			Password: container.RuntimePassword,
+			Username: container.Username,
+			Password: container.Password,
 		},
 	})
 	if err != nil {
