@@ -172,9 +172,10 @@ func TestSQLiteWriteGroupHardBoundaryAndDurableRestartRecovery(t *testing.T) {
 	if err := sequencer.Close(); err != nil {
 		t.Fatal(err)
 	}
-	sequencer = waitForReplacementVisibilityOwner(t, db)
+	replacement := waitForReplacementVisibilityOwner(t, db)
+	t.Cleanup(func() { _ = replacement.Close() })
 
-	replayed, found, _, err := sequencer.FormOrAcquireWriteGroup(ctx, "second-process", limits, now.Add(time.Second))
+	replayed, found, _, err := replacement.FormOrAcquireWriteGroup(ctx, "second-process", limits, now.Add(time.Second))
 	if err != nil || !found {
 		t.Fatalf("restart acquisition found=%v error=%v", found, err)
 	}
@@ -183,7 +184,7 @@ func TestSQLiteWriteGroupHardBoundaryAndDurableRestartRecovery(t *testing.T) {
 		replayed.Members[0].Reservation.Sequence != first.Sequence {
 		t.Fatalf("replayed group = %+v, want stable %+v", replayed, group)
 	}
-	if err := sequencer.ReleaseWriteGroup(ctx, replayed.ID, "second-process"); err != nil {
+	if err := replacement.ReleaseWriteGroup(ctx, replayed.ID, "second-process"); err != nil {
 		t.Fatal(err)
 	}
 }
