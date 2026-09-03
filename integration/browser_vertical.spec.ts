@@ -430,7 +430,13 @@ test("backend diagnostics remain authoritative and prevent browser dispatch", as
   await page.getByTestId("search-input").fill(source);
   await page.getByTestId("run-search").click();
 
-  await expect(page.getByTestId("toast")).toContainText(diagnosticMessage, { timeout });
+  const failurePanel = page.getByTestId("search-failure-panel");
+  await expect(failurePanel).toContainText(diagnosticMessage, { timeout });
+  await expect(failurePanel).toContainText("SPL_UNSUPPORTED_EVAL_EXPRESSION");
+  await expect(
+    failurePanel.getByRole("button", { name: `Line 1, column ${startColumn}` }),
+  ).toBeEnabled();
+  await expect(page.getByTestId("toast")).toHaveCount(0);
   expect(validated).toHaveLength(1);
   expect(safety.createRequests()).toBe(0);
   expect(safety.resultsRequests()).toBe(0);
