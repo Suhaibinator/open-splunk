@@ -422,6 +422,92 @@ func TestCoordinatorDoesNotRetryPermanentCompletionConflict(t *testing.T) {
 	}
 }
 
+func TestCoordinatorErrorCallbackCannotDelayShutdown(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, time.August, 30, 16, 0, 0, 0, time.UTC)
+	callbackStarted := make(chan struct{})
+	releaseCallback := make(chan struct{})
+	defer close(releaseCallback)
+	coordinator := newErrorReportingCoordinator(t, now, func(error) {
+		close(callbackStarted)
+		<-releaseCallback
+	})
+	if err := coordinator.Step(context.Background(), now); err != nil {
+		t.Fatalf("Step() error = %v", err)
+	}
+	select {
+	case <-callbackStarted:
+	case <-time.After(time.Second):
+		t.Fatal("error callback did not start")
+	}
+	closed := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		closed <- coordinator.Close(ctx)
+	}()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("Close() waited for error callback")
+	}
+}
+
+func TestCoordinatorContainsErrorCallbackPanic(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, time.August, 30, 16, 30, 0, 0, time.UTC)
+	callbackStarted := make(chan struct{})
+	coordinator := newErrorReportingCoordinator(t, now, func(error) {
+		close(callbackStarted)
+		panic("callback failure")
+	})
+	if err := coordinator.Step(context.Background(), now); err != nil {
+		t.Fatalf("Step() error = %v", err)
+	}
+	select {
+	case <-callbackStarted:
+	case <-time.After(time.Second):
+		t.Fatal("error callback did not start")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := coordinator.Close(ctx); err != nil {
+		t.Fatalf("Close() after callback panic = %v", err)
+	}
+}
+
+func newErrorReportingCoordinator(t *testing.T, now time.Time, onError func(error)) *Coordinator {
+	t.Helper()
+	runs := &coordinatorRunStore{
+		due:             []RunSnapshot{coordinatorSnapshot(now)},
+		completedSignal: make(chan struct{}, 1),
+		attemptSignal:   make(chan struct{}, 1),
+	}
+	coordinator, err := NewCoordinator(CoordinatorOptions{
+		RunRepository: runs,
+		Admission:     &coordinatorAdmission{jobID: "job-1"},
+		Jobs:          coordinatorJobReader{},
+		Results:       &coordinatorResults{},
+		Retention:     &coordinatorRetention{},
+		Authorizer:    &coordinatorAuthorizer{},
+		Deliverer:     &coordinatorDeliverer{},
+		Poller: coordinatorPoller{wait: func(context.Context, string, string, SearchJobReader) (SearchJobSnapshot, error) {
+			return SearchJobSnapshot{}, errors.New("search failed")
+		}},
+		Clock:            func() time.Time { return now },
+		ConcurrencyLimit: 1,
+		QueueCapacity:    1,
+		OnError:          onError,
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator() error = %v", err)
+	}
+	return coordinator
+}
+
 func coordinatorSnapshot(now time.Time) RunSnapshot {
 	return RunSnapshot{
 		AlertID: "alert-1", AlertRunID: "run-1", AlertVersion: 2, OwnerID: "owner-1", TenantID: "tenant-1",
