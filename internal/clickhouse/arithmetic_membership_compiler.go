@@ -461,13 +461,10 @@ func normalizeDynamicArithmeticOperand(input compiledScalar) compiledScalar {
 		kind:           fieldKindDynamic,
 	}
 	typeSQL := dynamicScalarTypeSQL(value)
-	stringSQL := "dynamicElement(__os_arithmetic_dynamic, 'String')"
-	limit := strconv.Itoa(MaximumArithmeticDynamicStringBytes)
-	boundedString := "if(length(" + stringSQL + ") <= " + limit + ", " +
-		stringSQL + ", CAST('' AS String))"
-	validString := "(" + typeSQL + " = 'String' AND length(" + stringSQL +
-		") <= " + limit + " AND isValidUTF8(" + boundedString + ") AND match(" +
-		boundedString + ", " + decimalNumericStringPattern + "))"
+	validString, boundedString := dynamicNumericStringTextWithLimit(
+		value,
+		MaximumArithmeticDynamicStringBytes,
+	)
 	stringValue := "toFloat64OrNull(" + canonicalNumericTextSQL(boundedString) + ")"
 
 	validDecimal, decimalPayload := dynamicTaggedDecimalTextWithLimit(

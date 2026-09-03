@@ -61,6 +61,7 @@ func TestDynamicCrossFeatureMatrixAgainstClickHouse(t *testing.T) {
 		{id: "text-leading-plus", value: typedString("+100"), kind: "Number", equalLiteral: "100", unequalLiteral: "101", arithmeticPresent: true, arithmeticValue: 100, ordered: true},
 		{id: "text-leading-zero", value: typedString("00100"), kind: "Number", equalLiteral: "100", unequalLiteral: "101", arithmeticPresent: true, arithmeticValue: 100, ordered: true},
 		{id: "text-decimal", value: typedString("100.0"), kind: "Number", equalLiteral: "100", unequalLiteral: "101", arithmeticPresent: true, arithmeticValue: 100, ordered: true},
+		{id: "text-fraction", value: typedString("100.5"), kind: "Number", equalLiteral: "100.5", unequalLiteral: "101.5", arithmeticPresent: true, arithmeticValue: 100.5, ordered: true},
 		{id: "text-exponent", value: typedString("1e2"), kind: "Number", equalLiteral: "100", unequalLiteral: "101", arithmeticPresent: true, arithmeticValue: 100, ordered: true},
 		{id: "text-negative", value: typedString("-100"), kind: "Number", equalLiteral: "-100", unequalLiteral: "-99", arithmeticPresent: true, arithmeticValue: -100, ordered: true},
 		{id: "text-wide", value: typedString("9007199254740993"), kind: "Number", equalLiteral: "9007199254740993", unequalLiteral: "9007199254740992", arithmeticPresent: true, arithmeticValue: 9_007_199_254_740_992, ordered: true},
