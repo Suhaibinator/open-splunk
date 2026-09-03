@@ -278,7 +278,6 @@ func TestSPLSemanticInvariantsAgainstClickHouse(t *testing.T) {
 		},
 	}
 	for _, invariant := range invariants {
-		invariant := invariant
 		t.Run(invariant.name, func(t *testing.T) {
 			left := queryEventIDs(t, invariant.left)
 			right := queryEventIDs(t, invariant.right)
@@ -321,7 +320,6 @@ func TestSPLSemanticInvariantsAgainstClickHouse(t *testing.T) {
 		},
 	}
 	for _, invariant := range countInvariants {
-		invariant := invariant
 		t.Run(invariant.name, func(t *testing.T) {
 			left := queryCount(t, invariant.left)
 			right := queryCount(t, invariant.right)
