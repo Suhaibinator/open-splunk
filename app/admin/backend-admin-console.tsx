@@ -10,7 +10,6 @@ import {
   IngestionTokenPurpose,
   IngestionTokenState,
   type IngestionToken,
-  type IngestionTokenHecProfile,
 } from "@/gen/ts/open_splunk/collector_admin";
 import type { GetHECOperationalSnapshotResponse } from "@/gen/ts/open_splunk/hec_admin_api";
 import { IngestionTokenSortBy } from "@/gen/ts/open_splunk/collector_admin_api";
@@ -25,7 +24,6 @@ import {
   createOpenSplunkApiClient,
   getSystemBootstrap,
   isAdvertisedFeatureRouteUnavailable,
-  isHttpError,
   isHttpStatus,
   isOptionalRouteUnavailable,
   supportsServerFeature,
@@ -33,47 +31,50 @@ import {
   type SystemBootstrapModel,
 } from "@/lib/api";
 import { createErrorMessage } from "@/lib/error-message";
-import { boundedIndexSearchQuery, searchLaunchHref } from "@/lib/search/launch-url";
 
 import { FieldNote, fieldControlProps } from "../_components/field-validation";
 import {
-  INDEX_POLICY_FIELDS,
-  INDEX_POLICY_KEYS,
-  INGESTION_MAX_BYTES_PER_SECOND,
-  INGESTION_MAX_EVENTS_PER_SECOND,
-  TOKEN_POLICY_FIELDS,
-  TOKEN_POLICY_KEYS,
-  indexPolicyErrors,
-  indexPolicyFieldHint,
   indexPolicyFormFromDefinition,
   indexPolicyFromForm,
   indexPolicyIsValid,
-  normalizeTokenPatterns,
-  policyFieldInputMode,
-  tokenPolicyErrors,
-  tokenPolicyFieldHint,
   tokenPolicyFormFromToken,
   tokenPolicyFromForm,
   tokenPolicyIsValid,
   type IndexPolicyForm,
-  type PolicyFieldKind,
   type TokenPolicyForm,
 } from "./ingestion-policy-form";
 import { BackendResourceState } from "../_components/backend-resource-state";
 import { StatusDot, StatusLabel, type StatusTone } from "../_components/status";
 import { AppIcon, type AppIconName } from "../_components/app-icon";
-import { formatMediumDateTime } from "../_components/date-format";
 import { PageHeading } from "../_components/product-shell";
 import { Modal } from "../_components/modal";
 import { AppsAdminPanel, CollectorFleetPanel } from "./admin-resource-panels";
+import {
+  BackendIndexes,
+  BackendOverview,
+  BackendServerSettings,
+  BackendTokens,
+  HECTokenProfileFields,
+  IndexPolicyFields,
+  TokenPolicyFields,
+  TokenScopePicker,
+  formatDate,
+  formatDuration,
+  indexStateLabel,
+  statusTone,
+  tokenCanBeRevoked,
+  tokenStateLabel,
+  type ResourceState,
+  type TokenIndexScopeOption,
+  type TokenScopeSource,
+} from "./backend-admin-panels";
 import { ADMIN_SECTION_QUERY_PARAMETER, adminSectionPath, resolveAdminSection } from "./admin-navigation";
 import { KnowledgeManagerGate } from "./knowledge-manager-gate";
 import { LookupManagerGate } from "./lookup-manager-gate";
-import { SearchLimitsSettings } from "./search-limits-settings";
+import { IssuedTokenDialog, TokenCreationDialog, type TokenCreateFormValue } from "./token-creation-dialog";
 import {
   TOKEN_CREATE_CLOCK_EPSILON_MS,
   TOKEN_CREATE_ZERO_CONFIRMATION_INTERVAL_MS,
-  isAuthoritativeTokenCreateRejection,
   tokenCreateDialogRequiresExclusiveAttention,
   tokenRecoveryEnvironmentCanPoll,
   tokenRecoveryPollDelayMs,
@@ -84,6 +85,40 @@ import {
   type ZeroCandidateObservation,
 } from "./token-create-recovery-policy";
 import {
+  COLLECTOR_ID_ERROR,
+  hecCurlExample,
+  hecProfileFromForm,
+  hecProfilesMatch,
+  hasSameStrings,
+  historyHasTokenGuard,
+  historyStateWithTokenGuard,
+  browserSupportsTokenCreateLock,
+  isDefiniteTokenCreateFailure,
+  listTokensForCreateSafety,
+  normalizeApiBaseUrl,
+  normalizedPageToken,
+  parsePersistedTokenCreateGuard,
+  readTokenCreateGuardRaw,
+  removeTokenCreateGuard,
+  requestTokenCreateLock,
+  serializeTokenCreateGuard,
+  subscribeTokenCreateGuard,
+  tokenFallsWithinCreateAttributionWindow,
+  tokenIsTerminallySafe,
+  tokenMatchesCreateDefinition,
+  tokenMatchesCreateMetadata,
+  tokenPurposeLabel,
+  tokenUsesHEC,
+  validCollectorId,
+  validHECMetadataDefault,
+  writeTokenCreateGuard,
+  type TokenCreateDefinitionSnapshot,
+  type TokenCreateGuardStorageState,
+  type TokenCreateOutcomeKind,
+  type TokenCreateRecovery,
+  type UnreadableTokenCreateRecovery,
+} from "./token-creation";
+import {
   backendKnowledgeCapabilities,
   backendAdminNavigation,
   knowledgeManagerAppOptionsFromBootstrap,
@@ -91,7 +126,6 @@ import {
 } from "./knowledge-manager-feature";
 
 type AdminModal = "create-index" | "edit-index" | "create-token" | "edit-token";
-type ResourceState = "loading" | "available" | "unavailable" | "error";
 
 interface BackendAdminConsoleProps {
   apiBaseUrl: string;
@@ -133,538 +167,14 @@ interface AdminToast {
   kind: "success" | "warning";
 }
 
-interface TokenIndexScopeOption {
-  id: string;
-  name: string;
-  displayName: string;
-  ingestible: boolean;
-}
-
-type TokenScopeSource = "index-admin" | "bootstrap" | "unavailable";
-
 interface ServerClockAnchor {
   serverTimeMs: number;
   clientMonotonicMs: number;
   uncertaintyMs: number;
 }
 
-type TokenCreateOutcomeKind = "pending" | "settled-response" | "ambiguous-failure";
-
-interface TokenCreateDefinitionSnapshot {
-  name: string;
-  description: string;
-  boundCollectorId: string;
-  allowedIndexNames: string[];
-  allowedHostRegexes?: string[];
-  allowedSourceRegexes?: string[];
-  maxEventsPerSecond?: bigint;
-  maxUncompressedBytesPerSecond?: bigint;
-  purpose: IngestionTokenPurpose;
-  hecProfile: IngestionTokenHecProfile | undefined;
-  expiresAt: Date | undefined;
-  armedServerTimeMs: number;
-  dispatchedServerTimeMs: number | null;
-  outcomeObservedServerTimeMs: number | null;
-  requestRoundTripMs: number | null;
-  requestTimeoutMs: number;
-  clockUncertaintyMs: number;
-  outcomeKind: TokenCreateOutcomeKind;
-}
-
-interface TokenCreateRecovery {
-  attemptId: string;
-  ownerId: string;
-  definition: TokenCreateDefinitionSnapshot;
-  preexistingTokenIds: ReadonlySet<string>;
-  confirmedRevokedTokenIds: ReadonlySet<string>;
-  failureMessage: string;
-  candidates: IngestionToken[];
-  reconciliationError: string | null;
-}
-
-type TokenCreateGuardMode = "ambiguous" | "issued";
-type TokenCreateGuardStorageState = "checking" | "available" | "unavailable";
-
-interface UnreadableTokenCreateRecovery {
-  attemptId: string;
-  raw: string;
-  observedServerTimeMs: number | null;
-  candidates: IngestionToken[];
-  reconciliationError: string | null;
-}
-
-interface PersistedTokenCreateGuard {
-  schemaVersion: 1;
-  apiBaseUrl: string;
-  attemptId: string;
-  ownerId: string;
-  mode: TokenCreateGuardMode;
-  definition: {
-    name: string;
-    description: string;
-    boundCollectorId: string;
-    allowedIndexNames: string[];
-    allowedHostRegexes: string[];
-    allowedSourceRegexes: string[];
-    maxEventsPerSecond: string | null;
-    maxUncompressedBytesPerSecond: string | null;
-    purpose: IngestionTokenPurpose;
-    hecProfile: {
-      defaultIndexName: string | null;
-      defaultHost: string | null;
-      defaultSource: string | null;
-      defaultSourcetype: string | null;
-      indexerAcknowledgment: boolean;
-    } | null;
-    expiresAt: string | null;
-    armedServerTimeMs: number;
-    dispatchedServerTimeMs: number | null;
-    outcomeObservedServerTimeMs: number | null;
-    requestRoundTripMs: number | null;
-    requestTimeoutMs: number;
-    clockUncertaintyMs: number;
-    outcomeKind: TokenCreateOutcomeKind;
-  };
-  preexistingTokenIds: string[];
-  confirmedRevokedTokenIds: string[];
-  failureMessage: string;
-  knownIssuedTokenId: string | null;
-}
-
-const TOKEN_HISTORY_GUARD_KEY = "__openSplunkTokenGuard";
-const TOKEN_CREATE_GUARD_STORAGE_PREFIX = "open-splunk.admin.token-create-guard";
-const TOKEN_CREATE_LOCK_PREFIX = "open-splunk.admin.token-create-lock";
-
-function normalizeApiBaseUrl(apiBaseUrl: string, pageOrigin: string): string {
-  const url = new URL(apiBaseUrl.trim() || "/", pageOrigin);
-  if (
-    url.username.length > 0
-    || url.password.length > 0
-    || url.search.length > 0
-    || url.hash.length > 0
-  ) {
-    throw new Error("The API base URL cannot contain credentials, a query, or a fragment.");
-  }
-  const pathname = url.pathname.replace(/\/+$/, "") || "/";
-  return `${url.origin}${pathname}`;
-}
-
-function tokenCreateGuardStorageKey(normalizedApiBaseUrl: string): string {
-  return `${TOKEN_CREATE_GUARD_STORAGE_PREFIX}:${encodeURIComponent(normalizedApiBaseUrl)}`;
-}
-
-function tokenCreateLockName(normalizedApiBaseUrl: string): string {
-  return `${TOKEN_CREATE_LOCK_PREFIX}:${normalizedApiBaseUrl}`;
-}
-
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
-}
-
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((item) => typeof item === "string");
-}
-
-function isNullableString(value: unknown): value is string | null {
-  return value === null || typeof value === "string";
-}
-
-function validCollectorId(value: string): boolean {
-  return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value);
-}
-
-function tokenUsesHEC(purpose: IngestionTokenPurpose): boolean {
-  return purpose === IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_HEC;
-}
-
-export function tokenPurposeLabel(purpose: IngestionTokenPurpose): string {
-  if (purpose === IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_HEC) return "HEC";
-  if (purpose === IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR) {
-    return "Native collector";
-  }
-  return "Unknown";
-}
-
-function hecProfileSummary(profile: IngestionTokenHecProfile | undefined): string {
-  if (profile === undefined) return "Profile unavailable";
-  const defaults = [
-    profile.defaultIndexName ? `index ${profile.defaultIndexName}` : null,
-    profile.defaultHost ? `host ${profile.defaultHost}` : null,
-    profile.defaultSource ? `source ${profile.defaultSource}` : null,
-    profile.defaultSourcetype ? `sourcetype ${profile.defaultSourcetype}` : null,
-  ].filter((value): value is string => value !== null);
-  return defaults.length === 0 ? "No token defaults" : `Defaults: ${defaults.join(" · ")}`;
-}
-
-function isASCIIWhitespaceCodeUnit(codeUnit: number): boolean {
-  return codeUnit === 0x20 || (codeUnit >= 0x09 && codeUnit <= 0x0d);
-}
-
-export function validHECMetadataDefault(value: string): boolean {
-  if (value.length === 0) return true;
-  const byteLength = new TextEncoder().encode(value).byteLength;
-  const hasInvalidScalar = [...value].some((character) => {
-    const codePoint = character.codePointAt(0) ?? 0;
-    return codePoint <= 0x1f
-      || (codePoint >= 0x7f && codePoint <= 0x9f)
-      || (codePoint >= 0xd800 && codePoint <= 0xdfff);
-  });
-  return byteLength <= 255
-    && !hasInvalidScalar
-    && !isASCIIWhitespaceCodeUnit(value.charCodeAt(0))
-    && !isASCIIWhitespaceCodeUnit(value.charCodeAt(value.length - 1));
-}
-
-interface HECProfileFormValue {
-  defaultIndexName: string;
-  defaultHost: string;
-  defaultSource: string;
-  defaultSourcetype: string;
-  indexerAcknowledgment: boolean;
-}
-
-export function hecProfileFromForm(value: HECProfileFormValue): IngestionTokenHecProfile {
-  return {
-    defaultIndexName: value.defaultIndexName || undefined,
-    defaultHost: value.defaultHost || undefined,
-    defaultSource: value.defaultSource || undefined,
-    defaultSourcetype: value.defaultSourcetype || undefined,
-    indexerAcknowledgment: value.indexerAcknowledgment,
-  };
-}
-
-function hecProfilesMatch(
-  left: IngestionTokenHecProfile | undefined,
-  right: IngestionTokenHecProfile | undefined,
-): boolean {
-  return left?.defaultIndexName === right?.defaultIndexName
-    && left?.defaultHost === right?.defaultHost
-    && left?.defaultSource === right?.defaultSource
-    && left?.defaultSourcetype === right?.defaultSourcetype
-    && left?.indexerAcknowledgment === right?.indexerAcknowledgment;
-}
-
-function shellSingleQuote(value: string): string {
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
-}
-
-export function hecCurlExample(
-  normalizedApiBaseUrl: string | null,
-  purpose: IngestionTokenPurpose,
-  plaintextToken: string | null,
-  indexName: string | null,
-): string | null {
-  if (
-    normalizedApiBaseUrl === null
-    || !tokenUsesHEC(purpose)
-    || plaintextToken === null
-    || plaintextToken.length === 0
-    || indexName === null
-    || indexName.length === 0
-  ) {
-    return null;
-  }
-  const endpoint = `${normalizedApiBaseUrl.replace(/\/+$/, "")}/services/collector/event`;
-  const body = JSON.stringify({ event: "hello from Open Splunk", index: indexName });
-  return [
-    "#!/usr/bin/env bash",
-    "set -euo pipefail",
-    "umask 077",
-    "read -r -s -p 'HEC token: ' OPEN_SPLUNK_HEC_TOKEN",
-    "printf '\\n' >&2",
-    'OPEN_SPLUNK_HEC_CONFIG="$(mktemp "${TMPDIR:-/tmp}/open-splunk-hec.XXXXXX")"',
-    'trap \'rm -f -- "$OPEN_SPLUNK_HEC_CONFIG"\' EXIT',
-    "trap 'exit 1' HUP INT TERM",
-    'chmod 600 "$OPEN_SPLUNK_HEC_CONFIG"',
-    'printf \'header = "Authorization: Splunk %s"\\n\' "$OPEN_SPLUNK_HEC_TOKEN" > "$OPEN_SPLUNK_HEC_CONFIG"',
-    "unset OPEN_SPLUNK_HEC_TOKEN",
-    `curl --fail-with-body --request POST --config "$OPEN_SPLUNK_HEC_CONFIG" ${shellSingleQuote(endpoint)} \\`,
-    `  --header 'Content-Type: application/json' \\`,
-    `  --header 'X-Splunk-Request-Channel: 00000000-0000-0000-0000-000000000001' \\`,
-    `  --data ${shellSingleQuote(body)}`,
-  ].join("\n");
-}
-
-export function serializeTokenCreateGuard(
-  normalizedApiBaseUrl: string,
-  recovery: TokenCreateRecovery,
-  knownIssuedTokenId: string | null,
-): PersistedTokenCreateGuard {
-  return {
-    schemaVersion: 1,
-    apiBaseUrl: normalizedApiBaseUrl,
-    attemptId: recovery.attemptId,
-    ownerId: recovery.ownerId,
-    mode: knownIssuedTokenId === null ? "ambiguous" : "issued",
-    definition: {
-      name: recovery.definition.name,
-      description: recovery.definition.description,
-      boundCollectorId: recovery.definition.boundCollectorId,
-      allowedIndexNames: [...recovery.definition.allowedIndexNames],
-      allowedHostRegexes: [...(recovery.definition.allowedHostRegexes ?? [])],
-      allowedSourceRegexes: [...(recovery.definition.allowedSourceRegexes ?? [])],
-      maxEventsPerSecond: recovery.definition.maxEventsPerSecond?.toString() ?? null,
-      maxUncompressedBytesPerSecond:
-        recovery.definition.maxUncompressedBytesPerSecond?.toString() ?? null,
-      purpose: recovery.definition.purpose,
-      hecProfile: recovery.definition.hecProfile === undefined ? null : {
-        defaultIndexName: recovery.definition.hecProfile.defaultIndexName ?? null,
-        defaultHost: recovery.definition.hecProfile.defaultHost ?? null,
-        defaultSource: recovery.definition.hecProfile.defaultSource ?? null,
-        defaultSourcetype: recovery.definition.hecProfile.defaultSourcetype ?? null,
-        indexerAcknowledgment: recovery.definition.hecProfile.indexerAcknowledgment,
-      },
-      expiresAt: recovery.definition.expiresAt?.toISOString() ?? null,
-      armedServerTimeMs: recovery.definition.armedServerTimeMs,
-      dispatchedServerTimeMs: recovery.definition.dispatchedServerTimeMs,
-      outcomeObservedServerTimeMs: recovery.definition.outcomeObservedServerTimeMs,
-      requestRoundTripMs: recovery.definition.requestRoundTripMs,
-      requestTimeoutMs: recovery.definition.requestTimeoutMs,
-      clockUncertaintyMs: recovery.definition.clockUncertaintyMs,
-      outcomeKind: recovery.definition.outcomeKind,
-    },
-    preexistingTokenIds: [...recovery.preexistingTokenIds],
-    confirmedRevokedTokenIds: [...recovery.confirmedRevokedTokenIds],
-    failureMessage: knownIssuedTokenId === null
-      ? "The browser did not observe a trustworthy final outcome for this token creation request."
-      : "The token was issued, but its one-time secret is intentionally not stored by the browser.",
-    knownIssuedTokenId,
-  };
-}
-
-export function parsePersistedTokenCreateGuard(
-  raw: string,
-  normalizedApiBaseUrl: string,
-): { recovery: TokenCreateRecovery; knownIssuedTokenId: string | null } | null {
-  let value: unknown;
-  try {
-    value = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-  if (typeof value !== "object" || value === null) return null;
-  const record = value as Partial<PersistedTokenCreateGuard>;
-  const definition = record.definition;
-  const persistedPurpose = definition?.purpose;
-  const persistedHECProfile = definition?.hecProfile;
-  const allowedIndexNames = isStringArray(definition?.allowedIndexNames)
-    ? definition.allowedIndexNames
-    : [];
-  const allowedHostRegexes = isStringArray(definition?.allowedHostRegexes)
-    ? definition.allowedHostRegexes
-    : null;
-  const allowedSourceRegexes = isStringArray(definition?.allowedSourceRegexes)
-    ? definition.allowedSourceRegexes
-    : null;
-  let normalizedHostRegexes: string[] | null = null;
-  let normalizedSourceRegexes: string[] | null = null;
-  try {
-    normalizedHostRegexes = allowedHostRegexes === null
-      ? null
-      : normalizeTokenPatterns(allowedHostRegexes, "Allowed host");
-    normalizedSourceRegexes = allowedSourceRegexes === null
-      ? null
-      : normalizeTokenPatterns(allowedSourceRegexes, "Allowed source");
-  } catch {
-    return null;
-  }
-  const persistedEventsRate = definition?.maxEventsPerSecond;
-  const persistedBytesRate = definition?.maxUncompressedBytesPerSecond;
-  const validPersistedEventsRate = persistedEventsRate === null
-    || (typeof persistedEventsRate === "string"
-      && persistedEventsRate.length <= INGESTION_MAX_EVENTS_PER_SECOND.toString().length
-      && /^[1-9][0-9]*$/.test(persistedEventsRate)
-      && BigInt(persistedEventsRate) <= INGESTION_MAX_EVENTS_PER_SECOND);
-  const validPersistedBytesRate = persistedBytesRate === null
-    || (typeof persistedBytesRate === "string"
-      && persistedBytesRate.length <= INGESTION_MAX_BYTES_PER_SECOND.toString().length
-      && /^[1-9][0-9]*$/.test(persistedBytesRate)
-      && BigInt(persistedBytesRate) <= INGESTION_MAX_BYTES_PER_SECOND);
-  const validPersistedHECProfile = typeof persistedHECProfile === "object"
-    && persistedHECProfile !== null
-    && isNullableString(persistedHECProfile.defaultIndexName)
-    && (
-      persistedHECProfile.defaultIndexName === null
-      || (
-        persistedHECProfile.defaultIndexName.length > 0
-        && allowedIndexNames.includes(persistedHECProfile.defaultIndexName)
-      )
-    )
-    && isNullableString(persistedHECProfile.defaultHost)
-    && (
-      persistedHECProfile.defaultHost === null
-      || (
-        persistedHECProfile.defaultHost.length > 0
-        && validHECMetadataDefault(persistedHECProfile.defaultHost)
-      )
-    )
-    && isNullableString(persistedHECProfile.defaultSource)
-    && (
-      persistedHECProfile.defaultSource === null
-      || (
-        persistedHECProfile.defaultSource.length > 0
-        && validHECMetadataDefault(persistedHECProfile.defaultSource)
-      )
-    )
-    && isNullableString(persistedHECProfile.defaultSourcetype)
-    && (
-      persistedHECProfile.defaultSourcetype === null
-      || (
-        persistedHECProfile.defaultSourcetype.length > 0
-        && validHECMetadataDefault(persistedHECProfile.defaultSourcetype)
-      )
-    )
-    && typeof persistedHECProfile.indexerAcknowledgment === "boolean";
-  if (
-    record.schemaVersion !== 1
-    || record.apiBaseUrl !== normalizedApiBaseUrl
-    || typeof record.attemptId !== "string"
-    || record.attemptId.length === 0
-    || typeof record.ownerId !== "string"
-    || record.ownerId.length === 0
-    || (record.mode !== "ambiguous" && record.mode !== "issued")
-    || typeof definition !== "object"
-    || definition === null
-    || typeof definition.name !== "string"
-    || definition.name.length === 0
-    || typeof definition.description !== "string"
-    || typeof definition.boundCollectorId !== "string"
-    || !isStringArray(definition.allowedIndexNames)
-    || definition.allowedIndexNames.length === 0
-    || new Set(definition.allowedIndexNames).size !== definition.allowedIndexNames.length
-    || normalizedHostRegexes === null
-    || normalizedSourceRegexes === null
-    || !validPersistedEventsRate
-    || !validPersistedBytesRate
-    || (
-      persistedPurpose !== IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR
-      && persistedPurpose !== IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_HEC
-    )
-    || (
-      persistedPurpose === IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR
-      && (!validCollectorId(definition.boundCollectorId) || persistedHECProfile !== null)
-    )
-    || (
-      persistedPurpose === IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_HEC
-      && (definition.boundCollectorId.length !== 0 || !validPersistedHECProfile)
-    )
-    || !(definition.expiresAt === null || typeof definition.expiresAt === "string")
-    || !isFiniteNumber(definition.armedServerTimeMs)
-    || !(definition.dispatchedServerTimeMs === null
-      || isFiniteNumber(definition.dispatchedServerTimeMs))
-    || !(definition.outcomeObservedServerTimeMs === null
-      || isFiniteNumber(definition.outcomeObservedServerTimeMs))
-    || !(definition.requestRoundTripMs === null
-      || (isFiniteNumber(definition.requestRoundTripMs) && definition.requestRoundTripMs >= 0))
-    || !isFiniteNumber(definition.requestTimeoutMs)
-    || definition.requestTimeoutMs <= 0
-    || !isFiniteNumber(definition.clockUncertaintyMs)
-    || definition.clockUncertaintyMs < 0
-    || (
-      definition.outcomeKind !== "pending"
-      && definition.outcomeKind !== "settled-response"
-      && definition.outcomeKind !== "ambiguous-failure"
-    )
-    || !isStringArray(record.preexistingTokenIds)
-    || new Set(record.preexistingTokenIds).size !== record.preexistingTokenIds.length
-    || !isStringArray(record.confirmedRevokedTokenIds)
-    || new Set(record.confirmedRevokedTokenIds).size !== record.confirmedRevokedTokenIds.length
-    || typeof record.failureMessage !== "string"
-    || !(record.knownIssuedTokenId === null || typeof record.knownIssuedTokenId === "string")
-    || (record.mode === "issued" && !record.knownIssuedTokenId)
-    || (record.mode === "ambiguous" && record.knownIssuedTokenId !== null)
-  ) {
-    return null;
-  }
-  const expiresAt = definition.expiresAt === null ? undefined : new Date(definition.expiresAt);
-  if (expiresAt !== undefined && Number.isNaN(expiresAt.valueOf())) return null;
-  return {
-    recovery: {
-      attemptId: record.attemptId,
-      ownerId: record.ownerId,
-      definition: {
-        name: definition.name,
-        description: definition.description,
-        boundCollectorId: definition.boundCollectorId,
-        allowedIndexNames: [...new Set(definition.allowedIndexNames)].toSorted(),
-        allowedHostRegexes: normalizedHostRegexes,
-        allowedSourceRegexes: normalizedSourceRegexes,
-        maxEventsPerSecond: persistedEventsRate === null
-          ? undefined
-          : BigInt(persistedEventsRate),
-        maxUncompressedBytesPerSecond: persistedBytesRate === null
-          ? undefined
-          : BigInt(persistedBytesRate),
-        purpose: persistedPurpose,
-        hecProfile: persistedPurpose === IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_HEC
-          && validPersistedHECProfile
-          ? {
-              defaultIndexName: persistedHECProfile.defaultIndexName ?? undefined,
-              defaultHost: persistedHECProfile.defaultHost ?? undefined,
-              defaultSource: persistedHECProfile.defaultSource ?? undefined,
-              defaultSourcetype: persistedHECProfile.defaultSourcetype ?? undefined,
-              indexerAcknowledgment: persistedHECProfile.indexerAcknowledgment,
-            }
-          : undefined,
-        expiresAt,
-        armedServerTimeMs: definition.armedServerTimeMs,
-        dispatchedServerTimeMs: definition.dispatchedServerTimeMs,
-        outcomeObservedServerTimeMs: definition.outcomeObservedServerTimeMs,
-        requestRoundTripMs: definition.requestRoundTripMs,
-        requestTimeoutMs: definition.requestTimeoutMs,
-        clockUncertaintyMs: definition.clockUncertaintyMs,
-        outcomeKind: definition.outcomeKind,
-      },
-      preexistingTokenIds: new Set(record.preexistingTokenIds),
-      confirmedRevokedTokenIds: new Set(record.confirmedRevokedTokenIds),
-      failureMessage: record.failureMessage
-        || "The browser did not observe the final outcome of this token creation request.",
-      candidates: [],
-      reconciliationError: null,
-    },
-    knownIssuedTokenId: record.knownIssuedTokenId,
-  };
-}
-
-function historyHasTokenGuard(guardId: string): boolean {
-  const state: unknown = window.history.state;
-  return typeof state === "object"
-    && state !== null
-    && TOKEN_HISTORY_GUARD_KEY in state
-    && (state as Record<string, unknown>)[TOKEN_HISTORY_GUARD_KEY] === guardId;
-}
-
-function historyStateWithTokenGuard(guardId: string): Record<string, unknown> {
-  const state: unknown = window.history.state;
-  return {
-    ...(typeof state === "object" && state !== null ? state : {}),
-    [TOKEN_HISTORY_GUARD_KEY]: guardId,
-  };
-}
 
 const errorMessage = createErrorMessage("The server did not return a usable response.");
-
-function formatDate(value: Date | undefined): string {
-  return formatMediumDateTime(value, "Never");
-}
-
-function formatDuration(seconds: bigint | undefined): string {
-  if (seconds === undefined || seconds <= 0n) return "Forever";
-  const days = seconds / 86_400n;
-  if (days > 0n && seconds % 86_400n === 0n) return `${days.toLocaleString()} days`;
-  const hours = seconds / 3_600n;
-  if (hours > 0n && seconds % 3_600n === 0n) return `${hours.toLocaleString()} hours`;
-  return `${seconds.toLocaleString()} seconds`;
-}
-
-function formatOperationalDuration(
-  duration: { seconds: bigint; nanos: number } | undefined,
-): string {
-  if (duration === undefined) return "Not reported";
-  if (duration.nanos === 0) return `${duration.seconds.toLocaleString()} seconds`;
-  const fractional = duration.nanos.toString().padStart(9, "0").replace(/0+$/, "");
-  return `${duration.seconds.toLocaleString()}.${fractional} seconds`;
-}
 
 function retentionFormValue(seconds: bigint | undefined): string {
   if (seconds === undefined || seconds <= 0n) return "forever";
@@ -696,153 +206,6 @@ function expirationFromForm(value: string, authoritativeNowMs?: number): Date | 
   return expiresAt;
 }
 
-function hasSameStrings(left: Iterable<string>, right: Iterable<string>): boolean {
-  const leftValues = [...left].toSorted();
-  const rightValues = [...right].toSorted();
-  return leftValues.length === rightValues.length
-    && leftValues.every((value, index) => value === rightValues[index]);
-}
-
-function indexStateLabel(state: IndexState): string {
-  if (state === IndexState.INDEX_STATE_ACTIVE) return "Active";
-  if (state === IndexState.INDEX_STATE_ARCHIVED) return "Archived";
-  if (state === IndexState.INDEX_STATE_DELETING) return "Deleting";
-  return "Unknown";
-}
-
-function indexAccessLabel(state: IndexAccessState | undefined): string {
-  if (state === IndexAccessState.INDEX_ACCESS_STATE_ENABLED) return "Enabled";
-  if (state === IndexAccessState.INDEX_ACCESS_STATE_DISABLED) return "Disabled";
-  return "Unknown";
-}
-
-function tokenStateLabel(state: IngestionTokenState): string {
-  if (state === IngestionTokenState.INGESTION_TOKEN_STATE_ACTIVE) return "Active";
-  if (state === IngestionTokenState.INGESTION_TOKEN_STATE_DISABLED) return "Disabled";
-  if (state === IngestionTokenState.INGESTION_TOKEN_STATE_REVOKED) return "Revoked";
-  if (state === IngestionTokenState.INGESTION_TOKEN_STATE_EXPIRED) return "Expired";
-  return "Unknown";
-}
-
-function tokenCanBeRevoked(token: IngestionToken): boolean {
-  return token.state === IngestionTokenState.INGESTION_TOKEN_STATE_ACTIVE
-    || token.state === IngestionTokenState.INGESTION_TOKEN_STATE_DISABLED;
-}
-
-export function tokenCanSetEnabled(token: IngestionToken): boolean {
-  return token.state === IngestionTokenState.INGESTION_TOKEN_STATE_ACTIVE
-    || token.state === IngestionTokenState.INGESTION_TOKEN_STATE_DISABLED;
-}
-
-function tokenIsTerminallySafe(token: IngestionToken): boolean {
-  return token.state === IngestionTokenState.INGESTION_TOKEN_STATE_REVOKED
-    || token.state === IngestionTokenState.INGESTION_TOKEN_STATE_EXPIRED;
-}
-
-function isDefiniteTokenCreateFailure(error: unknown): boolean {
-  if (!isHttpError(error)) return false;
-  if (isAuthoritativeTokenCreateRejection(error)) return true;
-  return [
-    400,
-    401,
-    403,
-    404,
-    405,
-    409,
-    410,
-    422,
-    501,
-  ].includes(error.status);
-}
-
-function normalizedPageToken(value: string | undefined): string | null {
-  return value?.trim() || null;
-}
-
-function countLabel(
-  loaded: number,
-  totalSize: bigint | null,
-  totalSizeExact: boolean,
-  singular: string,
-  plural: string,
-): string {
-  const loadedLabel = loaded === 1 ? singular : plural;
-  if (totalSize !== null && totalSizeExact) {
-    const totalLabel = totalSize === 1n ? singular : plural;
-    return BigInt(loaded) < totalSize
-      ? `${loaded.toLocaleString()} of ${totalSize.toLocaleString()} ${totalLabel} loaded`
-      : `${totalSize.toLocaleString()} ${totalLabel}`;
-  }
-  if (totalSize !== null) {
-    return `${loaded.toLocaleString()} ${loadedLabel} loaded · server estimate ${totalSize.toLocaleString()}`;
-  }
-  return `${loaded.toLocaleString()} ${loadedLabel} loaded`;
-}
-
-function tokenMatchesCreateMetadata(
-  token: IngestionToken,
-  definition: TokenCreateDefinitionSnapshot,
-): boolean {
-  const constraints = token.constraints;
-  if (
-    token.name !== definition.name
-    || (token.description ?? "") !== definition.description
-    || constraints === undefined
-    || !hasSameStrings(constraints.allowedIndexNames, definition.allowedIndexNames)
-    || !hasSameStrings(constraints.allowedHostRegexes, definition.allowedHostRegexes ?? [])
-    || !hasSameStrings(constraints.allowedSourceRegexes, definition.allowedSourceRegexes ?? [])
-    || (constraints.boundCollectorId ?? "") !== definition.boundCollectorId
-    || (token.ingestionRateLimits?.maxEventsPerSecond ?? undefined)
-      !== definition.maxEventsPerSecond
-    || (token.ingestionRateLimits?.maxUncompressedBytesPerSecond ?? undefined)
-      !== definition.maxUncompressedBytesPerSecond
-    || token.purpose !== definition.purpose
-    || !hecProfilesMatch(token.hecProfile, definition.hecProfile)
-    || (token.expiresAt?.valueOf() ?? null) !== (definition.expiresAt?.valueOf() ?? null)
-  ) {
-    return false;
-  }
-  return true;
-}
-
-function tokenFallsWithinCreateAttributionWindow(
-  token: IngestionToken,
-  definition: TokenCreateDefinitionSnapshot,
-): boolean {
-  if (definition.dispatchedServerTimeMs === null) return false;
-  const createdAtMs = token.createdAt?.valueOf();
-  const timingToleranceMs = Math.max(
-    TOKEN_CREATE_CLOCK_EPSILON_MS,
-    definition.clockUncertaintyMs,
-  );
-  const observedServerTimeMs = definition.outcomeObservedServerTimeMs
-    ?? definition.dispatchedServerTimeMs;
-  const upperBoundServerTimeMs = definition.outcomeKind === "settled-response"
-    ? definition.outcomeObservedServerTimeMs
-    : Math.max(
-        observedServerTimeMs,
-        definition.dispatchedServerTimeMs + definition.requestTimeoutMs,
-      );
-  if (upperBoundServerTimeMs === null) return false;
-  return createdAtMs !== undefined
-    && createdAtMs >= definition.dispatchedServerTimeMs - timingToleranceMs
-    && createdAtMs <= upperBoundServerTimeMs + timingToleranceMs;
-}
-
-function tokenMatchesCreateDefinition(
-  token: IngestionToken,
-  definition: TokenCreateDefinitionSnapshot,
-): boolean {
-  return tokenMatchesCreateMetadata(token, definition)
-    && tokenFallsWithinCreateAttributionWindow(token, definition);
-}
-
-function statusTone(label: string): StatusTone {
-  if (label === "Active") return "success";
-  if (label === "Deleting") return "running";
-  if (label === "Unknown") return "warning";
-  return "neutral";
-}
 
 async function loadResourcePage<Response extends { page?: PageResponse | undefined }, T>(
   call: () => Promise<Response>,
@@ -998,64 +361,6 @@ async function loadMorePage<T>({
   }
 }
 
-async function listTokensForCreateSafety(
-  client: OpenSplunkApiClient,
-  tokenName: string | undefined,
-  signal?: AbortSignal,
-): Promise<IngestionToken[]> {
-  const tokens: IngestionToken[] = [];
-  const tokenIds = new Set<string>();
-  const seenCursors = new Set<string>();
-  let expectedTotal: bigint | null = null;
-  async function loadPage(pageToken: string | undefined): Promise<void> {
-    // This complete snapshot (name-filtered for a valid guard, unfiltered for
-    // a damaged one) is a safety prerequisite, not the Admin table load path.
-    const response = await client.ingestionTokens.list({
-      page: { pageSize: undefined, pageToken, includeTotalSize: true },
-      stateFilters: [],
-      indexNameFilter: undefined,
-      textFilter: tokenName,
-      sortBy: IngestionTokenSortBy.INGESTION_TOKEN_SORT_BY_CREATED_AT,
-      sortDirection: SortDirection.SORT_DIRECTION_DESCENDING,
-    }, { signal });
-    if (
-      response.page?.totalSize === undefined
-      || !response.page.totalSizeExact
-      || (expectedTotal !== null && response.page.totalSize !== expectedTotal)
-    ) {
-      throw new Error("The server did not return a stable exact token count for safe creation.");
-    }
-    expectedTotal = response.page.totalSize;
-    for (const token of response.ingestionTokens) {
-      if (token.ingestionTokenId.length === 0 || tokenIds.has(token.ingestionTokenId)) {
-        throw new Error("The token snapshot contained a missing or duplicate token identifier.");
-      }
-      tokenIds.add(token.ingestionTokenId);
-      tokens.push(token);
-    }
-    const next = normalizedPageToken(response.page.nextPageToken);
-    if (next === null) return;
-    if (seenCursors.has(next)) {
-      throw new Error("The token snapshot returned a repeated page cursor.");
-    }
-    seenCursors.add(next);
-    await loadPage(next);
-  }
-  await loadPage(undefined);
-  if (expectedTotal === null || BigInt(tokens.length) !== expectedTotal) {
-    throw new Error("The token snapshot ended before its exact total was loaded.");
-  }
-  return tokens;
-}
-
-/**
- * Why a collector ID is not acceptable, stated once.
- *
- * It used to be a block-level `.access-mode-notice` under the field, which said
- * the same thing at the width of the dialog and left the field itself carrying
- * an `aria-invalid` nothing painted.
- */
-const COLLECTOR_ID_ERROR = "Use 1–128 ASCII characters: start with a letter or number, then use letters, numbers, dot, underscore, colon, or hyphen.";
 
 export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
   const client = useMemo(() => createOpenSplunkApiClient({ baseUrl: apiBaseUrl }), [apiBaseUrl]);
@@ -1110,9 +415,6 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
   const [tokenDescription, setTokenDescription] = useState("");
   const [tokenCollectorId, setTokenCollectorId] = useState("");
   const [tokenIndexes, setTokenIndexes] = useState<Set<string>>(new Set());
-  const [tokenPurpose, setTokenPurpose] = useState(
-    IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR,
-  );
   const [tokenHECDefaultIndex, setTokenHECDefaultIndex] = useState("");
   const [tokenHECDefaultHost, setTokenHECDefaultHost] = useState("");
   const [tokenHECDefaultSource, setTokenHECDefaultSource] = useState("");
@@ -1139,7 +441,6 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
   const [tokenRecoveryNextCheckAt, setTokenRecoveryNextCheckAt] = useState<number | null>(null);
   const [tokenRecoveryEnvironmentReady, setTokenRecoveryEnvironmentReady] = useState(true);
   const [tokenRecoveryAcquireGeneration, setTokenRecoveryAcquireGeneration] = useState(0);
-  const [tokenSecretAcknowledged, setTokenSecretAcknowledged] = useState(false);
   const [revokeTarget, setRevokeTarget] = useState<IngestionToken | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [toast, setToast] = useState<AdminToast | null>(null);
@@ -1364,9 +665,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
   useEffect(() => {
     if (normalizedApiBaseUrl === null) return;
     const canonicalApiBaseUrl = normalizedApiBaseUrl;
-    const key = tokenCreateGuardStorageKey(canonicalApiBaseUrl);
     function handleTokenGuardStorage(event: StorageEvent) {
-      if (event.storageArea !== window.localStorage || event.key !== key) return;
       tokenCreatePreparationControllerRef.current?.abort();
       tokenCreatePreparationControllerRef.current = null;
       tokenRecoveryOperationGenerationRef.current += 1;
@@ -1406,7 +705,6 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
           setIssuedTokenRecovery(null);
           setUnreadableTokenCreateRecovery(null);
           setTokenSecret(null);
-          setTokenSecretAcknowledged(false);
           setModal((current) => current === "create-token" ? null : current);
           if (exactResolvedAttempt) {
             setToast({
@@ -1474,8 +772,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
         kind: "warning",
       });
     }
-    window.addEventListener("storage", handleTokenGuardStorage);
-    return () => window.removeEventListener("storage", handleTokenGuardStorage);
+    return subscribeTokenCreateGuard(canonicalApiBaseUrl, handleTokenGuardStorage);
   }, [normalizedApiBaseUrl]);
 
   useEffect(() => {
@@ -1587,9 +884,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
   function ownsTokenCreateGuard(recovery: TokenCreateRecovery): boolean {
     try {
       if (normalizedApiBaseUrl === null) return false;
-      const raw = window.localStorage.getItem(
-        tokenCreateGuardStorageKey(normalizedApiBaseUrl),
-      );
+      const raw = readTokenCreateGuardRaw(normalizedApiBaseUrl);
       if (raw === null) return false;
       const stored = parsePersistedTokenCreateGuard(raw, normalizedApiBaseUrl);
       return stored !== null
@@ -1666,10 +961,9 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
         "This tab no longer holds the token safety Web Lock.",
       );
     }
-    const key = tokenCreateGuardStorageKey(normalizedApiBaseUrl);
     let existingRaw: string | null;
     try {
-      existingRaw = window.localStorage.getItem(key);
+      existingRaw = readTokenCreateGuardRaw(normalizedApiBaseUrl);
     } catch (error) {
       setTokenCreateGuardStorageState("unavailable");
       setTokenCreateGuardStorageError(errorMessage(error));
@@ -1709,10 +1003,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       // The record is deliberately constructed field-by-field and contains no
       // plaintext credential. localStorage makes the safety guard survive tab
       // closure and broadcasts ownership changes to other same-origin tabs.
-      window.localStorage.setItem(
-        key,
-        JSON.stringify(record),
-      );
+      writeTokenCreateGuard(normalizedApiBaseUrl, record);
       setTokenCreateGuardStorageState("available");
       setTokenCreateGuardStorageError(null);
       setTokenRecoveryOwnership("owned");
@@ -1742,10 +1033,9 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
         "This tab no longer holds the token safety Web Lock.",
       );
     }
-    const key = tokenCreateGuardStorageKey(normalizedApiBaseUrl);
     let raw: string | null;
     try {
-      raw = window.localStorage.getItem(key);
+      raw = readTokenCreateGuardRaw(normalizedApiBaseUrl);
     } catch (error) {
       setTokenCreateGuardStorageState("unavailable");
       setTokenCreateGuardStorageError(errorMessage(error));
@@ -1769,7 +1059,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       );
     }
     try {
-      window.localStorage.removeItem(key);
+      removeTokenCreateGuard(normalizedApiBaseUrl);
       tokenRecoveryOperationGenerationRef.current += 1;
       if (tokenGuardLockOperationAttemptRef.current === expectedAttemptId) {
         tokenGuardLockOperationAttemptRef.current = null;
@@ -1904,23 +1194,10 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
 
   function openTokenDialog() {
     setTokenEditTarget(null);
-    setTokenName("");
-    setTokenDescription("");
-    setTokenCollectorId("");
-    setTokenIndexes(new Set(ingestibleTokenScopes.slice(0, 1).map((scope) => scope.name)));
-    setTokenPurpose(IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR);
-    setTokenHECDefaultIndex("");
-    setTokenHECDefaultHost("");
-    setTokenHECDefaultSource("");
-    setTokenHECDefaultSourcetype("");
-    setTokenHECIndexerAcknowledgment(false);
-    setTokenPolicyForm(tokenPolicyFormFromToken());
-    setTokenExpiration("");
     setTokenSecret(null);
     setIssuedToken(null);
     setIssuedTokenRecovery(null);
     setTokenCreateRecovery(null);
-    setTokenSecretAcknowledged(false);
     setModal("create-token");
   }
 
@@ -2027,7 +1304,6 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       setTokenDescription(current.description ?? "");
       setTokenCollectorId(current.constraints?.boundCollectorId ?? "");
       setTokenIndexes(new Set(current.constraints?.allowedIndexNames ?? []));
-      setTokenPurpose(current.purpose);
       setTokenHECDefaultIndex(current.hecProfile?.defaultIndexName ?? "");
       setTokenHECDefaultHost(current.hecProfile?.defaultHost ?? "");
       setTokenHECDefaultSource(current.hecProfile?.defaultSource ?? "");
@@ -2276,7 +1552,6 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       setIssuedToken(null);
       setIssuedTokenRecovery(null);
       setTokenSecret(null);
-      setTokenSecretAcknowledged(false);
       setToast({
         message: "A matching token falls outside the expected request timing window. It remains visible and blocks automatic recovery clearing.",
         kind: "warning",
@@ -2314,7 +1589,6 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       setIssuedToken(null);
       setIssuedTokenRecovery(null);
       setTokenSecret(null);
-      setTokenSecretAcknowledged(false);
       setModal(null);
       setToast({
         message: "All identified tokens from the uncertain create request are revoked or expired. Token generation is safe again.",
@@ -2335,7 +1609,6 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       setIssuedToken(candidate);
       setIssuedTokenRecovery(nextRecovery);
       setTokenSecret(null);
-      setTokenSecretAcknowledged(false);
       setToast({
         message: tokenCanBeRevoked(candidate)
           ? `A newly created token (${candidate.tokenPrefix}) was identified, but its one-time secret was lost. Revoke it before leaving.`
@@ -2373,7 +1646,6 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
         setIssuedToken(null);
         setIssuedTokenRecovery(null);
         setTokenSecret(null);
-        setTokenSecretAcknowledged(false);
         setModal((current) => current === "create-token" ? null : current);
         setToast({
           message: `No token named “${recovery.definition.name}” was created. Token generation is available again.`,
@@ -2445,9 +1717,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       if (normalizedApiBaseUrl === null || !hasTokenGuardLockContext(recovery.attemptId)) {
         return false;
       }
-      return window.localStorage.getItem(
-        tokenCreateGuardStorageKey(normalizedApiBaseUrl),
-      ) === recovery.raw;
+      return readTokenCreateGuardRaw(normalizedApiBaseUrl) === recovery.raw;
     } catch {
       return false;
     }
@@ -2470,9 +1740,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       );
     }
     try {
-      if (window.localStorage.getItem(
-        tokenCreateGuardStorageKey(normalizedApiBaseUrl),
-      ) === recovery.raw) return true;
+      if (readTokenCreateGuardRaw(normalizedApiBaseUrl) === recovery.raw) return true;
     } catch (error) {
       setTokenCreateGuardStorageState("unavailable");
       setTokenCreateGuardStorageError(errorMessage(error));
@@ -2494,14 +1762,13 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     if (!requireUnreadableTokenGuardOwnership(recovery)) return false;
     try {
       if (normalizedApiBaseUrl === null) return false;
-      const key = tokenCreateGuardStorageKey(normalizedApiBaseUrl);
-      if (window.localStorage.getItem(key) !== recovery.raw) {
+      if (readTokenCreateGuardRaw(normalizedApiBaseUrl) !== recovery.raw) {
         return loseTokenGuardOwnership(
           recovery.attemptId,
           "The unreadable token safety record changed before it could be cleared.",
         );
       }
-      window.localStorage.removeItem(key);
+      removeTokenCreateGuard(normalizedApiBaseUrl);
       tokenRecoveryOperationGenerationRef.current += 1;
       tokenGuardLockOperationAttemptRef.current = null;
       releaseTokenGuardLease(recovery.attemptId);
@@ -2758,12 +2025,25 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     }
   }
 
-  async function createToken(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const creatingHECToken = tokenUsesHEC(tokenPurpose);
+  async function createToken(value: TokenCreateFormValue) {
+    const {
+      collectorId,
+      description,
+      expiration,
+      hecDefaultHost,
+      hecDefaultIndex,
+      hecDefaultSource,
+      hecDefaultSourcetype,
+      hecIndexerAcknowledgment,
+      indexes: selectedIndexes,
+      name,
+      policy,
+      purpose,
+    } = value;
+    const creatingHECToken = tokenUsesHEC(purpose);
     if (
-      tokenName.trim().length === 0
-      || (!creatingHECToken && !validCollectorId(tokenCollectorId))
+      name.trim().length === 0
+      || (!creatingHECToken && !validCollectorId(collectorId))
     ) return;
     if (serverClockAnchor === null) {
       setToast({
@@ -2793,13 +2073,27 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       });
       return;
     }
-    if (tokenCreateScopeInvalid) {
+    const hasUnavailableScope = [...selectedIndexes].some(
+      (selectedIndexName) => !ingestibleIndexNames.has(selectedIndexName),
+    );
+    const hecProfileInvalid = hecDefaultIndex.length > 0 && !selectedIndexes.has(hecDefaultIndex)
+      || !validHECMetadataDefault(hecDefaultHost)
+      || !validHECMetadataDefault(hecDefaultSource)
+      || !validHECMetadataDefault(hecDefaultSourcetype);
+    const createScopeInvalid = tokenScopeSource === "unavailable"
+      || selectedIndexes.size === 0
+      || hasUnavailableScope
+      || (!creatingHECToken && !validCollectorId(collectorId))
+      || (creatingHECToken && !hecEnabled)
+      || (creatingHECToken && hecProfileInvalid)
+      || tokenCreationBlockReason !== null;
+    if (createScopeInvalid) {
       setToast({
         message: creatingHECToken && !hecEnabled
           ? "HEC token generation is unavailable because the server does not advertise HEC ingestion."
           : tokenScopeSource === "unavailable"
           ? "Token generation is unavailable until the server returns an authoritative index summary."
-          : tokenIndexes.size === 0
+          : selectedIndexes.size === 0
             ? "Select at least one active, ingestion-enabled index."
             : "Remove unavailable index scopes before generating the token.",
         kind: "warning",
@@ -2808,22 +2102,20 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     }
     let tokenPolicy: ReturnType<typeof tokenPolicyFromForm>;
     try {
-      tokenPolicy = tokenPolicyFromForm(tokenPolicyForm);
+      tokenPolicy = tokenPolicyFromForm(policy);
     } catch (error) {
       setToast({ message: errorMessage(error), kind: "warning" });
       return;
     }
     let crossTabLockAcquired = false;
     try {
-      await navigator.locks.request(
-        tokenCreateLockName(normalizedApiBaseUrl),
+      await requestTokenCreateLock(
+        normalizedApiBaseUrl,
         { mode: "exclusive", ifAvailable: true },
         async (lock) => {
           if (lock === null) return;
           crossTabLockAcquired = true;
-          const existingGuard = window.localStorage.getItem(
-            tokenCreateGuardStorageKey(normalizedApiBaseUrl),
-          );
+          const existingGuard = readTokenCreateGuardRaw(normalizedApiBaseUrl);
           if (existingGuard !== null) {
             setTokenCreateGuardStorageState("available");
             setTokenCreateGuardStorageError(null);
@@ -2855,25 +2147,25 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       if (initialServerTimeMs === undefined) {
         throw new Error("System bootstrap no longer supplies an authoritative server clock.");
       }
-      const expiresAt = expirationFromForm(tokenExpiration, initialServerTimeMs);
+      const expiresAt = expirationFromForm(expiration, initialServerTimeMs);
       const hecProfile = creatingHECToken ? hecProfileFromForm({
-        defaultIndexName: tokenHECDefaultIndex,
-        defaultHost: tokenHECDefaultHost,
-        defaultSource: tokenHECDefaultSource,
-        defaultSourcetype: tokenHECDefaultSourcetype,
-        indexerAcknowledgment: tokenHECIndexerAcknowledgment,
+        defaultIndexName: hecDefaultIndex,
+        defaultHost: hecDefaultHost,
+        defaultSource: hecDefaultSource,
+        defaultSourcetype: hecDefaultSourcetype,
+        indexerAcknowledgment: hecIndexerAcknowledgment,
       }) : undefined;
       const definition: TokenCreateDefinitionSnapshot = {
-        name: tokenName.trim(),
-        description: tokenDescription.trim(),
-        boundCollectorId: creatingHECToken ? "" : tokenCollectorId,
-        allowedIndexNames: [...tokenIndexes].toSorted(),
+        name: name.trim(),
+        description: description.trim(),
+        boundCollectorId: creatingHECToken ? "" : collectorId,
+        allowedIndexNames: [...selectedIndexes].toSorted(),
         allowedHostRegexes: tokenPolicy.allowedHostRegexes,
         allowedSourceRegexes: tokenPolicy.allowedSourceRegexes,
         maxEventsPerSecond: tokenPolicy.ingestionRateLimits.maxEventsPerSecond,
         maxUncompressedBytesPerSecond:
           tokenPolicy.ingestionRateLimits.maxUncompressedBytesPerSecond,
-        purpose: tokenPurpose,
+        purpose,
         hecProfile,
         expiresAt,
         armedServerTimeMs: initialServerTimeMs,
@@ -2992,7 +2284,6 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       setIssuedToken(createdToken);
       setIssuedTokenRecovery(recovery);
       setTokenSecret(response.plaintextToken);
-      setTokenSecretAcknowledged(false);
     } catch (error) {
       if (
         !requestDispatched
@@ -3045,7 +2336,6 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
         if (!persistTokenCreateGuard(ambiguousRecovery, null)) return;
         setTokenSecret(null);
         setIssuedTokenRecovery(null);
-        setTokenSecretAcknowledged(false);
         setTokenCreateRecovery(ambiguousRecovery);
         setToast({
           message: "The token create request had an uncertain outcome. Generation is locked while the server is checked for a possible unusable token.",
@@ -3346,14 +2636,14 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     }
   }
 
-  function acknowledgeIssuedToken() {
+  function acknowledgeIssuedToken(secretAcknowledged: boolean) {
     if (issuedToken === null) return;
     if (
       issuedTokenRecovery === null
       || !requireTokenGuardOwnership(issuedTokenRecovery)
     ) return;
     const hasSecret = tokenSecret !== null && tokenSecret.length > 0;
-    if ((hasSecret && !tokenSecretAcknowledged) || (!hasSecret && tokenCanBeRevoked(issuedToken))) {
+    if ((hasSecret && !secretAcknowledged) || (!hasSecret && tokenCanBeRevoked(issuedToken))) {
       return;
     }
     if (
@@ -3372,7 +2662,6 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     setIssuedToken(null);
     setIssuedTokenRecovery(null);
     setTokenSecret(null);
-    setTokenSecretAcknowledged(false);
     setModal(null);
   }
 
@@ -3408,7 +2697,6 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
         setIssuedToken(null);
         setIssuedTokenRecovery(null);
         setTokenSecret(null);
-        setTokenSecretAcknowledged(false);
         setModal(null);
         setToast({ message: `Token “${target.name}” was revoked.`, kind: "success" });
       } else {
@@ -3433,7 +2721,6 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
             setIssuedToken(null);
             setIssuedTokenRecovery(null);
             setTokenSecret(null);
-            setTokenSecretAcknowledged(false);
             setModal(null);
             setToast({ message: `Token “${current.name}” is confirmed ${tokenStateLabel(current.state).toLowerCase()}.`, kind: "success" });
           } else {
@@ -3479,13 +2766,10 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       releaseTokenGuardLease();
     };
     let raw: string | null;
-    const lockManager = navigator.locks;
-    const lockAvailable = typeof lockManager?.request === "function";
+    const lockAvailable = browserSupportsTokenCreateLock();
     setTokenCreateLockAvailable(lockAvailable);
     try {
-      raw = window.localStorage.getItem(
-        tokenCreateGuardStorageKey(normalizedApiBaseUrl),
-      );
+      raw = readTokenCreateGuardRaw(normalizedApiBaseUrl);
     } catch (error) {
       setTokenCreateGuardStorageState("unavailable");
       setTokenCreateGuardStorageError(errorMessage(error));
@@ -3513,7 +2797,6 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     setTokenCreateGuardStorageError(null);
     const restored = parsePersistedTokenCreateGuard(raw, normalizedApiBaseUrl);
     setTokenSecret(null);
-    setTokenSecretAcknowledged(false);
     setIssuedToken(null);
     setIssuedTokenRecovery(null);
     const unreadableRecovery: UnreadableTokenCreateRecovery | null = restored === null
@@ -3542,8 +2825,8 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
 
     setTokenRecoveryOwnership("acquiring");
     setTokenRecoveryOwnershipError(null);
-    void lockManager.request(
-      tokenCreateLockName(normalizedApiBaseUrl),
+    void requestTokenCreateLock(
+      normalizedApiBaseUrl,
       { mode: "exclusive", ifAvailable: true, signal: controller.signal },
       async (lock) => {
         if (!current) return;
@@ -3758,7 +3041,6 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     bootstrap,
     ServerFeature.SERVER_FEATURE_HEC_INGESTION,
   );
-  const creatingHECToken = tokenUsesHEC(tokenPurpose);
   const editingHECToken = tokenEditTarget !== null && tokenUsesHEC(tokenEditTarget.purpose);
   const editingNativeToken = tokenEditTarget?.purpose
     === IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR;
@@ -3768,8 +3050,8 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     && editingNativeToken
     && tokenEditTarget.constraints?.boundCollectorId === undefined
     && validCollectorId(tokenCollectorId);
-  const tokenHasUnavailableScope = [...tokenIndexes].some((name) => !ingestibleIndexNames.has(name));
-  const tokenScopeInvalid = tokenScopeChanged && tokenHasUnavailableScope;
+  const tokenScopeInvalid = tokenScopeChanged
+    && [...tokenIndexes].some((name) => !ingestibleIndexNames.has(name));
   const tokenCollectorIdInvalid = !validCollectorId(tokenCollectorId);
   const tokenHECDefaultIndexInvalid = tokenHECDefaultIndex.length > 0
     && !tokenIndexes.has(tokenHECDefaultIndex);
@@ -3809,13 +3091,6 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       : tokenGuardActive
         ? "A token create request is currently in progress."
         : null;
-  const tokenCreateScopeInvalid = tokenScopeSource === "unavailable"
-    || tokenIndexes.size === 0
-    || tokenHasUnavailableScope
-    || (!creatingHECToken && tokenCollectorIdInvalid)
-    || (creatingHECToken && !hecEnabled)
-    || (creatingHECToken && tokenHECProfileInvalid)
-    || tokenCreationBlockReason !== null;
   const indexDefinition = indexEditTarget?.definition;
   // The index name rule the server enforces, stated once so the field, the
   // submit button and `createIndex` cannot disagree about it. It used to live
@@ -4037,41 +3312,50 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
         <section className="admin-content">
           {section === "overview" ? (
             <BackendOverview
-              bootstrap={bootstrap}
-              bootstrapError={bootstrapError}
-              indexState={indexState}
-              indexCount={indexes.length}
-              indexTotalSize={indexTotalSize}
-              indexTotalSizeExact={indexTotalSizeExact}
-              activeIndexes={activeIndexes}
-              tokenState={tokenState}
-              tokenCount={tokens.length}
-              tokenTotalSize={tokenTotalSize}
-              tokenTotalSizeExact={tokenTotalSizeExact}
-              activeTokens={activeTokens}
-              onNavigate={navigateSection}
-              onReload={load}
+              actions={{ navigate: navigateSection, reload: load }}
+              snapshot={{
+                bootstrap,
+                bootstrapError,
+                indexes: {
+                  activeCount: activeIndexes,
+                  loadedCount: indexes.length,
+                  state: indexState,
+                  totalSize: indexTotalSize,
+                  totalSizeExact: indexTotalSizeExact,
+                },
+                tokens: {
+                  activeCount: activeTokens,
+                  loadedCount: tokens.length,
+                  state: tokenState,
+                  totalSize: tokenTotalSize,
+                  totalSizeExact: tokenTotalSizeExact,
+                },
+              }}
             />
           ) : null}
           {section === "indexes" ? (
             <BackendIndexes
-              state={indexState}
-              error={indexError}
-              filter={filter}
-              indexes={visibleIndexes}
-              totalIndexes={indexes.length}
-              totalSize={indexTotalSize}
-              totalSizeExact={indexTotalSizeExact}
-              hasMore={indexNextPageToken !== null}
-              loadingMore={indexLoadingMore}
-              paginationError={indexPaginationError}
-              busy={busy}
-              onFilterChange={setFilter}
-              onLoadMore={() => void loadMoreIndexes()}
-              onReload={load}
-              onEdit={(index) => void openIndexEditor(index)}
-              onChangeState={(index) => void changeIndexState(index)}
-              onDelete={(index) => void openIndexDeleteDialog(index)}
+              actions={{
+                changeState: (index) => void changeIndexState(index),
+                delete: (index) => void openIndexDeleteDialog(index),
+                edit: (index) => void openIndexEditor(index),
+                loadMore: () => void loadMoreIndexes(),
+                reload: load,
+                setFilter,
+              }}
+              catalog={{
+                busy,
+                error: indexError,
+                filter,
+                hasMore: indexNextPageToken !== null,
+                indexes: visibleIndexes,
+                loadingMore: indexLoadingMore,
+                paginationError: indexPaginationError,
+                state: indexState,
+                totalIndexes: indexes.length,
+                totalSize: indexTotalSize,
+                totalSizeExact: indexTotalSizeExact,
+              }}
             />
           ) : null}
           {section === "apps" ? (
@@ -4098,27 +3382,35 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
           ) : null}
           {section === "collectors" ? (
             <BackendTokens
-              state={tokenState}
-              error={tokenError}
-              tokens={tokens}
-              totalSize={tokenTotalSize}
-              totalSizeExact={tokenTotalSizeExact}
-              hasMore={tokenNextPageToken !== null}
-              loadingMore={tokenLoadingMore}
-              paginationError={tokenPaginationError}
-              busy={busy}
-              onEdit={(token) => void openTokenEditor(token)}
-              onReload={load}
-              onLoadMore={() => void loadMoreTokens()}
-              onRevoke={setRevokeTarget}
-              onSetEnabled={(token, enabled) => void setTokenEnabled(token, enabled)}
-              canCreate={ingestibleTokenScopes.length > 0 && tokenCreationBlockReason === null}
-              createBlockReason={tokenCreateDisabledReason}
-              recoveryActionLabel={tokenResolutionOpen ? "Resolve token creation" : null}
-              onResolveRecovery={openTokenRecoveryDialog}
-              indexState={indexState}
-              indexError={indexError}
-              scopeSource={tokenScopeSource}
+              actions={{
+                edit: (token) => void openTokenEditor(token),
+                loadMore: () => void loadMoreTokens(),
+                reload: load,
+                resolveRecovery: openTokenRecoveryDialog,
+                revoke: setRevokeTarget,
+                setEnabled: (token, enabled) => void setTokenEnabled(token, enabled),
+              }}
+              catalog={{
+                busy,
+                error: tokenError,
+                hasMore: tokenNextPageToken !== null,
+                loadingMore: tokenLoadingMore,
+                paginationError: tokenPaginationError,
+                state: tokenState,
+                tokens,
+                totalSize: tokenTotalSize,
+                totalSizeExact: tokenTotalSizeExact,
+              }}
+              creation={{
+                blockReason: tokenCreateDisabledReason,
+                canCreate: ingestibleTokenScopes.length > 0 && tokenCreationBlockReason === null,
+                recoveryActionLabel: tokenResolutionOpen ? "Resolve token creation" : null,
+              }}
+              scope={{
+                error: indexError,
+                source: tokenScopeSource,
+                state: indexState,
+              }}
             />
           ) : null}
           {section === "access" ? (
@@ -4222,83 +3514,59 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
         </Modal>
       ) : null}
 
-      {modal === "create-token" ? (
+      {modal === "create-token" && !tokenResolutionOpen ? (
+        <TokenCreationDialog
+          blockReason={tokenCreationBlockReason}
+          busy={busy !== null}
+          hecEnabled={hecEnabled}
+          onClose={() => {
+            if (busy === null) setModal(null);
+          }}
+          onSubmit={(value) => void createToken(value)}
+          scopeOptions={tokenScopeOptions}
+          scopeSource={tokenScopeSource}
+        />
+      ) : null}
+
+      {modal === "create-token" && tokenRecoveryOpen ? (
         <Modal
           title={unreadableTokenCreateRecovery !== null
             ? "Resolve damaged token recovery"
-            : tokenRecoveryOpen
-            ? "Resolve token creation"
-            : tokenRevealOpen
-              ? "Save this token now"
-              : "Generate ingestion token"}
-          subtitle={tokenRecoveryOpen
-            ? "New token creation is paused while Open Splunk checks; the rest of the app remains available."
-            : tokenRevealOpen
-              ? "The server reveals this plaintext credential only once."
-              : "Scope a new credential to one or more ingestible indexes."}
+            : "Resolve token creation"}
+          subtitle="New token creation is paused while Open Splunk checks; the rest of the app remains available."
           dismissible={!tokenDialogHardBlocked}
-          initialFocus={tokenRecoveryOpen
-            ? "#reconcile-token-create"
-            : tokenRevealOpen
-            ? tokenSecret === null || tokenSecret.length === 0
-              ? busy === null ? "#revoke-issued-token" : undefined
-              : "#copy-issued-token"
-            : "#new-token-name"}
+          initialFocus="#reconcile-token-create"
           onClose={() => {
             if (tokenDialogHardBlocked) return;
-            if (!tokenResolutionOpen) setTokenSecret(null);
             setModal(null);
           }}
-          footer={tokenRecoveryOpen
-            ? (
-              <>
-                <button className="button button--secondary" type="button" onClick={() => setModal(null)}>
-                  Close
-                </button>
-                {recoveryNeedsAuthentication ? (
-                  <Link className="button button--secondary" href="/signin/">Sign in</Link>
-                ) : null}
-                <button
-                  id="reconcile-token-create"
-                  className="button button--primary"
-                  type="button"
-                  disabled={tokenRecoveryChecking || tokenRecoveryOwnership === "acquiring" || tokenCreateLockAvailable !== true}
-                  onClick={checkOrRetryTokenRecovery}
-                >
-                  {tokenRecoveryChecking
-                    ? "Checking…"
-                    : tokenRecoveryOwnership === "owned"
-                      ? "Check now"
-                      : tokenRecoveryOwnership === "acquiring"
-                        ? "Acquiring…"
-                        : "Try again"}
-                </button>
-              </>
-            )
-            : !tokenRevealOpen
-            ? <><button className="button button--secondary" type="button" onClick={() => setModal(null)} disabled={busy !== null}>Cancel</button><button className="button button--primary" type="submit" form="create-token-form" disabled={busy !== null || tokenName.trim().length === 0 || tokenCreateScopeInvalid || !tokenPolicyValid}>{busy === "create-token" ? "Generating…" : "Generate token"}</button></>
-            : (
-              <>
-                <button id="revoke-issued-token" className="button button--danger" type="button" disabled={busy !== null || tokenRecoveryOwnership !== "owned" || !tokenCanBeRevoked(issuedToken)} onClick={() => void revokeIssuedToken()}>
-                  {busy === `issued-token-${issuedToken.ingestionTokenId}` ? "Revoking…" : "Revoke unused token"}
-                </button>
-                <button
-                  className="button button--primary"
-                  type="button"
-                  disabled={busy !== null || tokenRecoveryOwnership !== "owned" || (
-                    tokenSecret !== null && tokenSecret.length > 0
-                      ? !tokenSecretAcknowledged
-                      : tokenCanBeRevoked(issuedToken)
-                  )}
-                  onClick={acknowledgeIssuedToken}
-                >
-                  Done
-                </button>
-              </>
-            )}
+          footer={(
+            <>
+              <button className="button button--secondary" type="button" onClick={() => setModal(null)}>
+                Close
+              </button>
+              {recoveryNeedsAuthentication ? (
+                <Link className="button button--secondary" href="/signin/">Sign in</Link>
+              ) : null}
+              <button
+                id="reconcile-token-create"
+                className="button button--primary"
+                type="button"
+                disabled={tokenRecoveryChecking || tokenRecoveryOwnership === "acquiring" || tokenCreateLockAvailable !== true}
+                onClick={checkOrRetryTokenRecovery}
+              >
+                {tokenRecoveryChecking
+                  ? "Checking…"
+                  : tokenRecoveryOwnership === "owned"
+                    ? "Check now"
+                    : tokenRecoveryOwnership === "acquiring"
+                      ? "Acquiring…"
+                      : "Try again"}
+              </button>
+            </>
+          )}
         >
-          {tokenRecoveryOpen ? (
-            <div className="token-create-recovery">
+          <div className="token-create-recovery">
               <div className="access-mode-notice" role="alert">
                 <span>!</span>
                 <div>
@@ -4383,82 +3651,29 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
                   ))}
                 </ul>
               )}
-            </div>
-          ) : !tokenRevealOpen ? (
-            <form className="admin-form" id="create-token-form" onSubmit={(event) => void createToken(event)}>
-              <label htmlFor="new-token-name"><span>Token name</span><input id="new-token-name" value={tokenName} onChange={(event) => setTokenName(event.target.value)} placeholder="prod-api-collector" autoComplete="off" /></label>
-              <label htmlFor="new-token-description"><span>Description <small>(optional)</small></span><input id="new-token-description" value={tokenDescription} onChange={(event) => setTokenDescription(event.target.value)} placeholder="Production collector credential" /></label>
-              <label htmlFor="new-token-purpose"><span>Purpose</span><select id="new-token-purpose" value={tokenPurpose} onChange={(event) => { const next = Number(event.target.value) as IngestionTokenPurpose; setTokenPurpose(next); if (tokenUsesHEC(next)) setTokenCollectorId(""); }}><option value={IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR}>Native collector</option><option value={IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_HEC} disabled={!hecEnabled}>HTTP Event Collector (HEC){hecEnabled ? "" : " — disabled on server"}</option></select><small>Purpose is an immutable transport boundary. HEC credentials can only be created while the server advertises HEC ingestion.</small></label>
-              {creatingHECToken ? null : (
-                <>
-                  <label htmlFor="new-token-collector-id">
-                    <span>Collector ID</span>
-                    <input autoComplete="off" id="new-token-collector-id" onChange={(event) => setTokenCollectorId(event.target.value)} placeholder="Paste the collector’s stable ID" spellCheck={false} value={tokenCollectorId} {...fieldControlProps("new-token-collector-id", tokenCollectorIdInvalid ? COLLECTOR_ID_ERROR : null)} />
-                    <FieldNote error={tokenCollectorIdInvalid ? COLLECTOR_ID_ERROR : null} fieldId="new-token-collector-id">Run <code>open-splunk-collector identity -config PATH</code> against the collector’s final state directory, then paste the printed ID. The binding cannot be changed after creation.</FieldNote>
-                  </label>
-                </>
-              )}
-              <TokenScopePicker idPrefix="new-token" options={tokenScopeOptions} selected={tokenIndexes} onChange={setTokenIndexes} disabled={tokenScopeSource === "unavailable"} />
-              <TokenPolicyFields
-                idPrefix="new-token"
-                value={tokenPolicyForm}
-                onChange={(next) => setTokenPolicyForm((current) => ({ ...current, ...next }))}
-              />
-              {creatingHECToken ? (
-                <HECTokenProfileFields
-                  idPrefix="new-token"
-                  selectedIndexes={tokenIndexes}
-                  defaultIndex={tokenHECDefaultIndex}
-                  onDefaultIndexChange={setTokenHECDefaultIndex}
-                  defaultHost={tokenHECDefaultHost}
-                  onDefaultHostChange={setTokenHECDefaultHost}
-                  defaultSource={tokenHECDefaultSource}
-                  onDefaultSourceChange={setTokenHECDefaultSource}
-                  defaultSourcetype={tokenHECDefaultSourcetype}
-                  onDefaultSourcetypeChange={setTokenHECDefaultSourcetype}
-                  indexerAcknowledgment={tokenHECIndexerAcknowledgment}
-                  onIndexerAcknowledgmentChange={setTokenHECIndexerAcknowledgment}
-                />
-              ) : null}
-              {creatingHECToken && tokenHECProfileInvalid ? <div className="access-mode-notice" role="alert"><span>!</span><div><strong>HEC defaults are invalid</strong><p>The default index must remain in the allowed scope. Metadata defaults must contain 1–255 UTF-8 bytes without control characters or surrounding ASCII whitespace.</p></div></div> : null}
-              {tokenHasUnavailableScope ? <div className="access-mode-notice" role="alert"><span>!</span><div><strong>Choose an available scope</strong><p>Tokens can only be generated for active, ingestion-enabled indexes. Remove the unavailable scope before continuing.</p></div></div> : null}
-              {tokenScopeSource === "unavailable" ? <div className="access-mode-notice" role="note"><span>i</span><div><strong>Index scopes are unavailable</strong><p>Token generation is disabled until the server returns an authoritative index summary.</p></div></div> : null}
-              {tokenCreationBlockReason === null ? null : <div className="access-mode-notice" role="alert"><span>!</span><div><strong>Token generation is locked</strong><p>{tokenCreationBlockReason}</p></div></div>}
-              <label htmlFor="new-token-expiration"><span>Expiration <small>(optional)</small></span><input id="new-token-expiration" type="datetime-local" value={tokenExpiration} onChange={(event) => setTokenExpiration(event.target.value)} /><small>Leave blank for a token that does not expire. Any expiration must be in the future.</small></label>
-            </form>
-          ) : (
-            <div className="token-reveal">
-              <span className="token-warning-icon">!</span>
-              {tokenSecret === null || tokenSecret.length === 0 ? (
-                <p>{tokenCanBeRevoked(issuedToken)
-                  ? "The server created this token, but its plaintext secret is no longer available. Revoke the unusable token before generating another; you may close this dialog and keep using the app."
-                  : `This token was identified without its plaintext secret and is confirmed ${tokenStateLabel(issuedToken.state).toLowerCase()}. It is no longer usable.`}</p>
-              ) : (
-                <>
-                  <p>Copy this credential now. Closing, reloading, or navigating away cannot reveal it again.</p>
-                  <div><code>{tokenSecret}</code><button id="copy-issued-token" type="button" onClick={() => void navigator.clipboard.writeText(tokenSecret).then(() => setToast({ message: "Token copied to the clipboard.", kind: "success" }), () => setToast({ message: "Copy failed. Select the token text and copy it manually.", kind: "warning" }))}>Copy token</button></div>
-                  {issuedHECCurlExample === null ? null : (
-                    <section className="token-recovery-summary" aria-label="HEC curl example" style={{ gridColumn: "1 / -1" }}>
-                      <strong>Send a test HEC event</strong>
-                      <p>This command contains the one-time credential and disappears permanently when this dialog is dismissed.</p>
-                      <pre style={{ overflowWrap: "anywhere", whiteSpace: "pre-wrap" }}><code>{issuedHECCurlExample}</code></pre>
-                      <button type="button" onClick={() => void navigator.clipboard.writeText(issuedHECCurlExample).then(() => setToast({ message: "HEC curl example copied to the clipboard.", kind: "success" }), () => setToast({ message: "Copy failed. Select the curl command and copy it manually.", kind: "warning" }))}>Copy curl example</button>
-                    </section>
-                  )}
-                  <label className="admin-checkbox" htmlFor="token-secret-acknowledgement" aria-label="I stored this ingestion token securely">
-                    <input
-                      id="token-secret-acknowledgement"
-                      type="checkbox"
-                      checked={tokenSecretAcknowledged}
-                      onChange={(event) => setTokenSecretAcknowledged(event.target.checked)}
-                    />
-                    <span><strong>I stored this token securely</strong><small>Required before this one-time secret can be dismissed.</small></span>
-                  </label>
-                </>
-              )}
-            </div>
-          )}
+          </div>
         </Modal>
+      ) : null}
+
+      {modal === "create-token" && issuedToken !== null && !tokenRecoveryOpen ? (
+        <IssuedTokenDialog
+          key={issuedToken.ingestionTokenId}
+          busy={busy}
+          curlExample={issuedHECCurlExample}
+          dismissible={!tokenDialogHardBlocked}
+          issuedToken={issuedToken}
+          onAcknowledge={acknowledgeIssuedToken}
+          onClose={() => {
+            if (!tokenDialogHardBlocked) setModal(null);
+          }}
+          onCopyResult={(message, success) => setToast({
+            message,
+            kind: success ? "success" : "warning",
+          })}
+          onRevoke={() => void revokeIssuedToken()}
+          ownership={tokenRecoveryOwnership}
+          secret={tokenSecret}
+        />
       ) : null}
 
       {modal === "edit-token" && tokenEditTarget !== null ? (
@@ -4522,660 +3737,6 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       ) : null}
 
       {toast === null ? null : <output className={`toast toast-${toast.kind}`}><span aria-hidden="true"><AppIcon name={toast.kind === "success" ? "check" : "warning"} size="sm" /></span><strong>{toast.message}</strong><button type="button" aria-label="Dismiss notification" onClick={() => setToast(null)}><AppIcon name="close" size="md" /></button></output>}
-    </div>
-  );
-}
-
-/**
- * The numeric policy fields, one shape for the index form and the token form.
- *
- * The field id is derived from the form key, so the control and its note cannot
- * be given different names -- that pairing is what lets `fieldControlProps`
- * point `aria-describedby` at the message the field is showing.
- */
-function PolicyNumberField({
-  error,
-  field,
-  fieldKey,
-  hint,
-  idPrefix,
-  onChange,
-  value,
-}: {
-  error: string | null;
-  field: { kind: PolicyFieldKind; label: string; placeholder: string };
-  fieldKey: string;
-  hint: string;
-  idPrefix: string;
-  onChange: (value: string) => void;
-  value: string;
-}) {
-  const fieldId = `${idPrefix}-${fieldKey.replaceAll(/(?<=[a-z])(?=[A-Z])/gu, "-").toLowerCase()}`;
-  return (
-    <label htmlFor={fieldId}>
-      <span>{field.label}</span>
-      <input
-        autoComplete="off"
-        id={fieldId}
-        // A quantity carries its own unit, so it is a text field: `type="number"`
-        // would refuse "512 KiB" by silently keeping the control empty, and a
-        // silent rejection is what the visible validation here exists to replace.
-        inputMode={policyFieldInputMode(field.kind)}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder={field.placeholder}
-        spellCheck={false}
-        value={value}
-        {...fieldControlProps(fieldId, error)}
-      />
-      <FieldNote error={error} fieldId={fieldId}>{hint}</FieldNote>
-    </label>
-  );
-}
-
-function IndexPolicyFields({
-  idPrefix,
-  value,
-  onChange,
-}: {
-  idPrefix: string;
-  value: IndexPolicyForm;
-  onChange: (value: Partial<IndexPolicyForm>) => void;
-}) {
-  const errors = indexPolicyErrors(value);
-  const sourcetypeId = `${idPrefix}-default-sourcetype`;
-  return (
-    <fieldset>
-      <legend>Ingestion policy <small>(optional)</small></legend>
-      <div className="admin-policy-grid">
-        <label htmlFor={sourcetypeId}>
-          <span>Default sourcetype</span>
-          <input aria-describedby={`${sourcetypeId}-note`} id={sourcetypeId} maxLength={255} onChange={(event) => onChange({ defaultSourcetype: event.target.value })} placeholder="_json" value={value.defaultSourcetype} />
-          <small id={`${sourcetypeId}-note`}>Applied when an admitted event does not provide a sourcetype.</small>
-        </label>
-        {INDEX_POLICY_KEYS.map((key) => (
-          <PolicyNumberField
-            error={errors[key]}
-            field={INDEX_POLICY_FIELDS[key]}
-            fieldKey={key}
-            hint={indexPolicyFieldHint(key, value)}
-            idPrefix={idPrefix}
-            key={key}
-            onChange={(next) => onChange({ [key]: next })}
-            value={value[key]}
-          />
-        ))}
-      </div>
-    </fieldset>
-  );
-}
-
-function TokenPolicyFields({
-  idPrefix,
-  value,
-  onChange,
-}: {
-  idPrefix: string;
-  value: TokenPolicyForm;
-  onChange: (value: Partial<TokenPolicyForm>) => void;
-}) {
-  const errors = tokenPolicyErrors(value);
-  const patternFields = [
-    {
-      error: errors.allowedHostRegexes,
-      hint: "One complete-value Go/RE2 pattern per line. Empty means any host.",
-      id: `${idPrefix}-host-patterns`,
-      label: "Allowed host patterns",
-      onChange: (next: string) => onChange({ allowedHostRegexes: next }),
-      placeholder: "api-[0-9]+\nworker-[0-9]+",
-      value: value.allowedHostRegexes,
-    },
-    {
-      error: errors.allowedSourceRegexes,
-      hint: "One complete-value Go/RE2 pattern per line. Empty means any source.",
-      id: `${idPrefix}-source-patterns`,
-      label: "Allowed source patterns",
-      onChange: (next: string) => onChange({ allowedSourceRegexes: next }),
-      placeholder: "/var/log/application\\.log",
-      value: value.allowedSourceRegexes,
-    },
-  ];
-  return (
-    <fieldset>
-      <legend>Admission policy <small>(optional)</small></legend>
-      <div className="admin-policy-grid">
-        {patternFields.map((field) => (
-          <label htmlFor={field.id} key={field.id}>
-            <span>{field.label}</span>
-            <textarea
-              id={field.id}
-              onChange={(event) => field.onChange(event.target.value)}
-              placeholder={field.placeholder}
-              rows={3}
-              spellCheck={false}
-              value={field.value}
-              {...fieldControlProps(field.id, field.error)}
-            />
-            <FieldNote error={field.error} fieldId={field.id}>{field.hint}</FieldNote>
-          </label>
-        ))}
-        {TOKEN_POLICY_KEYS.map((key) => (
-          <PolicyNumberField
-            error={errors[key]}
-            field={TOKEN_POLICY_FIELDS[key]}
-            fieldKey={key}
-            hint={tokenPolicyFieldHint(key, value)}
-            idPrefix={idPrefix}
-            key={key}
-            onChange={(next) => onChange({ [key]: next })}
-            value={value[key]}
-          />
-        ))}
-      </div>
-    </fieldset>
-  );
-}
-
-interface TokenScopePickerProps {
-  idPrefix: string;
-  options: TokenIndexScopeOption[];
-  selected: Set<string>;
-  onChange: (value: Set<string>) => void;
-  disabled?: boolean;
-}
-
-interface HECTokenProfileFieldsProps {
-  idPrefix: string;
-  selectedIndexes: Set<string>;
-  defaultIndex: string;
-  onDefaultIndexChange: (value: string) => void;
-  defaultHost: string;
-  onDefaultHostChange: (value: string) => void;
-  defaultSource: string;
-  onDefaultSourceChange: (value: string) => void;
-  defaultSourcetype: string;
-  onDefaultSourcetypeChange: (value: string) => void;
-  indexerAcknowledgment: boolean;
-  onIndexerAcknowledgmentChange: (value: boolean) => void;
-  acknowledgmentReadOnly?: boolean;
-}
-
-function HECTokenProfileFields(props: HECTokenProfileFieldsProps) {
-  const metadataFields = [
-    {
-      key: "host",
-      label: "Default host",
-      value: props.defaultHost,
-      placeholder: "api.example.com",
-      onChange: props.onDefaultHostChange,
-    },
-    {
-      key: "source",
-      label: "Default source",
-      value: props.defaultSource,
-      placeholder: "http:orders",
-      onChange: props.onDefaultSourceChange,
-    },
-    {
-      key: "sourcetype",
-      label: "Default sourcetype",
-      value: props.defaultSourcetype,
-      placeholder: "_json",
-      onChange: props.onDefaultSourcetypeChange,
-    },
-  ] as const;
-  return (
-    <fieldset>
-      <legend>HEC profile</legend>
-      <label htmlFor={`${props.idPrefix}-hec-default-index`}>
-        <span>Default index <small>(optional)</small></span>
-        <select id={`${props.idPrefix}-hec-default-index`} value={props.defaultIndex} onChange={(event) => props.onDefaultIndexChange(event.target.value)} aria-invalid={props.defaultIndex.length > 0 && !props.selectedIndexes.has(props.defaultIndex)}>
-          <option value="">No token default (requests must provide an index)</option>
-          {[...props.selectedIndexes].toSorted().map((name) => <option value={name} key={name}>{name}</option>)}
-        </select>
-        <small>When set, this index must remain in the token&apos;s allowed scope. Allowed scope alone is never an implicit default.</small>
-      </label>
-      {metadataFields.map((field) => {
-        const valid = validHECMetadataDefault(field.value);
-        const bytes = new TextEncoder().encode(field.value).byteLength;
-        return (
-          <label htmlFor={`${props.idPrefix}-hec-default-${field.key}`} key={field.key}>
-            <span>{field.label} <small>(optional)</small></span>
-            <input id={`${props.idPrefix}-hec-default-${field.key}`} value={field.value} onChange={(event) => field.onChange(event.target.value)} placeholder={field.placeholder} autoComplete="off" spellCheck={false} aria-invalid={!valid} />
-            <small>{bytes.toLocaleString()} / 255 UTF-8 bytes. Values are preserved exactly and cannot contain controls or surrounding ASCII whitespace.</small>
-          </label>
-        );
-      })}
-      <label className="admin-checkbox" htmlFor={`${props.idPrefix}-hec-indexer-acknowledgment`} aria-label="Enable HEC indexer acknowledgment">
-        <input id={`${props.idPrefix}-hec-indexer-acknowledgment`} type="checkbox" checked={props.indexerAcknowledgment} disabled={props.acknowledgmentReadOnly} onChange={(event) => props.onIndexerAcknowledgmentChange(event.target.checked)} />
-        <span><strong>Indexer acknowledgment</strong><small>{props.acknowledgmentReadOnly ? "This setting is immutable. Rotate the token to change acknowledgment mode." : "Enable channel-scoped acknowledgment IDs. This choice cannot be changed after creation."}</small></span>
-      </label>
-    </fieldset>
-  );
-}
-
-function TokenScopePicker({ idPrefix, options, selected, onChange, disabled = false }: TokenScopePickerProps) {
-  const optionByName = new Map(options.map((option) => [option.name, option]));
-  const ingestibleNames = options.filter((option) => option.ingestible).map((option) => option.name);
-  const ingestibleSet = new Set(ingestibleNames);
-  const choices = [...ingestibleNames, ...[...selected].filter((name) => !ingestibleSet.has(name))];
-
-  return (
-    <fieldset>
-      <legend>Allowed indexes</legend>
-      {choices.map((name) => {
-        const option = optionByName.get(name);
-        const available = ingestibleSet.has(name);
-        const inputId = `${idPrefix}-index-${option?.id ?? name}`;
-        return (
-          <label className="admin-checkbox" htmlFor={inputId} aria-label={`Allow ingestion to ${name}`} key={name}>
-            <input
-              id={inputId}
-              type="checkbox"
-              checked={selected.has(name)}
-              disabled={disabled}
-              onChange={(event) => {
-                const next = new Set(selected);
-                if (event.target.checked) next.add(name);
-                else next.delete(name);
-                onChange(next);
-              }}
-            />
-            <span>
-              <strong>{name}</strong>
-              <small>{available
-                ? option?.displayName || "Ingestion enabled"
-                : disabled
-                  ? "Current scope · index eligibility unavailable"
-                  : "Unavailable for ingestion · remove to save"}</small>
-            </span>
-          </label>
-        );
-      })}
-      {choices.length === 0 ? <p className="resource-footnote">No active, ingestion-enabled indexes are available.</p> : null}
-    </fieldset>
-  );
-}
-
-interface BackendOverviewProps {
-  bootstrap: SystemBootstrapModel | null;
-  bootstrapError: string | null;
-  indexState: ResourceState;
-  indexCount: number;
-  indexTotalSize: bigint | null;
-  indexTotalSizeExact: boolean;
-  activeIndexes: number;
-  tokenState: ResourceState;
-  tokenCount: number;
-  tokenTotalSize: bigint | null;
-  tokenTotalSizeExact: boolean;
-  activeTokens: number;
-  onNavigate: (section: AdminSection) => void;
-  onReload: () => void;
-}
-
-function BackendOverview(props: BackendOverviewProps) {
-  const { bootstrap } = props;
-  const indexCount = countLabel(
-    props.indexCount,
-    props.indexTotalSize,
-    props.indexTotalSizeExact,
-    "index",
-    "indexes",
-  );
-  const tokenCount = countLabel(
-    props.tokenCount,
-    props.tokenTotalSize,
-    props.tokenTotalSizeExact,
-    "token",
-    "tokens",
-  );
-  const indexDetail = props.indexState === "available"
-    ? `${props.activeIndexes.toLocaleString()} active in loaded records`
-    : props.indexState === "loading"
-      ? "Loading catalog…"
-      : props.indexState === "error"
-        ? "Load failed"
-        : "Route unavailable";
-  const tokenDetail = props.tokenState === "available"
-    ? `${props.activeTokens.toLocaleString()} active in loaded records`
-    : props.tokenState === "loading"
-      ? "Loading tokens…"
-      : props.tokenState === "error"
-        ? "Load failed"
-        : "Route unavailable";
-  return (
-    <div className="admin-section-stack">
-      <header className="admin-section-header"><div><h2>System overview</h2><p>Capabilities reported by the available server routes.</p></div><button className="button" type="button" onClick={props.onReload}>Refresh</button></header>
-      <div className="admin-summary-grid">
-        <article><span className="summary-icon summary-icon--green" aria-hidden="true">▦</span><div><small>Indexes</small><strong>{props.indexState === "available" ? indexCount : "—"}</strong><p>{indexDetail}</p></div><button type="button" onClick={() => props.onNavigate("indexes")}>Manage</button></article>
-        <article><span className="summary-icon summary-icon--blue" aria-hidden="true">⇣</span><div><small>Ingestion tokens</small><strong>{props.tokenState === "available" ? tokenCount : "—"}</strong><p>{tokenDetail}</p></div><button type="button" onClick={() => props.onNavigate("collectors")}>Inspect</button></article>
-        <article><span className="summary-icon summary-icon--violet" aria-hidden="true">⌕</span><div><small>Source revision</small><strong>{bootstrap?.build?.sourceRevision.slice(0, 12) || "—"}</strong><p>{bootstrap === null ? "Bootstrap unavailable" : bootstrap.build === null ? "Not reported" : "Build identity"}</p></div><Link href="/search/events/">Search</Link></article>
-        <article><span className="summary-icon summary-icon--orange" aria-hidden="true">↻</span><div><small>Result retention</small><strong>{bootstrap !== null && bootstrap.limits.searchResultRetentionMs > 0 ? `${Math.round(bootstrap.limits.searchResultRetentionMs / 60_000)}m` : "—"}</strong><p>{bootstrap === null ? "Bootstrap unavailable" : "Read-only server limit"}</p></div><button type="button" onClick={() => props.onNavigate("server")}>Limits</button></article>
-      </div>
-      {bootstrap === null ? (
-        <BackendResourceState
-          kind="error"
-          title="System bootstrap could not be loaded"
-          message={`${props.bootstrapError ?? "The bootstrap route did not return a usable response."} Index and token routes were checked independently and remain available where shown.`}
-          action={<button type="button" onClick={props.onReload}>Retry bootstrap</button>}
-        />
-      ) : (
-        <section className="suite-card">
-          <header className="suite-card-header"><div><h3>Connection details</h3><p>Values returned by system bootstrap.</p></div><StatusLabel tone="success">Connected</StatusLabel></header>
-          <dl className="backend-definition-list">
-            <div><dt>Source revision</dt><dd>{bootstrap.build?.sourceRevision || "Not reported"}</dd></div>
-            <div><dt>UI build ID</dt><dd>{bootstrap.build?.uiBuildId || "Not reported"}</dd></div>
-            <div><dt>Server time</dt><dd>{formatDate(bootstrap.serverTime)}</dd></div>
-            <div><dt>Feature flags</dt><dd>{bootstrap.features.size.toLocaleString()}</dd></div>
-          </dl>
-        </section>
-      )}
-    </div>
-  );
-}
-
-interface BackendIndexesProps {
-  state: ResourceState;
-  error: string | null;
-  filter: string;
-  indexes: Index[];
-  totalIndexes: number;
-  totalSize: bigint | null;
-  totalSizeExact: boolean;
-  hasMore: boolean;
-  loadingMore: boolean;
-  paginationError: string | null;
-  busy: string | null;
-  onFilterChange: (value: string) => void;
-  onLoadMore: () => void;
-  onReload: () => void;
-  onEdit: (index: Index) => void;
-  onChangeState: (index: Index) => void;
-  onDelete: (index: Index) => void;
-}
-
-function BackendIndexes(props: BackendIndexesProps) {
-  if (props.state === "loading") return <BackendResourceState kind="loading" title="Loading indexes" message="Reading the server index catalog…" />;
-  if (props.state === "unavailable") return <BackendResourceState kind="unavailable" title="Index administration is unavailable" message="The connected server did not register the index administration routes." action={<button type="button" onClick={props.onReload}>Retry</button>} />;
-  if (props.state === "error") return <BackendResourceState kind="error" title="Indexes could not be loaded" message={props.error ?? "The server rejected the index catalog request."} action={<button type="button" onClick={props.onReload}>Retry</button>} />;
-
-  const loadedCount = countLabel(
-    props.totalIndexes,
-    props.totalSize,
-    props.totalSizeExact,
-    "index",
-    "indexes",
-  );
-
-  return (
-    <div className="admin-section-stack">
-      <header className="admin-section-header"><div><h2>Indexes</h2><p>Authoritative index definitions from the connected server.</p></div><span>{loadedCount}</span></header>
-      <div className="resource-toolbar"><label><span className="sr-only">Filter loaded indexes</span><i aria-hidden="true"><AppIcon name="search" size="sm" /></i><input value={props.filter} onChange={(event) => props.onFilterChange(event.target.value)} placeholder="Filter loaded indexes" /></label><button type="button" onClick={props.onReload}><AppIcon name="refresh" size="sm" /> Refresh</button></div>
-      {props.indexes.length === 0 ? (
-        <BackendResourceState kind="empty" title={props.totalIndexes === 0 ? "No indexes configured" : "No matching indexes"} message={props.totalIndexes === 0 ? "Create an index to begin accepting and searching data." : "Try another index name or description."} action={props.totalIndexes > 0 && props.filter.trim().length > 0 ? <button type="button" onClick={() => props.onFilterChange("")}>Clear filter</button> : undefined} />
-      ) : (
-        <div className="suite-card resource-table-card">
-          <div className="table-wrap">
-            <table className="table admin-resource-table">
-              <caption className="sr-only">Configured indexes</caption>
-              <thead><tr><th scope="col">Name</th><th scope="col">State</th><th scope="col">Ingestion</th><th scope="col">Search</th><th scope="col">Retention</th><th scope="col">Updated</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
-              <tbody>{props.indexes.map((index) => {
-                const definition = index.definition;
-                const name = definition?.name || index.indexId;
-                const state = indexStateLabel(index.state);
-                const canChange = index.state === IndexState.INDEX_STATE_ACTIVE || index.state === IndexState.INDEX_STATE_ARCHIVED;
-                const canEdit = index.state !== IndexState.INDEX_STATE_DELETING && definition !== undefined;
-                const canSearch = index.state === IndexState.INDEX_STATE_ACTIVE
-                  && definition?.searchAccess === IndexAccessState.INDEX_ACCESS_STATE_ENABLED;
-                const nameContent = <><span aria-hidden="true">▦</span><div><strong>{definition?.displayName || name}</strong><small>index={name}{definition?.description ? ` · ${definition.description}` : ""}</small></div></>;
-                return (
-                  <tr key={index.indexId}>
-                    <td className="table-long-value">{canSearch
-                      ? <Link className="resource-name" href={searchLaunchHref(boundedIndexSearchQuery(name))} aria-label={`Search index ${name}`}>{nameContent}</Link>
-                      : <div className="resource-name" aria-label={`Index ${name} is not currently searchable`}>{nameContent}</div>}
-                    </td>
-                    <td><StatusLabel tone={statusTone(state)}>{state}</StatusLabel></td>
-                    <td>{indexAccessLabel(definition?.ingestionAccess)}</td>
-                    <td>{indexAccessLabel(definition?.searchAccess)}</td>
-                    <td>{formatDuration(definition?.retentionPeriod?.seconds)}</td>
-                    <td>{formatDate(index.updatedAt)}</td>
-                    <td><div className="row-actions"><button className="table-action" type="button" aria-label={`Edit index ${name}`} disabled={!canEdit || props.busy !== null} onClick={() => props.onEdit(index)}>{props.busy === `read-index-${index.indexId}` ? "Loading…" : "Edit"}</button><button className="table-action" type="button" aria-label={`${index.state === IndexState.INDEX_STATE_ACTIVE ? "Archive" : "Reactivate"} index ${name}`} disabled={!canChange || props.busy !== null} onClick={() => props.onChangeState(index)}>{props.busy === `index-${index.indexId}` ? "Updating…" : index.state === IndexState.INDEX_STATE_ACTIVE ? "Archive" : "Reactivate"}</button><button className="table-action table-action--danger" type="button" aria-label={`Delete index ${name}`} disabled={!canEdit || props.busy !== null} onClick={() => props.onDelete(index)}>Delete</button></div></td>
-                  </tr>
-                );
-              })}</tbody>
-            </table>
-          </div>
-        </div>
-      )}
-      <div className="admin-pagination-footer" aria-live="polite">
-        <div>
-          <strong>{loadedCount}</strong>
-          {props.filter.trim().length === 0 ? null : <small>{props.indexes.length.toLocaleString()} matching loaded records</small>}
-          {props.paginationError === null ? null : <small className="table-warning-detail">{props.paginationError}</small>}
-        </div>
-        {props.hasMore
-          ? <button className="button button--secondary" type="button" disabled={props.loadingMore || props.busy !== null} onClick={props.onLoadMore}>{props.loadingMore ? "Loading…" : "Load more indexes"}</button>
-          : null}
-      </div>
-      <p className="resource-footnote">Event counts, storage use, and the bounded field catalog are available from the Datasets page. Delete uses a current version, an exact-name confirmation, and an explicit physical-data mode.</p>
-    </div>
-  );
-}
-
-interface BackendTokensProps {
-  state: ResourceState;
-  error: string | null;
-  indexState: ResourceState;
-  indexError: string | null;
-  scopeSource: TokenScopeSource;
-  tokens: IngestionToken[];
-  totalSize: bigint | null;
-  totalSizeExact: boolean;
-  hasMore: boolean;
-  loadingMore: boolean;
-  paginationError: string | null;
-  busy: string | null;
-  canCreate: boolean;
-  createBlockReason: string | null;
-  recoveryActionLabel: string | null;
-  onResolveRecovery: () => void;
-  onEdit: (token: IngestionToken) => void;
-  onLoadMore: () => void;
-  onReload: () => void;
-  onRevoke: (token: IngestionToken) => void;
-  onSetEnabled: (token: IngestionToken, enabled: boolean) => void;
-}
-
-function BackendTokens(props: BackendTokensProps) {
-  if (props.state === "loading") return <BackendResourceState kind="loading" title="Loading ingestion tokens" message="Reading token metadata from the server…" />;
-  if (props.state === "unavailable") return <BackendResourceState kind="unavailable" title="Ingestion tokens are unavailable" message="The connected server did not register the ingestion-token routes. Collector fleet status is loaded independently from its own capability-gated panel." action={<button type="button" onClick={props.onReload}>Retry</button>} />;
-  if (props.state === "error") return <BackendResourceState kind="error" title="Ingestion tokens could not be loaded" message={props.error ?? "The server rejected the token list request."} action={<button type="button" onClick={props.onReload}>Retry</button>} />;
-  const loadedCount = countLabel(
-    props.tokens.length,
-    props.totalSize,
-    props.totalSizeExact,
-    "token",
-    "tokens",
-  );
-  const indexAdminDetail = props.indexState === "loading"
-    ? "The versioned index catalog is still loading."
-    : props.indexError ?? "The versioned index catalog route is unavailable.";
-
-  return (
-    <div className="admin-section-stack">
-      <header className="admin-section-header"><div><h2>Ingestion tokens</h2><p>Manage server-issued ingestion credentials and their index scopes.</p></div></header>
-      {props.createBlockReason === null ? null : (
-        <div id="ingestion-token-create-disabled-reason" className="access-mode-notice token-create-disabled-reason" role="note">
-          <span>!</span>
-          <div>
-            <strong>Token generation is locked</strong>
-            <p>{props.createBlockReason}</p>
-            {props.recoveryActionLabel === null ? null : (
-              <button className="button button--secondary" type="button" onClick={props.onResolveRecovery}>
-                {props.recoveryActionLabel}
-              </button>
-            )}
-          </div>
-        </div>
-      )}
-      {props.indexState === "available" ? null : (
-        <div className="access-mode-notice" role="note">
-          <span>!</span>
-          <div>
-            <strong>{props.scopeSource === "bootstrap" ? "Using bootstrap index summaries" : "Index scope data unavailable"}</strong>
-            <p>{props.scopeSource === "bootstrap"
-              ? `${indexAdminDetail} Token generation and scope edits remain available using bootstrap eligibility data.`
-              : props.indexError === null
-                ? "Existing tokens can still be inspected, edited, and revoked. Token generation and index-scope changes require an authoritative index summary."
-                : `${props.indexError} Existing tokens remain available, but token generation and index-scope changes are disabled.`}</p>
-          </div>
-        </div>
-      )}
-      <section className="suite-card token-section token-section--credentials">
-        <header className="suite-card-header"><div><h3>Issued credentials</h3><p>Token secrets are never returned after creation. {loadedCount}.</p></div><button type="button" onClick={props.onReload}>Refresh</button></header>
-        {props.tokens.length === 0 ? (
-          <BackendResourceState
-            kind="empty"
-            title="No ingestion tokens"
-            message={props.canCreate
-              ? "Generate a token scoped to an active, ingestible index."
-              : props.scopeSource !== "unavailable"
-                ? "No active, ingestion-enabled index is currently available for a new token."
-                : "The token route is available, but generation is disabled until an authoritative index summary loads."}
-          />
-        ) : (
-          <div className="table-wrap"><table className="table"><caption className="sr-only">Issued ingestion credentials</caption><thead><tr><th scope="col">Name</th><th scope="col">Purpose</th><th scope="col">Prefix</th><th scope="col">Allowed indexes</th><th scope="col">Expires</th><th scope="col">Last used</th><th scope="col">State</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead><tbody>{props.tokens.map((token) => {
-            const state = tokenStateLabel(token.state);
-            const canRevoke = tokenCanBeRevoked(token);
-            const canSetEnabled = tokenCanSetEnabled(token);
-            const enable = token.state === IngestionTokenState.INGESTION_TOKEN_STATE_DISABLED;
-            const hecToken = tokenUsesHEC(token.purpose);
-            const nativeToken = token.purpose === IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR;
-            const canEdit = canRevoke && (hecToken || nativeToken);
-            return <tr key={token.ingestionTokenId}><td><strong>{token.name}</strong>{token.description ? <small className="table-secondary">{token.description}</small> : null}</td><td><strong>{tokenPurposeLabel(token.purpose)}</strong><small className="table-secondary">{hecToken ? `Indexer ACK ${token.hecProfile?.indexerAcknowledgment ? "enabled" : "disabled"}` : nativeToken ? "gRPC ingestion" : "Transport unavailable"}</small>{hecToken ? <small className="table-secondary">{hecProfileSummary(token.hecProfile)}</small> : null}</td><td><code>{token.tokenPrefix}</code></td><td className="table-long-value">{token.constraints?.allowedIndexNames.join(", ") || "None"}<small className="table-secondary">{hecToken ? token.hecProfile?.defaultIndexName ? `Default ${token.hecProfile.defaultIndexName}` : "No token default index" : nativeToken ? token.constraints?.boundCollectorId === undefined ? "Native collector binding required" : `Collector ${token.constraints.boundCollectorId}` : "Purpose unavailable"}</small></td><td>{formatDate(token.expiresAt)}</td><td>{formatDate(token.lastUsedAt)}</td><td><StatusLabel tone={statusTone(state)}>{state}</StatusLabel></td><td><div className="row-actions"><button className="table-action" type="button" aria-label={`Edit token ${token.name}`} disabled={!canEdit || props.busy !== null} onClick={() => props.onEdit(token)}>{props.busy === `read-token-${token.ingestionTokenId}` ? "Loading…" : "Edit"}</button><button className="table-action" type="button" aria-label={`${enable ? "Enable" : "Disable"} token ${token.name}`} disabled={!canSetEnabled || props.busy !== null} onClick={() => props.onSetEnabled(token, enable)}>{props.busy === `token-state-${token.ingestionTokenId}` ? enable ? "Enabling…" : "Disabling…" : canSetEnabled ? enable ? "Enable" : "Disable" : "—"}</button><button className="table-action" type="button" aria-label={`Revoke token ${token.name}`} disabled={!canRevoke || props.busy !== null} onClick={() => props.onRevoke(token)}>{props.busy === `token-${token.ingestionTokenId}` ? "Revoking…" : canRevoke ? "Revoke" : "—"}</button></div></td></tr>;
-          })}</tbody></table></div>
-        )}
-        <div className="admin-pagination-footer admin-pagination-footer--inset" aria-live="polite">
-          <div>
-            <strong>{loadedCount}</strong>
-            {props.paginationError === null ? null : <small className="table-warning-detail">{props.paginationError}</small>}
-          </div>
-          {props.hasMore
-            ? <button className="button button--secondary" type="button" disabled={props.loadingMore || props.busy !== null} onClick={props.onLoadMore}>{props.loadingMore ? "Loading…" : "Load more tokens"}</button>
-            : null}
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function BackendServerSettings({
-  client,
-  bootstrap,
-  error,
-  hecState,
-  hecSnapshot,
-  hecError,
-  onReload,
-  onStatus,
-  onDirtyChange,
-}: {
-  client: OpenSplunkApiClient;
-  bootstrap: SystemBootstrapModel | null;
-  error: string | null;
-  hecState: ResourceState;
-  hecSnapshot: GetHECOperationalSnapshotResponse | null;
-  hecError: string | null;
-  onReload: () => void;
-  onStatus: (message: string, kind: "success" | "warning") => void;
-  onDirtyChange: (dirty: boolean) => void;
-}) {
-  if (bootstrap === null) {
-    return (
-      <BackendResourceState
-        kind="error"
-        title="Server limits could not be loaded"
-        message={error ?? "The system bootstrap route did not return a usable response."}
-        action={<button type="button" onClick={onReload}>Retry bootstrap</button>}
-      />
-    );
-  }
-  const limits = bootstrap.limits;
-  const editable = supportsServerFeature(bootstrap, ServerFeature.SERVER_FEATURE_SERVER_SETTINGS_ADMIN);
-  return (
-    <div className="admin-section-stack">
-      <header className="admin-section-header"><div><h2>Server settings</h2><p>{editable ? "Persistent node-wide search resource limits." : "Read-only limits advertised to this browser."}</p></div><span>{editable ? "Administrator settings" : "Bootstrap values"}</span></header>
-      {editable ? <SearchLimitsSettings client={client} onStatus={onStatus} onDirtyChange={onDirtyChange} /> : <><div className="access-mode-notice" role="note"><span>i</span><div><strong>Configuration writes are unavailable</strong><p>The backend does not advertise editable server settings. These values cannot be changed from this page.</p></div></div>
-      <section className="suite-card settings-group">
-        <header><h3>Search and result limits</h3><p>Authoritative limits returned by system bootstrap.</p></header>
-        <dl className="backend-definition-list">
-          <div><dt>Maximum page size</dt><dd>{limits.maximumPageSize.toLocaleString()}</dd></div>
-          <div><dt>Default search timeout</dt><dd>{limits.defaultSearchTimeoutMs > 0 ? `${(limits.defaultSearchTimeoutMs / 1_000).toLocaleString()} seconds` : "Not reported"}</dd></div>
-          <div><dt>Result retention</dt><dd>{limits.searchResultRetentionMs > 0 ? `${(limits.searchResultRetentionMs / 60_000).toLocaleString()} minutes` : "Not reported"}</dd></div>
-          <div><dt>Maximum export rows</dt><dd>{limits.maximumExportRows > 0n ? limits.maximumExportRows.toLocaleString() : "Not reported"}</dd></div>
-          <div><dt>Maximum export bytes</dt><dd>{limits.maximumExportBytes > 0n ? limits.maximumExportBytes.toLocaleString() : "Not reported"}</dd></div>
-          <div><dt>Maximum timeline buckets</dt><dd>{limits.maximumTimelineBuckets > 0 ? limits.maximumTimelineBuckets.toLocaleString() : "Not available"}</dd></div>
-        </dl>
-      </section></>}
-      {hecState === "unavailable" ? (
-        <div className="access-mode-notice" role="note"><span>i</span><div><strong>HTTP Event Collector is disabled</strong><p>The server does not advertise HEC ingestion. HEC token creation and test commands remain unavailable until the data-plane feature is enabled.</p></div></div>
-      ) : hecState === "loading" ? (
-        <BackendResourceState kind="loading" title="Loading HEC operations" message="Reading the administrator operational snapshot…" />
-      ) : hecState === "error" || hecSnapshot === null ? (
-        <BackendResourceState kind="error" title="HEC operations could not be loaded" message={hecError ?? "The operational snapshot was empty."} action={<button type="button" onClick={onReload}>Retry</button>} />
-      ) : (
-        <>
-          <section className="suite-card settings-group">
-            <header><h3>HTTP Event Collector operations</h3><p>Process-wide counters observed {formatDate(hecSnapshot.observedAt)}.</p></header>
-            <dl className="backend-definition-list">
-              <div><dt>Requests</dt><dd>{hecSnapshot.request?.requests.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>Accepted requests</dt><dd>{hecSnapshot.request?.acceptedRequests.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>Events</dt><dd>{hecSnapshot.request?.events.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>Uncompressed bytes</dt><dd>{hecSnapshot.request?.uncompressedBytes.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>Authentication failures</dt><dd>{hecSnapshot.request?.authenticationFailures.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>Decode failures</dt><dd>{hecSnapshot.request?.decodeFailures.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>Event-policy failures</dt><dd>{hecSnapshot.request?.eventPolicyFailures.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>Rate-limited requests</dt><dd>{hecSnapshot.request?.rateLimitedRequests.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>Staging failures</dt><dd>{hecSnapshot.request?.stagingFailures.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>Staging duration</dt><dd>{formatOperationalDuration(hecSnapshot.request?.stagingDuration)}</dd></div>
-              <div><dt>Shutdown rejections</dt><dd>{hecSnapshot.request?.shutdownRejections.toLocaleString() ?? "Not reported"}</dd></div>
-            </dl>
-          </section>
-          <section className="suite-card settings-group">
-            <header><h3>Durability and acknowledgment</h3><p>Queue capacity, reconciliation, and indexer-acknowledgment health.</p></header>
-            <dl className="backend-definition-list">
-              <div><dt>Durable queue</dt><dd>{hecSnapshot.durable?.queueAvailable ? "Available" : "Unavailable"}</dd></div>
-              <div><dt>Request capacity</dt><dd>{hecSnapshot.durable?.requestCapacityAvailable ? "Available" : "Unavailable"}</dd></div>
-              <div><dt>Pending outbox reservations</dt><dd>{hecSnapshot.durable?.pendingOutboxReservations.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>Pending outbox bytes</dt><dd>{hecSnapshot.durable?.pendingOutboxBytes.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>Oldest pending age</dt><dd>{formatOperationalDuration(hecSnapshot.durable?.oldestPendingOutboxAge)}</dd></div>
-              <div><dt>Retained requests</dt><dd>{hecSnapshot.durable?.retainedRequests.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>Reconciliation</dt><dd>{hecSnapshot.reconciliation?.available ? "Available" : "Unavailable"}</dd></div>
-              <div><dt>Reconciliation successes</dt><dd>{hecSnapshot.reconciliation?.successes.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>Reconciliation retries</dt><dd>{hecSnapshot.reconciliation?.retries.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>Reconciliation ambiguities</dt><dd>{hecSnapshot.reconciliation?.ambiguities.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>ACK service</dt><dd>{hecSnapshot.acknowledgments?.available ? "Available" : "Unavailable"}</dd></div>
-              <div><dt>Active ACK channels</dt><dd>{hecSnapshot.acknowledgments?.activeChannels.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>Retained ACK channels</dt><dd>{hecSnapshot.acknowledgments?.retainedChannels.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>Pending ACK rows</dt><dd>{hecSnapshot.acknowledgments?.pendingRows.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>Indexed ACK rows</dt><dd>{hecSnapshot.acknowledgments?.indexedRows.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>Expired ACK rows</dt><dd>{hecSnapshot.acknowledgments?.expiredRows.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>Terminal failed requests</dt><dd>{hecSnapshot.acknowledgments?.terminalFailedRequests.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>ACK queries</dt><dd>{hecSnapshot.acknowledgments?.queries.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>ACK IDs queried</dt><dd>{hecSnapshot.acknowledgments?.idsQueried.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>ACK query misses</dt><dd>{hecSnapshot.acknowledgments?.misses.toLocaleString() ?? "Not reported"}</dd></div>
-            </dl>
-          </section>
-          <section className="suite-card settings-group">
-            <header><h3>HEC protocol failures</h3><p>Bounded non-success response codes reported by the HEC compatibility layer.</p></header>
-            {hecSnapshot.protocolFailures.length === 0 ? <p className="settings-group__empty">No protocol failures have been observed.</p> : (
-              <dl className="backend-definition-list">
-                {hecSnapshot.protocolFailures.map((metric) => <div key={metric.code}><dt>Response code {metric.code}</dt><dd>{metric.count.toLocaleString()}</dd></div>)}
-              </dl>
-            )}
-          </section>
-        </>
-      )}
     </div>
   );
 }

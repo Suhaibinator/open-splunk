@@ -38,6 +38,7 @@ const testFiles = [
   path.join("app", "dashboards", "dashboard-panel-runner.test.ts"),
   path.join("app", "admin", "admin-resource-data.test.ts"),
   path.join("app", "admin", "backend-admin-console-hec.test.ts"),
+  path.join("app", "admin", "token-creation-dialog.test.tsx"),
   path.join("app", "admin", "ingestion-policy-form.test.ts"),
   path.join("app", "admin", "search-limits-form.test.ts"),
   path.join("app", "admin", "token-create-recovery-policy.test.ts"),

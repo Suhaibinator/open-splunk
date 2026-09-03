@@ -10,10 +10,10 @@ import {
   hecProfileFromForm,
   parsePersistedTokenCreateGuard,
   serializeTokenCreateGuard,
-  tokenCanSetEnabled,
   tokenPurposeLabel,
   validHECMetadataDefault,
-} from "./backend-admin-console";
+} from "./token-creation";
+import { tokenCanSetEnabled } from "./backend-admin-panels";
 import { tokenPatternsFromForm } from "./ingestion-policy-form";
 
 test("only active and disabled tokens expose reversible state controls", () => {

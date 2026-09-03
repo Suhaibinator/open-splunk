@@ -187,7 +187,9 @@
 .token-reveal button { background: var(--fg-secondary); border: 1px solid var(--status-neutral); color: var(--fg-inverse); font-size: var(--type-xs); height: 28px; }
 .token-create-recovery { display: grid; gap: var(--space-3); }
 .token-recovery-summary { border: 1px solid var(--border); display: grid; gap: var(--space-1); padding: var(--space-3); }
+.token-recovery-summary--wide { grid-column: 1 / -1; }
 .token-recovery-summary strong { font-size: var(--type-sm); }
+.token-recovery-command { overflow-wrap: anywhere; white-space: pre-wrap; }
 .token-recovery-list { border: 1px solid var(--border); list-style: none; margin: 0; padding: 0; }
 .token-recovery-list li { align-items: center; border-bottom: 1px solid var(--border-subtle); display: grid; gap: 10px; grid-template-columns: minmax(0, 1fr) auto auto; padding: 10px; }
 .token-recovery-list li:last-child { border-bottom: 0; }
