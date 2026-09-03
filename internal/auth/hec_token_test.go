@@ -115,6 +115,77 @@ func TestAuthenticateHECReturnsVersionedPolicySnapshotAndRecordsUse(t *testing.T
 	}
 }
 
+func TestAuthenticateHECClassifiesSQLiteWriterContentionAsTemporary(t *testing.T) {
+	ctx := context.Background()
+	db := openControlDB(t)
+	if _, err := db.CreateIndex(ctx, activeIndex("main")); err != nil {
+		t.Fatalf("CreateIndex(main): %v", err)
+	}
+	store, err := NewStore(
+		db,
+		[]byte("0123456789abcdef0123456789abcdef"),
+	)
+	if err != nil {
+		t.Fatalf("NewStore(): %v", err)
+	}
+	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
+		Name:              "HEC contended authentication",
+		Purpose:           IngestionTokenPurposeHEC,
+		AllowedIndexNames: []string{"main"},
+	})
+	if err != nil {
+		t.Fatalf("CreateCollectorToken(HEC): %v", err)
+	}
+
+	database := db.SQLDB()
+	database.SetMaxOpenConns(2)
+	blocker, err := database.Conn(ctx)
+	if err != nil {
+		t.Fatalf("acquire HEC authentication blocker: %v", err)
+	}
+	blockerOpen := true
+	t.Cleanup(func() {
+		if !blockerOpen {
+			return
+		}
+		_, _ = blocker.ExecContext(context.Background(), `ROLLBACK`)
+		_ = blocker.Close()
+	})
+	if _, err := blocker.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		t.Fatalf("reserve HEC authentication writer: %v", err)
+	}
+	contender, err := database.Conn(ctx)
+	if err != nil {
+		t.Fatalf("acquire HEC authentication contender: %v", err)
+	}
+	if _, err := contender.ExecContext(ctx, `PRAGMA busy_timeout = 1`); err != nil {
+		_ = contender.Close()
+		t.Fatalf("shorten HEC authentication busy timeout: %v", err)
+	}
+	if err := contender.Close(); err != nil {
+		t.Fatalf("release configured HEC authentication contender: %v", err)
+	}
+
+	if _, err := store.AuthenticateHEC(ctx, issued.Secret.Plaintext()); !errors.Is(err, ErrHECAuthenticationTemporarilyUnavailable) ||
+		!control.IsDatabaseContention(err) {
+		t.Fatalf(
+			"AuthenticateHEC(contended) error = %v, want temporary database contention",
+			err,
+		)
+	}
+	if _, err := blocker.ExecContext(ctx, `ROLLBACK`); err != nil {
+		t.Fatalf("release HEC authentication writer: %v", err)
+	}
+	if err := blocker.Close(); err != nil {
+		t.Fatalf("close HEC authentication blocker: %v", err)
+	}
+	blockerOpen = false
+
+	if _, err := store.AuthenticateHEC(ctx, issued.Secret.Plaintext()); err != nil {
+		t.Fatalf("AuthenticateHEC(after contention): %v", err)
+	}
+}
+
 func TestAuthenticateHECFailsClosedWithoutProfileAndDoesNotRecordUse(t *testing.T) {
 	t.Parallel()
 

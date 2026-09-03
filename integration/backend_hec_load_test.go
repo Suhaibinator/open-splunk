@@ -461,6 +461,37 @@ func TestBackendHECLoadWarmAcceptanceUsesCompletionTime(t *testing.T) {
 	}
 }
 
+func TestBackendHECLoadUnexpectedResponseIncludesBoundedDiagnostics(t *testing.T) {
+	t.Parallel()
+	started := time.Unix(1_700_000_000, 0)
+	accumulator := &backendHECLoadAccumulator{outageStart: started.Add(10 * time.Second)}
+	accumulator.result.startedAt = started
+	job := backendHECLoadJob{
+		shape:       backendHECLoadShapeSmall,
+		events:      1,
+		scheduledAt: started.Add(3 * time.Second),
+	}
+	err := accumulator.record(job, backendHECLoadHTTPResponse{
+		status:      http.StatusInternalServerError,
+		code:        8,
+		text:        "Internal server error",
+		completedAt: started.Add(3*time.Second + 125*time.Millisecond),
+	})
+	if err == nil {
+		t.Fatal("unexpected HEC load response returned no diagnostic error")
+	}
+	for _, want := range []string{
+		`small response status/code/text/ack = 500/8/"Internal server error"/0`,
+		"scheduled_offset=3s",
+		"completed_offset=3.125s",
+		"latency=125ms",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("unexpected HEC load response error %q does not contain %q", err, want)
+		}
+	}
+}
+
 func TestBackendHECLoadSoakRateRequiresSustainedTailAndPacing(t *testing.T) {
 	t.Parallel()
 	plan := defaultBackendHECLoadPlan()
@@ -919,7 +950,18 @@ func runBackendHECDurableLoad(t *testing.T, plan backendHECLoadPlan) {
 
 	load := <-loadDone
 	if load.err != nil {
-		t.Fatalf("durable HEC traffic: %v", load.err)
+		failureOperations, failureOperationsErr := readBackendHECLoadOperations(
+			ctx,
+			httpClient,
+			baseURL,
+			administratorToken,
+		)
+		t.Fatalf(
+			"durable HEC traffic: %v; operations_error=%v; operations=%+v",
+			load.err,
+			failureOperationsErr,
+			failureOperations,
+		)
 	}
 	if err := nativeGenerator.Wait(plan.Duration + 30*time.Second); err != nil {
 		t.Fatalf("native HEC-load generator: %v", err)
@@ -1310,11 +1352,15 @@ func (accumulator *backendHECLoadAccumulator) record(
 		return nil
 	default:
 		return fmt.Errorf(
-			"HEC load %s response status/code/ack = %d/%d/%d",
+			"HEC load %s response status/code/text/ack = %d/%d/%q/%d (scheduled_offset=%s completed_offset=%s latency=%s)",
 			job.shape,
 			response.status,
 			response.code,
+			response.text,
 			response.acknowledgment,
+			job.scheduledAt.Sub(accumulator.result.startedAt).Round(time.Millisecond),
+			response.completedAt.Sub(accumulator.result.startedAt).Round(time.Millisecond),
+			response.completedAt.Sub(job.scheduledAt).Round(time.Millisecond),
 		)
 	}
 }
@@ -1470,6 +1516,7 @@ func backendHECLoadFullBody() []byte {
 type backendHECLoadHTTPResponse struct {
 	status         int
 	code           int
+	text           string
 	acknowledgment int64
 	completedAt    time.Time
 }
@@ -1516,6 +1563,7 @@ func backendHECLoadPost(
 	result := backendHECLoadHTTPResponse{
 		status:      response.StatusCode,
 		code:        decoded.Code,
+		text:        decoded.Text,
 		completedAt: time.Now(),
 	}
 	if decoded.AckID != nil {
