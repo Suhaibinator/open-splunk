@@ -1,19 +1,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { SearchJob } from "@/gen/ts/open_splunk/search";
+import type { SearchJob, SearchProgress } from "@/gen/ts/open_splunk/search";
 import type { SearchWebSocketClient } from "@/lib/api";
 
 import { RunningSearchController } from "./running-search-controller";
 
 test("a backend launch supersedes the prior job and resets reconciliation state", () => {
   const running = new RunningSearchController();
-  running.jobIdRef.current = "prior-job";
-  running.jobRef.current = { searchJobId: "prior-job" } as SearchJob;
-  running.jobVersionRef.current = 9n;
-  running.liveUpdateEpochRef.current = 4n;
-  running.cancelPendingRef.current = true;
-  running.cancelRequestedRef.current = true;
+  const priorGeneration = running.beginGeneration();
+  running.recordJobId("prior-job");
+  running.acceptAuthoritativeJob(
+    { searchJobId: "prior-job", stateVersion: 9n } as SearchJob,
+    { revision: 9n, progress: {} as SearchProgress },
+  );
+  running.recordUnversionedLiveUpdate();
+  assert.equal(running.beginCancel(), priorGeneration);
   let relatedRequestsAborted = false;
 
   const generation = running.beginGeneration();
@@ -21,15 +23,15 @@ test("a backend launch supersedes the prior job and resets reconciliation state"
     relatedRequestsAborted = true;
   });
 
-  assert.equal(generation, 1);
+  assert.equal(generation, 2);
   assert.equal(launch.supersededJobId, "prior-job");
   assert.equal(running.isCurrent(generation), true);
-  assert.equal(running.jobIdRef.current, null);
-  assert.equal(running.jobRef.current, null);
-  assert.equal(running.jobVersionRef.current, 0n);
-  assert.equal(running.liveUpdateEpochRef.current, 0n);
-  assert.equal(running.cancelPendingRef.current, false);
-  assert.equal(running.cancelRequestedRef.current, false);
+  assert.equal(running.currentJobId(), null);
+  assert.equal(running.currentJob(), null);
+  assert.equal(running.currentJobVersion(), 0n);
+  assert.equal(running.captureLiveUpdateEpoch(), 0n);
+  assert.equal(running.cancelIsPending(), false);
+  assert.equal(running.cancelWasRequested(), false);
   assert.equal(relatedRequestsAborted, true);
 });
 
@@ -41,8 +43,8 @@ test("cancel completion cannot clear a newer search generation", () => {
 
   running.finishCancel(canceledGeneration);
 
-  assert.equal(running.cancelPendingRef.current, true);
-  assert.equal(running.cancelRequestedRef.current, true);
+  assert.equal(running.cancelIsPending(), true);
+  assert.equal(running.cancelWasRequested(), true);
 });
 
 test("live update state is fenced by socket identity and job lifetime", () => {
@@ -59,14 +61,14 @@ test("live update state is fenced by socket identity and job lifetime", () => {
 
   running.attachSocket(second);
   running.releaseSocket(first);
-  assert.equal(running.socketRef.current, second);
   running.recordUnversionedLiveUpdate();
   assert.equal(running.liveUpdateEpochIs(epoch), false);
 
   running.stopLiveUpdates();
   assert.equal(firstDisposed, 0);
   assert.equal(secondDisposed, 1);
-  assert.equal(running.socketRef.current, null);
+  running.stopLiveUpdates();
+  assert.equal(secondDisposed, 1);
   running.clearJob();
   assert.equal(running.captureLiveUpdateEpoch(), 0n);
 });
