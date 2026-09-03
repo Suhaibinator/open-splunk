@@ -31,6 +31,9 @@
 import { readFileSync } from "node:fs";
 import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
+import { NodeFlags, SyntaxKind } from "typescript/unstable/ast";
+import { createVirtualFileSystem } from "typescript/unstable/fs";
+import { API } from "typescript/unstable/sync";
 
 /* == 1. The layer ========================================================== */
 
@@ -1817,7 +1820,7 @@ export async function collectExactTokenMisses(root) {
     perFamily.set(value.trim(), name);
     steps.set(prefix, perFamily);
   }
-  const spacingSteps = steps.get("--space-") ?? new Map();
+  const spacingSteps = universalSpacingSteps(resolved);
   const misses = [];
   for (const declaration of await collectApplicationDeclarations(root)) {
     const { file, property, selector, value } = declaration;
@@ -1841,6 +1844,14 @@ export async function collectExactTokenMisses(root) {
   return misses.toSorted((left, right) => (
     `${left.file}${left.selector}${left.property}`.localeCompare(`${right.file}${right.selector}${right.property}`)
   ));
+}
+
+export function universalSpacingSteps(resolved) {
+  return new Map(
+    [...resolved]
+      .filter(([name]) => /^--space-\d+$/u.test(name))
+      .map(([name, value]) => [value.trim(), name]),
+  );
 }
 
 /**
@@ -2129,6 +2140,144 @@ export async function collectInlineStyleColourLiterals(root) {
     }
     return found;
   }));
+  return perFile.flat().toSorted();
+}
+
+const INLINE_LAYOUT_PROPERTIES = new Set([
+  "alignContent", "alignItems", "alignSelf", "aspectRatio", "blockSize", "bottom",
+  "columnGap", "display", "flex", "flexBasis", "flexDirection", "flexGrow", "flexShrink",
+  "flexWrap", "gap", "grid", "gridArea", "gridAutoColumns", "gridAutoFlow", "gridAutoRows",
+  "gridColumn", "gridColumnEnd", "gridColumnStart", "gridRow", "gridRowEnd", "gridRowStart",
+  "gridTemplate", "gridTemplateAreas", "gridTemplateColumns", "gridTemplateRows", "height",
+  "inlineSize", "inset", "insetBlock", "insetBlockEnd", "insetBlockStart", "insetInline",
+  "insetInlineEnd", "insetInlineStart", "justifyContent", "justifyItems", "justifySelf", "left",
+  "margin", "marginBlock", "marginBlockEnd", "marginBlockStart", "marginBottom", "marginInline",
+  "marginInlineEnd", "marginInlineStart", "marginLeft", "marginRight", "marginTop", "maxBlockSize",
+  "maxHeight", "maxInlineSize", "maxWidth", "minBlockSize", "minHeight", "minInlineSize",
+  "minWidth", "objectFit", "overflow", "overflowWrap", "overflowX", "overflowY", "padding", "paddingBlock",
+  "paddingBlockEnd", "paddingBlockStart", "paddingBottom", "paddingInline", "paddingInlineEnd",
+  "paddingInlineStart", "paddingLeft", "paddingRight", "paddingTop", "position", "right", "rowGap",
+  "textAlign", "textDecoration", "textOverflow", "top", "transform", "whiteSpace", "width", "zIndex",
+]);
+
+const INLINE_SOURCE_PREFIX = "/style-inventory-inline";
+let inlineParser;
+
+function parsedTypeScript(source, collect) {
+  if (inlineParser === undefined) {
+    const fileSystem = createVirtualFileSystem({});
+    const api = new API({ cwd: "/", fs: fileSystem });
+    inlineParser = { api, fileSystem, sourcePath: null, version: 0 };
+    process.once("exit", () => api.close());
+  }
+  const previousPath = inlineParser.sourcePath;
+  inlineParser.version += 1;
+  const sourcePath = `${INLINE_SOURCE_PREFIX}-${inlineParser.version}.tsx`;
+  inlineParser.fileSystem.writeFile(sourcePath, source);
+  const snapshot = inlineParser.api.updateSnapshot({
+    closeFiles: previousPath === null ? [] : [previousPath],
+    openFiles: [sourcePath],
+  });
+  if (previousPath !== null) inlineParser.fileSystem.removeFile(previousPath);
+  inlineParser.sourcePath = sourcePath;
+  try {
+    const project = snapshot.getDefaultProjectForFile(sourcePath);
+    const sourceFile = project?.program.getSourceFile(sourcePath);
+    return project === undefined || sourceFile === undefined ? [] : collect(sourceFile, project);
+  } finally {
+    snapshot.dispose();
+  }
+}
+
+function unwrapInlineExpression(expression) {
+  let current = expression;
+  while ([
+    SyntaxKind.AsExpression,
+    SyntaxKind.NonNullExpression,
+    SyntaxKind.ParenthesizedExpression,
+    SyntaxKind.SatisfiesExpression,
+    SyntaxKind.TypeAssertionExpression,
+  ].includes(current.kind)) current = current.expression;
+  return current;
+}
+
+function fixedInlineValue(expression) {
+  const current = unwrapInlineExpression(expression);
+  if ([
+    SyntaxKind.NoSubstitutionTemplateLiteral,
+    SyntaxKind.NumericLiteral,
+    SyntaxKind.StringLiteral,
+  ].includes(current.kind)) return true;
+  if (current.kind === SyntaxKind.PrefixUnaryExpression) {
+    return current.operator === SyntaxKind.MinusToken
+      && unwrapInlineExpression(current.operand).kind === SyntaxKind.NumericLiteral;
+  }
+  return current.kind === SyntaxKind.ConditionalExpression
+    && fixedInlineValue(current.whenTrue)
+    && fixedInlineValue(current.whenFalse);
+}
+
+function objectLiteralExpression(expression) {
+  if (expression === undefined) return null;
+  const current = unwrapInlineExpression(expression);
+  return current.kind === SyntaxKind.ObjectLiteralExpression ? current : null;
+}
+
+function collectObjectDeclarations(sourceFile, object) {
+  const found = [];
+  for (const member of object.properties) {
+    if (member.kind === SyntaxKind.SpreadAssignment) {
+      const spread = objectLiteralExpression(member.expression);
+      if (spread !== null) found.push(...collectObjectDeclarations(sourceFile, spread));
+      continue;
+    }
+    if (member.kind !== SyntaxKind.PropertyAssignment) continue;
+    const property = [SyntaxKind.Identifier, SyntaxKind.StringLiteral].includes(member.name.kind)
+      ? member.name.text
+      : null;
+    if (property !== null && INLINE_LAYOUT_PROPERTIES.has(property) && fixedInlineValue(member.initializer)) {
+      found.push(`${property}: ${member.initializer.getText(sourceFile)}`);
+    }
+  }
+  return found;
+}
+
+function resolvedConstObject(identifier, project) {
+  const declaration = project.checker.getResolvedSymbol(identifier)?.valueDeclaration?.resolve(project);
+  if (declaration?.kind !== SyntaxKind.VariableDeclaration
+    || declaration.parent.kind !== SyntaxKind.VariableDeclarationList
+    || (declaration.parent.flags & NodeFlags.Const) === 0) return null;
+  return objectLiteralExpression(declaration.initializer);
+}
+
+export function collectFixedInlineLayoutDeclarations(source) {
+  return parsedTypeScript(source, (sourceFile, project) => {
+    const found = [];
+    function visit(node) {
+      if (node.kind === SyntaxKind.JsxAttribute
+        && node.name.kind === SyntaxKind.Identifier
+        && node.name.text === "style"
+        && node.initializer?.kind === SyntaxKind.JsxExpression) {
+        const expression = node.initializer.expression;
+        const current = expression === undefined ? undefined : unwrapInlineExpression(expression);
+        const object = current?.kind === SyntaxKind.Identifier
+          ? resolvedConstObject(current, project)
+          : objectLiteralExpression(current);
+        if (object !== null) found.push(...collectObjectDeclarations(sourceFile, object));
+      }
+      node.forEachChild(visit);
+    }
+    visit(sourceFile);
+    return found;
+  });
+}
+
+export async function collectApplicationFixedInlineLayoutDeclarations(root) {
+  const files = await listApplicationTypeScript(root);
+  const perFile = await Promise.all(files.map(async (file) => (
+    collectFixedInlineLayoutDeclarations(await readFile(file, "utf8"))
+      .map((declaration) => `${relativePosix(root, file)}: ${declaration}`)
+  )));
   return perFile.flat().toSorted();
 }
 

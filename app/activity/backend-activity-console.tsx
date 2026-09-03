@@ -154,9 +154,11 @@ export function BackendActivityConsole({ apiBaseUrl, onViewChange, view }: Backe
     };
   }, [client]);
 
-  useEffect(() => {
+  const [visitedView, setVisitedView] = useState(view);
+  if (visitedView !== view) {
+    setVisitedView(view);
     setVisited((current) => new Set(current).add(view));
-  }, [view]);
+  }
 
   function selectView(nextView: ActivityView) {
     onViewChange(nextView);
@@ -355,6 +357,21 @@ function BackendSearchHistory({ apiBaseUrl }: BackendActivityViewProps) {
   const actionAbortRef = useRef<AbortController | null>(null);
   const pageTokensSeenRef = useRef<Set<string>>(new Set());
   const reload = useCallback(() => setGeneration((current) => current + 1), []);
+  const loadInput = { client, filter, generation, textFilter };
+  const [activeLoadInput, setActiveLoadInput] = useState(loadInput);
+  if (
+    activeLoadInput.client !== loadInput.client
+    || activeLoadInput.filter !== loadInput.filter
+    || activeLoadInput.generation !== loadInput.generation
+    || activeLoadInput.textFilter !== loadInput.textFilter
+  ) {
+    setActiveLoadInput(loadInput);
+    setState("loading");
+    setError(null);
+    setLoadMoreError(null);
+    setLoadingMore(false);
+    setNextPageToken(null);
+  }
 
   useEffect(() => {
     const timeout = window.setTimeout(() => setTextFilter(query.trim()), 300);
@@ -364,15 +381,11 @@ function BackendSearchHistory({ apiBaseUrl }: BackendActivityViewProps) {
   useEffect(() => () => actionAbortRef.current?.abort(), []);
 
   useEffect(() => {
+    if (activeLoadInput.generation !== generation) return;
     loadMoreAbortRef.current?.abort();
     loadMoreAbortRef.current = null;
     const controller = new AbortController();
     let current = true;
-    setState("loading");
-    setError(null);
-    setLoadMoreError(null);
-    setLoadingMore(false);
-    setNextPageToken(null);
     bootstrapRef.current = null;
     pageTokensSeenRef.current.clear();
     void (async () => {
@@ -418,7 +431,7 @@ function BackendSearchHistory({ apiBaseUrl }: BackendActivityViewProps) {
       loadMoreAbortRef.current?.abort();
       loadMoreAbortRef.current = null;
     };
-  }, [client, filter, generation, textFilter]);
+  }, [activeLoadInput, client, filter, generation, textFilter]);
 
   const loadMore = useCallback(async () => {
     const bootstrap = bootstrapRef.current;
@@ -594,7 +607,7 @@ function BackendSearchHistory({ apiBaseUrl }: BackendActivityViewProps) {
 
       {state === "available" ? (
         <>
-          {actionNotice === null ? null : <output className="history-action-notice"><span>{actionNotice}</span><button type="button" aria-label="Dismiss history action message" onClick={() => setActionNotice(null)}><AppIcon name="close" size="md" /></button></output>}
+          {actionNotice === null ? null : <output className="history-action-notice"><span>{actionNotice}</span><button className="button button--notice-dismiss" type="button" aria-label="Dismiss history action message" onClick={() => setActionNotice(null)}><AppIcon name="close" size="md" /></button></output>}
           <output className="live-jobs-snapshot history-snapshot">
             <span><i aria-hidden="true" />This view contains persisted terminal-search metadata, not the transient job list.</span>
             <div className="history-snapshot-actions">

@@ -71,13 +71,23 @@ function BackendRecentSearches({
   const contextualHref = (href: string) => navigationAppId === undefined
     ? href
     : backendAppHref(href, navigationAppId);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    let current = true;
+  const loadInput = { client, generation, preferredAppId };
+  const [activeLoadInput, setActiveLoadInput] = useState(loadInput);
+  if (
+    activeLoadInput.client !== loadInput.client
+    || activeLoadInput.generation !== loadInput.generation
+    || activeLoadInput.preferredAppId !== loadInput.preferredAppId
+  ) {
+    setActiveLoadInput(loadInput);
     setState("loading");
     setError(null);
     setSelectedAppId(null);
+  }
+
+  useEffect(() => {
+    if (activeLoadInput.generation !== generation) return;
+    const controller = new AbortController();
+    let current = true;
     void (async () => {
       try {
         const bootstrap = await getSystemBootstrap(client, preferredAppId, { signal: controller.signal });
@@ -108,7 +118,7 @@ function BackendRecentSearches({
       current = false;
       controller.abort();
     };
-  }, [client, generation, preferredAppId]);
+  }, [activeLoadInput, client, generation, preferredAppId]);
 
   let content;
   if (state === "loading") {

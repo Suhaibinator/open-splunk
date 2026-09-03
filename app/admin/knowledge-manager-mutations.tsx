@@ -993,13 +993,9 @@ export function KnowledgeQuarantineControl({
   useEffect(() => {
     if (preparation === null) return;
     const remainingMilliseconds = preparation.expiresAt.valueOf() - Date.now();
-    if (remainingMilliseconds <= 0) {
-      setControlState("unavailable");
-      return;
-    }
     const timeout = window.setTimeout(
       () => setControlState("unavailable"),
-      Math.min(remainingMilliseconds, 2_147_483_647),
+      Math.max(0, Math.min(remainingMilliseconds, 2_147_483_647)),
     );
     return () => window.clearTimeout(timeout);
   }, [preparation]);

@@ -84,7 +84,7 @@ func (handler *apiHandler) getSavedSearch(request *http.Request, input *opensplu
 	}
 	converted, err = handler.augmentScheduledSearch(request.Context(), converted)
 	if err != nil {
-		return nil, mapScheduledReportError(err)
+		return nil, mapScheduledReportCallError(request.Context(), err)
 	}
 	if err := savedSearchRequestContextError(request.Context()); err != nil {
 		return nil, err
@@ -154,7 +154,7 @@ func (handler *apiHandler) listSavedSearches(request *http.Request, input *opens
 		}
 	}
 	if err := handler.augmentScheduledSearches(request.Context(), converted); err != nil {
-		return nil, mapScheduledReportError(err)
+		return nil, mapScheduledReportCallError(request.Context(), err)
 	}
 	page := &opensplunk.PageResponse{}
 	if result.NextPageToken != nil {
@@ -213,7 +213,7 @@ func (handler *apiHandler) updateSavedSearch(request *http.Request, input *opens
 	}
 	converted, err = handler.augmentScheduledSearch(request.Context(), converted)
 	if err != nil {
-		return nil, mapScheduledReportError(err)
+		return nil, mapScheduledReportCallError(request.Context(), err)
 	}
 	return &opensplunk.UpdateSavedSearchResponse{SavedSearch: converted}, nil
 }

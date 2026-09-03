@@ -118,6 +118,106 @@ test("desktop time picker stays right-anchored inside the viewport", async ({ pa
   expect(geometry.documentWidth).toBe(geometry.viewportWidth);
 });
 
+test("button modifiers preserve notice, toolbar, and dataset-toggle geometry", async ({ page }) => {
+  await mount(page, `
+    <output class="history-action-notice"><span>History updated</span><button class="button button--notice-dismiss" type="button">×</button></output>
+    <output class="reports-action-notice"><span>Report updated</span><button class="button button--notice-dismiss" type="button">×</button></output>
+    <div class="resource-toolbar"><button class="button button--toolbar" type="button"><svg class="app-icon app-icon--sm"></svg> Refresh</button></div>
+    <fieldset class="dataset-view-toggle"><button class="button button--toolbar active" type="button"><svg class="app-icon app-icon--sm"></svg> Cards</button><button class="button button--toolbar" type="button"><span aria-hidden="true">☷</span> Table</button></fieldset>
+    <article class="collector-card"><footer><span></span><small>72% of configured peak</small><button class="button button--link" type="button">Details</button></footer></article>
+    <section class="field-inspector"><footer><span>Showing top values</span><button class="button button--link" type="button">New search</button></footer></section>
+    <section class="pattern-table"><article><button class="button button--link pattern-action" type="button">View events</button></article></section>
+  `, DESKTOP_WIDTH);
+
+  await Promise.all([".history-action-notice .button", ".reports-action-notice .button"].map(async (selector) => {
+    const dismiss = page.locator(selector);
+    const [height, width] = await Promise.all([
+      contentHeight(page, selector),
+      contentWidth(page, selector),
+    ]);
+    await expect(dismiss).toHaveCSS("border-radius", "0px");
+    await expect(dismiss).toHaveCSS("border-width", "0px");
+    await expect(dismiss).toHaveCSS("font-weight", "400");
+    await expect(dismiss).toHaveCSS("gap", "5px");
+    await expect(dismiss).toHaveCSS("justify-content", "normal");
+    await expect(dismiss).toHaveCSS("padding-bottom", "1px");
+    await expect(dismiss).toHaveCSS("padding-left", "6px");
+    await expect(dismiss).toHaveCSS("padding-right", "6px");
+    await expect(dismiss).toHaveCSS("padding-top", "1px");
+    expect(height).toBeCloseTo(28, 0);
+    expect(width).toBeCloseTo(28, 0);
+  }));
+
+  const [surface, border, selection, subtle] = await resolveTokens(page, [
+    "--bg-surface",
+    "--border-strong",
+    "--selection",
+    "--bg-subtle",
+  ]);
+  const toolbar = page.locator(".resource-toolbar .button");
+  await expect(toolbar).toHaveCSS("background-color", surface ?? "");
+  await expect(toolbar).toHaveCSS("border-color", border ?? "");
+  await expect(toolbar).toHaveCSS("border-radius", "0px");
+  await expect(toolbar).toHaveCSS("display", "flex");
+  await expect(toolbar).toHaveCSS("font-weight", "400");
+  await expect(toolbar).toHaveCSS("gap", "5px");
+  await expect(toolbar).toHaveCSS("height", "32px");
+  await expect(toolbar).toHaveCSS("justify-content", "normal");
+  await expect(toolbar).toHaveCSS("padding-left", "10px");
+  await expect(toolbar).toHaveCSS("padding-right", "10px");
+  expect(await contentWidth(page, ".resource-toolbar .button")).toBeCloseTo(76.02, 1);
+  await toolbar.hover();
+  await expect(toolbar).toHaveCSS("background-color", surface ?? "");
+
+  const activeToggle = page.locator(".dataset-view-toggle .button").first();
+  const inactiveToggle = page.locator(".dataset-view-toggle .button").last();
+  await expect(activeToggle).toHaveCSS("border-radius", "0px");
+  await expect(activeToggle).toHaveCSS("display", "flex");
+  await expect(activeToggle).toHaveCSS("font-weight", "700");
+  await expect(activeToggle).toHaveCSS("gap", "5px");
+  await expect(inactiveToggle).toHaveCSS("border-radius", "0px");
+  await expect(inactiveToggle).toHaveCSS("display", "block");
+  await expect(inactiveToggle).toHaveCSS("font-weight", "400");
+  await expect(inactiveToggle).toHaveCSS("gap", "normal");
+  await expect(inactiveToggle).toHaveCSS("justify-content", "normal");
+  await expect(inactiveToggle).toHaveCSS("border-left-width", "0px");
+  expect(await contentWidth(page, ".dataset-view-toggle .button:first-of-type")).toBeCloseTo(69.36, 1);
+  expect(await contentWidth(page, ".dataset-view-toggle .button:last-of-type")).toBeCloseTo(56.70, 1);
+  await activeToggle.hover();
+  await expect(activeToggle).toHaveCSS("background-color", subtle ?? "");
+  await inactiveToggle.hover();
+  await expect(inactiveToggle).toHaveCSS("background-color", surface ?? "");
+
+  await expect(page.locator(".collector-card footer .button")).toHaveCSS("display", "none");
+  const fieldAction = page.locator(".field-inspector footer .button");
+  await expect(fieldAction).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await expect(fieldAction).toHaveCSS("border-radius", "0px");
+  await expect(fieldAction).toHaveCSS("border-width", "0px");
+  await expect(fieldAction).toHaveCSS("display", "block");
+  await expect(fieldAction).toHaveCSS("font-weight", "400");
+  await expect(fieldAction).toHaveCSS("gap", "normal");
+  await expect(fieldAction).toHaveCSS("min-height", "0px");
+  await expect(fieldAction).toHaveCSS("padding-bottom", "1px");
+  await expect(fieldAction).toHaveCSS("padding-left", "6px");
+  await expect(fieldAction).toHaveCSS("padding-right", "6px");
+  await expect(fieldAction).toHaveCSS("padding-top", "1px");
+  expect(await contentHeight(page, ".field-inspector footer .button")).toBeCloseTo(14, 1);
+  expect(await contentWidth(page, ".field-inspector footer .button")).toBeCloseTo(64.81, 1);
+
+  const patternAction = page.locator(".pattern-action");
+  await expect(patternAction).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await expect(patternAction).toHaveCSS("border-radius", "0px");
+  await expect(patternAction).toHaveCSS("border-width", "0px");
+  await expect(patternAction).toHaveCSS("display", "flex");
+  await expect(patternAction).toHaveCSS("font-weight", "400");
+  await expect(patternAction).toHaveCSS("gap", "5px");
+  await expect(patternAction).toHaveCSS("min-height", "28px");
+  await expect(patternAction).toHaveCSS("padding-left", "8px");
+  await expect(patternAction).toHaveCSS("padding-right", "8px");
+  await patternAction.hover();
+  await expect(patternAction).toHaveCSS("background-color", selection ?? "");
+});
+
 test.describe("search workspace touch targets", () => {
   test.use({ hasTouch: true });
 
@@ -191,6 +291,27 @@ test.describe("search workspace touch targets", () => {
       expect(box.height, `${selector} height`).toBeGreaterThanOrEqual(44);
       expect(box.width, `${selector} width`).toBeGreaterThanOrEqual(44);
     }));
+  });
+
+  test("migrated buttons retain their established coarse-pointer dimensions", async ({ page }) => {
+    await mount(page, `
+      <output class="history-action-notice"><span>History updated</span><button class="button button--notice-dismiss" type="button">×</button></output>
+      <output class="reports-action-notice"><span>Report updated</span><button class="button button--notice-dismiss" type="button">×</button></output>
+      <div class="resource-toolbar"><button class="button button--toolbar" type="button"><svg class="app-icon app-icon--sm"></svg> Refresh</button></div>
+      <fieldset class="dataset-view-toggle"><button class="button button--toolbar active" type="button"><svg class="app-icon app-icon--sm"></svg> Cards</button><button class="button button--toolbar" type="button"><span aria-hidden="true">☷</span> Table</button></fieldset>
+      <section class="field-inspector"><footer><span>Showing top values</span><button class="button button--link" type="button">New search</button></footer></section>
+      <section class="pattern-table"><article><button class="button button--link pattern-action" type="button">View events</button></article></section>
+    `, MOBILE_WIDTH);
+
+    expect(await contentHeight(page, ".history-action-notice .button")).toBeCloseTo(44, 0);
+    expect(await contentWidth(page, ".history-action-notice .button")).toBeCloseTo(44, 0);
+    expect(await contentHeight(page, ".reports-action-notice .button")).toBeCloseTo(28, 0);
+    expect(await contentWidth(page, ".reports-action-notice .button")).toBeCloseTo(28, 0);
+    expect(await contentHeight(page, ".resource-toolbar .button")).toBeCloseTo(32, 0);
+    expect(await contentHeight(page, ".dataset-view-toggle .button:first-of-type")).toBeCloseTo(44, 0);
+    expect(await contentHeight(page, ".dataset-view-toggle .button:last-of-type")).toBeCloseTo(44, 0);
+    expect(await contentHeight(page, ".field-inspector footer .button")).toBeCloseTo(14, 0);
+    expect(await contentHeight(page, ".pattern-action")).toBeCloseTo(28, 0);
   });
 
   test("the open Search app menu stays inside a narrow viewport", async ({ page }) => {
@@ -539,18 +660,15 @@ const statisticsMarkup = `
   </tbody>
 </table>`;
 
-// The stacked presentation mirrors the panel: the cell carries the inline
-// `max-width`/`overflow` the table cell renders with, and each member is its
-// own line inside the fixed-height row.
 const statisticsListMember = `/api/v1/${"resource-segment/".repeat(24)}index`;
 const statisticsListMarkup = `
 <table class="statistics-table statistics-table--fixed">
   <tbody>
     <tr class="statistics-plain-row">
-      <td style="max-width: 420px; overflow: hidden">alpha</td>
+      <td class="statistics-cell--single-line">${statisticsListMember}</td>
     </tr>
     <tr class="statistics-list-row">
-      <td style="max-width: 420px; overflow: hidden"><span class="statistics-multivalue-list"><span class="statistics-multivalue-item">${statisticsListMember}</span><span class="statistics-multivalue-item">${statisticsListMember}-two</span><button class="statistics-multivalue-more" type="button" aria-haspopup="dialog" aria-label="Show all 5 values for path">+3 more</button></span></td>
+      <td class="statistics-cell--multivalue"><span class="statistics-multivalue-list"><span class="statistics-multivalue-item">${statisticsListMember}</span><span class="statistics-multivalue-item">${statisticsListMember}-two</span><button class="statistics-multivalue-more" type="button" aria-haspopup="dialog" aria-label="Show all 5 values for path">+3 more</button></span></td>
     </tr>
   </tbody>
 </table>`;
@@ -625,6 +743,16 @@ test.describe("statistics multivalue contracts", () => {
     await mount(page, statisticsListMarkup, DESKTOP_WIDTH);
 
     const list = page.locator(".statistics-multivalue-list");
+    const listCell = page.locator(".statistics-cell--multivalue");
+    const singleLineCell = page.locator(".statistics-cell--single-line");
+    await expect(listCell).toHaveCSS("max-width", "420px");
+    await expect(listCell).toHaveCSS("overflow-x", "hidden");
+    await expect(listCell).toHaveCSS("overflow-y", "hidden");
+    await expect(singleLineCell).toHaveCSS("max-width", "420px");
+    await expect(singleLineCell).toHaveCSS("overflow-x", "hidden");
+    await expect(singleLineCell).toHaveCSS("overflow-y", "hidden");
+    await expect(singleLineCell).toHaveCSS("text-overflow", "ellipsis");
+    await expect(singleLineCell).toHaveCSS("white-space", "nowrap");
     await expect(list).toHaveCSS("display", "block");
     await expect(list).toHaveCSS("overflow-x", "hidden");
     await expect(list).toHaveCSS("overflow-y", "hidden");

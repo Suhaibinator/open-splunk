@@ -143,6 +143,7 @@ export function BackendLiveJobs({ apiBaseUrl }: BackendLiveJobsProps) {
   const [error, setError] = useState<string | null>(null);
   const [refreshedAt, setRefreshedAt] = useState<Date | null>(null);
   const [generation, setGeneration] = useState(0);
+  const activeLoadGenerationRef = useRef(0);
   const [jobAction, setJobAction] = useState<{ id: string; kind: "cancel" | "rerun" } | null>(null);
   const [actionNotice, setActionNotice] = useState<{ kind: "success" | "error"; message: string } | null>(null);
   const bootstrapRef = useRef<SystemBootstrapModel | null>(null);
@@ -163,6 +164,7 @@ export function BackendLiveJobs({ apiBaseUrl }: BackendLiveJobsProps) {
   }, [query]);
 
   useEffect(() => {
+    activeLoadGenerationRef.current = generation;
     const retainShell = hasLoadedRef.current;
     loadMoreAbortRef.current?.abort();
     loadMoreAbortRef.current = null;
@@ -187,7 +189,7 @@ export function BackendLiveJobs({ apiBaseUrl }: BackendLiveJobsProps) {
     void (async () => {
       try {
         const bootstrap = await getSystemBootstrap(client, undefined, { signal: controller.signal });
-        if (!current) return;
+        if (!current || activeLoadGenerationRef.current !== generation) return;
         bootstrapRef.current = bootstrap;
         setApps(bootstrap.apps
           .filter((app) => app.appId.trim().length > 0)

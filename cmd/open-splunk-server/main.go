@@ -850,6 +850,7 @@ func runWithOptions(config options) error {
 	if err != nil {
 		return err
 	}
+	defer clear(appCursorKey)
 	trustedScheduledAdmission := &runtimeTrustedSearchAdmission{
 		jobs: jobs, indexes: controlDB, apps: appCatalog,
 	}

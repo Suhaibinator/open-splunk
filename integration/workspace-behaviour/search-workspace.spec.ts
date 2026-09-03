@@ -36,6 +36,26 @@ async function runFromEditor(page: Page): Promise<void> {
   await expect(runButton).toHaveAttribute("aria-label", "Run search");
 }
 
+test("mobile fields start collapsed and preserve explicit toggles across viewport changes", async ({ page }) => {
+  await page.setViewportSize({ width: 760, height: 800 });
+  await openSeededWorkspace(page);
+  await runFromEditor(page);
+
+  const layout = page.locator(".events-layout");
+  await expect(layout).toHaveClass(/\bfields-collapsed\b/u);
+  await page.getByRole("button", { name: "Fields", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "Search fields" })).toBeVisible();
+
+  await page.setViewportSize({ width: 900, height: 800 });
+  await page.setViewportSize({ width: 760, height: 800 });
+  await expect(layout).not.toHaveClass(/\bfields-collapsed\b/u);
+  await page.getByRole("button", { name: "Close fields panel" }).click();
+
+  await page.setViewportSize({ width: 900, height: 800 });
+  await page.setViewportSize({ width: 760, height: 800 });
+  await expect(layout).toHaveClass(/\bfields-collapsed\b/u);
+});
+
 test("Ctrl+Space opens the command menu and Enter inserts the highlighted command as a new stage", async ({ page }) => {
   await openSeededWorkspace(page);
   await focusEditorEnd(page);

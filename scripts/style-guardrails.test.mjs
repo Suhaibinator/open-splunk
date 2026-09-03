@@ -30,8 +30,8 @@
 //
 // Every read of a stylesheet goes through `scripts/style-inventory.mjs`, like
 // the suite beside this one, so this file never opens a `.css` itself. What it
-// does read directly are the three tool configurations -- `package.json`,
-// `.stylelintrc.json` and the CI workflow -- because those are the subject.
+// does read directly are the tool configurations and CI workflow because those
+// are the subject.
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -40,6 +40,8 @@ import test from "node:test";
 
 import {
   collectContainerQueries,
+  collectApplicationFixedInlineLayoutDeclarations,
+  collectFixedInlineLayoutDeclarations,
   collectFontShorthandLiterals,
   collectImportantCounts,
   collectInlineStyleColourLiterals,
@@ -48,6 +50,7 @@ import {
 } from "./style-inventory.mjs";
 
 const workspace = process.cwd();
+const oxlintPath = path.join(workspace, ".oxlintrc.json");
 const packagePath = path.join(workspace, "package.json");
 const stylelintPath = path.join(workspace, ".stylelintrc.json");
 const workflowPath = path.join(workspace, ".github", "workflows", "ci.yml");
@@ -92,6 +95,19 @@ test("npm run lint runs the stylesheet gate as well as the script gate", async (
     "npm run lint:css must run stylelint over every stylesheet under app/. Narrowing the glob is the one\n"
       + "edit that silences the gate for a file without changing a single rule, and it looks like a\n"
       + `refactor in review. It currently reads: ${manifest.scripts["lint:css"]}`,
+  );
+});
+
+test("React correctness rules remain errors in the repository lint gate", async () => {
+  const config = await readJson(oxlintPath);
+  const required = [
+    "react/exhaustive-effect-dependencies",
+    "react/refs",
+    "react/set-state-in-effect",
+  ];
+  assert.deepEqual(
+    Object.fromEntries(required.map((rule) => [rule, config.rules[rule]])),
+    Object.fromEntries(required.map((rule) => [rule, "error"])),
   );
 });
 
@@ -243,6 +259,148 @@ test("an inline style may not write a colour the stylesheet sweep would reject",
       + "a named colour and every modern colour function. The weaker of the two definitions guards the\n"
       + "stronger position: an inline style outranks every rule in the cascade, so a colour written here\n"
       + `survives a retheme that repaints the whole stylesheet layer:\n${describeList(inline)}`,
+  );
+});
+
+test("fixed layout values stay in stylesheets while runtime geometry stays inline", async () => {
+  assert.deepEqual(
+    await collectApplicationFixedInlineLayoutDeclarations(workspace),
+    [],
+    "Fixed inline layout declarations outrank the feature stylesheet and cannot be reused. Move them to a class or model the value as runtime domain data.",
+  );
+  assert.deepEqual(
+    collectFixedInlineLayoutDeclarations(`
+      <div style={{ width: "72%", maxWidth: 420, overflow: "hidden", overflowWrap: "anywhere", whiteSpace: \`nowrap\` }} />
+      <div style={{ width: kind === "large" ? "64%" : kind === "medium" ? "42%" : "18%", height: runtimeHeight }} />
+      <div style={({ "paddingInline": "6px", 'textOverflow': "ellipsis" } as const)} />
+      <div title={format({ nested: true }) > threshold ? "wide" : "narrow"} style={{ minWidth: -12 }} />
+    `),
+    ["width: \"72%\"", "maxWidth: 420", "overflow: \"hidden\"", "overflowWrap: \"anywhere\"", "whiteSpace: `nowrap`", "width: kind === \"large\" ? \"64%\" : kind === \"medium\" ? \"42%\" : \"18%\"", "paddingInline: \"6px\"", "textOverflow: \"ellipsis\"", "minWidth: -12"],
+  );
+  assert.deepEqual(
+    collectFixedInlineLayoutDeclarations(`
+      const fixedStyle: CSSProperties = ({ "maxWidth": 420, overflow: ("hidden" as const) } satisfies CSSProperties);
+      const tableShellStyle: CSSProperties = {
+        "--statistics-header-height": \`\${headerHeight}px\`,
+        minWidth: 96,
+        ...(virtualized ? { maxHeight: viewportHeight } : {}),
+      };
+      <section style={fixedStyle} />
+      <section style={(tableShellStyle as CSSProperties)!} />
+    `),
+    ["maxWidth: 420", "overflow: (\"hidden\" as const)", "minWidth: 96"],
+  );
+  assert.deepEqual(
+    collectFixedInlineLayoutDeclarations(`
+      const runtimeStyle = getRuntimeStyle(), fixedStyle = { width: "72%" }, typedStyle: CSSProperties = { minHeight: 40 };
+      <section style={fixedStyle} />
+      <section style={typedStyle} />
+    `),
+    ["width: \"72%\"", "minHeight: 40"],
+  );
+  assert.deepEqual(
+    collectFixedInlineLayoutDeclarations(`
+      const comparison = left < right, fixedStyle = { width: "72%" };
+      <section style={fixedStyle} />
+    `),
+    ["width: \"72%\""],
+  );
+  assert.deepEqual(
+    collectFixedInlineLayoutDeclarations(`
+      <section style={{ ...{ width: "72%", height: runtimeHeight }, ...({ minWidth: 64 } as const) }} />
+    `),
+    ["width: \"72%\"", "minWidth: 64"],
+  );
+  assert.deepEqual(
+    collectFixedInlineLayoutDeclarations(`
+      const shellStyle = { maxWidth: 420 };
+      function Example() {
+        const shellStyle = { maxWidth: runtimeWidth };
+        return <section style={shellStyle} />;
+      }
+    `),
+    [],
+  );
+  assert.deepEqual(
+    collectFixedInlineLayoutDeclarations(`
+      const shellStyle = { maxWidth: 420 };
+      function ParameterShadow(shellStyle: CSSProperties) {
+        return <section style={shellStyle} />;
+      }
+      function LetShadow() {
+        let otherStyle: CSSProperties, shellStyle: CSSProperties = getRuntimeStyle();
+        return <section style={shellStyle} />;
+      }
+      const ArrowShadow = (shellStyle: CSSProperties) => {
+        return <section style={shellStyle} />;
+      };
+    `),
+    [],
+  );
+  assert.deepEqual(
+    collectFixedInlineLayoutDeclarations(`
+      const shellStyle = { maxWidth: 420 };
+      const SingleShadow = shellStyle => <section style={shellStyle} />;
+      const ParenthesizedShadow = (shellStyle) => <section style={shellStyle} />;
+      const TypedShadow = (shellStyle: CSSProperties) => <section style={shellStyle} />;
+      const OuterReference = (value: CSSProperties) => <section style={shellStyle} />;
+      <section style={shellStyle} />
+    `),
+    ["maxWidth: 420", "maxWidth: 420"],
+  );
+  assert.deepEqual(
+    collectFixedInlineLayoutDeclarations(`
+      const shellStyle = { maxWidth: 420 };
+      const ParameterShadow = ({ shellStyle }: Props) => <section style={shellStyle} />;
+      function LocalShadow(props: Props) {
+        const { shellStyle } = props;
+        return <section style={shellStyle} />;
+      }
+    `),
+    [],
+  );
+  assert.deepEqual(
+    collectFixedInlineLayoutDeclarations(`
+      const shellStyle = { maxWidth: 420 };
+      for (let shellStyle of styles) {
+        <section style={shellStyle} />;
+      }
+      <section style={shellStyle} />;
+    `),
+    ["maxWidth: 420"],
+  );
+  assert.deepEqual(
+    collectFixedInlineLayoutDeclarations(`
+      <div children={<span style={{ width: "72%" }} />} />
+    `),
+    ["width: \"72%\""],
+  );
+  assert.deepEqual(
+    collectFixedInlineLayoutDeclarations(`
+      <div children={<><Panel style={{ height: "40px" }} /><span style={{ paddingLeft: 12 }} /></>} style={{ maxWidth: 420 }} />
+    `),
+    ["height: \"40px\"", "paddingLeft: 12", "maxWidth: 420"],
+  );
+  assert.deepEqual(
+    collectFixedInlineLayoutDeclarations(`
+      <div children={<span style={{ width: \`${"${percent}"}%\` }} />} />
+    `),
+    [],
+  );
+  assert.deepEqual(
+    collectFixedInlineLayoutDeclarations(`
+      const data = { width: "72%" };
+      const html = '<span style={{ height: "40px" }} />';
+      <div data-shape={{ maxWidth: 420 }} />
+    `),
+    [],
+  );
+  assert.deepEqual(
+    collectFixedInlineLayoutDeclarations(`
+      <span style={{ width: \`${"${percent}"}%\`, left: geometry.left, "--signal-height": "38%" }} />
+      <stop style={{ stopColor: "var(--chart-series-1)", stopOpacity: 0.24 }} />
+    `),
+    [],
   );
 });
 

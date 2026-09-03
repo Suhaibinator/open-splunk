@@ -12,9 +12,9 @@ import { PageHeading } from "../_components/product-shell";
 import { BackendDatasetsConsole } from "./backend-datasets-console";
 
 const DATASETS = [
-  { name: "gradethis", description: "GradeThis application and request logs", events: "18.6M", sources: 4, fields: 42, size: "284 GB", retention: "30 days", color: "green", status: "Active" },
-  { name: "platform", description: "Workers, notification delivery, and infrastructure", events: "4.2M", sources: 7, fields: 31, size: "91 GB", retention: "14 days", color: "blue", status: "Active" },
-  { name: "internal", description: "Open Splunk server and collector diagnostics", events: "643K", sources: 3, fields: 26, size: "12 GB", retention: "7 days", color: "orange", status: "Paused" },
+  { name: "gradethis", description: "GradeThis application and request logs", events: "18.6M", sources: 4, fields: 42, size: "284 GB", retention: "30 days", retentionPercent: 64, color: "green", status: "Active" },
+  { name: "platform", description: "Workers, notification delivery, and infrastructure", events: "4.2M", sources: 7, fields: 31, size: "91 GB", retention: "14 days", retentionPercent: 42, color: "blue", status: "Active" },
+  { name: "internal", description: "Open Splunk server and collector diagnostics", events: "643K", sources: 3, fields: 26, size: "12 GB", retention: "7 days", retentionPercent: 18, color: "orange", status: "Paused" },
 ] as const;
 
 const COMMON_FIELDS = [
@@ -59,8 +59,8 @@ function DemoDatasetsConsole() {
         <label><span className="sr-only">Filter datasets</span><i aria-hidden="true"><AppIcon name="search" size="sm" /></i><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Find an index or description" /></label>
         <fieldset className="dataset-view-toggle">
           <legend className="sr-only">Dataset view</legend>
-          <button className={view === "cards" ? "active" : undefined} type="button" aria-pressed={view === "cards"} onClick={() => setView("cards")}><AppIcon name="dashboard" size="sm" /> Cards</button>
-          <button className={view === "table" ? "active" : undefined} type="button" aria-pressed={view === "table"} onClick={() => setView("table")}><span aria-hidden="true">☷</span> Table</button>
+          <button className={`button button--toolbar${view === "cards" ? " active" : ""}`} type="button" aria-pressed={view === "cards"} onClick={() => setView("cards")}><AppIcon name="dashboard" size="sm" /> Cards</button>
+          <button className={`button button--toolbar${view === "table" ? " active" : ""}`} type="button" aria-pressed={view === "table"} onClick={() => setView("table")}><span aria-hidden="true">☷</span> Table</button>
         </fieldset>
       </div>
 
@@ -82,7 +82,7 @@ function DemoDatasetsConsole() {
                 <div><dt>Storage</dt><dd>{item.size}</dd></div>
               </dl>
               <div className="dataset-retention">
-                <span aria-hidden="true"><i style={{ width: item.name === "gradethis" ? "64%" : item.name === "platform" ? "42%" : "18%" }} /></span>
+                <span aria-hidden="true"><i style={{ width: `${item.retentionPercent}%` }} /></span>
                 <small>{item.retention} retention · {item.status === "Paused" ? "ingestion paused" : item.name === "gradethis" ? "11 days remaining in current partition" : "healthy"}</small>
               </div>
               <footer>

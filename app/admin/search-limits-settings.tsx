@@ -58,10 +58,14 @@ export function SearchLimitsSettings({
   const [exactBase, setExactBase] = useState<SearchLimits | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "saving" | "error">("loading");
   const [error, setError] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
+  const [activeClient, setActiveClient] = useState(client);
+  if (activeClient !== client) {
+    setActiveClient(client);
     setState("loading");
     setError(null);
+  }
+
+  const load = useCallback(async () => {
     try {
       const next = await client.serverSettings.get({});
       if (!completeEnvelope(next)) throw new Error("The server returned incomplete search settings.");
@@ -77,7 +81,31 @@ export function SearchLimitsSettings({
     }
   }, [client]);
 
-  useEffect(() => { void load(); }, [load]);
+  const reload = useCallback(() => {
+    setState("loading");
+    setError(null);
+    return load();
+  }, [load]);
+
+  useEffect(() => {
+    if (activeClient !== client) return;
+    let current = true;
+    void client.serverSettings.get({}).then((next) => {
+      if (!current) return;
+      if (!completeEnvelope(next)) throw new Error("The server returned incomplete search settings.");
+      setResponse(next);
+      setForm(searchLimitsToForm(next.current.limits));
+      setExactBase(next.current.limits);
+      setState("ready");
+    }).catch((cause: unknown) => {
+      if (!current) return;
+      setError(createErrorMessage("Search settings could not be loaded.")(cause));
+      setState("error");
+    });
+    return () => {
+      current = false;
+    };
+  }, [activeClient, client]);
 
   const savedForm = useMemo(
     () => response?.current?.limits === undefined ? null : searchLimitsToForm(response.current.limits),
@@ -101,7 +129,7 @@ export function SearchLimitsSettings({
   }, [dirty]);
 
   if (state === "error") {
-    return <div className="access-mode-notice" role="alert"><span>!</span><div><strong>Search limits could not be loaded</strong><p>{error}</p><button type="button" onClick={() => void load()}>Retry</button></div></div>;
+    return <div className="access-mode-notice" role="alert"><span>!</span><div><strong>Search limits could not be loaded</strong><p>{error}</p><button type="button" onClick={() => void reload()}>Retry</button></div></div>;
   }
   if (state === "loading" || form === null || response === null) {
     return <output className="access-mode-notice"><span>i</span><div><strong>Loading search limits</strong><p>Reading the current version and supported ranges…</p></div></output>;
@@ -132,7 +160,7 @@ export function SearchLimitsSettings({
       onStatus("Search limits were updated. New searches now use version " + next.current.version.toString() + ".", "success");
     } catch (cause) {
       if (isHttpStatus(cause, 409)) {
-        const reloaded = await load();
+        const reloaded = await reload();
         onStatus(reloaded
           ? "Search limits changed on the server. The latest version was reloaded; review it before applying again."
           : "Search limits changed on the server, and the latest version could not be reloaded.", "warning");

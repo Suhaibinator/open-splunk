@@ -142,15 +142,21 @@ export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsolePro
   const [definitionError, setDefinitionError] = useState<string | null>(null);
   const [observedIndexId, setObservedIndexId] = useState<string | null>(null);
   const reload = useCallback(() => setGeneration((current) => current + 1), []);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    let current = true;
+  const loadInput = { client, generation };
+  const [activeLoadInput, setActiveLoadInput] = useState(loadInput);
+  if (activeLoadInput.client !== loadInput.client || activeLoadInput.generation !== loadInput.generation) {
+    setActiveLoadInput(loadInput);
     setLoading(true);
     setError(null);
     setDefinitionState("idle");
     setDefinitions(new Map());
     setDefinitionError(null);
+  }
+
+  useEffect(() => {
+    if (activeLoadInput.generation !== generation) return;
+    const controller = new AbortController();
+    let current = true;
     void (async () => {
       try {
         const response = await getSystemBootstrap(client, undefined, { signal: controller.signal });
@@ -176,7 +182,7 @@ export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsolePro
       current = false;
       controller.abort();
     };
-  }, [client, generation]);
+  }, [activeLoadInput, client, generation]);
 
   const visible = useMemo(() => {
     const normalized = filter.trim().toLowerCase();
@@ -185,9 +191,11 @@ export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsolePro
       || `${index.name} ${index.displayName}`.toLowerCase().includes(normalized));
   }, [bootstrap, filter]);
   const observedIndex = visible.find((index) => index.id === observedIndexId) ?? null;
-  useEffect(() => {
+  const [observedVisibleIndexes, setObservedVisibleIndexes] = useState(visible);
+  if (observedVisibleIndexes !== visible) {
+    setObservedVisibleIndexes(visible);
     setObservedIndexId((current) => retainVisibleObservedIndexId(current, visible.map((index) => index.id)));
-  }, [visible]);
+  }
 
   function toggleObservedIndex(indexId: string) {
     setObservedIndexId((current) => nextObservedIndexId(current, indexId));
@@ -212,8 +220,8 @@ export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsolePro
             <label><span className="sr-only">Filter datasets</span><i aria-hidden="true"><AppIcon name="search" size="sm" /></i><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Find an index" /></label>
             <fieldset className="dataset-view-toggle">
               <legend className="sr-only">Dataset view</legend>
-              <button className={view === "cards" ? "active" : undefined} type="button" aria-pressed={view === "cards"} onClick={() => setView("cards")}><AppIcon name="dashboard" size="sm" /> Cards</button>
-              <button className={view === "table" ? "active" : undefined} type="button" aria-pressed={view === "table"} onClick={() => setView("table")}><span aria-hidden="true">☷</span> Table</button>
+              <button className={`button button--toolbar${view === "cards" ? " active" : ""}`} type="button" aria-pressed={view === "cards"} onClick={() => setView("cards")}><AppIcon name="dashboard" size="sm" /> Cards</button>
+              <button className={`button button--toolbar${view === "table" ? " active" : ""}`} type="button" aria-pressed={view === "table"} onClick={() => setView("table")}><span aria-hidden="true">☷</span> Table</button>
             </fieldset>
           </div>
           {definitionState === "loading" ? <output className="dataset-definition-notice">Loading retention and index metadata from the registered administration route…</output> : null}
