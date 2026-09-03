@@ -1,15 +1,22 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
 import type { SearchDataMode } from "@/lib/search/backend-data";
 import { searchLaunchHref } from "@/lib/search/launch-url";
+import { commitRoutedView } from "@/lib/view-navigation";
 
 import { AppIcon } from "../_components/app-icon";
+import { BackendResourceState } from "../_components/backend-resource-state";
 import { StatusDot, StatusLabel } from "../_components/status";
 import { PageHeading } from "../_components/product-shell";
 import { BackendActivityConsole } from "./backend-activity-console";
+import {
+  ACTIVITY_BASE_PATH,
+  activityViewFromPathname,
+  type ActivityView,
+} from "./activity-navigation";
 
 type ActivityFilter = "all" | "running" | "completed" | "failed";
 
@@ -24,14 +31,45 @@ const JOBS = [
 interface ActivityConsoleProps {
   dataMode: SearchDataMode;
   apiBaseUrl: string;
+  canonicalizeParent?: boolean;
+  initialView: ActivityView;
 }
 
-export function ActivityConsole({ dataMode, apiBaseUrl }: ActivityConsoleProps) {
-  if (dataMode === "backend") return <BackendActivityConsole apiBaseUrl={apiBaseUrl} />;
-  return <DemoActivityConsole />;
+export function ActivityConsole({
+  dataMode,
+  apiBaseUrl,
+  canonicalizeParent = false,
+  initialView,
+}: ActivityConsoleProps) {
+  const [view, setView] = useState(initialView);
+
+  useEffect(() => setView(initialView), [initialView]);
+
+  useEffect(() => {
+    if (canonicalizeParent) {
+      commitRoutedView(window, ACTIVITY_BASE_PATH, "jobs", "replace");
+    }
+    function restoreView() {
+      const restored = activityViewFromPathname(window.location.pathname);
+      if (restored !== null) setView(restored);
+    }
+    window.addEventListener("popstate", restoreView);
+    return () => window.removeEventListener("popstate", restoreView);
+  }, [canonicalizeParent]);
+
+  function navigateView(nextView: ActivityView) {
+    if (nextView === view) return;
+    setView(nextView);
+    commitRoutedView(window, ACTIVITY_BASE_PATH, nextView, "push");
+  }
+
+  if (dataMode === "backend") {
+    return <BackendActivityConsole apiBaseUrl={apiBaseUrl} view={view} onViewChange={navigateView} />;
+  }
+  return <DemoActivityConsole view={view} />;
 }
 
-function DemoActivityConsole() {
+function DemoActivityConsole({ view }: { view: ActivityView }) {
   const [filter, setFilter] = useState<ActivityFilter>("all");
   const [query, setQuery] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
@@ -51,6 +89,20 @@ function DemoActivityConsole() {
     anchor.click();
     URL.revokeObjectURL(url);
     setNotice("Audit log exported.");
+  }
+
+  if (view !== "jobs") {
+    return (
+      <div className="suite-page activity-page">
+        <PageHeading eyebrow="OPERATIONS" title="Activity" description="Inspect preview search jobs, exports, and recent system activity." />
+        <BackendResourceState
+          kind="unavailable"
+          title="Activity view not found"
+          message="This activity view is not available in preview data mode."
+          action={<Link href="/activity/jobs/">View current jobs</Link>}
+        />
+      </div>
+    );
   }
 
   return (

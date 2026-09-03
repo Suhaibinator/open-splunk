@@ -1,6 +1,7 @@
 import type { SearchDataMode } from "@/lib/search/backend-data";
+import type { SearchResultView } from "@/lib/search/result-view-navigation";
 
-export type ResultTab = "events" | "patterns" | "statistics" | "visualization";
+export type ResultTab = SearchResultView;
 export type ModalName =
   | "time"
   | "save"
@@ -150,4 +151,6 @@ export type SearchCapabilityName = keyof Pick<
 export interface SearchWorkspaceProps {
   dataMode: SearchDataMode;
   apiBaseUrl?: string;
+  canonicalizeParent?: boolean;
+  initialResultView: ResultTab;
 }

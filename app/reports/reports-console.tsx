@@ -1,15 +1,22 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import type { SearchDataMode } from "@/lib/search/backend-data";
 import { searchLaunchHref } from "@/lib/search/launch-url";
+import { commitRoutedView } from "@/lib/view-navigation";
 
 import { AppIcon } from "../_components/app-icon";
+import { BackendResourceState } from "../_components/backend-resource-state";
 import { StatusLabel } from "../_components/status";
 import { PageHeading } from "../_components/product-shell";
 import { BackendReportsConsole } from "./backend-reports-console";
+import {
+  REPORTS_BASE_PATH,
+  reportsViewFromPathname,
+  type ReportsView,
+} from "./reports-view-state";
 
 type ReportScope = "all" | "mine" | "scheduled" | "favorites";
 type ReportType = "all" | "chart" | "statistics" | "events";
@@ -158,10 +165,54 @@ function compareReports(left: ReportDefinition, right: ReportDefinition, sort: S
 interface ReportsConsoleProps {
   dataMode: SearchDataMode;
   apiBaseUrl: string;
+  canonicalizeParent?: boolean;
+  initialView: ReportsView;
 }
 
-export function ReportsConsole({ dataMode, apiBaseUrl }: ReportsConsoleProps) {
-  if (dataMode === "backend") return <BackendReportsConsole apiBaseUrl={apiBaseUrl} />;
+export function ReportsConsole({
+  dataMode,
+  apiBaseUrl,
+  canonicalizeParent = false,
+  initialView,
+}: ReportsConsoleProps) {
+  const [view, setView] = useState(initialView);
+
+  useEffect(() => setView(initialView), [initialView]);
+
+  useEffect(() => {
+    if (canonicalizeParent) {
+      commitRoutedView(window, REPORTS_BASE_PATH, "saved-searches", "replace");
+    }
+    function restoreView() {
+      const restored = reportsViewFromPathname(window.location.pathname);
+      if (restored !== null) setView(restored);
+    }
+    window.addEventListener("popstate", restoreView);
+    return () => window.removeEventListener("popstate", restoreView);
+  }, [canonicalizeParent]);
+
+  function navigateView(nextView: ReportsView) {
+    if (nextView === view) return;
+    setView(nextView);
+    commitRoutedView(window, REPORTS_BASE_PATH, nextView, "push");
+  }
+
+  if (dataMode === "backend") {
+    return <BackendReportsConsole apiBaseUrl={apiBaseUrl} view={view} onViewChange={navigateView} />;
+  }
+  if (view === "alerts") {
+    return (
+      <div className="suite-page reports-page">
+        <PageHeading eyebrow="SEARCH & REPORTING" title="Reports" description="Curated searches for recurring operational questions and scheduled delivery." />
+        <BackendResourceState
+          kind="unavailable"
+          title="Reports view not found"
+          message="Alert management is not available in preview data mode."
+          action={<Link href="/reports/saved-searches/">View saved searches</Link>}
+        />
+      </div>
+    );
+  }
   return <DemoReportsConsole />;
 }
 
@@ -217,7 +268,7 @@ function DemoReportsConsole() {
         description="Curated searches for recurring operational questions and scheduled delivery."
         actions={(
           <>
-            <Link className="button" href="/search/">Open Search</Link>
+            <Link className="button" href="/search/events/">Open Search</Link>
             <Link
               className="button button--primary"
               href={searchLaunchHref("index=gradethis | stats count by service", { run: false })}

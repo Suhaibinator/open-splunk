@@ -3,6 +3,7 @@ import type { PointerEvent, ReactNode } from "react";
 import { SearchJobState } from "@/gen/ts/open_splunk/search";
 import { DEMO_EVENTS, type DemoEvent, type DemoHistoryEntry, type DemoScalar } from "@/lib/demo/search-data";
 import type { DiagnosticMarker } from "@/lib/search/spl-diagnostic-markers";
+import { searchResultViewForQuery } from "@/lib/search/result-view-navigation";
 import {
   isSplOffsetInQuotedValue,
   isSupportedSplPipelineCommand,
@@ -306,9 +307,7 @@ export function filteredDemoEvents(query: string): DemoEvent[] {
 }
 
 export function resultTabForQuery(query: string): ResultTab {
-  if (hasPipelineCommand(query, "timechart")) return "visualization";
-  if (hasPipelineCommand(query, ["table", "stats", "top", "rare"])) return "statistics";
-  return "events";
+  return searchResultViewForQuery(query);
 }
 
 export function highlightedRaw(raw: string, query: string): ReactNode[] {

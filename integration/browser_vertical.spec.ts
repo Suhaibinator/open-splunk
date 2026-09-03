@@ -1063,7 +1063,7 @@ test("Mutation Audit renders historical Knowledge events without the Knowledge f
   let storageBefore: { local: [string, string][]; session: [string, string][] };
   let trafficBeforeAudit = 0;
   await test.step("audit-only bootstrap exposes the Mutation Audit tab", async () => {
-    activityURL = new URL("/activity/", origin).href;
+    activityURL = new URL("/activity/jobs/", origin).href;
     await page.goto(activityURL, { waitUntil: "domcontentloaded", timeout });
     const mutationTab = page.getByRole("tab", { name: /Mutation audit/ });
     await expect(mutationTab).toBeVisible({ timeout });
@@ -1120,11 +1120,20 @@ test("Mutation Audit renders historical Knowledge events without the Knowledge f
     ));
     expect(apiTraffic.filter(({ pathname }) => pathname.startsWith("/api/knowledge/")))
       .toEqual([]);
-    expect(page.url()).toBe(activityURL);
+    expect(page.url()).toBe(new URL("/activity/mutations/", origin).href);
     expect(await page.evaluate(() => ({
       local: Object.entries(localStorage),
       session: Object.entries(sessionStorage),
     }))).toEqual(storageBefore);
+
+    const requestsBeforeHistoryNavigation = auditRequests.length;
+    await page.goBack();
+    await expect(page).toHaveURL(activityURL);
+    await expect(page.getByRole("tab", { name: /Current jobs/ })).toHaveAttribute("aria-selected", "true");
+    await page.goForward();
+    await expect(page).toHaveURL(new URL("/activity/mutations/", origin).href);
+    await expect(mutationPanel).toBeVisible();
+    expect(auditRequests).toHaveLength(requestsBeforeHistoryNavigation);
   });
 });
 

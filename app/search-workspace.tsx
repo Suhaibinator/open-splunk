@@ -123,10 +123,16 @@ import {
   commitSearchLaunch,
   historyNavigationDecision,
   readSearchLaunchState,
+  sameSearchLaunchState,
   stampSearchLaunchState,
   type SearchLaunchHistoryState,
   type SearchLaunchRange,
 } from "@/lib/search/search-launch-state";
+import {
+  SEARCH_BASE_PATH,
+  searchResultViewFromPathname,
+} from "@/lib/search/result-view-navigation";
+import { commitRoutedView } from "@/lib/view-navigation";
 import {
   duplicateSavedSearchName,
   savedSearchNameWithSuffix,
@@ -185,6 +191,7 @@ import {
 } from "@/lib/theme-preference";
 
 import { AppIcon, type AppIconName } from "./_components/app-icon";
+import { BackendResourceState } from "./_components/backend-resource-state";
 import { StatusDot, statusClassName } from "./_components/status";
 import { ProductShell, ThemeMenu } from "./_components/product-shell";
 import { AlertSecretRecovery } from "./reports/alert-secret-recovery";
@@ -816,7 +823,12 @@ function formatResolvedBackendTimeRange(range: ResolvedTimeRange | undefined): s
   }
 }
 
-export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspaceProps) {
+export function SearchWorkspace({
+  dataMode,
+  apiBaseUrl = "",
+  canonicalizeParent = false,
+  initialResultView,
+}: SearchWorkspaceProps) {
   const backendEnabled = dataMode === "backend";
   const initialWorkspaceQuery = backendEnabled ? "" : DEFAULT_QUERY;
   const apiClient = useMemo(() => createOpenSplunkApiClient({ baseUrl: apiBaseUrl }), [apiBaseUrl]);
@@ -839,7 +851,10 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   );
   const [backendConnectionError, setBackendConnectionError] = useState<string | null>(null);
   const [appSwitchingId, setAppSwitchingId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<ResultTab>("events");
+  const [activeTab, setActiveTab] = useState<ResultTab>(initialResultView);
+  const activeTabRef = useRef<ResultTab>(initialResultView);
+  const pendingUrlResultViewRef = useRef<ResultTab | null>(initialResultView);
+  const [resultViewUnavailable, setResultViewUnavailable] = useState(false);
   const [phase, setPhase] = useState<JobPhase>("completed");
   const [progress, setProgress] = useState(backendEnabled ? 0 : 100);
   const [elapsed, setElapsed] = useState(backendEnabled ? "0.00 s" : "1.82 s");
@@ -1158,6 +1173,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     job: backendJobRef.current,
     activeSavedSearchId,
     query: submittedQuery,
+    resultView: activeTab,
     timeRange: submittedTimeRange,
     copyText: copyShareText,
     onJobUpdated: (job) => {
@@ -1926,9 +1942,38 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   })();
 
   useEffect(() => {
+    activeTabRef.current = activeTab;
     const behavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
     document.getElementById(`tab-${activeTab}`)?.scrollIntoView({ behavior, block: "nearest", inline: "center" });
   }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTabRef.current !== initialResultView) {
+      pendingUrlResultViewRef.current = null;
+      setResultViewUnavailable(false);
+    }
+    activeTabRef.current = initialResultView;
+    setActiveTab(initialResultView);
+  }, [initialResultView]);
+
+  useEffect(() => {
+    if (!canonicalizeParent) return;
+    commitRoutedView(window, SEARCH_BASE_PATH, "events", "replace", {
+      ...window.history.state,
+      resultView: "events",
+    });
+  }, [canonicalizeParent]);
+
+  useEffect(() => {
+    if (backendEnabled) return;
+    try {
+      if (parseSearchLaunch(new URL(window.location.href).searchParams).source === null) {
+        pendingUrlResultViewRef.current = null;
+      }
+    } catch {
+      // The launch effect owns invalid-URL presentation.
+    }
+  }, [backendEnabled]);
 
   useEffect(() => {
     if (window.matchMedia("(max-width: 760px)").matches) setFieldsCollapsed(true);
@@ -2949,6 +2994,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       };
     }
     if (hasContextualQuery && !shouldRunContextualQuery) {
+      pendingUrlResultViewRef.current = null;
       setSubmittedQuery("");
       setSubmittedTimeRange(initialRange);
       setPhase("completed");
@@ -2968,7 +3014,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       setTimelineStart(null);
       setTimelineEnd(null);
       setEventPage(1);
-      setActiveTab("events");
+      setResultViewUnavailable(false);
     }
     if (backendEnabled && !hasContextualQuery) {
       void ensureBackendBootstrap()
@@ -3017,7 +3063,22 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   // run triggered from here refines the entry it lands on.
   const followHistoryEntry = useEffectEvent((event: PopStateEvent) => {
     const url = new URL(window.location.href);
-    const decision = historyNavigationDecision(url.searchParams, readSearchLaunchState(event.state), backendEnabled);
+    const restoredView = searchResultViewFromPathname(url.pathname) ?? "events";
+    const restoredState = readSearchLaunchState(event.state);
+    if (restoredState !== null && sameSearchLaunchState(restoredState, currentLaunchState())) {
+      pendingUrlResultViewRef.current = null;
+      applyResultView(restoredView);
+      setResultViewUnavailable(
+        backendEnabled
+          && hasResultData
+          && !resultTabCompatibleWithKind(restoredView, backendResultKind),
+      );
+      return;
+    }
+    pendingUrlResultViewRef.current = restoredView;
+    applyResultView(restoredView);
+    setResultViewUnavailable(false);
+    const decision = historyNavigationDecision(url.searchParams, restoredState, backendEnabled);
     if (decision.kind === "invalid") {
       recordSearchLaunchFailure(
         new Error(decision.message),
@@ -3950,9 +4011,12 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       setBackendPreviewDisplay({ schema, snapshot: applied.snapshot, adapted });
       setBackendResultSchema(schema);
       setBackendResultKind(schema.resultKind);
-      setActiveTab((current) => resultTabCompatibleWithKind(current, schema.resultKind)
-        ? current
-        : resultTabForBackendKind(schema.resultKind));
+      selectAutomaticResultView(
+        resultTabCompatibleWithKind(activeTabRef.current, schema.resultKind)
+          ? activeTabRef.current
+          : resultTabForBackendKind(schema.resultKind),
+        schema.resultKind,
+      );
       const firstVisibleSnapshot = previous === null || previous.rows.length === 0;
       updateBackendPreviewStatus(
         "live",
@@ -4520,10 +4584,13 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         ? job.resultKind
         : job.resultSchema?.resultKind ?? ResultSetKind.RESULT_SET_KIND_UNSPECIFIED;
       const savedPreferredTab = pendingSavedPreferredTabRef.current;
-      setActiveTab(
-        savedPreferredTab !== null && resultTabCompatibleWithKind(savedPreferredTab, kind)
-          ? savedPreferredTab
-          : resultTabForBackendKind(kind),
+      selectAutomaticResultView(
+        resultTabCompatibleWithKind(activeTabRef.current, kind)
+          ? activeTabRef.current
+          : savedPreferredTab !== null && resultTabCompatibleWithKind(savedPreferredTab, kind)
+            ? savedPreferredTab
+            : resultTabForBackendKind(kind),
+        kind,
       );
       pendingSavedPreferredTabRef.current = null;
       if (kind !== ResultSetKind.RESULT_SET_KIND_EVENTS) {
@@ -5020,6 +5087,10 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   ) {
     if (searchLaunchRef.current) return;
     if (backendWorkspaceTransitionBlocked()) return;
+    if (resultViewUnavailable) {
+      pendingUrlResultViewRef.current = null;
+      setResultViewUnavailable(false);
+    }
     const nextQuery = queryOverride ?? query;
     setSearchFailure(null);
     const nextDiagnostic = getQueryDiagnostic(nextQuery);
@@ -5127,7 +5198,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       setPhase("completed");
       setProgress(100);
       setElapsed("1.82 s");
-      setActiveTab(resultTabForQuery(nextQuery));
+      selectAutomaticResultView(resultTabForQuery(nextQuery));
       const savedVisualization = activeSavedSearchIdRef.current === null
         ? undefined
         : savedSearches.find((saved) => saved.id === activeSavedSearchIdRef.current)?.visualization;
@@ -6028,7 +6099,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     pendingSavedSelectedFieldsRef.current = new Set(search.selectedFields);
     const preferredTab = workspaceResultTabFromSaved(search.preferredResultTab);
     pendingSavedPreferredTabRef.current = preferredTab;
-    if (preferredTab !== null) setActiveTab(preferredTab);
+    if (preferredTab !== null && pendingUrlResultViewRef.current === null) replaceResultView(preferredTab);
 
     const visualization = search.visualization;
     if (visualization === undefined) {
@@ -6062,7 +6133,52 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
 
   /** The current entry's remembered state, keeping the job it already shows. */
   function currentLaunchState(): SearchLaunchHistoryState {
-    return { ...launchHistoryState(query, timeRange), searchJobId: backendJobIdRef.current ?? undefined };
+    return {
+      ...launchHistoryState(query, timeRange),
+      resultView: activeTabRef.current,
+      searchJobId: backendJobIdRef.current ?? undefined,
+    };
+  }
+
+  function applyResultView(nextView: ResultTab) {
+    activeTabRef.current = nextView;
+    setActiveTab(nextView);
+  }
+
+  function replaceResultView(nextView: ResultTab) {
+    applyResultView(nextView);
+    setResultViewUnavailable(false);
+    const state = { ...window.history.state, ...currentLaunchState(), resultView: nextView };
+    commitRoutedView(window, SEARCH_BASE_PATH, nextView, "replace", state);
+  }
+
+  function navigateResultView(nextView: ResultTab) {
+    if (nextView === activeTabRef.current && !resultViewUnavailable) return;
+    const currentState = currentLaunchState();
+    stampSearchLaunchState({ ...currentState, resultView: activeTabRef.current });
+    pendingUrlResultViewRef.current = null;
+    applyResultView(nextView);
+    setResultViewUnavailable(false);
+    commitRoutedView(window, SEARCH_BASE_PATH, nextView, "push", {
+      ...window.history.state,
+      ...currentState,
+      resultView: nextView,
+    });
+  }
+
+  function selectAutomaticResultView(nextView: ResultTab, kind?: ResultSetKind) {
+    const requestedView = pendingUrlResultViewRef.current;
+    if (requestedView !== null) {
+      applyResultView(requestedView);
+      if (backendEnabled && kind !== undefined && !resultTabCompatibleWithKind(requestedView, kind)) {
+        setResultViewUnavailable(true);
+      } else {
+        pendingUrlResultViewRef.current = null;
+        setResultViewUnavailable(false);
+      }
+      return;
+    }
+    replaceResultView(nextView);
   }
 
   // Clears the workspace for a history navigation and, when a backend job was
@@ -7194,7 +7310,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     } else return;
     if (currentIndex < 0 || nextTab === undefined) return;
     event.preventDefault();
-    setActiveTab(nextTab);
+    navigateResultView(nextTab);
     window.requestAnimationFrame(() => document.getElementById(`tab-${nextTab}`)?.focus());
   }
 
@@ -7352,7 +7468,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
                 );
               })
             : <>
-                <Link role="menuitem" href="/search/" className="selected"><span className="app-glyph"><AppIcon name="search" size="md" /></span><span><strong>Search &amp; Reporting</strong><small>Search all authorized indexes</small></span><b><AppIcon name="check" size="sm" /></b></Link>
+                <Link role="menuitem" href="/search/events/" className="selected"><span className="app-glyph"><AppIcon name="search" size="md" /></span><span><strong>Search &amp; Reporting</strong><small>Search all authorized indexes</small></span><b><AppIcon name="check" size="sm" /></b></Link>
                 <Link role="menuitem" href="/dashboards/"><span className="app-glyph">G</span><span><strong>GradeThis Operations</strong><small>Default index: gradethis</small></span></Link>
               </>}
           <div className="menu-separator" />
@@ -7373,7 +7489,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           <div className="floating-menu utility-menu" role="menu">
             <span className="menu-label">Activity</span>
             <button aria-label={`Open active search job: ${phaseLabel(phase)}`} role="menuitem" type="button" onClick={() => { setModal("jobs"); setMenu(null); }}><StatusDot tone={stateTone(phase)} /> <span><strong>{phaseLabel(phase)}</strong><small>{visibleCountPrefix}{NUMBER_FORMAT.format(visibleEventCount)} results · {elapsed}</small></span></button>
-            <Link role="menuitem" href={productHref("/activity/")}>View all activity</Link>
+            <Link role="menuitem" href={productHref("/activity/jobs/")}>View all activity</Link>
           </div>
         ) : null}
       </div>
@@ -7689,7 +7805,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           <button className="close-search" type="button" onClick={closeSearchWorkspace}>Close</button>
           <div className="header-menu-wrap mobile-search-actions">
             <button type="button" aria-haspopup="menu" aria-expanded={menu === "search-actions"} onClick={() => setMenu(menu === "search-actions" ? null : "search-actions")}>More <AppIcon name="chevron-down" size="xs" /></button>
-            {menu === "search-actions" ? <div className="floating-menu mobile-search-menu" role="menu"><button role="menuitem" type="button" onClick={() => { setModal("open"); setMenu(null); }}><AppIcon name="open" size="md" /> <span>Open saved search</span></button><button role="menuitem" type="button" onClick={() => openSaveDialog(null, true)}><AppIcon name="plus" size="md" /> <span>Save as new</span></button><button role="menuitem" type="button" onClick={() => { setModal("history"); setMenu(null); }}><AppIcon name="history" size="md" /> <span>Search history</span></button><button role="menuitem" type="button" disabled={backendEnabled && !backendAuthoritativeResultsReady} title={backendEnabled && !backendAuthoritativeResultsReady ? "Authoritative results are required before export" : undefined} onClick={() => { openExportDialog(); setMenu(null); }}><AppIcon name="download" size="md" /> <span>Export results</span></button><Link role="menuitem" href={productHref("/activity/")}><AppIcon name="info" size="md" /> <span>View activity</span></Link><button role="menuitem" type="button" onClick={closeSearchWorkspace}><AppIcon name="close" size="md" /> <span>Close search</span></button></div> : null}
+            {menu === "search-actions" ? <div className="floating-menu mobile-search-menu" role="menu"><button role="menuitem" type="button" onClick={() => { setModal("open"); setMenu(null); }}><AppIcon name="open" size="md" /> <span>Open saved search</span></button><button role="menuitem" type="button" onClick={() => openSaveDialog(null, true)}><AppIcon name="plus" size="md" /> <span>Save as new</span></button><button role="menuitem" type="button" onClick={() => { setModal("history"); setMenu(null); }}><AppIcon name="history" size="md" /> <span>Search history</span></button><button role="menuitem" type="button" disabled={backendEnabled && !backendAuthoritativeResultsReady} title={backendEnabled && !backendAuthoritativeResultsReady ? "Authoritative results are required before export" : undefined} onClick={() => { openExportDialog(); setMenu(null); }}><AppIcon name="download" size="md" /> <span>Export results</span></button><Link role="menuitem" href={productHref("/activity/jobs/")}><AppIcon name="info" size="md" /> <span>View activity</span></Link><button role="menuitem" type="button" onClick={closeSearchWorkspace}><AppIcon name="close" size="md" /> <span>Close search</span></button></div> : null}
           </div>
         </div>
       </header>
@@ -7897,7 +8013,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
             key={id}
             disabled={!resultTabAvailable(id)}
             title={resultTabAvailable(id) ? undefined : "This view is not available for the server result type."}
-            onClick={() => setActiveTab(id)}
+            onClick={() => navigateResultView(id)}
             onKeyDown={(event) => handleResultTabKeyDown(event, id)}
           >
             {label}{count.length === 0 ? null : <span>{count}</span>}
@@ -7907,7 +8023,18 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
 
       <InactiveResultTabPanels activeTab={activeTab} />
 
-      {searchFailure !== null && searchFailurePresentation !== null ? (
+      {resultViewUnavailable ? (
+        <section id={`panel-${activeTab}`} role="tabpanel" aria-labelledby={`tab-${activeTab}`}>
+          <BackendResourceState
+            kind="unavailable"
+            title="Search result view not found"
+            message="This result view is not compatible with the result returned by the current search."
+            action={<button type="button" onClick={() => navigateResultView(resultTabForBackendKind(backendResultKind))}>View available results</button>}
+          />
+        </section>
+      ) : null}
+
+      {!resultViewUnavailable && searchFailure !== null && searchFailurePresentation !== null ? (
         <SearchFailurePanel
           activeTab={activeTab}
           canNavigateSource={searchFailure.source === query}
@@ -7934,11 +8061,11 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         />
       ) : null}
 
-      {showResultSkeleton && resultSkeletonTab !== null ? (
+      {!resultViewUnavailable && showResultSkeleton && resultSkeletonTab !== null ? (
         <ResultSkeleton tab={resultSkeletonTab} />
       ) : null}
 
-      {searchFailure === null && !showResultSkeleton && !hasResultData ? (
+      {!resultViewUnavailable && searchFailure === null && !showResultSkeleton && !hasResultData ? (
         <section
           id={`panel-${activeTab}`}
           role="tabpanel"
@@ -7971,7 +8098,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         </section>
       ) : null}
 
-      {searchFailure === null && hasResultData && activeTab === "events" ? (
+      {!resultViewUnavailable && searchFailure === null && hasResultData && activeTab === "events" ? (
         <EventsPanel
           activeField={activeField}
           backendEnabled={backendEnabled}
@@ -8043,7 +8170,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         />
       ) : null}
 
-      {searchFailure === null && hasResultData && activeTab === "patterns" ? (
+      {!resultViewUnavailable && searchFailure === null && hasResultData && activeTab === "patterns" ? (
         <PatternsPanel
           menu={menu}
           patternRows={patternRows}
@@ -8051,7 +8178,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           onMenuChange={setMenu}
           onPatternSensitivityChange={setPatternSensitivity}
           onShowToast={showToast}
-          onTabChange={setActiveTab}
+          onTabChange={navigateResultView}
           onViewEvents={(signature) => {
             if (backendWorkspaceTransitionBlocked()) return;
             timelineZoomParentRef.current = null;
@@ -8060,7 +8187,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         />
       ) : null}
 
-      {searchFailure === null && hasResultData && activeTab === "statistics" ? (
+      {!resultViewUnavailable && searchFailure === null && hasResultData && activeTab === "statistics" ? (
         <StatisticsPanel
           columnLayoutStore={statisticsColumnLayoutStoreRef.current}
           elapsed={elapsed}
@@ -8100,7 +8227,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         />
       ) : null}
 
-      {searchFailure === null && hasResultData && activeTab === "visualization" ? (
+      {!resultViewUnavailable && searchFailure === null && hasResultData && activeTab === "visualization" ? (
         <VisualizationPanel
           chartStyle={chartStyle}
           chartTitle={chartTitle}

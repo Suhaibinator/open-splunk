@@ -124,7 +124,7 @@ export function SignInScreen({ dataMode }: SignInScreenProps) {
             </>
           )}
           <div className="signin-divider"><span>or</span></div>
-          <Link className="signin-preview-link" href="/search/">Open Search &amp; Reporting <AppIcon name="chevron-right" size="xs" /></Link>
+          <Link className="signin-preview-link" href="/search/events/">Open Search &amp; Reporting <AppIcon name="chevron-right" size="xs" /></Link>
           <footer><span>Open Splunk {OPEN_SPLUNK_BUILD_LABEL} · {localSession ? "local server" : "preview"}</span><span>{localSession ? "Memory-only bearer session" : "Authentication unavailable"}</span></footer>
         </div>
       </section>

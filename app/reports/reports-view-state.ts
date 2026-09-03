@@ -1,8 +1,23 @@
+import { resolveRoutedView, routedViewPath } from "@/lib/view-navigation";
+
 export type ReportsView = "alerts" | "saved-searches";
 
 export const SCHEDULE_REPORT_QUERY_PARAMETER = "scheduleSavedSearchId";
+export const REPORTS_BASE_PATH = "/reports/";
 
-const REPORT_VIEWS: readonly ReportsView[] = ["saved-searches", "alerts"];
+export const REPORT_VIEWS: readonly ReportsView[] = ["saved-searches", "alerts"];
+
+export function isReportsView(value: string): value is ReportsView {
+  return REPORT_VIEWS.includes(value as ReportsView);
+}
+
+export function reportsViewPath(view: ReportsView): string {
+  return routedViewPath(REPORTS_BASE_PATH, view);
+}
+
+export function reportsViewFromPathname(pathname: string): ReportsView | null {
+  return resolveRoutedView(pathname, REPORTS_BASE_PATH, REPORT_VIEWS);
+}
 
 export function reportsViewForKey(current: ReportsView, key: string): ReportsView | null {
   if (key === "Home") return REPORT_VIEWS[0];
@@ -17,7 +32,7 @@ export function scheduledReportConfigurationHref(savedSearchId: string): string 
   const id = savedSearchId.trim();
   if (id.length === 0) throw new TypeError("A saved-search ID is required to configure a report.");
   const parameters = new URLSearchParams({ [SCHEDULE_REPORT_QUERY_PARAMETER]: id });
-  return `/reports/?${parameters.toString()}`;
+  return `${reportsViewPath("saved-searches")}?${parameters.toString()}`;
 }
 
 export function scheduledReportConfigurationTarget(parameters: URLSearchParams): string | null {

@@ -78,11 +78,11 @@ export function productMenuControlId(activeMenu: ProductMenu | null, triggerMenu
 }
 
 const PRIMARY_NAV: Array<{ key: ProductSection; label: string; href: string }> = [
-  { key: "search", label: "Search", href: "/search/" },
+  { key: "search", label: "Search", href: "/search/events/" },
   { key: "analytics", label: "Analytics", href: "/analytics/" },
   { key: "datasets", label: "Datasets", href: "/datasets/" },
-  { key: "reports", label: "Reports", href: "/reports/" },
-  { key: "activity", label: "Activity", href: "/activity/" },
+  { key: "reports", label: "Reports", href: "/reports/saved-searches/" },
+  { key: "activity", label: "Activity", href: "/activity/jobs/" },
   { key: "dashboards", label: "Dashboards", href: "/dashboards/" },
 ];
 
@@ -422,7 +422,7 @@ export function ProductShell({
                 })
               ) : (
                 <>
-                  <Link role="menuitem" href="/search/"><i className="suite-app-icon" aria-hidden="true"><AppIcon name="search" size="md" /></i><span><strong>Search &amp; Reporting</strong><small>Explore deterministic sample data</small></span></Link>
+                  <Link role="menuitem" href="/search/events/"><i className="suite-app-icon" aria-hidden="true"><AppIcon name="search" size="md" /></i><span><strong>Search &amp; Reporting</strong><small>Explore deterministic sample data</small></span></Link>
                   <Link role="menuitem" href="/dashboards/"><i className="suite-app-icon suite-app-icon--grade" aria-hidden="true">G</i><span><strong>GradeThis Operations</strong><small>Preview service-health workspace</small></span></Link>
                 </>
               )}
@@ -435,7 +435,7 @@ export function ProductShell({
         {utilities ?? <nav className="suite-utilities" aria-label="Product utilities">
           <span className="suite-context">{dataMode === "backend" ? "Backend workspace" : "Demo workspace"}</span>
           <Link href={productHref("/admin/")}>Settings</Link>
-          <Link href={productHref("/activity/")}>Activity {dataMode === "demo" ? <span className="activity-count">1</span> : null}</Link>
+          <Link href={productHref("/activity/jobs/")}>Activity {dataMode === "demo" ? <span className="activity-count">1</span> : null}</Link>
           <div className="suite-menu-anchor">
             <button type="button" aria-controls={productMenuControlId(menu, "help")} aria-haspopup="menu" aria-expanded={menu === "help"} onClick={(event) => { const opening = menu !== "help"; toggleMenu("help", event.currentTarget); if (opening && event.detail === 0) focusFirstMenuItem("help"); }} onKeyDown={(event) => openMenuFromKeyboard(event, "help")}>Help <AppIcon name="chevron-down" size="xs" /></button>
             {menu === "help" ? (
@@ -492,7 +492,7 @@ export function ProductShell({
           <span className="drawer-label">APPLICATION</span>
           <Link className={activeSection === "home" ? "active" : undefined} aria-current={activeSection === "home" ? "page" : undefined} href={productHref("/")}><span aria-hidden="true"><AppIcon name="home" size="md" /></span>Home</Link>
           {!ownsCatalog ? (
-            <Link className={activeSection === "search" ? "active" : undefined} aria-current={activeSection === "search" ? "page" : undefined} href={productHref("/search/")}><span aria-hidden="true"><AppIcon name="search" size="md" /></span>{appName}</Link>
+            <Link className={activeSection === "search" ? "active" : undefined} aria-current={activeSection === "search" ? "page" : undefined} href={productHref("/search/events/")}><span aria-hidden="true"><AppIcon name="search" size="md" /></span>{appName}</Link>
           ) : dataMode === "backend" ? (
             backendAppCatalogState === "loading" ? (
               <output className="drawer-app-state">Loading server apps…</output>
@@ -506,14 +506,14 @@ export function ProductShell({
               return <Link className={selected ? "selected-app" : undefined} href={backendAppSearchHref(app.appId)} key={`mobile-${app.appId}`}><span aria-hidden="true">{label.charAt(0).toUpperCase() || "⌕"}</span>{label}{selected ? <b>Selected</b> : null}</Link>;
             })
           ) : (
-            <Link className={activeSection === "search" ? "active" : undefined} aria-current={activeSection === "search" ? "page" : undefined} href={productHref("/search/")}><span aria-hidden="true"><AppIcon name="search" size="md" /></span>Search &amp; Reporting</Link>
+            <Link className={activeSection === "search" ? "active" : undefined} aria-current={activeSection === "search" ? "page" : undefined} href={productHref("/search/events/")}><span aria-hidden="true"><AppIcon name="search" size="md" /></span>Search &amp; Reporting</Link>
           )}
           <Link className={activeSection === "analytics" ? "active" : undefined} aria-current={activeSection === "analytics" ? "page" : undefined} href={productHref("/analytics/")}><span aria-hidden="true"><AppIcon name="analytics" size="md" /></span>Analytics</Link>
           <Link className={activeSection === "datasets" ? "active" : undefined} aria-current={activeSection === "datasets" ? "page" : undefined} href={productHref("/datasets/")}><span aria-hidden="true"><AppIcon name="database" size="md" /></span>Datasets</Link>
-          <Link className={activeSection === "reports" ? "active" : undefined} aria-current={activeSection === "reports" ? "page" : undefined} href={productHref("/reports/")}><span aria-hidden="true"><AppIcon name="file" size="md" /></span>Reports</Link>
+          <Link className={activeSection === "reports" ? "active" : undefined} aria-current={activeSection === "reports" ? "page" : undefined} href={productHref("/reports/saved-searches/")}><span aria-hidden="true"><AppIcon name="file" size="md" /></span>Reports</Link>
           <Link className={activeSection === "dashboards" ? "active" : undefined} aria-current={activeSection === "dashboards" ? "page" : undefined} href={productHref("/dashboards/")}><span aria-hidden="true"><AppIcon name="dashboard" size="md" /></span>Dashboards</Link>
           <span className="drawer-label">SYSTEM</span>
-          <Link className={activeSection === "activity" ? "active" : undefined} aria-current={activeSection === "activity" ? "page" : undefined} href={productHref("/activity/")}><span aria-hidden="true"><AppIcon name="activity" size="md" /></span>Activity {dataMode === "demo" ? <b className="activity-count">1</b> : null}</Link>
+          <Link className={activeSection === "activity" ? "active" : undefined} aria-current={activeSection === "activity" ? "page" : undefined} href={productHref("/activity/jobs/")}><span aria-hidden="true"><AppIcon name="activity" size="md" /></span>Activity {dataMode === "demo" ? <b className="activity-count">1</b> : null}</Link>
           <Link className={activeSection === "admin" ? "active" : undefined} aria-current={activeSection === "admin" ? "page" : undefined} href={productHref("/admin/")}><span aria-hidden="true"><AppIcon name="settings" size="md" /></span>Administration</Link>
           <span className="drawer-label">HELP DOCUMENTATION IS NOT INCLUDED IN THIS PREVIEW</span>
           <span className="drawer-rule" />

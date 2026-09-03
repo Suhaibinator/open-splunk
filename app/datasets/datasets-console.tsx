@@ -52,7 +52,7 @@ function DemoDatasetsConsole() {
         eyebrow="DATA"
         title="Datasets"
         description="Understand available indexes, source types, and field coverage."
-        actions={<><Link className="button" href="/admin/?section=indexes">Manage indexes</Link><Link className="button button--primary" href="/search/">Search data</Link></>}
+        actions={<><Link className="button" href="/admin/?section=indexes">Manage indexes</Link><Link className="button button--primary" href="/search/events/">Search data</Link></>}
       />
 
       <div className="dataset-toolbar">

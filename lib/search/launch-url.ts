@@ -1,4 +1,9 @@
 import { formatSplValue } from "@/lib/search/spl-syntax";
+import {
+  searchResultViewForQuery,
+  searchResultViewPath,
+  type SearchResultView,
+} from "@/lib/search/result-view-navigation";
 
 interface SearchLaunchOptions {
   earliest?: string;
@@ -6,6 +11,7 @@ interface SearchLaunchOptions {
   label?: string;
   run?: boolean;
   timezone?: string;
+  view?: SearchResultView;
 }
 
 export type SearchLaunchSource = "q" | "savedSearchId" | "historySearchId" | "searchJobId";
@@ -36,29 +42,34 @@ export function searchLaunchHref(query: string, options: SearchLaunchOptions = {
   });
   if (options.label !== undefined) parameters.set("label", options.label);
   if (options.timezone !== undefined) parameters.set("timezone", options.timezone);
-  return `/search/?${parameters.toString()}`;
+  return `${searchResultViewPath(options.view ?? searchResultViewForQuery(query))}?${parameters.toString()}`;
 }
 
-function objectLaunchHref(parameter: Exclude<SearchLaunchSource, "q">, id: string, run = true): string {
+function objectLaunchHref(
+  parameter: Exclude<SearchLaunchSource, "q">,
+  id: string,
+  run = true,
+  view: SearchResultView = "events",
+): string {
   const normalizedId = id.trim();
   if (normalizedId.length === 0) throw new TypeError("A persisted search ID is required.");
   const parameters = new URLSearchParams({
     [parameter]: normalizedId,
     run: run ? "1" : "0",
   });
-  return `/search/?${parameters.toString()}`;
+  return `${searchResultViewPath(view)}?${parameters.toString()}`;
 }
 
-export function savedSearchLaunchHref(savedSearchId: string, run = true): string {
-  return objectLaunchHref("savedSearchId", savedSearchId, run);
+export function savedSearchLaunchHref(savedSearchId: string, run = true, view?: SearchResultView): string {
+  return objectLaunchHref("savedSearchId", savedSearchId, run, view);
 }
 
-export function historySearchLaunchHref(searchJobId: string, run = true): string {
-  return objectLaunchHref("historySearchId", searchJobId, run);
+export function historySearchLaunchHref(searchJobId: string, run = true, view?: SearchResultView): string {
+  return objectLaunchHref("historySearchId", searchJobId, run, view);
 }
 
-export function searchJobLaunchHref(searchJobId: string): string {
-  return objectLaunchHref("searchJobId", searchJobId, false);
+export function searchJobLaunchHref(searchJobId: string, view?: SearchResultView): string {
+  return objectLaunchHref("searchJobId", searchJobId, false, view);
 }
 
 /** Reads one canonical launch source and rejects ambiguous deep links. */

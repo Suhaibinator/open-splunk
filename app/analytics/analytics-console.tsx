@@ -918,7 +918,7 @@ function BackendAnalyticsConsole({ apiBaseUrl }: { apiBaseUrl: string }) {
                 <div><span>Lowest bucket p95</span><strong>{observedTrendValues.length === 0 ? "Not reported" : `${Math.min(...observedTrendValues).toFixed(2)} s`}</strong></div>
                 <div><span>Median search</span><strong>{formatRuntime(workload.medianRuntimeMs)}</strong></div>
                 <div><span>Highest bucket p95</span><strong>{observedTrendValues.length === 0 ? "Not reported" : `${Math.max(...observedTrendValues).toFixed(2)} s`}</strong></div>
-                <Link href={contextualHref("/activity/")}>Inspect history <AppIcon name="chevron-right" size="xs" /></Link>
+                <Link href={contextualHref("/activity/history/")}>Inspect history <AppIcon name="chevron-right" size="xs" /></Link>
               </footer>
             </section>
 
@@ -1029,7 +1029,7 @@ function BackendAnalyticsConsole({ apiBaseUrl }: { apiBaseUrl: string }) {
                   ))}
                 </ol>
               )}
-              <footer className="analytics-slowest-footer"><span>Ordered by retained runtime</span><Link href={contextualHref("/activity/")}>View search history <AppIcon name="chevron-right" size="xs" /></Link></footer>
+              <footer className="analytics-slowest-footer"><span>Ordered by retained runtime</span><Link href={contextualHref("/activity/history/")}>View search history <AppIcon name="chevron-right" size="xs" /></Link></footer>
             </section>
           </div>
         </>

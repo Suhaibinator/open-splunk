@@ -12,7 +12,7 @@ import { expect, test, type Page } from "@playwright/test";
 const SEEDED_QUERY = "index=main";
 
 function launchUrl(parameters: Record<string, string>): string {
-  return `/search/?${new URLSearchParams({ q: SEEDED_QUERY, run: "0", ...parameters }).toString()}`;
+  return `/search/events/?${new URLSearchParams({ q: SEEDED_QUERY, run: "0", ...parameters }).toString()}`;
 }
 
 async function openSeededWorkspace(page: Page, parameters: Record<string, string> = {}): Promise<void> {
@@ -283,6 +283,41 @@ test("arrow keys move the selected result tab and focus follows it", async ({ pa
   await expect(page.getByTestId("result-tab-visualization")).toHaveAttribute("aria-selected", "true");
   await page.keyboard.press("Home");
   await expect(events).toHaveAttribute("aria-selected", "true");
+});
+
+test("result tabs persist in the URL and Back restores a view without rerunning the search", async ({ page }) => {
+  await openSeededWorkspace(page);
+  await runFromEditor(page);
+  const patterns = page.getByTestId("result-tab-patterns");
+  const statistics = page.getByTestId("result-tab-statistics");
+
+  await patterns.click();
+  await expect(page).toHaveURL(/\/search\/patterns\//u);
+  await statistics.click();
+  await expect(page).toHaveURL(/\/search\/statistics\//u);
+
+  await page.goBack();
+  await expect(page).toHaveURL(/\/search\/patterns\//u);
+  await expect(patterns).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByTestId("job-strip")).toHaveAttribute("aria-busy", "false");
+
+  await page.reload();
+  await expect(patterns).toHaveAttribute("aria-selected", "true");
+});
+
+test("automatic result selection replaces the path and parent aliases preserve URL state", async ({ page }) => {
+  await page.goto("/search/?q=index%3Dmain&run=0#results");
+  await expect(page).toHaveURL(/\/search\/events\/\?q=index%3Dmain&run=0#results$/u);
+
+  const editor = page.getByTestId("search-input");
+  await editor.fill("index=main | stats count");
+  await page.keyboard.press("Control+Enter");
+  await expect(page.getByTestId("run-search")).toHaveAttribute("aria-label", "Run search");
+  await expect(page).toHaveURL(/\/search\/statistics\//u);
+  await expect(page.getByTestId("result-tab-statistics")).toHaveAttribute("aria-selected", "true");
+
+  await page.goBack();
+  await expect(page).toHaveURL(/\/search\/events\/\?q=index%3Dmain&run=0#results$/u);
 });
 
 test("Help opens the SPL reference, the filter narrows it, and Insert appends the command as a new stage", async ({ page }) => {

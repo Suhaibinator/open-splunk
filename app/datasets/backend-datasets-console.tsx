@@ -199,7 +199,7 @@ export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsolePro
         eyebrow="DATA"
         title="Datasets"
         description="Browse the indexes authorized for this browser session."
-        actions={<><Link className="button" href="/admin/?section=indexes">Manage indexes</Link><Link className="button button--primary" href="/search/">Search data</Link></>}
+        actions={<><Link className="button" href="/admin/?section=indexes">Manage indexes</Link><Link className="button button--primary" href="/search/events/">Search data</Link></>}
       />
 
       {loading ? (

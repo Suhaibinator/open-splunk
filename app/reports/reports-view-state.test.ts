@@ -18,7 +18,7 @@ test("report tabs support wrapping arrow navigation and boundary keys", () => {
 
 test("report schedule links round-trip exactly one saved-search target", () => {
   const href = scheduledReportConfigurationHref("saved/a b");
-  assert.equal(href, "/reports/?scheduleSavedSearchId=saved%2Fa+b");
+  assert.equal(href, "/reports/saved-searches/?scheduleSavedSearchId=saved%2Fa+b");
   assert.equal(
     scheduledReportConfigurationTarget(new URL(href, "https://example.test").searchParams),
     "saved/a b",

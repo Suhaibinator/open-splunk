@@ -46,5 +46,5 @@ test("job-link sharing atomically uses the returned shared job identity and revi
   assert.deepEqual(requests, [{ searchJobId: "job-1", expectedStateVersion: 7n }]);
   assert.equal(result.settings.visibility, "everyone");
   assert.equal(result.settings.lifetimeMs, 7 * 24 * 60 * 60 * 1_000);
-  assert.equal(result.href, "https://splunk.example.test/search/?searchJobId=job-1&run=0");
+  assert.equal(result.href, "https://splunk.example.test/search/events/?searchJobId=job-1&run=0");
 });

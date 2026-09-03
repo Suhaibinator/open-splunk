@@ -16,6 +16,7 @@ import {
 import { supportsServerFeature } from "@/lib/api/system-bootstrap";
 import { createErrorMessage } from "@/lib/error-message";
 import { savedSearchLaunchHref } from "@/lib/search/launch-url";
+import { searchResultViewForDefinition } from "@/lib/search/result-view-navigation";
 import {
   nextDuplicateSavedSearchName,
   savedSearchNameValidationError,
@@ -57,6 +58,8 @@ interface SavedSearchModal {
 
 interface BackendReportsConsoleProps {
   apiBaseUrl: string;
+  onViewChange: (view: ReportsView) => void;
+  view: ReportsView;
 }
 
 const errorMessage = createErrorMessage("The server did not return a usable saved-search response.");
@@ -87,10 +90,14 @@ function formatDate(value: Date | null): string {
 }
 
 function launchHref(savedSearch: ServerSavedSearch): string {
-  return savedSearchLaunchHref(savedSearch.id);
+  return savedSearchLaunchHref(
+    savedSearch.id,
+    true,
+    searchResultViewForDefinition(savedSearch.search.spl, savedSearch.search.preferredResultTab),
+  );
 }
 
-export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps) {
+export function BackendReportsConsole({ apiBaseUrl, onViewChange, view }: BackendReportsConsoleProps) {
   const client = useMemo(() => createOpenSplunkApiClient({ baseUrl: apiBaseUrl }), [apiBaseUrl]);
   const [state, setState] = useState<LoadState>("loading");
   const [savedSearches, setSavedSearches] = useState<ServerSavedSearch[]>([]);
@@ -115,7 +122,6 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [scheduleTargetId, setScheduleTargetId] = useState<string | null>(null);
-  const [view, setView] = useState<ReportsView>("saved-searches");
   const alertsTabRef = useRef<HTMLButtonElement>(null);
   const savedSearchesTabRef = useRef<HTMLButtonElement>(null);
   const bootstrapRef = useRef<SystemBootstrapModel | null>(null);
@@ -342,7 +348,7 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
     const nextView = reportsViewForKey(view, event.key);
     if (nextView === null) return;
     event.preventDefault();
-    setView(nextView);
+    onViewChange(nextView);
     window.requestAnimationFrame(() => {
       (nextView === "saved-searches" ? savedSearchesTabRef : alertsTabRef).current?.focus();
     });
@@ -479,12 +485,12 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
         description={view === "saved-searches"
           ? "Open reusable search definitions persisted by the connected server."
           : "Manage scheduled result conditions and signed webhook delivery."}
-        actions={<><Link className="button" href="/search/">Open Search</Link>{view === "saved-searches" ? <button className="button button--primary" type="button" aria-busy={refreshPending} aria-disabled={controlsPending} onClick={() => { if (!controlsPending) reload(); }}>{refreshing ? "Refreshing…" : state === "loading" ? "Loading…" : "Refresh"}</button> : null}</>}
+        actions={<><Link className="button" href="/search/events/">Open Search</Link>{view === "saved-searches" ? <button className="button button--primary" type="button" aria-busy={refreshPending} aria-disabled={controlsPending} onClick={() => { if (!controlsPending) reload(); }}>{refreshing ? "Refreshing…" : state === "loading" ? "Loading…" : "Refresh"}</button> : null}</>}
       />
 
       <div className="reports-view-tabs" role="tablist" aria-label="Search reporting views">
-        <button ref={savedSearchesTabRef} className={`button ${view === "saved-searches" ? "button--primary" : "button--secondary"}`} id="reports-saved-searches-tab" role="tab" aria-controls="reports-saved-searches-panel" aria-selected={view === "saved-searches"} tabIndex={view === "saved-searches" ? 0 : -1} type="button" onClick={() => setView("saved-searches")} onKeyDown={moveReportsView}>Saved Searches</button>
-        <button ref={alertsTabRef} className={`button ${view === "alerts" ? "button--primary" : "button--secondary"}`} id="reports-alerts-tab" role="tab" aria-controls="reports-alerts-panel" aria-selected={view === "alerts"} tabIndex={view === "alerts" ? 0 : -1} type="button" onClick={() => setView("alerts")} onKeyDown={moveReportsView}>Alerts</button>
+        <button ref={savedSearchesTabRef} className={`button ${view === "saved-searches" ? "button--primary" : "button--secondary"}`} id="reports-saved-searches-tab" role="tab" aria-controls="reports-saved-searches-panel" aria-selected={view === "saved-searches"} tabIndex={view === "saved-searches" ? 0 : -1} type="button" onClick={() => onViewChange("saved-searches")} onKeyDown={moveReportsView}>Saved Searches</button>
+        <button ref={alertsTabRef} className={`button ${view === "alerts" ? "button--primary" : "button--secondary"}`} id="reports-alerts-tab" role="tab" aria-controls="reports-alerts-panel" aria-selected={view === "alerts"} tabIndex={view === "alerts" ? 0 : -1} type="button" onClick={() => onViewChange("alerts")} onKeyDown={moveReportsView}>Alerts</button>
       </div>
 
       <div id="reports-saved-searches-panel" role="tabpanel" aria-labelledby="reports-saved-searches-tab" hidden={view !== "saved-searches"}>
@@ -559,7 +565,7 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
                 <span aria-hidden="true"><AppIcon name="search" size="lg" /></span>
                 <strong>{savedSearches.length === 0 ? "No saved searches" : "No matching saved searches"}</strong>
                 <p>{savedSearches.length === 0 && effectiveQuery.length === 0 && scope === "all" ? "Save a search from the Search workspace to add its reusable definition here." : "Try another phrase or sharing scope."}</p>
-                {savedSearches.length > 0 ? <button type="button" onClick={() => { setQuery(""); setScope("all"); }}>Clear filters</button> : <Link href="/search/">Open Search</Link>}
+                {savedSearches.length > 0 ? <button type="button" onClick={() => { setQuery(""); setScope("all"); }}>Clear filters</button> : <Link href="/search/events/">Open Search</Link>}
               </div>
             ) : (
               <div className="table-wrap reports-table-wrap">

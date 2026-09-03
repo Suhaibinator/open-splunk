@@ -18,6 +18,7 @@ import {
 import type { SystemBootstrapModel } from "@/lib/api/system-bootstrap";
 import type { ProtobufRequestOptions } from "@/lib/api/protobuf-transport";
 import { supportsServerFeature } from "@/lib/api/system-bootstrap";
+import type { SearchResultView } from "@/lib/search/result-view-navigation";
 
 import type { DialogActionState, TimeRange } from "./model";
 
@@ -30,6 +31,7 @@ interface UseSearchSharingOptions {
   job: SearchJob | null;
   activeSavedSearchId: string | null;
   query: string;
+  resultView: SearchResultView;
   timeRange: TimeRange;
   copyText: (text: string, successMessage: string) => Promise<boolean>;
   onJobUpdated: (job: SearchJob) => void;
@@ -62,6 +64,7 @@ export async function shareSearchJobForLink(
   searchJobId: string,
   expectedStateVersion: bigint,
   origin: string,
+  resultView: SearchResultView = "events",
   options?: ProtobufRequestOptions,
 ): Promise<Awaited<ReturnType<typeof shareServerSearchJob>> & { href: string }> {
   const result = await shareServerSearchJob(
@@ -73,7 +76,7 @@ export async function shareSearchJobForLink(
   );
   return {
     ...result,
-    href: new URL(searchJobLaunchHref(result.job.searchJobId), origin).toString(),
+    href: new URL(searchJobLaunchHref(result.job.searchJobId, resultView), origin).toString(),
   };
 }
 
@@ -189,16 +192,17 @@ export function useSearchSharing(options: UseSearchSharingOptions): SearchSharin
       latest: options.timeRange.latest,
       label: options.timeRange.label,
       timezone: options.timeRange.timezone,
+      view: options.resultView,
     })), "Query link copied to the clipboard.");
-  }, [copyLink, options.query, options.timeRange]);
+  }, [copyLink, options.query, options.resultView, options.timeRange]);
 
   const copySavedSearchLink = useCallback(async () => {
     if (options.activeSavedSearchId === null) return;
     await copyLink(
-      absoluteHref(savedSearchLaunchHref(options.activeSavedSearchId)),
+      absoluteHref(savedSearchLaunchHref(options.activeSavedSearchId, true, options.resultView)),
       "Saved-search link copied to the clipboard.",
     );
-  }, [copyLink, options.activeSavedSearchId]);
+  }, [copyLink, options.activeSavedSearchId, options.resultView]);
 
   const share = useCallback(async (copyAfterShare: boolean) => {
     if (options.job === null || options.bootstrap === null || settings === null) return;
@@ -214,6 +218,7 @@ export function useSearchSharing(options: UseSearchSharingOptions): SearchSharin
           options.job.searchJobId,
           settings.stateVersion,
           window.location.origin,
+          options.resultView,
           { signal: request.controller.signal },
         );
         result = shared;

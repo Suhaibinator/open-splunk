@@ -116,9 +116,9 @@ function BackendRecentSearches({
   } else if (state === "error") {
     content = <BackendResourceState kind="error" title="Recent searches unavailable" message={error ?? "The recent search request failed."} action={<button type="button" onClick={() => setGeneration((current) => current + 1)}>Retry</button>} />;
   } else if (state === "unavailable") {
-    content = <BackendResourceState kind="unavailable" title="Search history is not enabled" message="This server does not advertise the persisted search-history feature." action={<Link href={contextualHref("/search/")}>Open Search</Link>} />;
+    content = <BackendResourceState kind="unavailable" title="Search history is not enabled" message="This server does not advertise the persisted search-history feature." action={<Link href={contextualHref("/search/events/")}>Open Search</Link>} />;
   } else if (entries.length === 0) {
-    content = <BackendResourceState kind="empty" title="No persisted search history" message="Completed, failed, or canceled searches for this app will appear here after the backend retains them." action={<Link href={contextualHref("/search/")}>Run a search</Link>} />;
+    content = <BackendResourceState kind="empty" title="No persisted search history" message="Completed, failed, or canceled searches for this app will appear here after the backend retains them." action={<Link href={contextualHref("/search/events/")}>Run a search</Link>} />;
   } else {
     content = (
       <div className="table-wrap">
@@ -143,7 +143,7 @@ function BackendRecentSearches({
 
   return (
     <section className="suite-card recent-searches-card recent-searches-card--backend">
-      <header className="suite-card-header"><div><h2>Recent searches</h2><p>Rerun terminal searches retained for the selected backend app.</p></div><Link href={contextualHref("/activity/")}>View all activity</Link></header>
+      <header className="suite-card-header"><div><h2>Recent searches</h2><p>Rerun terminal searches retained for the selected backend app.</p></div><Link href={contextualHref("/activity/history/")}>View all activity</Link></header>
       {content}
     </section>
   );
@@ -169,7 +169,7 @@ export function HomeDashboard({ apiBaseUrl = "", dataMode }: HomeDashboardProps)
             : "Explore the deterministic search, administration, and operations preview."}</p>
         </div>
         <div className="home-hero-actions">
-          <Link className="button button--primary" href={productHref("/search/")}>New search</Link>
+          <Link className="button button--primary" href={productHref("/search/events/")}>New search</Link>
           <Link className="button" href={productHref("/admin/")}>{dataMode === "backend" ? "Administration" : "Administration preview"}</Link>
         </div>
       </header>
@@ -206,7 +206,7 @@ export function HomeDashboard({ apiBaseUrl = "", dataMode }: HomeDashboardProps)
         <section className="suite-card home-apps-card">
           <header className="suite-card-header"><div><h2>Apps</h2><p>Choose a workspace for your next task.</p></div><Link href={productHref("/admin/")}>Administration</Link></header>
           <div className="app-launcher-grid">
-            <Link className="app-launch-card" href={productHref("/search/")}>
+            <Link className="app-launch-card" href={productHref("/search/events/")}>
               <span className="app-launch-icon" aria-hidden="true">⌕</span>
               <div><strong>Search &amp; Reporting</strong><p>Explore events, build searches, and create visualizations.</p><small>Recently used</small></div>
               <b aria-hidden="true"><AppIcon name="chevron-right" size="sm" /></b>
@@ -228,16 +228,16 @@ export function HomeDashboard({ apiBaseUrl = "", dataMode }: HomeDashboardProps)
           <header className="suite-card-header"><div><h2>{dataMode === "backend" ? "Connected workflow" : "Explore the preview"}</h2><p>{dataMode === "backend" ? "Open backend-supported surfaces." : "Try each deterministic workspace."}</p></div></header>
           {dataMode === "backend" ? (
             <ol className="setup-checklist">
-              <li><span aria-hidden="true">1</span><div><strong>Run an SPL search</strong><small>Query authorized indexes</small></div><Link href={productHref("/search/")}>Open</Link></li>
+              <li><span aria-hidden="true">1</span><div><strong>Run an SPL search</strong><small>Query authorized indexes</small></div><Link href={productHref("/search/events/")}>Open</Link></li>
               <li><span aria-hidden="true">2</span><div><strong>Browse index summaries</strong><small>Read the bootstrap catalog</small></div><Link href={productHref("/datasets/")}>Open</Link></li>
-              <li><span aria-hidden="true">3</span><div><strong>Review saved definitions</strong><small>When registered by the server</small></div><Link href={productHref("/reports/")}>Open</Link></li>
-              <li><span aria-hidden="true">4</span><div><strong>Inspect search activity</strong><small>Jobs and history remain separate</small></div><Link href={productHref("/activity/")}>Open</Link></li>
+              <li><span aria-hidden="true">3</span><div><strong>Review saved definitions</strong><small>When registered by the server</small></div><Link href={productHref("/reports/saved-searches/")}>Open</Link></li>
+              <li><span aria-hidden="true">4</span><div><strong>Inspect search activity</strong><small>Jobs and history remain separate</small></div><Link href={productHref("/activity/jobs/")}>Open</Link></li>
             </ol>
           ) : (
             <ol className="setup-checklist">
-              <li><span aria-hidden="true">1</span><div><strong>Run a preview search</strong><small>Use deterministic events</small></div><Link href="/search/">Open</Link></li>
+              <li><span aria-hidden="true">1</span><div><strong>Run a preview search</strong><small>Use deterministic events</small></div><Link href="/search/events/">Open</Link></li>
               <li><span aria-hidden="true">2</span><div><strong>Browse preview datasets</strong><small>Inspect fixture index cards</small></div><Link href="/datasets/">Open</Link></li>
-              <li><span aria-hidden="true">3</span><div><strong>Review preview activity</strong><small>Inspect sample job states</small></div><Link href="/activity/">Open</Link></li>
+              <li><span aria-hidden="true">3</span><div><strong>Review preview activity</strong><small>Inspect sample job states</small></div><Link href="/activity/jobs/">Open</Link></li>
               <li><span aria-hidden="true">4</span><div><strong>Open administration</strong><small>Explore sample controls</small></div><Link href="/admin/">Open</Link></li>
             </ol>
           )}
@@ -246,7 +246,7 @@ export function HomeDashboard({ apiBaseUrl = "", dataMode }: HomeDashboardProps)
 
       {dataMode === "backend" ? <BackendRecentSearches apiBaseUrl={apiBaseUrl} preferredAppId={preferredAppId} /> : (
         <section className="suite-card recent-searches-card">
-          <header className="suite-card-header"><div><h2>Preview recent searches</h2><p>Resume a deterministic sample investigation.</p></div><Link href="/activity/">View preview activity</Link></header>
+          <header className="suite-card-header"><div><h2>Preview recent searches</h2><p>Resume a deterministic sample investigation.</p></div><Link href="/activity/jobs/">View preview activity</Link></header>
           <div className="table-wrap">
             <table className="table recent-searches-table">
               <thead><tr><th scope="col">Search</th><th scope="col">Results</th><th scope="col">Status</th><th scope="col">Last run</th></tr></thead>

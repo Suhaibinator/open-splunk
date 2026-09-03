@@ -1,12 +1,9 @@
 import type { Metadata } from "next";
 
-import { getFrontendRuntimeConfig } from "@/lib/frontend-runtime-config";
-
-import { SearchWorkspace } from "../search-workspace";
+import { SearchPageContent } from "./search-page";
 
 export const metadata: Metadata = { title: "Search & Reporting" };
 
 export default function SearchPage() {
-  const { apiBaseUrl, dataMode } = getFrontendRuntimeConfig();
-  return <SearchWorkspace dataMode={dataMode} apiBaseUrl={apiBaseUrl} />;
+  return <SearchPageContent canonicalizeParent initialResultView="events" />;
 }

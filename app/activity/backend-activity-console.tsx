@@ -23,6 +23,7 @@ import {
 } from "@/lib/api";
 import { createErrorMessage } from "@/lib/error-message";
 import { historySearchLaunchHref } from "@/lib/search/launch-url";
+import { searchResultViewForDefinition } from "@/lib/search/result-view-navigation";
 import {
   clearServerSearchHistory,
   deleteServerSearchHistoryEntry,
@@ -46,22 +47,31 @@ import {
 import { BackendLiveJobs } from "./backend-live-jobs";
 import { BackendMutationAudit, BackendSearchAttemptAudit } from "./backend-audit-views";
 import { BackendExportJobs } from "./backend-export-jobs";
+import type { ActivityView } from "./activity-navigation";
 
 type ActivityFilter = "all" | "completed" | "failed" | "canceled" | "warnings";
-type ActivityView = "jobs" | "history" | "exports" | "mutations" | "attempts";
 type LoadState = "loading" | "available" | "unavailable" | "error";
 type HistoryModal =
   | { action: "delete"; target: ServerSearchHistoryEntry }
   | { action: "clear" };
 
-interface BackendActivityConsoleProps {
+interface BackendActivityViewProps {
   apiBaseUrl: string;
+}
+
+interface BackendActivityConsoleProps extends BackendActivityViewProps {
+  onViewChange: (view: ActivityView) => void;
+  view: ActivityView;
 }
 
 const errorMessage = createErrorMessage("The server did not return a usable search history response.");
 
 function launchHref(entry: ServerSearchHistoryEntry): string {
-  return historySearchLaunchHref(entry.id);
+  return historySearchLaunchHref(
+    entry.id,
+    true,
+    searchResultViewForDefinition(entry.search.spl, entry.search.preferredResultTab),
+  );
 }
 
 function historyStateFilters(filter: ActivityFilter): SearchJobState[] {
@@ -98,11 +108,11 @@ function historyFilterLabel(filter: ActivityFilter): string {
   return "all";
 }
 
-export function BackendActivityConsole({ apiBaseUrl }: BackendActivityConsoleProps) {
+export function BackendActivityConsole({ apiBaseUrl, onViewChange, view }: BackendActivityConsoleProps) {
   const client = useMemo(() => createOpenSplunkApiClient({ baseUrl: apiBaseUrl }), [apiBaseUrl]);
-  const [view, setView] = useState<ActivityView>("jobs");
-  const [visited, setVisited] = useState<ReadonlySet<ActivityView>>(new Set(["jobs"]));
+  const [visited, setVisited] = useState<ReadonlySet<ActivityView>>(new Set([view]));
   const [bootstrap, setBootstrap] = useState<SystemBootstrapModel | null>(null);
+  const [bootstrapState, setBootstrapState] = useState<"loading" | "available" | "error">("loading");
   const jobTabRef = useRef<HTMLButtonElement>(null);
   const historyTabRef = useRef<HTMLButtonElement>(null);
   const exportsTabRef = useRef<HTMLButtonElement>(null);
@@ -128,17 +138,56 @@ export function BackendActivityConsole({ apiBaseUrl }: BackendActivityConsolePro
     const controller = new AbortController();
     let current = true;
     void getSystemBootstrap(client, undefined, { signal: controller.signal })
-      .then((value) => { if (current) setBootstrap(value); })
-      .catch(() => { if (current) setBootstrap(null); });
+      .then((value) => {
+        if (!current) return;
+        setBootstrap(value);
+        setBootstrapState("available");
+      })
+      .catch(() => {
+        if (!current) return;
+        setBootstrap(null);
+        setBootstrapState("error");
+      });
     return () => {
       current = false;
       controller.abort();
     };
   }, [client]);
 
+  useEffect(() => {
+    setVisited((current) => new Set(current).add(view));
+  }, [view]);
+
   function selectView(nextView: ActivityView) {
-    setView(nextView);
-    setVisited((current) => new Set(current).add(nextView));
+    onViewChange(nextView);
+  }
+
+  const capabilityGatedView = view === "exports" || view === "mutations" || view === "attempts";
+  if (capabilityGatedView && bootstrapState !== "available") {
+    return (
+      <div className="suite-page activity-page backend-activity-page">
+        <PageHeading eyebrow="OPERATIONS" title="Activity" description="Inspect retained search and export jobs, search history, and the audit journals advertised by this backend." />
+        <BackendResourceState
+          kind={bootstrapState === "loading" ? "loading" : "error"}
+          title={bootstrapState === "loading" ? "Checking activity capabilities" : "Activity capabilities could not be loaded"}
+          message={bootstrapState === "loading" ? "Reading the views advertised by this backend…" : "The requested activity view cannot be verified until the system bootstrap is available."}
+          action={bootstrapState === "error" ? <Link href="/activity/jobs/">View current jobs</Link> : undefined}
+        />
+      </div>
+    );
+  }
+  if (!availableViews.includes(view)) {
+    return (
+      <div className="suite-page activity-page backend-activity-page">
+        <PageHeading eyebrow="OPERATIONS" title="Activity" description="Inspect retained search and export jobs, search history, and the audit journals advertised by this backend." />
+        <BackendResourceState
+          kind="unavailable"
+          title="Activity view not found"
+          message="The connected backend does not advertise the capability required by this activity view."
+          action={<Link href="/activity/jobs/">View current jobs</Link>}
+        />
+      </div>
+    );
   }
 
   function navigateTabs(event: ReactKeyboardEvent<HTMLButtonElement>) {
@@ -281,7 +330,7 @@ export function BackendActivityConsole({ apiBaseUrl }: BackendActivityConsolePro
   );
 }
 
-function BackendSearchHistory({ apiBaseUrl }: BackendActivityConsoleProps) {
+function BackendSearchHistory({ apiBaseUrl }: BackendActivityViewProps) {
   const client = useMemo(() => createOpenSplunkApiClient({ baseUrl: apiBaseUrl }), [apiBaseUrl]);
   const [state, setState] = useState<LoadState>("loading");
   const [entries, setEntries] = useState<ServerSearchHistoryEntry[]>([]);
