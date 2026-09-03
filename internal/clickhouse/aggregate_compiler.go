@@ -4016,6 +4016,125 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 	)
 }
 
+type aggregateExpressionInput struct {
+	valueSQL              string
+	valueArgs             []any
+	kind                  fieldKind
+	numberType            string
+	dynamicDomain         dynamicScalarDomain
+	maxStringBytes        uint64
+	numericIntegral       bool
+	mvCountOneOrNull      bool
+	mvSortedLexicographic bool
+	alwaysNull            bool
+	ieeeComparison        bool
+	ordinal               int
+	field                 fieldState
+	numericAlias          string
+	stringAlias           string
+}
+
+type aggregateInputCacheKey struct {
+	fieldName         string
+	expressionOrdinal int
+	expression        bool
+}
+
+type aggregateScalarStringInput struct {
+	ordinal        int
+	valueAlias     string
+	numberAlias    string
+	candidateAlias string
+	rawBytesSQL    string
+	extremaReady   bool
+}
+
+type aggregateExtremaResultKey struct {
+	input    aggregateInputCacheKey
+	function plan.AggregateFunction
+}
+
+type aggregateExtremaResult struct {
+	winnerAlias string
+	typeAlias   string
+}
+
+type aggregateChronologicalInput struct {
+	candidatesAlias string
+	validationAlias string
+	multiple        bool
+}
+
+type aggregateChronologicalResultKey struct {
+	input    aggregateInputCacheKey
+	function plan.AggregateFunction
+}
+
+type aggregateChronologicalResult struct {
+	winnerAlias string
+	typeAlias   string
+}
+
+type aggregatePercentileState struct {
+	column    string
+	positions map[uint8]int
+}
+
+type aggregateOrderedStringList struct {
+	listColumn     string
+	overflowColumn string
+}
+
+type aggregateConditionalCountInput struct {
+	predicateSQL  string
+	predicateArgs []any
+	alias         string
+}
+
+type aggregateSparklineBucketInput struct {
+	spec  statsSparklineBucketSpec
+	alias string
+}
+
+type aggregateMeasureLowering struct {
+	operator                     *plan.Aggregate
+	state                        compileState
+	statsOptions                 plan.StatsOptions
+	projection                   []string
+	predicates                   []string
+	groups                       []string
+	next                         compileState
+	args                         []any
+	seen                         map[string]struct{}
+	dynamicGroupInvalid          []string
+	dynamicGroupInvalidArgs      []any
+	numericInputs                map[string]string
+	aggregateExpressionInputs    []*aggregateExpressionInput
+	stringInputs                 map[string]string
+	allNumericInvalidInputs      map[aggregateInputCacheKey]string
+	scalarStringInputs           map[aggregateInputCacheKey]*aggregateScalarStringInput
+	countInputs                  map[string]string
+	conditionalCountInputs       []aggregateConditionalCountInput
+	extremaInputs                map[aggregateInputCacheKey]string
+	scalarExtremaResults         map[aggregateExtremaResultKey]aggregateExtremaResult
+	dynamicExtremaResults        map[aggregateExtremaResultKey]aggregateExtremaResult
+	chronologicalInputs          map[aggregateInputCacheKey]aggregateChronologicalInput
+	chronologicalResults         map[aggregateChronologicalResultKey]aggregateChronologicalResult
+	chronologicalInputDirections map[string]chronologicalDirections
+	chronologicalRowKey          string
+	exactStringSets              map[aggregateInputCacheKey]string
+	distinctCounts               map[aggregateInputCacheKey]string
+	orderedStringLists           map[aggregateInputCacheKey]aggregateOrderedStringList
+	valuesInputs                 map[aggregateInputCacheKey]struct{}
+	extremaMeasureInputs         map[string]struct{}
+	numericArrayConsumers        map[string]struct{}
+	percentileLevels             map[string][]uint8
+	percentileStates             map[string]aggregatePercentileState
+	listRowOrdinal               string
+	listWindowOrder              string
+	sparklineBuckets             map[plan.SparklineSpan]aggregateSparklineBucketInput
+}
+
 func compileAggregateMeasures(
 	operator *plan.Aggregate,
 	state compileState,
@@ -4029,360 +4148,60 @@ func compileAggregateMeasures(
 	dynamicGroupInvalid []string,
 	dynamicGroupInvalidArgs []any,
 ) ([]string, []string, []string, compileState, []any, error) {
-	numericInputs := make(map[string]string)
-	numericInputForResolved := func(ref plan.FieldRef, input fieldState, ok bool) string {
-		if inputAlias, cached := numericInputs[ref.Name]; cached {
-			return inputAlias
-		}
-		inputSQL := "CAST([], 'Array(Float64)')"
-		var inputArgs []any
-		if ok {
-			inputSQL, inputArgs = numericArrayInputSQL(input)
-		}
-		inputAlias := quoteIdentifier(fmt.Sprintf("__os_measure_values_%d", len(numericInputs)))
-		numericInputs[ref.Name] = inputAlias
-		next.preAggregateColumns = append(next.preAggregateColumns, inputSQL+" AS "+inputAlias)
-		next.preAggregateArgs = append(next.preAggregateArgs, inputArgs...)
-		return inputAlias
+	lowering := aggregateMeasureLowering{
+		operator:                     operator,
+		state:                        state,
+		statsOptions:                 statsOptions,
+		projection:                   projection,
+		predicates:                   predicates,
+		groups:                       groups,
+		next:                         next,
+		args:                         args,
+		seen:                         seen,
+		dynamicGroupInvalid:          dynamicGroupInvalid,
+		dynamicGroupInvalidArgs:      dynamicGroupInvalidArgs,
+		numericInputs:                make(map[string]string),
+		aggregateExpressionInputs:    make([]*aggregateExpressionInput, 0),
+		stringInputs:                 make(map[string]string),
+		allNumericInvalidInputs:      make(map[aggregateInputCacheKey]string),
+		scalarStringInputs:           make(map[aggregateInputCacheKey]*aggregateScalarStringInput),
+		countInputs:                  make(map[string]string),
+		conditionalCountInputs:       make([]aggregateConditionalCountInput, 0),
+		extremaInputs:                make(map[aggregateInputCacheKey]string),
+		scalarExtremaResults:         make(map[aggregateExtremaResultKey]aggregateExtremaResult),
+		dynamicExtremaResults:        make(map[aggregateExtremaResultKey]aggregateExtremaResult),
+		chronologicalInputs:          make(map[aggregateInputCacheKey]aggregateChronologicalInput),
+		chronologicalResults:         make(map[aggregateChronologicalResultKey]aggregateChronologicalResult),
+		chronologicalInputDirections: make(map[string]chronologicalDirections),
+		exactStringSets:              make(map[aggregateInputCacheKey]string),
+		distinctCounts:               make(map[aggregateInputCacheKey]string),
+		orderedStringLists:           make(map[aggregateInputCacheKey]aggregateOrderedStringList),
+		valuesInputs:                 make(map[aggregateInputCacheKey]struct{}),
+		extremaMeasureInputs:         make(map[string]struct{}),
+		numericArrayConsumers:        make(map[string]struct{}),
+		percentileLevels:             make(map[string][]uint8),
+		percentileStates:             make(map[string]aggregatePercentileState),
+		sparklineBuckets:             make(map[plan.SparklineSpan]aggregateSparklineBucketInput),
 	}
-	numericInputFor := func(ref plan.FieldRef) (string, error) {
-		if inputAlias, cached := numericInputs[ref.Name]; cached {
-			return inputAlias, nil
-		}
-		input, ok, resolveErr := resolveCompiledField(ref, state)
-		if resolveErr != nil {
-			return "", resolveErr
-		}
-		inputAlias := numericInputForResolved(ref, input, ok)
-		return inputAlias, nil
+	lowering.collectMeasureInputs()
+	if err := lowering.compileMeasures(); err != nil {
+		return nil, nil, nil, compileState{}, nil, err
 	}
-	type aggregateExpressionInput struct {
-		valueSQL              string
-		valueArgs             []any
-		kind                  fieldKind
-		numberType            string
-		dynamicDomain         dynamicScalarDomain
-		maxStringBytes        uint64
-		numericIntegral       bool
-		mvCountOneOrNull      bool
-		mvSortedLexicographic bool
-		alwaysNull            bool
-		ieeeComparison        bool
-		ordinal               int
-		field                 fieldState
-		numericAlias          string
-		stringAlias           string
+	if err := lowering.finalizeDynamicGroups(); err != nil {
+		return nil, nil, nil, compileState{}, nil, err
 	}
-	aggregateExpressionInputs := make([]*aggregateExpressionInput, 0)
-	aggregateExpressionInputFor := func(
-		expression plan.ScalarExpression,
-	) (*aggregateExpressionInput, error) {
-		if nilScalarExpression(expression) {
-			return nil, errors.New("compile ClickHouse aggregate: scalar eval input is missing")
-		}
-		compiled, compileErr := compileScalarValue(expression, state)
-		if compileErr != nil {
-			return nil, fmt.Errorf("compile ClickHouse aggregate scalar eval input: %w", compileErr)
-		}
-		for _, cached := range aggregateExpressionInputs {
-			if cached.valueSQL == compiled.valueSQL &&
-				reflect.DeepEqual(cached.valueArgs, compiled.valueArgs) &&
-				cached.field.textEligibleSQL == compiled.textEligibleSQL &&
-				cached.field.semanticBytesSQL == compiled.semanticBytesSQL &&
-				cached.field.textEligibleBySemanticBytes == compiled.textEligibleBySemanticBytes &&
-				cached.field.stringOrBytes == compiled.stringOrBytes &&
-				cached.field.stringOrBytesNullable == compiled.stringOrBytesNullable &&
-				cached.kind == compiled.kind &&
-				cached.numberType == compiled.numberType &&
-				cached.dynamicDomain == compiled.dynamicDomain &&
-				cached.maxStringBytes == compiled.maxStringBytes &&
-				cached.numericIntegral == compiled.numericIntegral &&
-				cached.mvCountOneOrNull == compiled.mvCountOneOrNull &&
-				cached.mvSortedLexicographic == compiled.mvSortedLexicographic &&
-				cached.alwaysNull == compiled.alwaysNull &&
-				cached.ieeeComparison == compiled.ieeeComparison {
-				return cached, nil
-			}
-		}
+	return lowering.projection, lowering.predicates, lowering.groups, lowering.next, lowering.args, nil
+}
 
-		ordinal := len(aggregateExpressionInputs)
-		valueAlias := quoteIdentifier(fmt.Sprintf(
-			"__os_measure_numeric_expression_value_%d",
-			ordinal,
-		))
-		next.preAggregateColumns = append(
-			next.preAggregateColumns,
-			compiled.valueSQL+" AS "+valueAlias,
-		)
-		next.preAggregateArgs = append(next.preAggregateArgs, compiled.valueArgs...)
-		semanticBytesSQL := compiled.semanticBytesSQL
-		if compiled.kind == fieldKindString && compiled.stringOrBytes {
-			if semanticBytesSQL == "" {
-				return nil, errors.New(
-					"compile ClickHouse aggregate scalar eval input: String-or-Bytes value lacks semantic Bytes provenance",
-				)
-			}
-			semanticAlias := quoteIdentifier(fmt.Sprintf(
-				"__os_measure_expression_semantic_bytes_%d",
-				ordinal,
-			))
-			next.preAggregateColumns = append(
-				next.preAggregateColumns,
-				"toUInt8(ifNull("+semanticBytesSQL+", 0)) AS "+semanticAlias,
-			)
-			next.preAggregateArgs = append(
-				next.preAggregateArgs,
-				compiled.semanticBytesArgs...,
-			)
-			semanticBytesSQL = semanticAlias
-		}
-		materialized := fieldState{
-			valueSQL:                    valueAlias,
-			textEligibleSQL:             compiled.textEligibleSQL,
-			semanticBytesSQL:            semanticBytesSQL,
-			semanticBytesByUTF8Validity: compiled.semanticBytesByUTF8Validity,
-			textEligibleBySemanticBytes: compiled.textEligibleBySemanticBytes,
-			stringOrBytes:               compiled.stringOrBytes,
-			stringOrBytesNullable:       compiled.stringOrBytesNullable,
-			existsSQL:                   "1",
-			kind:                        compiled.kind,
-			numberType:                  compiled.numberType,
-			maxStringBytes:              compiled.maxStringBytes,
-			numericIntegral:             compiled.numericIntegral,
-			mvCountOneOrNull:            compiled.mvCountOneOrNull,
-			mvSortedLexicographic:       compiled.mvSortedLexicographic,
-			alwaysNull:                  compiled.alwaysNull,
-			dynamicDomain:               compiled.dynamicDomain,
-			ieeeComparison:              compiled.ieeeComparison,
-		}
-		if compiled.kind == fieldKindDynamic {
-			materialized.dynamicTypeSQL = "dynamicType(" + valueAlias + ")"
-		}
-		cached := &aggregateExpressionInput{
-			valueSQL:              compiled.valueSQL,
-			valueArgs:             append([]any(nil), compiled.valueArgs...),
-			kind:                  compiled.kind,
-			numberType:            compiled.numberType,
-			dynamicDomain:         compiled.dynamicDomain,
-			maxStringBytes:        compiled.maxStringBytes,
-			numericIntegral:       compiled.numericIntegral,
-			mvCountOneOrNull:      compiled.mvCountOneOrNull,
-			mvSortedLexicographic: compiled.mvSortedLexicographic,
-			alwaysNull:            compiled.alwaysNull,
-			ieeeComparison:        compiled.ieeeComparison,
-			ordinal:               ordinal,
-			field:                 materialized,
-		}
-		aggregateExpressionInputs = append(aggregateExpressionInputs, cached)
-		return cached, nil
-	}
-	numericInputForExpression := func(expression plan.ScalarExpression) (string, error) {
-		cached, inputErr := aggregateExpressionInputFor(expression)
-		if inputErr != nil {
-			return "", inputErr
-		}
-		if cached.numericAlias != "" {
-			return cached.numericAlias, nil
-		}
-		inputSQL, inputArgs := numericArrayInputSQL(cached.field)
-		inputAlias := quoteIdentifier(fmt.Sprintf(
-			"__os_measure_numeric_expression_%d",
-			cached.ordinal,
-		))
-		next.preAggregateColumns = append(
-			next.preAggregateColumns,
-			inputSQL+" AS "+inputAlias,
-		)
-		next.preAggregateArgs = append(next.preAggregateArgs, inputArgs...)
-		cached.numericAlias = inputAlias
-		return inputAlias, nil
-	}
-	type aggregateInputCacheKey struct {
-		fieldName         string
-		expressionOrdinal int
-		expression        bool
-	}
-	fieldInputCacheKey := func(name string) aggregateInputCacheKey {
-		return aggregateInputCacheKey{fieldName: name}
-	}
-	expressionInputCacheKey := func(ordinal int) aggregateInputCacheKey {
-		return aggregateInputCacheKey{
-			expressionOrdinal: ordinal,
-			expression:        true,
-		}
-	}
-	stringInputs := make(map[string]string)
-	allNumericInvalidInputs := make(map[aggregateInputCacheKey]string)
-	allNumericInvalidInputFor := func(
-		key aggregateInputCacheKey,
-		input fieldState,
-		exists bool,
-	) string {
-		if !statsOptions.AllNumeric {
-			return ""
-		}
-		if cached, ok := allNumericInvalidInputs[key]; ok {
-			return cached
-		}
-		if !exists {
-			allNumericInvalidInputs[key] = ""
-			return ""
-		}
-		invalidSQL, invalidArgs := statsAllNumericInvalidSQL(input)
-		if invalidSQL == "toUInt8(0)" {
-			allNumericInvalidInputs[key] = ""
-			return ""
-		}
-		alias := quoteIdentifier(fmt.Sprintf(
-			"__os_measure_all_numeric_invalid_%d",
-			len(allNumericInvalidInputs),
-		))
-		allNumericInvalidInputs[key] = alias
-		next.preAggregateColumns = append(
-			next.preAggregateColumns,
-			invalidSQL+" AS "+alias,
-		)
-		next.preAggregateArgs = append(next.preAggregateArgs, invalidArgs...)
-		return alias
-	}
-	allNumericInvalidFor := func(
-		measure plan.AggregateMeasure,
-		key aggregateInputCacheKey,
-	) (string, error) {
-		if !statsOptions.AllNumeric || !statsUsesAllNumericPolicy(measure.Function) {
-			return "", nil
-		}
-		if measure.InputExpression != nil {
-			cached, inputErr := aggregateExpressionInputFor(measure.InputExpression)
-			if inputErr != nil {
-				return "", inputErr
-			}
-			return allNumericInvalidInputFor(key, cached.field, !cached.field.alwaysNull), nil
-		}
-		input, exists, resolveErr := resolveCompiledField(measure.Input, state)
-		if resolveErr != nil {
-			return "", resolveErr
-		}
-		return allNumericInvalidInputFor(key, input, exists), nil
-	}
-	type scalarStringInput struct {
-		ordinal        int
-		valueAlias     string
-		numberAlias    string
-		candidateAlias string
-		rawBytesSQL    string
-		extremaReady   bool
-	}
-	scalarStringInputs := make(map[aggregateInputCacheKey]*scalarStringInput)
-	countInputs := make(map[string]string)
-	countInputFor := func(ref plan.FieldRef) (string, error) {
-		if inputAlias, cached := countInputs[ref.Name]; cached {
-			return inputAlias, nil
-		}
-		input, ok, resolveErr := resolveCompiledField(ref, state)
-		if resolveErr != nil {
-			return "", resolveErr
-		}
-		inputSQL := "toUInt64(0)"
-		var inputArgs []any
-		if ok {
-			inputSQL, inputArgs = countValueInputSQL(input)
-		}
-		inputAlias := quoteIdentifier(fmt.Sprintf(
-			"__os_measure_count_%d",
-			len(countInputs),
-		))
-		countInputs[ref.Name] = inputAlias
-		next.preAggregateColumns = append(
-			next.preAggregateColumns,
-			inputSQL+" AS "+inputAlias,
-		)
-		next.preAggregateArgs = append(next.preAggregateArgs, inputArgs...)
-		return inputAlias, nil
-	}
-	type conditionalCountInput struct {
-		predicateSQL  string
-		predicateArgs []any
-		alias         string
-	}
-	conditionalCountInputs := make([]conditionalCountInput, 0)
-	conditionalCountInputFor := func(expression plan.Expression) (string, error) {
-		predicateSQL, predicateArgs, compileErr := compileExpression(expression, state)
-		if compileErr != nil {
-			return "", compileErr
-		}
-		for _, cached := range conditionalCountInputs {
-			if cached.predicateSQL == predicateSQL &&
-				reflect.DeepEqual(cached.predicateArgs, predicateArgs) {
-				return cached.alias, nil
-			}
-		}
-		alias := quoteIdentifier(fmt.Sprintf(
-			"__os_measure_conditional_count_%d",
-			len(conditionalCountInputs),
-		))
-		conditionalCountInputs = append(
-			conditionalCountInputs,
-			conditionalCountInput{
-				predicateSQL:  predicateSQL,
-				predicateArgs: append([]any(nil), predicateArgs...),
-				alias:         alias,
-			},
-		)
-		next.preAggregateColumns = append(
-			next.preAggregateColumns,
-			"toUInt64(ifNull("+predicateSQL+", 0)) AS "+alias,
-		)
-		next.preAggregateArgs = append(next.preAggregateArgs, predicateArgs...)
-		return alias, nil
-	}
-	extremaInputs := make(map[aggregateInputCacheKey]string)
-	type scalarExtremaResultKey struct {
-		input    aggregateInputCacheKey
-		function plan.AggregateFunction
-	}
-	type scalarExtremaResult struct {
-		winnerAlias string
-		typeAlias   string
-	}
-	scalarExtremaResults := make(map[scalarExtremaResultKey]scalarExtremaResult)
-	dynamicExtremaResults := make(map[scalarExtremaResultKey]scalarExtremaResult)
-	type chronologicalInput struct {
-		candidatesAlias string
-		validationAlias string
-		multiple        bool
-	}
-	type chronologicalResultKey struct {
-		input    aggregateInputCacheKey
-		function plan.AggregateFunction
-	}
-	type chronologicalResult struct {
-		winnerAlias string
-		typeAlias   string
-	}
-	chronologicalInputs := make(map[aggregateInputCacheKey]chronologicalInput)
-	chronologicalResults := make(map[chronologicalResultKey]chronologicalResult)
-	chronologicalInputDirections := make(map[string]chronologicalDirections)
-	chronologicalRowKey := ""
-	exactStringSets := make(map[aggregateInputCacheKey]string)
-	distinctCounts := make(map[aggregateInputCacheKey]string)
-	type orderedStringList struct {
-		listColumn     string
-		overflowColumn string
-	}
-	orderedStringLists := make(map[aggregateInputCacheKey]orderedStringList)
-	valuesInputs := make(map[aggregateInputCacheKey]struct{})
-	extremaMeasureInputs := make(map[string]struct{})
-	numericArrayConsumers := make(map[string]struct{})
-	percentileLevels := make(map[string][]uint8)
-	for _, measure := range operator.Measures {
+func (lowering *aggregateMeasureLowering) collectMeasureInputs() {
+	for _, measure := range lowering.operator.Measures {
 		if measure.Function == plan.AggregateFunctionEarliest ||
 			measure.Function == plan.AggregateFunctionLatest ||
 			measure.Function == plan.AggregateFunctionFirst ||
 			measure.Function == plan.AggregateFunctionLast ||
 			measure.Function == plan.AggregateFunctionEarliestTime ||
 			measure.Function == plan.AggregateFunctionLatestTime {
-			directions := chronologicalInputDirections[measure.Input.Name]
+			directions := lowering.chronologicalInputDirections[measure.Input.Name]
 			if measure.Function == plan.AggregateFunctionEarliest ||
 				measure.Function == plan.AggregateFunctionFirst ||
 				measure.Function == plan.AggregateFunctionEarliestTime {
@@ -4390,14 +4209,14 @@ func compileAggregateMeasures(
 			} else {
 				directions.latest = true
 			}
-			chronologicalInputDirections[measure.Input.Name] = directions
+			lowering.chronologicalInputDirections[measure.Input.Name] = directions
 		}
 		if measure.Function == plan.AggregateFunctionValues && measure.InputExpression == nil {
-			valuesInputs[fieldInputCacheKey(measure.Input.Name)] = struct{}{}
+			lowering.valuesInputs[lowering.fieldInputCacheKey(measure.Input.Name)] = struct{}{}
 		}
 		if measure.Function == plan.AggregateFunctionMinimum ||
 			measure.Function == plan.AggregateFunctionMaximum {
-			extremaMeasureInputs[measure.Input.Name] = struct{}{}
+			lowering.extremaMeasureInputs[measure.Input.Name] = struct{}{}
 		}
 		if measure.InputExpression == nil && (measure.Function == plan.AggregateFunctionSum ||
 			measure.Function == plan.AggregateFunctionAverage ||
@@ -4411,1408 +4230,1841 @@ func compileAggregateMeasures(
 			measure.Function == plan.AggregateFunctionVarianceSample ||
 			measure.Function == plan.AggregateFunctionVariancePopulation ||
 			measure.Function == plan.AggregateFunctionRate) {
-			numericArrayConsumers[measure.Input.Name] = struct{}{}
+			lowering.numericArrayConsumers[measure.Input.Name] = struct{}{}
 		}
 		if measure.Function == plan.AggregateFunctionPercentile &&
 			measure.InputExpression == nil &&
 			measure.Percentile >= 1 && measure.Percentile <= 99 &&
-			!slices.Contains(percentileLevels[measure.Input.Name], measure.Percentile) {
-			percentileLevels[measure.Input.Name] = append(
-				percentileLevels[measure.Input.Name],
+			!slices.Contains(lowering.percentileLevels[measure.Input.Name], measure.Percentile) {
+			lowering.percentileLevels[measure.Input.Name] = append(
+				lowering.percentileLevels[measure.Input.Name],
 				measure.Percentile,
 			)
 		}
 	}
-	listRowOrdinal := ""
-	listWindowOrder := ""
-	listRowOrdinalFor := func() (string, string, error) {
-		if listRowOrdinal != "" {
-			return listRowOrdinal, listWindowOrder, nil
-		}
-		orderKeys := defaultCompiledOrder(state)
-		if len(orderKeys) == 0 {
-			return "", "", errors.New("compile ClickHouse list order: input has no deterministic row identity")
-		}
-		orderSQL, orderErr := compileMaterializedOrder(orderKeys, false)
-		if orderErr != nil {
-			return "", "", fmt.Errorf("compile ClickHouse list order: %w", orderErr)
-		}
-		windowParts := make([]string, 0, 2)
-		if len(groups) > 0 {
-			windowParts = append(windowParts, "PARTITION BY "+strings.Join(groups, ", "))
-		}
-		windowParts = append(windowParts, "ORDER BY "+orderSQL)
-		listWindowOrder = strings.Join(windowParts, " ")
-		listRowOrdinal = quoteIdentifier("__os_list_row_ordinal")
-		next.preAggregateListWindowColumns = append(
-			next.preAggregateListWindowColumns,
-			"row_number() OVER ("+listWindowOrder+") AS "+listRowOrdinal,
-		)
-		return listRowOrdinal, listWindowOrder, nil
+}
+
+func (lowering *aggregateMeasureLowering) fieldInputCacheKey(name string) aggregateInputCacheKey {
+	return aggregateInputCacheKey{fieldName: name}
+}
+
+func (lowering *aggregateMeasureLowering) expressionInputCacheKey(
+	ordinal int,
+) aggregateInputCacheKey {
+	return aggregateInputCacheKey{
+		expressionOrdinal: ordinal,
+		expression:        true,
 	}
-	scalarStringInputFor := func(key aggregateInputCacheKey, input fieldState) *scalarStringInput {
-		if cached, ok := scalarStringInputs[key]; ok {
-			return cached
-		}
-		ordinal := len(scalarStringInputs)
-		inputSQL, inputArgs := statsScalarStringInputSQL(input)
-		inputAlias := quoteIdentifier(fmt.Sprintf(
-			"__os_measure_scalar_string_%d",
-			ordinal,
-		))
-		cached := &scalarStringInput{
-			ordinal:     ordinal,
-			valueAlias:  inputAlias,
-			rawBytesSQL: fixedStringExtremaRawBytesSQL(input),
-		}
-		scalarStringInputs[key] = cached
-		next.preAggregateColumns = append(next.preAggregateColumns, inputSQL+" AS "+inputAlias)
-		next.preAggregateArgs = append(next.preAggregateArgs, inputArgs...)
-		return cached
+}
+
+func (lowering *aggregateMeasureLowering) numericInputForResolved(
+	ref plan.FieldRef,
+	input fieldState,
+	exists bool,
+) string {
+	if inputAlias, cached := lowering.numericInputs[ref.Name]; cached {
+		return inputAlias
 	}
-	stringInputFor := func(ref plan.FieldRef) (string, error) {
-		if inputSQL, cached := stringInputs[ref.Name]; cached {
-			return inputSQL, nil
-		}
-		input, ok, resolveErr := resolveCompiledField(ref, state)
-		if resolveErr != nil {
-			return "", resolveErr
-		}
-		inputSQL := "CAST([], 'Array(String)')"
-		if ok {
-			var inputArgs []any
-			if _, sharesScalar := extremaMeasureInputs[ref.Name]; sharesScalar &&
-				input.kind == fieldKindString && input.textEligibleSQL == "" {
-				scalarInput := scalarStringInputFor(fieldInputCacheKey(ref.Name), input)
-				inputSQL = compactNullableArraySQL("[" + scalarInput.valueAlias + "]")
-			} else {
-				inputSQL, inputArgs = stringArrayInputSQL(input)
-			}
-			inputAlias := quoteIdentifier(fmt.Sprintf("__os_measure_strings_%d", len(stringInputs)))
-			stringInputs[ref.Name] = inputAlias
-			next.preAggregateColumns = append(next.preAggregateColumns, inputSQL+" AS "+inputAlias)
-			next.preAggregateArgs = append(next.preAggregateArgs, inputArgs...)
-			inputSQL = inputAlias
-		}
-		stringInputs[ref.Name] = inputSQL
-		return inputSQL, nil
+	inputSQL := "CAST([], 'Array(Float64)')"
+	var inputArgs []any
+	if exists {
+		inputSQL, inputArgs = numericArrayInputSQL(input)
 	}
-	stringInputForExpression := func(expression plan.ScalarExpression) (string, error) {
-		cached, inputErr := aggregateExpressionInputFor(expression)
-		if inputErr != nil {
-			return "", inputErr
-		}
-		if cached.stringAlias != "" {
-			return cached.stringAlias, nil
-		}
-		inputSQL, inputArgs := stringArrayInputSQL(cached.field)
-		inputAlias := quoteIdentifier(fmt.Sprintf(
-			"__os_measure_string_expression_%d",
-			cached.ordinal,
-		))
-		next.preAggregateColumns = append(
-			next.preAggregateColumns,
-			inputSQL+" AS "+inputAlias,
-		)
-		next.preAggregateArgs = append(next.preAggregateArgs, inputArgs...)
-		cached.stringAlias = inputAlias
+	inputAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_measure_values_%d",
+		len(lowering.numericInputs),
+	))
+	lowering.numericInputs[ref.Name] = inputAlias
+	lowering.next.preAggregateColumns = append(
+		lowering.next.preAggregateColumns,
+		inputSQL+" AS "+inputAlias,
+	)
+	lowering.next.preAggregateArgs = append(lowering.next.preAggregateArgs, inputArgs...)
+	return inputAlias
+}
+
+func (lowering *aggregateMeasureLowering) numericInputFor(
+	ref plan.FieldRef,
+) (string, error) {
+	if inputAlias, cached := lowering.numericInputs[ref.Name]; cached {
 		return inputAlias, nil
 	}
-	chronologicalRowKeyFor := func() string {
-		if chronologicalRowKey != "" {
-			return chronologicalRowKey
-		}
-		chronologicalRowKey = quoteIdentifier("__os_chronological_row_key")
-		next.preAggregateColumns = append(
-			next.preAggregateColumns,
-			immutableChronologicalRowKeySQL()+" AS "+chronologicalRowKey,
-		)
-		return chronologicalRowKey
+	input, exists, err := resolveCompiledField(ref, lowering.state)
+	if err != nil {
+		return "", err
 	}
-	chronologicalInputForResolved := func(
-		key aggregateInputCacheKey,
-		input fieldState,
-		exists bool,
-		directions chronologicalDirections,
-	) chronologicalInput {
-		if cached, ok := chronologicalInputs[key]; ok {
-			return cached
+	return lowering.numericInputForResolved(ref, input, exists), nil
+}
+
+func (lowering *aggregateMeasureLowering) aggregateExpressionInputFor(
+	expression plan.ScalarExpression,
+) (*aggregateExpressionInput, error) {
+	if nilScalarExpression(expression) {
+		return nil, errors.New("compile ClickHouse aggregate: scalar eval input is missing")
+	}
+	compiled, err := compileScalarValue(expression, lowering.state)
+	if err != nil {
+		return nil, fmt.Errorf("compile ClickHouse aggregate scalar eval input: %w", err)
+	}
+	for _, cached := range lowering.aggregateExpressionInputs {
+		if cached.valueSQL == compiled.valueSQL &&
+			reflect.DeepEqual(cached.valueArgs, compiled.valueArgs) &&
+			cached.field.textEligibleSQL == compiled.textEligibleSQL &&
+			cached.field.semanticBytesSQL == compiled.semanticBytesSQL &&
+			cached.field.textEligibleBySemanticBytes == compiled.textEligibleBySemanticBytes &&
+			cached.field.stringOrBytes == compiled.stringOrBytes &&
+			cached.field.stringOrBytesNullable == compiled.stringOrBytesNullable &&
+			cached.kind == compiled.kind &&
+			cached.numberType == compiled.numberType &&
+			cached.dynamicDomain == compiled.dynamicDomain &&
+			cached.maxStringBytes == compiled.maxStringBytes &&
+			cached.numericIntegral == compiled.numericIntegral &&
+			cached.mvCountOneOrNull == compiled.mvCountOneOrNull &&
+			cached.mvSortedLexicographic == compiled.mvSortedLexicographic &&
+			cached.alwaysNull == compiled.alwaysNull &&
+			cached.ieeeComparison == compiled.ieeeComparison {
+			return cached, nil
 		}
-		ordinal := len(chronologicalInputs)
-		compiled := chronologicalInput{}
-		candidatesSQL, candidateArgs, runtimeValidated := chronologicalCandidatesSQL(
-			input,
-			exists,
-			directions,
-		)
-		compiled.candidatesAlias = quoteIdentifier(fmt.Sprintf(
-			"__os_chronological_candidates_%d",
+	}
+	ordinal := len(lowering.aggregateExpressionInputs)
+	valueAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_measure_numeric_expression_value_%d",
+		ordinal,
+	))
+	lowering.next.preAggregateColumns = append(
+		lowering.next.preAggregateColumns,
+		compiled.valueSQL+" AS "+valueAlias,
+	)
+	lowering.next.preAggregateArgs = append(
+		lowering.next.preAggregateArgs,
+		compiled.valueArgs...,
+	)
+	semanticBytesSQL := compiled.semanticBytesSQL
+	if compiled.kind == fieldKindString && compiled.stringOrBytes {
+		if semanticBytesSQL == "" {
+			return nil, errors.New(
+				"compile ClickHouse aggregate scalar eval input: String-or-Bytes value lacks semantic Bytes provenance",
+			)
+		}
+		semanticAlias := quoteIdentifier(fmt.Sprintf(
+			"__os_measure_expression_semantic_bytes_%d",
 			ordinal,
 		))
-		compiled.multiple = exists &&
-			(input.kind == fieldKindDynamic || isNativeMultivalueKind(input.kind))
-		next.preAggregateColumns = append(
-			next.preAggregateColumns,
-			candidatesSQL+" AS "+compiled.candidatesAlias,
+		lowering.next.preAggregateColumns = append(
+			lowering.next.preAggregateColumns,
+			"toUInt8(ifNull("+semanticBytesSQL+", 0)) AS "+semanticAlias,
 		)
-		next.preAggregateArgs = append(next.preAggregateArgs, candidateArgs...)
-		if runtimeValidated {
-			compiled.validationAlias = quoteIdentifier(fmt.Sprintf(
-				"__os_stats_chronological_any_unsupported_%d",
-				ordinal,
-			))
-			projection = append(
-				projection,
-				"max(toUInt8(tupleElement("+compiled.candidatesAlias+", 4))) AS "+
-					compiled.validationAlias,
-			)
-		}
-		chronologicalInputs[key] = compiled
-		return compiled
+		lowering.next.preAggregateArgs = append(
+			lowering.next.preAggregateArgs,
+			compiled.semanticBytesArgs...,
+		)
+		semanticBytesSQL = semanticAlias
 	}
-	chronologicalInputFor := func(ref plan.FieldRef) (chronologicalInput, error) {
-		input, exists, resolveErr := resolveCompiledField(ref, state)
-		if resolveErr != nil {
-			return chronologicalInput{}, resolveErr
-		}
-		return chronologicalInputForResolved(
-			fieldInputCacheKey(ref.Name),
-			input,
-			exists,
-			chronologicalInputDirections[ref.Name],
-		), nil
+	materialized := fieldState{
+		valueSQL:                    valueAlias,
+		textEligibleSQL:             compiled.textEligibleSQL,
+		semanticBytesSQL:            semanticBytesSQL,
+		semanticBytesByUTF8Validity: compiled.semanticBytesByUTF8Validity,
+		textEligibleBySemanticBytes: compiled.textEligibleBySemanticBytes,
+		stringOrBytes:               compiled.stringOrBytes,
+		stringOrBytesNullable:       compiled.stringOrBytesNullable,
+		existsSQL:                   "1",
+		kind:                        compiled.kind,
+		numberType:                  compiled.numberType,
+		maxStringBytes:              compiled.maxStringBytes,
+		numericIntegral:             compiled.numericIntegral,
+		mvCountOneOrNull:            compiled.mvCountOneOrNull,
+		mvSortedLexicographic:       compiled.mvSortedLexicographic,
+		alwaysNull:                  compiled.alwaysNull,
+		dynamicDomain:               compiled.dynamicDomain,
+		ieeeComparison:              compiled.ieeeComparison,
 	}
-	chronologicalInputForExpression := func(
-		expression plan.ScalarExpression,
-	) (chronologicalInput, error) {
-		cached, inputErr := aggregateExpressionInputFor(expression)
-		if inputErr != nil {
-			return chronologicalInput{}, inputErr
+	if compiled.kind == fieldKindDynamic {
+		materialized.dynamicTypeSQL = "dynamicType(" + valueAlias + ")"
+	}
+	cached := &aggregateExpressionInput{
+		valueSQL:              compiled.valueSQL,
+		valueArgs:             append([]any(nil), compiled.valueArgs...),
+		kind:                  compiled.kind,
+		numberType:            compiled.numberType,
+		dynamicDomain:         compiled.dynamicDomain,
+		maxStringBytes:        compiled.maxStringBytes,
+		numericIntegral:       compiled.numericIntegral,
+		mvCountOneOrNull:      compiled.mvCountOneOrNull,
+		mvSortedLexicographic: compiled.mvSortedLexicographic,
+		alwaysNull:            compiled.alwaysNull,
+		ieeeComparison:        compiled.ieeeComparison,
+		ordinal:               ordinal,
+		field:                 materialized,
+	}
+	lowering.aggregateExpressionInputs = append(lowering.aggregateExpressionInputs, cached)
+	return cached, nil
+}
+
+func (lowering *aggregateMeasureLowering) numericInputForExpression(
+	expression plan.ScalarExpression,
+) (string, error) {
+	cached, err := lowering.aggregateExpressionInputFor(expression)
+	if err != nil {
+		return "", err
+	}
+	if cached.numericAlias != "" {
+		return cached.numericAlias, nil
+	}
+	inputSQL, inputArgs := numericArrayInputSQL(cached.field)
+	inputAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_measure_numeric_expression_%d",
+		cached.ordinal,
+	))
+	lowering.next.preAggregateColumns = append(
+		lowering.next.preAggregateColumns,
+		inputSQL+" AS "+inputAlias,
+	)
+	lowering.next.preAggregateArgs = append(lowering.next.preAggregateArgs, inputArgs...)
+	cached.numericAlias = inputAlias
+	return inputAlias, nil
+}
+
+func (lowering *aggregateMeasureLowering) allNumericInvalidInputFor(
+	key aggregateInputCacheKey,
+	input fieldState,
+	exists bool,
+) string {
+	if !lowering.statsOptions.AllNumeric {
+		return ""
+	}
+	if cached, ok := lowering.allNumericInvalidInputs[key]; ok {
+		return cached
+	}
+	if !exists {
+		lowering.allNumericInvalidInputs[key] = ""
+		return ""
+	}
+	invalidSQL, invalidArgs := statsAllNumericInvalidSQL(input)
+	if invalidSQL == "toUInt8(0)" {
+		lowering.allNumericInvalidInputs[key] = ""
+		return ""
+	}
+	alias := quoteIdentifier(fmt.Sprintf(
+		"__os_measure_all_numeric_invalid_%d",
+		len(lowering.allNumericInvalidInputs),
+	))
+	lowering.allNumericInvalidInputs[key] = alias
+	lowering.next.preAggregateColumns = append(
+		lowering.next.preAggregateColumns,
+		invalidSQL+" AS "+alias,
+	)
+	lowering.next.preAggregateArgs = append(lowering.next.preAggregateArgs, invalidArgs...)
+	return alias
+}
+
+func (lowering *aggregateMeasureLowering) allNumericInvalidFor(
+	measure plan.AggregateMeasure,
+	key aggregateInputCacheKey,
+) (string, error) {
+	if !lowering.statsOptions.AllNumeric || !statsUsesAllNumericPolicy(measure.Function) {
+		return "", nil
+	}
+	if measure.InputExpression != nil {
+		cached, err := lowering.aggregateExpressionInputFor(measure.InputExpression)
+		if err != nil {
+			return "", err
 		}
-		return chronologicalInputForResolved(
-			expressionInputCacheKey(cached.ordinal),
+		return lowering.allNumericInvalidInputFor(
+			key,
 			cached.field,
 			!cached.field.alwaysNull,
-			chronologicalDirections{earliest: true, latest: true},
 		), nil
 	}
-	type percentileState struct {
-		column    string
-		positions map[uint8]int
+	input, exists, err := resolveCompiledField(measure.Input, lowering.state)
+	if err != nil {
+		return "", err
 	}
-	percentileStates := make(map[string]percentileState)
-	percentileInputFor := func(ref plan.FieldRef) (string, bool, error) {
-		if _, sharedWithArrayConsumer := numericArrayConsumers[ref.Name]; sharedWithArrayConsumer {
-			inputAlias, err := numericInputFor(ref)
-			return inputAlias, true, err
+	return lowering.allNumericInvalidInputFor(key, input, exists), nil
+}
+
+func (lowering *aggregateMeasureLowering) countInputFor(
+	ref plan.FieldRef,
+) (string, error) {
+	if inputAlias, cached := lowering.countInputs[ref.Name]; cached {
+		return inputAlias, nil
+	}
+	input, exists, err := resolveCompiledField(ref, lowering.state)
+	if err != nil {
+		return "", err
+	}
+	inputSQL := "toUInt64(0)"
+	var inputArgs []any
+	if exists {
+		inputSQL, inputArgs = countValueInputSQL(input)
+	}
+	inputAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_measure_count_%d",
+		len(lowering.countInputs),
+	))
+	lowering.countInputs[ref.Name] = inputAlias
+	lowering.next.preAggregateColumns = append(
+		lowering.next.preAggregateColumns,
+		inputSQL+" AS "+inputAlias,
+	)
+	lowering.next.preAggregateArgs = append(lowering.next.preAggregateArgs, inputArgs...)
+	return inputAlias, nil
+}
+
+func (lowering *aggregateMeasureLowering) conditionalCountInputFor(
+	expression plan.Expression,
+) (string, error) {
+	predicateSQL, predicateArgs, err := compileExpression(expression, lowering.state)
+	if err != nil {
+		return "", err
+	}
+	for _, cached := range lowering.conditionalCountInputs {
+		if cached.predicateSQL == predicateSQL &&
+			reflect.DeepEqual(cached.predicateArgs, predicateArgs) {
+			return cached.alias, nil
 		}
-		input, ok, resolveErr := resolveCompiledField(ref, state)
-		if resolveErr != nil {
-			return "", false, resolveErr
-		}
-		if ok && (input.kind == fieldKindDynamic || isNativeMultivalueKind(input.kind)) {
-			return numericInputForResolved(ref, input, true), true, nil
-		}
-		inputSQL := "CAST(NULL AS Nullable(Float64))"
-		if ok {
-			inputSQL = percentileInputSQL(input)
-			if input.existsSQL != "" && input.existsSQL != "1" {
-				inputSQL = "if(" + input.existsSQL + ", " + inputSQL +
-					", CAST(NULL AS Nullable(Float64)))"
-				next.preAggregateArgs = append(next.preAggregateArgs, input.existsArgs...)
-			}
+	}
+	alias := quoteIdentifier(fmt.Sprintf(
+		"__os_measure_conditional_count_%d",
+		len(lowering.conditionalCountInputs),
+	))
+	lowering.conditionalCountInputs = append(
+		lowering.conditionalCountInputs,
+		aggregateConditionalCountInput{
+			predicateSQL:  predicateSQL,
+			predicateArgs: append([]any(nil), predicateArgs...),
+			alias:         alias,
+		},
+	)
+	lowering.next.preAggregateColumns = append(
+		lowering.next.preAggregateColumns,
+		"toUInt64(ifNull("+predicateSQL+", 0)) AS "+alias,
+	)
+	lowering.next.preAggregateArgs = append(lowering.next.preAggregateArgs, predicateArgs...)
+	return alias, nil
+}
+
+func (lowering *aggregateMeasureLowering) listRowOrdinalFor() (string, string, error) {
+	if lowering.listRowOrdinal != "" {
+		return lowering.listRowOrdinal, lowering.listWindowOrder, nil
+	}
+	orderKeys := defaultCompiledOrder(lowering.state)
+	if len(orderKeys) == 0 {
+		return "", "", errors.New(
+			"compile ClickHouse list order: input has no deterministic row identity",
+		)
+	}
+	orderSQL, err := compileMaterializedOrder(orderKeys, false)
+	if err != nil {
+		return "", "", fmt.Errorf("compile ClickHouse list order: %w", err)
+	}
+	windowParts := make([]string, 0, 2)
+	if len(lowering.groups) > 0 {
+		windowParts = append(
+			windowParts,
+			"PARTITION BY "+strings.Join(lowering.groups, ", "),
+		)
+	}
+	windowParts = append(windowParts, "ORDER BY "+orderSQL)
+	lowering.listWindowOrder = strings.Join(windowParts, " ")
+	lowering.listRowOrdinal = quoteIdentifier("__os_list_row_ordinal")
+	lowering.next.preAggregateListWindowColumns = append(
+		lowering.next.preAggregateListWindowColumns,
+		"row_number() OVER ("+lowering.listWindowOrder+") AS "+lowering.listRowOrdinal,
+	)
+	return lowering.listRowOrdinal, lowering.listWindowOrder, nil
+}
+
+func (lowering *aggregateMeasureLowering) scalarStringInputFor(
+	key aggregateInputCacheKey,
+	input fieldState,
+) *aggregateScalarStringInput {
+	if cached, ok := lowering.scalarStringInputs[key]; ok {
+		return cached
+	}
+	ordinal := len(lowering.scalarStringInputs)
+	inputSQL, inputArgs := statsScalarStringInputSQL(input)
+	inputAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_measure_scalar_string_%d",
+		ordinal,
+	))
+	cached := &aggregateScalarStringInput{
+		ordinal:     ordinal,
+		valueAlias:  inputAlias,
+		rawBytesSQL: fixedStringExtremaRawBytesSQL(input),
+	}
+	lowering.scalarStringInputs[key] = cached
+	lowering.next.preAggregateColumns = append(
+		lowering.next.preAggregateColumns,
+		inputSQL+" AS "+inputAlias,
+	)
+	lowering.next.preAggregateArgs = append(lowering.next.preAggregateArgs, inputArgs...)
+	return cached
+}
+
+func (lowering *aggregateMeasureLowering) stringInputFor(
+	ref plan.FieldRef,
+) (string, error) {
+	if inputSQL, cached := lowering.stringInputs[ref.Name]; cached {
+		return inputSQL, nil
+	}
+	input, exists, err := resolveCompiledField(ref, lowering.state)
+	if err != nil {
+		return "", err
+	}
+	inputSQL := "CAST([], 'Array(String)')"
+	if exists {
+		var inputArgs []any
+		if _, sharesScalar := lowering.extremaMeasureInputs[ref.Name]; sharesScalar &&
+			input.kind == fieldKindString && input.textEligibleSQL == "" {
+			scalarInput := lowering.scalarStringInputFor(lowering.fieldInputCacheKey(ref.Name), input)
+			inputSQL = compactNullableArraySQL("[" + scalarInput.valueAlias + "]")
+		} else {
+			inputSQL, inputArgs = stringArrayInputSQL(input)
 		}
 		inputAlias := quoteIdentifier(fmt.Sprintf(
-			"__os_measure_percentile_value_%d",
-			len(percentileStates),
+			"__os_measure_strings_%d",
+			len(lowering.stringInputs),
 		))
-		next.preAggregateColumns = append(next.preAggregateColumns, inputSQL+" AS "+inputAlias)
-		return inputAlias, false, nil
+		lowering.stringInputs[ref.Name] = inputAlias
+		lowering.next.preAggregateColumns = append(
+			lowering.next.preAggregateColumns,
+			inputSQL+" AS "+inputAlias,
+		)
+		lowering.next.preAggregateArgs = append(lowering.next.preAggregateArgs, inputArgs...)
+		inputSQL = inputAlias
 	}
-	type sparklineBucketInput struct {
-		spec  statsSparklineBucketSpec
-		alias string
+	lowering.stringInputs[ref.Name] = inputSQL
+	return inputSQL, nil
+}
+
+func (lowering *aggregateMeasureLowering) stringInputForExpression(
+	expression plan.ScalarExpression,
+) (string, error) {
+	cached, err := lowering.aggregateExpressionInputFor(expression)
+	if err != nil {
+		return "", err
 	}
-	sparklineBuckets := make(map[plan.SparklineSpan]sparklineBucketInput)
-	for measureIndex, measure := range operator.Measures {
-		if measure.OutputLiteral {
-			if operator.StatsOptions == nil || !spl.IsStatsLiteralOutputName(measure.Output) {
-				return nil, nil, nil, compileState{}, nil, fmt.Errorf(
-					"compile ClickHouse aggregate: invalid literal output field %q",
-					measure.Output,
-				)
-			}
-		} else if _, fieldErr := plan.ResolveField(measure.Output, spl.Range{}); fieldErr != nil {
-			return nil, nil, nil, compileState{}, nil, fmt.Errorf(
-				"compile ClickHouse aggregate: invalid output field %q: %w",
-				measure.Output,
-				fieldErr,
+	if cached.stringAlias != "" {
+		return cached.stringAlias, nil
+	}
+	inputSQL, inputArgs := stringArrayInputSQL(cached.field)
+	inputAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_measure_string_expression_%d",
+		cached.ordinal,
+	))
+	lowering.next.preAggregateColumns = append(
+		lowering.next.preAggregateColumns,
+		inputSQL+" AS "+inputAlias,
+	)
+	lowering.next.preAggregateArgs = append(lowering.next.preAggregateArgs, inputArgs...)
+	cached.stringAlias = inputAlias
+	return inputAlias, nil
+}
+
+func (lowering *aggregateMeasureLowering) chronologicalRowKeyFor() string {
+	if lowering.chronologicalRowKey != "" {
+		return lowering.chronologicalRowKey
+	}
+	lowering.chronologicalRowKey = quoteIdentifier("__os_chronological_row_key")
+	lowering.next.preAggregateColumns = append(
+		lowering.next.preAggregateColumns,
+		immutableChronologicalRowKeySQL()+" AS "+lowering.chronologicalRowKey,
+	)
+	return lowering.chronologicalRowKey
+}
+
+func (lowering *aggregateMeasureLowering) chronologicalInputForResolved(
+	key aggregateInputCacheKey,
+	input fieldState,
+	exists bool,
+	directions chronologicalDirections,
+) aggregateChronologicalInput {
+	if cached, ok := lowering.chronologicalInputs[key]; ok {
+		return cached
+	}
+	ordinal := len(lowering.chronologicalInputs)
+	compiled := aggregateChronologicalInput{}
+	candidatesSQL, candidateArgs, runtimeValidated := chronologicalCandidatesSQL(
+		input,
+		exists,
+		directions,
+	)
+	compiled.candidatesAlias = quoteIdentifier(fmt.Sprintf(
+		"__os_chronological_candidates_%d",
+		ordinal,
+	))
+	compiled.multiple = exists &&
+		(input.kind == fieldKindDynamic || isNativeMultivalueKind(input.kind))
+	lowering.next.preAggregateColumns = append(
+		lowering.next.preAggregateColumns,
+		candidatesSQL+" AS "+compiled.candidatesAlias,
+	)
+	lowering.next.preAggregateArgs = append(
+		lowering.next.preAggregateArgs,
+		candidateArgs...,
+	)
+	if runtimeValidated {
+		compiled.validationAlias = quoteIdentifier(fmt.Sprintf(
+			"__os_stats_chronological_any_unsupported_%d",
+			ordinal,
+		))
+		lowering.projection = append(
+			lowering.projection,
+			"max(toUInt8(tupleElement("+compiled.candidatesAlias+", 4))) AS "+
+				compiled.validationAlias,
+		)
+	}
+	lowering.chronologicalInputs[key] = compiled
+	return compiled
+}
+
+func (lowering *aggregateMeasureLowering) chronologicalInputFor(
+	ref plan.FieldRef,
+) (aggregateChronologicalInput, error) {
+	input, exists, err := resolveCompiledField(ref, lowering.state)
+	if err != nil {
+		return aggregateChronologicalInput{}, err
+	}
+	return lowering.chronologicalInputForResolved(
+		lowering.fieldInputCacheKey(ref.Name),
+		input,
+		exists,
+		lowering.chronologicalInputDirections[ref.Name],
+	), nil
+}
+
+func (lowering *aggregateMeasureLowering) chronologicalInputForExpression(
+	expression plan.ScalarExpression,
+) (aggregateChronologicalInput, error) {
+	cached, err := lowering.aggregateExpressionInputFor(expression)
+	if err != nil {
+		return aggregateChronologicalInput{}, err
+	}
+	return lowering.chronologicalInputForResolved(
+		lowering.expressionInputCacheKey(cached.ordinal),
+		cached.field,
+		!cached.field.alwaysNull,
+		chronologicalDirections{earliest: true, latest: true},
+	), nil
+}
+
+func (lowering *aggregateMeasureLowering) percentileInputFor(
+	ref plan.FieldRef,
+) (string, bool, error) {
+	if _, sharedWithArrayConsumer := lowering.numericArrayConsumers[ref.Name]; sharedWithArrayConsumer {
+		inputAlias, err := lowering.numericInputFor(ref)
+		return inputAlias, true, err
+	}
+	input, exists, err := resolveCompiledField(ref, lowering.state)
+	if err != nil {
+		return "", false, err
+	}
+	if exists && (input.kind == fieldKindDynamic || isNativeMultivalueKind(input.kind)) {
+		return lowering.numericInputForResolved(ref, input, true), true, nil
+	}
+	inputSQL := "CAST(NULL AS Nullable(Float64))"
+	if exists {
+		inputSQL = percentileInputSQL(input)
+		if input.existsSQL != "" && input.existsSQL != "1" {
+			inputSQL = "if(" + input.existsSQL + ", " + inputSQL +
+				", CAST(NULL AS Nullable(Float64)))"
+			lowering.next.preAggregateArgs = append(
+				lowering.next.preAggregateArgs,
+				input.existsArgs...,
 			)
 		}
+	}
+	inputAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_measure_percentile_value_%d",
+		len(lowering.percentileStates),
+	))
+	lowering.next.preAggregateColumns = append(
+		lowering.next.preAggregateColumns,
+		inputSQL+" AS "+inputAlias,
+	)
+	return inputAlias, false, nil
+}
+
+func (lowering *aggregateMeasureLowering) compileMeasures() error {
+	for measureIndex, measure := range lowering.operator.Measures {
+		if err := lowering.validateOutput(measure); err != nil {
+			return err
+		}
 		if measure.Sparkline != nil {
-			if operator.StatsOptions == nil ||
-				measure.Function != plan.AggregateFunctionInvalid ||
-				measure.Input.Name != "" || measure.Input.Canonical ||
-				measure.Input.Path != nil || measure.Input.Range != (spl.Range{}) ||
-				measure.InputExpression != nil || measure.Predicate != nil ||
-				measure.Percentile != 0 {
-				return nil, nil, nil, compileState{}, nil, errors.New(
-					"compile ClickHouse aggregate: sparkline and scalar aggregate metadata overlap",
-				)
-			}
-			if state.context == nil || state.context.searchEarliest.IsZero() ||
-				state.context.searchLatest.IsZero() {
-				return nil, nil, nil, compileState{}, nil, errors.New(
-					"compile ClickHouse stats sparkline: search time range is unavailable",
-				)
-			}
-
-			sparkline := measure.Sparkline
-			if err := validateCanonicalFieldRef("stats sparkline", "time", sparkline.Time); err != nil {
-				return nil, nil, nil, compileState{}, nil, err
-			}
-			if sparkline.Time.Name != "_time" || !sparkline.Time.Canonical ||
-				sparkline.Time.Path != nil {
-				return nil, nil, nil, compileState{}, nil, errors.New(
-					"compile ClickHouse stats sparkline: time field is not canonical _time",
-				)
-			}
-			timeField, timeExists, resolveErr := resolveCompiledField(sparkline.Time, state)
-			if resolveErr != nil {
-				return nil, nil, nil, compileState{}, nil, resolveErr
-			}
-			if !timeExists || timeField.kind != fieldKindTime || !timeField.canonicalTime {
-				return nil, nil, nil, compileState{}, nil, &plan.Diagnostic{
-					Code:    "SPL_UNSUPPORTED_STATS_TIME_FIELD",
-					Message: "stats sparkline requires event rows with the unmodified canonical _time field",
-					Range:   sparkline.Time.Range,
-				}
-			}
-
-			hasSparklineInput := sparkline.Input.Name != "" ||
-				sparkline.Input.Canonical || sparkline.Input.Path != nil ||
-				sparkline.Input.Range != (spl.Range{})
-			if hasSparklineInput {
-				if err := validateCanonicalFieldRef("stats sparkline", "input", sparkline.Input); err != nil {
-					return nil, nil, nil, compileState{}, nil, err
-				}
-				if state.eventRows && state.allowDynamic && sparkline.Input.Name == "fields" {
-					return nil, nil, nil, compileState{}, nil, &plan.Diagnostic{
-						Code:    "SPL_AMBIGUOUS_STATS_FIELD",
-						Message: "stats sparkline cannot read the event result's reserved fields payload without an exact upstream schema",
-						Range:   sparkline.Input.Range,
-					}
-				}
-			}
-
-			bucket, cached := sparklineBuckets[sparkline.Span]
-			if !cached {
-				spec, specErr := statsSparklineBucketSpecFor(
-					sparkline.Span,
-					state.context.searchEarliest,
-					state.context.searchLatest,
-					sparkline.MaximumPoints,
-					timeField.valueSQL,
-					state.context.searchTimezone,
-				)
-				if specErr != nil {
-					return nil, nil, nil, compileState{}, nil, specErr
-				}
-				bucket = sparklineBucketInput{
-					spec: spec,
-					alias: quoteIdentifier(fmt.Sprintf(
-						"__os_sparkline_bucket_%d",
-						len(sparklineBuckets),
-					)),
-				}
-				sparklineBuckets[sparkline.Span] = bucket
-				next.preAggregateColumns = append(
-					next.preAggregateColumns,
-					spec.BucketSQL+" AS "+bucket.alias,
-				)
-				next.preAggregateArgs = append(next.preAggregateArgs, spec.BucketArgs...)
-			}
-
-			partition := append(append([]string(nil), groups...), bucket.alias)
-			partitionSQL := strings.Join(partition, ", ")
-			inputSQL := ""
-			expectedInput := statsSparklineInputNone
-			missing := statsSparklineMissingEmpty
-			switch sparkline.Function {
-			case plan.AggregateFunctionCountRows:
-				if hasSparklineInput {
-					return nil, nil, nil, compileState{}, nil, errors.New(
-						"compile ClickHouse stats sparkline: row count contains an input field",
-					)
-				}
-				missing = statsSparklineMissingZero
-			case plan.AggregateFunctionCountValues:
-				if !hasSparklineInput {
-					return nil, nil, nil, compileState{}, nil, errors.New(
-						"compile ClickHouse stats sparkline: count(field) input is missing",
-					)
-				}
-				inputSQL, resolveErr = countInputFor(sparkline.Input)
-				expectedInput = statsSparklineInputOccurrenceCount
-				missing = statsSparklineMissingZero
-			case plan.AggregateFunctionDistinctCount,
-				plan.AggregateFunctionMinimum,
-				plan.AggregateFunctionMaximum:
-				if !hasSparklineInput {
-					return nil, nil, nil, compileState{}, nil, errors.New(
-						"compile ClickHouse stats sparkline: string aggregate input is missing",
-					)
-				}
-				inputSQL, resolveErr = stringInputFor(sparkline.Input)
-				expectedInput = statsSparklineInputStringArray
-				if sparkline.Function == plan.AggregateFunctionDistinctCount {
-					missing = statsSparklineMissingZero
-				}
-			case plan.AggregateFunctionAverage,
-				plan.AggregateFunctionStandardDeviationSample,
-				plan.AggregateFunctionStandardDeviationPopulation,
-				plan.AggregateFunctionVarianceSample,
-				plan.AggregateFunctionVariancePopulation,
-				plan.AggregateFunctionSum,
-				plan.AggregateFunctionSumSquares,
-				plan.AggregateFunctionRange:
-				if !hasSparklineInput {
-					return nil, nil, nil, compileState{}, nil, errors.New(
-						"compile ClickHouse stats sparkline: numeric aggregate input is missing",
-					)
-				}
-				inputSQL, resolveErr = numericInputFor(sparkline.Input)
-				expectedInput = statsSparklineInputFloat64Array
-			default:
-				return nil, nil, nil, compileState{}, nil, fmt.Errorf(
-					"compile ClickHouse stats sparkline: unsupported function %d",
-					sparkline.Function,
-				)
-			}
-			if resolveErr != nil {
-				return nil, nil, nil, compileState{}, nil, resolveErr
-			}
-			lowering, supported := statsSparklineWindowAggregateSQL(
-				sparkline.Function,
-				inputSQL,
-				partitionSQL,
-			)
-			if !supported || lowering.Input != expectedInput {
-				return nil, nil, nil, compileState{}, nil, errors.New(
-					"compile ClickHouse stats sparkline: aggregate lowering is invalid",
-				)
-			}
-			windowSQL := lowering.SQL
-			if statsOptions.AllNumeric && statsUsesAllNumericPolicy(sparkline.Function) {
-				input, exists, inputErr := resolveCompiledField(sparkline.Input, state)
-				if inputErr != nil {
-					return nil, nil, nil, compileState{}, nil, inputErr
-				}
-				invalidAlias := allNumericInvalidInputFor(
-					fieldInputCacheKey(sparkline.Input.Name),
-					input,
-					exists,
-				)
-				if invalidAlias != "" {
-					windowSQL = "if(max(" + invalidAlias + ") OVER (PARTITION BY " +
-						partitionSQL + ") != 0, CAST(NULL AS Nullable(Float64)), " +
-						windowSQL + ")"
-				}
-			}
-
-			if _, duplicate := seen[measure.Output]; duplicate {
-				return nil, nil, nil, compileState{}, nil, fmt.Errorf(
-					"compile ClickHouse aggregate: output field %q is duplicated",
-					measure.Output,
-				)
-			}
-			seen[measure.Output] = struct{}{}
-			windowAlias := quoteIdentifier(fmt.Sprintf(
-				"__os_sparkline_window_%d",
-				measureIndex,
-			))
-			next.preAggregateSparklineWindows = append(
-				next.preAggregateSparklineWindows,
-				windowSQL+" AS "+windowAlias,
-			)
-			recordsSQL, ok := statsSparklineBucketRecordsSQL(
-				bucket.alias,
-				windowAlias,
-				sparkline.MaximumPoints,
-			)
-			if !ok {
-				return nil, nil, nil, compileState{}, nil, errors.New(
-					"compile ClickHouse stats sparkline: bucket record lowering is invalid",
-				)
-			}
-			recordsAlias := quoteIdentifier(fmt.Sprintf(
-				"__os_sparkline_records_%d",
-				measureIndex,
-			))
-			projection = append(projection, recordsSQL+" AS "+recordsAlias)
-			output := quoteIdentifier(measure.Output)
-			next.postAggregateSparklines = append(
-				next.postAggregateSparklines,
-				compiledStatsSparklineMeasure{
-					recordsColumn: recordsAlias,
-					outputColumn:  output,
-					spec:          bucket.spec,
-					missing:       missing,
-				},
-			)
-			next.visible[measure.Output] = fieldState{
-				valueSQL:       output,
-				existsSQL:      "1",
-				kind:           fieldKindStringArray,
-				maxStringBytes: MaximumStatsSparklineBytesPerCell,
-				statsSparkline: true,
-				stringOrBytes: sparkline.Function == plan.AggregateFunctionMinimum ||
-					sparkline.Function == plan.AggregateFunctionMaximum,
-			}
-			next.publicOrder = append(next.publicOrder, measure.Output)
-			if len(next.order) == 0 {
-				next.order = append(next.order, compiledSortKey{valueSQL: output})
+			if err := lowering.compileSparklineMeasure(measureIndex, measure); err != nil {
+				return err
 			}
 			continue
 		}
-		hasFieldInput := measure.Input.Name != "" || measure.Input.Canonical ||
-			len(measure.Input.Path) != 0 || measure.Input.Range != (spl.Range{})
-		hasExpressionInput := measure.InputExpression != nil
-		if hasExpressionInput && nilScalarExpression(measure.InputExpression) {
-			return nil, nil, nil, compileState{}, nil, errors.New(
-				"compile ClickHouse aggregate: scalar eval input is a typed nil",
-			)
-		}
-		supportsExpressionInput := false
-		switch measure.Function {
-		case plan.AggregateFunctionCountRows:
-			if hasFieldInput || hasExpressionInput || measure.Percentile != 0 {
-				return nil, nil, nil, compileState{}, nil, errors.New(
-					"compile ClickHouse aggregate: count contains unsupported input metadata",
-				)
-			}
-		case plan.AggregateFunctionCountPredicate:
-			// Predicate structure and mutually exclusive metadata were
-			// validated before any materialization-field traversal.
-		case plan.AggregateFunctionCountValues:
-			if hasExpressionInput || measure.Percentile != 0 {
-				return nil, nil, nil, compileState{}, nil, errors.New(
-					"compile ClickHouse aggregate: count(field) contains scalar-input or percentile metadata",
-				)
-			}
-		case plan.AggregateFunctionPercentile,
-			plan.AggregateFunctionExactPercentile,
-			plan.AggregateFunctionUpperPercentile:
-			supportsExpressionInput = true
-			if measure.Percentile < 1 || measure.Percentile > 99 {
-				return nil, nil, nil, compileState{}, nil, fmt.Errorf(
-					"compile ClickHouse aggregate: unsupported percentile %d",
-					measure.Percentile,
-				)
-			}
-		case plan.AggregateFunctionSum, plan.AggregateFunctionAverage,
-			plan.AggregateFunctionMedian,
-			plan.AggregateFunctionRange, plan.AggregateFunctionSumSquares,
-			plan.AggregateFunctionStandardDeviationSample,
-			plan.AggregateFunctionStandardDeviationPopulation,
-			plan.AggregateFunctionVarianceSample,
-			plan.AggregateFunctionVariancePopulation,
-			plan.AggregateFunctionRate:
-			supportsExpressionInput = true
-			if measure.Percentile != 0 {
-				return nil, nil, nil, compileState{}, nil, fmt.Errorf(
-					"compile ClickHouse aggregate: function %d contains percentile metadata",
-					measure.Function,
-				)
-			}
-		case plan.AggregateFunctionDistinctCount,
-			plan.AggregateFunctionEstimatedDistinctCount,
-			plan.AggregateFunctionEstimatedDistinctCountError,
-			plan.AggregateFunctionValues,
-			plan.AggregateFunctionList,
-			plan.AggregateFunctionMinimum, plan.AggregateFunctionMaximum,
-			plan.AggregateFunctionMode,
-			plan.AggregateFunctionFirst, plan.AggregateFunctionLast,
-			plan.AggregateFunctionEarliest, plan.AggregateFunctionLatest,
-			plan.AggregateFunctionEarliestTime,
-			plan.AggregateFunctionLatestTime:
-			supportsExpressionInput = true
-			if measure.Percentile != 0 {
-				return nil, nil, nil, compileState{}, nil, fmt.Errorf(
-					"compile ClickHouse aggregate: function %d contains percentile metadata",
-					measure.Function,
-				)
-			}
-		default:
-			return nil, nil, nil, compileState{}, nil, fmt.Errorf(
-				"compile ClickHouse aggregate: unsupported function %d",
-				measure.Function,
-			)
-		}
-		if measure.Function != plan.AggregateFunctionCountRows &&
-			measure.Function != plan.AggregateFunctionCountPredicate {
-			if hasFieldInput == hasExpressionInput {
-				return nil, nil, nil, compileState{}, nil, errors.New(
-					"compile ClickHouse aggregate: measure requires exactly one field or scalar eval input",
-				)
-			}
-			if hasExpressionInput && !supportsExpressionInput {
-				return nil, nil, nil, compileState{}, nil, fmt.Errorf(
-					"compile ClickHouse aggregate: function %d does not support a scalar eval input",
-					measure.Function,
-				)
-			}
-			if hasFieldInput {
-				if err := validateCanonicalFieldRef("aggregate", "input", measure.Input); err != nil {
-					return nil, nil, nil, compileState{}, nil, err
-				}
-				if state.eventRows && state.allowDynamic && measure.Input.Name == "fields" {
-					return nil, nil, nil, compileState{}, nil, &plan.Diagnostic{
-						Code:    "SPL_AMBIGUOUS_STATS_FIELD",
-						Message: "stats cannot read the event result's reserved fields payload without an exact upstream schema",
-						Range:   measure.Input.Range,
-					}
-				}
-			} else if state.eventRows && state.allowDynamic {
-				if sourceRange, reserved := predicateFieldSourceRange(
-					&plan.ScalarPredicateExpression{Value: measure.InputExpression},
-					"fields",
-				); reserved {
-					return nil, nil, nil, compileState{}, nil, &plan.Diagnostic{
-						Code:    "SPL_AMBIGUOUS_STATS_FIELD",
-						Message: "stats cannot read the event result's reserved fields payload without an exact upstream schema",
-						Range:   sourceRange,
-					}
-				}
-			}
-		}
-		measureInputKey := fieldInputCacheKey(measure.Input.Name)
-		if hasExpressionInput {
-			cached, inputErr := aggregateExpressionInputFor(measure.InputExpression)
-			if inputErr != nil {
-				return nil, nil, nil, compileState{}, nil, inputErr
-			}
-			measureInputKey = expressionInputCacheKey(cached.ordinal)
-		}
-		if _, duplicate := seen[measure.Output]; duplicate {
-			return nil, nil, nil, compileState{}, nil, fmt.Errorf("compile ClickHouse aggregate: output field %q is duplicated", measure.Output)
-		}
-		seen[measure.Output] = struct{}{}
-		output := quoteIdentifier(measure.Output)
-		measureState := fieldState{valueSQL: output, existsSQL: "1", kind: fieldKindNumber}
-		allNumericInvalidAlias, invalidErr := allNumericInvalidFor(measure, measureInputKey)
-		if invalidErr != nil {
-			return nil, nil, nil, compileState{}, nil, invalidErr
-		}
-		switch measure.Function {
-		case plan.AggregateFunctionCountRows:
-			projection = append(projection, "count() AS "+output)
-			measureState.numberType = "UInt64"
-		case plan.AggregateFunctionCountPredicate:
-			inputAlias, inputErr := conditionalCountInputFor(measure.Predicate)
-			if inputErr != nil {
-				return nil, nil, nil, compileState{}, nil, inputErr
-			}
-			// The predicate is a measure, not a prefilter: TRUE contributes one
-			// while FALSE/NULL contributes zero. UInt128 protects the partial
-			// aggregate state and the production row ceiling bounds the final
-			// UInt64 conversion.
-			projection = append(
-				projection,
-				"toUInt64(sum(toUInt128("+inputAlias+"))) AS "+output,
-			)
-			measureState.numberType = "UInt64"
-		case plan.AggregateFunctionCountValues:
-			inputAlias, inputErr := countInputFor(measure.Input)
-			if inputErr != nil {
-				return nil, nil, nil, compileState{}, nil, inputErr
-			}
-			// Aggregate in UInt128 so the intermediate state cannot wrap. The
-			// production 250M-row read ceiling and 1 MiB hard event ceiling make
-			// the final occurrence total strictly smaller than UInt64.
-			projection = append(projection, "toUInt64(sum(toUInt128("+inputAlias+"))) AS "+output)
-			measureState.numberType = "UInt64"
-		case plan.AggregateFunctionPercentile:
-			if measure.InputExpression != nil {
-				inputAlias, inputErr := numericInputForExpression(measure.InputExpression)
-				if inputErr != nil {
-					return nil, nil, nil, compileState{}, nil, inputErr
-				}
-				projection = append(
-					projection,
-					statsAllNumericResultSQL(
-						singlePercentileArrayAggregateSQL(measure.Percentile, inputAlias),
-						allNumericInvalidAlias,
-					)+
-						" AS "+output,
-				)
-				measureState.numberType = "Float64"
-				break
-			}
-			percentiles, cached := percentileStates[measure.Input.Name]
-			if !cached {
-				inputAlias, inputIsArray, inputErr := percentileInputFor(measure.Input)
-				if inputErr != nil {
-					return nil, nil, nil, compileState{}, nil, inputErr
-				}
-				levels := percentileLevels[measure.Input.Name]
-				if len(levels) == 0 {
-					return nil, nil, nil, compileState{}, nil, errors.New(
-						"compile ClickHouse aggregate: percentile input has no valid levels",
-					)
-				}
-				levelSQL := make([]string, 0, len(levels))
-				positions := make(map[uint8]int, len(levels))
-				for index, level := range levels {
-					levelSQL = append(levelSQL, statsPercentileLevelSQL(level))
-					positions[level] = index + 1
-				}
-				percentiles = percentileState{
-					column: quoteIdentifier(fmt.Sprintf(
-						"__os_stats_percentiles_%d",
-						len(percentileStates),
-					)),
-					positions: positions,
-				}
-				percentileStates[measure.Input.Name] = percentiles
-				aggregateFunction := "quantilesGKOrNull"
-				if inputIsArray {
-					aggregateFunction += "Array"
-				}
-				projection = append(
-					projection,
-					aggregateFunction+"(100, "+strings.Join(levelSQL, ", ")+")("+
-						inputAlias+") AS "+percentiles.column,
-				)
-			}
-			position, ok := percentiles.positions[measure.Percentile]
-			if !ok {
-				return nil, nil, nil, compileState{}, nil, errors.New(
-					"compile ClickHouse aggregate: percentile level was not collected",
-				)
-			}
-			projection = append(
-				projection,
-				statsAllNumericResultSQL(
-					"arrayElementOrNull("+percentiles.column+", "+strconv.Itoa(position)+")",
-					allNumericInvalidAlias,
-				)+" AS "+output,
-			)
-			measureState.numberType = "Float64"
-		case plan.AggregateFunctionExactPercentile,
-			plan.AggregateFunctionUpperPercentile,
-			plan.AggregateFunctionMedian:
-			var inputAlias string
-			var inputErr error
-			if measure.InputExpression != nil {
-				inputAlias, inputErr = numericInputForExpression(measure.InputExpression)
-			} else {
-				inputAlias, inputErr = numericInputFor(measure.Input)
-			}
-			if inputErr != nil {
-				return nil, nil, nil, compileState{}, nil, inputErr
-			}
-			lowering, supported := statsDistributionArrayAggregateSQL(
-				measure.Function,
-				measure.Percentile,
-				inputAlias,
-			)
-			if !supported || lowering.Result != statsDistributionResultNullableFloat64 {
-				return nil, nil, nil, compileState{}, nil, errors.New(
-					"compile ClickHouse aggregate: percentile distribution lowering is invalid",
-				)
-			}
-			projection = append(
-				projection,
-				statsAllNumericResultSQL(lowering.SQL, allNumericInvalidAlias)+" AS "+output,
-			)
-			measureState.numberType = "Float64"
-		case plan.AggregateFunctionRate:
-			var inputAlias string
-			var inputErr error
-			if measure.InputExpression != nil {
-				inputAlias, inputErr = numericInputForExpression(measure.InputExpression)
-			} else {
-				inputAlias, inputErr = numericInputFor(measure.Input)
-			}
-			if inputErr != nil {
-				return nil, nil, nil, compileState{}, nil, inputErr
-			}
-			timeField, timeExists := state.visible["_time"]
-			if !timeExists || timeField.kind != fieldKindTime || !timeField.canonicalTime {
-				return nil, nil, nil, compileState{}, nil, errors.New(
-					"compile ClickHouse aggregate: rate has no canonical _time input",
-				)
-			}
-			projection = append(
-				projection,
-				statsAllNumericResultSQL(
-					statsRateAggregateSQL(
-						inputAlias,
-						chronologicalRowKeyFor(),
-						percentileInputSQL(timeField),
-					),
-					allNumericInvalidAlias,
-				)+" AS "+output,
-			)
-			measureState.numberType = "Float64"
-		case plan.AggregateFunctionSum, plan.AggregateFunctionAverage,
-			plan.AggregateFunctionRange, plan.AggregateFunctionSumSquares,
-			plan.AggregateFunctionStandardDeviationSample,
-			plan.AggregateFunctionStandardDeviationPopulation,
-			plan.AggregateFunctionVarianceSample,
-			plan.AggregateFunctionVariancePopulation:
-			var inputAlias string
-			var inputErr error
-			if measure.InputExpression != nil {
-				inputAlias, inputErr = numericInputForExpression(measure.InputExpression)
-			} else {
-				inputAlias, inputErr = numericInputFor(measure.Input)
-			}
-			if inputErr != nil {
-				return nil, nil, nil, compileState{}, nil, inputErr
-			}
-			valueSQL, supported := statsNumericArrayAggregateSQL(measure.Function, inputAlias)
-			if !supported {
-				return nil, nil, nil, compileState{}, nil, errors.New(
-					"compile ClickHouse aggregate: numeric array function is invalid",
-				)
-			}
-			projection = append(
-				projection,
-				statsAllNumericResultSQL(valueSQL, allNumericInvalidAlias)+" AS "+output,
-			)
-			measureState.numberType = "Float64"
-		case plan.AggregateFunctionMinimum, plan.AggregateFunctionMaximum:
-			var input fieldState
-			var ok bool
-			if measure.InputExpression != nil {
-				cached, inputErr := aggregateExpressionInputFor(measure.InputExpression)
-				if inputErr != nil {
-					return nil, nil, nil, compileState{}, nil, inputErr
-				}
-				input = cached.field
-				ok = !input.alwaysNull
-			} else {
-				var resolveErr error
-				input, ok, resolveErr = resolveCompiledField(measure.Input, state)
-				if resolveErr != nil {
-					return nil, nil, nil, compileState{}, nil, resolveErr
-				}
-			}
-			if eligible, eligibleArgs, fixed := fixedExtremaEligibilitySQL(input); ok && fixed {
-				function := "minIfOrNull"
-				if measure.Function == plan.AggregateFunctionMaximum {
-					function = "maxIfOrNull"
-				}
-				projection = append(projection, function+"("+input.valueSQL+", "+eligible+") AS "+output)
-				args = append(args, eligibleArgs...)
-				measureState.kind = input.kind
-				measureState.numberType = input.numberType
-				measureState.caseSensitive = input.caseSensitive
-				break
-			}
-
-			if ok && input.kind == fieldKindString {
-				scalarInput := scalarStringInputFor(measureInputKey, input)
-				if !scalarInput.extremaReady {
-					scalarInput.numberAlias = quoteIdentifier(fmt.Sprintf(
-						"__os_measure_extrema_number_%d",
-						scalarInput.ordinal,
-					))
-					scalarInput.candidateAlias = quoteIdentifier(fmt.Sprintf(
-						"__os_measure_extrema_scalar_%d",
-						scalarInput.ordinal,
-					))
-					next.preAggregateColumns = append(
-						next.preAggregateColumns,
-						statsExtremaScalarNumberSQL(scalarInput.valueAlias)+" AS "+scalarInput.numberAlias,
-						statsExtremaScalarCandidateSQL(
-							scalarInput.valueAlias,
-							scalarInput.numberAlias,
-							scalarInput.rawBytesSQL,
-						)+" AS "+scalarInput.candidateAlias,
-					)
-					scalarInput.extremaReady = true
-				}
-
-				resultKey := scalarExtremaResultKey{
-					input:    measureInputKey,
-					function: measure.Function,
-				}
-				result, cached := scalarExtremaResults[resultKey]
-				if !cached {
-					result = scalarExtremaResult{
-						winnerAlias: quoteIdentifier(fmt.Sprintf(
-							"__os_stats_extrema_winner_%d",
-							measureIndex,
-						)),
-						typeAlias: quoteIdentifier(fmt.Sprintf(
-							"__os_stats_extrema_type_%d",
-							measureIndex,
-						)),
-					}
-					scalarExtremaResults[resultKey] = result
-					projection = append(
-						projection,
-						statsExtremaScalarAggregateWinnerSQL(
-							measure.Function,
-							scalarInput.candidateAlias,
-						)+" AS "+result.winnerAlias,
-					)
-					next.privateColumns = append(
-						next.privateColumns,
-						result.typeAlias,
-					)
-				}
-				next.postAggregateScalarExtrema = append(
-					next.postAggregateScalarExtrema,
-					compiledScalarExtremaMeasure{
-						winnerColumn: result.winnerAlias,
-						typeColumn:   result.typeAlias,
-						outputColumn: output,
-					},
-				)
-				measureState = fieldState{
-					valueSQL:       output,
-					dynamicTypeSQL: "dynamicType(" + output + ")",
-					storedTypeSQL:  result.typeAlias,
-					existsSQL:      "1",
-					kind:           fieldKindDynamic,
-				}
-				break
-			}
-
-			candidates, cached := extremaInputs[measureInputKey]
-			if !cached {
-				candidates = quoteIdentifier(fmt.Sprintf("__os_measure_extrema_%d", len(extremaInputs)))
-				extremaInputs[measureInputKey] = candidates
-				var candidateSQL string
-				var candidateArgs []any
-				if ok && input.kind == fieldKindDynamic {
-					candidateSQL, candidateArgs = statsExtremaDynamicCandidatesSQL(input)
-				} else {
-					var stringInputSQL string
-					var inputErr error
-					if measure.InputExpression != nil {
-						stringInputSQL, inputErr = stringInputForExpression(measure.InputExpression)
-					} else {
-						stringInputSQL, inputErr = stringInputFor(measure.Input)
-					}
-					if inputErr != nil {
-						return nil, nil, nil, compileState{}, nil, inputErr
-					}
-					candidateSQL = statsExtremaCandidatesSQL(stringInputSQL)
-				}
-				next.preAggregateColumns = append(
-					next.preAggregateColumns,
-					candidateSQL+" AS "+candidates,
-				)
-				next.preAggregateArgs = append(next.preAggregateArgs, candidateArgs...)
-			}
-			resultKey := scalarExtremaResultKey{
-				input:    measureInputKey,
-				function: measure.Function,
-			}
-			result, cached := dynamicExtremaResults[resultKey]
-			if !cached {
-				result = scalarExtremaResult{
-					winnerAlias: quoteIdentifier(fmt.Sprintf(
-						"__os_stats_extrema_winner_%d",
-						measureIndex,
-					)),
-					typeAlias: quoteIdentifier(fmt.Sprintf(
-						"__os_stats_extrema_type_%d",
-						measureIndex,
-					)),
-				}
-				dynamicExtremaResults[resultKey] = result
-				projection = append(
-					projection,
-					statsExtremaAggregateSQL(measure.Function, candidates)+
-						" AS "+result.winnerAlias,
-					statsExtremaStoredTypeSQL(result.winnerAlias)+
-						" AS "+result.typeAlias,
-				)
-				next.privateColumns = append(next.privateColumns, result.typeAlias)
-			}
-			projection = append(projection, result.winnerAlias+" AS "+output)
-			measureState = fieldState{
-				valueSQL:       output,
-				dynamicTypeSQL: "dynamicType(" + output + ")",
-				storedTypeSQL:  result.typeAlias,
-				existsSQL:      "1",
-				kind:           fieldKindDynamic,
-			}
-		case plan.AggregateFunctionFirst, plan.AggregateFunctionLast,
-			plan.AggregateFunctionEarliest, plan.AggregateFunctionLatest:
-			var input chronologicalInput
-			var inputErr error
-			if measure.InputExpression != nil {
-				input, inputErr = chronologicalInputForExpression(measure.InputExpression)
-			} else {
-				input, inputErr = chronologicalInputFor(measure.Input)
-			}
-			if inputErr != nil {
-				return nil, nil, nil, compileState{}, nil, inputErr
-			}
-			rowKey := chronologicalRowKeyFor()
-			if measure.Function == plan.AggregateFunctionFirst ||
-				measure.Function == plan.AggregateFunctionLast {
-				var orderErr error
-				rowKey, _, orderErr = listRowOrdinalFor()
-				if orderErr != nil {
-					return nil, nil, nil, compileState{}, nil, orderErr
-				}
-			}
-			resultKey := chronologicalResultKey{
-				input:    measureInputKey,
-				function: measure.Function,
-			}
-			result, cached := chronologicalResults[resultKey]
-			if !cached {
-				ordinal := len(chronologicalResults)
-				result = chronologicalResult{
-					winnerAlias: quoteIdentifier(fmt.Sprintf(
-						"__os_chronological_winner_%d",
-						ordinal,
-					)),
-					typeAlias: quoteIdentifier(fmt.Sprintf(
-						"__os_chronological_type_%d",
-						ordinal,
-					)),
-				}
-				chronologicalResults[resultKey] = result
-				aggregateSQL, aggregateErr := chronologicalAggregateSQL(
-					measure.Function,
-					input.candidatesAlias,
-					rowKey,
-					input.multiple,
-				)
-				if aggregateErr != nil {
-					return nil, nil, nil, compileState{}, nil, aggregateErr
-				}
-				projection = append(
-					projection,
-					aggregateSQL+" AS "+result.winnerAlias,
-				)
-				next.privateColumns = append(next.privateColumns, result.typeAlias)
-			}
-			next.postAggregateChronological = append(
-				next.postAggregateChronological,
-				compiledChronologicalMeasure{
-					winnerColumn:     result.winnerAlias,
-					validationColumn: input.validationAlias,
-					typeColumn:       result.typeAlias,
-					outputColumn:     output,
-				},
-			)
-			measureState = fieldState{
-				valueSQL:       output,
-				dynamicTypeSQL: "dynamicType(" + output + ")",
-				storedTypeSQL:  result.typeAlias,
-				existsSQL:      "1",
-				kind:           fieldKindDynamic,
-			}
-		case plan.AggregateFunctionEarliestTime,
-			plan.AggregateFunctionLatestTime:
-			var input chronologicalInput
-			var inputErr error
-			if measure.InputExpression != nil {
-				input, inputErr = chronologicalInputForExpression(measure.InputExpression)
-			} else {
-				input, inputErr = chronologicalInputFor(measure.Input)
-			}
-			if inputErr != nil {
-				return nil, nil, nil, compileState{}, nil, inputErr
-			}
-			timeField, timeExists := state.visible["_time"]
-			if !timeExists || timeField.kind != fieldKindTime || !timeField.canonicalTime {
-				return nil, nil, nil, compileState{}, nil, errors.New(
-					"compile ClickHouse aggregate: occurrence time has no canonical _time input",
-				)
-			}
-			valueSQL, valueErr := statsOccurrenceTimeAggregateSQL(
-				measure.Function,
-				input.candidatesAlias,
-				chronologicalRowKeyFor(),
-				percentileInputSQL(timeField),
-			)
-			if valueErr != nil {
-				return nil, nil, nil, compileState{}, nil, valueErr
-			}
-			projection = append(projection, valueSQL+" AS "+output)
-			measureState.numberType = "Float64"
-		case plan.AggregateFunctionEstimatedDistinctCount,
-			plan.AggregateFunctionEstimatedDistinctCountError,
-			plan.AggregateFunctionMode:
-			var inputSQL string
-			var modeInput fieldState
-			modeInputKnown := false
-			var inputErr error
-			if measure.InputExpression != nil {
-				inputSQL, inputErr = stringInputForExpression(measure.InputExpression)
-				if inputErr == nil {
-					cached, cachedErr := aggregateExpressionInputFor(measure.InputExpression)
-					if cachedErr != nil {
-						return nil, nil, nil, compileState{}, nil, cachedErr
-					}
-					modeInput = cached.field
-					modeInputKnown = !modeInput.alwaysNull
-				}
-			} else {
-				inputSQL, inputErr = stringInputFor(measure.Input)
-				if inputErr == nil {
-					modeInput, modeInputKnown, inputErr = resolveCompiledField(
-						measure.Input,
-						state,
-					)
-				}
-			}
-			if inputErr != nil {
-				return nil, nil, nil, compileState{}, nil, inputErr
-			}
-			lowering, supported := statsDistributionArrayAggregateSQL(
-				measure.Function,
-				measure.Percentile,
-				inputSQL,
-			)
-			if !supported {
-				return nil, nil, nil, compileState{}, nil, errors.New(
-					"compile ClickHouse aggregate: string distribution lowering is invalid",
-				)
-			}
-			modeSemanticBytesSQL := ""
-			if measure.Function == plan.AggregateFunctionMode && modeInputKnown &&
-				modeInput.stringOrBytes &&
-				(modeInput.kind == fieldKindString || modeInput.kind == fieldKindStringArray) {
-				if modeInput.semanticBytesSQL == "" {
-					if modeInput.kind == fieldKindString {
-						return nil, nil, nil, compileState{}, nil, errors.New(
-							"compile ClickHouse aggregate: mode String-or-Bytes input lacks semantic Bytes provenance",
-						)
-					}
-				}
-				modeValuesInput := quoteIdentifier(fmt.Sprintf(
-					"__os_measure_mode_values_%d",
-					measureIndex,
-				))
-				modeSemanticInput := quoteIdentifier(fmt.Sprintf(
-					"__os_measure_semantic_bytes_%d",
-					measureIndex,
-				))
-				modeExistsSQL := modeInput.existsSQL
-				if modeExistsSQL == "" {
-					modeExistsSQL = "1"
-				}
-				modeValuesSQL := "if(" + modeExistsSQL + " AND isNotNull(" +
-					modeInput.valueSQL + "), [assumeNotNull(" + modeInput.valueSQL +
-					")], CAST([], 'Array(String)'))"
-				modeSemanticSQL := "if(" + modeExistsSQL + " AND isNotNull(" +
-					modeInput.valueSQL + "), [toUInt8(ifNull(" +
-					modeInput.semanticBytesSQL + ", 0))], CAST([], 'Array(UInt8)'))"
-				if modeInput.kind == fieldKindStringArray {
-					modeValuesSQL = "if(" + modeExistsSQL + ", " +
-						modeInput.valueSQL + ", CAST([], 'Array(String)'))"
-					modeSemanticSQL = "arrayMap(value -> toUInt8(NOT isValidUTF8(value)), " +
-						modeValuesSQL + ")"
-				}
-				next.preAggregateColumns = append(
-					next.preAggregateColumns,
-					modeValuesSQL+" AS "+modeValuesInput,
-					modeSemanticSQL+" AS "+modeSemanticInput,
-				)
-				next.preAggregateArgs = append(
-					next.preAggregateArgs,
-					modeInput.existsArgs...,
-				)
-				next.preAggregateArgs = append(
-					next.preAggregateArgs,
-					modeInput.existsArgs...,
-				)
-				modeLowering := statsExactModeWithSemanticBytesSQL(
-					modeValuesInput,
-					modeSemanticInput,
-				)
-				lowering.SQL = modeLowering.ValueSQL
-				modeSemanticOutput := quoteIdentifier(fmt.Sprintf(
-					"__os_mode_semantic_bytes_%d",
-					measureIndex,
-				))
-				projection = append(
-					projection,
-					modeLowering.SemanticBytesSQL+" AS "+modeSemanticOutput,
-				)
-				next.privateColumns = append(next.privateColumns, modeSemanticOutput)
-				modeSemanticBytesSQL = modeSemanticOutput
-			}
-			projection = append(projection, lowering.SQL+" AS "+output)
-			switch lowering.Result {
-			case statsDistributionResultUInt64:
-				measureState.numberType = "UInt64"
-			case statsDistributionResultFloat64:
-				measureState.numberType = "Float64"
-			case statsDistributionResultNullableString:
-				measureState.kind = fieldKindString
-				measureState.numberType = ""
-				measureState.existsSQL = "isNotNull(" + output + ")"
-				if measure.Function == plan.AggregateFunctionMode {
-					measureState.stringOrBytes = true
-					measureState.stringOrBytesNullable = true
-					measureState.semanticBytesByUTF8Validity = modeSemanticBytesSQL == ""
-					measureState.semanticBytesSQL = modeSemanticBytesSQL
-					if measureState.semanticBytesSQL == "" {
-						measureState.semanticBytesSQL = "toUInt8(isNotNull(" + output +
-							") AND NOT isValidUTF8(assumeNotNull(" + output + ")))"
-					}
-					measureState.textEligibleSQL = "(ifNull(" +
-						measureState.semanticBytesSQL + ", 0) = 0 AND isNotNull(" +
-						output + ") AND isValidUTF8(assumeNotNull(" + output + ")))"
-					measureState.textEligibleBySemanticBytes = true
-				}
-				if measure.InputExpression != nil {
-					cached, inputErr := aggregateExpressionInputFor(measure.InputExpression)
-					if inputErr != nil {
-						return nil, nil, nil, compileState{}, nil, inputErr
-					}
-					measureState.maxStringBytes = fieldStateStringByteBound(cached.field)
-				} else if input, ok, resolveErr := resolveCompiledField(measure.Input, state); resolveErr != nil {
-					return nil, nil, nil, compileState{}, nil, resolveErr
-				} else if ok {
-					measureState.maxStringBytes = fieldStateStringByteBound(input)
-				}
-			default:
-				return nil, nil, nil, compileState{}, nil, errors.New(
-					"compile ClickHouse aggregate: distribution result kind is invalid",
-				)
-			}
-		case plan.AggregateFunctionDistinctCount, plan.AggregateFunctionValues:
-			var inputSQL string
-			var inputErr error
-			if measure.InputExpression != nil {
-				inputSQL, inputErr = stringInputForExpression(measure.InputExpression)
-			} else {
-				inputSQL, inputErr = stringInputFor(measure.Input)
-			}
-			if inputErr != nil {
-				return nil, nil, nil, compileState{}, nil, inputErr
-			}
-			_, publishesValues := valuesInputs[measureInputKey]
-			if measure.Function == plan.AggregateFunctionDistinctCount && !publishesValues {
-				cardinalityColumn, cached := distinctCounts[measureInputKey]
-				if !cached {
-					cardinalityColumn = quoteIdentifier(fmt.Sprintf("__os_dc_cardinality_%d", len(distinctCounts)))
-					distinctCounts[measureInputKey] = cardinalityColumn
-					projection = append(projection, distinctCountCardinalitySQL(inputSQL)+" AS "+cardinalityColumn)
-				}
-				next.postAggregateDistinctCounts = append(next.postAggregateDistinctCounts, compiledDistinctCount{
-					cardinalityColumn: cardinalityColumn,
-					outputColumn:      output,
-				})
-				measureState.numberType = "UInt64"
-			} else {
-				setColumn, cached := exactStringSets[measureInputKey]
-				if !cached {
-					setColumn = quoteIdentifier(fmt.Sprintf("__os_exact_strings_%d", len(exactStringSets)))
-					exactStringSets[measureInputKey] = setColumn
-					projection = append(
-						projection,
-						exactDistinctStringSetSQL(inputSQL, uint64(MaximumStatsValuesPerGroup))+" AS "+setColumn,
-					)
-				}
-				next.postAggregateExactStrings = append(next.postAggregateExactStrings, compiledExactStringMeasure{
-					setColumn:    setColumn,
-					outputColumn: output,
-					function:     measure.Function,
-				})
-				if measure.Function == plan.AggregateFunctionDistinctCount {
-					measureState.numberType = "UInt64"
-				} else {
-					measureState.kind = fieldKindStringArray
-					measureState.mvSortedLexicographic = true
-					measureState.stringOrBytes = true
-					// The physical result is always a non-null Array(String), but an
-					// empty multivalue has no logical SPL field value.
-					measureState.existsSQL = "notEmpty(" + output + ")"
-				}
-			}
-		case plan.AggregateFunctionList:
-			inputExists := false
-			if measure.InputExpression != nil {
-				cached, inputErr := aggregateExpressionInputFor(measure.InputExpression)
-				if inputErr != nil {
-					return nil, nil, nil, compileState{}, nil, inputErr
-				}
-				inputExists = !cached.field.alwaysNull
-			} else {
-				_, resolved, resolveErr := resolveCompiledField(measure.Input, state)
-				if resolveErr != nil {
-					return nil, nil, nil, compileState{}, nil, resolveErr
-				}
-				inputExists = resolved
-			}
-			if !inputExists {
-				// Preserve global aggregate and retained-group row semantics with
-				// one constant-size aggregate state. There is no row order to
-				// recover for a field that is statically absent, so ordered
-				// prefix windows would only sort the entire input to publish [].
-				projection = append(
-					projection,
-					"groupArrayArray(1)(CAST([], 'Array(String)')) AS "+output,
-				)
-				measureState.kind = fieldKindStringArray
-				measureState.stringOrBytes = true
-				measureState.existsSQL = "notEmpty(" + output + ")"
-				break
-			}
-			var inputSQL string
-			var inputErr error
-			if measure.InputExpression != nil {
-				inputSQL, inputErr = stringInputForExpression(measure.InputExpression)
-			} else {
-				inputSQL, inputErr = stringInputFor(measure.Input)
-			}
-			if inputErr != nil {
-				return nil, nil, nil, compileState{}, nil, inputErr
-			}
-			rowOrdinal, windowOrder, orderErr := listRowOrdinalFor()
-			if orderErr != nil {
-				return nil, nil, nil, compileState{}, nil, orderErr
-			}
-			list, cached := orderedStringLists[measureInputKey]
-			if !cached {
-				ordinal := len(orderedStringLists)
-				priorElements := quoteIdentifier(fmt.Sprintf(
-					"__os_list_prior_elements_%d",
-					ordinal,
-				))
-				priorBytes := quoteIdentifier(fmt.Sprintf(
-					"__os_list_prior_bytes_%d",
-					ordinal,
-				))
-				frame := " OVER (" + windowOrder +
-					" ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)"
-				next.preAggregateListWindowColumns = append(
-					next.preAggregateListWindowColumns,
-					"ifNull(sum(toUInt128(length("+inputSQL+")))"+frame+
-						", toUInt128(0)) AS "+priorElements,
-					"ifNull(sum("+stringArrayPayloadBytesSQL(inputSQL)+")"+frame+
-						", toUInt128(0)) AS "+priorBytes,
-				)
-				rowState := quoteIdentifier(fmt.Sprintf(
-					"__os_list_row_state_%d",
-					ordinal,
-				))
-				next.preAggregateListCandidateColumns = append(
-					next.preAggregateListCandidateColumns,
-					boundedOrderedStringRowStateSQL(
-						rowOrdinal,
-						inputSQL,
-						priorElements,
-						priorBytes,
-					)+" AS "+rowState,
-				)
-				list.listColumn = quoteIdentifier(fmt.Sprintf(
-					"__os_ordered_strings_%d",
-					ordinal,
-				))
-				list.overflowColumn = quoteIdentifier(fmt.Sprintf(
-					"__os_ordered_strings_bytes_overflow_%d",
-					ordinal,
-				))
-				orderedStringLists[measureInputKey] = list
-				projection = append(
-					projection,
-					boundedOrderedStringListSQL("tupleElement("+rowState+", 1)")+
-						" AS "+list.listColumn,
-					"max(tupleElement("+rowState+", 2)) AS "+list.overflowColumn,
-				)
-			}
-			next.postAggregateOrderedStrings = append(
-				next.postAggregateOrderedStrings,
-				compiledOrderedStringMeasure{
-					listColumn:     list.listColumn,
-					overflowColumn: list.overflowColumn,
-					outputColumn:   output,
-				},
-			)
-			measureState.kind = fieldKindStringArray
-			measureState.stringOrBytes = true
-			// As with values(), an empty physical array has no logical SPL value.
-			measureState.existsSQL = "notEmpty(" + output + ")"
-		default:
-			return nil, nil, nil, compileState{}, nil, fmt.Errorf("compile ClickHouse aggregate: unsupported function %d", measure.Function)
-		}
-		switch measure.Function {
-		case plan.AggregateFunctionMinimum, plan.AggregateFunctionMaximum,
-			plan.AggregateFunctionFirst, plan.AggregateFunctionLast,
-			plan.AggregateFunctionEarliest, plan.AggregateFunctionLatest:
-			var input fieldState
-			var ok bool
-			if measure.InputExpression != nil {
-				cached, inputErr := aggregateExpressionInputFor(measure.InputExpression)
-				if inputErr != nil {
-					return nil, nil, nil, compileState{}, nil, inputErr
-				}
-				input = cached.field
-				ok = !input.alwaysNull
-			} else {
-				var resolveErr error
-				input, ok, resolveErr = resolveCompiledField(measure.Input, state)
-				if resolveErr != nil {
-					return nil, nil, nil, compileState{}, nil, resolveErr
-				}
-			}
-			if ok {
-				measureState.maxStringBytes = fieldStateStringByteBound(input)
-			}
-		}
-		if measure.Function == plan.AggregateFunctionValues ||
-			measure.Function == plan.AggregateFunctionList {
-			// delim is presentation metadata only. Keep the aggregate as a typed
-			// Array(String) and bind the effective default/authored delimiter to
-			// this exact output field for downstream exact projections.
-			measureState.flatMultivalueDelimiter = strings.Clone(statsOptions.Delimiter)
-			measureState.hasFlatMultivalueDelimiter = true
-		}
-		next.visible[measure.Output] = measureState
-		next.publicOrder = append(next.publicOrder, measure.Output)
-		if len(next.order) == 0 {
-			orderSQL := quoteIdentifier(measure.Output)
-			if measureState.kind == fieldKindDynamic {
-				orderSQL = quoteIdentifier("__os_aggregate_order")
-				projection = append(projection, "toUInt8(0) AS "+orderSQL)
-			}
-			next.order = append(next.order, compiledSortKey{valueSQL: orderSQL})
+		if err := lowering.compileScalarMeasure(measureIndex, measure); err != nil {
+			return err
 		}
 	}
-	if len(dynamicGroupInvalid) > 0 {
-		if next.context == nil {
-			return nil, nil, nil, compileState{}, nil, errors.New(
-				"compile ClickHouse aggregate: runtime validation context is missing",
+	return nil
+}
+
+func (lowering *aggregateMeasureLowering) validateOutput(
+	measure plan.AggregateMeasure,
+) error {
+	if measure.OutputLiteral {
+		if lowering.operator.StatsOptions == nil ||
+			!spl.IsStatsLiteralOutputName(measure.Output) {
+			return fmt.Errorf(
+				"compile ClickHouse aggregate: invalid literal output field %q",
+				measure.Output,
 			)
 		}
-		// Raw Dynamic BY inputs are validated at execution because their runtime
-		// shape can be a scalar, an admitted scalar-member multivalue, or an
-		// unsupported nested container. A backend iterator may discover a late
-		// unsupported value only after yielding otherwise valid groups, so the
-		// complete result must remain staged until validation and Close succeed.
-		next.context.atomicResult = true
-		anyUnsupportedColumn := quoteIdentifier("__os_stats_by_any_unsupported")
-		invalid := "(" + strings.Join(dynamicGroupInvalid, ") OR (") + ")"
-		next.preAggregateValidationColumns = append(next.preAggregateValidationColumns,
-			"max(CAST("+invalid+" AS UInt8)) OVER () AS "+anyUnsupportedColumn,
+		return nil
+	}
+	if _, err := plan.ResolveField(measure.Output, spl.Range{}); err != nil {
+		return fmt.Errorf(
+			"compile ClickHouse aggregate: invalid output field %q: %w",
+			measure.Output,
+			err,
 		)
-		next.preAggregateValidationArgs = append(next.preAggregateValidationArgs, dynamicGroupInvalidArgs...)
-		eligible := "1"
-		if len(predicates) > 0 {
-			eligible = "(" + strings.Join(predicates, " AND ") + ")"
+	}
+	return nil
+}
+
+func (lowering *aggregateMeasureLowering) compileScalarMeasure(
+	measureIndex int,
+	measure plan.AggregateMeasure,
+) error {
+	hasFieldInput := measure.Input.Name != "" || measure.Input.Canonical ||
+		len(measure.Input.Path) != 0 || measure.Input.Range != (spl.Range{})
+	hasExpressionInput := measure.InputExpression != nil
+	if hasExpressionInput && nilScalarExpression(measure.InputExpression) {
+		return errors.New("compile ClickHouse aggregate: scalar eval input is a typed nil")
+	}
+	supportsExpressionInput := false
+	switch measure.Function {
+	case plan.AggregateFunctionCountRows:
+		if hasFieldInput || hasExpressionInput || measure.Percentile != 0 {
+			return errors.New(
+				"compile ClickHouse aggregate: count contains unsupported input metadata",
+			)
 		}
-		predicates = []string{
-			"if(" + anyUnsupportedColumn + " != 0, throwIf(toUInt8(1), '" + UnsupportedStatsByValueMarker + "') = 0, " + eligible + ")",
+	case plan.AggregateFunctionCountPredicate:
+	case plan.AggregateFunctionCountValues:
+		if hasExpressionInput || measure.Percentile != 0 {
+			return errors.New(
+				"compile ClickHouse aggregate: count(field) contains scalar-input or percentile metadata",
+			)
+		}
+	case plan.AggregateFunctionPercentile,
+		plan.AggregateFunctionExactPercentile,
+		plan.AggregateFunctionUpperPercentile:
+		supportsExpressionInput = true
+		if measure.Percentile < 1 || measure.Percentile > 99 {
+			return fmt.Errorf(
+				"compile ClickHouse aggregate: unsupported percentile %d",
+				measure.Percentile,
+			)
+		}
+	case plan.AggregateFunctionSum, plan.AggregateFunctionAverage,
+		plan.AggregateFunctionMedian,
+		plan.AggregateFunctionRange, plan.AggregateFunctionSumSquares,
+		plan.AggregateFunctionStandardDeviationSample,
+		plan.AggregateFunctionStandardDeviationPopulation,
+		plan.AggregateFunctionVarianceSample,
+		plan.AggregateFunctionVariancePopulation,
+		plan.AggregateFunctionRate:
+		supportsExpressionInput = true
+		if measure.Percentile != 0 {
+			return fmt.Errorf(
+				"compile ClickHouse aggregate: function %d contains percentile metadata",
+				measure.Function,
+			)
+		}
+	case plan.AggregateFunctionDistinctCount,
+		plan.AggregateFunctionEstimatedDistinctCount,
+		plan.AggregateFunctionEstimatedDistinctCountError,
+		plan.AggregateFunctionValues,
+		plan.AggregateFunctionList,
+		plan.AggregateFunctionMinimum, plan.AggregateFunctionMaximum,
+		plan.AggregateFunctionMode,
+		plan.AggregateFunctionFirst, plan.AggregateFunctionLast,
+		plan.AggregateFunctionEarliest, plan.AggregateFunctionLatest,
+		plan.AggregateFunctionEarliestTime,
+		plan.AggregateFunctionLatestTime:
+		supportsExpressionInput = true
+		if measure.Percentile != 0 {
+			return fmt.Errorf(
+				"compile ClickHouse aggregate: function %d contains percentile metadata",
+				measure.Function,
+			)
+		}
+	default:
+		return fmt.Errorf(
+			"compile ClickHouse aggregate: unsupported function %d",
+			measure.Function,
+		)
+	}
+	if measure.Function != plan.AggregateFunctionCountRows &&
+		measure.Function != plan.AggregateFunctionCountPredicate {
+		if hasFieldInput == hasExpressionInput {
+			return errors.New(
+				"compile ClickHouse aggregate: measure requires exactly one field or scalar eval input",
+			)
+		}
+		if hasExpressionInput && !supportsExpressionInput {
+			return fmt.Errorf(
+				"compile ClickHouse aggregate: function %d does not support a scalar eval input",
+				measure.Function,
+			)
+		}
+		if hasFieldInput {
+			if err := validateCanonicalFieldRef("aggregate", "input", measure.Input); err != nil {
+				return err
+			}
+			if lowering.state.eventRows && lowering.state.allowDynamic &&
+				measure.Input.Name == "fields" {
+				return &plan.Diagnostic{
+					Code:    "SPL_AMBIGUOUS_STATS_FIELD",
+					Message: "stats cannot read the event result's reserved fields payload without an exact upstream schema",
+					Range:   measure.Input.Range,
+				}
+			}
+		} else if lowering.state.eventRows && lowering.state.allowDynamic {
+			if sourceRange, reserved := predicateFieldSourceRange(
+				&plan.ScalarPredicateExpression{Value: measure.InputExpression},
+				"fields",
+			); reserved {
+				return &plan.Diagnostic{
+					Code:    "SPL_AMBIGUOUS_STATS_FIELD",
+					Message: "stats cannot read the event result's reserved fields payload without an exact upstream schema",
+					Range:   sourceRange,
+				}
+			}
 		}
 	}
-	return projection, predicates, groups, next, args, nil
+	inputKey := lowering.fieldInputCacheKey(measure.Input.Name)
+	if hasExpressionInput {
+		cached, err := lowering.aggregateExpressionInputFor(measure.InputExpression)
+		if err != nil {
+			return err
+		}
+		inputKey = lowering.expressionInputCacheKey(cached.ordinal)
+	}
+	if _, duplicate := lowering.seen[measure.Output]; duplicate {
+		return fmt.Errorf(
+			"compile ClickHouse aggregate: output field %q is duplicated",
+			measure.Output,
+		)
+	}
+	lowering.seen[measure.Output] = struct{}{}
+	output := quoteIdentifier(measure.Output)
+	measureState := fieldState{valueSQL: output, existsSQL: "1", kind: fieldKindNumber}
+	allNumericInvalidAlias, err := lowering.allNumericInvalidFor(measure, inputKey)
+	if err != nil {
+		return err
+	}
+	measureState, err = lowering.measure(
+		measureIndex,
+		measure,
+		inputKey,
+		output,
+		measureState,
+		allNumericInvalidAlias,
+	)
+	if err != nil {
+		return err
+	}
+	switch measure.Function {
+	case plan.AggregateFunctionMinimum, plan.AggregateFunctionMaximum,
+		plan.AggregateFunctionFirst, plan.AggregateFunctionLast,
+		plan.AggregateFunctionEarliest, plan.AggregateFunctionLatest:
+		input, exists, inputErr := lowering.resolveMeasureInput(measure)
+		if inputErr != nil {
+			return inputErr
+		}
+		if exists {
+			measureState.maxStringBytes = fieldStateStringByteBound(input)
+		}
+	}
+	if measure.Function == plan.AggregateFunctionValues ||
+		measure.Function == plan.AggregateFunctionList {
+		measureState.flatMultivalueDelimiter = strings.Clone(lowering.statsOptions.Delimiter)
+		measureState.hasFlatMultivalueDelimiter = true
+	}
+	lowering.next.visible[measure.Output] = measureState
+	lowering.next.publicOrder = append(lowering.next.publicOrder, measure.Output)
+	if len(lowering.next.order) == 0 {
+		orderSQL := quoteIdentifier(measure.Output)
+		if measureState.kind == fieldKindDynamic {
+			orderSQL = quoteIdentifier("__os_aggregate_order")
+			lowering.projection = append(lowering.projection, "toUInt8(0) AS "+orderSQL)
+		}
+		lowering.next.order = append(lowering.next.order, compiledSortKey{valueSQL: orderSQL})
+	}
+	return nil
+}
+
+func (lowering *aggregateMeasureLowering) finalizeDynamicGroups() error {
+	if len(lowering.dynamicGroupInvalid) == 0 {
+		return nil
+	}
+	if lowering.next.context == nil {
+		return errors.New("compile ClickHouse aggregate: runtime validation context is missing")
+	}
+	lowering.next.context.atomicResult = true
+	anyUnsupportedColumn := quoteIdentifier("__os_stats_by_any_unsupported")
+	invalid := "(" + strings.Join(lowering.dynamicGroupInvalid, ") OR (") + ")"
+	lowering.next.preAggregateValidationColumns = append(
+		lowering.next.preAggregateValidationColumns,
+		"max(CAST("+invalid+" AS UInt8)) OVER () AS "+anyUnsupportedColumn,
+	)
+	lowering.next.preAggregateValidationArgs = append(
+		lowering.next.preAggregateValidationArgs,
+		lowering.dynamicGroupInvalidArgs...,
+	)
+	eligible := "1"
+	if len(lowering.predicates) > 0 {
+		eligible = "(" + strings.Join(lowering.predicates, " AND ") + ")"
+	}
+	lowering.predicates = []string{
+		"if(" + anyUnsupportedColumn + " != 0, throwIf(toUInt8(1), '" +
+			UnsupportedStatsByValueMarker + "') = 0, " + eligible + ")",
+	}
+	return nil
+}
+
+func (lowering *aggregateMeasureLowering) compileSparklineMeasure(
+	measureIndex int,
+	measure plan.AggregateMeasure,
+) error {
+	if lowering.operator.StatsOptions == nil ||
+		measure.Function != plan.AggregateFunctionInvalid ||
+		measure.Input.Name != "" || measure.Input.Canonical ||
+		measure.Input.Path != nil || measure.Input.Range != (spl.Range{}) ||
+		measure.InputExpression != nil || measure.Predicate != nil ||
+		measure.Percentile != 0 {
+		return errors.New(
+			"compile ClickHouse aggregate: sparkline and scalar aggregate metadata overlap",
+		)
+	}
+	if lowering.state.context == nil || lowering.state.context.searchEarliest.IsZero() ||
+		lowering.state.context.searchLatest.IsZero() {
+		return errors.New(
+			"compile ClickHouse stats sparkline: search time range is unavailable",
+		)
+	}
+	sparkline := measure.Sparkline
+	if err := validateCanonicalFieldRef("stats sparkline", "time", sparkline.Time); err != nil {
+		return err
+	}
+	if sparkline.Time.Name != "_time" || !sparkline.Time.Canonical ||
+		sparkline.Time.Path != nil {
+		return errors.New(
+			"compile ClickHouse stats sparkline: time field is not canonical _time",
+		)
+	}
+	timeField, timeExists, err := resolveCompiledField(sparkline.Time, lowering.state)
+	if err != nil {
+		return err
+	}
+	if !timeExists || timeField.kind != fieldKindTime || !timeField.canonicalTime {
+		return &plan.Diagnostic{
+			Code:    "SPL_UNSUPPORTED_STATS_TIME_FIELD",
+			Message: "stats sparkline requires event rows with the unmodified canonical _time field",
+			Range:   sparkline.Time.Range,
+		}
+	}
+	hasInput := sparkline.Input.Name != "" || sparkline.Input.Canonical ||
+		sparkline.Input.Path != nil || sparkline.Input.Range != (spl.Range{})
+	if hasInput {
+		if err := validateCanonicalFieldRef("stats sparkline", "input", sparkline.Input); err != nil {
+			return err
+		}
+		if lowering.state.eventRows && lowering.state.allowDynamic &&
+			sparkline.Input.Name == "fields" {
+			return &plan.Diagnostic{
+				Code:    "SPL_AMBIGUOUS_STATS_FIELD",
+				Message: "stats sparkline cannot read the event result's reserved fields payload without an exact upstream schema",
+				Range:   sparkline.Input.Range,
+			}
+		}
+	}
+	bucket, cached := lowering.sparklineBuckets[sparkline.Span]
+	if !cached {
+		spec, specErr := statsSparklineBucketSpecFor(
+			sparkline.Span,
+			lowering.state.context.searchEarliest,
+			lowering.state.context.searchLatest,
+			sparkline.MaximumPoints,
+			timeField.valueSQL,
+			lowering.state.context.searchTimezone,
+		)
+		if specErr != nil {
+			return specErr
+		}
+		bucket = aggregateSparklineBucketInput{
+			spec: spec,
+			alias: quoteIdentifier(fmt.Sprintf(
+				"__os_sparkline_bucket_%d",
+				len(lowering.sparklineBuckets),
+			)),
+		}
+		lowering.sparklineBuckets[sparkline.Span] = bucket
+		lowering.next.preAggregateColumns = append(
+			lowering.next.preAggregateColumns,
+			spec.BucketSQL+" AS "+bucket.alias,
+		)
+		lowering.next.preAggregateArgs = append(
+			lowering.next.preAggregateArgs,
+			spec.BucketArgs...,
+		)
+	}
+	partition := append(append([]string(nil), lowering.groups...), bucket.alias)
+	partitionSQL := strings.Join(partition, ", ")
+	inputSQL := ""
+	expectedInput := statsSparklineInputNone
+	missing := statsSparklineMissingEmpty
+	switch sparkline.Function {
+	case plan.AggregateFunctionCountRows:
+		if hasInput {
+			return errors.New(
+				"compile ClickHouse stats sparkline: row count contains an input field",
+			)
+		}
+		missing = statsSparklineMissingZero
+	case plan.AggregateFunctionCountValues:
+		if !hasInput {
+			return errors.New(
+				"compile ClickHouse stats sparkline: count(field) input is missing",
+			)
+		}
+		inputSQL, err = lowering.countInputFor(sparkline.Input)
+		expectedInput = statsSparklineInputOccurrenceCount
+		missing = statsSparklineMissingZero
+	case plan.AggregateFunctionDistinctCount,
+		plan.AggregateFunctionMinimum,
+		plan.AggregateFunctionMaximum:
+		if !hasInput {
+			return errors.New(
+				"compile ClickHouse stats sparkline: string aggregate input is missing",
+			)
+		}
+		inputSQL, err = lowering.stringInputFor(sparkline.Input)
+		expectedInput = statsSparklineInputStringArray
+		if sparkline.Function == plan.AggregateFunctionDistinctCount {
+			missing = statsSparklineMissingZero
+		}
+	case plan.AggregateFunctionAverage,
+		plan.AggregateFunctionStandardDeviationSample,
+		plan.AggregateFunctionStandardDeviationPopulation,
+		plan.AggregateFunctionVarianceSample,
+		plan.AggregateFunctionVariancePopulation,
+		plan.AggregateFunctionSum,
+		plan.AggregateFunctionSumSquares,
+		plan.AggregateFunctionRange:
+		if !hasInput {
+			return errors.New(
+				"compile ClickHouse stats sparkline: numeric aggregate input is missing",
+			)
+		}
+		inputSQL, err = lowering.numericInputFor(sparkline.Input)
+		expectedInput = statsSparklineInputFloat64Array
+	default:
+		return fmt.Errorf(
+			"compile ClickHouse stats sparkline: unsupported function %d",
+			sparkline.Function,
+		)
+	}
+	if err != nil {
+		return err
+	}
+	compiled, supported := statsSparklineWindowAggregateSQL(
+		sparkline.Function,
+		inputSQL,
+		partitionSQL,
+	)
+	if !supported || compiled.Input != expectedInput {
+		return errors.New(
+			"compile ClickHouse stats sparkline: aggregate lowering is invalid",
+		)
+	}
+	windowSQL := compiled.SQL
+	if lowering.statsOptions.AllNumeric && statsUsesAllNumericPolicy(sparkline.Function) {
+		input, exists, inputErr := resolveCompiledField(sparkline.Input, lowering.state)
+		if inputErr != nil {
+			return inputErr
+		}
+		invalidAlias := lowering.allNumericInvalidInputFor(
+			lowering.fieldInputCacheKey(sparkline.Input.Name),
+			input,
+			exists,
+		)
+		if invalidAlias != "" {
+			windowSQL = "if(max(" + invalidAlias + ") OVER (PARTITION BY " +
+				partitionSQL + ") != 0, CAST(NULL AS Nullable(Float64)), " +
+				windowSQL + ")"
+		}
+	}
+	if _, duplicate := lowering.seen[measure.Output]; duplicate {
+		return fmt.Errorf(
+			"compile ClickHouse aggregate: output field %q is duplicated",
+			measure.Output,
+		)
+	}
+	lowering.seen[measure.Output] = struct{}{}
+	windowAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_sparkline_window_%d",
+		measureIndex,
+	))
+	lowering.next.preAggregateSparklineWindows = append(
+		lowering.next.preAggregateSparklineWindows,
+		windowSQL+" AS "+windowAlias,
+	)
+	recordsSQL, ok := statsSparklineBucketRecordsSQL(
+		bucket.alias,
+		windowAlias,
+		sparkline.MaximumPoints,
+	)
+	if !ok {
+		return errors.New(
+			"compile ClickHouse stats sparkline: bucket record lowering is invalid",
+		)
+	}
+	recordsAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_sparkline_records_%d",
+		measureIndex,
+	))
+	lowering.projection = append(lowering.projection, recordsSQL+" AS "+recordsAlias)
+	output := quoteIdentifier(measure.Output)
+	lowering.next.postAggregateSparklines = append(
+		lowering.next.postAggregateSparklines,
+		compiledStatsSparklineMeasure{
+			recordsColumn: recordsAlias,
+			outputColumn:  output,
+			spec:          bucket.spec,
+			missing:       missing,
+		},
+	)
+	lowering.next.visible[measure.Output] = fieldState{
+		valueSQL:       output,
+		existsSQL:      "1",
+		kind:           fieldKindStringArray,
+		maxStringBytes: MaximumStatsSparklineBytesPerCell,
+		statsSparkline: true,
+		stringOrBytes: sparkline.Function == plan.AggregateFunctionMinimum ||
+			sparkline.Function == plan.AggregateFunctionMaximum,
+	}
+	lowering.next.publicOrder = append(lowering.next.publicOrder, measure.Output)
+	if len(lowering.next.order) == 0 {
+		lowering.next.order = append(lowering.next.order, compiledSortKey{valueSQL: output})
+	}
+	return nil
+}
+
+func (lowering *aggregateMeasureLowering) measure(
+	measureIndex int,
+	measure plan.AggregateMeasure,
+	inputKey aggregateInputCacheKey,
+	output string,
+	measureState fieldState,
+	allNumericInvalidAlias string,
+) (fieldState, error) {
+	switch measure.Function {
+	case plan.AggregateFunctionCountRows,
+		plan.AggregateFunctionCountPredicate,
+		plan.AggregateFunctionCountValues:
+		return lowering.count(measure, output, measureState)
+	case plan.AggregateFunctionPercentile,
+		plan.AggregateFunctionExactPercentile,
+		plan.AggregateFunctionUpperPercentile,
+		plan.AggregateFunctionMedian,
+		plan.AggregateFunctionRate,
+		plan.AggregateFunctionSum,
+		plan.AggregateFunctionAverage,
+		plan.AggregateFunctionRange,
+		plan.AggregateFunctionSumSquares,
+		plan.AggregateFunctionStandardDeviationSample,
+		plan.AggregateFunctionStandardDeviationPopulation,
+		plan.AggregateFunctionVarianceSample,
+		plan.AggregateFunctionVariancePopulation:
+		return lowering.numeric(measure, output, measureState, allNumericInvalidAlias)
+	case plan.AggregateFunctionMinimum, plan.AggregateFunctionMaximum:
+		return lowering.extrema(measureIndex, measure, inputKey, output, measureState)
+	case plan.AggregateFunctionFirst, plan.AggregateFunctionLast,
+		plan.AggregateFunctionEarliest, plan.AggregateFunctionLatest,
+		plan.AggregateFunctionEarliestTime, plan.AggregateFunctionLatestTime:
+		return lowering.chronological(measure, inputKey, output, measureState)
+	case plan.AggregateFunctionEstimatedDistinctCount,
+		plan.AggregateFunctionEstimatedDistinctCountError,
+		plan.AggregateFunctionMode:
+		return lowering.distribution(measureIndex, measure, output, measureState)
+	case plan.AggregateFunctionDistinctCount, plan.AggregateFunctionValues:
+		return lowering.distinct(measure, inputKey, output, measureState)
+	case plan.AggregateFunctionList:
+		return lowering.list(measure, inputKey, output, measureState)
+	default:
+		return fieldState{}, fmt.Errorf(
+			"compile ClickHouse aggregate: unsupported function %d",
+			measure.Function,
+		)
+	}
+}
+
+func (lowering *aggregateMeasureLowering) count(
+	measure plan.AggregateMeasure,
+	output string,
+	measureState fieldState,
+) (fieldState, error) {
+	switch measure.Function {
+	case plan.AggregateFunctionCountRows:
+		lowering.projection = append(lowering.projection, "count() AS "+output)
+		measureState.numberType = "UInt64"
+	case plan.AggregateFunctionCountPredicate:
+		inputAlias, err := lowering.conditionalCountInputFor(measure.Predicate)
+		if err != nil {
+			return fieldState{}, err
+		}
+		lowering.projection = append(
+			lowering.projection,
+			"toUInt64(sum(toUInt128("+inputAlias+"))) AS "+output,
+		)
+		measureState.numberType = "UInt64"
+	case plan.AggregateFunctionCountValues:
+		inputAlias, err := lowering.countInputFor(measure.Input)
+		if err != nil {
+			return fieldState{}, err
+		}
+		lowering.projection = append(
+			lowering.projection,
+			"toUInt64(sum(toUInt128("+inputAlias+"))) AS "+output,
+		)
+		measureState.numberType = "UInt64"
+	}
+	return measureState, nil
+}
+
+func (lowering *aggregateMeasureLowering) numeric(
+	measure plan.AggregateMeasure,
+	output string,
+	measureState fieldState,
+	allNumericInvalidAlias string,
+) (fieldState, error) {
+	if measure.Function == plan.AggregateFunctionPercentile {
+		return lowering.percentile(measure, output, measureState, allNumericInvalidAlias)
+	}
+	inputAlias, err := lowering.numericMeasureInput(measure)
+	if err != nil {
+		return fieldState{}, err
+	}
+	switch measure.Function {
+	case plan.AggregateFunctionExactPercentile,
+		plan.AggregateFunctionUpperPercentile,
+		plan.AggregateFunctionMedian:
+		compiled, supported := statsDistributionArrayAggregateSQL(
+			measure.Function,
+			measure.Percentile,
+			inputAlias,
+		)
+		if !supported || compiled.Result != statsDistributionResultNullableFloat64 {
+			return fieldState{}, errors.New(
+				"compile ClickHouse aggregate: percentile distribution lowering is invalid",
+			)
+		}
+		lowering.projection = append(
+			lowering.projection,
+			statsAllNumericResultSQL(compiled.SQL, allNumericInvalidAlias)+" AS "+output,
+		)
+	case plan.AggregateFunctionRate:
+		timeField, timeExists := lowering.state.visible["_time"]
+		if !timeExists || timeField.kind != fieldKindTime || !timeField.canonicalTime {
+			return fieldState{}, errors.New(
+				"compile ClickHouse aggregate: rate has no canonical _time input",
+			)
+		}
+		lowering.projection = append(
+			lowering.projection,
+			statsAllNumericResultSQL(
+				statsRateAggregateSQL(
+					inputAlias,
+					lowering.chronologicalRowKeyFor(),
+					percentileInputSQL(timeField),
+				),
+				allNumericInvalidAlias,
+			)+" AS "+output,
+		)
+	default:
+		valueSQL, supported := statsNumericArrayAggregateSQL(measure.Function, inputAlias)
+		if !supported {
+			return fieldState{}, errors.New(
+				"compile ClickHouse aggregate: numeric array function is invalid",
+			)
+		}
+		lowering.projection = append(
+			lowering.projection,
+			statsAllNumericResultSQL(valueSQL, allNumericInvalidAlias)+" AS "+output,
+		)
+	}
+	measureState.numberType = "Float64"
+	return measureState, nil
+}
+
+func (lowering *aggregateMeasureLowering) numericMeasureInput(
+	measure plan.AggregateMeasure,
+) (string, error) {
+	if measure.InputExpression != nil {
+		return lowering.numericInputForExpression(measure.InputExpression)
+	}
+	return lowering.numericInputFor(measure.Input)
+}
+
+func (lowering *aggregateMeasureLowering) percentile(
+	measure plan.AggregateMeasure,
+	output string,
+	measureState fieldState,
+	allNumericInvalidAlias string,
+) (fieldState, error) {
+	if measure.InputExpression != nil {
+		inputAlias, err := lowering.numericInputForExpression(measure.InputExpression)
+		if err != nil {
+			return fieldState{}, err
+		}
+		lowering.projection = append(
+			lowering.projection,
+			statsAllNumericResultSQL(
+				singlePercentileArrayAggregateSQL(measure.Percentile, inputAlias),
+				allNumericInvalidAlias,
+			)+" AS "+output,
+		)
+		measureState.numberType = "Float64"
+		return measureState, nil
+	}
+	percentiles, cached := lowering.percentileStates[measure.Input.Name]
+	if !cached {
+		inputAlias, inputIsArray, err := lowering.percentileInputFor(measure.Input)
+		if err != nil {
+			return fieldState{}, err
+		}
+		levels := lowering.percentileLevels[measure.Input.Name]
+		if len(levels) == 0 {
+			return fieldState{}, errors.New(
+				"compile ClickHouse aggregate: percentile input has no valid levels",
+			)
+		}
+		levelSQL := make([]string, 0, len(levels))
+		positions := make(map[uint8]int, len(levels))
+		for index, level := range levels {
+			levelSQL = append(levelSQL, statsPercentileLevelSQL(level))
+			positions[level] = index + 1
+		}
+		percentiles = aggregatePercentileState{
+			column: quoteIdentifier(fmt.Sprintf(
+				"__os_stats_percentiles_%d",
+				len(lowering.percentileStates),
+			)),
+			positions: positions,
+		}
+		lowering.percentileStates[measure.Input.Name] = percentiles
+		aggregateFunction := "quantilesGKOrNull"
+		if inputIsArray {
+			aggregateFunction += "Array"
+		}
+		lowering.projection = append(
+			lowering.projection,
+			aggregateFunction+"(100, "+strings.Join(levelSQL, ", ")+")("+
+				inputAlias+") AS "+percentiles.column,
+		)
+	}
+	position, ok := percentiles.positions[measure.Percentile]
+	if !ok {
+		return fieldState{}, errors.New(
+			"compile ClickHouse aggregate: percentile level was not collected",
+		)
+	}
+	lowering.projection = append(
+		lowering.projection,
+		statsAllNumericResultSQL(
+			"arrayElementOrNull("+percentiles.column+", "+strconv.Itoa(position)+")",
+			allNumericInvalidAlias,
+		)+" AS "+output,
+	)
+	measureState.numberType = "Float64"
+	return measureState, nil
+}
+
+func (lowering *aggregateMeasureLowering) extrema(
+	measureIndex int,
+	measure plan.AggregateMeasure,
+	inputKey aggregateInputCacheKey,
+	output string,
+	measureState fieldState,
+) (fieldState, error) {
+	input, ok, err := lowering.resolveMeasureInput(measure)
+	if err != nil {
+		return fieldState{}, err
+	}
+	if eligible, eligibleArgs, fixed := fixedExtremaEligibilitySQL(input); ok && fixed {
+		function := "minIfOrNull"
+		if measure.Function == plan.AggregateFunctionMaximum {
+			function = "maxIfOrNull"
+		}
+		lowering.projection = append(
+			lowering.projection,
+			function+"("+input.valueSQL+", "+eligible+") AS "+output,
+		)
+		lowering.args = append(lowering.args, eligibleArgs...)
+		measureState.kind = input.kind
+		measureState.numberType = input.numberType
+		measureState.caseSensitive = input.caseSensitive
+		return measureState, nil
+	}
+	if ok && input.kind == fieldKindString {
+		return lowering.scalarExtrema(measureIndex, measure, inputKey, output, input)
+	}
+	return lowering.dynamicExtrema(measureIndex, measure, inputKey, output, input, ok)
+}
+
+func (lowering *aggregateMeasureLowering) scalarExtrema(
+	measureIndex int,
+	measure plan.AggregateMeasure,
+	inputKey aggregateInputCacheKey,
+	output string,
+	input fieldState,
+) (fieldState, error) {
+	scalarInput := lowering.scalarStringInputFor(inputKey, input)
+	if !scalarInput.extremaReady {
+		scalarInput.numberAlias = quoteIdentifier(fmt.Sprintf(
+			"__os_measure_extrema_number_%d",
+			scalarInput.ordinal,
+		))
+		scalarInput.candidateAlias = quoteIdentifier(fmt.Sprintf(
+			"__os_measure_extrema_scalar_%d",
+			scalarInput.ordinal,
+		))
+		lowering.next.preAggregateColumns = append(
+			lowering.next.preAggregateColumns,
+			statsExtremaScalarNumberSQL(scalarInput.valueAlias)+" AS "+scalarInput.numberAlias,
+			statsExtremaScalarCandidateSQL(
+				scalarInput.valueAlias,
+				scalarInput.numberAlias,
+				scalarInput.rawBytesSQL,
+			)+" AS "+scalarInput.candidateAlias,
+		)
+		scalarInput.extremaReady = true
+	}
+	resultKey := aggregateExtremaResultKey{
+		input:    inputKey,
+		function: measure.Function,
+	}
+	result, cached := lowering.scalarExtremaResults[resultKey]
+	if !cached {
+		result = aggregateExtremaResult{
+			winnerAlias: quoteIdentifier(fmt.Sprintf(
+				"__os_stats_extrema_winner_%d",
+				measureIndex,
+			)),
+			typeAlias: quoteIdentifier(fmt.Sprintf(
+				"__os_stats_extrema_type_%d",
+				measureIndex,
+			)),
+		}
+		lowering.scalarExtremaResults[resultKey] = result
+		lowering.projection = append(
+			lowering.projection,
+			statsExtremaScalarAggregateWinnerSQL(
+				measure.Function,
+				scalarInput.candidateAlias,
+			)+" AS "+result.winnerAlias,
+		)
+		lowering.next.privateColumns = append(
+			lowering.next.privateColumns,
+			result.typeAlias,
+		)
+	}
+	lowering.next.postAggregateScalarExtrema = append(
+		lowering.next.postAggregateScalarExtrema,
+		compiledScalarExtremaMeasure{
+			winnerColumn: result.winnerAlias,
+			typeColumn:   result.typeAlias,
+			outputColumn: output,
+		},
+	)
+	return fieldState{
+		valueSQL:       output,
+		dynamicTypeSQL: "dynamicType(" + output + ")",
+		storedTypeSQL:  result.typeAlias,
+		existsSQL:      "1",
+		kind:           fieldKindDynamic,
+	}, nil
+}
+
+func (lowering *aggregateMeasureLowering) dynamicExtrema(
+	measureIndex int,
+	measure plan.AggregateMeasure,
+	inputKey aggregateInputCacheKey,
+	output string,
+	input fieldState,
+	inputExists bool,
+) (fieldState, error) {
+	candidates, cached := lowering.extremaInputs[inputKey]
+	if !cached {
+		candidates = quoteIdentifier(fmt.Sprintf(
+			"__os_measure_extrema_%d",
+			len(lowering.extremaInputs),
+		))
+		lowering.extremaInputs[inputKey] = candidates
+		var candidateSQL string
+		var candidateArgs []any
+		if inputExists && input.kind == fieldKindDynamic {
+			candidateSQL, candidateArgs = statsExtremaDynamicCandidatesSQL(input)
+		} else {
+			stringInputSQL, err := lowering.stringMeasureInput(measure)
+			if err != nil {
+				return fieldState{}, err
+			}
+			candidateSQL = statsExtremaCandidatesSQL(stringInputSQL)
+		}
+		lowering.next.preAggregateColumns = append(
+			lowering.next.preAggregateColumns,
+			candidateSQL+" AS "+candidates,
+		)
+		lowering.next.preAggregateArgs = append(
+			lowering.next.preAggregateArgs,
+			candidateArgs...,
+		)
+	}
+	resultKey := aggregateExtremaResultKey{
+		input:    inputKey,
+		function: measure.Function,
+	}
+	result, cached := lowering.dynamicExtremaResults[resultKey]
+	if !cached {
+		result = aggregateExtremaResult{
+			winnerAlias: quoteIdentifier(fmt.Sprintf(
+				"__os_stats_extrema_winner_%d",
+				measureIndex,
+			)),
+			typeAlias: quoteIdentifier(fmt.Sprintf(
+				"__os_stats_extrema_type_%d",
+				measureIndex,
+			)),
+		}
+		lowering.dynamicExtremaResults[resultKey] = result
+		lowering.projection = append(
+			lowering.projection,
+			statsExtremaAggregateSQL(measure.Function, candidates)+
+				" AS "+result.winnerAlias,
+			statsExtremaStoredTypeSQL(result.winnerAlias)+
+				" AS "+result.typeAlias,
+		)
+		lowering.next.privateColumns = append(lowering.next.privateColumns, result.typeAlias)
+	}
+	lowering.projection = append(lowering.projection, result.winnerAlias+" AS "+output)
+	return fieldState{
+		valueSQL:       output,
+		dynamicTypeSQL: "dynamicType(" + output + ")",
+		storedTypeSQL:  result.typeAlias,
+		existsSQL:      "1",
+		kind:           fieldKindDynamic,
+	}, nil
+}
+
+func (lowering *aggregateMeasureLowering) resolveMeasureInput(
+	measure plan.AggregateMeasure,
+) (fieldState, bool, error) {
+	if measure.InputExpression != nil {
+		cached, err := lowering.aggregateExpressionInputFor(measure.InputExpression)
+		if err != nil {
+			return fieldState{}, false, err
+		}
+		return cached.field, !cached.field.alwaysNull, nil
+	}
+	return resolveCompiledField(measure.Input, lowering.state)
+}
+
+func (lowering *aggregateMeasureLowering) stringMeasureInput(
+	measure plan.AggregateMeasure,
+) (string, error) {
+	if measure.InputExpression != nil {
+		return lowering.stringInputForExpression(measure.InputExpression)
+	}
+	return lowering.stringInputFor(measure.Input)
+}
+
+func (lowering *aggregateMeasureLowering) chronological(
+	measure plan.AggregateMeasure,
+	inputKey aggregateInputCacheKey,
+	output string,
+	measureState fieldState,
+) (fieldState, error) {
+	input, err := lowering.chronologicalMeasureInput(measure)
+	if err != nil {
+		return fieldState{}, err
+	}
+	if measure.Function == plan.AggregateFunctionEarliestTime ||
+		measure.Function == plan.AggregateFunctionLatestTime {
+		timeField, timeExists := lowering.state.visible["_time"]
+		if !timeExists || timeField.kind != fieldKindTime || !timeField.canonicalTime {
+			return fieldState{}, errors.New(
+				"compile ClickHouse aggregate: occurrence time has no canonical _time input",
+			)
+		}
+		valueSQL, valueErr := statsOccurrenceTimeAggregateSQL(
+			measure.Function,
+			input.candidatesAlias,
+			lowering.chronologicalRowKeyFor(),
+			percentileInputSQL(timeField),
+		)
+		if valueErr != nil {
+			return fieldState{}, valueErr
+		}
+		lowering.projection = append(lowering.projection, valueSQL+" AS "+output)
+		measureState.numberType = "Float64"
+		return measureState, nil
+	}
+	rowKey := lowering.chronologicalRowKeyFor()
+	if measure.Function == plan.AggregateFunctionFirst ||
+		measure.Function == plan.AggregateFunctionLast {
+		rowKey, _, err = lowering.listRowOrdinalFor()
+		if err != nil {
+			return fieldState{}, err
+		}
+	}
+	resultKey := aggregateChronologicalResultKey{
+		input:    inputKey,
+		function: measure.Function,
+	}
+	result, cached := lowering.chronologicalResults[resultKey]
+	if !cached {
+		ordinal := len(lowering.chronologicalResults)
+		result = aggregateChronologicalResult{
+			winnerAlias: quoteIdentifier(fmt.Sprintf(
+				"__os_chronological_winner_%d",
+				ordinal,
+			)),
+			typeAlias: quoteIdentifier(fmt.Sprintf(
+				"__os_chronological_type_%d",
+				ordinal,
+			)),
+		}
+		lowering.chronologicalResults[resultKey] = result
+		aggregateSQL, aggregateErr := chronologicalAggregateSQL(
+			measure.Function,
+			input.candidatesAlias,
+			rowKey,
+			input.multiple,
+		)
+		if aggregateErr != nil {
+			return fieldState{}, aggregateErr
+		}
+		lowering.projection = append(
+			lowering.projection,
+			aggregateSQL+" AS "+result.winnerAlias,
+		)
+		lowering.next.privateColumns = append(lowering.next.privateColumns, result.typeAlias)
+	}
+	lowering.next.postAggregateChronological = append(
+		lowering.next.postAggregateChronological,
+		compiledChronologicalMeasure{
+			winnerColumn:     result.winnerAlias,
+			validationColumn: input.validationAlias,
+			typeColumn:       result.typeAlias,
+			outputColumn:     output,
+		},
+	)
+	return fieldState{
+		valueSQL:       output,
+		dynamicTypeSQL: "dynamicType(" + output + ")",
+		storedTypeSQL:  result.typeAlias,
+		existsSQL:      "1",
+		kind:           fieldKindDynamic,
+	}, nil
+}
+
+func (lowering *aggregateMeasureLowering) chronologicalMeasureInput(
+	measure plan.AggregateMeasure,
+) (aggregateChronologicalInput, error) {
+	if measure.InputExpression != nil {
+		return lowering.chronologicalInputForExpression(measure.InputExpression)
+	}
+	return lowering.chronologicalInputFor(measure.Input)
+}
+
+func (lowering *aggregateMeasureLowering) distribution(
+	measureIndex int,
+	measure plan.AggregateMeasure,
+	output string,
+	measureState fieldState,
+) (fieldState, error) {
+	inputSQL, err := lowering.stringMeasureInput(measure)
+	if err != nil {
+		return fieldState{}, err
+	}
+	modeInput, modeInputKnown, err := lowering.resolveMeasureInput(measure)
+	if err != nil {
+		return fieldState{}, err
+	}
+	compiled, supported := statsDistributionArrayAggregateSQL(
+		measure.Function,
+		measure.Percentile,
+		inputSQL,
+	)
+	if !supported {
+		return fieldState{}, errors.New(
+			"compile ClickHouse aggregate: string distribution lowering is invalid",
+		)
+	}
+	modeSemanticBytesSQL := ""
+	if measure.Function == plan.AggregateFunctionMode && modeInputKnown &&
+		modeInput.stringOrBytes &&
+		(modeInput.kind == fieldKindString || modeInput.kind == fieldKindStringArray) {
+		if modeInput.semanticBytesSQL == "" && modeInput.kind == fieldKindString {
+			return fieldState{}, errors.New(
+				"compile ClickHouse aggregate: mode String-or-Bytes input lacks semantic Bytes provenance",
+			)
+		}
+		modeValuesInput := quoteIdentifier(fmt.Sprintf(
+			"__os_measure_mode_values_%d",
+			measureIndex,
+		))
+		modeSemanticInput := quoteIdentifier(fmt.Sprintf(
+			"__os_measure_semantic_bytes_%d",
+			measureIndex,
+		))
+		modeExistsSQL := modeInput.existsSQL
+		if modeExistsSQL == "" {
+			modeExistsSQL = "1"
+		}
+		modeValuesSQL := "if(" + modeExistsSQL + " AND isNotNull(" +
+			modeInput.valueSQL + "), [assumeNotNull(" + modeInput.valueSQL +
+			")], CAST([], 'Array(String)'))"
+		modeSemanticSQL := "if(" + modeExistsSQL + " AND isNotNull(" +
+			modeInput.valueSQL + "), [toUInt8(ifNull(" +
+			modeInput.semanticBytesSQL + ", 0))], CAST([], 'Array(UInt8)'))"
+		if modeInput.kind == fieldKindStringArray {
+			modeValuesSQL = "if(" + modeExistsSQL + ", " +
+				modeInput.valueSQL + ", CAST([], 'Array(String)'))"
+			modeSemanticSQL = "arrayMap(value -> toUInt8(NOT isValidUTF8(value)), " +
+				modeValuesSQL + ")"
+		}
+		lowering.next.preAggregateColumns = append(
+			lowering.next.preAggregateColumns,
+			modeValuesSQL+" AS "+modeValuesInput,
+			modeSemanticSQL+" AS "+modeSemanticInput,
+		)
+		lowering.next.preAggregateArgs = append(
+			lowering.next.preAggregateArgs,
+			modeInput.existsArgs...,
+		)
+		lowering.next.preAggregateArgs = append(
+			lowering.next.preAggregateArgs,
+			modeInput.existsArgs...,
+		)
+		modeLowering := statsExactModeWithSemanticBytesSQL(
+			modeValuesInput,
+			modeSemanticInput,
+		)
+		compiled.SQL = modeLowering.ValueSQL
+		modeSemanticOutput := quoteIdentifier(fmt.Sprintf(
+			"__os_mode_semantic_bytes_%d",
+			measureIndex,
+		))
+		lowering.projection = append(
+			lowering.projection,
+			modeLowering.SemanticBytesSQL+" AS "+modeSemanticOutput,
+		)
+		lowering.next.privateColumns = append(
+			lowering.next.privateColumns,
+			modeSemanticOutput,
+		)
+		modeSemanticBytesSQL = modeSemanticOutput
+	}
+	lowering.projection = append(lowering.projection, compiled.SQL+" AS "+output)
+	switch compiled.Result {
+	case statsDistributionResultUInt64:
+		measureState.numberType = "UInt64"
+	case statsDistributionResultFloat64:
+		measureState.numberType = "Float64"
+	case statsDistributionResultNullableString:
+		measureState.kind = fieldKindString
+		measureState.numberType = ""
+		measureState.existsSQL = "isNotNull(" + output + ")"
+		if measure.Function == plan.AggregateFunctionMode {
+			measureState.stringOrBytes = true
+			measureState.stringOrBytesNullable = true
+			measureState.semanticBytesByUTF8Validity = modeSemanticBytesSQL == ""
+			measureState.semanticBytesSQL = modeSemanticBytesSQL
+			if measureState.semanticBytesSQL == "" {
+				measureState.semanticBytesSQL = "toUInt8(isNotNull(" + output +
+					") AND NOT isValidUTF8(assumeNotNull(" + output + ")))"
+			}
+			measureState.textEligibleSQL = "(ifNull(" +
+				measureState.semanticBytesSQL + ", 0) = 0 AND isNotNull(" +
+				output + ") AND isValidUTF8(assumeNotNull(" + output + ")))"
+			measureState.textEligibleBySemanticBytes = true
+		}
+		if measure.InputExpression != nil || modeInputKnown {
+			measureState.maxStringBytes = fieldStateStringByteBound(modeInput)
+		}
+	default:
+		return fieldState{}, errors.New(
+			"compile ClickHouse aggregate: distribution result kind is invalid",
+		)
+	}
+	return measureState, nil
+}
+
+func (lowering *aggregateMeasureLowering) distinct(
+	measure plan.AggregateMeasure,
+	inputKey aggregateInputCacheKey,
+	output string,
+	measureState fieldState,
+) (fieldState, error) {
+	inputSQL, err := lowering.stringMeasureInput(measure)
+	if err != nil {
+		return fieldState{}, err
+	}
+	_, publishesValues := lowering.valuesInputs[inputKey]
+	if measure.Function == plan.AggregateFunctionDistinctCount && !publishesValues {
+		cardinalityColumn, cached := lowering.distinctCounts[inputKey]
+		if !cached {
+			cardinalityColumn = quoteIdentifier(fmt.Sprintf(
+				"__os_dc_cardinality_%d",
+				len(lowering.distinctCounts),
+			))
+			lowering.distinctCounts[inputKey] = cardinalityColumn
+			lowering.projection = append(
+				lowering.projection,
+				distinctCountCardinalitySQL(inputSQL)+" AS "+cardinalityColumn,
+			)
+		}
+		lowering.next.postAggregateDistinctCounts = append(
+			lowering.next.postAggregateDistinctCounts,
+			compiledDistinctCount{
+				cardinalityColumn: cardinalityColumn,
+				outputColumn:      output,
+			},
+		)
+		measureState.numberType = "UInt64"
+		return measureState, nil
+	}
+	setColumn, cached := lowering.exactStringSets[inputKey]
+	if !cached {
+		setColumn = quoteIdentifier(fmt.Sprintf(
+			"__os_exact_strings_%d",
+			len(lowering.exactStringSets),
+		))
+		lowering.exactStringSets[inputKey] = setColumn
+		lowering.projection = append(
+			lowering.projection,
+			exactDistinctStringSetSQL(inputSQL, uint64(MaximumStatsValuesPerGroup))+
+				" AS "+setColumn,
+		)
+	}
+	lowering.next.postAggregateExactStrings = append(
+		lowering.next.postAggregateExactStrings,
+		compiledExactStringMeasure{
+			setColumn:    setColumn,
+			outputColumn: output,
+			function:     measure.Function,
+		},
+	)
+	if measure.Function == plan.AggregateFunctionDistinctCount {
+		measureState.numberType = "UInt64"
+	} else {
+		measureState.kind = fieldKindStringArray
+		measureState.mvSortedLexicographic = true
+		measureState.stringOrBytes = true
+		measureState.existsSQL = "notEmpty(" + output + ")"
+	}
+	return measureState, nil
+}
+
+func (lowering *aggregateMeasureLowering) list(
+	measure plan.AggregateMeasure,
+	inputKey aggregateInputCacheKey,
+	output string,
+	measureState fieldState,
+) (fieldState, error) {
+	_, inputExists, err := lowering.resolveMeasureInput(measure)
+	if err != nil {
+		return fieldState{}, err
+	}
+	if !inputExists {
+		lowering.projection = append(
+			lowering.projection,
+			"groupArrayArray(1)(CAST([], 'Array(String)')) AS "+output,
+		)
+		measureState.kind = fieldKindStringArray
+		measureState.stringOrBytes = true
+		measureState.existsSQL = "notEmpty(" + output + ")"
+		return measureState, nil
+	}
+	inputSQL, err := lowering.stringMeasureInput(measure)
+	if err != nil {
+		return fieldState{}, err
+	}
+	rowOrdinal, windowOrder, err := lowering.listRowOrdinalFor()
+	if err != nil {
+		return fieldState{}, err
+	}
+	list, cached := lowering.orderedStringLists[inputKey]
+	if !cached {
+		ordinal := len(lowering.orderedStringLists)
+		priorElements := quoteIdentifier(fmt.Sprintf(
+			"__os_list_prior_elements_%d",
+			ordinal,
+		))
+		priorBytes := quoteIdentifier(fmt.Sprintf(
+			"__os_list_prior_bytes_%d",
+			ordinal,
+		))
+		frame := " OVER (" + windowOrder +
+			" ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)"
+		lowering.next.preAggregateListWindowColumns = append(
+			lowering.next.preAggregateListWindowColumns,
+			"ifNull(sum(toUInt128(length("+inputSQL+")))"+frame+
+				", toUInt128(0)) AS "+priorElements,
+			"ifNull(sum("+stringArrayPayloadBytesSQL(inputSQL)+")"+frame+
+				", toUInt128(0)) AS "+priorBytes,
+		)
+		rowState := quoteIdentifier(fmt.Sprintf(
+			"__os_list_row_state_%d",
+			ordinal,
+		))
+		lowering.next.preAggregateListCandidateColumns = append(
+			lowering.next.preAggregateListCandidateColumns,
+			boundedOrderedStringRowStateSQL(
+				rowOrdinal,
+				inputSQL,
+				priorElements,
+				priorBytes,
+			)+" AS "+rowState,
+		)
+		list.listColumn = quoteIdentifier(fmt.Sprintf(
+			"__os_ordered_strings_%d",
+			ordinal,
+		))
+		list.overflowColumn = quoteIdentifier(fmt.Sprintf(
+			"__os_ordered_strings_bytes_overflow_%d",
+			ordinal,
+		))
+		lowering.orderedStringLists[inputKey] = list
+		lowering.projection = append(
+			lowering.projection,
+			boundedOrderedStringListSQL("tupleElement("+rowState+", 1)")+
+				" AS "+list.listColumn,
+			"max(tupleElement("+rowState+", 2)) AS "+list.overflowColumn,
+		)
+	}
+	lowering.next.postAggregateOrderedStrings = append(
+		lowering.next.postAggregateOrderedStrings,
+		compiledOrderedStringMeasure{
+			listColumn:     list.listColumn,
+			overflowColumn: list.overflowColumn,
+			outputColumn:   output,
+		},
+	)
+	measureState.kind = fieldKindStringArray
+	measureState.stringOrBytes = true
+	measureState.existsSQL = "notEmpty(" + output + ")"
+	return measureState, nil
 }
 
 func resolveCountValueInput(
