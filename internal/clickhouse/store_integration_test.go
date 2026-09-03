@@ -410,6 +410,53 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 			indexTime,
 		)
 	})
+	t.Run("twenty five logical batches become one ten thousand row insert", func(t *testing.T) {
+		before := store.HECReconciliationTelemetry()
+		const (
+			batchCount = 25
+			batchRows  = 400
+		)
+		for batchIndex := range batchCount {
+			batchID := fmt.Sprintf("coalesced-batch-%02d", batchIndex)
+			batch := distinctStoreBatch(batchID, uint64(batchIndex+10_000))
+			batch.OriginalEventCount = batchRows
+			batch.Events = make([]*ingest.StoredEvent, 0, batchRows)
+			for rowIndex := range batchRows {
+				eventID := fmt.Sprintf("coalesced-event-%02d-%03d", batchIndex, rowIndex)
+				event := testStoredEvent(eventID, "main", batch.ReceivedAt)
+				event.BatchID = batchID
+				batch.Events = append(batch.Events, event)
+			}
+			if result, stageErr := store.Stage(ctx, batch); stageErr != nil ||
+				result.State != ingest.StoredBatchPending {
+				t.Fatalf("Stage batch %d = %+v error=%v", batchIndex, result, stageErr)
+			}
+		}
+		if err := store.ReconcilePending(ctx); err != nil {
+			t.Fatalf("ReconcilePending coalesced batches: %v", err)
+		}
+		after := store.HECReconciliationTelemetry()
+		if after.FormedGroups-before.FormedGroups != 1 ||
+			after.PhysicalSends-before.PhysicalSends != 1 ||
+			after.SuccessfulGroups-before.SuccessfulGroups != 1 ||
+			after.GroupMemberBatches-before.GroupMemberBatches != batchCount ||
+			after.GroupRows-before.GroupRows != batchCount*batchRows {
+			t.Fatalf("coalesced physical telemetry before=%+v after=%+v", before, after)
+		}
+		var rows, distinct uint64
+		if err := store.connection.queryRow(
+			ctx,
+			`SELECT count(), uniqExact(event_id)
+			 FROM open_splunk.events
+			 WHERE startsWith(event_id, 'coalesced-event-')`,
+			nil,
+		).Scan(&rows, &distinct); err != nil {
+			t.Fatalf("query coalesced physical rows: %v", err)
+		}
+		if rows != batchCount*batchRows || distinct != rows {
+			t.Fatalf("coalesced rows=%d distinct=%d, want %d exact", rows, distinct, batchCount*batchRows)
+		}
+	})
 }
 
 func storeIntegrationLifecycleContext(
@@ -1264,6 +1311,7 @@ func testAmbiguousCommittedInsertRecovery(
 	).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("post-recovery row count = %d, error = %v, want 1", count, err)
 	}
+
 }
 
 type commitThenErrorStoreConnection struct {

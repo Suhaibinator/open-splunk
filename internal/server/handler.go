@@ -219,6 +219,14 @@ type RuntimeReadiness interface {
 // HECOperationalSnapshot is the fixed-shape, administrator-only HEC
 // projection. It deliberately has no string, byte, map, or slice fields which
 // could carry token, channel, index, request, or event identity.
+type HECFixedHistogramSnapshot struct {
+	UpperBounds  [13]uint64
+	BucketCounts [14]uint64
+	Count        uint64
+	Sum          uint64
+	Max          uint64
+}
+
 type HECOperationalSnapshot struct {
 	ObservedAt                time.Time
 	Requests                  uint64
@@ -233,6 +241,11 @@ type HECOperationalSnapshot struct {
 	StagingDuration           time.Duration
 	PendingOutboxReservations uint64
 	PendingOutboxBytes        uint64
+	PendingMetadataBytes      uint64
+	PendingUngrouped          uint64
+	ReadyWriteGroups          uint64
+	AmbiguousWriteGroups      uint64
+	LiveWriteGroupLeases      uint64
 	OldestPendingOutboxAge    time.Duration
 	RequestCapacityAvailable  bool
 	RetainedRequests          uint64
@@ -241,6 +254,35 @@ type HECOperationalSnapshot struct {
 	ReconciliationSuccesses   uint64
 	ReconciliationRetries     uint64
 	ReconciliationAmbiguities uint64
+	StagedLogicalBatches      uint64
+	StagedLogicalRows         uint64
+	FormedWriteGroups         uint64
+	PhysicalInsertSends       uint64
+	SuccessfulWriteGroups     uint64
+	WriteGroupMemberBatches   uint64
+	WriteGroupRows            uint64
+	WriteGroupDecodedBytes    uint64
+	WriteGroupMonthlyParts    uint64
+	MemberBatchesPerGroup     HECFixedHistogramSnapshot
+	RowsPerGroup              HECFixedHistogramSnapshot
+	DecodedBytesPerGroup      HECFixedHistogramSnapshot
+	MonthlyPartitionsPerGroup HECFixedHistogramSnapshot
+	RowsPerPhysicalInsert     HECFixedHistogramSnapshot
+	FillRowTarget             uint64
+	FillByteTarget            uint64
+	FillHardBoundary          uint64
+	FillLinger                uint64
+	FillDrain                 uint64
+	FillRecovery              uint64
+	NativeWaiters             uint64
+	PeakNativeWaiters         uint64
+	NativeWaiterWakeups       uint64
+	NativeWaiterCancellations uint64
+	NativeTerminalLookups     uint64
+	SealLatencyBuckets        [8]uint64
+	SendLatencyBuckets        [8]uint64
+	CommitLatencyBuckets      [8]uint64
+	LatencyUpperBoundsMicros  [7]uint64
 	ActiveChannels            uint64
 	RetainedChannels          uint64
 	PendingAcknowledgments    uint64

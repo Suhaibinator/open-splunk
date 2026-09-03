@@ -118,7 +118,7 @@ func TestIndexDataDeletionRuntimeRejectsWakeAfterCloseBegins(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		releaseWorker()
-		if closeErr := runtime.Close(context.Background()); closeErr != nil {
+		if closeErr := runtime.Close(context.Background()); !errors.Is(closeErr, context.Canceled) {
 			t.Errorf("Close(): %v", closeErr)
 		}
 	})
@@ -147,8 +147,8 @@ func TestIndexDataDeletionRuntimeRejectsWakeAfterCloseBegins(t *testing.T) {
 	}
 
 	releaseWorker()
-	if closeErr := runtime.Close(context.Background()); closeErr != nil {
-		t.Fatalf("Close(after release): %v", closeErr)
+	if closeErr := runtime.Close(context.Background()); !errors.Is(closeErr, context.Canceled) {
+		t.Fatalf("Close(after release) = %v, want persisted cancellation", closeErr)
 	}
 	runtime.Wake()
 	var nilRuntime *indexDataDeletionRuntime
@@ -156,8 +156,8 @@ func TestIndexDataDeletionRuntimeRejectsWakeAfterCloseBegins(t *testing.T) {
 	if got := scanCalls.Load(); got != 1 {
 		t.Fatalf("scan calls after close = %d, want 1", got)
 	}
-	if got := store.closeCalls.Load(); got != 1 {
-		t.Fatalf("Store.Close calls = %d, want exactly 1", got)
+	if got := store.closeCalls.Load(); got != 0 {
+		t.Fatalf("Store.CloseContext calls = %d, want 0 after failed worker join", got)
 	}
 }
 
@@ -299,7 +299,7 @@ func TestIndexDataDeletionRuntimeClosesCoordinatorBeforeStore(t *testing.T) {
 	}
 }
 
-func TestIndexDataDeletionRuntimeCloseTimeoutLeavesStoreOpenUntilWorkerJoins(
+func TestIndexDataDeletionRuntimeCloseTimeoutLeavesStoreOpen(
 	t *testing.T,
 ) {
 	started := make(chan struct{})
@@ -344,11 +344,11 @@ func TestIndexDataDeletionRuntimeCloseTimeoutLeavesStoreOpenUntilWorkerJoins(
 	}
 
 	close(release)
-	if closeErr := runtime.Close(context.Background()); !errors.Is(closeErr, storeErr) {
-		t.Fatalf("second Close() error = %v, want persisted store failure", closeErr)
+	if closeErr := runtime.Close(context.Background()); !errors.Is(closeErr, context.Canceled) {
+		t.Fatalf("second Close() error = %v, want persisted cancellation", closeErr)
 	}
-	if got := store.closeCalls.Load(); got != 1 {
-		t.Fatalf("Store.Close calls = %d after second close, want 1", got)
+	if got := store.closeCalls.Load(); got != 0 {
+		t.Fatalf("Store.CloseContext calls = %d after failed worker join, want 0", got)
 	}
 }
 
@@ -461,7 +461,7 @@ func TestIndexDataDeletionRuntimeCloseDeadlineBoundsBlockingStoreClose(
 	}
 }
 
-func TestFinalizeIndexDataDeletionRuntimeRetainsDependenciesUntilJoined(
+func TestFinalizeIndexDataDeletionRuntimeReturnsAtDeadlineWhenWorkerDoesNotJoin(
 	t *testing.T,
 ) {
 	var mutex sync.Mutex
@@ -474,6 +474,7 @@ func TestFinalizeIndexDataDeletionRuntimeRetainsDependenciesUntilJoined(
 	workerStarted := make(chan struct{})
 	workerCanceled := make(chan struct{})
 	releaseWorker := make(chan struct{})
+	workerExited := make(chan struct{})
 	controlPlane := &runtimeDeletionControl{
 		next: func(ctx context.Context) (control.IndexDeletionOperation, error) {
 			close(workerStarted)
@@ -481,6 +482,7 @@ func TestFinalizeIndexDataDeletionRuntimeRetainsDependenciesUntilJoined(
 			close(workerCanceled)
 			<-releaseWorker
 			record("coordinator")
+			close(workerExited)
 			return control.IndexDeletionOperation{}, control.ErrNotFound
 		},
 	}
@@ -523,45 +525,30 @@ func TestFinalizeIndexDataDeletionRuntimeRetainsDependenciesUntilJoined(
 	}
 	select {
 	case closeErr := <-finalizeDone:
-		t.Fatalf(
-			"finalizer returned before coordinator joined: %v",
-			closeErr,
-		)
-	case <-time.After(50 * time.Millisecond):
+		if !errors.Is(closeErr, context.DeadlineExceeded) {
+			t.Fatalf("finalizer error = %v, want deadline", closeErr)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("finalizer exceeded its shutdown deadline")
 	}
 	mutex.Lock()
 	earlyEvents := append([]string(nil), events...)
 	mutex.Unlock()
-	if len(earlyEvents) != 0 {
+	if len(earlyEvents) != 2 || earlyEvents[0] != "sequencer" || earlyEvents[1] != "control" {
 		t.Fatalf(
-			"dependency close events before join = %v, want none",
+			"dependency close events at deadline = %v, want [sequencer control]",
 			earlyEvents,
 		)
 	}
 
 	close(releaseWorker)
 	select {
-	case closeErr := <-finalizeDone:
-		if !errors.Is(closeErr, context.DeadlineExceeded) {
-			t.Fatalf(
-				"finalizer error = %v, want initial deadline",
-				closeErr,
-			)
-		}
+	case <-workerExited:
 	case <-time.After(time.Second):
-		t.Fatal("finalizer did not finish after coordinator was released")
+		t.Fatal("coordinator worker did not exit after release")
 	}
-
-	mutex.Lock()
-	defer mutex.Unlock()
-	want := []string{"coordinator", "store", "sequencer", "control"}
-	if len(events) != len(want) {
-		t.Fatalf("close events = %v, want %v", events, want)
-	}
-	for i := range want {
-		if events[i] != want[i] {
-			t.Fatalf("close events = %v, want %v", events, want)
-		}
+	if got := store.closeCalls.Load(); got != 0 {
+		t.Fatalf("Store.CloseContext calls = %d, want 0 after failed worker join", got)
 	}
 }
 
@@ -635,7 +622,7 @@ func (store *runtimeDeletionStore) WithWritesFrozen(
 	return errors.New("unexpected WithWritesFrozen call")
 }
 
-func (store *runtimeDeletionStore) Close() error {
+func (store *runtimeDeletionStore) CloseContext(context.Context) error {
 	store.closeCalls.Add(1)
 	if store.close != nil {
 		return store.close()

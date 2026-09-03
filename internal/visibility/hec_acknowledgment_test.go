@@ -91,6 +91,37 @@ func TestKeyedHECAcknowledgmentIDSourceIsExactAndConstantSpace(t *testing.T) {
 	}
 }
 
+func TestPendingHECQueueAvailabilityEnforcesEveryDurableCapacity(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		usage PendingUsage
+		want  bool
+	}{
+		{name: "empty", want: true},
+		{name: "reservation limit", usage: PendingUsage{Reservations: MaxPendingReservations}},
+		{name: "outbox limit", usage: PendingUsage{OutboxBytes: MaxPendingOutboxBytes}},
+		{name: "metadata limit", usage: PendingUsage{MetadataBytes: MaxPendingMetadataBytes}},
+		{
+			name: "one below every limit",
+			usage: PendingUsage{
+				Reservations:  MaxPendingReservations - 1,
+				OutboxBytes:   MaxPendingOutboxBytes - 1,
+				MetadataBytes: MaxPendingMetadataBytes - 1,
+			},
+			want: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if got := pendingHECQueueAvailable(test.usage); got != test.want {
+				t.Fatalf("pendingHECQueueAvailable(%+v) = %t, want %t", test.usage, got, test.want)
+			}
+		})
+	}
+}
+
 func TestHECAcknowledgmentCollisionRerollsAtomically(t *testing.T) {
 	t.Parallel()
 	sequencer, db := openTestSequencer(t)

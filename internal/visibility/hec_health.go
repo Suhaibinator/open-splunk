@@ -23,6 +23,11 @@ type HECOperationalSnapshot struct {
 	AcknowledgmentAvailable   bool
 	PendingOutboxReservations uint64
 	PendingOutboxBytes        uint64
+	PendingMetadataBytes      uint64
+	PendingUngrouped          uint64
+	ReadyWriteGroups          uint64
+	AmbiguousWriteGroups      uint64
+	LiveWriteGroupLeases      uint64
 	OldestPendingOutboxAge    time.Duration
 	RequestCapacityAvailable  bool
 	RetainedRequests          uint64
@@ -60,10 +65,15 @@ func readHECReadiness(ctx context.Context, database *sql.DB) (HECReadinessSnapsh
 		return HECReadinessSnapshot{}, err
 	}
 	return HECReadinessSnapshot{
-		QueueAvailable: usage.Reservations < MaxPendingReservations &&
-			usage.OutboxBytes < MaxPendingOutboxBytes,
+		QueueAvailable:          pendingHECQueueAvailable(usage),
 		AcknowledgmentAvailable: acknowledgmentAvailable,
 	}, nil
+}
+
+func pendingHECQueueAvailable(usage PendingUsage) bool {
+	return usage.Reservations < MaxPendingReservations &&
+		usage.OutboxBytes < MaxPendingOutboxBytes &&
+		usage.MetadataBytes < MaxPendingMetadataBytes
 }
 
 func readHECAcknowledgmentAvailability(ctx context.Context, database queryer) (bool, error) {
@@ -110,8 +120,12 @@ func (sequencer *SQLiteSequencer) HECOperationalHealth(
 	}
 	snapshot.PendingOutboxReservations = uint64(usage.Reservations)
 	snapshot.PendingOutboxBytes = usage.OutboxBytes
-	snapshot.QueueAvailable = usage.Reservations < MaxPendingReservations &&
-		usage.OutboxBytes < MaxPendingOutboxBytes
+	snapshot.PendingMetadataBytes = usage.MetadataBytes
+	snapshot.PendingUngrouped = uint64(usage.UngroupedReservations)
+	snapshot.ReadyWriteGroups = uint64(usage.ReadyGroups)
+	snapshot.AmbiguousWriteGroups = uint64(usage.AmbiguousGroups)
+	snapshot.LiveWriteGroupLeases = uint64(usage.LiveGroupLeases)
+	snapshot.QueueAvailable = pendingHECQueueAvailable(usage)
 	observedAt := time.Now().UTC()
 	if sequencer.now != nil {
 		observedAt = sequencer.now().Round(0).UTC()

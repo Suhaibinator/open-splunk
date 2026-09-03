@@ -45,6 +45,13 @@ const (
 	defaultDatabase                    = "open_splunk"
 	defaultTable                       = "events"
 	visibilityFinalizeTimeout          = 10 * time.Second
+	writeGroupTargetRows               = 10_000
+	writeGroupHardMaxRows              = visibility.MaxWriteGroupRows
+	writeGroupTargetDecodedBytes       = 16 << 20
+	writeGroupHardMaxDecodedBytes      = visibility.MaxWriteGroupDecodedBytes
+	writeGroupMaxMembers               = visibility.MaxWriteGroupMembers
+	writeGroupMaxLinger                = 200 * time.Millisecond
+	writeGroupShutdownDrainTimeout     = 10 * time.Second
 	durableClickHouseIdempotencyWindow = 10_000
 	durableBatchRejectWindow           = 10_000
 	durableBatchRejectMetadataBytes    = 256 << 20
@@ -233,8 +240,8 @@ func NewStoreWithDeletionConnection(
 	return store, nil
 }
 
-// Store implements ingest.EventStore using one synchronous native insert per
-// accepted protocol batch.
+// Store implements ingest.EventStore by durably staging logical batches and
+// coalescing them into bounded synchronous native inserts.
 type Store struct {
 	connection                storeConnection
 	deletionConnection        storeConnection
@@ -243,6 +250,9 @@ type Store struct {
 	insertSQL                 string
 	retention                 RetentionProvider
 	visibility                visibility.Sequencer
+	writeGroupVisibility      visibility.WriteGroupSequencer
+	writeGroupLimits          visibility.WriteGroupLimits
+	commitWaiters             *commitWaiters
 	attemptID                 func() (string, error)
 	clock                     func() time.Time
 	retryAfter                time.Duration
@@ -256,6 +266,7 @@ type Store struct {
 	reconcileDone             chan struct{}
 	reconcileCancel           context.CancelCauseFunc
 	reconcileErr              error
+	coalescing                bool
 	closed                    bool
 	closeOnce                 sync.Once
 	closeErr                  error
@@ -264,15 +275,65 @@ type Store struct {
 	reconciliationSuccesses   atomic.Uint64
 	reconciliationRetries     atomic.Uint64
 	reconciliationAmbiguities atomic.Uint64
+	stagedLogicalBatches      atomic.Uint64
+	stagedLogicalRows         atomic.Uint64
+	formedGroups              atomic.Uint64
+	physicalSends             atomic.Uint64
+	successfulGroups          atomic.Uint64
+	groupMemberBatches        atomic.Uint64
+	groupRows                 atomic.Uint64
+	groupDecodedBytes         atomic.Uint64
+	groupMonthlyPartitions    atomic.Uint64
+	memberBatchesPerGroup     coalescingHistogram
+	rowsPerGroup              coalescingHistogram
+	decodedBytesPerGroup      coalescingHistogram
+	monthlyPartitionsPerGroup coalescingHistogram
+	rowsPerPhysicalInsert     coalescingHistogram
+	groupFillReasons          writeGroupFillCounters
+	groupSealLatency          coalescingDurationHistogram
+	groupSendLatency          coalescingDurationHistogram
+	groupCommitLatency        coalescingDurationHistogram
+	peakNativeWaiters         atomic.Uint64
+	waiterWakeups             atomic.Uint64
+	waiterCancellations       atomic.Uint64
+	waiterTerminalLookups     atomic.Uint64
 }
 
 // HECReconciliationSnapshot is a constant-shape aggregate view of the
 // background outbox authority. It contains no error text or durable identity.
 type HECReconciliationSnapshot struct {
-	Available   bool
-	Successes   uint64
-	Retries     uint64
-	Ambiguities uint64
+	Available                 bool
+	Successes                 uint64
+	Retries                   uint64
+	Ambiguities               uint64
+	StagedLogicalBatches      uint64
+	StagedLogicalRows         uint64
+	FormedGroups              uint64
+	PhysicalSends             uint64
+	SuccessfulGroups          uint64
+	GroupMemberBatches        uint64
+	GroupRows                 uint64
+	GroupDecodedBytes         uint64
+	GroupMonthlyPartitions    uint64
+	MemberBatchesPerGroup     CoalescingHistogramSnapshot
+	RowsPerGroup              CoalescingHistogramSnapshot
+	DecodedBytesPerGroup      CoalescingHistogramSnapshot
+	MonthlyPartitionsPerGroup CoalescingHistogramSnapshot
+	RowsPerPhysicalInsert     CoalescingHistogramSnapshot
+	FillRowTarget             uint64
+	FillByteTarget            uint64
+	FillHardBoundary          uint64
+	FillLinger                uint64
+	FillDrain                 uint64
+	FillRecovery              uint64
+	NativeWaiters             uint64
+	PeakNativeWaiters         uint64
+	NativeWaiterWakeups       uint64
+	NativeWaiterCancellations uint64
+	NativeTerminalLookups     uint64
+	SealLatency               CoalescingDurationHistogramSnapshot
+	SendLatency               CoalescingDurationHistogramSnapshot
+	CommitLatency             CoalescingDurationHistogramSnapshot
 }
 
 type hecTerminalPruner interface {
@@ -362,7 +423,7 @@ func newStoreWithConnections(
 	reconcileSlot := make(chan struct{}, 1)
 	reconcileSlot <- struct{}{}
 	lifecycleContext, lifecycleCancel := context.WithCancelCause(context.Background())
-	return &Store{
+	store := &Store{
 		connection:         connection,
 		deletionConnection: deletionConnection,
 		database:           database,
@@ -374,10 +435,26 @@ func newStoreWithConnections(
 		clock:              clock,
 		retryAfter:         retryAfter,
 		writeAdmission:     newWriteAdmission(),
-		reconcileSlot:      reconcileSlot,
-		lifecycleContext:   lifecycleContext,
-		lifecycleCancel:    lifecycleCancel,
-	}, nil
+		writeGroupLimits: visibility.WriteGroupLimits{
+			TargetRows:          writeGroupTargetRows,
+			HardMaxRows:         writeGroupHardMaxRows,
+			TargetDecodedBytes:  writeGroupTargetDecodedBytes,
+			HardMaxDecodedBytes: writeGroupHardMaxDecodedBytes,
+			MaxMembers:          writeGroupMaxMembers,
+			MaxLinger:           writeGroupMaxLinger,
+		},
+		commitWaiters:    newCommitWaiters(visibility.MaxPendingReservations),
+		reconcileSlot:    reconcileSlot,
+		lifecycleContext: lifecycleContext,
+		lifecycleCancel:  lifecycleCancel,
+	}
+	store.writeGroupVisibility, _ = sequencer.(visibility.WriteGroupSequencer)
+	store.memberBatchesPerGroup = newCoalescingHistogram(coalescingShapeBounds)
+	store.rowsPerGroup = newCoalescingHistogram(coalescingShapeBounds)
+	store.decodedBytesPerGroup = newCoalescingHistogram(coalescingByteBounds)
+	store.monthlyPartitionsPerGroup = newCoalescingHistogram(coalescingShapeBounds)
+	store.rowsPerPhysicalInsert = newCoalescingHistogram(coalescingShapeBounds)
+	return store, nil
 }
 
 func sameConnectionIdentity(left, right any) bool {
@@ -497,7 +574,7 @@ func (s *Store) stageAdmitted(ctx context.Context, batch ingest.StoreBatch) (ing
 		return stageResultForReservation(prior)
 	}
 
-	metadata, outbox, indexTime, err := s.freshReservationPayload(ctx, batch)
+	payload, err := s.freshReservationPayload(ctx, batch)
 	if err != nil {
 		return ingest.StageResult{}, err
 	}
@@ -506,16 +583,18 @@ func (s *Store) stageAdmitted(ctx context.Context, batch ingest.StoreBatch) (ing
 		return ingest.StageResult{}, s.classifyError(fmt.Errorf("create staged ClickHouse visibility attempt: %w", err))
 	}
 	reservation, err := s.visibility.Reserve(ctx, visibility.ReserveRequest{
-		BatchKey:         deduplicationKey,
-		SequenceKey:      sequenceKey,
-		AttemptID:        attemptID,
-		IndexTime:        indexTime,
-		PayloadSHA256:    payloadDigest,
-		Metadata:         metadata,
-		Outbox:           outbox,
-		QuotaAdmission:   batch.QuotaAdmission,
-		QuotaEvaluatedAt: batch.QuotaEvaluatedAt,
-		HECAdmission:     visibilityHECAdmission(batch),
+		BatchKey:          deduplicationKey,
+		SequenceKey:       sequenceKey,
+		AttemptID:         attemptID,
+		IndexTime:         payload.indexTime,
+		PayloadSHA256:     payloadDigest,
+		Metadata:          payload.metadata,
+		Outbox:            payload.outbox,
+		StoredRowCount:    payload.storedRowCount,
+		DecodedEventBytes: payload.decodedEventBytes,
+		QuotaAdmission:    batch.QuotaAdmission,
+		QuotaEvaluatedAt:  batch.QuotaEvaluatedAt,
+		HECAdmission:      visibilityHECAdmission(batch),
 	})
 	if err != nil {
 		if _, ok := errors.AsType[*ingestquota.ExceededError](err); !ok {
@@ -525,6 +604,9 @@ func (s *Store) stageAdmitted(ctx context.Context, batch ingest.StoreBatch) (ing
 	}
 	if reservation.AlreadyCommitted || reservation.Rejected {
 		return stageResultForReservation(reservation)
+	}
+	if !reservation.PreviouslyReserved {
+		s.noteStagedLogicalBatch(reservation.StoredRowCount)
 	}
 	if err := s.releaseAttempt(reservation.Sequence, attemptID, nil); err != nil {
 		return ingest.StageResult{}, err
@@ -564,8 +646,10 @@ func visibilityHECIndexAuthorities(source []ingest.HECIndexAuthority) []visibili
 func stageResultForReservation(reservation visibility.Reservation) (ingest.StageResult, error) {
 	if !reservation.AlreadyCommitted && !reservation.Rejected {
 		return ingest.StageResult{
-			VisibilitySequence: reservation.Sequence,
-			State:              ingest.StoredBatchPending,
+			VisibilitySequence:  reservation.Sequence,
+			State:               ingest.StoredBatchPending,
+			HECRequestSequence:  reservation.HECRequestSequence,
+			HECAcknowledgmentID: reservation.HECAcknowledgmentID,
 		}, nil
 	}
 	outcome, err := resultForReservation(reservation, true)
@@ -676,11 +760,237 @@ func (s *Store) store(
 		return ingest.StoreResult{}, err
 	}
 	defer finishOperation()
+	if s.writeGroupVisibility != nil && s.coalescing {
+		return s.storeGrouped(operationContext, batch, resumeOnly)
+	}
 	if err := s.writeAdmission.enter(operationContext); err != nil {
 		return ingest.StoreResult{}, err
 	}
 	defer s.writeAdmission.leave()
 	return s.storeAdmitted(operationContext, batch, resumeOnly)
+}
+
+func (s *Store) storeGrouped(
+	ctx context.Context,
+	batch ingest.StoreBatch,
+	resumeOnly bool,
+) (ingest.StoreResult, error) {
+	if err := s.writeAdmission.enter(ctx); err != nil {
+		return ingest.StoreResult{}, err
+	}
+	reservation, attemptID, duplicate, terminal, err := s.reserveForGroupedStore(ctx, batch, resumeOnly)
+	if err != nil || terminal {
+		s.writeAdmission.leave()
+		if err != nil {
+			return ingest.StoreResult{}, err
+		}
+		return resultForReservation(reservation, true)
+	}
+
+	ready, cancelWaiter, err := s.commitWaiters.register(reservation.Sequence)
+	if err != nil {
+		s.writeAdmission.leave()
+		capacityErr := &ingest.TransientStoreError{
+			Err:        err,
+			Reason:     opensplunk.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
+			RetryAfter: s.retryAfter,
+		}
+		if attemptID != "" {
+			return ingest.StoreResult{}, s.releaseAttempt(reservation.Sequence, attemptID, capacityErr)
+		}
+		return ingest.StoreResult{}, capacityErr
+	}
+	s.observeNativeWaiterCount()
+	defer func() { cancelWaiter() }()
+	if attemptID != "" {
+		if err := s.releaseAttempt(reservation.Sequence, attemptID, nil); err != nil {
+			s.writeAdmission.leave()
+			return ingest.StoreResult{}, err
+		}
+	} else {
+		s.wakeReconciler()
+	}
+	s.writeAdmission.leave()
+
+	// Registration is deliberately non-authoritative. Re-read the durable
+	// ledger after installing the waiter to close the commit-before-register
+	// race, and after every wake to survive lost or stale process-local signals.
+	for {
+		state, result, lookupErr := s.lookupBatch(ctx, storeBatchIdentity(batch))
+		if lookupErr != nil {
+			if ctx.Err() != nil {
+				s.waiterCancellations.Add(1)
+			}
+			return ingest.StoreResult{}, lookupErr
+		}
+		switch state {
+		case ingest.StoredBatchCommitted, ingest.StoredBatchRejected:
+			s.waiterTerminalLookups.Add(1)
+			cancelWaiter()
+			if !duplicate && state == ingest.StoredBatchCommitted {
+				result.Accepted = result.Duplicate
+				result.Duplicate = 0
+			}
+			return result, nil
+		case ingest.StoredBatchPending:
+		case ingest.StoredBatchNotFound:
+			return ingest.StoreResult{}, s.visibilityFailure(
+				"wait for grouped ClickHouse batch outcome",
+				visibility.ErrReservationGone,
+			)
+		default:
+			return ingest.StoreResult{}, errors.New("wait for grouped ClickHouse batch outcome: invalid durable state")
+		}
+		poll := time.NewTimer(s.retryAfter)
+		select {
+		case <-ctx.Done():
+			stopStoreTimer(poll)
+			s.waiterCancellations.Add(1)
+			return ingest.StoreResult{}, ctx.Err()
+		case <-ready:
+			stopStoreTimer(poll)
+			cancelWaiter()
+			ready, cancelWaiter, err = s.commitWaiters.register(reservation.Sequence)
+			if err != nil {
+				return ingest.StoreResult{}, &ingest.TransientStoreError{
+					Err:        err,
+					Reason:     opensplunk.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
+					RetryAfter: s.retryAfter,
+				}
+			}
+			s.observeNativeWaiterCount()
+		case <-poll.C:
+		}
+	}
+}
+
+func (s *Store) observeNativeWaiterCount() {
+	atomicMaximum(&s.peakNativeWaiters, uint64(s.commitWaiters.size()))
+}
+
+func stopStoreTimer(timer *time.Timer) {
+	if timer.Stop() {
+		return
+	}
+	select {
+	case <-timer.C:
+	default:
+	}
+}
+
+func (s *Store) reserveForGroupedStore(
+	ctx context.Context,
+	batch ingest.StoreBatch,
+	resumeOnly bool,
+) (visibility.Reservation, string, bool, bool, error) {
+	deduplicationKey := deduplicationToken(batch)
+	sequenceKey := sequenceIdentityKey(batch)
+	payloadDigest, err := storePayloadDigest(batch)
+	if err != nil {
+		return visibility.Reservation{}, "", false, false, err
+	}
+	prior, found, err := s.visibility.Lookup(ctx, deduplicationKey, sequenceKey, payloadDigest)
+	if err != nil {
+		return visibility.Reservation{}, "", false, false,
+			s.visibilityFailure("lookup ClickHouse visibility reservation", err)
+	}
+	if found && (prior.AlreadyCommitted || prior.Rejected) {
+		return prior, "", true, true, nil
+	}
+	if found {
+		// A grouped pending reservation is owned only by its group lease. Exact
+		// retries observe and wait; they must never reacquire a per-reservation
+		// attempt that could race or obstruct physical replay.
+		return prior, "", true, false, nil
+	}
+
+	request := visibility.ReserveRequest{
+		BatchKey:          deduplicationKey,
+		SequenceKey:       sequenceKey,
+		ExistingOnly:      resumeOnly,
+		IndexTime:         prior.IndexTime,
+		PayloadSHA256:     payloadDigest,
+		Metadata:          prior.Metadata,
+		Outbox:            prior.Outbox,
+		StoredRowCount:    prior.StoredRowCount,
+		DecodedEventBytes: prior.DecodedEventBytes,
+		QuotaAdmission:    batch.QuotaAdmission,
+		QuotaEvaluatedAt:  batch.QuotaEvaluatedAt,
+	}
+	if !found && !resumeOnly {
+		payload, payloadErr := s.freshReservationPayload(ctx, batch)
+		if payloadErr != nil {
+			return visibility.Reservation{}, "", false, false, payloadErr
+		}
+		applyFreshReservationPayload(&request, payload)
+	}
+	attemptID, err := s.attemptID()
+	if err != nil {
+		return visibility.Reservation{}, "", false, false,
+			s.classifyError(fmt.Errorf("create ClickHouse visibility attempt: %w", err))
+	}
+	request.AttemptID = attemptID
+	reservation, err := s.visibility.Reserve(ctx, request)
+	if errors.Is(err, visibility.ErrAttemptInProgress) {
+		observed, observedFound, lookupErr := s.visibility.Lookup(
+			ctx,
+			deduplicationKey,
+			sequenceKey,
+			payloadDigest,
+		)
+		if lookupErr != nil {
+			return visibility.Reservation{}, "", false, false,
+				s.visibilityFailure("recheck concurrently staged ClickHouse batch", lookupErr)
+		}
+		if observedFound {
+			return observed, "", true,
+				observed.AlreadyCommitted || observed.Rejected, nil
+		}
+	}
+	if err != nil {
+		if _, ok := errors.AsType[*ingestquota.ExceededError](err); !ok {
+			s.wakeReconciler()
+		}
+		if !resumeOnly && errors.Is(err, visibility.ErrReservationGone) {
+			return visibility.Reservation{}, "", false, false, &ingest.TransientStoreError{
+				Err:        fmt.Errorf("reserve fresh ClickHouse visibility sequence: %w", err),
+				Reason:     opensplunk.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
+				RetryAfter: s.retryAfter,
+			}
+		}
+		return visibility.Reservation{}, "", false, false,
+			s.visibilityFailure("reserve ClickHouse visibility sequence", err)
+	}
+	duplicate := found || reservation.PreviouslyReserved || resumeOnly
+	if !duplicate && !reservation.AlreadyCommitted && !reservation.Rejected {
+		s.noteStagedLogicalBatch(reservation.StoredRowCount)
+	}
+	return reservation, attemptID, duplicate,
+		reservation.AlreadyCommitted || reservation.Rejected, nil
+}
+
+func (s *Store) noteStagedLogicalBatch(rows uint32) {
+	s.stagedLogicalBatches.Add(1)
+	s.stagedLogicalRows.Add(uint64(rows))
+}
+
+func applyFreshReservationPayload(request *visibility.ReserveRequest, payload freshReservationPayload) {
+	request.IndexTime = payload.indexTime
+	request.Metadata = payload.metadata
+	request.Outbox = payload.outbox
+	request.StoredRowCount = payload.storedRowCount
+	request.DecodedEventBytes = payload.decodedEventBytes
+}
+
+func storeBatchIdentity(batch ingest.StoreBatch) ingest.StoreBatchIdentity {
+	return ingest.StoreBatchIdentity{
+		TenantID:          batch.TenantID,
+		Source:            batch.Source,
+		CollectorID:       batch.CollectorID,
+		BatchID:           batch.BatchID,
+		BatchSequence:     batch.BatchSequence,
+		SourceBatchSHA256: batch.SourceBatchSHA256,
+	}
 }
 
 func (s *Store) storeAdmitted(
@@ -705,6 +1015,8 @@ func (s *Store) storeAdmitted(
 	metadata := prior.Metadata
 	outbox := prior.Outbox
 	indexTime := prior.IndexTime
+	storedRowCount := prior.StoredRowCount
+	decodedBytes := prior.DecodedEventBytes
 	// Lookup intentionally does not acquire a lease. A pending row may become
 	// terminal or be safely abandoned before Reserve starts, so observed pending
 	// rows first use the atomic existing-only path and never recreate anything
@@ -713,40 +1025,50 @@ func (s *Store) storeAdmitted(
 	// identity-only ResumeBatch calls cannot.
 	existingOnly := found || resumeOnly
 	if !found && !resumeOnly {
-		metadata, outbox, indexTime, err = s.freshReservationPayload(ctx, batch)
+		payload, payloadErr := s.freshReservationPayload(ctx, batch)
+		err = payloadErr
 		if err != nil {
 			return ingest.StoreResult{}, err
 		}
+		metadata, outbox, indexTime = payload.metadata, payload.outbox, payload.indexTime
+		storedRowCount, decodedBytes = payload.storedRowCount, payload.decodedEventBytes
 	}
 	attemptID, err := s.attemptID()
 	if err != nil {
 		return ingest.StoreResult{}, s.classifyError(fmt.Errorf("create ClickHouse visibility attempt: %w", err))
 	}
 	request := visibility.ReserveRequest{
-		BatchKey:         deduplicationKey,
-		SequenceKey:      sequenceKey,
-		AttemptID:        attemptID,
-		ExistingOnly:     existingOnly,
-		IndexTime:        indexTime,
-		PayloadSHA256:    payloadDigest,
-		Metadata:         metadata,
-		Outbox:           outbox,
-		QuotaAdmission:   batch.QuotaAdmission,
-		QuotaEvaluatedAt: batch.QuotaEvaluatedAt,
+		BatchKey:          deduplicationKey,
+		SequenceKey:       sequenceKey,
+		AttemptID:         attemptID,
+		ExistingOnly:      existingOnly,
+		IndexTime:         indexTime,
+		PayloadSHA256:     payloadDigest,
+		Metadata:          metadata,
+		Outbox:            outbox,
+		StoredRowCount:    storedRowCount,
+		DecodedEventBytes: decodedBytes,
+		QuotaAdmission:    batch.QuotaAdmission,
+		QuotaEvaluatedAt:  batch.QuotaEvaluatedAt,
 	}
 	reservation, err := s.visibility.Reserve(ctx, request)
 	if found && !resumeOnly && errors.Is(err, visibility.ErrReservationGone) {
 		// ExistingOnly proves the observed row no longer has an active outcome and
 		// releases the attempted lease before returning. Reuse that attempt ID for
 		// one bounded fresh allocation from the complete normalized Store input.
-		metadata, outbox, indexTime, err = s.freshReservationPayload(ctx, batch)
+		payload, payloadErr := s.freshReservationPayload(ctx, batch)
+		err = payloadErr
 		if err != nil {
 			return ingest.StoreResult{}, err
 		}
+		metadata, outbox, indexTime = payload.metadata, payload.outbox, payload.indexTime
+		storedRowCount, decodedBytes = payload.storedRowCount, payload.decodedEventBytes
 		request.ExistingOnly = false
 		request.IndexTime = indexTime
 		request.Metadata = metadata
 		request.Outbox = outbox
+		request.StoredRowCount = storedRowCount
+		request.DecodedEventBytes = decodedBytes
 		found = false
 		reservation, err = s.visibility.Reserve(ctx, request)
 	}
@@ -772,31 +1094,58 @@ func (s *Store) storeAdmitted(
 	return s.writeReservation(ctx, reservation, attemptID, found || reservation.PreviouslyReserved || resumeOnly)
 }
 
+type freshReservationPayload struct {
+	metadata          []byte
+	outbox            []byte
+	indexTime         time.Time
+	storedRowCount    uint32
+	decodedEventBytes uint64
+}
+
 func (s *Store) freshReservationPayload(
 	ctx context.Context,
 	batch ingest.StoreBatch,
-) ([]byte, []byte, time.Time, error) {
+) (freshReservationPayload, error) {
 	if batch.OriginalEventCount == 0 && len(batch.RejectedEvents) == 0 && len(batch.Events) > 0 {
-
 		eventCount, conversionErr := safecast.Conv[uint32](len(batch.Events))
 		if conversionErr != nil {
-			return nil, nil, time.Time{}, errors.New("store ClickHouse batch: source event count exceeds uint32")
+			return freshReservationPayload{}, errors.New("store ClickHouse batch: source event count exceeds uint32")
 		}
 		batch.OriginalEventCount = eventCount
 	}
 	rows, err := s.rowsForBatch(ctx, batch, nil)
 	if err != nil {
-		return nil, nil, time.Time{}, s.classifyError(err)
+		return freshReservationPayload{}, s.classifyError(err)
 	}
 	metadata, err := encodeReservationMetadata(rows, batch)
 	if err != nil {
-		return nil, nil, time.Time{}, err
+		return freshReservationPayload{}, err
 	}
 	outbox, err := encodeStoreOutbox(batch)
 	if err != nil {
-		return nil, nil, time.Time{}, err
+		return freshReservationPayload{}, err
 	}
-	return metadata, outbox, batch.ReceivedAt, nil
+	rowCount, err := safecast.Conv[uint32](len(rows))
+	if err != nil {
+		return freshReservationPayload{}, errors.New("store ClickHouse batch: accepted row count exceeds uint32")
+	}
+	return freshReservationPayload{
+		metadata:          metadata,
+		outbox:            outbox,
+		indexTime:         batch.ReceivedAt,
+		storedRowCount:    rowCount,
+		decodedEventBytes: decodedEventBytes(batch),
+	}, nil
+}
+
+func decodedEventBytes(batch ingest.StoreBatch) uint64 {
+	events := make([]*opensplunk.LogEvent, 0, len(batch.Events))
+	for _, stored := range batch.Events {
+		if stored != nil {
+			events = append(events, stored.Event)
+		}
+	}
+	return ingest.UncompressedEventBytes(events)
 }
 
 func (s *Store) writeReservation(
@@ -862,6 +1211,7 @@ func (s *Store) writeReservation(
 			s.finalizationFailure("mark ClickHouse visibility sequence sending", err),
 		)
 	}
+	s.physicalSends.Add(1)
 	if err := prepared.Send(); err != nil {
 		// Send failures are ambiguous: ClickHouse may still finish after the
 		// client loses its response. The durable outbox lets the server retry the
@@ -914,10 +1264,357 @@ func (s *Store) ReconcilePending(ctx context.Context) (resultErr error) {
 		return err
 	}
 	defer s.writeAdmission.leave()
+	if s.writeGroupVisibility != nil && s.coalescing {
+		_, err := s.reconcileWriteGroups(operationContext, true, false)
+		return err
+	}
 	return s.reconcilePending(operationContext, false)
 }
 
+func (s *Store) reconcileWriteGroups(
+	ctx context.Context,
+	forceSeal bool,
+	proveDrained bool,
+) (time.Time, error) {
+	var replayed uint32
+	for {
+		attemptID, err := s.attemptID()
+		if err != nil {
+			return time.Time{}, s.classifyError(fmt.Errorf("create ClickHouse write-group attempt: %w", err))
+		}
+		legacyAmbiguous, foundLegacyAmbiguous, err := s.writeGroupVisibility.AcquireUngroupedAmbiguous(
+			ctx,
+			attemptID,
+		)
+		if err != nil {
+			return time.Time{}, s.visibilityFailure("acquire ungrouped ambiguous ClickHouse outbox", err)
+		}
+		if foundLegacyAmbiguous {
+			s.reconciliationAmbiguities.Add(1)
+			if replayed == visibility.MaxPendingReservations {
+				invariantErr := fmt.Errorf(
+					"%w: acquired more than %d reservations during one drain",
+					ErrPendingOutboxNotDrained,
+					visibility.MaxPendingReservations,
+				)
+				return time.Time{}, s.releaseAttempt(
+					legacyAmbiguous.Sequence,
+					attemptID,
+					invariantErr,
+				)
+			}
+			replayed++
+			if _, err := s.writeReservation(ctx, legacyAmbiguous, attemptID, true); err != nil {
+				return time.Time{}, err
+			}
+			s.reconciliationSuccesses.Add(1)
+			continue
+		}
+		limits := s.writeGroupLimits
+		limits.ForceSeal = forceSeal
+		group, found, nextLingerDeadline, err := s.writeGroupVisibility.FormOrAcquireWriteGroup(
+			ctx,
+			attemptID,
+			limits,
+			s.clock().UTC(),
+		)
+		if err != nil {
+			return time.Time{}, s.visibilityFailure("form or acquire ClickHouse write group", err)
+		}
+		if !found {
+			if proveDrained {
+				usage, usageErr := s.visibility.PendingUsage(ctx)
+				if usageErr != nil {
+					return time.Time{}, s.visibilityFailure("prove pending ClickHouse outbox is empty", usageErr)
+				}
+				if !pendingWriteGroupUsageEmpty(usage) {
+					return time.Time{}, pendingWriteGroupError(usage)
+				}
+				return time.Time{}, nil
+			}
+			if err := s.pruneTerminal(ctx); err != nil {
+				return time.Time{}, err
+			}
+			return nextLingerDeadline, nil
+		}
+		if group.NewlyFormed {
+			s.noteFormedWriteGroup(group)
+		} else {
+			s.groupFillReasons.add(visibility.WriteGroupFillRecovery)
+		}
+		if group.State == visibility.WriteGroupAmbiguous {
+			s.reconciliationAmbiguities.Add(1)
+		}
+		memberCount, countErr := safecast.Conv[uint32](len(group.Members))
+		if countErr != nil || replayed > visibility.MaxPendingReservations-memberCount {
+			invariantErr := fmt.Errorf(
+				"%w: acquired more than %d reservations during one drain",
+				ErrPendingOutboxNotDrained,
+				visibility.MaxPendingReservations,
+			)
+			return time.Time{}, s.releaseWriteGroup(group.ID, attemptID, invariantErr)
+		}
+		replayed += memberCount
+		if err := s.writeGroup(ctx, group, attemptID); err != nil {
+			if proveDrained {
+				return time.Time{}, err
+			}
+			if pruneErr := s.pruneTerminal(ctx); pruneErr != nil {
+				return time.Time{}, errors.Join(err, pruneErr)
+			}
+			return time.Time{}, err
+		}
+		s.reconciliationSuccesses.Add(1)
+	}
+}
+
+func (s *Store) writeGroup(
+	ctx context.Context,
+	group visibility.WriteGroup,
+	attemptID string,
+) error {
+	if err := s.validateWriteGroup(group, attemptID); err != nil {
+		return s.releaseWriteGroup(group.ID, attemptID, err)
+	}
+	if group.State == visibility.WriteGroupReady && len(group.Members) != 0 {
+		s.groupSendLatency.observe(nonnegativeDuration(s.clock().UTC(), group.Members[0].Reservation.CreatedAt))
+	}
+	rows := make([][]any, 0, group.RowCount)
+	for memberIndex, member := range group.Members {
+		reservation := member.Reservation
+		if uint64(len(reservation.Outbox)) != member.OutboxLength ||
+			sha256.Sum256(reservation.Outbox) != member.OutboxSHA256 ||
+			reservation.OutboxSHA256 != member.OutboxSHA256 {
+			return s.releaseWriteGroup(group.ID, attemptID, fmt.Errorf(
+				"ClickHouse write group member %d outbox digest does not match sealed membership",
+				memberIndex,
+			))
+		}
+		replayBatch, err := decodeStoreOutbox(reservation.Outbox)
+		if err != nil {
+			return s.releaseWriteGroup(group.ID, attemptID, fmt.Errorf(
+				"decode durable ClickHouse write group member %d: %w",
+				memberIndex,
+				err,
+			))
+		}
+		replayDigest, err := storePayloadDigest(replayBatch)
+		if err != nil || replayDigest != reservation.PayloadSHA256 ||
+			deduplicationToken(replayBatch) != reservation.BatchKey ||
+			sequenceIdentityKey(replayBatch) != reservation.SequenceKey {
+			return s.releaseWriteGroup(group.ID, attemptID, fmt.Errorf(
+				"durable ClickHouse write group member %d identity does not match its reservation",
+				memberIndex,
+			))
+		}
+		memberRows, err := s.rowsForBatch(ctx, replayBatch, &reservation)
+		if err != nil {
+			return s.releaseWriteGroup(group.ID, attemptID, s.classifyError(fmt.Errorf(
+				"rebuild ClickHouse write group member %d: %w",
+				memberIndex,
+				err,
+			)))
+		}
+		actualRowCount, err := safecast.Conv[uint32](len(memberRows))
+		if err != nil || actualRowCount != member.RowCount || actualRowCount != reservation.StoredRowCount ||
+			decodedEventBytes(replayBatch) != member.DecodedBytes ||
+			member.DecodedBytes != reservation.DecodedEventBytes {
+			return s.releaseWriteGroup(group.ID, attemptID, fmt.Errorf(
+				"ClickHouse write group member %d totals do not match its durable outbox",
+				memberIndex,
+			))
+		}
+		if err := applyReservation(memberRows, reservation); err != nil {
+			return s.releaseWriteGroup(group.ID, attemptID, fmt.Errorf(
+				"apply ClickHouse write group member %d visibility: %w",
+				memberIndex,
+				err,
+			))
+		}
+		rows = append(rows, memberRows...)
+	}
+	if group.NewlyFormed {
+		monthlyPartitions := distinctWriteGroupMonthlyPartitions(rows)
+		s.groupMonthlyPartitions.Add(monthlyPartitions)
+		s.monthlyPartitionsPerGroup.observe(monthlyPartitions)
+	}
+
+	settings := insertSettings(group.ID)
+	prepared, err := s.connection.prepare(ctx, s.insertSQL, settings)
+	if err != nil {
+		return s.releaseWriteGroup(group.ID, attemptID,
+			s.classifyError(fmt.Errorf("prepare ClickHouse write group: %w", err)))
+	}
+	closed := false
+	defer func() {
+		if !closed {
+			_ = prepared.Close()
+		}
+	}()
+	for rowIndex, row := range rows {
+		if err := prepared.Append(row...); err != nil {
+			_ = prepared.Abort()
+			return s.releaseWriteGroup(group.ID, attemptID,
+				s.classifyError(fmt.Errorf("append ClickHouse write group row %d: %w", rowIndex, err)))
+		}
+	}
+	if err := s.writeGroupVisibility.MarkWriteGroupSending(ctx, group.ID, attemptID); err != nil {
+		_ = prepared.Abort()
+		return s.releaseWriteGroup(group.ID, attemptID,
+			s.finalizationFailure("mark ClickHouse write group sending", err))
+	}
+	s.physicalSends.Add(1)
+	s.rowsPerPhysicalInsert.observe(uint64(group.RowCount))
+	if err := prepared.Send(); err != nil {
+		_ = prepared.Abort()
+		return s.releaseWriteGroup(group.ID, attemptID,
+			s.classifyError(fmt.Errorf("send ClickHouse write group: %w", err)))
+	}
+	committedAt := s.clock().UTC().Truncate(time.Microsecond)
+	physicalCompleteAt := time.Now().UTC().Truncate(time.Microsecond)
+	if physicalCompleteAt.After(committedAt) {
+		committedAt = physicalCompleteAt
+	}
+	if group.SendingAt.After(committedAt) {
+		committedAt = group.SendingAt.UTC().Truncate(time.Microsecond)
+	}
+	commitContext, cancelCommit := context.WithTimeout(context.Background(), visibilityFinalizeTimeout)
+	err = s.writeGroupVisibility.CommitWriteGroup(commitContext, group.ID, attemptID, committedAt)
+	cancelCommit()
+	if err != nil {
+		// The transaction result can be uncertain. Wake native callers so they
+		// re-read SQLite and wake the reconciler to acquire the exact group again;
+		// never try to rewrite terminal state through a best-effort release.
+		sequences := writeGroupSequences(group)
+		s.waiterWakeups.Add(uint64(s.commitWaiters.notify(sequences)))
+		s.wakeReconciler()
+		return s.finalizationFailure("commit ClickHouse write group", err)
+	}
+	s.successfulGroups.Add(1)
+	if len(group.Members) != 0 {
+		s.groupCommitLatency.observe(nonnegativeDuration(committedAt, group.Members[0].Reservation.CreatedAt))
+	}
+	closeErr := prepared.Close()
+	closed = true
+	sequences := writeGroupSequences(group)
+	for range group.Members {
+		s.noteTerminalReservation()
+	}
+	s.waiterWakeups.Add(uint64(s.commitWaiters.notify(sequences)))
+	if closeErr != nil {
+		return s.classifyError(fmt.Errorf("close committed ClickHouse write group: %w", closeErr))
+	}
+	return nil
+}
+
+func (s *Store) noteFormedWriteGroup(group visibility.WriteGroup) {
+	s.formedGroups.Add(1)
+	s.groupMemberBatches.Add(uint64(len(group.Members)))
+	s.groupRows.Add(uint64(group.RowCount))
+	s.groupDecodedBytes.Add(group.DecodedBytes)
+	s.memberBatchesPerGroup.observe(uint64(len(group.Members)))
+	s.rowsPerGroup.observe(uint64(group.RowCount))
+	s.decodedBytesPerGroup.observe(group.DecodedBytes)
+	s.groupFillReasons.add(group.FillReason)
+	if len(group.Members) != 0 {
+		s.groupSealLatency.observe(nonnegativeDuration(group.CreatedAt, group.Members[0].Reservation.CreatedAt))
+	}
+}
+
+func distinctWriteGroupMonthlyPartitions(rows [][]any) uint64 {
+	partitions := make(map[[2]int]struct{})
+	for _, row := range rows {
+		if len(row) <= eventIndexTimeColumn {
+			continue
+		}
+		value, ok := row[eventIndexTimeColumn].(time.Time)
+		if !ok {
+			continue
+		}
+		partitions[[2]int{value.Year(), int(value.Month())}] = struct{}{}
+	}
+	return uint64(len(partitions))
+}
+
+func writeGroupSequences(group visibility.WriteGroup) []uint64 {
+	sequences := make([]uint64, len(group.Members))
+	for index, member := range group.Members {
+		sequences[index] = member.Reservation.Sequence
+	}
+	return sequences
+}
+
+func (s *Store) validateWriteGroup(group visibility.WriteGroup, attemptID string) error {
+	if group.ID == "" || group.AttemptID != attemptID ||
+		(group.State != visibility.WriteGroupReady && group.State != visibility.WriteGroupAmbiguous) ||
+		len(group.Members) == 0 || len(group.Members) > int(s.writeGroupLimits.MaxMembers) ||
+		group.RowCount == 0 || group.RowCount > s.writeGroupLimits.HardMaxRows ||
+		group.DecodedBytes == 0 || group.DecodedBytes > s.writeGroupLimits.HardMaxDecodedBytes {
+		return errors.New("acquired ClickHouse write group violates configured bounds")
+	}
+	var rows uint32
+	var decodedBytes uint64
+	for index, member := range group.Members {
+		if member.Ordinal != uint32(index) || member.Reservation.Sequence == 0 ||
+			(index > 0 && member.Reservation.Sequence <= group.Members[index-1].Reservation.Sequence) ||
+			member.RowCount == 0 || member.RowCount > s.writeGroupLimits.HardMaxRows ||
+			member.DecodedBytes == 0 || member.DecodedBytes > s.writeGroupLimits.HardMaxDecodedBytes ||
+			rows > s.writeGroupLimits.HardMaxRows-member.RowCount ||
+			decodedBytes > s.writeGroupLimits.HardMaxDecodedBytes-member.DecodedBytes {
+			return fmt.Errorf("acquired ClickHouse write group member %d violates ordering or bounds", index)
+		}
+		rows += member.RowCount
+		decodedBytes += member.DecodedBytes
+	}
+	membershipDigest, err := visibility.ComputeWriteGroupMembershipSHA256(group.Members)
+	if err != nil {
+		return fmt.Errorf("compute ClickHouse write group membership digest: %w", err)
+	}
+	if rows != group.RowCount || decodedBytes != group.DecodedBytes ||
+		group.FirstSequence != group.Members[0].Reservation.Sequence ||
+		group.LastSequence != group.Members[len(group.Members)-1].Reservation.Sequence ||
+		membershipDigest != group.MembershipSHA256 {
+		return errors.New("acquired ClickHouse write group membership digest or totals do not match")
+	}
+	return nil
+}
+
+func (s *Store) releaseWriteGroup(groupID, attemptID string, operationErr error) error {
+	defer s.wakeReconciler()
+	ctx, cancel := context.WithTimeout(context.Background(), visibilityFinalizeTimeout)
+	defer cancel()
+	if err := s.writeGroupVisibility.ReleaseWriteGroup(ctx, groupID, attemptID); err != nil {
+		return errors.Join(operationErr, s.finalizationFailure("release ClickHouse write group attempt", err))
+	}
+	return operationErr
+}
+
+func pendingWriteGroupUsageEmpty(usage visibility.PendingUsage) bool {
+	return usage.Reservations == 0 && usage.UngroupedReservations == 0 &&
+		usage.ReadyGroups == 0 && usage.AmbiguousGroups == 0 &&
+		usage.LiveGroupLeases == 0 && usage.OutboxBytes == 0 &&
+		usage.MetadataBytes == 0
+}
+
+func pendingWriteGroupError(usage visibility.PendingUsage) error {
+	return fmt.Errorf(
+		"%w: reservations=%d ungrouped=%d ready_groups=%d ambiguous_groups=%d live_group_leases=%d outbox_bytes=%d metadata_bytes=%d",
+		ErrPendingOutboxNotDrained,
+		usage.Reservations,
+		usage.UngroupedReservations,
+		usage.ReadyGroups,
+		usage.AmbiguousGroups,
+		usage.LiveGroupLeases,
+		usage.OutboxBytes,
+		usage.MetadataBytes,
+	)
+}
+
 func (s *Store) reconcilePending(ctx context.Context, proveDrained bool) error {
+	if s.writeGroupVisibility != nil && s.coalescing {
+		_, err := s.reconcileWriteGroups(ctx, true, proveDrained)
+		return err
+	}
 	var replayed uint32
 	for {
 		attemptID, err := s.attemptID()
@@ -1007,6 +1704,7 @@ func (s *Store) startReconciler() {
 	if s.closed || s.reconcileCancel != nil {
 		return
 	}
+	s.coalescing = s.writeGroupVisibility != nil
 	ctx, cancel := context.WithCancelCause(context.Background())
 	s.reconcileCancel = cancel
 	s.reconcileWake = make(chan struct{}, 1)
@@ -1022,19 +1720,37 @@ func (s *Store) runReconciler(ctx context.Context, wake <-chan struct{}, done ch
 		<-timer.C
 	}
 	defer timer.Stop()
-	var retry <-chan time.Time
+	resetTimer := func(delay time.Duration) <-chan time.Time {
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timer.Reset(delay)
+		return timer.C
+	}
+	var scheduled <-chan time.Time
+	retrying := false
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-wake:
-			if retry != nil {
+			if retrying {
 				continue
 			}
-		case <-retry:
-			retry = nil
+		case <-scheduled:
+			scheduled = nil
+			retrying = false
 		}
-		err := s.ReconcilePending(ctx)
+		var nextLingerDeadline time.Time
+		var err error
+		if s.writeGroupVisibility == nil {
+			err = s.ReconcilePending(ctx)
+		} else {
+			nextLingerDeadline, err = s.reconcileWriteGroupsFromWorker(ctx)
+		}
 		s.lifecycleMu.Lock()
 		if !errors.Is(err, context.Canceled) {
 			s.reconcileErr = err
@@ -1042,10 +1758,32 @@ func (s *Store) runReconciler(ctx context.Context, wake <-chan struct{}, done ch
 		s.lifecycleMu.Unlock()
 		if err != nil && !errors.Is(err, context.Canceled) {
 			s.reconciliationRetries.Add(1)
-			timer.Reset(s.retryAfter)
-			retry = timer.C
+			scheduled = resetTimer(s.retryAfter)
+			retrying = true
+		} else if !nextLingerDeadline.IsZero() {
+			delay := max(time.Duration(0), nextLingerDeadline.Sub(s.clock().UTC()))
+			scheduled = resetTimer(delay)
 		}
 	}
+}
+
+func (s *Store) reconcileWriteGroupsFromWorker(ctx context.Context) (next time.Time, resultErr error) {
+	operationContext, finishOperation, err := s.beginOperation(ctx, &resultErr)
+	if err != nil {
+		return time.Time{}, err
+	}
+	defer finishOperation()
+	select {
+	case <-operationContext.Done():
+		return time.Time{}, operationContext.Err()
+	case <-s.reconcileSlot:
+	}
+	defer func() { s.reconcileSlot <- struct{}{} }()
+	if err := s.writeAdmission.enter(operationContext); err != nil {
+		return time.Time{}, err
+	}
+	defer s.writeAdmission.leave()
+	return s.reconcileWriteGroups(operationContext, false, false)
 }
 
 func (s *Store) wakeReconciler() {
@@ -1336,55 +2074,153 @@ func (s *Store) HECReconciliationTelemetry() HECReconciliationSnapshot {
 	available := !s.closed && s.reconcileErr == nil
 	s.lifecycleMu.Unlock()
 	return HECReconciliationSnapshot{
-		Available:   available,
-		Successes:   s.reconciliationSuccesses.Load(),
-		Retries:     s.reconciliationRetries.Load(),
-		Ambiguities: s.reconciliationAmbiguities.Load(),
+		Available:                 available,
+		Successes:                 s.reconciliationSuccesses.Load(),
+		Retries:                   s.reconciliationRetries.Load(),
+		Ambiguities:               s.reconciliationAmbiguities.Load(),
+		StagedLogicalBatches:      s.stagedLogicalBatches.Load(),
+		StagedLogicalRows:         s.stagedLogicalRows.Load(),
+		FormedGroups:              s.formedGroups.Load(),
+		PhysicalSends:             s.physicalSends.Load(),
+		SuccessfulGroups:          s.successfulGroups.Load(),
+		GroupMemberBatches:        s.groupMemberBatches.Load(),
+		GroupRows:                 s.groupRows.Load(),
+		GroupDecodedBytes:         s.groupDecodedBytes.Load(),
+		GroupMonthlyPartitions:    s.groupMonthlyPartitions.Load(),
+		MemberBatchesPerGroup:     s.memberBatchesPerGroup.snapshot(),
+		RowsPerGroup:              s.rowsPerGroup.snapshot(),
+		DecodedBytesPerGroup:      s.decodedBytesPerGroup.snapshot(),
+		MonthlyPartitionsPerGroup: s.monthlyPartitionsPerGroup.snapshot(),
+		RowsPerPhysicalInsert:     s.rowsPerPhysicalInsert.snapshot(),
+		FillRowTarget:             s.groupFillReasons.rowTarget.Load(),
+		FillByteTarget:            s.groupFillReasons.byteTarget.Load(),
+		FillHardBoundary:          s.groupFillReasons.hardBoundary.Load(),
+		FillLinger:                s.groupFillReasons.linger.Load(),
+		FillDrain:                 s.groupFillReasons.drain.Load(),
+		FillRecovery:              s.groupFillReasons.recovery.Load(),
+		NativeWaiters:             uint64(s.commitWaiters.size()),
+		PeakNativeWaiters:         s.peakNativeWaiters.Load(),
+		NativeWaiterWakeups:       s.waiterWakeups.Load(),
+		NativeWaiterCancellations: s.waiterCancellations.Load(),
+		NativeTerminalLookups:     s.waiterTerminalLookups.Load(),
+		SealLatency:               s.groupSealLatency.snapshot(),
+		SendLatency:               s.groupSendLatency.snapshot(),
+		CommitLatency:             s.groupCommitLatency.snapshot(),
 	}
 }
 
-// Close releases all pooled ClickHouse connections.
+// Close gives graceful shutdown the standard bounded drain budget.
 func (s *Store) Close() error {
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		writeGroupShutdownDrainTimeout,
+	)
+	defer cancel()
+	return s.CloseContext(ctx)
+}
+
+// CloseContext stops admission, gives accepted grouped work one force-seal and
+// drain attempt within the caller's budget, then releases pooled ClickHouse
+// connections within that same budget. A timeout or drain failure is returned
+// but does not discard durable ready or ambiguous work.
+func (s *Store) CloseContext(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("close ClickHouse store context is required")
+	}
 	s.closeOnce.Do(func() {
-		s.lifecycleMu.Lock()
-		s.closed = true
-		lifecycleCancel := s.lifecycleCancel
-		writeAdmission := s.writeAdmission
-		if writeAdmission != nil {
-			writeAdmission.close()
-		}
-		cancel := s.reconcileCancel
-		done := s.reconcileDone
-		s.lifecycleMu.Unlock()
-		if lifecycleCancel != nil {
-			lifecycleCancel(context.Canceled)
-		}
-		if cancel != nil {
-			cancel(context.Canceled)
-			<-done
-		}
-		s.operations.Wait()
-		var closeErrors []error
-		if s.deletionConnection != nil {
-			if err := s.deletionConnection.Close(); err != nil {
-				closeErrors = append(
-					closeErrors,
-					fmt.Errorf(
-						"close ClickHouse deletion connection: %w",
-						err,
-					),
-				)
-			}
-		}
-		if err := s.connection.Close(); err != nil {
-			closeErrors = append(
-				closeErrors,
-				fmt.Errorf("close ClickHouse: %w", err),
-			)
-		}
-		s.closeErr = errors.Join(closeErrors...)
+		s.closeErr = s.closeContext(ctx)
 	})
 	return s.closeErr
+}
+
+func (s *Store) closeContext(ctx context.Context) error {
+	s.lifecycleMu.Lock()
+	s.closed = true
+	lifecycleCancel := s.lifecycleCancel
+	writeAdmission := s.writeAdmission
+	cancel := s.reconcileCancel
+	done := s.reconcileDone
+	s.lifecycleMu.Unlock()
+	var closeErrors []error
+
+	// Stop the ordinary worker before acquiring the exclusive admission
+	// lease. Otherwise it could retain the reconciliation slot while queued
+	// behind this close-time freeze.
+	if cancel != nil {
+		cancel(context.Canceled)
+		select {
+		case <-done:
+		case <-ctx.Done():
+			closeErrors = append(closeErrors, fmt.Errorf("join ClickHouse write-group reconciler: %w", ctx.Err()))
+		}
+	}
+
+	if ctx.Err() == nil && writeAdmission != nil && s.writeGroupVisibility != nil && s.coalescing {
+		if err := writeAdmission.freeze(ctx); err != nil {
+			closeErrors = append(closeErrors, fmt.Errorf("freeze ClickHouse writes for shutdown drain: %w", err))
+		} else {
+			_, drainErr := s.reconcileWriteGroups(ctx, true, true)
+			writeAdmission.releaseFreeze()
+			if drainErr != nil {
+				closeErrors = append(closeErrors, fmt.Errorf("drain ClickHouse write groups during shutdown: %w", drainErr))
+			}
+		}
+	}
+
+	if writeAdmission != nil {
+		writeAdmission.close()
+	}
+	if lifecycleCancel != nil {
+		lifecycleCancel(context.Canceled)
+	}
+	if err := waitForStoreOperations(ctx, &s.operations); err != nil {
+		closeErrors = append(closeErrors, err)
+	}
+	if s.deletionConnection != nil {
+		if err := closeStoreConnection(ctx, "ClickHouse deletion connection", s.deletionConnection); err != nil {
+			closeErrors = append(
+				closeErrors,
+				err,
+			)
+		}
+	}
+	if err := closeStoreConnection(ctx, "ClickHouse", s.connection); err != nil {
+		closeErrors = append(
+			closeErrors,
+			err,
+		)
+	}
+	return errors.Join(closeErrors...)
+}
+
+func waitForStoreOperations(ctx context.Context, operations *sync.WaitGroup) error {
+	done := make(chan struct{})
+	go func() {
+		operations.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("join ClickHouse operations: %w", ctx.Err())
+	}
+}
+
+func closeStoreConnection(ctx context.Context, label string, connection storeConnection) error {
+	done := make(chan error, 1)
+	go func() {
+		done <- connection.Close()
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			return fmt.Errorf("close %s: %w", label, err)
+		}
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("close %s: %w", label, ctx.Err())
+	}
 }
 
 func (s *Store) rowsForBatch(ctx context.Context, batch ingest.StoreBatch, prior *visibility.Reservation) ([][]any, error) {

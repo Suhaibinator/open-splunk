@@ -100,6 +100,14 @@ set binds their exact private schema/migration counters and digests. Restore
 never mixes a control plane from one generation with ClickHouse from another.
 Unknown state fails closed; recovery does not discard it as success.
 
+The SQLite half of that generation contains both logical ingestion
+reservations and immutable write-group membership. A snapshot must therefore
+never retain an ambiguous group without every referenced reservation outbox.
+Online backup, index deletion, and other physical maintenance use the shared
+write freeze and drain proof before copying or mutating either store. Terminal
+group membership is pruned before referenced logical identity rows in the same
+bounded maintenance transaction.
+
 ## Verification
 
 Fast schema, final-shape, ordered-history, upgrade-preservation, ledger,

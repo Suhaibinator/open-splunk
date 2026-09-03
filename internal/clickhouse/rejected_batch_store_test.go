@@ -284,13 +284,15 @@ func TestResumeBatchReturnsRejectionAfterSafePendingAbandonment(t *testing.T) {
 	}
 	const attemptID = "accepted-before-safe-abandonment"
 	pending, err := sequencer.Reserve(ctx, visibility.ReserveRequest{
-		BatchKey:      deduplicationToken(batch),
-		SequenceKey:   sequenceIdentityKey(batch),
-		AttemptID:     attemptID,
-		IndexTime:     batch.ReceivedAt,
-		PayloadSHA256: payloadDigest,
-		Metadata:      metadata,
-		Outbox:        outbox,
+		BatchKey:          deduplicationToken(batch),
+		SequenceKey:       sequenceIdentityKey(batch),
+		AttemptID:         attemptID,
+		IndexTime:         batch.ReceivedAt,
+		PayloadSHA256:     payloadDigest,
+		Metadata:          metadata,
+		Outbox:            outbox,
+		StoredRowCount:    uint32(len(rows)),
+		DecodedEventBytes: decodedEventBytes(batch),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -359,13 +361,15 @@ func TestResumeBatchAfterObservedPendingAbandonmentReturnsGoneWithoutRecreation(
 	}
 	const attemptID = "pending-before-resume-abandonment"
 	pending, err := sequencer.Reserve(ctx, visibility.ReserveRequest{
-		BatchKey:      deduplicationToken(batch),
-		SequenceKey:   sequenceIdentityKey(batch),
-		AttemptID:     attemptID,
-		IndexTime:     batch.ReceivedAt,
-		PayloadSHA256: payloadDigest,
-		Metadata:      metadata,
-		Outbox:        outbox,
+		BatchKey:          deduplicationToken(batch),
+		SequenceKey:       sequenceIdentityKey(batch),
+		AttemptID:         attemptID,
+		IndexTime:         batch.ReceivedAt,
+		PayloadSHA256:     payloadDigest,
+		Metadata:          metadata,
+		Outbox:            outbox,
+		StoredRowCount:    uint32(len(rows)),
+		DecodedEventBytes: decodedEventBytes(batch),
 	})
 	if err != nil {
 		t.Fatal(err)

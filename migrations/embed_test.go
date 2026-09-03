@@ -14,7 +14,7 @@ var embeddedMigrationName = regexp.MustCompile(`^(\d{4})_[a-z0-9]+(?:_[a-z0-9]+)
 
 var embeddedMigrationSHA256 = map[string]map[string]string{
 	"SQLite": {
-		"0001_baseline.sql":                        "3ceec9b0c2f2a44edccff0b3e8b5cd0622fe72c462dc8c36616d9d7683bb2b75",
+		"0001_baseline.sql":                        "23e85b8b288addf86eda7f848e2b087a40194f8c5281459a9f0f8c1d215e1d64",
 		"0002_server_search_settings.sql":          "0c485f9b509705e049453a5bc8dd21f71e0543a54045cde4854d737d340a3038",
 		"0003_durable_search_jobs.sql":             "1371ae38492b5a05894f3f25b3f9ccfb8a41cd51c71d74deb2878754057ab79a",
 		"0004_saved_search_schedules.sql":          "fbd52b43e24c247394a005c6cd518b90947ee80350dacd61fbfee827f27954bd",
