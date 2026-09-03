@@ -737,12 +737,14 @@ func runBackendHECDurableLoad(t *testing.T, plan backendHECLoadPlan) {
 		nativeToken,
 	)
 
+	// Load evidence needs test-only system telemetry that is deliberately
+	// excluded from the server's least-privilege runtime principal.
 	storage, err := clickhousedriver.Open(&clickhousedriver.Options{
 		Addr: []string{clickHouse.Address},
 		Auth: clickhousedriver.Auth{
 			Database: clickHouse.Database,
-			Username: clickHouse.RuntimeUsername,
-			Password: clickHouse.RuntimePassword,
+			Username: clickHouse.Username,
+			Password: clickHouse.Password,
 		},
 		DialTimeout: 5 * time.Second,
 	})
