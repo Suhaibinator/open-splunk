@@ -376,9 +376,31 @@ func TestRuntimeHECHandlerOwnsNamespaceDelegatesBrowserAndStagesDurably(t *testi
 
 	store.mu.Lock()
 	store.reconciliationTelemetry = clickhouse.HECReconciliationSnapshot{
-		Successes:   3,
-		Retries:     2,
-		Ambiguities: 1,
+		Successes:                 3,
+		Retries:                   2,
+		Ambiguities:               1,
+		StagedLogicalBatches:      12,
+		StagedLogicalRows:         13,
+		FormedGroups:              14,
+		PhysicalSends:             15,
+		SuccessfulGroups:          16,
+		GroupMemberBatches:        17,
+		GroupRows:                 18,
+		GroupDecodedBytes:         19,
+		GroupMonthlyPartitions:    20,
+		FillRowTarget:             21,
+		FillByteTarget:            22,
+		FillHardBoundary:          23,
+		FillLinger:                24,
+		FillDrain:                 25,
+		FillRecovery:              26,
+		NativeWaiters:             27,
+		NativeWaiterWakeups:       28,
+		NativeWaiterCancellations: 29,
+		NativeTerminalLookups:     30,
+		SealLatency:               clickhouse.CoalescingDurationHistogramSnapshot{1, 2, 3, 4, 5, 6, 7, 8},
+		SendLatency:               clickhouse.CoalescingDurationHistogramSnapshot{8, 7, 6, 5, 4, 3, 2, 1},
+		CommitLatency:             clickhouse.CoalescingDurationHistogramSnapshot{9, 10, 11, 12, 13, 14, 15, 16},
 	}
 	store.mu.Unlock()
 	sequencer.mu.Lock()
@@ -387,6 +409,11 @@ func TestRuntimeHECHandlerOwnsNamespaceDelegatesBrowserAndStagesDurably(t *testi
 		AcknowledgmentAvailable:   true,
 		PendingOutboxReservations: 4,
 		PendingOutboxBytes:        512,
+		PendingMetadataBytes:      513,
+		PendingUngrouped:          31,
+		ReadyWriteGroups:          32,
+		AmbiguousWriteGroups:      33,
+		LiveWriteGroupLeases:      34,
 		OldestPendingOutboxAge:    7 * time.Second,
 		RequestCapacityAvailable:  true,
 		RetainedRequests:          11,
@@ -411,11 +438,27 @@ func TestRuntimeHECHandlerOwnsNamespaceDelegatesBrowserAndStagesDurably(t *testi
 	if !operational.ObservedAt.Equal(observedAt) || operational.AcceptedRequests != 1 ||
 		operational.Events != 1 || operational.UncompressedBytes == 0 ||
 		operational.PendingOutboxReservations != 4 || operational.PendingOutboxBytes != 512 ||
+		operational.PendingMetadataBytes != 513 || operational.PendingUngrouped != 31 ||
+		operational.ReadyWriteGroups != 32 || operational.AmbiguousWriteGroups != 33 ||
+		operational.LiveWriteGroupLeases != 34 ||
 		operational.OldestPendingOutboxAge != 7*time.Second ||
 		!operational.RequestCapacityAvailable || operational.RetainedRequests != 11 ||
 		!operational.QueueAvailable || !operational.ReconciliationAvailable ||
 		operational.ReconciliationSuccesses != 3 || operational.ReconciliationRetries != 2 ||
-		operational.ReconciliationAmbiguities != 1 || operational.ActiveChannels != 5 ||
+		operational.ReconciliationAmbiguities != 1 || operational.StagedLogicalBatches != 12 ||
+		operational.StagedLogicalRows != 13 || operational.FormedWriteGroups != 14 ||
+		operational.PhysicalInsertSends != 15 || operational.SuccessfulWriteGroups != 16 ||
+		operational.WriteGroupMemberBatches != 17 || operational.WriteGroupRows != 18 ||
+		operational.WriteGroupDecodedBytes != 19 || operational.WriteGroupMonthlyParts != 20 ||
+		operational.FillRowTarget != 21 || operational.FillByteTarget != 22 ||
+		operational.FillHardBoundary != 23 || operational.FillLinger != 24 ||
+		operational.FillDrain != 25 || operational.FillRecovery != 26 ||
+		operational.NativeWaiters != 27 || operational.NativeWaiterWakeups != 28 ||
+		operational.NativeWaiterCancellations != 29 || operational.NativeTerminalLookups != 30 ||
+		operational.SealLatencyBuckets != [8]uint64{1, 2, 3, 4, 5, 6, 7, 8} ||
+		operational.SendLatencyBuckets != [8]uint64{8, 7, 6, 5, 4, 3, 2, 1} ||
+		operational.CommitLatencyBuckets != [8]uint64{9, 10, 11, 12, 13, 14, 15, 16} ||
+		operational.ActiveChannels != 5 ||
 		operational.RetainedChannels != 6 || operational.PendingAcknowledgments != 7 ||
 		operational.IndexedAcknowledgments != 8 || operational.ExpiredAcknowledgments != 9 ||
 		operational.TerminalFailedRequests != 10 || !operational.AcknowledgmentAvailable {

@@ -33,6 +33,11 @@ message HECDurableOperationalMetrics {
   google.protobuf.Duration oldest_pending_outbox_age = 4;
   bool request_capacity_available = 5;
   uint64 retained_requests = 6;
+  uint64 pending_metadata_bytes = 7;
+  uint64 pending_ungrouped = 8;
+  uint64 ready_write_groups = 9;
+  uint64 ambiguous_write_groups = 10;
+  uint64 live_write_group_leases = 11;
 }
 
 message HECReconciliationOperationalMetrics {
@@ -40,6 +45,28 @@ message HECReconciliationOperationalMetrics {
   uint64 successes = 2;
   uint64 retries = 3;
   uint64 ambiguities = 4;
+  uint64 staged_logical_batches = 5;
+  uint64 staged_logical_rows = 6;
+  uint64 formed_write_groups = 7;
+  uint64 physical_insert_sends = 8;
+  uint64 successful_write_groups = 9;
+  uint64 write_group_member_batches = 10;
+  uint64 write_group_rows = 11;
+  uint64 write_group_decoded_bytes = 12;
+  uint64 write_group_monthly_partitions = 13;
+  uint64 fill_row_target = 14;
+  uint64 fill_byte_target = 15;
+  uint64 fill_hard_boundary = 16;
+  uint64 fill_linger = 17;
+  uint64 fill_drain = 18;
+  uint64 fill_recovery = 19;
+  uint64 native_waiters = 20;
+  uint64 native_waiter_wakeups = 21;
+  uint64 native_waiter_cancellations = 22;
+  uint64 native_terminal_lookups = 23;
+  repeated uint64 seal_latency_buckets = 24;
+  repeated uint64 send_latency_buckets = 25;
+  repeated uint64 commit_latency_buckets = 26;
 }
 
 message HECAcknowledgmentOperationalMetrics {

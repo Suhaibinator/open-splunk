@@ -233,6 +233,11 @@ type HECOperationalSnapshot struct {
 	StagingDuration           time.Duration
 	PendingOutboxReservations uint64
 	PendingOutboxBytes        uint64
+	PendingMetadataBytes      uint64
+	PendingUngrouped          uint64
+	ReadyWriteGroups          uint64
+	AmbiguousWriteGroups      uint64
+	LiveWriteGroupLeases      uint64
 	OldestPendingOutboxAge    time.Duration
 	RequestCapacityAvailable  bool
 	RetainedRequests          uint64
@@ -241,6 +246,28 @@ type HECOperationalSnapshot struct {
 	ReconciliationSuccesses   uint64
 	ReconciliationRetries     uint64
 	ReconciliationAmbiguities uint64
+	StagedLogicalBatches      uint64
+	StagedLogicalRows         uint64
+	FormedWriteGroups         uint64
+	PhysicalInsertSends       uint64
+	SuccessfulWriteGroups     uint64
+	WriteGroupMemberBatches   uint64
+	WriteGroupRows            uint64
+	WriteGroupDecodedBytes    uint64
+	WriteGroupMonthlyParts    uint64
+	FillRowTarget             uint64
+	FillByteTarget            uint64
+	FillHardBoundary          uint64
+	FillLinger                uint64
+	FillDrain                 uint64
+	FillRecovery              uint64
+	NativeWaiters             uint64
+	NativeWaiterWakeups       uint64
+	NativeWaiterCancellations uint64
+	NativeTerminalLookups     uint64
+	SealLatencyBuckets        [8]uint64
+	SendLatencyBuckets        [8]uint64
+	CommitLatencyBuckets      [8]uint64
 	ActiveChannels            uint64
 	RetainedChannels          uint64
 	PendingAcknowledgments    uint64

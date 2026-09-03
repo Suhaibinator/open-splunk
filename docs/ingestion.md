@@ -141,6 +141,16 @@ visibility, and outbox work. Concurrent duplicates, ambiguous inserts,
 restart, and stream takeover therefore cannot double-charge inside the retained
 replay horizon.
 
+The logical collector batch remains the unit of identity, quota, response, and
+acknowledgment, but it is not normally the physical ClickHouse insert. The
+server durably coalesces ordered pending batches toward 10,000 rows or 16 MiB,
+with a 200 ms maximum linger and hard limits of 50,000 rows, 64 MiB decoded
+event data, and 10,000 member batches. Sparse traffic may therefore produce a
+small insert when its durable linger deadline expires. A native request waits
+for its own durable terminal result; cancellation or a lost response leaves
+the staged batch available to exact retry and background recovery. The full
+failure and resource contract is in [Insert coalescing](insert-coalescing.md).
+
 ## Container deployment
 
 Successful `v0.MINOR.PATCH` publications produce a public,
@@ -277,6 +287,14 @@ run and framing recovery keeps the input on the same retryable range. See
 SIGTERM stops reads, seals partial work, and gives the WAL a bounded drain
 window. Use a stop timeout of at least 30 seconds. Unacknowledged batches replay
 after restart.
+
+Server shutdown separately stops new admission, force-seals accepted
+ungrouped batches, and drains write groups within its bounded shutdown context
+before closing SQLite or ClickHouse. Any work that does not finish remains in
+SQLite with its sealed membership and outbox, so restart resumes ambiguous
+groups first, then ready groups, then ungrouped batches. An expired sparse
+linger deadline is durable and fires immediately after restart rather than
+starting a new delay.
 
 Back up or move state only while the collector is stopped. Copy the complete
 directory consistently and preserve UID/GID and owner-only modes. Collector

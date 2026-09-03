@@ -238,7 +238,7 @@ Principal hard ceilings are:
 | exact number token | 128 bytes; exponent magnitude 1,024 |
 | concurrent requests per token / process | 16 / 128 |
 | reserved concurrent health probes | 8 |
-| pending outbox requests / payload | 64 / 256 MiB |
+| pending outbox requests / payload / metadata | 20,000 / 256 MiB / 256 MiB |
 | retained requests per token | 100,000 |
 | channels per token | 256 |
 | ACK IDs per query / retained per token | 1,000 / 100,000 |
@@ -311,6 +311,15 @@ restore, allow reconciliation to resolve retained pending requests. An ID
 issued after the chosen snapshot is lost external state and polls false;
 resending may duplicate an event that existed outside the restored authority.
 
+Accepted HEC requests remain independent logical batches while the server
+combines their rows into durable ordered ClickHouse write groups. ACK remains
+false until the transaction that commits the complete physical group also
+updates every member request; a partial group cannot become acknowledged or
+visible. Backup must use the same exclusive write freeze and empty-drain proof
+as index deletion: no ungrouped reservation, ready group, ambiguous group, or
+live group lease may be omitted. Restore replays the oldest ambiguous group
+with its original membership and token before sending newer work.
+
 ## Load, soak, and slow-client gates
 
 The always-on real TLS transport gate is:
@@ -328,9 +337,28 @@ The durable shipped-process load gate exercises HEC, native collector traffic,
 control-plane mutations, ClickHouse outage/backlog/reconciliation, ACK truth,
 and exact event IDs:
 
+It also reports physical inserts, rows per insert, active parts, and insert
+rejections/delays from ClickHouse's bounded system telemetry. Under a qualified
+steady-state window with at least 10,000 eligible rows available before the
+linger deadline, the gate requires a median of at least 10,000 rows, at least
+90 percent of inserts at or above 5,000 rows, no hard-limit violation, and at
+most one physical insert per ten accepted logical batches. Startup recovery,
+explicit drain, and sparse linger flushes are reported separately and are not
+misclassified as steady-state regressions.
+
 ```sh
 OPEN_SPLUNK_HEC_LOAD=1 \
 go test ./integration -run '^TestBackendHECDurableLoad$' \
+  -count=1 -timeout=15m -v
+```
+
+The six-second batch-only qualification profile drives 50,000 events/second
+through concurrent HEC requests. It measures only the pre-outage steady-state
+window after startup, then enforces the coalescing distribution thresholds:
+
+```sh
+OPEN_SPLUNK_HEC_QUALIFIED_LOAD=1 \
+go test ./integration -run '^TestBackendHECQualifiedLoad$' \
   -count=1 -timeout=15m -v
 ```
 

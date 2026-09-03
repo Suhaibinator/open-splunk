@@ -59,6 +59,11 @@ func TestHECOperationalSnapshotRouteIsBoundedAndAdministratorOnly(t *testing.T) 
 		StagingDuration:           10 * time.Millisecond,
 		PendingOutboxReservations: 11,
 		PendingOutboxBytes:        12,
+		PendingMetadataBytes:      29,
+		PendingUngrouped:          30,
+		ReadyWriteGroups:          31,
+		AmbiguousWriteGroups:      32,
+		LiveWriteGroupLeases:      33,
 		OldestPendingOutboxAge:    13 * time.Second,
 		RequestCapacityAvailable:  true,
 		RetainedRequests:          28,
@@ -67,6 +72,28 @@ func TestHECOperationalSnapshotRouteIsBoundedAndAdministratorOnly(t *testing.T) 
 		ReconciliationSuccesses:   14,
 		ReconciliationRetries:     15,
 		ReconciliationAmbiguities: 16,
+		StagedLogicalBatches:      34,
+		StagedLogicalRows:         35,
+		FormedWriteGroups:         36,
+		PhysicalInsertSends:       37,
+		SuccessfulWriteGroups:     38,
+		WriteGroupMemberBatches:   39,
+		WriteGroupRows:            40,
+		WriteGroupDecodedBytes:    41,
+		WriteGroupMonthlyParts:    42,
+		FillRowTarget:             43,
+		FillByteTarget:            44,
+		FillHardBoundary:          45,
+		FillLinger:                46,
+		FillDrain:                 47,
+		FillRecovery:              48,
+		NativeWaiters:             49,
+		NativeWaiterWakeups:       50,
+		NativeWaiterCancellations: 51,
+		NativeTerminalLookups:     52,
+		SealLatencyBuckets:        [8]uint64{1, 2, 3, 4, 5, 6, 7, 8},
+		SendLatencyBuckets:        [8]uint64{8, 7, 6, 5, 4, 3, 2, 1},
+		CommitLatencyBuckets:      [8]uint64{9, 10, 11, 12, 13, 14, 15, 16},
 		ActiveChannels:            17,
 		RetainedChannels:          18,
 		PendingAcknowledgments:    19,
@@ -101,11 +128,38 @@ func TestHECOperationalSnapshotRouteIsBoundedAndAdministratorOnly(t *testing.T) 
 		decoded.GetRequest().GetStagingDuration().AsDuration() != 10*time.Millisecond ||
 		decoded.GetRequest().GetShutdownRejections() != 26 ||
 		decoded.GetDurable().GetPendingOutboxReservations() != 11 ||
+		decoded.GetDurable().GetPendingMetadataBytes() != 29 ||
+		decoded.GetDurable().GetPendingUngrouped() != 30 ||
+		decoded.GetDurable().GetReadyWriteGroups() != 31 ||
+		decoded.GetDurable().GetAmbiguousWriteGroups() != 32 ||
+		decoded.GetDurable().GetLiveWriteGroupLeases() != 33 ||
 		decoded.GetDurable().GetOldestPendingOutboxAge().AsDuration() != 13*time.Second ||
 		!decoded.GetDurable().GetRequestCapacityAvailable() ||
 		decoded.GetDurable().GetRetainedRequests() != 28 ||
 		!decoded.GetReconciliation().GetAvailable() ||
 		decoded.GetReconciliation().GetAmbiguities() != 16 ||
+		decoded.GetReconciliation().GetStagedLogicalBatches() != 34 ||
+		decoded.GetReconciliation().GetStagedLogicalRows() != 35 ||
+		decoded.GetReconciliation().GetFormedWriteGroups() != 36 ||
+		decoded.GetReconciliation().GetPhysicalInsertSends() != 37 ||
+		decoded.GetReconciliation().GetSuccessfulWriteGroups() != 38 ||
+		decoded.GetReconciliation().GetWriteGroupMemberBatches() != 39 ||
+		decoded.GetReconciliation().GetWriteGroupRows() != 40 ||
+		decoded.GetReconciliation().GetWriteGroupDecodedBytes() != 41 ||
+		decoded.GetReconciliation().GetWriteGroupMonthlyPartitions() != 42 ||
+		decoded.GetReconciliation().GetFillRowTarget() != 43 ||
+		decoded.GetReconciliation().GetFillByteTarget() != 44 ||
+		decoded.GetReconciliation().GetFillHardBoundary() != 45 ||
+		decoded.GetReconciliation().GetFillLinger() != 46 ||
+		decoded.GetReconciliation().GetFillDrain() != 47 ||
+		decoded.GetReconciliation().GetFillRecovery() != 48 ||
+		decoded.GetReconciliation().GetNativeWaiters() != 49 ||
+		decoded.GetReconciliation().GetNativeWaiterWakeups() != 50 ||
+		decoded.GetReconciliation().GetNativeWaiterCancellations() != 51 ||
+		decoded.GetReconciliation().GetNativeTerminalLookups() != 52 ||
+		!reflect.DeepEqual(decoded.GetReconciliation().GetSealLatencyBuckets(), []uint64{1, 2, 3, 4, 5, 6, 7, 8}) ||
+		!reflect.DeepEqual(decoded.GetReconciliation().GetSendLatencyBuckets(), []uint64{8, 7, 6, 5, 4, 3, 2, 1}) ||
+		!reflect.DeepEqual(decoded.GetReconciliation().GetCommitLatencyBuckets(), []uint64{9, 10, 11, 12, 13, 14, 15, 16}) ||
 		decoded.GetAcknowledgments().GetActiveChannels() != 17 ||
 		decoded.GetAcknowledgments().GetRetainedChannels() != 18 ||
 		decoded.GetAcknowledgments().GetExpiredRows() != 21 ||

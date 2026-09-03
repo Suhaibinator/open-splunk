@@ -104,7 +104,11 @@ generation continues, and concurrent bounded searches over monotonically
 advancing visibility snapshots. Final checks require exact source, raw-row,
 cardinality, checkpoint, WAL-drain, dead-letter, and secret-redaction results.
 Throughput, outage/recovery, storage, and search-latency measurements are logged
-as observational evidence rather than portable timing promises.
+as observational evidence rather than portable timing promises. The gate also
+queries ClickHouse's system logs and parts after the final drain to report
+physical inserts, rows-per-insert distribution, insert delays/rejections, and
+active-part growth. These measurements contain no tenant, index, batch, group,
+channel, token, payload, or error-text labels.
 
 Run this resource-intensive gate explicitly:
 
@@ -117,6 +121,17 @@ OPEN_SPLUNK_BACKEND_LOAD=1 \
 It starts the repository-pinned ClickHouse image unless
 `OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE` deliberately selects another digest-pinned
 image.
+
+Physical insert coalescing has a separate concurrent HEC qualification gate.
+It excludes startup, outage, recovery, and final drain from the measured
+window and enforces the documented median, coverage, hard-limit, and physical-
+to-logical ratio thresholds:
+
+```sh
+OPEN_SPLUNK_HEC_QUALIFIED_LOAD=1 \
+  go test ./integration -run '^TestBackendHECQualifiedLoad$' \
+    -count=1 -timeout=15m -v
+```
 
 ## Browser stream recovery and cancellation
 

@@ -7,10 +7,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/Suhaibinator/open-splunk/internal/server"
+	"github.com/Suhaibinator/open-splunk/internal/testsupport"
+	"github.com/Suhaibinator/open-splunk/migrations"
 )
 
 type backendLoadStorageState struct {
@@ -172,6 +178,387 @@ type backendLoadStorageMetrics struct {
 	CompressedBytes   uint64
 	UncompressedBytes uint64
 	BytesOnDisk       uint64
+}
+
+type backendLoadPhysicalInsertShape struct {
+	PhysicalInserts         uint64
+	WrittenRows             uint64
+	WrittenBytes            uint64
+	RowsAtLeastFiveThousand uint64
+	MinimumRows             uint64
+	MedianRows              uint64
+	MaximumRows             uint64
+	FailedInserts           uint64
+	NewParts                uint64
+	NewPartRows             uint64
+	MergeParts              uint64
+	MergedRows              uint64
+	DelayedInserts          uint64
+	RejectedInserts         uint64
+}
+
+type backendLoadStorageActivityMarker struct {
+	StartedAt   time.Time
+	EndedAt     time.Time
+	Events      map[string]uint64
+	EndedEvents map[string]uint64
+}
+
+var backendLoadStorageEventNames = []string{
+	"DelayedInserts",
+	"RejectedInserts",
+}
+
+func readBackendLoadStorageActivityMarker(
+	ctx context.Context,
+	connection clickhousedriver.Conn,
+) (backendLoadStorageActivityMarker, error) {
+	var startedAt time.Time
+	if err := connection.QueryRow(ctx, `SELECT now64(6)`).Scan(&startedAt); err != nil {
+		return backendLoadStorageActivityMarker{}, fmt.Errorf("read ClickHouse activity clock: %w", err)
+	}
+	events, err := readBackendLoadStorageEvents(ctx, connection)
+	if err != nil {
+		return backendLoadStorageActivityMarker{}, err
+	}
+	return backendLoadStorageActivityMarker{
+		StartedAt: startedAt.UTC(),
+		Events:    events,
+	}, nil
+}
+
+func readBackendLoadPhysicalInsertShape(
+	ctx context.Context,
+	connection clickhousedriver.Conn,
+	marker backendLoadStorageActivityMarker,
+) (backendLoadPhysicalInsertShape, error) {
+	if marker.StartedAt.IsZero() {
+		return backendLoadPhysicalInsertShape{}, errors.New("ClickHouse activity marker time is required")
+	}
+	queryEnd := ""
+	queryArguments := []any{marker.StartedAt}
+	partArguments := []any{marker.StartedAt}
+	if !marker.EndedAt.IsZero() {
+		if !marker.EndedAt.After(marker.StartedAt) || marker.EndedEvents == nil {
+			return backendLoadPhysicalInsertShape{}, errors.New("ClickHouse activity marker end must follow its start with event counters")
+		}
+		queryEnd = " AND query_start_time_microseconds < ?"
+		queryArguments = append(queryArguments, marker.EndedAt)
+		partArguments = append(partArguments, marker.EndedAt)
+	}
+	var shape backendLoadPhysicalInsertShape
+	if err := connection.QueryRow(
+		ctx,
+		`SELECT
+			countIf(type = 'QueryFinish' AND written_rows > 0),
+			coalesce(sumIf(written_rows, type = 'QueryFinish'), 0),
+			coalesce(sumIf(written_bytes, type = 'QueryFinish'), 0),
+			countIf(type = 'QueryFinish' AND written_rows >= 5000),
+			minIf(written_rows, type = 'QueryFinish' AND written_rows > 0),
+			quantileExactIf(0.5)(written_rows, type = 'QueryFinish' AND written_rows > 0),
+			maxIf(written_rows, type = 'QueryFinish'),
+			countIf(type IN ('ExceptionBeforeStart', 'ExceptionWhileProcessing'))
+		 FROM system.query_log
+		 WHERE query_start_time_microseconds >= ?
+			AND query_kind = 'Insert'
+			AND has(tables, 'open_splunk.events')`+queryEnd,
+		queryArguments...,
+	).Scan(
+		&shape.PhysicalInserts,
+		&shape.WrittenRows,
+		&shape.WrittenBytes,
+		&shape.RowsAtLeastFiveThousand,
+		&shape.MinimumRows,
+		&shape.MedianRows,
+		&shape.MaximumRows,
+		&shape.FailedInserts,
+	); err != nil {
+		return backendLoadPhysicalInsertShape{}, fmt.Errorf("read backend load insert query shape: %w", err)
+	}
+	if err := connection.QueryRow(
+		ctx,
+		`SELECT
+			countIf(event_type = 'NewPart'),
+			coalesce(sumIf(rows, event_type = 'NewPart'), 0),
+			countIf(event_type = 'MergeParts'),
+			coalesce(sumIf(rows, event_type = 'MergeParts'), 0)
+		 FROM system.part_log
+		 WHERE event_time_microseconds >= ?
+			AND database = 'open_splunk'
+			AND table = 'events'`+strings.Replace(queryEnd, "query_start_time_microseconds", "event_time_microseconds", 1),
+		partArguments...,
+	).Scan(
+		&shape.NewParts,
+		&shape.NewPartRows,
+		&shape.MergeParts,
+		&shape.MergedRows,
+	); err != nil {
+		return backendLoadPhysicalInsertShape{}, fmt.Errorf("read backend load part activity: %w", err)
+	}
+	events := marker.EndedEvents
+	if events == nil {
+		var err error
+		events, err = readBackendLoadStorageEvents(ctx, connection)
+		if err != nil {
+			return backendLoadPhysicalInsertShape{}, err
+		}
+	}
+	shape.DelayedInserts = monotonicCounterDelta(marker.Events["DelayedInserts"], events["DelayedInserts"])
+	shape.RejectedInserts = monotonicCounterDelta(marker.Events["RejectedInserts"], events["RejectedInserts"])
+	return shape, nil
+}
+
+func readBackendLoadStorageEvents(
+	ctx context.Context,
+	connection clickhousedriver.Conn,
+) (map[string]uint64, error) {
+	rows, err := connection.Query(
+		ctx,
+		`SELECT event, value
+		 FROM system.events
+		 WHERE event IN ('DelayedInserts', 'RejectedInserts')`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("read backend load ClickHouse events: %w", err)
+	}
+	defer rows.Close()
+	values := make(map[string]uint64, len(backendLoadStorageEventNames))
+	for _, name := range backendLoadStorageEventNames {
+		values[name] = 0
+	}
+	for rows.Next() {
+		var name string
+		var value uint64
+		if err := rows.Scan(&name, &value); err != nil {
+			return nil, fmt.Errorf("scan backend load ClickHouse event: %w", err)
+		}
+		if _, known := values[name]; known {
+			values[name] = value
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate backend load ClickHouse events: %w", err)
+	}
+	return values, nil
+}
+
+func monotonicCounterDelta(before, after uint64) uint64 {
+	if after < before {
+		return 0
+	}
+	return after - before
+}
+
+func waitForBackendLoadPhysicalInsertShape(
+	t *testing.T,
+	ctx context.Context,
+	connection clickhousedriver.Conn,
+	marker backendLoadStorageActivityMarker,
+	expectedRows uint64,
+) backendLoadPhysicalInsertShape {
+	t.Helper()
+	waitContext, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	var last backendLoadPhysicalInsertShape
+	var lastErr error
+	for {
+		queryContext, queryCancel := context.WithTimeout(waitContext, 5*time.Second)
+		last, lastErr = readBackendLoadPhysicalInsertShape(queryContext, connection, marker)
+		queryCancel()
+		if lastErr == nil && last.WrittenRows >= expectedRows && last.NewParts > 0 {
+			return last
+		}
+		select {
+		case <-waitContext.Done():
+			t.Fatalf(
+				"wait for backend load physical insert telemetry: %v shape=%+v error=%v",
+				waitContext.Err(),
+				last,
+				lastErr,
+			)
+		case <-ticker.C:
+		}
+	}
+}
+
+func validateBackendLoadPhysicalInsertShape(
+	shape backendLoadPhysicalInsertShape,
+	logicalBatches uint64,
+	qualifiedSteadyState bool,
+) error {
+	if shape.PhysicalInserts == 0 || shape.WrittenRows == 0 || shape.MinimumRows == 0 {
+		return errors.New("physical insert telemetry contains no successful nonempty insert")
+	}
+	if shape.MaximumRows > 50_000 {
+		return fmt.Errorf("physical insert maximum rows %d exceeds hard limit 50000", shape.MaximumRows)
+	}
+	if !qualifiedSteadyState {
+		return nil
+	}
+	if shape.MedianRows < 10_000 {
+		return fmt.Errorf("physical insert median rows %d is below 10000", shape.MedianRows)
+	}
+	minimumLargeInserts := shape.PhysicalInserts/10*9 + (shape.PhysicalInserts%10*9+9)/10
+	if shape.RowsAtLeastFiveThousand < minimumLargeInserts {
+		return fmt.Errorf(
+			"physical inserts with at least 5000 rows = %d, want at least %d of %d",
+			shape.RowsAtLeastFiveThousand,
+			minimumLargeInserts,
+			shape.PhysicalInserts,
+		)
+	}
+	if logicalBatches == 0 || shape.PhysicalInserts > logicalBatches/10 {
+		return fmt.Errorf(
+			"physical inserts %d exceed one tenth of %d logical batches",
+			shape.PhysicalInserts,
+			logicalBatches,
+		)
+	}
+	return nil
+}
+
+func TestValidateQualifiedInsertShape(t *testing.T) {
+	t.Parallel()
+	sparse := backendLoadPhysicalInsertShape{
+		PhysicalInserts: 2,
+		WrittenRows:     200,
+		MinimumRows:     100,
+		MedianRows:      100,
+		MaximumRows:     100,
+	}
+	if err := validateBackendLoadPhysicalInsertShape(sparse, 2, false); err != nil {
+		t.Fatalf("sparse insert shape: %v", err)
+	}
+	qualified := backendLoadPhysicalInsertShape{
+		PhysicalInserts:         10,
+		WrittenRows:             100_000,
+		RowsAtLeastFiveThousand: 9,
+		MinimumRows:             1_000,
+		MedianRows:              10_000,
+		MaximumRows:             50_000,
+	}
+	if err := validateBackendLoadPhysicalInsertShape(qualified, 100, true); err != nil {
+		t.Fatalf("qualified insert shape: %v", err)
+	}
+	for name, shape := range map[string]backendLoadPhysicalInsertShape{
+		"empty": {},
+		"hard maximum": {
+			PhysicalInserts: 1,
+			WrittenRows:     50_001,
+			MinimumRows:     50_001,
+			MedianRows:      50_001,
+			MaximumRows:     50_001,
+		},
+		"median": {
+			PhysicalInserts:         10,
+			WrittenRows:             99_990,
+			RowsAtLeastFiveThousand: 9,
+			MinimumRows:             4_999,
+			MedianRows:              9_999,
+			MaximumRows:             50_000,
+		},
+		"large insert ratio": {
+			PhysicalInserts:         10,
+			WrittenRows:             100_000,
+			RowsAtLeastFiveThousand: 8,
+			MinimumRows:             1,
+			MedianRows:              10_000,
+			MaximumRows:             50_000,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if err := validateBackendLoadPhysicalInsertShape(shape, 100, true); err == nil {
+				t.Fatal("invalid physical insert shape unexpectedly validated")
+			}
+		})
+	}
+	tooMany := qualified
+	tooMany.PhysicalInserts = 11
+	tooMany.RowsAtLeastFiveThousand = 11
+	if err := validateBackendLoadPhysicalInsertShape(tooMany, 100, true); err == nil {
+		t.Fatal("physical/logical insert ratio above one tenth unexpectedly validated")
+	}
+}
+
+func TestQueryPhysicalInsertShapeAgainstClickHouse(t *testing.T) {
+	if os.Getenv("OPEN_SPLUNK_CLICKHOUSE_INTEGRATION") != "1" {
+		t.Skip("set OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 to run the Docker integration test")
+	}
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Fatalf("Docker integration was requested but the CLI is unavailable: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	container, err := testsupport.StartClickHouseWithServicePrincipals(
+		ctx,
+		os.Getenv("OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cleanupContext, cleanupCancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cleanupCancel()
+		if closeErr := container.Close(cleanupContext); closeErr != nil {
+			t.Errorf("close ClickHouse fixture: %v", closeErr)
+		}
+	})
+	migrator, err := clickhousedriver.Open(&clickhousedriver.Options{
+		Addr: []string{container.Address},
+		Auth: clickhousedriver.Auth{
+			Database: "default",
+			Username: container.MigrationUsername,
+			Password: container.MigrationPassword,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.ApplyClickHouseMigrations(ctx, migrator, migrations.ClickHouse()); err != nil {
+		_ = migrator.Close()
+		t.Fatal(err)
+	}
+	if err := migrator.Close(); err != nil {
+		t.Fatalf("close ClickHouse migration connection: %v", err)
+	}
+	connection, err := clickhousedriver.Open(&clickhousedriver.Options{
+		Addr: []string{container.Address},
+		Auth: clickhousedriver.Auth{
+			Database: container.Database,
+			Username: container.RuntimeUsername,
+			Password: container.RuntimePassword,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = connection.Close() }()
+	marker, err := readBackendLoadStorageActivityMarker(ctx, connection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.NewTimer(20 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	var shape backendLoadPhysicalInsertShape
+	for {
+		shape, err = readBackendLoadPhysicalInsertShape(ctx, connection, marker)
+		if err == nil {
+			break
+		}
+		select {
+		case <-deadline.C:
+			t.Fatalf("wait for ClickHouse system telemetry tables: %v", err)
+		case <-ticker.C:
+		}
+	}
+	if shape.PhysicalInserts != 0 || shape.WrittenRows != 0 || shape.NewParts != 0 {
+		t.Fatalf("empty post-marker ClickHouse activity = %+v", shape)
+	}
 }
 
 func readBackendLoadStorageMetrics(

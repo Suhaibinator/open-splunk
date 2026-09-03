@@ -23,6 +23,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/privatefs"
+	"github.com/Suhaibinator/open-splunk/internal/visibility"
 	"github.com/Suhaibinator/open-splunk/migrations"
 )
 
@@ -331,6 +332,9 @@ func createWithHooks(
 	)
 	if err != nil {
 		return Manifest{}, err
+	}
+	if err := visibility.ValidateBackupDrain(ctx, sourceDatabase); err != nil {
+		return Manifest{}, fmt.Errorf("create control-plane backup: %w", err)
 	}
 	databaseOpen := true
 	defer func() {

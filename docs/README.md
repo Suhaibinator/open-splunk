@@ -20,6 +20,9 @@ a document explicitly says otherwise.
   outside them.
 - [Ingestion](ingestion.md) covers native collectors, token constraints,
   quotas, and collector operations.
+- [Insert coalescing](insert-coalescing.md) defines the durable logical-batch
+  and physical-write-group protocol, recovery rules, resource bounds, and
+  acceptance measurements shared by native and HEC ingestion.
 - [Collector configuration](collector-configuration.md) enumerates the
   collector CLI, YAML schema, defaults, environment templating, processors,
   and TLS boundaries.

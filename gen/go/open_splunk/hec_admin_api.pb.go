@@ -194,6 +194,11 @@ type HECDurableOperationalMetrics struct {
 	OldestPendingOutboxAge    *durationpb.Duration   `protobuf:"bytes,4,opt,name=oldest_pending_outbox_age,json=oldestPendingOutboxAge,proto3" json:"oldest_pending_outbox_age,omitempty"`
 	RequestCapacityAvailable  bool                   `protobuf:"varint,5,opt,name=request_capacity_available,json=requestCapacityAvailable,proto3" json:"request_capacity_available,omitempty"`
 	RetainedRequests          uint64                 `protobuf:"varint,6,opt,name=retained_requests,json=retainedRequests,proto3" json:"retained_requests,omitempty"`
+	PendingMetadataBytes      uint64                 `protobuf:"varint,7,opt,name=pending_metadata_bytes,json=pendingMetadataBytes,proto3" json:"pending_metadata_bytes,omitempty"`
+	PendingUngrouped          uint64                 `protobuf:"varint,8,opt,name=pending_ungrouped,json=pendingUngrouped,proto3" json:"pending_ungrouped,omitempty"`
+	ReadyWriteGroups          uint64                 `protobuf:"varint,9,opt,name=ready_write_groups,json=readyWriteGroups,proto3" json:"ready_write_groups,omitempty"`
+	AmbiguousWriteGroups      uint64                 `protobuf:"varint,10,opt,name=ambiguous_write_groups,json=ambiguousWriteGroups,proto3" json:"ambiguous_write_groups,omitempty"`
+	LiveWriteGroupLeases      uint64                 `protobuf:"varint,11,opt,name=live_write_group_leases,json=liveWriteGroupLeases,proto3" json:"live_write_group_leases,omitempty"`
 	unknownFields             protoimpl.UnknownFields
 	sizeCache                 protoimpl.SizeCache
 }
@@ -270,14 +275,71 @@ func (x *HECDurableOperationalMetrics) GetRetainedRequests() uint64 {
 	return 0
 }
 
+func (x *HECDurableOperationalMetrics) GetPendingMetadataBytes() uint64 {
+	if x != nil {
+		return x.PendingMetadataBytes
+	}
+	return 0
+}
+
+func (x *HECDurableOperationalMetrics) GetPendingUngrouped() uint64 {
+	if x != nil {
+		return x.PendingUngrouped
+	}
+	return 0
+}
+
+func (x *HECDurableOperationalMetrics) GetReadyWriteGroups() uint64 {
+	if x != nil {
+		return x.ReadyWriteGroups
+	}
+	return 0
+}
+
+func (x *HECDurableOperationalMetrics) GetAmbiguousWriteGroups() uint64 {
+	if x != nil {
+		return x.AmbiguousWriteGroups
+	}
+	return 0
+}
+
+func (x *HECDurableOperationalMetrics) GetLiveWriteGroupLeases() uint64 {
+	if x != nil {
+		return x.LiveWriteGroupLeases
+	}
+	return 0
+}
+
 type HECReconciliationOperationalMetrics struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Available     bool                   `protobuf:"varint,1,opt,name=available,proto3" json:"available,omitempty"`
-	Successes     uint64                 `protobuf:"varint,2,opt,name=successes,proto3" json:"successes,omitempty"`
-	Retries       uint64                 `protobuf:"varint,3,opt,name=retries,proto3" json:"retries,omitempty"`
-	Ambiguities   uint64                 `protobuf:"varint,4,opt,name=ambiguities,proto3" json:"ambiguities,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                       protoimpl.MessageState `protogen:"open.v1"`
+	Available                   bool                   `protobuf:"varint,1,opt,name=available,proto3" json:"available,omitempty"`
+	Successes                   uint64                 `protobuf:"varint,2,opt,name=successes,proto3" json:"successes,omitempty"`
+	Retries                     uint64                 `protobuf:"varint,3,opt,name=retries,proto3" json:"retries,omitempty"`
+	Ambiguities                 uint64                 `protobuf:"varint,4,opt,name=ambiguities,proto3" json:"ambiguities,omitempty"`
+	StagedLogicalBatches        uint64                 `protobuf:"varint,5,opt,name=staged_logical_batches,json=stagedLogicalBatches,proto3" json:"staged_logical_batches,omitempty"`
+	StagedLogicalRows           uint64                 `protobuf:"varint,6,opt,name=staged_logical_rows,json=stagedLogicalRows,proto3" json:"staged_logical_rows,omitempty"`
+	FormedWriteGroups           uint64                 `protobuf:"varint,7,opt,name=formed_write_groups,json=formedWriteGroups,proto3" json:"formed_write_groups,omitempty"`
+	PhysicalInsertSends         uint64                 `protobuf:"varint,8,opt,name=physical_insert_sends,json=physicalInsertSends,proto3" json:"physical_insert_sends,omitempty"`
+	SuccessfulWriteGroups       uint64                 `protobuf:"varint,9,opt,name=successful_write_groups,json=successfulWriteGroups,proto3" json:"successful_write_groups,omitempty"`
+	WriteGroupMemberBatches     uint64                 `protobuf:"varint,10,opt,name=write_group_member_batches,json=writeGroupMemberBatches,proto3" json:"write_group_member_batches,omitempty"`
+	WriteGroupRows              uint64                 `protobuf:"varint,11,opt,name=write_group_rows,json=writeGroupRows,proto3" json:"write_group_rows,omitempty"`
+	WriteGroupDecodedBytes      uint64                 `protobuf:"varint,12,opt,name=write_group_decoded_bytes,json=writeGroupDecodedBytes,proto3" json:"write_group_decoded_bytes,omitempty"`
+	WriteGroupMonthlyPartitions uint64                 `protobuf:"varint,13,opt,name=write_group_monthly_partitions,json=writeGroupMonthlyPartitions,proto3" json:"write_group_monthly_partitions,omitempty"`
+	FillRowTarget               uint64                 `protobuf:"varint,14,opt,name=fill_row_target,json=fillRowTarget,proto3" json:"fill_row_target,omitempty"`
+	FillByteTarget              uint64                 `protobuf:"varint,15,opt,name=fill_byte_target,json=fillByteTarget,proto3" json:"fill_byte_target,omitempty"`
+	FillHardBoundary            uint64                 `protobuf:"varint,16,opt,name=fill_hard_boundary,json=fillHardBoundary,proto3" json:"fill_hard_boundary,omitempty"`
+	FillLinger                  uint64                 `protobuf:"varint,17,opt,name=fill_linger,json=fillLinger,proto3" json:"fill_linger,omitempty"`
+	FillDrain                   uint64                 `protobuf:"varint,18,opt,name=fill_drain,json=fillDrain,proto3" json:"fill_drain,omitempty"`
+	FillRecovery                uint64                 `protobuf:"varint,19,opt,name=fill_recovery,json=fillRecovery,proto3" json:"fill_recovery,omitempty"`
+	NativeWaiters               uint64                 `protobuf:"varint,20,opt,name=native_waiters,json=nativeWaiters,proto3" json:"native_waiters,omitempty"`
+	NativeWaiterWakeups         uint64                 `protobuf:"varint,21,opt,name=native_waiter_wakeups,json=nativeWaiterWakeups,proto3" json:"native_waiter_wakeups,omitempty"`
+	NativeWaiterCancellations   uint64                 `protobuf:"varint,22,opt,name=native_waiter_cancellations,json=nativeWaiterCancellations,proto3" json:"native_waiter_cancellations,omitempty"`
+	NativeTerminalLookups       uint64                 `protobuf:"varint,23,opt,name=native_terminal_lookups,json=nativeTerminalLookups,proto3" json:"native_terminal_lookups,omitempty"`
+	SealLatencyBuckets          []uint64               `protobuf:"varint,24,rep,packed,name=seal_latency_buckets,json=sealLatencyBuckets,proto3" json:"seal_latency_buckets,omitempty"`
+	SendLatencyBuckets          []uint64               `protobuf:"varint,25,rep,packed,name=send_latency_buckets,json=sendLatencyBuckets,proto3" json:"send_latency_buckets,omitempty"`
+	CommitLatencyBuckets        []uint64               `protobuf:"varint,26,rep,packed,name=commit_latency_buckets,json=commitLatencyBuckets,proto3" json:"commit_latency_buckets,omitempty"`
+	unknownFields               protoimpl.UnknownFields
+	sizeCache                   protoimpl.SizeCache
 }
 
 func (x *HECReconciliationOperationalMetrics) Reset() {
@@ -336,6 +398,160 @@ func (x *HECReconciliationOperationalMetrics) GetAmbiguities() uint64 {
 		return x.Ambiguities
 	}
 	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetStagedLogicalBatches() uint64 {
+	if x != nil {
+		return x.StagedLogicalBatches
+	}
+	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetStagedLogicalRows() uint64 {
+	if x != nil {
+		return x.StagedLogicalRows
+	}
+	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetFormedWriteGroups() uint64 {
+	if x != nil {
+		return x.FormedWriteGroups
+	}
+	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetPhysicalInsertSends() uint64 {
+	if x != nil {
+		return x.PhysicalInsertSends
+	}
+	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetSuccessfulWriteGroups() uint64 {
+	if x != nil {
+		return x.SuccessfulWriteGroups
+	}
+	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetWriteGroupMemberBatches() uint64 {
+	if x != nil {
+		return x.WriteGroupMemberBatches
+	}
+	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetWriteGroupRows() uint64 {
+	if x != nil {
+		return x.WriteGroupRows
+	}
+	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetWriteGroupDecodedBytes() uint64 {
+	if x != nil {
+		return x.WriteGroupDecodedBytes
+	}
+	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetWriteGroupMonthlyPartitions() uint64 {
+	if x != nil {
+		return x.WriteGroupMonthlyPartitions
+	}
+	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetFillRowTarget() uint64 {
+	if x != nil {
+		return x.FillRowTarget
+	}
+	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetFillByteTarget() uint64 {
+	if x != nil {
+		return x.FillByteTarget
+	}
+	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetFillHardBoundary() uint64 {
+	if x != nil {
+		return x.FillHardBoundary
+	}
+	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetFillLinger() uint64 {
+	if x != nil {
+		return x.FillLinger
+	}
+	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetFillDrain() uint64 {
+	if x != nil {
+		return x.FillDrain
+	}
+	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetFillRecovery() uint64 {
+	if x != nil {
+		return x.FillRecovery
+	}
+	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetNativeWaiters() uint64 {
+	if x != nil {
+		return x.NativeWaiters
+	}
+	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetNativeWaiterWakeups() uint64 {
+	if x != nil {
+		return x.NativeWaiterWakeups
+	}
+	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetNativeWaiterCancellations() uint64 {
+	if x != nil {
+		return x.NativeWaiterCancellations
+	}
+	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetNativeTerminalLookups() uint64 {
+	if x != nil {
+		return x.NativeTerminalLookups
+	}
+	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetSealLatencyBuckets() []uint64 {
+	if x != nil {
+		return x.SealLatencyBuckets
+	}
+	return nil
+}
+
+func (x *HECReconciliationOperationalMetrics) GetSendLatencyBuckets() []uint64 {
+	if x != nil {
+		return x.SendLatencyBuckets
+	}
+	return nil
+}
+
+func (x *HECReconciliationOperationalMetrics) GetCommitLatencyBuckets() []uint64 {
+	if x != nil {
+		return x.CommitLatencyBuckets
+	}
+	return nil
 }
 
 type HECAcknowledgmentOperationalMetrics struct {
@@ -611,19 +827,50 @@ const file_open_splunk_hec_admin_api_proto_rawDesc = "" +
 	"\x10staging_failures\x18\t \x01(\x04R\x0fstagingFailures\x12D\n" +
 	"\x10staging_duration\x18\n" +
 	" \x01(\v2\x19.google.protobuf.DurationR\x0fstagingDuration\x12/\n" +
-	"\x13shutdown_rejections\x18\v \x01(\x04R\x12shutdownRejections\"\xfa\x02\n" +
+	"\x13shutdown_rejections\x18\v \x01(\x04R\x12shutdownRejections\"\xf8\x04\n" +
 	"\x1cHECDurableOperationalMetrics\x12'\n" +
 	"\x0fqueue_available\x18\x01 \x01(\bR\x0equeueAvailable\x12>\n" +
 	"\x1bpending_outbox_reservations\x18\x02 \x01(\x04R\x19pendingOutboxReservations\x120\n" +
 	"\x14pending_outbox_bytes\x18\x03 \x01(\x04R\x12pendingOutboxBytes\x12T\n" +
 	"\x19oldest_pending_outbox_age\x18\x04 \x01(\v2\x19.google.protobuf.DurationR\x16oldestPendingOutboxAge\x12<\n" +
 	"\x1arequest_capacity_available\x18\x05 \x01(\bR\x18requestCapacityAvailable\x12+\n" +
-	"\x11retained_requests\x18\x06 \x01(\x04R\x10retainedRequests\"\x9d\x01\n" +
+	"\x11retained_requests\x18\x06 \x01(\x04R\x10retainedRequests\x124\n" +
+	"\x16pending_metadata_bytes\x18\a \x01(\x04R\x14pendingMetadataBytes\x12+\n" +
+	"\x11pending_ungrouped\x18\b \x01(\x04R\x10pendingUngrouped\x12,\n" +
+	"\x12ready_write_groups\x18\t \x01(\x04R\x10readyWriteGroups\x124\n" +
+	"\x16ambiguous_write_groups\x18\n" +
+	" \x01(\x04R\x14ambiguousWriteGroups\x125\n" +
+	"\x17live_write_group_leases\x18\v \x01(\x04R\x14liveWriteGroupLeases\"\xd8\t\n" +
 	"#HECReconciliationOperationalMetrics\x12\x1c\n" +
 	"\tavailable\x18\x01 \x01(\bR\tavailable\x12\x1c\n" +
 	"\tsuccesses\x18\x02 \x01(\x04R\tsuccesses\x12\x18\n" +
 	"\aretries\x18\x03 \x01(\x04R\aretries\x12 \n" +
-	"\vambiguities\x18\x04 \x01(\x04R\vambiguities\"\x8f\x03\n" +
+	"\vambiguities\x18\x04 \x01(\x04R\vambiguities\x124\n" +
+	"\x16staged_logical_batches\x18\x05 \x01(\x04R\x14stagedLogicalBatches\x12.\n" +
+	"\x13staged_logical_rows\x18\x06 \x01(\x04R\x11stagedLogicalRows\x12.\n" +
+	"\x13formed_write_groups\x18\a \x01(\x04R\x11formedWriteGroups\x122\n" +
+	"\x15physical_insert_sends\x18\b \x01(\x04R\x13physicalInsertSends\x126\n" +
+	"\x17successful_write_groups\x18\t \x01(\x04R\x15successfulWriteGroups\x12;\n" +
+	"\x1awrite_group_member_batches\x18\n" +
+	" \x01(\x04R\x17writeGroupMemberBatches\x12(\n" +
+	"\x10write_group_rows\x18\v \x01(\x04R\x0ewriteGroupRows\x129\n" +
+	"\x19write_group_decoded_bytes\x18\f \x01(\x04R\x16writeGroupDecodedBytes\x12C\n" +
+	"\x1ewrite_group_monthly_partitions\x18\r \x01(\x04R\x1bwriteGroupMonthlyPartitions\x12&\n" +
+	"\x0ffill_row_target\x18\x0e \x01(\x04R\rfillRowTarget\x12(\n" +
+	"\x10fill_byte_target\x18\x0f \x01(\x04R\x0efillByteTarget\x12,\n" +
+	"\x12fill_hard_boundary\x18\x10 \x01(\x04R\x10fillHardBoundary\x12\x1f\n" +
+	"\vfill_linger\x18\x11 \x01(\x04R\n" +
+	"fillLinger\x12\x1d\n" +
+	"\n" +
+	"fill_drain\x18\x12 \x01(\x04R\tfillDrain\x12#\n" +
+	"\rfill_recovery\x18\x13 \x01(\x04R\ffillRecovery\x12%\n" +
+	"\x0enative_waiters\x18\x14 \x01(\x04R\rnativeWaiters\x122\n" +
+	"\x15native_waiter_wakeups\x18\x15 \x01(\x04R\x13nativeWaiterWakeups\x12>\n" +
+	"\x1bnative_waiter_cancellations\x18\x16 \x01(\x04R\x19nativeWaiterCancellations\x126\n" +
+	"\x17native_terminal_lookups\x18\x17 \x01(\x04R\x15nativeTerminalLookups\x120\n" +
+	"\x14seal_latency_buckets\x18\x18 \x03(\x04R\x12sealLatencyBuckets\x120\n" +
+	"\x14send_latency_buckets\x18\x19 \x03(\x04R\x12sendLatencyBuckets\x124\n" +
+	"\x16commit_latency_buckets\x18\x1a \x03(\x04R\x14commitLatencyBuckets\"\x8f\x03\n" +
 	"#HECAcknowledgmentOperationalMetrics\x12\x1c\n" +
 	"\tavailable\x18\x01 \x01(\bR\tavailable\x12'\n" +
 	"\x0factive_channels\x18\x02 \x01(\x04R\x0eactiveChannels\x12+\n" +

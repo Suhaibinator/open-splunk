@@ -37,6 +37,11 @@ export interface HECDurableOperationalMetrics {
   oldestPendingOutboxAge: Duration | undefined;
   requestCapacityAvailable: boolean;
   retainedRequests: bigint;
+  pendingMetadataBytes: bigint;
+  pendingUngrouped: bigint;
+  readyWriteGroups: bigint;
+  ambiguousWriteGroups: bigint;
+  liveWriteGroupLeases: bigint;
 }
 
 export interface HECReconciliationOperationalMetrics {
@@ -44,6 +49,28 @@ export interface HECReconciliationOperationalMetrics {
   successes: bigint;
   retries: bigint;
   ambiguities: bigint;
+  stagedLogicalBatches: bigint;
+  stagedLogicalRows: bigint;
+  formedWriteGroups: bigint;
+  physicalInsertSends: bigint;
+  successfulWriteGroups: bigint;
+  writeGroupMemberBatches: bigint;
+  writeGroupRows: bigint;
+  writeGroupDecodedBytes: bigint;
+  writeGroupMonthlyPartitions: bigint;
+  fillRowTarget: bigint;
+  fillByteTarget: bigint;
+  fillHardBoundary: bigint;
+  fillLinger: bigint;
+  fillDrain: bigint;
+  fillRecovery: bigint;
+  nativeWaiters: bigint;
+  nativeWaiterWakeups: bigint;
+  nativeWaiterCancellations: bigint;
+  nativeTerminalLookups: bigint;
+  sealLatencyBuckets: bigint[];
+  sendLatencyBuckets: bigint[];
+  commitLatencyBuckets: bigint[];
 }
 
 export interface HECAcknowledgmentOperationalMetrics {
@@ -468,6 +495,11 @@ function createBaseHECDurableOperationalMetrics(): HECDurableOperationalMetrics 
     oldestPendingOutboxAge: undefined,
     requestCapacityAvailable: false,
     retainedRequests: 0n,
+    pendingMetadataBytes: 0n,
+    pendingUngrouped: 0n,
+    readyWriteGroups: 0n,
+    ambiguousWriteGroups: 0n,
+    liveWriteGroupLeases: 0n,
   };
 }
 
@@ -501,6 +533,36 @@ export const HECDurableOperationalMetrics: MessageFns<HECDurableOperationalMetri
         throw new globalThis.Error("value provided for field message.retainedRequests of type uint64 too large");
       }
       writer.uint32(48).uint64(message.retainedRequests);
+    }
+    if (message.pendingMetadataBytes !== 0n) {
+      if (BigInt.asUintN(64, message.pendingMetadataBytes) !== message.pendingMetadataBytes) {
+        throw new globalThis.Error("value provided for field message.pendingMetadataBytes of type uint64 too large");
+      }
+      writer.uint32(56).uint64(message.pendingMetadataBytes);
+    }
+    if (message.pendingUngrouped !== 0n) {
+      if (BigInt.asUintN(64, message.pendingUngrouped) !== message.pendingUngrouped) {
+        throw new globalThis.Error("value provided for field message.pendingUngrouped of type uint64 too large");
+      }
+      writer.uint32(64).uint64(message.pendingUngrouped);
+    }
+    if (message.readyWriteGroups !== 0n) {
+      if (BigInt.asUintN(64, message.readyWriteGroups) !== message.readyWriteGroups) {
+        throw new globalThis.Error("value provided for field message.readyWriteGroups of type uint64 too large");
+      }
+      writer.uint32(72).uint64(message.readyWriteGroups);
+    }
+    if (message.ambiguousWriteGroups !== 0n) {
+      if (BigInt.asUintN(64, message.ambiguousWriteGroups) !== message.ambiguousWriteGroups) {
+        throw new globalThis.Error("value provided for field message.ambiguousWriteGroups of type uint64 too large");
+      }
+      writer.uint32(80).uint64(message.ambiguousWriteGroups);
+    }
+    if (message.liveWriteGroupLeases !== 0n) {
+      if (BigInt.asUintN(64, message.liveWriteGroupLeases) !== message.liveWriteGroupLeases) {
+        throw new globalThis.Error("value provided for field message.liveWriteGroupLeases of type uint64 too large");
+      }
+      writer.uint32(88).uint64(message.liveWriteGroupLeases);
     }
     return writer;
   },
@@ -566,6 +628,46 @@ export const HECDurableOperationalMetrics: MessageFns<HECDurableOperationalMetri
             message.retainedRequests = reader.uint64() as bigint;
             continue;
           }
+          case 7: {
+            if (tag !== 56) {
+              break;
+            }
+
+            message.pendingMetadataBytes = reader.uint64() as bigint;
+            continue;
+          }
+          case 8: {
+            if (tag !== 64) {
+              break;
+            }
+
+            message.pendingUngrouped = reader.uint64() as bigint;
+            continue;
+          }
+          case 9: {
+            if (tag !== 72) {
+              break;
+            }
+
+            message.readyWriteGroups = reader.uint64() as bigint;
+            continue;
+          }
+          case 10: {
+            if (tag !== 80) {
+              break;
+            }
+
+            message.ambiguousWriteGroups = reader.uint64() as bigint;
+            continue;
+          }
+          case 11: {
+            if (tag !== 88) {
+              break;
+            }
+
+            message.liveWriteGroupLeases = reader.uint64() as bigint;
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -610,6 +712,31 @@ export const HECDurableOperationalMetrics: MessageFns<HECDurableOperationalMetri
         : isSet(object.retained_requests)
         ? BigInt(object.retained_requests)
         : 0n,
+      pendingMetadataBytes: isSet(object.pendingMetadataBytes)
+        ? BigInt(object.pendingMetadataBytes)
+        : isSet(object.pending_metadata_bytes)
+        ? BigInt(object.pending_metadata_bytes)
+        : 0n,
+      pendingUngrouped: isSet(object.pendingUngrouped)
+        ? BigInt(object.pendingUngrouped)
+        : isSet(object.pending_ungrouped)
+        ? BigInt(object.pending_ungrouped)
+        : 0n,
+      readyWriteGroups: isSet(object.readyWriteGroups)
+        ? BigInt(object.readyWriteGroups)
+        : isSet(object.ready_write_groups)
+        ? BigInt(object.ready_write_groups)
+        : 0n,
+      ambiguousWriteGroups: isSet(object.ambiguousWriteGroups)
+        ? BigInt(object.ambiguousWriteGroups)
+        : isSet(object.ambiguous_write_groups)
+        ? BigInt(object.ambiguous_write_groups)
+        : 0n,
+      liveWriteGroupLeases: isSet(object.liveWriteGroupLeases)
+        ? BigInt(object.liveWriteGroupLeases)
+        : isSet(object.live_write_group_leases)
+        ? BigInt(object.live_write_group_leases)
+        : 0n,
     };
   },
 
@@ -632,6 +759,21 @@ export const HECDurableOperationalMetrics: MessageFns<HECDurableOperationalMetri
     }
     if (message.retainedRequests !== 0n) {
       obj.retainedRequests = message.retainedRequests.toString();
+    }
+    if (message.pendingMetadataBytes !== 0n) {
+      obj.pendingMetadataBytes = message.pendingMetadataBytes.toString();
+    }
+    if (message.pendingUngrouped !== 0n) {
+      obj.pendingUngrouped = message.pendingUngrouped.toString();
+    }
+    if (message.readyWriteGroups !== 0n) {
+      obj.readyWriteGroups = message.readyWriteGroups.toString();
+    }
+    if (message.ambiguousWriteGroups !== 0n) {
+      obj.ambiguousWriteGroups = message.ambiguousWriteGroups.toString();
+    }
+    if (message.liveWriteGroupLeases !== 0n) {
+      obj.liveWriteGroupLeases = message.liveWriteGroupLeases.toString();
     }
     return obj;
   },
@@ -657,12 +799,54 @@ export const HECDurableOperationalMetrics: MessageFns<HECDurableOperationalMetri
     message.retainedRequests = (object.retainedRequests !== undefined && object.retainedRequests !== null)
       ? BigInt(object.retainedRequests)
       : 0n;
+    message.pendingMetadataBytes = (object.pendingMetadataBytes !== undefined && object.pendingMetadataBytes !== null)
+      ? BigInt(object.pendingMetadataBytes)
+      : 0n;
+    message.pendingUngrouped = (object.pendingUngrouped !== undefined && object.pendingUngrouped !== null)
+      ? BigInt(object.pendingUngrouped)
+      : 0n;
+    message.readyWriteGroups = (object.readyWriteGroups !== undefined && object.readyWriteGroups !== null)
+      ? BigInt(object.readyWriteGroups)
+      : 0n;
+    message.ambiguousWriteGroups = (object.ambiguousWriteGroups !== undefined && object.ambiguousWriteGroups !== null)
+      ? BigInt(object.ambiguousWriteGroups)
+      : 0n;
+    message.liveWriteGroupLeases = (object.liveWriteGroupLeases !== undefined && object.liveWriteGroupLeases !== null)
+      ? BigInt(object.liveWriteGroupLeases)
+      : 0n;
     return message;
   },
 };
 
 function createBaseHECReconciliationOperationalMetrics(): HECReconciliationOperationalMetrics {
-  return { available: false, successes: 0n, retries: 0n, ambiguities: 0n };
+  return {
+    available: false,
+    successes: 0n,
+    retries: 0n,
+    ambiguities: 0n,
+    stagedLogicalBatches: 0n,
+    stagedLogicalRows: 0n,
+    formedWriteGroups: 0n,
+    physicalInsertSends: 0n,
+    successfulWriteGroups: 0n,
+    writeGroupMemberBatches: 0n,
+    writeGroupRows: 0n,
+    writeGroupDecodedBytes: 0n,
+    writeGroupMonthlyPartitions: 0n,
+    fillRowTarget: 0n,
+    fillByteTarget: 0n,
+    fillHardBoundary: 0n,
+    fillLinger: 0n,
+    fillDrain: 0n,
+    fillRecovery: 0n,
+    nativeWaiters: 0n,
+    nativeWaiterWakeups: 0n,
+    nativeWaiterCancellations: 0n,
+    nativeTerminalLookups: 0n,
+    sealLatencyBuckets: [],
+    sendLatencyBuckets: [],
+    commitLatencyBuckets: [],
+  };
 }
 
 export const HECReconciliationOperationalMetrics: MessageFns<HECReconciliationOperationalMetrics> = {
@@ -688,6 +872,148 @@ export const HECReconciliationOperationalMetrics: MessageFns<HECReconciliationOp
       }
       writer.uint32(32).uint64(message.ambiguities);
     }
+    if (message.stagedLogicalBatches !== 0n) {
+      if (BigInt.asUintN(64, message.stagedLogicalBatches) !== message.stagedLogicalBatches) {
+        throw new globalThis.Error("value provided for field message.stagedLogicalBatches of type uint64 too large");
+      }
+      writer.uint32(40).uint64(message.stagedLogicalBatches);
+    }
+    if (message.stagedLogicalRows !== 0n) {
+      if (BigInt.asUintN(64, message.stagedLogicalRows) !== message.stagedLogicalRows) {
+        throw new globalThis.Error("value provided for field message.stagedLogicalRows of type uint64 too large");
+      }
+      writer.uint32(48).uint64(message.stagedLogicalRows);
+    }
+    if (message.formedWriteGroups !== 0n) {
+      if (BigInt.asUintN(64, message.formedWriteGroups) !== message.formedWriteGroups) {
+        throw new globalThis.Error("value provided for field message.formedWriteGroups of type uint64 too large");
+      }
+      writer.uint32(56).uint64(message.formedWriteGroups);
+    }
+    if (message.physicalInsertSends !== 0n) {
+      if (BigInt.asUintN(64, message.physicalInsertSends) !== message.physicalInsertSends) {
+        throw new globalThis.Error("value provided for field message.physicalInsertSends of type uint64 too large");
+      }
+      writer.uint32(64).uint64(message.physicalInsertSends);
+    }
+    if (message.successfulWriteGroups !== 0n) {
+      if (BigInt.asUintN(64, message.successfulWriteGroups) !== message.successfulWriteGroups) {
+        throw new globalThis.Error("value provided for field message.successfulWriteGroups of type uint64 too large");
+      }
+      writer.uint32(72).uint64(message.successfulWriteGroups);
+    }
+    if (message.writeGroupMemberBatches !== 0n) {
+      if (BigInt.asUintN(64, message.writeGroupMemberBatches) !== message.writeGroupMemberBatches) {
+        throw new globalThis.Error("value provided for field message.writeGroupMemberBatches of type uint64 too large");
+      }
+      writer.uint32(80).uint64(message.writeGroupMemberBatches);
+    }
+    if (message.writeGroupRows !== 0n) {
+      if (BigInt.asUintN(64, message.writeGroupRows) !== message.writeGroupRows) {
+        throw new globalThis.Error("value provided for field message.writeGroupRows of type uint64 too large");
+      }
+      writer.uint32(88).uint64(message.writeGroupRows);
+    }
+    if (message.writeGroupDecodedBytes !== 0n) {
+      if (BigInt.asUintN(64, message.writeGroupDecodedBytes) !== message.writeGroupDecodedBytes) {
+        throw new globalThis.Error("value provided for field message.writeGroupDecodedBytes of type uint64 too large");
+      }
+      writer.uint32(96).uint64(message.writeGroupDecodedBytes);
+    }
+    if (message.writeGroupMonthlyPartitions !== 0n) {
+      if (BigInt.asUintN(64, message.writeGroupMonthlyPartitions) !== message.writeGroupMonthlyPartitions) {
+        throw new globalThis.Error(
+          "value provided for field message.writeGroupMonthlyPartitions of type uint64 too large",
+        );
+      }
+      writer.uint32(104).uint64(message.writeGroupMonthlyPartitions);
+    }
+    if (message.fillRowTarget !== 0n) {
+      if (BigInt.asUintN(64, message.fillRowTarget) !== message.fillRowTarget) {
+        throw new globalThis.Error("value provided for field message.fillRowTarget of type uint64 too large");
+      }
+      writer.uint32(112).uint64(message.fillRowTarget);
+    }
+    if (message.fillByteTarget !== 0n) {
+      if (BigInt.asUintN(64, message.fillByteTarget) !== message.fillByteTarget) {
+        throw new globalThis.Error("value provided for field message.fillByteTarget of type uint64 too large");
+      }
+      writer.uint32(120).uint64(message.fillByteTarget);
+    }
+    if (message.fillHardBoundary !== 0n) {
+      if (BigInt.asUintN(64, message.fillHardBoundary) !== message.fillHardBoundary) {
+        throw new globalThis.Error("value provided for field message.fillHardBoundary of type uint64 too large");
+      }
+      writer.uint32(128).uint64(message.fillHardBoundary);
+    }
+    if (message.fillLinger !== 0n) {
+      if (BigInt.asUintN(64, message.fillLinger) !== message.fillLinger) {
+        throw new globalThis.Error("value provided for field message.fillLinger of type uint64 too large");
+      }
+      writer.uint32(136).uint64(message.fillLinger);
+    }
+    if (message.fillDrain !== 0n) {
+      if (BigInt.asUintN(64, message.fillDrain) !== message.fillDrain) {
+        throw new globalThis.Error("value provided for field message.fillDrain of type uint64 too large");
+      }
+      writer.uint32(144).uint64(message.fillDrain);
+    }
+    if (message.fillRecovery !== 0n) {
+      if (BigInt.asUintN(64, message.fillRecovery) !== message.fillRecovery) {
+        throw new globalThis.Error("value provided for field message.fillRecovery of type uint64 too large");
+      }
+      writer.uint32(152).uint64(message.fillRecovery);
+    }
+    if (message.nativeWaiters !== 0n) {
+      if (BigInt.asUintN(64, message.nativeWaiters) !== message.nativeWaiters) {
+        throw new globalThis.Error("value provided for field message.nativeWaiters of type uint64 too large");
+      }
+      writer.uint32(160).uint64(message.nativeWaiters);
+    }
+    if (message.nativeWaiterWakeups !== 0n) {
+      if (BigInt.asUintN(64, message.nativeWaiterWakeups) !== message.nativeWaiterWakeups) {
+        throw new globalThis.Error("value provided for field message.nativeWaiterWakeups of type uint64 too large");
+      }
+      writer.uint32(168).uint64(message.nativeWaiterWakeups);
+    }
+    if (message.nativeWaiterCancellations !== 0n) {
+      if (BigInt.asUintN(64, message.nativeWaiterCancellations) !== message.nativeWaiterCancellations) {
+        throw new globalThis.Error(
+          "value provided for field message.nativeWaiterCancellations of type uint64 too large",
+        );
+      }
+      writer.uint32(176).uint64(message.nativeWaiterCancellations);
+    }
+    if (message.nativeTerminalLookups !== 0n) {
+      if (BigInt.asUintN(64, message.nativeTerminalLookups) !== message.nativeTerminalLookups) {
+        throw new globalThis.Error("value provided for field message.nativeTerminalLookups of type uint64 too large");
+      }
+      writer.uint32(184).uint64(message.nativeTerminalLookups);
+    }
+    writer.uint32(194).fork();
+    for (const v of message.sealLatencyBuckets) {
+      if (BigInt.asUintN(64, v) !== v) {
+        throw new globalThis.Error("a value provided in array field sealLatencyBuckets of type uint64 is too large");
+      }
+      writer.uint64(v);
+    }
+    writer.join();
+    writer.uint32(202).fork();
+    for (const v of message.sendLatencyBuckets) {
+      if (BigInt.asUintN(64, v) !== v) {
+        throw new globalThis.Error("a value provided in array field sendLatencyBuckets of type uint64 is too large");
+      }
+      writer.uint64(v);
+    }
+    writer.join();
+    writer.uint32(210).fork();
+    for (const v of message.commitLatencyBuckets) {
+      if (BigInt.asUintN(64, v) !== v) {
+        throw new globalThis.Error("a value provided in array field commitLatencyBuckets of type uint64 is too large");
+      }
+      writer.uint64(v);
+    }
+    writer.join();
     return writer;
   },
 
@@ -736,6 +1062,212 @@ export const HECReconciliationOperationalMetrics: MessageFns<HECReconciliationOp
             message.ambiguities = reader.uint64() as bigint;
             continue;
           }
+          case 5: {
+            if (tag !== 40) {
+              break;
+            }
+
+            message.stagedLogicalBatches = reader.uint64() as bigint;
+            continue;
+          }
+          case 6: {
+            if (tag !== 48) {
+              break;
+            }
+
+            message.stagedLogicalRows = reader.uint64() as bigint;
+            continue;
+          }
+          case 7: {
+            if (tag !== 56) {
+              break;
+            }
+
+            message.formedWriteGroups = reader.uint64() as bigint;
+            continue;
+          }
+          case 8: {
+            if (tag !== 64) {
+              break;
+            }
+
+            message.physicalInsertSends = reader.uint64() as bigint;
+            continue;
+          }
+          case 9: {
+            if (tag !== 72) {
+              break;
+            }
+
+            message.successfulWriteGroups = reader.uint64() as bigint;
+            continue;
+          }
+          case 10: {
+            if (tag !== 80) {
+              break;
+            }
+
+            message.writeGroupMemberBatches = reader.uint64() as bigint;
+            continue;
+          }
+          case 11: {
+            if (tag !== 88) {
+              break;
+            }
+
+            message.writeGroupRows = reader.uint64() as bigint;
+            continue;
+          }
+          case 12: {
+            if (tag !== 96) {
+              break;
+            }
+
+            message.writeGroupDecodedBytes = reader.uint64() as bigint;
+            continue;
+          }
+          case 13: {
+            if (tag !== 104) {
+              break;
+            }
+
+            message.writeGroupMonthlyPartitions = reader.uint64() as bigint;
+            continue;
+          }
+          case 14: {
+            if (tag !== 112) {
+              break;
+            }
+
+            message.fillRowTarget = reader.uint64() as bigint;
+            continue;
+          }
+          case 15: {
+            if (tag !== 120) {
+              break;
+            }
+
+            message.fillByteTarget = reader.uint64() as bigint;
+            continue;
+          }
+          case 16: {
+            if (tag !== 128) {
+              break;
+            }
+
+            message.fillHardBoundary = reader.uint64() as bigint;
+            continue;
+          }
+          case 17: {
+            if (tag !== 136) {
+              break;
+            }
+
+            message.fillLinger = reader.uint64() as bigint;
+            continue;
+          }
+          case 18: {
+            if (tag !== 144) {
+              break;
+            }
+
+            message.fillDrain = reader.uint64() as bigint;
+            continue;
+          }
+          case 19: {
+            if (tag !== 152) {
+              break;
+            }
+
+            message.fillRecovery = reader.uint64() as bigint;
+            continue;
+          }
+          case 20: {
+            if (tag !== 160) {
+              break;
+            }
+
+            message.nativeWaiters = reader.uint64() as bigint;
+            continue;
+          }
+          case 21: {
+            if (tag !== 168) {
+              break;
+            }
+
+            message.nativeWaiterWakeups = reader.uint64() as bigint;
+            continue;
+          }
+          case 22: {
+            if (tag !== 176) {
+              break;
+            }
+
+            message.nativeWaiterCancellations = reader.uint64() as bigint;
+            continue;
+          }
+          case 23: {
+            if (tag !== 184) {
+              break;
+            }
+
+            message.nativeTerminalLookups = reader.uint64() as bigint;
+            continue;
+          }
+          case 24: {
+            if (tag === 192) {
+              message.sealLatencyBuckets.push(reader.uint64() as bigint);
+
+              continue;
+            }
+
+            if (tag === 194) {
+              const end2 = reader.uint32() + reader.pos;
+              while (reader.pos < end2) {
+                message.sealLatencyBuckets.push(reader.uint64() as bigint);
+              }
+
+              continue;
+            }
+
+            break;
+          }
+          case 25: {
+            if (tag === 200) {
+              message.sendLatencyBuckets.push(reader.uint64() as bigint);
+
+              continue;
+            }
+
+            if (tag === 202) {
+              const end2 = reader.uint32() + reader.pos;
+              while (reader.pos < end2) {
+                message.sendLatencyBuckets.push(reader.uint64() as bigint);
+              }
+
+              continue;
+            }
+
+            break;
+          }
+          case 26: {
+            if (tag === 208) {
+              message.commitLatencyBuckets.push(reader.uint64() as bigint);
+
+              continue;
+            }
+
+            if (tag === 210) {
+              const end2 = reader.uint32() + reader.pos;
+              while (reader.pos < end2) {
+                message.commitLatencyBuckets.push(reader.uint64() as bigint);
+              }
+
+              continue;
+            }
+
+            break;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -754,6 +1286,116 @@ export const HECReconciliationOperationalMetrics: MessageFns<HECReconciliationOp
       successes: isSet(object.successes) ? BigInt(object.successes) : 0n,
       retries: isSet(object.retries) ? BigInt(object.retries) : 0n,
       ambiguities: isSet(object.ambiguities) ? BigInt(object.ambiguities) : 0n,
+      stagedLogicalBatches: isSet(object.stagedLogicalBatches)
+        ? BigInt(object.stagedLogicalBatches)
+        : isSet(object.staged_logical_batches)
+        ? BigInt(object.staged_logical_batches)
+        : 0n,
+      stagedLogicalRows: isSet(object.stagedLogicalRows)
+        ? BigInt(object.stagedLogicalRows)
+        : isSet(object.staged_logical_rows)
+        ? BigInt(object.staged_logical_rows)
+        : 0n,
+      formedWriteGroups: isSet(object.formedWriteGroups)
+        ? BigInt(object.formedWriteGroups)
+        : isSet(object.formed_write_groups)
+        ? BigInt(object.formed_write_groups)
+        : 0n,
+      physicalInsertSends: isSet(object.physicalInsertSends)
+        ? BigInt(object.physicalInsertSends)
+        : isSet(object.physical_insert_sends)
+        ? BigInt(object.physical_insert_sends)
+        : 0n,
+      successfulWriteGroups: isSet(object.successfulWriteGroups)
+        ? BigInt(object.successfulWriteGroups)
+        : isSet(object.successful_write_groups)
+        ? BigInt(object.successful_write_groups)
+        : 0n,
+      writeGroupMemberBatches: isSet(object.writeGroupMemberBatches)
+        ? BigInt(object.writeGroupMemberBatches)
+        : isSet(object.write_group_member_batches)
+        ? BigInt(object.write_group_member_batches)
+        : 0n,
+      writeGroupRows: isSet(object.writeGroupRows)
+        ? BigInt(object.writeGroupRows)
+        : isSet(object.write_group_rows)
+        ? BigInt(object.write_group_rows)
+        : 0n,
+      writeGroupDecodedBytes: isSet(object.writeGroupDecodedBytes)
+        ? BigInt(object.writeGroupDecodedBytes)
+        : isSet(object.write_group_decoded_bytes)
+        ? BigInt(object.write_group_decoded_bytes)
+        : 0n,
+      writeGroupMonthlyPartitions: isSet(object.writeGroupMonthlyPartitions)
+        ? BigInt(object.writeGroupMonthlyPartitions)
+        : isSet(object.write_group_monthly_partitions)
+        ? BigInt(object.write_group_monthly_partitions)
+        : 0n,
+      fillRowTarget: isSet(object.fillRowTarget)
+        ? BigInt(object.fillRowTarget)
+        : isSet(object.fill_row_target)
+        ? BigInt(object.fill_row_target)
+        : 0n,
+      fillByteTarget: isSet(object.fillByteTarget)
+        ? BigInt(object.fillByteTarget)
+        : isSet(object.fill_byte_target)
+        ? BigInt(object.fill_byte_target)
+        : 0n,
+      fillHardBoundary: isSet(object.fillHardBoundary)
+        ? BigInt(object.fillHardBoundary)
+        : isSet(object.fill_hard_boundary)
+        ? BigInt(object.fill_hard_boundary)
+        : 0n,
+      fillLinger: isSet(object.fillLinger)
+        ? BigInt(object.fillLinger)
+        : isSet(object.fill_linger)
+        ? BigInt(object.fill_linger)
+        : 0n,
+      fillDrain: isSet(object.fillDrain)
+        ? BigInt(object.fillDrain)
+        : isSet(object.fill_drain)
+        ? BigInt(object.fill_drain)
+        : 0n,
+      fillRecovery: isSet(object.fillRecovery)
+        ? BigInt(object.fillRecovery)
+        : isSet(object.fill_recovery)
+        ? BigInt(object.fill_recovery)
+        : 0n,
+      nativeWaiters: isSet(object.nativeWaiters)
+        ? BigInt(object.nativeWaiters)
+        : isSet(object.native_waiters)
+        ? BigInt(object.native_waiters)
+        : 0n,
+      nativeWaiterWakeups: isSet(object.nativeWaiterWakeups)
+        ? BigInt(object.nativeWaiterWakeups)
+        : isSet(object.native_waiter_wakeups)
+        ? BigInt(object.native_waiter_wakeups)
+        : 0n,
+      nativeWaiterCancellations: isSet(object.nativeWaiterCancellations)
+        ? BigInt(object.nativeWaiterCancellations)
+        : isSet(object.native_waiter_cancellations)
+        ? BigInt(object.native_waiter_cancellations)
+        : 0n,
+      nativeTerminalLookups: isSet(object.nativeTerminalLookups)
+        ? BigInt(object.nativeTerminalLookups)
+        : isSet(object.native_terminal_lookups)
+        ? BigInt(object.native_terminal_lookups)
+        : 0n,
+      sealLatencyBuckets: globalThis.Array.isArray(object?.sealLatencyBuckets)
+        ? object.sealLatencyBuckets.map((e: any) => BigInt(e))
+        : globalThis.Array.isArray(object?.seal_latency_buckets)
+        ? object.seal_latency_buckets.map((e: any) => BigInt(e))
+        : [],
+      sendLatencyBuckets: globalThis.Array.isArray(object?.sendLatencyBuckets)
+        ? object.sendLatencyBuckets.map((e: any) => BigInt(e))
+        : globalThis.Array.isArray(object?.send_latency_buckets)
+        ? object.send_latency_buckets.map((e: any) => BigInt(e))
+        : [],
+      commitLatencyBuckets: globalThis.Array.isArray(object?.commitLatencyBuckets)
+        ? object.commitLatencyBuckets.map((e: any) => BigInt(e))
+        : globalThis.Array.isArray(object?.commit_latency_buckets)
+        ? object.commit_latency_buckets.map((e: any) => BigInt(e))
+        : [],
     };
   },
 
@@ -770,6 +1412,72 @@ export const HECReconciliationOperationalMetrics: MessageFns<HECReconciliationOp
     }
     if (message.ambiguities !== 0n) {
       obj.ambiguities = message.ambiguities.toString();
+    }
+    if (message.stagedLogicalBatches !== 0n) {
+      obj.stagedLogicalBatches = message.stagedLogicalBatches.toString();
+    }
+    if (message.stagedLogicalRows !== 0n) {
+      obj.stagedLogicalRows = message.stagedLogicalRows.toString();
+    }
+    if (message.formedWriteGroups !== 0n) {
+      obj.formedWriteGroups = message.formedWriteGroups.toString();
+    }
+    if (message.physicalInsertSends !== 0n) {
+      obj.physicalInsertSends = message.physicalInsertSends.toString();
+    }
+    if (message.successfulWriteGroups !== 0n) {
+      obj.successfulWriteGroups = message.successfulWriteGroups.toString();
+    }
+    if (message.writeGroupMemberBatches !== 0n) {
+      obj.writeGroupMemberBatches = message.writeGroupMemberBatches.toString();
+    }
+    if (message.writeGroupRows !== 0n) {
+      obj.writeGroupRows = message.writeGroupRows.toString();
+    }
+    if (message.writeGroupDecodedBytes !== 0n) {
+      obj.writeGroupDecodedBytes = message.writeGroupDecodedBytes.toString();
+    }
+    if (message.writeGroupMonthlyPartitions !== 0n) {
+      obj.writeGroupMonthlyPartitions = message.writeGroupMonthlyPartitions.toString();
+    }
+    if (message.fillRowTarget !== 0n) {
+      obj.fillRowTarget = message.fillRowTarget.toString();
+    }
+    if (message.fillByteTarget !== 0n) {
+      obj.fillByteTarget = message.fillByteTarget.toString();
+    }
+    if (message.fillHardBoundary !== 0n) {
+      obj.fillHardBoundary = message.fillHardBoundary.toString();
+    }
+    if (message.fillLinger !== 0n) {
+      obj.fillLinger = message.fillLinger.toString();
+    }
+    if (message.fillDrain !== 0n) {
+      obj.fillDrain = message.fillDrain.toString();
+    }
+    if (message.fillRecovery !== 0n) {
+      obj.fillRecovery = message.fillRecovery.toString();
+    }
+    if (message.nativeWaiters !== 0n) {
+      obj.nativeWaiters = message.nativeWaiters.toString();
+    }
+    if (message.nativeWaiterWakeups !== 0n) {
+      obj.nativeWaiterWakeups = message.nativeWaiterWakeups.toString();
+    }
+    if (message.nativeWaiterCancellations !== 0n) {
+      obj.nativeWaiterCancellations = message.nativeWaiterCancellations.toString();
+    }
+    if (message.nativeTerminalLookups !== 0n) {
+      obj.nativeTerminalLookups = message.nativeTerminalLookups.toString();
+    }
+    if (message.sealLatencyBuckets?.length) {
+      obj.sealLatencyBuckets = message.sealLatencyBuckets.map((e) => e.toString());
+    }
+    if (message.sendLatencyBuckets?.length) {
+      obj.sendLatencyBuckets = message.sendLatencyBuckets.map((e) => e.toString());
+    }
+    if (message.commitLatencyBuckets?.length) {
+      obj.commitLatencyBuckets = message.commitLatencyBuckets.map((e) => e.toString());
     }
     return obj;
   },
@@ -789,6 +1497,70 @@ export const HECReconciliationOperationalMetrics: MessageFns<HECReconciliationOp
     message.ambiguities = (object.ambiguities !== undefined && object.ambiguities !== null)
       ? BigInt(object.ambiguities)
       : 0n;
+    message.stagedLogicalBatches = (object.stagedLogicalBatches !== undefined && object.stagedLogicalBatches !== null)
+      ? BigInt(object.stagedLogicalBatches)
+      : 0n;
+    message.stagedLogicalRows = (object.stagedLogicalRows !== undefined && object.stagedLogicalRows !== null)
+      ? BigInt(object.stagedLogicalRows)
+      : 0n;
+    message.formedWriteGroups = (object.formedWriteGroups !== undefined && object.formedWriteGroups !== null)
+      ? BigInt(object.formedWriteGroups)
+      : 0n;
+    message.physicalInsertSends = (object.physicalInsertSends !== undefined && object.physicalInsertSends !== null)
+      ? BigInt(object.physicalInsertSends)
+      : 0n;
+    message.successfulWriteGroups =
+      (object.successfulWriteGroups !== undefined && object.successfulWriteGroups !== null)
+        ? BigInt(object.successfulWriteGroups)
+        : 0n;
+    message.writeGroupMemberBatches =
+      (object.writeGroupMemberBatches !== undefined && object.writeGroupMemberBatches !== null)
+        ? BigInt(object.writeGroupMemberBatches)
+        : 0n;
+    message.writeGroupRows = (object.writeGroupRows !== undefined && object.writeGroupRows !== null)
+      ? BigInt(object.writeGroupRows)
+      : 0n;
+    message.writeGroupDecodedBytes =
+      (object.writeGroupDecodedBytes !== undefined && object.writeGroupDecodedBytes !== null)
+        ? BigInt(object.writeGroupDecodedBytes)
+        : 0n;
+    message.writeGroupMonthlyPartitions =
+      (object.writeGroupMonthlyPartitions !== undefined && object.writeGroupMonthlyPartitions !== null)
+        ? BigInt(object.writeGroupMonthlyPartitions)
+        : 0n;
+    message.fillRowTarget = (object.fillRowTarget !== undefined && object.fillRowTarget !== null)
+      ? BigInt(object.fillRowTarget)
+      : 0n;
+    message.fillByteTarget = (object.fillByteTarget !== undefined && object.fillByteTarget !== null)
+      ? BigInt(object.fillByteTarget)
+      : 0n;
+    message.fillHardBoundary = (object.fillHardBoundary !== undefined && object.fillHardBoundary !== null)
+      ? BigInt(object.fillHardBoundary)
+      : 0n;
+    message.fillLinger = (object.fillLinger !== undefined && object.fillLinger !== null)
+      ? BigInt(object.fillLinger)
+      : 0n;
+    message.fillDrain = (object.fillDrain !== undefined && object.fillDrain !== null) ? BigInt(object.fillDrain) : 0n;
+    message.fillRecovery = (object.fillRecovery !== undefined && object.fillRecovery !== null)
+      ? BigInt(object.fillRecovery)
+      : 0n;
+    message.nativeWaiters = (object.nativeWaiters !== undefined && object.nativeWaiters !== null)
+      ? BigInt(object.nativeWaiters)
+      : 0n;
+    message.nativeWaiterWakeups = (object.nativeWaiterWakeups !== undefined && object.nativeWaiterWakeups !== null)
+      ? BigInt(object.nativeWaiterWakeups)
+      : 0n;
+    message.nativeWaiterCancellations =
+      (object.nativeWaiterCancellations !== undefined && object.nativeWaiterCancellations !== null)
+        ? BigInt(object.nativeWaiterCancellations)
+        : 0n;
+    message.nativeTerminalLookups =
+      (object.nativeTerminalLookups !== undefined && object.nativeTerminalLookups !== null)
+        ? BigInt(object.nativeTerminalLookups)
+        : 0n;
+    message.sealLatencyBuckets = object.sealLatencyBuckets?.map((e) => BigInt(e)) || [];
+    message.sendLatencyBuckets = object.sendLatencyBuckets?.map((e) => BigInt(e)) || [];
+    message.commitLatencyBuckets = object.commitLatencyBuckets?.map((e) => BigInt(e)) || [];
     return message;
   },
 };
