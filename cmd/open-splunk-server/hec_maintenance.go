@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/errorreport"
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
 )
@@ -85,7 +86,7 @@ type hecTerminalMaintenance struct {
 	runImmediately bool
 	now            func() time.Time
 	ticks          <-chan time.Time
-	onError        func(error)
+	errorReports   errorreport.SingleFlight
 
 	workerContext context.Context
 	cancelWorker  context.CancelFunc
@@ -115,7 +116,7 @@ func newHECTerminalMaintenance(
 		runImmediately: config.runImmediately,
 		now:            config.now,
 		ticks:          config.ticks,
-		onError:        config.onError,
+		errorReports:   errorreport.SingleFlight{Callback: config.onError},
 		workerContext:  workerContext,
 		cancelWorker:   cancelWorker,
 		done:           make(chan struct{}),
@@ -149,8 +150,8 @@ func (maintenance *hecTerminalMaintenance) prune() bool {
 		maintenance.maximumBatches,
 	)
 	if err != nil {
-		if maintenance.workerContext.Err() == nil && maintenance.onError != nil {
-			maintenance.onError(fmt.Errorf("prune expired HEC terminal requests: %w", err))
+		if maintenance.workerContext.Err() == nil {
+			maintenance.errorReports.Report(fmt.Errorf("prune expired HEC terminal requests: %w", err))
 		}
 		return false
 	}
