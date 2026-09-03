@@ -176,8 +176,11 @@ export function ReportsConsole({
   initialView,
 }: ReportsConsoleProps) {
   const [view, setView] = useState(initialView);
-
-  useEffect(() => setView(initialView), [initialView]);
+  const [activeInitialView, setActiveInitialView] = useState(initialView);
+  if (activeInitialView !== initialView) {
+    setActiveInitialView(initialView);
+    setView(initialView);
+  }
 
   useEffect(() => {
     if (canonicalizeParent) {

@@ -60,6 +60,7 @@ export function SearchLimitsSettings({
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
+    await Promise.resolve();
     setState("loading");
     setError(null);
     try {
@@ -77,7 +78,10 @@ export function SearchLimitsSettings({
     }
   }, [client]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => void load());
+    return () => window.cancelAnimationFrame(frame);
+  }, [load]);
 
   const savedForm = useMemo(
     () => response?.current?.limits === undefined ? null : searchLimitsToForm(response.current.limits),

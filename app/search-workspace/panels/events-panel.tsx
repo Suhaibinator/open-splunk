@@ -269,16 +269,21 @@ export function EventsPanel({
     return [...new Set(indexes)].map((index) => timelinePoints[index]?.label).filter((label): label is string => label !== undefined);
   }, [timelinePoints]);
 
-  useEffect(() => {
+  const [timelinePointCount, setTimelinePointCount] = useState(timelinePoints.length);
+  if (timelinePointCount !== timelinePoints.length) {
+    setTimelinePointCount(timelinePoints.length);
     setTimelineKeyboardIndex((current) => Math.min(current, Math.max(0, timelinePoints.length - 1)));
-  }, [timelinePoints.length]);
+  }
 
   useEffect(() => {
     const phoneViewport = window.matchMedia("(max-width: 760px)");
     const updateMode = () => setMobileFieldsMode(phoneViewport.matches);
-    updateMode();
+    const modeFrame = window.requestAnimationFrame(updateMode);
     phoneViewport.addEventListener("change", updateMode);
-    return () => phoneViewport.removeEventListener("change", updateMode);
+    return () => {
+      window.cancelAnimationFrame(modeFrame);
+      phoneViewport.removeEventListener("change", updateMode);
+    };
   }, []);
 
   useEffect(() => {

@@ -1,7 +1,7 @@
 "use client";
 
 import type { FormEvent } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { AppState, type AppWorkspace } from "@/gen/ts/open_splunk/app";
 import { AppSortBy } from "@/gen/ts/open_splunk/app_api";
@@ -104,6 +104,7 @@ export function AppsAdminPanel({ apiBaseUrl, bootstrap }: PanelProps) {
   const [totalExact, setTotalExact] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [generation, setGeneration] = useState(0);
+  const activeLoadGenerationRef = useRef(0);
   const [modal, setModal] = useState<"create" | "edit" | "delete" | null>(null);
   const [target, setTarget] = useState<AppWorkspace | null>(null);
   const [form, setForm] = useState<AppFormState>(blankAppForm);
@@ -118,14 +119,24 @@ export function AppsAdminPanel({ apiBaseUrl, bootstrap }: PanelProps) {
   const load = useCallback(() => setGeneration((value) => value + 1), []);
 
   useEffect(() => {
+    activeLoadGenerationRef.current = generation;
+    let current = true;
     if (capability === false) {
-      setState("unavailable");
-      setApps([]);
-      return;
+      queueMicrotask(() => {
+        if (!current) return;
+        setState("unavailable");
+        setApps([]);
+      });
+      return () => {
+        current = false;
+      };
     }
     const controller = new AbortController();
-    setState("loading");
-    setError(null);
+    queueMicrotask(() => {
+      if (!current) return;
+      setState("loading");
+      setError(null);
+    });
     void client.apps.list({
       page: { pageSize: undefined, pageToken: undefined, includeTotalSize: true },
       stateFilters: filters,
@@ -133,7 +144,7 @@ export function AppsAdminPanel({ apiBaseUrl, bootstrap }: PanelProps) {
       sortBy: AppSortBy.APP_SORT_BY_DISPLAY_NAME,
       sortDirection: SortDirection.SORT_DIRECTION_ASCENDING,
     }, { signal: controller.signal }).then((response) => {
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || activeLoadGenerationRef.current !== generation) return;
       setApps(response.apps);
       setNextPageToken(response.page?.nextPageToken?.trim() || null);
       setTotal(response.page?.totalSize ?? null);
@@ -149,7 +160,10 @@ export function AppsAdminPanel({ apiBaseUrl, bootstrap }: PanelProps) {
         setError(errorMessage(loadError));
       }
     });
-    return () => controller.abort();
+    return () => {
+      current = false;
+      controller.abort();
+    };
   }, [appliedQuery, capability, client, filters, generation]);
 
   async function loadMore() {
@@ -371,6 +385,7 @@ export function CollectorFleetPanel({ apiBaseUrl, bootstrap }: PanelProps) {
   const [totalExact, setTotalExact] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [generation, setGeneration] = useState(0);
+  const activeLoadGenerationRef = useRef(0);
   const [target, setTarget] = useState<CollectorRecord | null>(null);
   const [modal, setModal] = useState<"details" | "rename" | null>(null);
   const [displayName, setDisplayName] = useState("");
@@ -387,14 +402,24 @@ export function CollectorFleetPanel({ apiBaseUrl, bootstrap }: PanelProps) {
   const load = useCallback(() => setGeneration((value) => value + 1), []);
 
   useEffect(() => {
+    activeLoadGenerationRef.current = generation;
+    let current = true;
     if (capability === false) {
-      setState("unavailable");
-      setCollectors([]);
-      return;
+      queueMicrotask(() => {
+        if (!current) return;
+        setState("unavailable");
+        setCollectors([]);
+      });
+      return () => {
+        current = false;
+      };
     }
     const controller = new AbortController();
-    setState("loading");
-    setError(null);
+    queueMicrotask(() => {
+      if (!current) return;
+      setState("loading");
+      setError(null);
+    });
     void client.collectors.list({
       page: { pageSize: undefined, pageToken: undefined, includeTotalSize: true },
       stateFilters: filters,
@@ -403,7 +428,7 @@ export function CollectorFleetPanel({ apiBaseUrl, bootstrap }: PanelProps) {
       sortBy: CollectorSortBy.COLLECTOR_SORT_BY_DISPLAY_NAME,
       sortDirection: SortDirection.SORT_DIRECTION_ASCENDING,
     }, { signal: controller.signal }).then((response) => {
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || activeLoadGenerationRef.current !== generation) return;
       setCollectors(response.collectors);
       setNextPageToken(response.page?.nextPageToken?.trim() || null);
       setTotal(response.page?.totalSize ?? null);
@@ -419,7 +444,10 @@ export function CollectorFleetPanel({ apiBaseUrl, bootstrap }: PanelProps) {
         setError(errorMessage(loadError));
       }
     });
-    return () => controller.abort();
+    return () => {
+      current = false;
+      controller.abort();
+    };
   }, [appliedIndexFilter, appliedQuery, capability, client, filters, generation]);
 
   async function loadMore() {

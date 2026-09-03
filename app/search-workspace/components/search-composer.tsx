@@ -6,7 +6,7 @@ import type {
   SetStateAction,
   UIEvent,
 } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useState } from "react";
 
 import { resolveAbsoluteTimeRange } from "@/lib/search/backend-data";
 import type { EditorProblem } from "@/lib/search/spl-diagnostic-markers";
@@ -123,10 +123,9 @@ export function SearchComposer({
   onTimePickerSectionChange,
   onTimeRangeChange,
 }: SearchComposerProps) {
-  const closeTimePickerRef = useRef(onCloseTimePicker);
   const [mobileTimePicker, setMobileTimePicker] = useState(false);
   const [localTimeZone, setLocalTimeZone] = useState("Local browser time");
-  closeTimePickerRef.current = onCloseTimePicker;
+  const closeTimePicker = useEffectEvent(onCloseTimePicker);
   let draftTimeRangeInvalid = backendTimeSyntax
     ? serverTimeRangeValidationError(draftTimeRange) !== null
     : false;
@@ -146,10 +145,15 @@ export function SearchComposer({
   useEffect(() => {
     const phoneViewport = window.matchMedia("(max-width: 760px)");
     const updateViewport = () => setMobileTimePicker(phoneViewport.matches);
-    updateViewport();
-    setLocalTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone || "Local browser time");
+    const timeZoneFrame = window.requestAnimationFrame(() => {
+      updateViewport();
+      setLocalTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone || "Local browser time");
+    });
     phoneViewport.addEventListener("change", updateViewport);
-    return () => phoneViewport.removeEventListener("change", updateViewport);
+    return () => {
+      window.cancelAnimationFrame(timeZoneFrame);
+      phoneViewport.removeEventListener("change", updateViewport);
+    };
   }, []);
 
   useEffect(() => {
@@ -160,7 +164,7 @@ export function SearchComposer({
     return installModalSurface({
       container: dialog,
       excludedSiblingClassNames: ["drawer-backdrop"],
-      onEscape: () => closeTimePickerRef.current(),
+      onEscape: closeTimePicker,
       returnFocus: trigger,
     });
   }, [mobileTimePicker, modal]);

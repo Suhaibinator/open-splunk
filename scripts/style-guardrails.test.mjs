@@ -30,8 +30,8 @@
 //
 // Every read of a stylesheet goes through `scripts/style-inventory.mjs`, like
 // the suite beside this one, so this file never opens a `.css` itself. What it
-// does read directly are the three tool configurations -- `package.json`,
-// `.stylelintrc.json` and the CI workflow -- because those are the subject.
+// does read directly are the tool configurations and CI workflow because those
+// are the subject.
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -48,6 +48,7 @@ import {
 } from "./style-inventory.mjs";
 
 const workspace = process.cwd();
+const oxlintPath = path.join(workspace, ".oxlintrc.json");
 const packagePath = path.join(workspace, "package.json");
 const stylelintPath = path.join(workspace, ".stylelintrc.json");
 const workflowPath = path.join(workspace, ".github", "workflows", "ci.yml");
@@ -92,6 +93,19 @@ test("npm run lint runs the stylesheet gate as well as the script gate", async (
     "npm run lint:css must run stylelint over every stylesheet under app/. Narrowing the glob is the one\n"
       + "edit that silences the gate for a file without changing a single rule, and it looks like a\n"
       + `refactor in review. It currently reads: ${manifest.scripts["lint:css"]}`,
+  );
+});
+
+test("React correctness rules remain errors in the repository lint gate", async () => {
+  const config = await readJson(oxlintPath);
+  const required = [
+    "react/exhaustive-effect-dependencies",
+    "react/refs",
+    "react/set-state-in-effect",
+  ];
+  assert.deepEqual(
+    Object.fromEntries(required.map((rule) => [rule, config.rules[rule]])),
+    Object.fromEntries(required.map((rule) => [rule, "error"])),
   );
 });
 

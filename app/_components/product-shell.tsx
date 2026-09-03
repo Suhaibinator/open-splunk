@@ -1,7 +1,7 @@
 "use client";
 
 import type { FormEvent, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 
 import type { AppSummary } from "@/gen/ts/open_splunk/app";
@@ -185,6 +185,7 @@ export function ProductShell({
   );
   const [backendAppCatalogError, setBackendAppCatalogError] = useState<string | null>(null);
   const [backendAppCatalogGeneration, setBackendAppCatalogGeneration] = useState(0);
+  const activeCatalogGenerationRef = useRef(0);
   const apiClient = useMemo(
     () => createOpenSplunkApiClient({ baseUrl: apiBaseUrl }),
     [apiBaseUrl],
@@ -235,10 +236,10 @@ export function ProductShell({
     setMenu((current) => current === nextMenu ? null : nextMenu);
   }
 
-  function closeMenu(returnFocus = false) {
+  const closeMenu = useCallback((returnFocus = false) => {
     setMenu(null);
     if (returnFocus) window.requestAnimationFrame(() => menuTriggerRef.current?.focus());
-  }
+  }, []);
 
   function openMenuFromKeyboard(event: ReactKeyboardEvent<HTMLButtonElement>, nextMenu: ProductMenu) {
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
@@ -276,19 +277,28 @@ export function ProductShell({
   }, []);
 
   useEffect(() => {
+    activeCatalogGenerationRef.current = backendAppCatalogGeneration;
     if (!ownsCatalog) return;
+    let current = true;
     if (dataMode !== "backend") {
-      setBackendApps([]);
-      setSelectedBackendAppId(null);
-      setBackendAppCatalogError(null);
-      setBackendAppCatalogState("idle");
-      return;
+      queueMicrotask(() => {
+        if (!current || activeCatalogGenerationRef.current !== backendAppCatalogGeneration) return;
+        setBackendApps([]);
+        setSelectedBackendAppId(null);
+        setBackendAppCatalogError(null);
+        setBackendAppCatalogState("idle");
+      });
+      return () => {
+        current = false;
+      };
     }
     const controller = new AbortController();
-    let current = true;
-    setSelectedBackendAppId(null);
-    setBackendAppCatalogState("loading");
-    setBackendAppCatalogError(null);
+    queueMicrotask(() => {
+      if (!current) return;
+      setSelectedBackendAppId(null);
+      setBackendAppCatalogState("loading");
+      setBackendAppCatalogError(null);
+    });
     void getSystemBootstrap(apiClient, preferredAppId, { signal: controller.signal })
       .then((bootstrap) => {
         if (!current) return;
@@ -355,7 +365,7 @@ export function ProductShell({
     }
     document.addEventListener("keydown", navigateMenu);
     return () => document.removeEventListener("keydown", navigateMenu);
-  }, [menu]);
+  }, [closeMenu, menu]);
 
   useEffect(() => {
     if (!mobileOpen) return;
@@ -367,7 +377,7 @@ export function ProductShell({
       onEscape: () => setMobileOpen(false),
       returnFocus: mobileTriggerRef.current,
     });
-  }, [mobileOpen]);
+  }, [mobileDrawerRef, mobileOpen, mobileTriggerRef]);
 
   return (
     <div className={`suite-shell ${shellClassName}`.trim()} data-testid={shellTestId} id={shellId}>

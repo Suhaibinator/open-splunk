@@ -232,6 +232,7 @@ export function KnowledgeManagerPanel({
   const [loadingMore, setLoadingMore] = useState(false);
   const [continuationStale, setContinuationStale] = useState(false);
   const [reloadGeneration, setReloadGeneration] = useState(0);
+  const activeListGenerationRef = useRef(0);
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
   const [selectedObject, setSelectedObject] = useState<KnowledgeObjectDisplay | null>(null);
   const [detailState, setDetailState] = useState<DetailState>("closed");
@@ -295,9 +296,10 @@ export function KnowledgeManagerPanel({
   }, [selectedObjectId]);
 
   useEffect(() => {
-    resetForQueryChange();
+    activeListGenerationRef.current = reloadGeneration;
+    queueMicrotask(() => resetForQueryChange());
     if (!advancedFilterRequestAllowedRef.current) {
-      setListState("unavailable");
+      queueMicrotask(() => setListState("unavailable"));
       return;
     }
     const controller = new AbortController();
@@ -312,7 +314,11 @@ export function KnowledgeManagerPanel({
       pageSize,
       pageToken: null,
     }, { signal: controller.signal }).then((result) => {
-      if (controller.signal.aborted || listRequestRef.current !== controller) return;
+      if (
+        controller.signal.aborted
+        || listRequestRef.current !== controller
+        || activeListGenerationRef.current !== reloadGeneration
+      ) return;
       listRequestRef.current = null;
       if (result.status === "unavailable") {
         setListState("unavailable");
@@ -1188,6 +1194,7 @@ function KnowledgeRelationshipSection({
   const [page, setPage] = useState<KnowledgeRelationshipPageDisplay | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [reloadGeneration, setReloadGeneration] = useState(0);
+  const activeRelationshipGenerationRef = useRef(0);
   const requestRef = useRef<AbortController | null>(null);
   const inspectorRequestRef = useRef<AbortController | null>(null);
   const inspectorEdgeRef = useRef<KnowledgeRelationshipEdgeDisplay | null>(null);
@@ -1249,17 +1256,21 @@ function KnowledgeRelationshipSection({
   }, [startInspectorRequest]);
 
   useEffect(() => {
+    activeRelationshipGenerationRef.current = reloadGeneration;
     const cleanup = knowledgeRelationshipUnmountCleanup(requestRef, inspectorRequestRef);
     abortKnowledgeRequests(requestRef, inspectorRequestRef);
     inspectorEdgeRef.current = null;
     inspectorTriggerRef.current = null;
     consumedPageTokensRef.current = new Set();
-    setState("loading");
-    setPage(null);
-    setLoadingMore(false);
-    setInspector({ state: "closed" });
     const controller = new AbortController();
     requestRef.current = controller;
+    queueMicrotask(() => {
+      if (controller.signal.aborted) return;
+      setState("loading");
+      setPage(null);
+      setLoadingMore(false);
+      setInspector({ state: "closed" });
+    });
     void loadKnowledgeRelationshipPage(client, {
       direction,
       knowledgeObjectId,
@@ -1267,7 +1278,11 @@ function KnowledgeRelationshipSection({
       pageSize,
       pageToken: null,
     }, { signal: controller.signal }).then((result) => {
-      if (controller.signal.aborted || requestRef.current !== controller) return;
+      if (
+        controller.signal.aborted
+        || requestRef.current !== controller
+        || activeRelationshipGenerationRef.current !== reloadGeneration
+      ) return;
       requestRef.current = null;
       if (result.status === "unavailable") {
         setState("unavailable");

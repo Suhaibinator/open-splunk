@@ -25,20 +25,19 @@ export interface AlertSecretIssuance {
 
 /** React adapter for the synchronous issuance controller. */
 export function useAlertSecretIssuance(): AlertSecretIssuance {
-  const controllerRef = useRef<AlertSecretIssuanceController | null>(null);
-  controllerRef.current ??= new AlertSecretIssuanceController();
-  const [state, setState] = useState<AlertSecretIssuanceState>(() => controllerRef.current!.state());
+  const [controller] = useState(() => new AlertSecretIssuanceController());
+  const [state, setState] = useState<AlertSecretIssuanceState>(() => controller.state());
   const [navigationBlocked, setNavigationBlocked] = useState(false);
   const guardCleanupRef = useRef<(() => void) | null>(null);
 
-  const publish = useCallback(() => setState(controllerRef.current!.state()), []);
+  const publish = useCallback(() => setState(controller.state()), [controller]);
   const deactivateGuard = useCallback(() => {
     guardCleanupRef.current?.();
     guardCleanupRef.current = null;
     setNavigationBlocked(false);
   }, []);
   const begin = useCallback((operation: AlertSecretIssuanceOperation) => {
-    const started = controllerRef.current!.begin(operation);
+    const started = controller.begin(operation);
     if (started) {
       setNavigationBlocked(false);
       guardCleanupRef.current = installOneTimeSecretNavigationProtection(
@@ -49,26 +48,26 @@ export function useAlertSecretIssuance(): AlertSecretIssuance {
       publish();
     }
     return started;
-  }, [publish]);
+  }, [controller, publish]);
   const recover = useCallback((secret: AlertSigningSecret) => {
-    controllerRef.current!.recover(secret);
+    controller.recover(secret);
     publish();
-  }, [publish]);
+  }, [controller, publish]);
   const finishIssuing = useCallback(() => {
-    controllerRef.current!.finishIssuing();
-    if (controllerRef.current!.state().phase === "idle") deactivateGuard();
+    controller.finishIssuing();
+    if (controller.state().phase === "idle") deactivateGuard();
     publish();
-  }, [deactivateGuard, publish]);
+  }, [controller, deactivateGuard, publish]);
   const failIssuing = useCallback(() => {
-    controllerRef.current!.failIssuing();
+    controller.failIssuing();
     deactivateGuard();
     publish();
-  }, [deactivateGuard, publish]);
+  }, [controller, deactivateGuard, publish]);
   const closeRecovery = useCallback(() => {
-    controllerRef.current!.acknowledgeRecovery();
-    if (controllerRef.current!.state().phase === "idle") deactivateGuard();
+    controller.acknowledgeRecovery();
+    if (controller.state().phase === "idle") deactivateGuard();
     publish();
-  }, [deactivateGuard, publish]);
+  }, [controller, deactivateGuard, publish]);
   useEffect(() => () => guardCleanupRef.current?.(), []);
   const active = state.phase === "issuing" || state.phase === "recovery";
 

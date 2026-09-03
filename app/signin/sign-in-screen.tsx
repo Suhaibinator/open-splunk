@@ -28,7 +28,10 @@ export function SignInScreen({ dataMode }: SignInScreenProps) {
   const [tokenError, setTokenError] = useState<string | null>(null);
 
   useEffect(() => {
-    setAdministratorSessionActive(hasAdministratorBearerToken());
+    const frame = window.requestAnimationFrame(() => {
+      setAdministratorSessionActive(hasAdministratorBearerToken());
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, []);
 
   function openAdministratorSession(event: React.FormEvent<HTMLFormElement>): void {
