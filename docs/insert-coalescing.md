@@ -222,10 +222,12 @@ Do not copy outbox blobs into the group table. The reservation already owns the
 authoritative normalized payload. Duplicating it would double SQLite write
 amplification and complicate atomic cleanup.
 
-Because this project currently promises fresh-state schema compatibility only,
-the change belongs in `migrations/sqlite/0001_baseline.sql` and its schema
-contract tests. If compatibility policy changes before implementation, add a
-real migration instead of silently rewriting deployed state.
+The accounting columns and write-group tables are introduced by forward
+SQLite migrations. A narrowly recognized release that folded these objects
+into its baseline adopts the accounting migration without reapplying its
+columns; earlier databases apply the complete migration sequence. Pending
+reservations without the newer accounting seal are replayed individually
+before group formation.
 
 ## Sequencer API and transaction boundaries
 
@@ -631,4 +633,3 @@ The architecture above is fixed; these tuning choices require evidence:
 
 None of these questions permits weakening the replay, visibility, atomicity, or
 resource-bound requirements above.
-

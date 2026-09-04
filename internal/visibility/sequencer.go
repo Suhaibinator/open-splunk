@@ -339,7 +339,7 @@ type Sequencer interface {
 // the logical reservation API during the staged migration of Store callers.
 type WriteGroupSequencer interface {
 	Sequencer
-	AcquireUngroupedAmbiguous(context.Context, string) (Reservation, bool, error)
+	AcquireUngroupedReplay(context.Context, string) (Reservation, bool, error)
 	FormOrAcquireWriteGroup(context.Context, string, WriteGroupLimits, time.Time) (WriteGroup, bool, time.Time, error)
 	MarkWriteGroupSending(context.Context, string, string) error
 	CommitWriteGroup(context.Context, string, string, time.Time) error

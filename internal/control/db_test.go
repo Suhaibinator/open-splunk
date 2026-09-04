@@ -39,8 +39,8 @@ func TestOpenConfiguresSQLiteAndAppliesMigrations(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema migrations: %v", err)
 	}
-	if migrationCount != 8 {
-		t.Fatalf("schema migration count = %d, want 8", migrationCount)
+	if migrationCount != 10 {
+		t.Fatalf("schema migration count = %d, want 10", migrationCount)
 	}
 
 	// Foreign keys are connection-local in SQLite. Force database/sql to open
@@ -88,8 +88,8 @@ func TestOpenConfiguresSQLiteAndAppliesMigrations(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema migrations after reopen: %v", err)
 	}
-	if migrationCount != 8 {
-		t.Fatalf("schema migration count after reopen = %d, want 8", migrationCount)
+	if migrationCount != 10 {
+		t.Fatalf("schema migration count after reopen = %d, want 10", migrationCount)
 	}
 }
 
@@ -483,6 +483,47 @@ func TestApplyMigrationsIsVersionedAndDetectsDrift(t *testing.T) {
 	}
 }
 
+func TestApplyMigrationsAdoptsFoldedIngestBaseline(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	raw, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "folded.sqlite")+"?_txlock=immediate&_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	if err := ApplyMigrations(ctx, raw, migrations.SQLite()); err != nil {
+		t.Fatalf("apply canonical migration history: %v", err)
+	}
+	if _, err := raw.ExecContext(ctx, `
+		DELETE FROM schema_migrations WHERE version >= 9;
+		UPDATE schema_migrations
+		SET checksum = X'23e85b8b288addf86eda7f848e2b087a40194f8c5281459a9f0f8c1d215e1d64'
+		WHERE version = 1;`); err != nil {
+		t.Fatalf("represent folded release history: %v", err)
+	}
+
+	if err := ApplyMigrations(ctx, raw, migrations.SQLite()); err != nil {
+		t.Fatalf("upgrade folded release history: %v", err)
+	}
+	var migrationCount int
+	if err := raw.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
+		t.Fatal(err)
+	}
+	if migrationCount != 10 {
+		t.Fatalf("folded migration count = %d, want 10", migrationCount)
+	}
+	var storedBaselineSHA256 string
+	if err := raw.QueryRowContext(ctx, `
+		SELECT lower(hex(checksum)) FROM schema_migrations WHERE version = 1
+	`).Scan(&storedBaselineSHA256); err != nil {
+		t.Fatal(err)
+	}
+	if storedBaselineSHA256 != foldedIngestWriteGroupsSQLiteBaselineSHA256 {
+		t.Fatalf("folded baseline checksum = %q", storedBaselineSHA256)
+	}
+}
+
 func TestApplyMigrationsReportsPendingScriptAndRollsBack(t *testing.T) {
 	t.Parallel()
 
@@ -583,6 +624,8 @@ func TestServerSettingsMigrationPreservesExistingAuditLedger(t *testing.T) {
 		"0006_feature_operation_audit.sql",
 		"0007_lookup_mutation_audit.sql",
 		"0008_rolling_feature_operation_audit.sql",
+		"0009_ingest_reservation_accounting.sql",
+		"0010_ingest_write_groups.sql",
 	}
 	if strings.Join(ledger, ",") != strings.Join(wantLedger, ",") {
 		t.Fatalf("post-upgrade migration ledger = %v, want %v", ledger, wantLedger)
@@ -926,8 +969,8 @@ func TestConcurrentOpenSerializesMigrationStartup(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatalf("count schema migrations: %v", err)
 	}
-	if count != 8 {
-		t.Fatalf("schema migration count = %d, want 8", count)
+	if count != 10 {
+		t.Fatalf("schema migration count = %d, want 10", count)
 	}
 }
 

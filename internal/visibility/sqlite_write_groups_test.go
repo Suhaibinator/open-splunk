@@ -4,9 +4,89 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"io/fs"
+	"path/filepath"
 	"testing"
+	"testing/fstest"
 	"time"
+
+	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/migrations"
 )
+
+func TestSQLiteWriteGroupsAcquirePreAccountingReservationForReplay(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "pre-accounting.sqlite")
+	raw, err := sql.Open("sqlite", path+"?_txlock=immediate&_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := fstest.MapFS{}
+	for _, name := range []string{
+		"0001_baseline.sql",
+		"0002_server_search_settings.sql",
+		"0003_durable_search_jobs.sql",
+		"0004_saved_search_schedules.sql",
+		"0005_alerts.sql",
+		"0006_feature_operation_audit.sql",
+		"0007_lookup_mutation_audit.sql",
+		"0008_rolling_feature_operation_audit.sql",
+	} {
+		contents, err := fs.ReadFile(migrations.SQLite(), name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		prefix[name] = &fstest.MapFile{Data: contents}
+	}
+	if err := control.ApplyMigrations(ctx, raw, prefix); err != nil {
+		t.Fatalf("apply pre-accounting migrations: %v", err)
+	}
+	if _, err := raw.ExecContext(ctx, `
+		UPDATE ingest_visibility_state SET last_assigned = 1 WHERE singleton = 1;
+		INSERT INTO ingest_batch_identities (
+			batch_key, sequence_key, payload_sha256,
+			first_visibility_seq, created_at_unix_micro
+		) VALUES ('pre-accounting-batch', 'pre-accounting-sequence', zeroblob(32), 1, 1);
+		INSERT INTO ingest_visibility_reservations (
+			sequence, batch_key, state, phase, attempt_id,
+			index_time_unix_milli, metadata, outbox,
+			created_at_unix_micro, committed_at_unix_micro
+		) VALUES (
+			1, 'pre-accounting-batch', 'reserved', 'unsent', 'stale-owner',
+			1, X'', X'010203', 1, NULL
+		);`); err != nil {
+		t.Fatalf("seed pre-accounting reservation: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	database, err := control.Open(ctx, path)
+	if err != nil {
+		t.Fatalf("upgrade pre-accounting database: %v", err)
+	}
+	defer database.Close()
+	sequencer, err := NewSQLite(ctx, database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := sequencer.Shutdown(ctx); err != nil {
+			t.Errorf("shutdown upgraded sequencer: %v", err)
+		}
+	}()
+
+	reservation, found, err := sequencer.AcquireUngroupedReplay(ctx, "upgrade-owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || reservation.Sequence != 1 || reservation.MayHaveReachedStorage ||
+		reservation.OutboxSHA256 != ([sha256.Size]byte{}) || reservation.StoredRowCount != 0 ||
+		reservation.DecodedEventBytes != 0 || string(reservation.Outbox) != "\x01\x02\x03" {
+		t.Fatalf("pre-accounting replay reservation = %+v, found=%t", reservation, found)
+	}
+}
 
 func TestSQLiteWriteGroupLingerFormationAndAtomicCommit(t *testing.T) {
 	t.Parallel()

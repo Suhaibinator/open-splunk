@@ -19,11 +19,12 @@ const writeGroupMembershipFormat = "open-splunk/write-group-membership/v1\x00"
 
 var _ WriteGroupSequencer = (*SQLiteSequencer)(nil)
 
-// AcquireUngroupedAmbiguous leases the oldest pre-group reservation whose
-// ClickHouse send may already have occurred. This compatibility recovery path
-// always runs before grouped work, preserving the original per-batch
-// deduplication token across an upgrade or restored snapshot.
-func (sequencer *SQLiteSequencer) AcquireUngroupedAmbiguous(
+// AcquireUngroupedReplay leases the oldest pre-group reservation whose
+// ClickHouse send may already have occurred or whose accounting predates write
+// groups. This compatibility recovery path always runs before grouped work,
+// preserving the original per-batch deduplication token across an upgrade or
+// restored snapshot.
+func (sequencer *SQLiteSequencer) AcquireUngroupedReplay(
 	ctx context.Context,
 	attemptID string,
 ) (reservation Reservation, found bool, resultErr error) {
@@ -46,7 +47,7 @@ func (sequencer *SQLiteSequencer) AcquireUngroupedAmbiguous(
 
 	tx, err := sequencer.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
-		return Reservation{}, false, fmt.Errorf("begin ungrouped ambiguous acquisition: %w", err)
+		return Reservation{}, false, fmt.Errorf("begin ungrouped replay acquisition: %w", err)
 	}
 	defer rollback(tx)
 	var sequence int64
@@ -54,7 +55,13 @@ func (sequencer *SQLiteSequencer) AcquireUngroupedAmbiguous(
 	err = tx.QueryRowContext(ctx, `
 		SELECT reservation.sequence, reservation.attempt_id
 		FROM ingest_visibility_reservations AS reservation
-		WHERE reservation.state = 'reserved' AND reservation.phase = 'ambiguous'
+		WHERE reservation.state = 'reserved'
+		  AND (
+		      reservation.phase = 'ambiguous'
+		      OR (length(reservation.outbox_sha256) = 0
+		          AND reservation.stored_row_count = 0
+		          AND reservation.decoded_event_bytes = 0)
+		  )
 		  AND NOT EXISTS (
 		      SELECT 1 FROM ingest_write_group_members AS member
 		      WHERE member.visibility_sequence = reservation.sequence
@@ -64,16 +71,17 @@ func (sequencer *SQLiteSequencer) AcquireUngroupedAmbiguous(
 		      WHERE earlier_group.state = 'ambiguous'
 		        AND earlier_group.first_sequence < reservation.sequence
 		  )
-		ORDER BY reservation.sequence
+		ORDER BY CASE reservation.phase WHEN 'ambiguous' THEN 0 ELSE 1 END,
+		         reservation.sequence
 		LIMIT 1`).Scan(&sequence, &priorOwner)
 	if errors.Is(err, sql.ErrNoRows) {
 		if err := tx.Commit(); err != nil {
-			return Reservation{}, false, fmt.Errorf("commit empty ungrouped ambiguous acquisition: %w", err)
+			return Reservation{}, false, fmt.Errorf("commit empty ungrouped replay acquisition: %w", err)
 		}
 		return Reservation{}, false, nil
 	}
 	if err != nil {
-		return Reservation{}, false, fmt.Errorf("read ungrouped ambiguous reservation: %w", err)
+		return Reservation{}, false, fmt.Errorf("read ungrouped replay reservation: %w", err)
 	}
 	if priorOwner != "" && sequencer.leases.contains(priorOwner) {
 		return Reservation{}, false, ErrAttemptInProgress
@@ -81,21 +89,26 @@ func (sequencer *SQLiteSequencer) AcquireUngroupedAmbiguous(
 	result, err := tx.ExecContext(ctx, `
 		UPDATE ingest_visibility_reservations
 		SET attempt_id = ?
-		WHERE sequence = ? AND state = 'reserved' AND phase = 'ambiguous'
-		  AND attempt_id = ?`, attemptID, sequence, priorOwner)
+		WHERE sequence = ? AND state = 'reserved' AND attempt_id = ?
+		  AND (
+		      phase = 'ambiguous'
+		      OR (length(outbox_sha256) = 0
+		          AND stored_row_count = 0
+		          AND decoded_event_bytes = 0)
+		  )`, attemptID, sequence, priorOwner)
 	if err != nil {
-		return Reservation{}, false, fmt.Errorf("acquire ungrouped ambiguous reservation: %w", err)
+		return Reservation{}, false, fmt.Errorf("acquire ungrouped replay reservation: %w", err)
 	}
-	if err := requireOneRow(result, "acquire ungrouped ambiguous reservation"); err != nil {
+	if err := requireOneRow(result, "acquire ungrouped replay reservation"); err != nil {
 		return Reservation{}, false, err
 	}
 	reservation, err = queryReservationBySequence(ctx, tx, sequence)
 	if err != nil {
-		return Reservation{}, false, fmt.Errorf("hydrate ungrouped ambiguous reservation: %w", err)
+		return Reservation{}, false, fmt.Errorf("hydrate ungrouped replay reservation: %w", err)
 	}
 	reservation.PreviouslyReserved = true
 	if err := tx.Commit(); err != nil {
-		return Reservation{}, false, fmt.Errorf("commit ungrouped ambiguous acquisition: %w", err)
+		return Reservation{}, false, fmt.Errorf("commit ungrouped replay acquisition: %w", err)
 	}
 	sequencer.leases.bind(attemptID, reservation.Sequence)
 	retainLease = true

@@ -27,6 +27,14 @@ history is safe. Tests pin every shipped migration's SHA-256 digest: an applied
 script is never edited or replaced; a schema change requires a newly appended
 migration.
 
+One released SQLite baseline folded the ingest write-group schema into version
+`0001` after the original baseline had shipped. The runner narrowly recognizes
+that exact alternate checksum, adopts the corresponding accounting migration,
+and then rejoins the canonical history. No other alternate checksum or
+rewritten migration is accepted. Pre-accounting pending reservations retain
+their original outbox and are replayed individually before new write groups are
+formed.
+
 An unrecognized ledger or unledgered legacy schema is not silently adopted,
 rewritten, or deleted. Provision a fresh database or volume and retain old state
 separately if forensic access is required.

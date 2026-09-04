@@ -1282,15 +1282,17 @@ func (s *Store) reconcileWriteGroups(
 		if err != nil {
 			return time.Time{}, s.classifyError(fmt.Errorf("create ClickHouse write-group attempt: %w", err))
 		}
-		legacyAmbiguous, foundLegacyAmbiguous, err := s.writeGroupVisibility.AcquireUngroupedAmbiguous(
+		ungrouped, foundUngrouped, err := s.writeGroupVisibility.AcquireUngroupedReplay(
 			ctx,
 			attemptID,
 		)
 		if err != nil {
-			return time.Time{}, s.visibilityFailure("acquire ungrouped ambiguous ClickHouse outbox", err)
+			return time.Time{}, s.visibilityFailure("acquire ungrouped ClickHouse replay outbox", err)
 		}
-		if foundLegacyAmbiguous {
-			s.reconciliationAmbiguities.Add(1)
+		if foundUngrouped {
+			if ungrouped.MayHaveReachedStorage {
+				s.reconciliationAmbiguities.Add(1)
+			}
 			if replayed == visibility.MaxPendingReservations {
 				invariantErr := fmt.Errorf(
 					"%w: acquired more than %d reservations during one drain",
@@ -1298,13 +1300,13 @@ func (s *Store) reconcileWriteGroups(
 					visibility.MaxPendingReservations,
 				)
 				return time.Time{}, s.releaseAttempt(
-					legacyAmbiguous.Sequence,
+					ungrouped.Sequence,
 					attemptID,
 					invariantErr,
 				)
 			}
 			replayed++
-			if _, err := s.writeReservation(ctx, legacyAmbiguous, attemptID, true); err != nil {
+			if _, err := s.writeReservation(ctx, ungrouped, attemptID, true); err != nil {
 				return time.Time{}, err
 			}
 			s.reconciliationSuccesses.Add(1)

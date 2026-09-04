@@ -27,8 +27,8 @@ var (
 	// ErrPageInvalidated means a catalog mutation occurred after a list cursor
 	// was issued, so continuing it could omit or duplicate records.
 	ErrPageInvalidated = errors.New("control: list page invalidated")
-	// ErrMigrationDrift means the stored ledger is not the exact embedded
-	// sequence. In-place conversion is intentionally unsupported.
+	// ErrMigrationDrift means the stored ledger is neither the exact embedded
+	// sequence nor a narrowly recognized compatible release history.
 	ErrMigrationDrift = errors.New("control: migration history is unsupported; provision a fresh state database")
 	// ErrDatabaseTooNew means the database contains a migration beyond the
 	// embedded sequence. In-place downgrade is intentionally unsupported.
