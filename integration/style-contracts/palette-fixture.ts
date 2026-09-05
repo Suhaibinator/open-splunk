@@ -5,11 +5,12 @@
  * surface at once -- does any element paint its ink in its own ground, does
  * every raised surface keep its alpha, does the mono face reach every control
  * -- so they need the shell, the editor, a table, every button and badge, the
- * modal family, the drawer, the toast, the admin sidebar and the Appearance
- * card on one page. The markup mirrors the DOM the React components render
- * (`app/_components/product-shell.tsx`,
+ * modal family, the drawer, the toast, the admin sidebar, the Appearance
+ * card and the Knowledge Manager header on one page. The markup mirrors the
+ * DOM the React components render (`app/_components/product-shell.tsx`,
  * `app/search-workspace/components/search-editor.tsx`, the modal component,
- * the shared drawer, `app/admin/appearance-settings.tsx`) closely enough
+ * the shared drawer, `app/admin/appearance-settings.tsx`,
+ * `app/admin/knowledge-manager-panel.tsx`) closely enough
  * that every class here is one the stylesheets already select on. `SHELL_SELECTORS` names the elements a
  * classic pixel-parity capture compares across a change; the list is long on
  * purpose, because a knob that leaks touches a surface nobody was looking at.
@@ -133,6 +134,12 @@ export const SHELL_FIXTURE = `
             </div>
           </section>
         </form>
+        <section class="knowledge-manager">
+          <header class="knowledge-manager__header">
+            <div><span class="knowledge-manager__eyebrow">ADVERTISED CAPABILITY</span><h2>Knowledge Manager</h2><p>Create, validate, and manage visible Tier-1 field knowledge.</p></div>
+            <span class="knowledge-manager__readonly" aria-label="Tier-1 management surface">Tier 1</span>
+          </header>
+        </section>
       </div>
     </div>
   </main>
@@ -276,6 +283,11 @@ export const SHELL_SELECTORS: readonly string[] = [
   ".appearance-palette-options strong",
   ".appearance-palette-options small",
   ".appearance-palette-options label.is-selected small",
+  ".knowledge-manager__header",
+  ".knowledge-manager__header h2",
+  ".knowledge-manager__header p",
+  ".knowledge-manager__eyebrow",
+  ".knowledge-manager__readonly",
   ".modal-layer",
   ".modal-backdrop",
   ".modal-card",

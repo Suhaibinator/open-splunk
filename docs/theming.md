@@ -591,6 +591,7 @@ contracts, in `integration/style-contracts/css-contracts.spec.ts`, are:
 | no element in the shell paints its ink in its own ground | every palette and mode |
 | readable text clears its palette's contrast floor on the live page | AA, or 7:1 for graphite, in every palette and mode |
 | a keyboard-focused primary button shows a ring that clears 3:1 against its surround | every palette and mode |
+| the selected completion option draws a ring that clears 3:1 against the selection wash | every palette and mode; the cue that is not hue alone where the dark wash sits close to the surface |
 | the two chrome bars are distinct from each other and stand off the canvas | every palette and mode |
 | glass alone makes the raised surfaces translucent | the alpha and filter knobs reach only glass, and the opaque token still clears the text floor |
 | terminal alone sets the mono face on body text and squares every corner | `--font-sans` and the radii |

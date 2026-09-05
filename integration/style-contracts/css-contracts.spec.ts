@@ -1886,6 +1886,7 @@ const READABLE_TEXT: readonly string[] = [
   ".appearance-palette-options label.is-selected strong",
   ".appearance-palette-options label.is-selected small",
   ".appearance-palette-options label:not(.is-selected) small",
+  ".knowledge-manager__readonly",
 ];
 
 /**
@@ -1999,6 +2000,33 @@ test.describe("palette contracts", () => {
       expect(
         ratio,
         `${palette} ${mode}: focus ring ${ring.colour} on ${ring.surround} is ${ratio.toFixed(2)}:1`,
+      ).toBeGreaterThanOrEqual(NON_TEXT_CONTRAST);
+    });
+  });
+
+  test("the selected completion option draws a ring that clears 3:1 against the selection wash, in every palette and mode", async ({ page }) => {
+    // The selection wash sits within 1.3:1 of the surface in every dark
+    // scope, so the keyboard-selected option owes a cue that is not hue
+    // alone: an inset ring in the focused-edge colour, absent from the
+    // options around it, that clears non-text contrast on the wash itself.
+    await mountShell(page, DESKTOP_WIDTH);
+    const selected = page.locator('.completion-option[aria-selected="true"]');
+    const unselected = page.locator('.completion-option[aria-selected="false"]');
+    await inEveryScope(page, async ({ mode, palette }) => {
+      await expect(unselected, `${palette} ${mode}: an unselected option carries the ring`).toHaveCSS("box-shadow", "none");
+      const ring = await selected.evaluate((element) => {
+        const style = globalThis.getComputedStyle(element);
+        return { ground: style.backgroundColor, shadow: style.boxShadow };
+      });
+      const inset = /^(rgba?\([^)]+\)) 0px 0px 0px 1px inset$/u.exec(ring.shadow);
+      expect(inset, `${palette} ${mode}: the selected option's box-shadow is ${ring.shadow}, not a 1px inset ring`).not.toBeNull();
+      const colour = inset![1]!;
+      expect(paintAlpha(colour), `${palette} ${mode}: the ring is translucent`).toEqual(1);
+      expect(paintAlpha(ring.ground), `${palette} ${mode}: the selection wash is translucent`).toEqual(1);
+      const ratio = contrastRatio(colour, ring.ground);
+      expect(
+        ratio,
+        `${palette} ${mode}: selection ring ${colour} on ${ring.ground} is ${ratio.toFixed(2)}:1`,
       ).toBeGreaterThanOrEqual(NON_TEXT_CONTRAST);
     });
   });

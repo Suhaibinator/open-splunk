@@ -792,6 +792,14 @@ const PRIMITIVE_STEPS = new Set([0, 50, 100, 150, 200, 250, 300, 350, 400, 450, 
  * are left out on purpose -- `--fg-faint` is placeholder ink, so pinning it
  * here would turn a current implementation detail into an accessibility
  * promise.
+ *
+ * The last three are the pairs whose classic shortfall the readable-text
+ * contract in `css-contracts.spec.ts` used to carry as a ledger: the link on
+ * the striped row, the hovered accent as ink on the accent wash (the success
+ * badge, the admin notices), and the second accent as the completion menu's
+ * code ink on the selection wash. Each is promised by a role comment now, and
+ * held here so that a retune of the hex fails in `npm run test:frontend`
+ * rather than only in the Chromium contract.
  */
 const MANDATED_TEXT_PAIRS = [
   ["--fg-text", "--bg-canvas"],
@@ -806,6 +814,24 @@ const MANDATED_TEXT_PAIRS = [
   ["--chrome-fg", "--chrome-bar"],
   ["--chrome-fg", "--chrome-appbar"],
   ["--chrome-fg", "--chrome-hover"],
+  ["--fg-link", "--bg-subtle"],
+  ["--accent-hover", "--accent-soft"],
+  ["--accent-alt", "--selection"],
+];
+
+/**
+ * Text pairings painted from the status ramp, as `[foreground, background]`:
+ * the `-strong` ink each wash's comment promises, and the inverse ink on the
+ * danger button's `--status-error` ground. Status hues stay classic in every
+ * palette so a state keeps its meaning, and a palette's higher floor is a
+ * promise it makes on its own monochrome text, so these are held to AA in
+ * every scope rather than to the palette's floor -- the same rule the
+ * readable-text contract applies to the state-coloured surfaces.
+ */
+const STATE_TEXT_PAIRS = [
+  ["--status-info-strong", "--status-info-soft"],
+  ["--status-error-strong", "--status-error-soft"],
+  ["--fg-inverse", "--status-error"],
 ];
 
 /** WCAG 2.2 AA for text below 18.66px, which is every size this product ships. */
@@ -1264,15 +1290,20 @@ function contrastFloorOf(palette, floors) {
 }
 
 /**
- * Every mandated text pair that misses its scope's contrast floor, in any
- * scope of an indexed layer; a pair whose ink or ground does not resolve to a
- * six-digit hex is reported rather than measured.
+ * Every mandated text pair that misses its scope's contrast floor, and every
+ * state text pair that misses AA, in any scope of an indexed layer; a pair
+ * whose ink or ground does not resolve to a six-digit hex is reported rather
+ * than measured.
  */
 function contrastFailures({ floors, scopes }) {
   const failures = [];
   for (const scope of scopes) {
-    const floor = contrastFloorOf(scope.palette, floors);
-    for (const [foreground, background] of MANDATED_TEXT_PAIRS) {
+    const paletteFloor = contrastFloorOf(scope.palette, floors);
+    const pairs = [
+      ...MANDATED_TEXT_PAIRS.map(([foreground, background]) => [foreground, background, paletteFloor]),
+      ...STATE_TEXT_PAIRS.map(([foreground, background]) => [foreground, background, AA_CONTRAST]),
+    ];
+    for (const [foreground, background, floor] of pairs) {
       const ink = resolve(foreground, scope.values);
       const ground = resolve(background, scope.values);
       const unresolved = [[foreground, ink], [background, ground]]
@@ -2772,10 +2803,15 @@ const SYNTHETIC_COLOUR = `
   --gray-800: #2a2a2a;
   --gray-900: #1a1a1a;
   --gray-950: #0d0d0d;
+  --blue-100: #e6eef9;
   --blue-300: #7aa7e0;
   --blue-400: #4a86d8;
   --blue-500: #1a5fb4;
   --blue-700: #124a8f;
+  --red-100: #fbe9e7;
+  --red-300: #f28b82;
+  --red-500: #b3261e;
+  --red-700: #7a1a14;
   --bg-canvas: var(--gray-50);
   --bg-surface: var(--gray-0);
   --bg-subtle: var(--gray-100);
@@ -2784,11 +2820,21 @@ const SYNTHETIC_COLOUR = `
   --fg-text: var(--gray-700);
   --fg-strong: var(--gray-950);
   --fg-inverse: var(--gray-0);
+  --fg-link: var(--blue-700);
   --chrome-bar: var(--gray-900);
   --chrome-appbar: var(--gray-800);
   --chrome-hover: var(--gray-700);
   --chrome-fg: var(--gray-0);
   --accent: var(--blue-500);
+  --accent-hover: var(--blue-700);
+  --accent-soft: var(--gray-100);
+  --accent-alt: var(--gray-950);
+  --status-info-soft: var(--blue-100);
+  --status-info-strong: var(--blue-700);
+  --status-error: var(--red-500);
+  --status-error-soft: var(--red-100);
+  --status-error-strong: var(--red-700);
+  --selection: var(--gray-150);
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
@@ -2800,7 +2846,11 @@ const SYNTHETIC_COLOUR = `
   --fg-text: var(--gray-100);
   --fg-strong: var(--gray-0);
   --fg-inverse: var(--gray-950);
+  --fg-link: var(--gray-150);
   --accent: var(--blue-700);
+  --accent-hover: var(--gray-150);
+  --accent-soft: var(--gray-800);
+  --status-error: var(--red-300);
 }
 `;
 

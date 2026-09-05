@@ -402,6 +402,11 @@
   background: var(--selection);
 }
 
+/* The keyboard-selected option carries a ring as well as the wash: in dark the wash sits close to the surface, so hue alone is not the cue. */
+.completion-option[aria-selected="true"] {
+  box-shadow: inset 0 0 0 1px var(--border-focus);
+}
+
 .completion-menu code {
   color: var(--accent-alt);
   font-size: var(--type-md);

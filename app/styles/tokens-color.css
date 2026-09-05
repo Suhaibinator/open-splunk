@@ -204,7 +204,7 @@
   --fg-secondary: var(--gray-700); /* Ink one step lighter than body text: table cells, sub-headings. */
   --fg-muted: var(--gray-600); /* Secondary text: captions, metadata, help. */
   --fg-faint: var(--gray-500); /* Tertiary text: placeholders, disabled labels. */
-  --fg-inverse: var(--gray-0); /* Text on --bg-inverse. */
+  --fg-inverse: var(--gray-0); /* Text on --bg-inverse, and on --status-error as the danger button's label. */
   --fg-inverse-muted: var(--gray-400); /* Secondary text on --bg-inverse. */
   --fg-link: var(--blue-700); /* Anchor text; deep enough to clear AA on the striped row's --bg-subtle. */
 
@@ -216,11 +216,11 @@
 
   /* Accent: the product's primary action colour. */
   --accent: var(--green-700); /* Primary buttons, active tabs, progress. */
-  --accent-hover: var(--green-800); /* Hovered and pressed accent. */
+  --accent-hover: var(--green-800); /* Hovered and pressed accent, and the ink on --accent-soft. */
   --accent-bright: var(--green-500); /* Saturated accent fill: progress bars, timeline columns. */
   --accent-inverse: var(--green-400); /* The accent on --bg-inverse, one step lighter so it clears a dark ground. */
   --accent-soft: var(--green-100); /* Accent-tinted background wash. */
-  --accent-alt: var(--purple-600); /* Second decorative accent, carrying no status meaning. */
+  --accent-alt: var(--purple-600); /* Second decorative accent, carrying no status meaning; the completion menu's code ink, on --selection too. */
   --accent-alt-soft: var(--purple-100); /* Second decorative accent, as a background wash. */
 
   /* Status: one hue per outcome, each with a background wash. */
@@ -335,9 +335,9 @@
   --fg-secondary: var(--gray-300); /* Ink one step lighter than body text. */
   --fg-muted: var(--gray-450); /* Secondary text. */
   --fg-faint: var(--gray-550); /* Tertiary text. */
-  --fg-inverse: var(--gray-950); /* Text on --bg-inverse. */
+  --fg-inverse: var(--gray-950); /* Text on --bg-inverse, and on --status-error as the danger button's label. */
   --fg-inverse-muted: var(--gray-650); /* Secondary text on --bg-inverse; clears AA at the --bg-inverse-tint end too. */
-  --fg-link: var(--blue-300); /* Anchor text. */
+  --fg-link: var(--blue-300); /* Anchor text, on the striped row's --bg-subtle as on the surfaces. */
 
   /* Borders. */
   --border: var(--gray-700); /* Default rule. */
@@ -347,7 +347,7 @@
 
   /* Accent. */
   --accent: var(--green-500); /* Primary action colour. */
-  --accent-hover: var(--green-400); /* Hovered and pressed accent. */
+  --accent-hover: var(--green-400); /* Hovered and pressed accent, and the ink on --accent-soft. */
   --accent-bright: var(--green-300); /* Saturated accent fill. */
   --accent-inverse: var(--green-700); /* The accent on --bg-inverse, which is a light surface here; a label ink, so it clears AA. */
   --accent-soft: var(--green-950); /* Accent-tinted background wash; deep enough that --accent-hover reads as ink on it. */
