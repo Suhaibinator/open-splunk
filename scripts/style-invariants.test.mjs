@@ -485,43 +485,63 @@ test("no stylesheet outside the token layer grows a token of its own", async () 
   );
 });
 
+/**
+ * Everything wrong with one block of a token file, as the reader of the
+ * failure would want it said: its shape, the file it sits in, and what it
+ * declares. `palettes` is the set of names `PALETTES` lists.
+ *
+ * A `data-palette="classic"` block is refused by name rather than left to the
+ * file-ownership check, which a `tokens-palette-classic.css` would satisfy:
+ * classic is the base pair, the boot script writes `data-palette="classic"`
+ * explicitly, so such a block would apply and classic would stop rendering the
+ * base blocks alone -- the one promise every palette's resolution chain rests
+ * on.
+ */
+function tokenBlockProblems(file, block, palettes) {
+  const owner = paletteOfFile(file);
+  const problems = [];
+  const { ancestors, declarations, prelude } = block;
+  if (ancestors.length > 0) problems.push(`${file}: ${prelude} is nested inside ${ancestors.join(" > ")}`);
+  const scope = themeScopeOf(block);
+  if (scope === null) {
+    if (ancestors.length === 0) problems.push(`${file}: ${prelude} is a rule, not one of the four theme blocks`);
+  } else if (scope.palette === DEFAULT_PALETTE) {
+    problems.push(
+      `${file}: ${prelude} selects data-palette="${DEFAULT_PALETTE}", which is the base pair and has no block of its own`,
+    );
+  } else if (scope.palette !== null && !palettes.has(scope.palette)) {
+    problems.push(`${file}: ${prelude} selects a palette ${PALETTE_MODULE} does not list in PALETTES`);
+  } else if (scope.palette !== owner) {
+    problems.push(
+      `${file}: ${prelude} is the ${scopeLabel(scope.palette, scope.mode)} block, and this file holds only `
+      + `${owner === null ? "base" : owner} blocks`,
+    );
+  }
+  for (const { property } of declarations) {
+    // `color-scheme` is the one non-token declaration a theme block owes
+    // the browser: without it form controls and scrollbars keep the other
+    // theme's colours.
+    if (property.startsWith("--") || property === "color-scheme") continue;
+    problems.push(`${file}: ${prelude} sets ${property}`);
+  }
+  return problems;
+}
+
 test("the token layer declares tokens and nothing else", async () => {
   const palettes = new Set(await readPaletteNames());
   const files = await collectTokenBlocks(workspace);
-  const offenders = [];
-  for (const { blocks, file } of files) {
-    const owner = paletteOfFile(file);
-    for (const block of blocks) {
-      const { ancestors, declarations, prelude } = block;
-      if (ancestors.length > 0) offenders.push(`${file}: ${prelude} is nested inside ${ancestors.join(" > ")}`);
-      const scope = themeScopeOf(block);
-      if (scope === null) {
-        if (ancestors.length === 0) offenders.push(`${file}: ${prelude} is a rule, not one of the four theme blocks`);
-      } else if (scope.palette !== null && !palettes.has(scope.palette)) {
-        offenders.push(`${file}: ${prelude} selects a palette ${PALETTE_MODULE} does not list in PALETTES`);
-      } else if (scope.palette !== owner) {
-        offenders.push(
-          `${file}: ${prelude} is the ${scopeLabel(scope.palette, scope.mode)} block, and this file holds only `
-          + `${owner === null ? "base" : owner} blocks`,
-        );
-      }
-      for (const { property } of declarations) {
-        // `color-scheme` is the one non-token declaration a theme block owes
-        // the browser: without it form controls and scrollbars keep the other
-        // theme's colours.
-        if (property.startsWith("--") || property === "color-scheme") continue;
-        offenders.push(`${file}: ${prelude} sets ${property}`);
-      }
-    }
-  }
+  const offenders = files.flatMap(({ blocks, file }) => (
+    blocks.flatMap((block) => tokenBlockProblems(file, block, palettes))
+  ));
   assert.deepEqual(
     offenders.toSorted(),
     [],
     "A token file grew something that is not a token, or a theme block sits in the wrong file. Rules\n"
       + "belong in an application stylesheet; a palette's two blocks belong in its own\n"
-      + "tokens-palette-<name>.css and the base pair in tokens-color.css and tokens-scale.css; and the\n"
-      + "four preludes are exact, because `:root[data-palette=\"x\"]` without `:where()` outranks the\n"
-      + `base dark block and leaks light grounds into dark mode:\n${describeList(offenders.toSorted())}`,
+      + "tokens-palette-<name>.css and the base pair in tokens-color.css and tokens-scale.css; classic\n"
+      + "is the base pair and no block may select it; and the four preludes are exact, because\n"
+      + "`:root[data-palette=\"x\"]` without `:where()` outranks the base dark block and leaks light\n"
+      + `grounds into dark mode:\n${describeList(offenders.toSorted())}`,
   );
 });
 
@@ -534,7 +554,18 @@ test("every palette in PALETTES has one token file with one light and one dark b
     `${PALETTE_MODULE} lists PALETTES without ${DEFAULT_PALETTE}, which is the base pair every palette resolves through`,
   );
   for (const name of names) {
-    if (name === DEFAULT_PALETTE) continue;
+    if (name === DEFAULT_PALETTE) {
+      // Classic is the base pair: `data-palette="classic"` is meant to select
+      // nothing, so the one file a palette of that name could have is the one
+      // file that must not exist. Named here rather than left to the
+      // duplicate-declaration test, which only notices a classic file when
+      // its light block collides with a base name and says nothing about a
+      // dark-only one.
+      if (layer.some((entry) => entry.file === paletteFile(name))) {
+        problems.push(`${paletteFile(name)} exists, but ${name} is the base pair and has no palette file`);
+      }
+      continue;
+    }
     const entry = layer.find((candidate) => candidate.file === paletteFile(name));
     if (entry === undefined) {
       problems.push(`${name} is in PALETTES but ${paletteFile(name)} does not exist`);
@@ -559,8 +590,9 @@ test("every palette in PALETTES has one token file with one light and one dark b
     [],
     `${PALETTE_MODULE}'s PALETTES and the tokens-palette-*.css files disagree. The client offers every name\n`
       + "on that list, so a name without a file renders as classic while claiming not to, and a file\n"
-      + "without a name is a look nobody can select. Every palette ships exactly one light and one dark\n"
-      + `block so the resolution chain has the same shape for all of them:\n${describeList(problems.toSorted())}`,
+      + "without a name is a look nobody can select. Every palette but classic ships exactly one light\n"
+      + "and one dark block so the resolution chain has the same shape for all of them; classic is the\n"
+      + `base pair, so a file for it would change what every chain resolves through:\n${describeList(problems.toSorted())}`,
   );
 });
 
@@ -2128,6 +2160,66 @@ test("themeScopeOf rejects a palette light block without :where(), and a nested 
   assert.equal(scopeOf(".dark-row"), null);
   assert.equal(scopeOf(':root[data-theme="dark"] .card'), null);
   assert.equal(scopeOf(':root:where([data-palette="ocean"])[data-theme="dark"]'), null);
+});
+
+/** An unnested token-file block as `collectTokenBlocks` would report it. */
+function unnestedBlock(prelude, declarations = [{ property: "--radius-sm", value: "0" }]) {
+  return { ancestors: [], declarations, prelude };
+}
+
+test("tokenBlockProblems refuses a block that selects the default palette, in either mode", () => {
+  // Fixture-free: the rule is stated here so a classic file is refused by
+  // name, not left to whichever other invariant its contents happen to trip.
+  const palettes = new Set([DEFAULT_PALETTE, "ocean"]);
+  const classicFile = paletteFile(DEFAULT_PALETTE);
+  const colourFile = "app/styles/tokens-color.css";
+  const classicDark = `:root[data-palette="${DEFAULT_PALETTE}"][data-theme="dark"]`;
+  const classicLight = `:root:where([data-palette="${DEFAULT_PALETTE}"])`;
+  const refused = `selects data-palette="${DEFAULT_PALETTE}", which is the base pair and has no block of its own`;
+  assert.deepEqual(
+    tokenBlockProblems(classicFile, unnestedBlock(classicDark), palettes),
+    [`${classicFile}: ${classicDark} ${refused}`],
+  );
+  assert.deepEqual(
+    tokenBlockProblems(classicFile, unnestedBlock(classicLight), palettes),
+    [`${classicFile}: ${classicLight} ${refused}`],
+  );
+  // The refusal is about the palette, not the file: the same block in the
+  // colour file is refused for the same reason, before file ownership is asked.
+  assert.deepEqual(
+    tokenBlockProblems(colourFile, unnestedBlock(classicLight), palettes),
+    [`${colourFile}: ${classicLight} ${refused}`],
+  );
+  // The four legitimate shapes, each in its own file, raise nothing.
+  assert.deepEqual(tokenBlockProblems(colourFile, unnestedBlock(":root"), palettes), []);
+  assert.deepEqual(tokenBlockProblems("app/styles/tokens-scale.css", unnestedBlock(':root[data-theme="dark"]'), palettes), []);
+  assert.deepEqual(tokenBlockProblems(paletteFile("ocean"), unnestedBlock(':root:where([data-palette="ocean"])'), palettes), []);
+  assert.deepEqual(
+    tokenBlockProblems(paletteFile("ocean"), unnestedBlock(':root[data-palette="ocean"][data-theme="dark"]'), palettes),
+    [],
+  );
+  // And the checks it sits beside still fire: an unlisted palette, a block in
+  // the wrong file, a nested block, and a rule that is not a theme block.
+  assert.deepEqual(
+    tokenBlockProblems(paletteFile("sepia"), unnestedBlock(':root:where([data-palette="sepia"])'), palettes),
+    [`${paletteFile("sepia")}: :root:where([data-palette="sepia"]) selects a palette ${PALETTE_MODULE} does not list in PALETTES`],
+  );
+  assert.deepEqual(
+    tokenBlockProblems(colourFile, unnestedBlock(':root:where([data-palette="ocean"])'), palettes),
+    [`${colourFile}: :root:where([data-palette="ocean"]) is the ocean light block, and this file holds only base blocks`],
+  );
+  assert.deepEqual(
+    tokenBlockProblems(
+      colourFile,
+      { ancestors: ["@media (prefers-color-scheme: dark)"], declarations: [], prelude: ':root[data-theme="dark"]' },
+      palettes,
+    ),
+    [`${colourFile}: :root[data-theme="dark"] is nested inside @media (prefers-color-scheme: dark)`],
+  );
+  assert.deepEqual(
+    tokenBlockProblems(colourFile, unnestedBlock(".card", [{ property: "color", value: "red" }]), palettes),
+    [`${colourFile}: .card is a rule, not one of the four theme blocks`, `${colourFile}: .card sets color`],
+  );
 });
 
 test("cssDeclarations keeps a value that contains its own colons and commas", () => {
