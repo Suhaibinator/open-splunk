@@ -53,6 +53,17 @@
   --slate-700: #3f464c; /* App bar. */
   --slate-900: #1e252b; /* Product bar. */
 
+  /* Mist: the cool, faintly blue neutrals ocean and glass lay under their panels. */
+  --mist-100: #edf2f6; /* Ocean and glass page ground. */
+  --mist-150: #e3eaf0; /* Ocean and glass recessed strip: toolbars, table headers. */
+  --mist-200: #d5dfe8; /* Ocean and glass faint divider and resting skeleton surface. */
+
+  /* Slateblue: the blue-leaning slate ocean and glass build their two bars from. */
+  --slateblue-600: #3f5570; /* Ocean and glass app-bar hover in light. */
+  --slateblue-700: #32465e; /* Ocean and glass app bar in light; bar hover in dark. */
+  --slateblue-900: #1b2a3b; /* Ocean and glass product bar in light; app bar in dark. */
+  --slateblue-950: #121c28; /* Ocean and glass product bar in dark. */
+
   /* Green: the product's primary accent hue. */
   --green-100: #e8f2e1; /* Accent wash. */
   --green-200: #dbead2; /* Accent wash border. */
@@ -62,6 +73,7 @@
   --green-600: #5f9c3a; /* Mid accent fill; the info severity swatch. */
   --green-700: #477f2b; /* Primary accent. */
   --green-800: #376a20; /* Pressed and hovered accent. */
+  --green-900: #2c5619; /* Graphite string ink and terminal pressed accent: the one green that clears 7:1 on white. */
 
   /* Blue: informational hue, links, focus, and selection. */
   --blue-100: #e8f3f9; /* Informational wash. */
@@ -86,9 +98,11 @@
   --amber-700: #795817; /* Deep warning text. */
 
   /* Orange: the warmer caution hue used for in-progress and throttled states. */
+  --orange-300: #f2a65f; /* Ember focus ring and bright accent on a dark ground; graphite function ink in dark. */
   --orange-400: #d97a23; /* Primary orange. */
   --orange-500: #c07823; /* Pressed orange. */
   --orange-600: #aa5f18; /* Deep orange, legible as small ink on a light ground. */
+  --orange-700: #7f420a; /* Graphite function ink in light: orange that clears 7:1 on white. */
 
   /* Red: error and destructive hue. */
   --red-100: #fff0ee; /* Error wash. */
@@ -102,10 +116,12 @@
 
   /* Purple: categorical only; the product assigns it no state. */
   --purple-100: #efeaf6; /* Purple wash. */
+  --purple-300: #cbb8e0; /* Graphite command ink in dark: purple that clears 7:1 on the dark surface. */
   --purple-400: #b094cf; /* Light purple: an ink that clears AA on a dark ground. */
   --purple-500: #8b67a8; /* Mid purple. */
   --purple-550: #a14b96; /* Magenta-leaning purple. */
   --purple-600: #6d4b9f; /* Deep purple. */
+  --purple-700: #563a80; /* Graphite command ink in light: purple that clears 7:1 on white. */
 
   /* Extended categorical hues: the chart series ramp, and the dark theme's
      syntax pipe, reach these. */
@@ -113,10 +129,49 @@
   --brown-500: #8a6d55; /* Categorical brown. */
   --indigo-500: #6f7fb5; /* Categorical indigo. */
   --olive-500: #708f37; /* Categorical olive. */
+  --pink-300: #ebb5d0; /* Graphite pipe ink in dark: magenta that clears 7:1 on the dark surface. */
   --pink-400: #d98fb5; /* Light pink: an ink that clears AA on a dark ground. */
   --pink-500: #c76594; /* Categorical pink. */
+  --pink-700: #86375f; /* Graphite pipe ink in light: magenta that clears 7:1 on white. */
   --teal-500: #4d9a8a; /* Categorical teal. */
   --teal-600: #4f8f6f; /* Categorical green-teal. */
+
+  /* Sand: the warm neutrals ember lays under its panels and reads as light text in dark. */
+  --sand-50: #fdfbf7; /* Ember panel surface in light; inverse surface and heading ink in dark. */
+  --sand-100: #f6f1e8; /* Ember page ground in light. */
+  --sand-150: #efe8dc; /* Ember recessed strip in light. */
+  --sand-200: #e5dbcc; /* Ember faint divider and skeleton in light; body text in dark. */
+  --sand-300: #d4c7b4; /* Ember default border in light; secondary text in dark. */
+  --sand-400: #bcac96; /* Ember emphasised border in light; muted text in dark. */
+
+  /* Umber: the warm dark neutrals ember uses for chrome, inverse surfaces and dark-mode grounds. */
+  --umber-600: #5c4e45; /* Ember default border and skeleton highlight in dark. */
+  --umber-700: #4a3d35; /* Ember bar hover in light; raised surface in dark. */
+  --umber-800: #3a2e27; /* Ember app bar in light; recessed strip and bar hover in dark. */
+  --umber-900: #2a201b; /* Ember product bar and body text in light; panel surface and app bar in dark. */
+  --umber-950: #1c1512; /* Ember inverse surface and heading ink in light; page ground and product bar in dark. */
+
+  /* Rust: ember's orange-red accent hue. */
+  --rust-100: #fbe9e0; /* Ember accent wash in light. */
+  --rust-300: #f0a889; /* Ember accent on the inverse surface in light; hovered accent and link in dark. */
+  --rust-400: #e07a4f; /* Ember primary accent in dark. */
+  --rust-500: #c4471a; /* Ember primary accent in light. */
+  --rust-600: #a33a13; /* Ember hovered accent and link in light; accent on the inverse surface in dark. */
+  --rust-800: #5e2109; /* Ember accent wash in dark. */
+
+  /* Carbon: the pure neutral near-blacks terminal paints its dark grounds and bars with. */
+  --carbon-700: #3a3a3a; /* Terminal raised surface in dark. */
+  --carbon-800: #2a2a2a; /* Terminal recessed strip and bar hover in dark. */
+  --carbon-900: #1c1c1c; /* Terminal panel surface and app bar in dark. */
+  --carbon-950: #0f0f0f; /* Terminal page ground and product bar in dark. */
+
+  /* Phosphor: terminal's CRT green, brighter and bluer than the product green. */
+  --phosphor-100: #dcf5e4; /* Terminal accent wash in light. */
+  --phosphor-300: #7ee8a4; /* Terminal bar text in both modes; saturated accent fill in dark. */
+  --phosphor-400: #3fd57f; /* Terminal hovered accent, link, focus ring and string ink in dark. */
+  --phosphor-500: #1fb864; /* Terminal primary accent in dark. */
+  --phosphor-700: #157a44; /* Terminal accent on the light inverse surface in dark. */
+  --phosphor-800: #0f4f2f; /* Terminal accent wash and selection in dark. */
 
   /* Tier 2 -- semantic tokens. The only names the rest of the code may read. */
 

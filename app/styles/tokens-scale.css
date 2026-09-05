@@ -36,6 +36,19 @@
   /* Chart translucency. */
   --opacity-chart-area: 0.24; /* Series-area fill that keeps overlapping strokes and the plot grid legible. */
 
+  /* Translucency knobs: the two alphas and the one backdrop filter a palette
+     may turn to make a surface see-through. Classic holds every knob at its
+     inert value so it paints exactly as it did before the knobs existed: a
+     colour mixed at 100% is the colour, and `none` -- not `blur(0)`, which
+     still opens a stacking context -- is the whole filter. The consumers are
+     the two chrome bars (--alpha-chrome) and the raised and overlay surfaces
+     (--alpha-surface): menus, popovers, the modal card, the drawer, the toast.
+     AA contrast is proved on the opaque hex, so a palette may not take
+     --alpha-* below 80%; scripts/style-invariants.test.mjs holds that floor. */
+  --alpha-chrome: 100%; /* Opacity of the two chrome bars. */
+  --alpha-surface: 100%; /* Opacity of raised and overlay surfaces: menus, popovers, modal card, drawer, toast. */
+  --backdrop-surface: none; /* backdrop-filter behind a translucent surface; `none` keeps classic free of stacking side effects. */
+
   /* Type stacks, moved verbatim out of the :root block the application
      stylesheet used to carry. */
   --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
