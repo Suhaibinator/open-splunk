@@ -662,33 +662,104 @@ export function isDarkThemeContext(block) {
   return [block.prelude, ...block.ancestors].some((prelude) => DARK_THEME_CONTEXT.test(prelude));
 }
 
+/**
+ * The four preludes a token-layer block may open with, and what each selects.
+ *
+ * The token layer has two axes -- the instance palette on `data-palette` and
+ * the user's theme on `data-theme`, both attributes of `<html>` -- and exactly
+ * four block shapes, one per corner:
+ *
+ *   base light      `:root`                                        (0,1,0)
+ *   base dark       `:root[data-theme="dark"]`                     (0,2,0)
+ *   palette light   `:root:where([data-palette="ocean"])`          (0,1,0)
+ *   palette dark    `:root[data-palette="ocean"][data-theme="dark"]` (0,3,0)
+ *
+ * The `:where()` on the palette light block is what makes the resolution order
+ * `base light < palette light < base dark < palette dark` hold: it keeps that
+ * block at the base light block's specificity, so it wins over base light by
+ * source order alone and still loses to base dark, which every palette file is
+ * loaded after. A plain `:root[data-palette="ocean"]` would be (0,2,0), tie
+ * with base dark, and -- being stated later -- leak the palette's light grounds
+ * into dark mode. That is why the shape is anchored and exact rather than
+ * "contains data-palette": the wrong spelling is a real bug, not a variant.
+ */
+const THEME_SCOPE_PRELUDES = [
+  { mode: "light", pattern: /^:root$/u },
+  { mode: "dark", pattern: /^:root\[data-theme="dark"\]$/u },
+  { mode: "light", pattern: /^:root:where\(\[data-palette="([a-z][a-z0-9-]*)"\]\)$/u },
+  { mode: "dark", pattern: /^:root\[data-palette="([a-z][a-z0-9-]*)"\]\[data-theme="dark"\]$/u },
+];
+
+/**
+ * Which theme scope a token-layer block belongs to: `{ palette, mode }`, with
+ * `palette` `null` for the base pair, or `null` when the block is nested inside
+ * an at-rule or opens with any prelude other than the four above.
+ */
+export function themeScopeOf(block) {
+  if (block.ancestors.length > 0) return null;
+  const prelude = block.prelude.trim();
+  for (const { mode, pattern } of THEME_SCOPE_PRELUDES) {
+    const match = pattern.exec(prelude);
+    if (match !== null) return { mode, palette: match[1] ?? null };
+  }
+  return null;
+}
+
 /** The token files of the two-tier layer, sorted so reports read the same way. */
 export async function listTokenStylesheets(root) {
   const layer = /^app\/styles\/tokens-[a-z0-9-]+\.css$/u;
   return (await listStylesheets(root)).filter((file) => layer.test(relativePosix(root, file)));
 }
 
+/** The base pair of the token layer, in the order the entry point has to load them. */
+const BASE_TOKEN_FILES = ["app/styles/tokens-color.css", "app/styles/tokens-scale.css"];
+
 /**
- * Every custom property the token layer declares, split by theme.
+ * The order the token files have to be loaded in: colour, scale, then every
+ * palette file sorted by name.
  *
- * Declarations come back as lists rather than maps so a name declared twice in
- * one file stays visible to the caller instead of being silently overwritten.
+ * A palette file restates names both base files declare, and its light block
+ * relies on source order rather than specificity to beat the base light block
+ * (see `themeScopeOf`), so every palette has to follow both base files. Among
+ * the palettes the order carries no meaning -- each selects on its own
+ * `data-palette` value -- so they sort by name for a stable contract.
+ */
+export async function tokenCascadeOrder(root) {
+  const files = (await listTokenStylesheets(root)).map((file) => relativePosix(root, file));
+  const base = BASE_TOKEN_FILES.filter((file) => files.includes(file));
+  const palettes = files.filter((file) => !BASE_TOKEN_FILES.includes(file)).toSorted();
+  return [...base, ...palettes];
+}
+
+/**
+ * Every custom property the token layer declares, block by block.
+ *
+ * Each selector block comes back with the scope `themeScopeOf` assigns it --
+ * `palette` and `mode`, both `null` for a block that is not one of the four
+ * theme shapes, so a stray rule in a token file stays visible rather than being
+ * filed under a theme it does not select. Declarations are lists rather than
+ * maps for the same reason: a name declared twice in one block stays visible to
+ * the caller instead of being silently overwritten.
  */
 export async function collectTokenLayer(root) {
   const files = await listTokenStylesheets(root);
   return Promise.all(files.map(async (file) => {
-    const css = await readFile(file, "utf8");
-    const dark = [];
-    const light = [];
-    for (const block of cssBlocks(css)) {
+    const blocks = [];
+    for (const block of cssBlocks(await readFile(file, "utf8"))) {
       if (block.prelude.startsWith("@")) continue;
-      const target = isDarkThemeContext(block) ? dark : light;
+      const scope = themeScopeOf(block);
+      const tokens = [];
       for (const { property, value } of cssDeclarations(block.body)) {
-        if (!property.startsWith("--")) continue;
-        target.push({ name: property, selector: block.prelude, value });
+        if (property.startsWith("--")) tokens.push({ name: property, value });
       }
+      blocks.push({
+        mode: scope?.mode ?? null,
+        palette: scope?.palette ?? null,
+        selector: block.prelude.replaceAll(/\s+/gu, " "),
+        tokens,
+      });
     }
-    return { dark, file: relativePosix(root, file), light };
+    return { blocks, file: relativePosix(root, file) };
   }));
 }
 
@@ -750,31 +821,34 @@ export async function collectTokenBlocks(root) {
 }
 
 /**
- * Every reference to a tier-1 primitive from outside the file that declares it.
+ * Every reference to a tier-1 primitive from outside the token layer.
  *
- * "Nothing outside `app/styles/tokens-color.css` may reference a primitive" is
- * the rule the whole two-tier split rests on, and it is the one rule a
- * screenshot can never see: a rule that reads `--green-700` through a `var()`
- * renders exactly like the semantic token pointing at the same step, right up
- * to the day a theme tries to move it. The primitives are read out of the
- * palette file itself -- a name is a primitive because it holds a literal
- * there, not because of how it is spelled -- so adding a hue family extends the
- * check for free.
+ * "Nothing outside the token layer may reference a primitive" is the rule the
+ * whole two-tier split rests on, and it is the one rule a screenshot can never
+ * see: a rule that reads `--green-700` through a `var()` renders exactly like
+ * the semantic token pointing at the same step, right up to the day a theme
+ * tries to move it. The primitives are read out of every token file -- a name
+ * is a primitive because it holds a literal there, not because of how it is
+ * spelled or which file it sits in -- so adding a hue family extends the check
+ * for free, and a palette file that grew a literal of its own would have its
+ * name policed here rather than slipping past as a semantic token. Every token
+ * file is excluded from the candidates: a palette file exists to point
+ * semantic roles at primitives, which is the one reference the rule permits.
  *
  * Test and spec files are skipped: they quote token names inside fixture
  * strings on purpose, and a fixture is not a call site.
  */
 export async function collectPrimitiveReferences(root) {
-  const palette = (await listTokenStylesheets(root))
-    .find((file) => relativePosix(root, file) === "app/styles/tokens-color.css");
+  const layer = new Set(await listTokenStylesheets(root));
   const primitives = new Set();
-  if (palette !== undefined) {
-    const css = stripCssComments(await readFile(palette, "utf8"));
+  const layerSources = await Promise.all([...layer].map((file) => readFile(file, "utf8")));
+  for (const source of layerSources) {
+    const css = stripCssComments(source);
     for (const match of css.matchAll(/(--[a-z]+-\d+)\s*:\s*#[0-9a-f]{3,8}/giu)) primitives.add(match[1]);
   }
   const tests = new Set(await listTestFiles(root));
   const candidates = (await listRepositoryFiles(root)).filter((file) => (
-    file !== palette
+    !layer.has(file)
     && !tests.has(file)
     && (file.endsWith(".css") || SOURCE_EXTENSIONS.has(path.extname(file)))
   ));
@@ -1613,13 +1687,15 @@ export function hasColourLiteral(value) {
 }
 
 /**
- * The light-theme value of every custom property the token layer declares.
+ * The base light value of every custom property the token layer declares.
  *
- * Dark blocks are skipped: a theme restates tier 2, and the question every
- * caller here asks -- "does this literal already have a name?" -- is asked
- * against the theme the product actually ships. `var()` chains are followed to
- * the primitive, so a tier-2 token and the literal it replaced are directly
- * comparable.
+ * Every other block -- base dark, and both blocks of every palette -- is
+ * skipped: a theme restates tier 2, and the question every caller here asks --
+ * "does this literal already have a name?" -- is asked against the default the
+ * product ships. Reading the palette blocks too would let whichever palette
+ * file sorts last overwrite the classic value in every literal-ledger and
+ * property-kind check. `var()` chains are followed to the primitive, so a
+ * tier-2 token and the literal it replaced are directly comparable.
  */
 export async function collectTokenValues(root) {
   const files = await listTokenStylesheets(root);
@@ -1627,7 +1703,9 @@ export async function collectTokenValues(root) {
   const declared = new Map();
   for (const css of sources) {
     for (const block of cssBlocks(css)) {
-      if (block.prelude.startsWith("@") || isDarkThemeContext(block)) continue;
+      if (block.prelude.startsWith("@")) continue;
+      const scope = themeScopeOf(block);
+      if (scope === null || scope.palette !== null || scope.mode !== "light") continue;
       for (const { property, value } of cssDeclarations(block.body)) {
         if (property.startsWith("--")) declared.set(property, value);
       }
