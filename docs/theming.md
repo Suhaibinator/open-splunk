@@ -345,11 +345,13 @@ Page layers are ten steps: `--z-base` (1), `--z-sticky` (100), `--z-bar`
 `--z-skip-link` (1000). A positioned element on a step is a stacking context,
 so a menu inside it is held at its host's layer however high the menu's own
 step climbs; the host is raised instead for as long as it holds one.
-`.suite-product-bar`, `.search-title-row` and `.job-strip` move to
-`--z-dropdown` while they hold a `.floating-menu` or `.suite-popover`, and
-`.search-composer` does the same while it holds the `.completion-menu` or the
-`.time-popover`, which is what carries the completion menu over the fields
-rail -- a later sibling on the composer's own `--z-sticky` step.
+`.suite-product-bar` moves to `--z-dropdown` while it holds a
+`.floating-menu` or a `.suite-popover`; `.search-title-row`, `.job-strip`,
+`.result-view-header`, `.timeline-toolbar` and `.event-toolbar` do so while
+they hold a `.floating-menu`; `.search-composer` does so while it holds the
+`.completion-menu` or the `.time-popover`, which is what carries the
+completion menu over the fields rail -- a later sibling on the composer's own
+`--z-sticky` step.
 
 The type ramp is `--type-xxs` (9px) through `--type-xxl` (20px) plus the fluid
 `--type-display`. `body` in `base.css` sets `--type-md` (12px); most controls,
