@@ -145,6 +145,7 @@
   --sand-400: #bcac96; /* Ember emphasised border in light; muted text in dark. */
 
   /* Umber: the warm dark neutrals ember uses for chrome, inverse surfaces and dark-mode grounds. */
+  --umber-500: #6b5b50; /* Ember secondary text in light: the taupe that clears AA on the sand strip. */
   --umber-600: #5c4e45; /* Ember default border and skeleton highlight in dark. */
   --umber-700: #4a3d35; /* Ember bar hover in light; raised surface in dark. */
   --umber-800: #3a2e27; /* Ember app bar in light; recessed strip and bar hover in dark. */

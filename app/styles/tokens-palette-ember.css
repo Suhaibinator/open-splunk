@@ -17,7 +17,7 @@
   --fg-text: var(--umber-900); /* Body text, warmed to match the ground. */
   --fg-strong: var(--umber-950); /* Headings and emphasised text. */
   --fg-secondary: var(--umber-800); /* Ink one step lighter than body text. */
-  --fg-muted: var(--brown-500); /* Secondary text: a warm taupe at the classic muted lightness. */
+  --fg-muted: var(--umber-500); /* Secondary text: a warm taupe deep enough to clear AA on the sand strip. */
   --fg-link: var(--rust-600); /* Anchor text. */
 
   /* Borders. */

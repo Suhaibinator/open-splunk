@@ -10,6 +10,10 @@
   --bg-canvas: var(--mist-100); /* The page behind every panel: a cool, faintly blue ground. */
   --bg-subtle: var(--mist-150); /* Recessed strips inside a surface. */
 
+  /* Foregrounds: the mist grounds sit a shade below classic's, so the two inks that were marginal there deepen one step. */
+  --fg-muted: var(--gray-650); /* Secondary text: table headers, neutral badges, ghost buttons; clears AA on the mist strip. */
+  --fg-link: var(--blue-700); /* Anchor text, deepened to clear AA on the mist canvas. */
+
   /* Borders: one rung lighter than classic, so a pane edge reads as glass. */
   --border: var(--gray-250); /* Default rule between and around surfaces. */
   --border-subtle: var(--mist-200); /* Faint divider inside one surface. */
