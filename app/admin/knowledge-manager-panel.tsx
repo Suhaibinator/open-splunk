@@ -50,6 +50,7 @@ import {
   safeKnowledgeManagerAppOptions,
   type KnowledgeManagerPanelProps,
 } from "./knowledge-manager-feature";
+import { Select, SelectOption } from "../_components/select";
 
 type ListState = "loading" | "available" | "unavailable";
 type DetailState = "closed" | "loading" | "available" | "unavailable";
@@ -577,56 +578,56 @@ export function KnowledgeManagerPanel({
         <div className="knowledge-manager__filters">
           <label htmlFor="knowledge-app-filter">
             <span>App scope</span>
-            <select
+            <Select
               id="knowledge-app-filter"
               value={appId ?? ""}
-              onChange={(event) => changeApp(event.currentTarget.value)}
+              onValueChange={(selectedValue) => changeApp(selectedValue)}
               disabled={listState === "loading"}
             >
-              <option value="">All readable apps</option>
+              <SelectOption value="">All readable apps</SelectOption>
               {appOptions.map((app) => (
-                <option value={app.appId} key={app.appId}>{app.label}</option>
+                <SelectOption value={app.appId} key={app.appId}>{app.label}</SelectOption>
               ))}
-            </select>
+            </Select>
           </label>
           <label htmlFor="knowledge-object-type-filter">
             <span>Object type</span>
-            <select
+            <Select
               id="knowledge-object-type-filter"
               value={objectType}
-              onChange={(event) => changeObjectType(event.currentTarget.value)}
+              onValueChange={(selectedValue) => changeObjectType(selectedValue)}
               disabled={listState === "loading"}
             >
               {KNOWLEDGE_OBJECT_TYPE_FILTER_OPTIONS.map((option) => (
-                <option value={option.value} key={option.value}>{option.label}</option>
+                <SelectOption value={option.value} key={option.value}>{option.label}</SelectOption>
               ))}
-            </select>
+            </Select>
           </label>
           <label htmlFor="knowledge-lifecycle-state-filter">
             <span>Lifecycle state</span>
-            <select
+            <Select
               id="knowledge-lifecycle-state-filter"
               value={lifecycleState}
-              onChange={(event) => changeLifecycleState(event.currentTarget.value)}
+              onValueChange={(selectedValue) => changeLifecycleState(selectedValue)}
               disabled={listState === "loading"}
             >
               {KNOWLEDGE_LIFECYCLE_STATE_FILTER_OPTIONS.map((option) => (
-                <option value={option.value} key={option.value}>{option.label}</option>
+                <SelectOption value={option.value} key={option.value}>{option.label}</SelectOption>
               ))}
-            </select>
+            </Select>
           </label>
           <label htmlFor="knowledge-sort-choice">
             <span>Sort by</span>
-            <select
+            <Select
               id="knowledge-sort-choice"
               value={sort}
-              onChange={(event) => changeSort(event.currentTarget.value)}
+              onValueChange={(selectedValue) => changeSort(selectedValue)}
               disabled={listState === "loading"}
             >
               {KNOWLEDGE_SORT_OPTIONS.map((option) => (
-                <option value={option.value} key={option.value}>{option.label}</option>
+                <SelectOption value={option.value} key={option.value}>{option.label}</SelectOption>
               ))}
-            </select>
+            </Select>
           </label>
         </div>
         {page === null ? null : (
@@ -861,17 +862,17 @@ function KnowledgeAdvancedFilterForm({
             </label>
             <label htmlFor="knowledge-sharing-scope-filter">
               <span>Sharing scope</span>
-              <select
+              <Select
                 id="knowledge-sharing-scope-filter"
                 value={drafts.sharingScope}
                 aria-describedby="knowledge-advanced-filter-status"
                 aria-invalid={validationAttempted && normalized.invalid.sharingScope || undefined}
-                onChange={(event) => updateSharingScopeDraft(event.currentTarget.value)}
+                onValueChange={(selectedValue) => updateSharingScopeDraft(selectedValue)}
               >
                 {KNOWLEDGE_SHARING_SCOPE_FILTER_OPTIONS.map((option) => (
-                  <option value={option.value} key={option.value}>{option.label}</option>
+                  <SelectOption value={option.value} key={option.value}>{option.label}</SelectOption>
                 ))}
-              </select>
+              </Select>
             </label>
             <label htmlFor="knowledge-selector-text-filter">
               <span>Selector text</span>

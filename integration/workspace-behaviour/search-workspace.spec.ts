@@ -7,9 +7,20 @@
 // no backend. Like `integration/style-contracts/css-contracts.spec.ts` this
 // is deliberately a `.spec.ts`: `scripts/test-frontend.mjs` runs `.test.ts`
 // files under node, and Playwright tests cannot run there.
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 const SEEDED_QUERY = "index=main";
+
+async function chooseSelectOption(control: Locator, name: string): Promise<void> {
+  await control.click();
+  const listboxId = await control.getAttribute("aria-controls");
+  expect(listboxId).not.toBeNull();
+  await control.page().locator(`[id="${listboxId}"]`).getByRole("option", { name, exact: true }).click();
+}
+
+function selectValue(control: Locator): Locator {
+  return control.locator("xpath=..").locator(".select__input");
+}
 
 function launchUrl(parameters: Record<string, string>): string {
   return `/search/events/?${new URLSearchParams({ q: SEEDED_QUERY, run: "0", ...parameters }).toString()}`;
@@ -519,9 +530,9 @@ test("saved split timecharts restore Area and stacking presentation after rerun"
   const title = page.getByLabel("Title");
   const legend = page.getByLabel("Legend");
   await areaButton.click();
-  await stacking.selectOption("stacked100");
+  await chooseSelectOption(stacking, "100%");
   await title.fill("Service share over time");
-  await legend.selectOption("right");
+  await chooseSelectOption(legend, "Right");
   await expect(page.getByTestId("visualization-chart")).toHaveAttribute("data-stack-mode", "stacked100");
   await expect(page.locator(".time-series-chart__area")).toHaveCount(2);
 
@@ -533,9 +544,9 @@ test("saved split timecharts restore Area and stacking presentation after rerun"
   await expect(saveDialog).toHaveCount(0);
 
   await lineButton.click();
-  await stacking.selectOption("none");
+  await chooseSelectOption(stacking, "None");
   await title.fill("Temporary title");
-  await legend.selectOption("bottom");
+  await chooseSelectOption(legend, "Bottom");
 
   await page.getByRole("button", { name: "Open", exact: true }).click();
   const openDialog = page.getByRole("dialog", { name: "Open a saved search" });
@@ -545,18 +556,18 @@ test("saved split timecharts restore Area and stacking presentation after rerun"
 
   await runFromEditor(page);
   await expect(areaButton).toHaveAttribute("aria-pressed", "true");
-  await expect(stacking).toHaveValue("stacked100");
+  await expect(selectValue(stacking)).toHaveValue("stacked100");
   await expect(title).toHaveValue("Service share over time");
-  await expect(legend).toHaveValue("right");
+  await expect(selectValue(legend)).toHaveValue("right");
   await expect(page.getByTestId("visualization-chart")).toHaveAttribute("data-stack-mode", "stacked100");
   await expect(page.locator(".time-series-chart__area")).toHaveCount(2);
 
-  await stacking.selectOption("stacked");
+  await chooseSelectOption(stacking, "Stacked");
   await title.fill("Service totals over time");
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByTestId("toast")).toContainText("Saved changes");
   await lineButton.click();
-  await stacking.selectOption("none");
+  await chooseSelectOption(stacking, "None");
   await title.fill("Another temporary title");
 
   await page.getByRole("button", { name: "Open", exact: true }).click();
@@ -565,9 +576,46 @@ test("saved split timecharts restore Area and stacking presentation after rerun"
     .click();
   await runFromEditor(page);
   await expect(areaButton).toHaveAttribute("aria-pressed", "true");
-  await expect(stacking).toHaveValue("stacked");
+  await expect(selectValue(stacking)).toHaveValue("stacked");
   await expect(title).toHaveValue("Service totals over time");
   await expect(page.getByTestId("visualization-chart")).toHaveAttribute("data-stack-mode", "stacked");
+});
+
+test("the themed select menu supports keyboard selection alongside workspace dialogs", async ({ page }) => {
+  await openSeededWorkspace(page);
+  await page.getByTestId("search-input").fill("index=main | timechart count by service");
+  await runFromEditor(page);
+
+  const stacking = page.getByLabel("Stacking");
+  await stacking.click();
+  const listboxId = await stacking.getAttribute("aria-controls");
+  expect(listboxId).not.toBeNull();
+  const listbox = page.locator(`[id="${listboxId}"]`);
+  await expect(listbox).toBeVisible();
+  const lightBackground = await listbox.evaluate((element) => getComputedStyle(element).backgroundColor);
+  await page.keyboard.press("Escape");
+  await expect(stacking).toHaveAttribute("aria-expanded", "false");
+
+  await page.locator(".suite-user-button").click();
+  await page.getByRole("menuitemradio", { name: "Dark", exact: true }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".suite-user-button")).toHaveAttribute("aria-expanded", "false");
+  await stacking.focus();
+  await page.keyboard.press("End");
+  await expect(stacking).toHaveAttribute("aria-expanded", "true");
+  await expect(listbox).toBeVisible();
+  await expect(listbox.getByRole("option", { name: "100%", exact: true }))
+    .toHaveAttribute("data-active", "true");
+  expect(await listbox.evaluate((element) => getComputedStyle(element).backgroundColor))
+    .not.toBe(lightBackground);
+  await page.keyboard.press("Enter");
+  await expect(selectValue(stacking)).toHaveValue("stacked100");
+  await expect(stacking).toHaveAttribute("aria-expanded", "false");
+
+  await page.getByRole("button", { name: /^Save As/u }).click();
+  await page.getByRole("menuitem", { name: /^Saved search/u }).click();
+  await expect(page.getByRole("dialog", { name: "Save search" })).toBeVisible();
 });
 
 test("a rejected local search uses the persistent failure panel and returns focus to its source", async ({ page }) => {

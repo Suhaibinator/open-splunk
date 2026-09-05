@@ -52,6 +52,7 @@ export {
   isExactPublicField,
 } from "./lookup-manager-contract";
 import { summarizeByteQuantity } from "@/lib/byte-quantity";
+import { Select, SelectOption } from "../_components/select";
 
 type LoadState = "loading" | "available" | "unavailable" | "error";
 type LookupModal = "create" | "replace" | "delete";
@@ -600,15 +601,15 @@ export function LookupManagerPanel({
       <div className="lookup-manager__toolbar">
         <label htmlFor="lookup-app-filter">
           <span>App scope</span>
-          <select
+          <Select
             id="lookup-app-filter"
             value={appId}
             disabled={state === "loading"}
-            onChange={(event) => setAppId(event.currentTarget.value)}
+            onValueChange={(selectedValue) => setAppId(selectedValue)}
           >
-            <option value="">All managed apps</option>
-            {apps.map((app) => <option value={app.appId} key={app.appId}>{app.label}</option>)}
-          </select>
+            <SelectOption value="">All managed apps</SelectOption>
+            {apps.map((app) => <SelectOption value={app.appId} key={app.appId}>{app.label}</SelectOption>)}
+          </Select>
         </label>
         <label htmlFor="lookup-text-filter">
           <span>Filter loaded lookups</span>
@@ -870,9 +871,9 @@ function LookupEditor({
       <fieldset>
         <legend>Identity and visibility</legend>
         <div className="lookup-manager__editor-grid">
-          <label htmlFor="lookup-editor-app"><span>App scope</span><select id="lookup-editor-app" value={draft.appId} onChange={(event) => update("appId", event.currentTarget.value)}>{apps.map((app) => <option value={app.appId} key={app.appId}>{app.label}</option>)}</select></label>
+          <label htmlFor="lookup-editor-app"><span>App scope</span><Select id="lookup-editor-app" value={draft.appId} onValueChange={(selectedValue) => update("appId", selectedValue)}>{apps.map((app) => <SelectOption value={app.appId} key={app.appId}>{app.label}</SelectOption>)}</Select></label>
       <label htmlFor="lookup-editor-name"><span>Lookup name</span><input id="lookup-editor-name" value={draft.name} maxLength={LOOKUP_MANAGER_CONTRACT.maximumNameBytes} autoComplete="off" placeholder="service_catalog" onChange={(event) => update("name", event.currentTarget.value)} /><small>Exact unquoted name used by the SPL <code>lookup</code> command.</small></label>
-          <label htmlFor="lookup-editor-scope"><span>Sharing</span><select id="lookup-editor-scope" value={draft.sharingScope} onChange={(event) => update("sharingScope", event.currentTarget.value as LookupDraftSharingScope)}><option value="private">Private</option><option value="app">App</option><option value="global">Global</option></select></label>
+          <label htmlFor="lookup-editor-scope"><span>Sharing</span><Select id="lookup-editor-scope" value={draft.sharingScope} onValueChange={(selectedValue) => update("sharingScope", selectedValue as LookupDraftSharingScope)}><SelectOption value="private">Private</SelectOption><SelectOption value="app">App</SelectOption><SelectOption value="global">Global</SelectOption></Select></label>
           <label className="lookup-manager__editor-wide" htmlFor="lookup-editor-description"><span>Description <small>(optional)</small></span><input id="lookup-editor-description" value={draft.description} onChange={(event) => update("description", event.currentTarget.value)} /></label>
           <label className="admin-checkbox lookup-manager__editor-wide"><input type="checkbox" aria-label="Apply lookup automatically" checked={draft.automatic} onChange={(event) => update("automatic", event.currentTarget.checked)} /><span><strong>Apply automatically</strong><small>Run after Tier-1 calculated fields and before the authored base-search predicate when selectors match.</small></span></label>
         </div>
@@ -884,7 +885,7 @@ function LookupEditor({
           <label htmlFor="lookup-editor-keys"><span>Key mappings <small>(1–{LOOKUP_MANAGER_CONTRACT.maximumKeyMappings})</small></span><textarea id="lookup-editor-keys" value={draft.keyMappings} placeholder={"service_id AS service_key\nregion AS event_region"} onChange={(event) => update("keyMappings", event.currentTarget.value)} /><small>One <code>lookup_column AS event_field</code> per line. Key AS is required.</small></label>
           <label htmlFor="lookup-editor-outputs"><span>Output mappings <small>(1–{LOOKUP_MANAGER_CONTRACT.maximumOutputMappings})</small></span><textarea id="lookup-editor-outputs" value={draft.outputMappings} placeholder={"owner AS service_owner\ntier"} onChange={(event) => update("outputMappings", event.currentTarget.value)} /><small>One mapping per line. A column without AS writes to the same event-field name.</small></label>
         </div>
-        <label className="lookup-manager__overwrite" htmlFor="lookup-editor-overwrite"><span>On output collision</span><select id="lookup-editor-overwrite" value={draft.overwrite} onChange={(event) => update("overwrite", event.currentTarget.value as LookupDraftOverwrite)}><option value="preserve">Preserve existing (OUTPUTNEW)</option><option value="replace">Replace existing (OUTPUT)</option></select></label>
+        <label className="lookup-manager__overwrite" htmlFor="lookup-editor-overwrite"><span>On output collision</span><Select id="lookup-editor-overwrite" value={draft.overwrite} onValueChange={(selectedValue) => update("overwrite", selectedValue as LookupDraftOverwrite)}><SelectOption value="preserve">Preserve existing (OUTPUTNEW)</SelectOption><SelectOption value="replace">Replace existing (OUTPUT)</SelectOption></Select></label>
       </fieldset>
 
       <fieldset>

@@ -65,8 +65,9 @@ test("split timecharts expose Area and an accessible stacking selector", () => {
   assert.match(markup, /data-chart-style="area"/u);
   assert.match(markup, /data-stack-mode="stacked100"/u);
   assert.match(markup, /> Area<\/button>/u);
-  assert.match(markup, /<span>Stacking<\/span><select>/u);
-  assert.match(markup, /<option value="stacked100" selected="">100%<\/option>/u);
+  assert.match(markup, /<span>Stacking<\/span><div class="select">/u);
+  assert.match(markup, /role="combobox"[^>]*><span class="select__value">100%/u);
+  assert.match(markup, /role="option" aria-selected="true"[^>]*>100%/u);
 });
 
 test("single-series timecharts force unsupported stacking to none", () => {
@@ -92,7 +93,7 @@ test("horizontal categorical series render cumulative stacked geometry", () => {
   assert.match(markup, /visualization-horizontal-bars is-stacked/u);
   assert.match(markup, /data-chart-end="2" data-chart-raw="2" data-chart-start="0"/u);
   assert.match(markup, /data-chart-end="5" data-chart-raw="3" data-chart-start="2"/u);
-  assert.match(markup, /<span>Stacking<\/span><select>/u);
+  assert.match(markup, /<span>Stacking<\/span><div class="select">/u);
 });
 
 test("vertical categorical series use the same stacked baselines", () => {

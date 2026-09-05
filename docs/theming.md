@@ -140,6 +140,15 @@ file:
 - Status: `.status` and its semantic modifiers.
 - Badges: `.badge` and its semantic modifiers.
 - Forms: shared field, stack, fieldset, and settings-list structures.
+- Selection fields: `Select` and `SelectOption` in `app/_components/select.tsx`
+  provide themed combobox/listbox controls in both demo and backend views.
+  Use `onValueChange` with string values, explicit label associations, and the
+  existing disabled/validation attributes. Native `<select>` widgets are
+  prohibited by the structural guardrail because their open menus use OS
+  styling. Multiple independent selections use explicit checkboxes.
+- Card content: `.suite-card-body` supplies padding and heading/body spacing
+  inside `.suite-card`; tables and cards with their own headers keep their
+  existing layout without a blanket padding override.
 - Overlays: the shared modal/dialog family.
 - Product chrome: `ProductShell`, `Wordmark`, and the shared drawer.
 - Charts: the shared chart geometry and the semantic chart-series token ramp.

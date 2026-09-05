@@ -128,6 +128,7 @@ import {
   type TokenRecoveryStartupContext,
   type TokenRecoveryStartupRecord,
 } from "./token-recovery-startup";
+import { Select, SelectOption } from "../_components/select";
 
 type AdminModal = "create-index" | "edit-index" | "create-token" | "edit-token";
 
@@ -3332,9 +3333,9 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
 
       <div className="admin-mobile-section-picker">
         <label htmlFor="admin-section">Administration section</label>
-        <select id="admin-section" value={section} onChange={(event) => navigateSection(event.target.value as AdminSection)}>
-          {navigationItems.map((item) => <option value={item.key} key={item.key}>{item.label}</option>)}
-        </select>
+        <Select id="admin-section" value={section} onValueChange={(selectedValue) => navigateSection(selectedValue as AdminSection)}>
+          {navigationItems.map((item) => <SelectOption value={item.key} key={item.key}>{item.label}</SelectOption>)}
+        </Select>
       </div>
 
       <div className="admin-layout">
@@ -3496,7 +3497,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
             </label>
             <label htmlFor="new-index-display-name"><span>Display name <small>(optional)</small></span><input id="new-index-display-name" value={indexDisplayName} onChange={(event) => setIndexDisplayName(event.target.value)} placeholder="Application logs" /><small>Shown to administrators. Defaults to the immutable index name.</small></label>
             <label htmlFor="new-index-description"><span>Description <small>(optional)</small></span><input id="new-index-description" value={indexDescription} onChange={(event) => setIndexDescription(event.target.value)} placeholder="Application and request logs" /></label>
-            <label htmlFor="new-index-retention"><span>Retention</span><select id="new-index-retention" value={retention} onChange={(event) => setRetention(event.target.value)}><option value="7">7 days</option><option value="14">14 days</option><option value="30">30 days</option><option value="90">90 days</option><option value="forever">Forever</option></select><small>The server applies this period to stored events.</small></label>
+            <label htmlFor="new-index-retention"><span>Retention</span><Select id="new-index-retention" value={retention} onValueChange={(selectedValue) => setRetention(selectedValue)}><SelectOption value="7">7 days</SelectOption><SelectOption value="14">14 days</SelectOption><SelectOption value="30">30 days</SelectOption><SelectOption value="90">90 days</SelectOption><SelectOption value="forever">Forever</SelectOption></Select><small>The server applies this period to stored events.</small></label>
             <IndexPolicyFields
               idPrefix="new-index"
               value={indexPolicyForm}
@@ -3523,14 +3524,14 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
             <label htmlFor="edit-index-description"><span>Description <small>(optional)</small></span><input id="edit-index-description" value={indexDescription} onChange={(event) => setIndexDescription(event.target.value)} placeholder="Application and request logs" /></label>
             <label htmlFor="edit-index-retention">
               <span>Retention</span>
-              <select id="edit-index-retention" value={retention} onChange={(event) => setRetention(event.target.value)}>
-                {!["7", "14", "30", "90", "forever"].includes(retention) ? <option value={retention}>{formatDuration(indexEditTarget.definition.retentionPeriod?.seconds)} (current)</option> : null}
-                <option value="7">7 days</option><option value="14">14 days</option><option value="30">30 days</option><option value="90">90 days</option><option value="forever">Forever</option>
-              </select>
+              <Select id="edit-index-retention" value={retention} onValueChange={(selectedValue) => setRetention(selectedValue)}>
+                {!["7", "14", "30", "90", "forever"].includes(retention) ? <SelectOption value={retention}>{formatDuration(indexEditTarget.definition.retentionPeriod?.seconds)} (current)</SelectOption> : null}
+                <SelectOption value="7">7 days</SelectOption><SelectOption value="14">14 days</SelectOption><SelectOption value="30">30 days</SelectOption><SelectOption value="90">90 days</SelectOption><SelectOption value="forever">Forever</SelectOption>
+              </Select>
               <small>Changing retention affects how long stored events remain available.</small>
             </label>
-            <label htmlFor="edit-index-ingestion-access"><span>Ingestion access</span><select id="edit-index-ingestion-access" value={indexIngestionAccess} onChange={(event) => setIndexIngestionAccess(Number(event.target.value) as IndexAccessState)}><option value={IndexAccessState.INDEX_ACCESS_STATE_ENABLED}>Enabled</option><option value={IndexAccessState.INDEX_ACCESS_STATE_DISABLED}>Disabled</option></select><small>Disabled indexes reject new events and cannot be added to new token scopes.</small></label>
-            <label htmlFor="edit-index-search-access"><span>Search access</span><select id="edit-index-search-access" value={indexSearchAccess} onChange={(event) => setIndexSearchAccess(Number(event.target.value) as IndexAccessState)}><option value={IndexAccessState.INDEX_ACCESS_STATE_ENABLED}>Enabled</option><option value={IndexAccessState.INDEX_ACCESS_STATE_DISABLED}>Disabled</option></select><small>Disabled indexes remain configured but cannot be queried.</small></label>
+            <label htmlFor="edit-index-ingestion-access"><span>Ingestion access</span><Select id="edit-index-ingestion-access" value={String(indexIngestionAccess)} onValueChange={(selectedValue) => setIndexIngestionAccess(Number(selectedValue) as IndexAccessState)}><SelectOption value={String(IndexAccessState.INDEX_ACCESS_STATE_ENABLED)}>Enabled</SelectOption><SelectOption value={String(IndexAccessState.INDEX_ACCESS_STATE_DISABLED)}>Disabled</SelectOption></Select><small>Disabled indexes reject new events and cannot be added to new token scopes.</small></label>
+            <label htmlFor="edit-index-search-access"><span>Search access</span><Select id="edit-index-search-access" value={String(indexSearchAccess)} onValueChange={(selectedValue) => setIndexSearchAccess(Number(selectedValue) as IndexAccessState)}><SelectOption value={String(IndexAccessState.INDEX_ACCESS_STATE_ENABLED)}>Enabled</SelectOption><SelectOption value={String(IndexAccessState.INDEX_ACCESS_STATE_DISABLED)}>Disabled</SelectOption></Select><small>Disabled indexes remain configured but cannot be queried.</small></label>
             <IndexPolicyFields
               idPrefix="edit-index"
               value={indexPolicyForm}
@@ -3553,7 +3554,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
         >
           <form className="admin-form" id="delete-index-form" onSubmit={(event) => void deleteIndex(event)}>
             <div className="access-mode-notice" role="alert"><span>!</span><div><strong>Deletion cannot be undone from the browser</strong><p>The server will reject this request if index version {indexDeleteTarget.version.toLocaleString()} is no longer current.</p></div></div>
-            <label htmlFor="delete-index-mode"><span>Stored data</span><select id="delete-index-mode" value={indexDeleteMode} onChange={(event) => setIndexDeleteMode(Number(event.target.value) as IndexDataDeletionMode)}><option value={IndexDataDeletionMode.INDEX_DATA_DELETION_MODE_KEEP_DATA}>Keep physical data</option><option value={IndexDataDeletionMode.INDEX_DATA_DELETION_MODE_DELETE_DATA}>Permanently delete physical data</option></select><small>{indexDeleteMode === IndexDataDeletionMode.INDEX_DATA_DELETION_MODE_DELETE_DATA ? "The backend may run physical deletion asynchronously and return an operation ID." : "Only the control-plane index record is deleted; stored data is preserved."}</small></label>
+            <label htmlFor="delete-index-mode"><span>Stored data</span><Select id="delete-index-mode" value={String(indexDeleteMode)} onValueChange={(selectedValue) => setIndexDeleteMode(Number(selectedValue) as IndexDataDeletionMode)}><SelectOption value={String(IndexDataDeletionMode.INDEX_DATA_DELETION_MODE_KEEP_DATA)}>Keep physical data</SelectOption><SelectOption value={String(IndexDataDeletionMode.INDEX_DATA_DELETION_MODE_DELETE_DATA)}>Permanently delete physical data</SelectOption></Select><small>{indexDeleteMode === IndexDataDeletionMode.INDEX_DATA_DELETION_MODE_DELETE_DATA ? "The backend may run physical deletion asynchronously and return an operation ID." : "Only the control-plane index record is deleted; stored data is preserved."}</small></label>
             <label htmlFor="delete-index-confirmation"><span>Type <code>{indexDeleteTarget.definition.name}</code> to confirm</span><input id="delete-index-confirmation" value={indexDeleteConfirmation} onChange={(event) => setIndexDeleteConfirmation(event.target.value)} autoComplete="off" spellCheck={false} /><small>The backend also checks this exact name before accepting the operation.</small></label>
           </form>
         </Modal>

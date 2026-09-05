@@ -2,6 +2,7 @@
 
 import {
   type FormEvent,
+  type ReactNode,
   useCallback,
   useEffect,
   useMemo,
@@ -9,7 +10,7 @@ import {
   useState,
 } from "react";
 
-import type { AppSummary } from "@/gen/ts/open_splunk/app";
+import type { AppSummary, AppWorkspace } from "@/gen/ts/open_splunk/app";
 import { SharingScope } from "@/gen/ts/open_splunk/common";
 import {
   type Dashboard,
@@ -21,6 +22,8 @@ import { ServerFeature } from "@/gen/ts/open_splunk/system_api";
 import type { TypedValue } from "@/gen/ts/open_splunk/value";
 import { createOpenSplunkApiClient, getSystemBootstrap } from "@/lib/api";
 import { preferredBackendAppId, replaceBackendAppId } from "@/lib/search/app-navigation";
+import { ProductShell } from "../_components/product-shell";
+import { AppCreateDialog } from "../_components/app-create-dialog";
 
 import {
   cloneDashboardDefinition,
@@ -31,6 +34,7 @@ import {
   dashboardActionError,
   dashboardLoadError,
   dashboardPanelRunCanPublish,
+  dashboardViewState,
   type DashboardLoadMode,
   type DashboardManagerError,
 } from "./dashboard-manager-state";
@@ -82,10 +86,10 @@ async function fetchDashboardCatalog(
     return { available: false as const };
   }
   const selectedApp = bootstrap.apps.find((app) => app.appId === bootstrap.selectedAppId) ?? bootstrap.apps[0];
-  if (!selectedApp) throw new Error("No active app is available for dashboards.");
-  if (mode === "switch" && preferredAppId !== undefined && selectedApp.appId !== preferredAppId) {
+  if (mode === "switch" && preferredAppId !== undefined && selectedApp?.appId !== preferredAppId) {
     throw new Error("The requested dashboard app is no longer available.");
   }
+  if (!selectedApp) return { available: true as const, bootstrap, dashboards: [], selectedApp: undefined };
   const response = await client.dashboards.list({ appIdFilter: selectedApp.appId }, { signal });
   return { available: true as const, bootstrap, dashboards: response.dashboards, selectedApp };
 }
@@ -152,6 +156,9 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
   const [switchingAppID, setSwitchingAppID] = useState<string | null>(null);
   const [defaultSearchTimeoutMs, setDefaultSearchTimeoutMs] = useState(0);
   const [available, setAvailable] = useState(true);
+  const [loadedCatalog, setLoadedCatalog] = useState(false);
+  const [appAdminAvailable, setAppAdminAvailable] = useState(false);
+  const [createAppOpen, setCreateAppOpen] = useState(false);
   const [error, setError] = useState<DashboardManagerError | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [panelResults, setPanelResults] = useState<Record<string, PanelResult>>({});
@@ -168,6 +175,14 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
     && !dashboardDefinitionsEqual(draft, selected.definition)
   ), [draft, selected]);
   const workspaceBusy = saving || refreshing || switchingAppID !== null;
+  const viewState = dashboardViewState({
+    appCount: apps.length,
+    available,
+    dashboardCount: dashboards.length,
+    error,
+    loadedCatalog,
+    loading,
+  });
 
   const stopPanelRun = useCallback((panelIdValue: string, reason: string) => {
     const active = activePanelRuns.current.get(panelIdValue);
@@ -204,13 +219,27 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
         throw new Error("The backend no longer advertises persisted dashboard support.");
       }
       if (generation !== loadGeneration.current) return false;
+      setApps(result.bootstrap.apps);
+      setAppAdminAvailable(result.bootstrap.features.has(ServerFeature.SERVER_FEATURE_APP_ADMIN));
+      setLoadedCatalog(true);
+      if (!result.selectedApp) {
+        stopAllPanelRuns("Dashboard app catalog is empty");
+        setAppID("");
+        setAppName("Dashboard workspace");
+        setIndexNames([]);
+        setDashboards([]);
+        selectedIDRef.current = "";
+        setSelectedID("");
+        setDraft(null);
+        setPanelResults({});
+        return true;
+      }
       const retainedID = mode === "switch" ? "" : selectedIDRef.current;
       const nextSelected = result.dashboards.find((dashboard) => dashboard.dashboardId === retainedID)
         ?? result.dashboards[0]
         ?? null;
       if (mode !== "initial") stopAllPanelRuns(mode === "switch" ? "Dashboard app changed" : "Dashboards reloaded");
       setAvailable(true);
-      setApps(result.bootstrap.apps);
       setAppID(result.selectedApp.appId);
       setAppName(result.selectedApp.displayName || result.selectedApp.slug || "Dashboard workspace");
       setIndexNames(result.bootstrap.indexes.filter((index) => index.searchable).map((index) => index.name));
@@ -220,7 +249,7 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
       setSelectedID(selectedIDRef.current);
       setDraft(nextSelected?.definition ? cloneDashboardDefinition(nextSelected.definition) : null);
       setPanelResults({});
-      if (mode === "switch") replaceBackendAppId(result.selectedApp.appId);
+      replaceBackendAppId(result.selectedApp.appId);
       return true;
     } catch (requestError) {
       if (!controller.signal.aborted && generation === loadGeneration.current) {
@@ -258,12 +287,26 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
         setAvailable(false);
         return;
       }
+      setApps(result.bootstrap.apps);
+      setAppAdminAvailable(result.bootstrap.features.has(ServerFeature.SERVER_FEATURE_APP_ADMIN));
+      setLoadedCatalog(true);
+      if (!result.selectedApp) {
+        setAppID("");
+        setAppName("Dashboard workspace");
+        setIndexNames([]);
+        setDashboards([]);
+        selectedIDRef.current = "";
+        setSelectedID("");
+        setDraft(null);
+        setPanelResults({});
+        return;
+      }
       const nextSelected = result.dashboards.find((dashboard) => dashboard.dashboardId === selectedIDRef.current)
         ?? result.dashboards[0]
         ?? null;
       setAvailable(true);
-      setApps(result.bootstrap.apps);
       setAppID(result.selectedApp.appId);
+      replaceBackendAppId(result.selectedApp.appId);
       setAppName(result.selectedApp.displayName || result.selectedApp.slug || "Dashboard workspace");
       setIndexNames(result.bootstrap.indexes.filter((index) => index.searchable).map((index) => index.name));
       setDefaultSearchTimeoutMs(result.bootstrap.limits.defaultSearchTimeoutMs);
@@ -513,8 +556,24 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
   }
 
   function selectApp(nextAppID: string) {
-    if (!nextAppID || nextAppID === appID || workspaceBusy || !confirmDiscardChanges()) return;
+    if (!nextAppID || saving || refreshing) return;
+    if (nextAppID === appID) {
+      if (switchingAppID !== null) {
+        loadGeneration.current += 1;
+        for (const request of loadRequests.current) request.abort();
+        loadRequests.current.clear();
+        setSwitchingAppID(null);
+        setError(null);
+      }
+      return;
+    }
+    if (!confirmDiscardChanges()) return;
     beginLoad(nextAppID, "switch");
+  }
+
+  function useCreatedApp(app: AppWorkspace) {
+    setCreateAppOpen(false);
+    beginLoad(app.appId, "switch");
   }
 
   function selectDashboard(nextDashboardID: string) {
@@ -549,60 +608,92 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
     } : current);
   }
 
-  if (loading) {
-    return <div className="suite-page dashboard-page"><section className="suite-card"><p className="operations-state-message">Loading dashboards…</p></section></div>;
+  const shell = (content: ReactNode) => (
+    <ProductShell
+      activeSection="dashboards"
+      apiBaseUrl={apiBaseUrl}
+      appName="Dashboards"
+      backendAppCatalog={{
+        apps,
+        error: error?.message,
+        onRetry: retryDashboardLoad,
+        onSelect: selectApp,
+        selectedAppId: appID || null,
+        state: loading ? "loading" : error && apps.length === 0 ? "error" : "available",
+      }}
+      dataMode="backend"
+      disclosure={false}
+    >
+      {content}
+    </ProductShell>
+  );
+
+  if (viewState === "loading") {
+    return shell(<div className="suite-page dashboard-page"><section className="suite-card"><div className="suite-card-body"><h1>Dashboards</h1><p>Loading dashboards…</p></div></section></div>);
   }
-  if (!available) {
-    return <div className="suite-page dashboard-page"><section className="suite-card"><h1>Dashboards unavailable</h1><p className="operations-state-message">This backend does not advertise persisted dashboard support.</p></section></div>;
+  if (viewState === "unavailable") {
+    return shell(<div className="suite-page dashboard-page"><section className="suite-card"><div className="suite-card-body"><h1>Dashboards unavailable</h1><p>This backend does not support persisted dashboards.</p></div></section></div>);
   }
 
-  return (
+  return shell(
     <div className="suite-page dashboard-page">
       <header className="dashboard-title-row">
-        <div><span className="suite-eyebrow">{appName.toUpperCase()}</span><h1>Dashboards</h1><p>Build persisted panels and run their server-authoritative searches.</p></div>
-        <form className="operations-create-form" onSubmit={createDashboard}>
-          <label><span>App</span><select value={appID} disabled={workspaceBusy || loading} aria-busy={switchingAppID !== null} onChange={(event) => selectApp(event.target.value)}>{apps.map((app) => <option key={app.appId} value={app.appId}>{app.displayName || app.slug || app.appId}</option>)}</select></label>
+        <div><h1>Dashboards</h1><p>Build dashboards and run their searches.</p></div>
+        {dashboards.length > 0 ? <form className="operations-create-form" onSubmit={createDashboard}>
           <label><span>New dashboard name</span><input value={newName} disabled={workspaceBusy} onChange={(event) => setNewName(event.target.value)} maxLength={255} placeholder="Service overview" /></label>
-          <button type="submit" disabled={workspaceBusy || !newName.trim()}>Create dashboard</button>
-        </form>
+          <button className="button button--primary" type="submit" disabled={workspaceBusy || !newName.trim()}>Create dashboard</button>
+        </form> : null}
       </header>
 
-      {error ? <div className="operations-error-banner" role="alert"><span>{error.message}</span>{error.retry ? <button type="button" disabled={workspaceBusy} onClick={retryDashboardLoad}>{error.retry.mode === "switch" ? "Retry app switch" : "Reload"}</button> : null}</div> : null}
+      {error ? <div className="operations-error-banner" role="alert"><span>{error.message}</span>{error.retry ? <button className="button button--primary" type="button" disabled={workspaceBusy} onClick={retryDashboardLoad}>{error.retry.mode === "switch" ? "Retry app switch" : "Retry"}</button> : null}</div> : null}
       {switchingAppID !== null ? <output className="operations-state-message">Switching dashboard app…</output> : null}
       {refreshing ? <output className="operations-state-message">Reloading dashboards…</output> : null}
       {notice ? <output className="operations-notice-banner">{notice}</output> : null}
 
-      <div className="operations-manager-layout">
+      {viewState === "no-apps" ? (
+        <section className="suite-card operations-empty-dashboard"><div className="suite-card-body">
+          <h2>Create an app workspace first</h2>
+          <p>{appAdminAvailable
+            ? "Dashboards belong to an app workspace. Create one here, or ask an administrator to give you access."
+            : "Dashboards belong to an app workspace. Please ask an administrator to give you access."}</p>
+          {appAdminAvailable ? <button className="button button--primary" type="button" onClick={() => setCreateAppOpen(true)}>Create app</button> : <button className="button button--secondary" type="button" onClick={() => beginLoad(undefined, "reload")}>Check again</button>}
+        </div></section>
+      ) : viewState === "empty" ? (
+        <section className="suite-card operations-empty-dashboard"><div className="suite-card-body">
+          <h2>Create your first dashboard</h2>
+          <p>Add a dashboard to begin building panels for {appName}.</p>
+          <form className="operations-create-form" onSubmit={createDashboard}>
+            <label><span>Dashboard name</span><input value={newName} disabled={workspaceBusy} onChange={(event) => setNewName(event.target.value)} maxLength={255} placeholder="Service overview" /></label>
+            <button className="button button--primary" type="submit" disabled={workspaceBusy || !newName.trim()}>Create dashboard</button>
+          </form>
+        </div></section>
+      ) : viewState === "ready" ? <div className="operations-manager-layout">
         <aside className="suite-card operations-dashboard-list" aria-label="Saved dashboards">
           <h2>Saved dashboards</h2>
-          {dashboards.length === 0 ? <p>No dashboards yet.</p> : (
-            <ul>{dashboards.map((dashboard) => (
+          <ul>{dashboards.map((dashboard) => (
               <li key={dashboard.dashboardId}><button className={dashboard.dashboardId === selectedID ? "operations-dashboard-selected" : ""} disabled={workspaceBusy} type="button" onClick={() => selectDashboard(dashboard.dashboardId)}><strong>{dashboard.definition?.name ?? "Untitled"}</strong><span>{dashboard.definition?.panels.length ?? 0} panels · v{dashboard.version.toString()}</span></button></li>
             ))}</ul>
-          )}
         </aside>
 
-        <main className="operations-dashboard-editor">
-          {!selected || !draft ? (
-            <section className="suite-card"><h2>Select a dashboard</h2><p className="operations-state-message">Choose an existing dashboard or create one to start editing.</p></section>
-          ) : (
+        <section className="operations-dashboard-editor">
+          {!selected || !draft ? null : (
             <>
               <section className="suite-card operations-definition-editor">
-                <header className="suite-card-header"><div><h2>Dashboard settings</h2><p>Changes use optimistic versioning.</p></div><div className="operations-editor-actions"><button type="button" onClick={() => void saveDashboard()} disabled={workspaceBusy || !dirty || !draft.name.trim()}>Save</button><button className="operations-danger-button" type="button" onClick={() => void deleteDashboard()} disabled={workspaceBusy}>Delete</button></div></header>
+                <header className="suite-card-header"><div><h2>Dashboard settings</h2><p>Changes use optimistic versioning.</p></div><div className="operations-editor-actions"><button className="button button--primary" type="button" onClick={() => void saveDashboard()} disabled={workspaceBusy || !dirty || !draft.name.trim()}>Save</button><button className="button button--danger" type="button" onClick={() => void deleteDashboard()} disabled={workspaceBusy}>Delete</button></div></header>
                 <div className="operations-settings-grid">
                   <label><span>Name</span><input value={draft.name} disabled={workspaceBusy} maxLength={255} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
                   <label><span>Description</span><input value={draft.description ?? ""} disabled={workspaceBusy} maxLength={16384} onChange={(event) => setDraft({ ...draft, description: event.target.value || undefined })} /></label>
                 </div>
               </section>
 
-              <div className="operations-panel-toolbar"><h2>Panels</h2><button type="button" disabled={workspaceBusy || !indexNames[0] || draft.panels.length >= MAXIMUM_DASHBOARD_PANELS} title={draft.panels.length >= MAXIMUM_DASHBOARD_PANELS ? `Dashboards support up to ${MAXIMUM_DASHBOARD_PANELS} panels.` : undefined} onClick={() => setDraft({ ...draft, panels: [...draft.panels, newPanel(appID, indexNames[0] ?? "", draft.panels.length * 4)] })}>Add panel</button></div>
+              <div className="operations-panel-toolbar"><div><h2>Panels</h2>{indexNames.length === 0 ? <p>No searchable indexes are available. Add one before creating panels.</p> : null}</div><button className="button button--primary" type="button" disabled={workspaceBusy || !indexNames[0] || draft.panels.length >= MAXIMUM_DASHBOARD_PANELS} title={draft.panels.length >= MAXIMUM_DASHBOARD_PANELS ? `Dashboards support up to ${MAXIMUM_DASHBOARD_PANELS} panels.` : undefined} onClick={() => setDraft({ ...draft, panels: [...draft.panels, newPanel(appID, indexNames[0] ?? "", draft.panels.length * 4)] })}>Add panel</button></div>
               {draft.panels.length >= MAXIMUM_DASHBOARD_PANELS ? <output className="operations-state-message">This dashboard has reached the {MAXIMUM_DASHBOARD_PANELS}-panel limit.</output> : null}
               {draft.panels.length === 0 ? <section className="suite-card"><p className="operations-state-message">This dashboard has no panels. Add one after at least one searchable index is available.</p></section> : null}
               {draft.panels.map((panel) => {
                 const result = panelResults[panel.panelId];
                 return (
                   <section className="suite-card dashboard-panel operations-live-panel" key={panel.panelId}>
-                    <header className="suite-card-header"><div><h2>{panel.title || "Untitled panel"}</h2><p>{panel.search?.spl || "No SPL configured"}</p></div><div className="operations-editor-actions"><button type="button" onClick={() => void runPanel(panel)} disabled={workspaceBusy}>Run</button><button className="operations-danger-button" type="button" onClick={() => removePanel(panel.panelId)} disabled={workspaceBusy}>Remove</button></div></header>
+                    <header className="suite-card-header"><div><h2>{panel.title || "Untitled panel"}</h2><p>{panel.search?.spl || "No SPL configured"}</p></div><div className="operations-editor-actions"><button className="button button--primary" type="button" onClick={() => void runPanel(panel)} disabled={workspaceBusy}>Run</button><button className="button button--danger" type="button" onClick={() => removePanel(panel.panelId)} disabled={workspaceBusy}>Remove</button></div></header>
                     <div className="operations-panel-fields">
                       <label><span>Title</span><input value={panel.title} disabled={workspaceBusy} maxLength={255} onChange={(event) => updatePanel(panel.panelId, (current) => ({ ...current, title: event.target.value }))} /></label>
                       <label className="operations-spl-field"><span>SPL</span><textarea value={panel.search?.spl ?? ""} disabled={workspaceBusy} rows={3} onChange={(event) => updatePanel(panel.panelId, (current) => ({ ...current, search: current.search ? { ...current.search, spl: event.target.value } : current.search }))} /></label>
@@ -620,8 +711,9 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
               })}
             </>
           )}
-        </main>
-      </div>
+        </section>
+      </div> : null}
+      {createAppOpen ? <AppCreateDialog apiBaseUrl={apiBaseUrl} onClose={() => setCreateAppOpen(false)} onCreated={useCreatedApp} /> : null}
     </div>
   );
 }
