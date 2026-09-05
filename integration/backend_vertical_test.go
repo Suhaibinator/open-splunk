@@ -39,6 +39,7 @@ import (
 const (
 	backendIntegrationFlag         = "OPEN_SPLUNK_BACKEND_INTEGRATION"
 	verticalIndexName              = "vertical"
+	verticalInstancePalette        = opensplunk.UiPalette_UI_PALETTE_OCEAN
 	verticalTenantID               = "vertical-tenant"
 	verticalLookupName             = "vertical_service_owners"
 	verticalLookupOwner            = "platform-owner"
@@ -170,6 +171,7 @@ func TestBackendVertical(t *testing.T) {
 	waitForHealth(t, ctx, httpClient, baseURL, serverProcess)
 	assertPlaintextCannotReachHTTPSHealth(t, ctx, httpAddress)
 	assertStandaloneServerSurface(t, ctx, httpClient, baseURL)
+	assertInstancePaletteRoundTrip(t, ctx, httpClient, baseURL, administratorToken)
 
 	var createdIndex opensplunk.CreateIndexResponse
 	postAdministratorProto(
@@ -314,6 +316,7 @@ func TestBackendVertical(t *testing.T) {
 	serverProcesses = append(serverProcesses, serverProcess)
 	waitForHealth(t, ctx, httpClient, baseURL, serverProcess)
 	assertStandaloneServerSurface(t, ctx, httpClient, baseURL)
+	assertInstancePaletteAfterRestart(t, ctx, httpClient, baseURL, administratorToken)
 	persistedSavedSearch := assertVerticalLookupFixtureAfterRestart(
 		t,
 		ctx,
@@ -927,6 +930,108 @@ func assertStandaloneServerSurface(t *testing.T, ctx context.Context, client *ht
 		limits.GetMaximumTimelineBuckets() != verticalTimelineMaximumBuckets {
 		t.Fatalf("standalone bootstrap response = %+v", &bootstrap)
 	}
+}
+
+// assertInstancePaletteRoundTrip proves the compiled server wires the
+// appearance store into the settings object bootstrap reads: on a fresh
+// control database bootstrap serves classic, an administrator update lands at
+// version 1, the unauthenticated bootstrap immediately serves the new palette,
+// and a fresh authenticated read agrees. The in-process palette smoke
+// (`palette_smoke_test.go`) restates this wiring over a test settings object;
+// this is the only gate that exercises `cmd/open-splunk-server`'s own.
+func assertInstancePaletteRoundTrip(
+	t *testing.T,
+	ctx context.Context,
+	client *http.Client,
+	baseURL, administratorToken string,
+) {
+	t.Helper()
+	if got := bootstrapUIPalette(t, ctx, client, baseURL); got != opensplunk.UiPalette_UI_PALETTE_CLASSIC {
+		t.Fatalf("fresh bootstrap ui_palette = %v, want classic", got)
+	}
+	var initial opensplunk.GetServerAppearanceResponse
+	postAdministratorProto(
+		t,
+		ctx,
+		client,
+		baseURL+"/api/server/appearance/get",
+		administratorToken,
+		&opensplunk.GetServerAppearanceRequest{},
+		&initial,
+	)
+	if initial.GetCurrent().GetVersion() != 0 ||
+		initial.GetCurrent().GetPalette() != opensplunk.UiPalette_UI_PALETTE_CLASSIC ||
+		initial.GetDefaultPalette() != opensplunk.UiPalette_UI_PALETTE_CLASSIC {
+		t.Fatalf("fresh appearance = %+v", &initial)
+	}
+
+	var updated opensplunk.UpdateServerAppearanceResponse
+	postAdministratorProto(
+		t,
+		ctx,
+		client,
+		baseURL+"/api/server/appearance/update",
+		administratorToken,
+		&opensplunk.UpdateServerAppearanceRequest{
+			ExpectedVersion: 0,
+			Palette:         verticalInstancePalette,
+		},
+		&updated,
+	)
+	if updated.GetCurrent().GetVersion() != 1 ||
+		updated.GetCurrent().GetPalette() != verticalInstancePalette ||
+		updated.GetCurrent().GetUpdatedAt() == nil {
+		t.Fatalf("updated appearance = %+v", &updated)
+	}
+	assertInstancePaletteServed(t, ctx, client, baseURL, administratorToken)
+}
+
+// assertInstancePaletteAfterRestart proves the restarted binary reloads the
+// durable palette into the snapshot bootstrap serves rather than starting from
+// the default again.
+func assertInstancePaletteAfterRestart(
+	t *testing.T,
+	ctx context.Context,
+	client *http.Client,
+	baseURL, administratorToken string,
+) {
+	t.Helper()
+	assertInstancePaletteServed(t, ctx, client, baseURL, administratorToken)
+}
+
+func assertInstancePaletteServed(
+	t *testing.T,
+	ctx context.Context,
+	client *http.Client,
+	baseURL, administratorToken string,
+) {
+	t.Helper()
+	if got := bootstrapUIPalette(t, ctx, client, baseURL); got != verticalInstancePalette {
+		t.Fatalf("bootstrap ui_palette = %v, want %v", got, verticalInstancePalette)
+	}
+	var current opensplunk.GetServerAppearanceResponse
+	postAdministratorProto(
+		t,
+		ctx,
+		client,
+		baseURL+"/api/server/appearance/get",
+		administratorToken,
+		&opensplunk.GetServerAppearanceRequest{},
+		&current,
+	)
+	if current.GetCurrent().GetVersion() != 1 ||
+		current.GetCurrent().GetPalette() != verticalInstancePalette ||
+		current.GetCurrent().GetUpdatedAt() == nil ||
+		current.GetDefaultPalette() != opensplunk.UiPalette_UI_PALETTE_CLASSIC {
+		t.Fatalf("appearance after update = %+v", &current)
+	}
+}
+
+func bootstrapUIPalette(t *testing.T, ctx context.Context, client *http.Client, baseURL string) opensplunk.UiPalette {
+	t.Helper()
+	var bootstrap opensplunk.GetSystemBootstrapResponse
+	postProto(t, ctx, client, baseURL+"/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{}, &bootstrap)
+	return bootstrap.GetUiPalette()
 }
 
 func waitForHealth(

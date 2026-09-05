@@ -38,10 +38,14 @@ const SEARCH_URL = `/search/?${new URLSearchParams({
 
 /**
  * What the boot script wrote before any page script ran. Installed as an init
- * script, the observer sees the very first `data-palette` write on `<html>`,
- * which is the inline boot script's; hydration and ThemeSync come later.
+ * script, the observer sees the very first `data-palette` write on `<html>`
+ * and whether `<body>` had been parsed yet. Only the inline `<head>` script
+ * writes before `<body>` exists; hydration and ThemeSync run after it, so
+ * `beforeBody: true` is what proves the boot script, not ThemeSync's
+ * mount-time repaint, made the first write.
  */
 interface FirstPaintRecord {
+  beforeBody: boolean | null;
   firstPalette: string | null;
   firstTheme: string | null;
 }
@@ -128,7 +132,7 @@ async function openUserMenu(page: Page) {
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
-    const record: FirstPaintRecord = { firstPalette: null, firstTheme: null };
+    const record: FirstPaintRecord = { beforeBody: null, firstPalette: null, firstTheme: null };
     (window as unknown as FirstPaintWindow).openSplunkPaletteSmoke = record;
     // `document.documentElement` may not exist yet when an init script runs,
     // so observe the document and wait for the attribute to land on <html>.
@@ -136,6 +140,7 @@ test.beforeEach(async ({ page }) => {
       const root = document.documentElement;
       const palette = root?.getAttribute("data-palette") ?? null;
       if (palette === null) return;
+      record.beforeBody = document.body === null;
       record.firstPalette = palette;
       record.firstTheme = root.getAttribute("data-theme");
       observer.disconnect();
@@ -152,7 +157,7 @@ test("the administrator's palette reaches bootstrap, the cache, the boot script 
     await expect(html).toHaveAttribute("data-palette", "classic");
     await expect(html).toHaveAttribute("data-theme", "light");
     await expect.poll(() => cachedPalette(page)).toBe("classic");
-    expect(await firstPaint(page)).toEqual({ firstPalette: "classic", firstTheme: "light" });
+    expect(await firstPaint(page)).toEqual({ beforeBody: true, firstPalette: "classic", firstTheme: "light" });
     const current = await readAppearance(request);
     expect(current.current?.version).toBe(0n);
     expect(current.current?.palette).toBe(UiPalette.UI_PALETTE_CLASSIC);
@@ -168,7 +173,7 @@ test("the administrator's palette reaches bootstrap, the cache, the boot script 
   await test.step("the next load paints terminal after hydration and caches it", async () => {
     expect(await loadWithBootstrap(page, "/signin/")).toBe(200);
     // The boot script still had the classic cache; ThemeSync corrects it.
-    expect(await firstPaint(page)).toEqual({ firstPalette: "classic", firstTheme: "light" });
+    expect(await firstPaint(page)).toEqual({ beforeBody: true, firstPalette: "classic", firstTheme: "light" });
     await expect(html).toHaveAttribute("data-palette", "terminal");
     await expect.poll(() => cachedPalette(page)).toBe("terminal");
   });
@@ -180,7 +185,7 @@ test("the administrator's palette reaches bootstrap, the cache, the boot script 
       await route.abort("failed");
     });
     await page.goto("/signin/", { waitUntil: "domcontentloaded" });
-    expect(await firstPaint(page)).toEqual({ firstPalette: "terminal", firstTheme: "light" });
+    expect(await firstPaint(page)).toEqual({ beforeBody: true, firstPalette: "terminal", firstTheme: "light" });
     await expect(html).toHaveAttribute("data-palette", "terminal");
     // ThemeSync asked, got nothing, and left the cached paint alone.
     await expect.poll(() => blockedBootstraps).toBeGreaterThan(0);
@@ -200,7 +205,7 @@ test("the administrator's palette reaches bootstrap, the cache, the boot script 
     // Both attributes now come from the boot script on the next load.
     await page.route(BOOTSTRAP_ROUTE, (route) => route.abort("failed"));
     await page.goto("/signin/", { waitUntil: "domcontentloaded" });
-    expect(await firstPaint(page)).toEqual({ firstPalette: "terminal", firstTheme: "dark" });
+    expect(await firstPaint(page)).toEqual({ beforeBody: true, firstPalette: "terminal", firstTheme: "dark" });
     await expect(html).toHaveAttribute("data-theme", "dark");
     await expect(html).toHaveAttribute("data-palette", "terminal");
     await page.unroute(BOOTSTRAP_ROUTE);
@@ -246,7 +251,7 @@ test("the administrator's palette reaches bootstrap, the cache, the boot script 
     expect(current.current?.palette).toBe(UiPalette.UI_PALETTE_GLASS);
 
     expect(await loadWithBootstrap(page, "/signin/")).toBe(200);
-    expect(await firstPaint(page)).toEqual({ firstPalette: "glass", firstTheme: "dark" });
+    expect(await firstPaint(page)).toEqual({ beforeBody: true, firstPalette: "glass", firstTheme: "dark" });
     await expect(html).toHaveAttribute("data-palette", "glass");
     await expect(html).toHaveAttribute("data-theme", "dark");
     expect(await cachedPalette(page)).toBe("glass");

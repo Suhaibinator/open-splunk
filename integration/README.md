@@ -256,7 +256,11 @@ with an administrator bearer the Go test minted:
    `terminal` after hydration and the cache follows;
 3. with the bootstrap route blocked, the next load paints `terminal` from the
    cache before any network response, which an init-script mutation observer
-   records as the first `data-palette` write;
+   records as the first `data-palette` write, together with whether `<body>`
+   existed yet: only the inline `<head>` boot script writes before `<body>`
+   is parsed, so `beforeBody: true` is what separates the boot script from
+   ThemeSync's mount-time repaint (deleting the boot script from
+   `app/layout.tsx` fails this step and every other first-paint check);
 4. the user picks Dark from the user menu; both attributes hold, and the boot
    script paints both on a reload with bootstrap blocked again;
 5. the administrator updates to `glass`; the search workspace paints it and
@@ -283,7 +287,12 @@ OPEN_SPLUNK_PALETTE_SMOKE=1 \
 for the other browser gates. Failure artifacts are written beneath
 `test-results/palette-smoke`. What this gate does not prove is the compiled
 `open-splunk-server` wiring of the same stores into its runtime settings
-object; `TestBackendVertical` covers that path against ClickHouse.
+object: the smoke restates that wiring over a test settings object.
+`TestBackendVertical` (`OPEN_SPLUNK_BACKEND_INTEGRATION=1`, Docker) covers the
+binary's own through `assertInstancePaletteRoundTrip`: a fresh control
+database bootstraps `classic`, an administrator update lands `ocean` at
+version 1, the unauthenticated bootstrap and a fresh authenticated read both
+serve it, and after the server restart the reloaded snapshot still does.
 
 ## Global stylesheet computed-style contracts
 
