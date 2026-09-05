@@ -46,6 +46,7 @@ const testFiles = [
   path.join("app", "admin", "search-limits-form.test.ts"),
   path.join("app", "admin", "appearance-form.test.ts"),
   path.join("app", "admin", "appearance-settings.test.tsx"),
+  path.join("app", "admin", "appearance-settings.mount.test.tsx"),
   path.join("app", "admin", "token-create-recovery-policy.test.ts"),
   path.join("app", "admin", "token-recovery-startup.test.ts"),
   path.join("app", "admin", "knowledge-manager-data.test.ts"),
