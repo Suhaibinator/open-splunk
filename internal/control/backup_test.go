@@ -159,7 +159,7 @@ func TestBackupToIncludesCommittedWALAndExcludesUncommittedRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if identity.LatestVersion != 10 || identity.SHA256 == ([sha256.Size]byte{}) {
+	if identity.LatestVersion != 11 || identity.SHA256 == ([sha256.Size]byte{}) {
 		t.Fatalf("migration identity = %+v", identity)
 	}
 
@@ -340,12 +340,12 @@ func TestVerifyCurrentMigrationsRequiresExactLedgerAndStableIdentity(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if firstIdentity != secondIdentity || firstIdentity.LatestVersion != 10 {
+	if firstIdentity != secondIdentity || firstIdentity.LatestVersion != 11 {
 		t.Fatalf("migration identities differ: first=%+v second=%+v", firstIdentity, secondIdentity)
 	}
 
 	incomplete := open("incomplete")
-	if _, err := incomplete.SQLDB().ExecContext(ctx, `DELETE FROM schema_migrations WHERE version = 10`); err != nil {
+	if _, err := incomplete.SQLDB().ExecContext(ctx, `DELETE FROM schema_migrations WHERE version = 11`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := incomplete.VerifyCurrentMigrations(ctx, migrations.SQLite()); !errors.Is(err, ErrDatabaseNotCurrent) {
@@ -370,7 +370,7 @@ func TestVerifyCurrentMigrationsRequiresExactLedgerAndStableIdentity(t *testing.
 	tooNew := open("too-new")
 	if _, err := tooNew.SQLDB().ExecContext(ctx, `
 		INSERT INTO schema_migrations (version, name, checksum, applied_at_unix_micro)
-			VALUES (11, '0011_future.sql', zeroblob(32), 1)`); err != nil {
+			VALUES (12, '0012_future.sql', zeroblob(32), 1)`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := tooNew.VerifyCurrentMigrations(ctx, migrations.SQLite()); !errors.Is(err, ErrDatabaseTooNew) {

@@ -55,6 +55,7 @@ func TestCurrentSchemaIsExactBoundedAndRetrySafe(t *testing.T) {
 		"0008_rolling_feature_operation_audit.sql",
 		"0009_ingest_reservation_accounting.sql",
 		"0010_ingest_write_groups.sql",
+		"0011_server_appearance_settings.sql",
 	}
 	if strings.Join(ledger, ",") != strings.Join(wantLedger, ",") {
 		t.Fatalf("migration ledger = %v, want %v", ledger, wantLedger)
