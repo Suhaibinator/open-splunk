@@ -36,6 +36,26 @@
   /* Chart translucency. */
   --opacity-chart-area: 0.24; /* Series-area fill that keeps overlapping strokes and the plot grid legible. */
 
+  /* Translucency knobs: the two alphas and the one backdrop filter a palette
+     may turn to make a surface see-through. Classic holds every knob at its
+     inert value so it paints exactly as it did before the knobs existed: a
+     colour mixed at 100% is the colour, and `none` -- not `blur(0)`, which
+     still opens a stacking context -- is the whole filter. The alpha consumers
+     are the two chrome bars (--alpha-chrome) and the raised and overlay
+     surfaces (--alpha-surface): menus, popovers, the modal card, the drawer,
+     the toast. Only the raised surfaces also take the filter: a non-`none`
+     backdrop-filter makes its element a backdrop root, so a filtered element
+     nested inside another filtered element sees only the parent's already
+     blurred paint and loses its own frost, and it becomes the containing block
+     for every fixed descendant. The bars host the floating menus and, below
+     760px, a fixed app menu, so they stay filter-free; for the same reason no
+     fixed scrim may be rendered inside a menu, popover, modal card, drawer or
+     toast. AA contrast is proved on the opaque hex, so a palette may not take
+     --alpha-* below 80%; scripts/style-invariants.test.mjs holds that floor. */
+  --alpha-chrome: 100%; /* Opacity of the two chrome bars. */
+  --alpha-surface: 100%; /* Opacity of raised and overlay surfaces: menus, popovers, modal card, drawer, toast. */
+  --backdrop-surface: none; /* backdrop-filter behind a translucent raised surface, never a bar; `none` keeps classic free of stacking side effects. */
+
   /* Type stacks, moved verbatim out of the :root block the application
      stylesheet used to carry. */
   --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
@@ -104,8 +124,8 @@
   --space-statistics-column-text: 168px;
   --space-statistics-column-time: 220px;
 
-  /* Type scale. This product's body size is 10px, so the ramp is deliberately
-     bottom-heavy and --type-xs, not --type-md, is the default UI size. The
+  /* Type scale. body sets --type-md (12px), but most controls, tables and
+     chrome set --type-xs (10px), so the ramp is deliberately bottom-heavy. The
      family is --type-* rather than --text-* because --text and --text-strong
      are colours: one prefix cannot mean both a length and an ink.
 

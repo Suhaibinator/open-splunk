@@ -39,8 +39,8 @@ func TestOpenConfiguresSQLiteAndAppliesMigrations(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema migrations: %v", err)
 	}
-	if migrationCount != 10 {
-		t.Fatalf("schema migration count = %d, want 10", migrationCount)
+	if migrationCount != 11 {
+		t.Fatalf("schema migration count = %d, want 11", migrationCount)
 	}
 
 	// Foreign keys are connection-local in SQLite. Force database/sql to open
@@ -88,8 +88,8 @@ func TestOpenConfiguresSQLiteAndAppliesMigrations(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema migrations after reopen: %v", err)
 	}
-	if migrationCount != 10 {
-		t.Fatalf("schema migration count after reopen = %d, want 10", migrationCount)
+	if migrationCount != 11 {
+		t.Fatalf("schema migration count after reopen = %d, want 11", migrationCount)
 	}
 }
 
@@ -495,7 +495,9 @@ func TestApplyMigrationsAdoptsFoldedIngestBaseline(t *testing.T) {
 	if err := ApplyMigrations(ctx, raw, migrations.SQLite()); err != nil {
 		t.Fatalf("apply canonical migration history: %v", err)
 	}
+	// The folded release predates 0011, so the appearance table is absent there.
 	if _, err := raw.ExecContext(ctx, `
+		DROP TABLE server_appearance_settings;
 		DELETE FROM schema_migrations WHERE version >= 9;
 		UPDATE schema_migrations
 		SET checksum = X'23e85b8b288addf86eda7f848e2b087a40194f8c5281459a9f0f8c1d215e1d64'
@@ -510,8 +512,8 @@ func TestApplyMigrationsAdoptsFoldedIngestBaseline(t *testing.T) {
 	if err := raw.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatal(err)
 	}
-	if migrationCount != 10 {
-		t.Fatalf("folded migration count = %d, want 10", migrationCount)
+	if migrationCount != 11 {
+		t.Fatalf("folded migration count = %d, want 11", migrationCount)
 	}
 	var storedBaselineSHA256 string
 	if err := raw.QueryRowContext(ctx, `
@@ -626,6 +628,7 @@ func TestServerSettingsMigrationPreservesExistingAuditLedger(t *testing.T) {
 		"0008_rolling_feature_operation_audit.sql",
 		"0009_ingest_reservation_accounting.sql",
 		"0010_ingest_write_groups.sql",
+		"0011_server_appearance_settings.sql",
 	}
 	if strings.Join(ledger, ",") != strings.Join(wantLedger, ",") {
 		t.Fatalf("post-upgrade migration ledger = %v, want %v", ledger, wantLedger)
@@ -969,8 +972,8 @@ func TestConcurrentOpenSerializesMigrationStartup(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatalf("count schema migrations: %v", err)
 	}
-	if count != 10 {
-		t.Fatalf("schema migration count = %d, want 10", count)
+	if count != 11 {
+		t.Fatalf("schema migration count = %d, want 11", count)
 	}
 }
 

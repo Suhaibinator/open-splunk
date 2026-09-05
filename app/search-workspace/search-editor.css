@@ -343,7 +343,8 @@
 }
 
 .completion-menu {
-  background: var(--bg-surface);
+  backdrop-filter: var(--backdrop-surface);
+  background: color-mix(in srgb, var(--bg-surface) var(--alpha-surface), transparent);
   border: 1px solid var(--border-strong);
   box-shadow: var(--shadow-lg);
   left: 28px;
@@ -401,6 +402,11 @@
   background: var(--selection);
 }
 
+/* The keyboard-selected option carries a ring as well as the wash: in dark the wash sits close to the surface, so hue alone is not the cue. */
+.completion-option[aria-selected="true"] {
+  box-shadow: inset 0 0 0 1px var(--border-focus);
+}
+
 .completion-menu code {
   color: var(--accent-alt);
   font-size: var(--type-md);
@@ -453,13 +459,20 @@
   background: var(--bg-subtle);
 }
 
+/* The composer at --z-sticky is a stacking context, so its menus are held at
+   that layer however high their own z-index climbs -- and the fields rail,
+   the later sibling at the same step, then paints over the lower rows of an
+   open completion menu. Raise the composer for as long as it holds a menu,
+   the move the chrome bars make for a floating menu. */
+.search-composer:has(.completion-menu),
 .search-composer:has(.time-popover) {
   z-index: var(--z-dropdown);
 }
 
 .time-popover {
   animation: menu-in 100ms ease-out;
-  background: var(--bg-surface);
+  backdrop-filter: var(--backdrop-surface);
+  background: color-mix(in srgb, var(--bg-surface) var(--alpha-surface), transparent);
   border: 1px solid var(--border-strong);
   box-shadow: var(--shadow-lg);
   color: var(--fg-text);

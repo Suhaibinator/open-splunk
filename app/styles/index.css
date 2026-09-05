@@ -10,7 +10,9 @@
  * The order below is the contract, and it reads outward from what cannot be
  * overridden to what always wins:
  *
- *   1. tokens          -- names only; no rule, so nothing to override
+ *   1. tokens          -- names only; no rule, so nothing to override. The
+ *                         base pair first (colour, then scale), then one
+ *                         tokens-palette-<name>.css per instance palette
  *   2. base            -- the reset and the element defaults every page gets
  *   3. primitives      -- one implementation each of button, table, form,
  *                         modal, status, layout, chart and skeleton, in order
@@ -34,6 +36,14 @@
  * knobs. A colour, a space step or a radius declared out here is unreachable
  * from a retheme, which is the whole point of the layer.
  *
+ * The palette files have to follow both base files, and their order among
+ * themselves is by name (`tokenCascadeOrder` in scripts/style-inventory.mjs).
+ * A palette's light block is `:root:where([data-palette="…"])`: the `:where()`
+ * keeps it at the base light block's specificity, so it beats base light by
+ * source order alone and the base dark block still outranks it in dark mode.
+ * Loaded before the base files it would lose in light; written without
+ * `:where()` it would leak light grounds under every dark page.
+ *
  * Each file also carries its own responsive rules rather than deferring them to
  * a document-wide section, so a feature and the way it folds are one edit. Two
  * shapes are in use for where inside the file they sit -- a `Responsive`
@@ -45,6 +55,11 @@
  */
 @import url("./tokens-color.css");
 @import url("./tokens-scale.css");
+@import url("./tokens-palette-ember.css");
+@import url("./tokens-palette-glass.css");
+@import url("./tokens-palette-graphite.css");
+@import url("./tokens-palette-ocean.css");
+@import url("./tokens-palette-terminal.css");
 @import url("./base.css");
 @import url("./primitives/button.css");
 @import url("./primitives/table.css");

@@ -32,6 +32,8 @@ export class OpenSplunkApiClient {
   public readonly serverSettings = {
     get: this.route(serverSettingsRoutes.get),
     update: this.route(serverSettingsRoutes.update),
+    getAppearance: this.route(serverSettingsRoutes.getAppearance),
+    updateAppearance: this.route(serverSettingsRoutes.updateAppearance),
   };
 
   public readonly apps = {

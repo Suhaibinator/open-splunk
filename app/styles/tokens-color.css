@@ -4,18 +4,29 @@
  * Two tiers, and the boundary between them is the point of the file:
  *
  *   Tier 1 -- primitive palette. Raw hex, named after the hue and a lightness
- *   step. Nothing outside this file may read a primitive: they exist only so a
- *   tier 2 token has something to point at. Their steps were derived from the
- *   literal inventory the refactor started from, so every colour the product
- *   actually used lands within ~24 RGB units of a step.
+ *   step. Nothing outside the token layer may read a primitive: they exist
+ *   only so a tier 2 token has something to point at. Their steps were derived
+ *   from the literal inventory the refactor started from, so every colour the
+ *   product actually used lands within ~24 RGB units of a step. Every
+ *   primitive in the product lives in the base `:root` block below, the
+ *   steps the instance palettes reach included: a palette file declares no
+ *   primitive of its own, and a new hue step is added here with a comment
+ *   naming the palette that uses it.
  *
  *   Tier 2 -- semantic tokens. Named after the *role* a colour plays, never
- *   after the colour itself. These are the only names components, the
- *   application stylesheets, and the CSS modules may use, which is what makes a
- *   theme a one-file edit.
+ *   after the colour itself. These are the only names components and the
+ *   application stylesheets may use, which is what makes a theme a one-file
+ *   edit.
  *
- * A theme therefore restates tier 2 and leaves tier 1 alone: see the
- * `:root[data-theme="dark"]` block at the bottom, and docs/theming.md.
+ * A theme therefore restates tier 2 and leaves tier 1 alone. This file holds
+ * the base pair, `classic`: the `:root` block is base light and the
+ * `:root[data-theme="dark"]` block at the bottom is base dark, the one block
+ * held to restating every themeable role. Each other instance palette is one
+ * tokens-palette-<name>.css holding a light block
+ * (`:root:where([data-palette="…"])`) and a dark block
+ * (`:root[data-palette="…"][data-theme="dark"]`) that restate only what
+ * differs from this pair; the resolution order is base light < palette light
+ * < base dark < palette dark. See docs/theming.md, "Tokens and themes".
  *
  * The pre-refactor alias block that kept names like `--surface` and `--text`
  * alive through the migration is gone: every call site now reads a role, so the
@@ -53,6 +64,17 @@
   --slate-700: #3f464c; /* App bar. */
   --slate-900: #1e252b; /* Product bar. */
 
+  /* Mist: the cool, faintly blue neutrals ocean and glass lay under their panels. */
+  --mist-100: #edf2f6; /* Ocean and glass page ground. */
+  --mist-150: #e3eaf0; /* Ocean and glass recessed strip: toolbars, table headers. */
+  --mist-200: #d5dfe8; /* Ocean and glass faint divider and resting skeleton surface. */
+
+  /* Slateblue: the blue-leaning slate ocean and glass build their two bars from. */
+  --slateblue-600: #3f5570; /* Ocean and glass app-bar hover in light. */
+  --slateblue-700: #32465e; /* Ocean and glass app bar in light; bar hover in dark. */
+  --slateblue-900: #1b2a3b; /* Ocean and glass product bar in light; app bar in dark. */
+  --slateblue-950: #121c28; /* Ocean and glass product bar in dark. */
+
   /* Green: the product's primary accent hue. */
   --green-100: #e8f2e1; /* Accent wash. */
   --green-200: #dbead2; /* Accent wash border. */
@@ -62,6 +84,8 @@
   --green-600: #5f9c3a; /* Mid accent fill; the info severity swatch. */
   --green-700: #477f2b; /* Primary accent. */
   --green-800: #376a20; /* Pressed and hovered accent. */
+  --green-900: #2c5619; /* Graphite string ink and terminal pressed accent: the one green that clears 7:1 on white. */
+  --green-950: #204214; /* Dark accent wash: deep enough that the hovered accent reads as ink on it. */
 
   /* Blue: informational hue, links, focus, and selection. */
   --blue-100: #e8f3f9; /* Informational wash. */
@@ -71,9 +95,10 @@
   --blue-400: #5290b0; /* Light informational fill; the debug severity swatch. */
   --blue-450: #2f8ac1; /* Saturated interaction blue: focus rings. */
   --blue-500: #3b88ad; /* Mid informational fill. */
-  --blue-600: #2878a8; /* Primary informational colour and link text. */
-  --blue-700: #256e96; /* Pressed informational colour. */
+  --blue-600: #2878a8; /* Primary informational colour. */
+  --blue-700: #256e96; /* Pressed informational colour, and link text: the step that clears AA on the recessed strip. */
   --blue-800: #175d81; /* Deepest informational colour. */
+  --blue-900: #10394f; /* Dark selection wash and ocean's dark accent wash, the blue every ink the menus lay on it clears AA on; graphite's link in light, where it clears 7:1 on the striped row. */
 
   /* Amber: caution and highlight hue. */
   --amber-50: #fff8e9; /* Warning wash. */
@@ -86,9 +111,11 @@
   --amber-700: #795817; /* Deep warning text. */
 
   /* Orange: the warmer caution hue used for in-progress and throttled states. */
+  --orange-300: #f2a65f; /* Ember focus ring and bright accent on a dark ground; graphite function ink in dark. */
   --orange-400: #d97a23; /* Primary orange. */
   --orange-500: #c07823; /* Pressed orange. */
   --orange-600: #aa5f18; /* Deep orange, legible as small ink on a light ground. */
+  --orange-700: #7f420a; /* Graphite function ink in light: orange that clears 7:1 on white. */
 
   /* Red: error and destructive hue. */
   --red-100: #fff0ee; /* Error wash. */
@@ -100,12 +127,14 @@
   --red-600: #b23b36; /* Pressed error colour. */
   --red-700: #8f2f2b; /* Deep error text. */
 
-  /* Purple: categorical only; the product assigns it no state. */
+  /* Purple: categorical only; the product assigns it no state. Glass takes it as its accent. */
   --purple-100: #efeaf6; /* Purple wash. */
+  --purple-300: #cbb8e0; /* Graphite command ink in dark: purple that clears 7:1 on the dark surface. */
   --purple-400: #b094cf; /* Light purple: an ink that clears AA on a dark ground. */
   --purple-500: #8b67a8; /* Mid purple. */
   --purple-550: #a14b96; /* Magenta-leaning purple. */
   --purple-600: #6d4b9f; /* Deep purple. */
+  --purple-700: #563a80; /* Graphite command ink in light: purple that clears 7:1 on white. */
 
   /* Extended categorical hues: the chart series ramp, and the dark theme's
      syntax pipe, reach these. */
@@ -113,10 +142,50 @@
   --brown-500: #8a6d55; /* Categorical brown. */
   --indigo-500: #6f7fb5; /* Categorical indigo. */
   --olive-500: #708f37; /* Categorical olive. */
+  --pink-300: #ebb5d0; /* Graphite pipe ink in dark: magenta that clears 7:1 on the dark surface. */
   --pink-400: #d98fb5; /* Light pink: an ink that clears AA on a dark ground. */
   --pink-500: #c76594; /* Categorical pink. */
+  --pink-700: #86375f; /* Graphite pipe ink in light: magenta that clears 7:1 on white. */
   --teal-500: #4d9a8a; /* Categorical teal. */
   --teal-600: #4f8f6f; /* Categorical green-teal. */
+
+  /* Sand: the warm neutrals ember lays under its panels and reads as light text in dark. */
+  --sand-50: #fdfbf7; /* Ember panel surface in light; inverse surface and heading ink in dark. */
+  --sand-100: #f6f1e8; /* Ember page ground in light. */
+  --sand-150: #efe8dc; /* Ember recessed strip in light. */
+  --sand-200: #e5dbcc; /* Ember faint divider and skeleton in light; body text in dark. */
+  --sand-300: #d4c7b4; /* Ember default border in light; secondary text in dark. */
+  --sand-400: #bcac96; /* Ember emphasised border in light; muted text in dark. */
+
+  /* Umber: the warm dark neutrals ember uses for chrome, inverse surfaces and dark-mode grounds. */
+  --umber-500: #6b5b50; /* Ember secondary text in light: the taupe that clears AA on the sand strip. */
+  --umber-600: #5c4e45; /* Ember default border and skeleton highlight in dark. */
+  --umber-700: #4a3d35; /* Ember bar hover in light; raised surface in dark. */
+  --umber-800: #3a2e27; /* Ember app bar in light; recessed strip and bar hover in dark. */
+  --umber-900: #2a201b; /* Ember product bar and body text in light; panel surface and app bar in dark. */
+  --umber-950: #1c1512; /* Ember inverse surface and heading ink in light; page ground and product bar in dark. */
+
+  /* Rust: ember's orange-red accent hue. */
+  --rust-100: #fbe9e0; /* Ember accent wash in light. */
+  --rust-300: #f0a889; /* Ember accent on the inverse surface in light; hovered accent and link in dark. */
+  --rust-400: #e07a4f; /* Ember primary accent in dark. */
+  --rust-500: #c4471a; /* Ember primary accent in light. */
+  --rust-600: #a33a13; /* Ember hovered accent and link in light; accent on the inverse surface in dark. */
+  --rust-800: #5e2109; /* Ember accent wash in dark. */
+
+  /* Carbon: the pure neutral near-blacks terminal paints its dark grounds and bars with. */
+  --carbon-700: #3a3a3a; /* Terminal raised surface in dark. */
+  --carbon-800: #2a2a2a; /* Terminal recessed strip and bar hover in dark. */
+  --carbon-900: #1c1c1c; /* Terminal panel surface and app bar in dark. */
+  --carbon-950: #0f0f0f; /* Terminal page ground and product bar in dark. */
+
+  /* Phosphor: terminal's CRT green, brighter and bluer than the product green. */
+  --phosphor-100: #dcf5e4; /* Terminal accent wash in light. */
+  --phosphor-300: #7ee8a4; /* Terminal bar text in both modes; saturated accent fill in dark. */
+  --phosphor-400: #3fd57f; /* Terminal hovered accent, link, focus ring and string ink in dark. */
+  --phosphor-500: #1fb864; /* Terminal primary accent in dark. */
+  --phosphor-700: #157a44; /* Terminal accent on the light inverse surface in dark. */
+  --phosphor-800: #0f4f2f; /* Terminal accent wash and selection in dark. */
 
   /* Tier 2 -- semantic tokens. The only names the rest of the code may read. */
 
@@ -135,9 +204,9 @@
   --fg-secondary: var(--gray-700); /* Ink one step lighter than body text: table cells, sub-headings. */
   --fg-muted: var(--gray-600); /* Secondary text: captions, metadata, help. */
   --fg-faint: var(--gray-500); /* Tertiary text: placeholders, disabled labels. */
-  --fg-inverse: var(--gray-0); /* Text on --bg-inverse. */
+  --fg-inverse: var(--gray-0); /* Text on --bg-inverse, and on --status-error as the danger button's label. */
   --fg-inverse-muted: var(--gray-400); /* Secondary text on --bg-inverse. */
-  --fg-link: var(--blue-600); /* Anchor text. */
+  --fg-link: var(--blue-700); /* Anchor text; deep enough to clear AA on the striped row's --bg-subtle. */
 
   /* Borders. */
   --border: var(--gray-300); /* Default rule between and around surfaces. */
@@ -147,11 +216,11 @@
 
   /* Accent: the product's primary action colour. */
   --accent: var(--green-700); /* Primary buttons, active tabs, progress. */
-  --accent-hover: var(--green-800); /* Hovered and pressed accent. */
+  --accent-hover: var(--green-800); /* Hovered and pressed accent, and the ink on --accent-soft. */
   --accent-bright: var(--green-500); /* Saturated accent fill: progress bars, timeline columns. */
   --accent-inverse: var(--green-400); /* The accent on --bg-inverse, one step lighter so it clears a dark ground. */
   --accent-soft: var(--green-100); /* Accent-tinted background wash. */
-  --accent-alt: var(--purple-600); /* Second decorative accent, carrying no status meaning. */
+  --accent-alt: var(--purple-600); /* Second decorative accent, carrying no status meaning; the completion menu's code ink, on --selection too. */
   --accent-alt-soft: var(--purple-100); /* Second decorative accent, as a background wash. */
 
   /* Status: one hue per outcome, each with a background wash. */
@@ -266,9 +335,9 @@
   --fg-secondary: var(--gray-300); /* Ink one step lighter than body text. */
   --fg-muted: var(--gray-450); /* Secondary text. */
   --fg-faint: var(--gray-550); /* Tertiary text. */
-  --fg-inverse: var(--gray-950); /* Text on --bg-inverse. */
+  --fg-inverse: var(--gray-950); /* Text on --bg-inverse, and on --status-error as the danger button's label. */
   --fg-inverse-muted: var(--gray-650); /* Secondary text on --bg-inverse; clears AA at the --bg-inverse-tint end too. */
-  --fg-link: var(--blue-300); /* Anchor text. */
+  --fg-link: var(--blue-300); /* Anchor text, on the striped row's --bg-subtle as on the surfaces. */
 
   /* Borders. */
   --border: var(--gray-700); /* Default rule. */
@@ -278,11 +347,11 @@
 
   /* Accent. */
   --accent: var(--green-500); /* Primary action colour. */
-  --accent-hover: var(--green-400); /* Hovered and pressed accent. */
+  --accent-hover: var(--green-400); /* Hovered and pressed accent, and the ink on --accent-soft. */
   --accent-bright: var(--green-300); /* Saturated accent fill. */
   --accent-inverse: var(--green-700); /* The accent on --bg-inverse, which is a light surface here; a label ink, so it clears AA. */
-  --accent-soft: var(--green-800); /* Accent-tinted background wash. */
-  --accent-alt: var(--purple-400); /* Second decorative accent; an ink in the completion menu, so it clears AA. */
+  --accent-soft: var(--green-950); /* Accent-tinted background wash; deep enough that --accent-hover reads as ink on it. */
+  --accent-alt: var(--purple-400); /* Second decorative accent; an ink in the completion menu, so it clears AA on --selection too. */
   --accent-alt-soft: var(--purple-600); /* Second decorative accent, as a background wash. */
 
   /* Status. */
@@ -299,7 +368,7 @@
   --status-warning-edge: var(--amber-600); /* Needs attention, as the border around its own wash. */
   --status-warning-soft: var(--amber-700); /* Needs attention, as a background wash. */
   --status-warning-strong: var(--amber-200); /* Needs attention, as ink on its own wash. */
-  --status-error: var(--red-400); /* Failed. */
+  --status-error: var(--red-350); /* Failed; the danger button's ground, so the inverse ink clears AA on it. */
   --status-error-edge: var(--red-600); /* Failed, as the border around its own wash. */
   --status-error-soft: var(--red-700); /* Failed, as a background wash. */
   --status-error-strong: var(--red-200); /* Failed, as ink on its own wash. */
@@ -337,7 +406,7 @@
 
   /* Interaction. */
   --highlight: var(--amber-600); /* Matched search term inside a result. */
-  --selection: var(--blue-800); /* Selected row or range. */
+  --selection: var(--blue-900); /* Selected row or range; deep enough that the completion menu's --accent-alt reads as ink on it. */
   --focus-ring: var(--blue-200); /* Focus outline. */
 
   /* Loading skeleton. */

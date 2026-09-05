@@ -1,0 +1,106 @@
+/*
+ * Graphite palette: near-monochrome at a 7:1 floor. Colour is reserved for state
+ * and code; the accent, chrome and focus are gray and the link keeps one blue.
+ * Restates only what differs from classic; see docs/theming.md, "Adding a theme".
+ */
+:root:where([data-palette="graphite"]) {
+  color-scheme: light;
+
+  /* Foregrounds: every step one rung darker than classic. */
+  --fg-text: var(--gray-900); /* Body text. */
+  --fg-strong: var(--gray-950); /* Headings and emphasised text. */
+  --fg-secondary: var(--gray-800); /* Ink one step lighter than body text. */
+  --fg-muted: var(--gray-700); /* Secondary text. */
+  --fg-faint: var(--gray-600); /* Tertiary text; the faintest ink still above 4.5:1 on white. */
+  --fg-inverse-muted: var(--gray-300); /* Secondary text on --bg-inverse, lifted to clear 7:1. */
+  --fg-link: var(--blue-900); /* Anchor text: the one retained hue, deep enough for 7:1 on the striped row as well as on white. */
+
+  /* Borders: one rung stronger than classic. */
+  --border: var(--gray-400); /* Default rule between and around surfaces. */
+  --border-subtle: var(--gray-300); /* Faint divider inside one surface. */
+  --border-strong: var(--gray-600); /* Emphasised rule. */
+  --border-focus: var(--gray-900); /* Focused control edge. */
+
+  /* Accent: gray, so nothing but state and code carries a hue. */
+  --accent: var(--gray-800); /* Primary buttons, active tabs, progress. */
+  --accent-hover: var(--gray-900); /* Hovered and pressed accent. */
+  --accent-bright: var(--gray-600); /* Saturated accent fill: progress bars, timeline columns. */
+  --accent-inverse: var(--gray-300); /* The accent on --bg-inverse. */
+  --accent-soft: var(--gray-200); /* Accent-tinted background wash. */
+  --accent-alt: var(--gray-700); /* Second decorative accent. */
+  --accent-alt-soft: var(--gray-250); /* Second decorative accent, as a background wash. */
+
+  /* SPL syntax: same hues as classic, each one step deeper so it clears 7:1 on the editor ground. */
+  --syntax-pipe: var(--pink-700); /* The pipe between two commands. */
+  --syntax-command: var(--purple-700); /* A search command name. */
+  --syntax-function: var(--orange-700); /* An eval or stats function name. */
+  --syntax-field: var(--blue-800); /* A field name. */
+  --syntax-string: var(--green-900); /* A quoted string. */
+  --syntax-literal: var(--red-700); /* A boolean, an operator, a bare literal. */
+
+  /* Application chrome: gray bars; these equal classic dark's, so dark restates nothing. */
+  --chrome-bar: var(--gray-950); /* Product bar. */
+  --chrome-appbar: var(--gray-900); /* App bar. */
+  --chrome-hover: var(--gray-800); /* Hovered or open bar item. */
+
+  /* Interaction. */
+  --focus-ring: var(--gray-900); /* Focus outline drawn outside a control. */
+
+  /* Scale: tighter corners and hairline rings instead of drops. */
+  --radius-lg: 6px; /* Modal and card corners. */
+  --radius-md: 4px; /* Control and menu corners. */
+  --shadow-drawer: 0 0 0 1px rgb(25 37 45 / 32%); /* Drawer edge ring. */
+  --shadow-lg: 0 0 0 1px rgb(25 37 45 / 32%); /* Menu and popover ring. */
+  --shadow-md: 0 0 0 1px rgb(25 37 45 / 24%); /* Raised card ring. */
+  --shadow-sheet: 0 0 0 1px rgb(25 37 45 / 32%); /* Phone sheet ring. */
+  --shadow-sm: 0 0 0 1px rgb(25 37 45 / 16%); /* Resting card ring. */
+  --shadow-toast: 0 0 0 1px rgb(25 37 45 / 40%); /* Toast ring. */
+  --shadow-xl: 0 0 0 1px rgb(25 37 45 / 40%); /* Modal ring. */
+}
+
+:root[data-palette="graphite"][data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Foregrounds: every step one rung lighter than classic dark. */
+  --fg-text: var(--gray-100); /* Body text. */
+  --fg-strong: var(--gray-0); /* Headings and emphasised text. */
+  --fg-secondary: var(--gray-200); /* Ink one step lighter than body text. */
+  --fg-muted: var(--gray-300); /* Secondary text. */
+  --fg-faint: var(--gray-400); /* Tertiary text. */
+  --fg-inverse-muted: var(--gray-700); /* Secondary text on --bg-inverse, deepened to clear 7:1. */
+
+  /* Borders: one rung stronger than classic dark. */
+  --border: var(--gray-600); /* Default rule. */
+  --border-subtle: var(--gray-700); /* Faint divider inside one surface. */
+  --border-strong: var(--gray-500); /* Emphasised rule. */
+  --border-focus: var(--gray-100); /* Focused control edge. */
+
+  /* Accent: light gray on the dark ground. */
+  --accent: var(--gray-200); /* Primary action colour. */
+  --accent-hover: var(--gray-100); /* Hovered and pressed accent. */
+  --accent-bright: var(--gray-300); /* Saturated accent fill. */
+  --accent-inverse: var(--gray-700); /* The accent on --bg-inverse, a light surface here; a label ink, so it clears 7:1. */
+  --accent-soft: var(--gray-800); /* Accent-tinted background wash. */
+  --accent-alt: var(--gray-250); /* Second decorative accent; an ink in the completion menu, light enough to clear 7:1 on the selection wash. */
+  --accent-alt-soft: var(--gray-750); /* Second decorative accent, as a background wash. */
+
+  /* SPL syntax: same hues as classic dark, each one step lighter so it clears 7:1 on --bg-surface. */
+  --syntax-pipe: var(--pink-300); /* The pipe between two commands. */
+  --syntax-command: var(--purple-300); /* A search command name. */
+  --syntax-function: var(--orange-300); /* An eval or stats function name. */
+  --syntax-field: var(--blue-300); /* A field name. */
+  --syntax-string: var(--green-400); /* A quoted string. */
+  --syntax-literal: var(--red-300); /* A boolean, an operator, a bare literal. */
+
+  /* Interaction. */
+  --focus-ring: var(--gray-100); /* Focus outline. */
+
+  /* Scale: the rings turn light so they still edge a surface on the dark ground. */
+  --shadow-drawer: 0 0 0 1px rgb(230 234 236 / 28%); /* Drawer edge ring. */
+  --shadow-lg: 0 0 0 1px rgb(230 234 236 / 28%); /* Menu and popover ring. */
+  --shadow-md: 0 0 0 1px rgb(230 234 236 / 20%); /* Raised card ring. */
+  --shadow-sheet: 0 0 0 1px rgb(230 234 236 / 28%); /* Phone sheet ring. */
+  --shadow-sm: 0 0 0 1px rgb(230 234 236 / 14%); /* Resting card ring. */
+  --shadow-toast: 0 0 0 1px rgb(230 234 236 / 36%); /* Toast ring. */
+  --shadow-xl: 0 0 0 1px rgb(230 234 236 / 36%); /* Modal ring. */
+}

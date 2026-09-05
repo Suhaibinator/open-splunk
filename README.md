@@ -182,6 +182,14 @@ intentional component literals used for circular radii, composed shadow parts,
 and local stacking. **Recolouring the product is an edit to the token files, not
 a search across the rules.**
 
+Palettes are that edit, shipped. An administrator picks one instance-wide
+palette (classic, ocean, ember, graphite, glass or terminal) from the admin
+console's Server settings; each is one `app/styles/tokens-palette-<name>.css`
+that restates only the roles it changes, in a light and a dark block, so every
+user keeps their own System / Light / Dark choice on top of it. The choice
+rides on `/api/system/bootstrap`, is cached in the browser, and is painted
+before the first paint on every later load.
+
 Three gates keep that true, because almost none of it is visible to a compiler:
 `npm run test:frontend` runs the structural invariants in
 `scripts/style-invariants.test.mjs`, `npm run lint:css` runs stylelint over the

@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import process from "node:process";
 import test from "node:test";
 
 import { BinaryWriter } from "@bufbuild/protobuf/wire";
@@ -46,7 +49,7 @@ import {
   ValidateKnowledgeObjectResponse,
 } from "@/gen/ts/open_splunk/knowledge_api";
 import { ValidateSearchRequest, ValidateSearchResponse } from "@/gen/ts/open_splunk/search_api";
-import { ingestionTokenRoutes, knowledgeRoutes, lookupRoutes, searchRoutes } from "./routes";
+import { ingestionTokenRoutes, knowledgeRoutes, lookupRoutes, searchRoutes, serverSettingsRoutes } from "./routes";
 
 const administratorToken = "admin-token-0123456789-abcdefghijkl";
 
@@ -94,6 +97,14 @@ test("administrator route allowlist excludes ordinary search and WebSocket paths
   assert.equal(isAdministratorRoutePath("/api/search/jobs/inspect"), true);
   assert.equal(isAdministratorRoutePath("/api/server/settings/get"), true);
   assert.equal(isAdministratorRoutePath("/api/server/settings/update"), true);
+  assert.equal(isAdministratorRoutePath("/api/server/appearance/get"), true);
+  assert.equal(isAdministratorRoutePath("/api/server/appearance/update"), true);
+  assert.equal(serverSettingsRoutes.getAppearance.path, "/api/server/appearance/get");
+  assert.equal(serverSettingsRoutes.updateAppearance.path, "/api/server/appearance/update");
+  assert.equal(serverSettingsRoutes.getAppearance.authorization, "administrator");
+  assert.equal(serverSettingsRoutes.updateAppearance.authorization, "administrator");
+  // The palette itself rides bootstrap, which the sign-in page reads without a token.
+  assert.equal(isAdministratorRoutePath("/api/system/bootstrap"), false);
   assert.equal(isAdministratorRoutePath("/api/search/jobs/create"), false);
   assert.equal(isAdministratorRoutePath("/api/search/suggestions"), false);
   assert.equal(isAdministratorRoutePath("/api/search/ws"), false);
@@ -105,6 +116,136 @@ test("administrator route allowlist excludes ordinary search and WebSocket paths
     assert.equal(route.maximumResponseBytes, 9 << 20);
   }
   assert.equal(searchRoutes.inspect.maximumResponseBytes, 8 << 20);
+});
+
+/* == Parity with the Go server: the allowlist is exactly what the server gates == */
+
+/** Reads `internal/server/*.go` (never the tests) as a map of file name to source. */
+function goServerSources(): Map<string, string> {
+  const directory = join(process.cwd(), "internal", "server");
+  assert.ok(existsSync(join(directory, "handler.go")), `run from the repository root; ${directory} has no handler.go`);
+  const sources = new Map<string, string>();
+  for (const name of readdirSync(directory)) {
+    if (name.endsWith(".go") && !name.endsWith("_test.go")) sources.set(name, readFileSync(join(directory, name), "utf8"));
+  }
+  return sources;
+}
+
+/**
+ * Every package-level string constant, with `apiPathPrefix + xRoute` sums
+ * folded: the route tables name paths both as literals and as constants.
+ */
+function goStringConstants(sources: Map<string, string>): GoConstants {
+  const literals = new Map<string, string>();
+  const sums = new Map<string, [string, string]>();
+  for (const source of sources.values()) {
+    for (const [, name, value] of source.matchAll(/^\s*(\w+)\s*=\s*"([^"\n]*)"\s*$/gmu)) literals.set(name, value);
+    for (const [, name, left, right] of source.matchAll(/^\s*(\w+)\s*=\s*(\w+)\s*\+\s*(\w+)\s*$/gmu)) sums.set(name, [left, right]);
+  }
+  // Resolved on demand: only the names a route table mentions are followed,
+  // so a numeric sum elsewhere in the package is never read as a string.
+  const resolve: GoConstants = (name) => {
+    const literal = literals.get(name);
+    if (literal !== undefined) return literal;
+    const sum = sums.get(name);
+    assert.ok(sum, `no Go string constant named ${name}`);
+    return resolve(sum[0]) + resolve(sum[1]);
+  };
+  return resolve;
+}
+
+/** Resolves a package-level Go string constant by name. */
+type GoConstants = (name: string) => string;
+
+/** A Go string literal or a constant, as one element of a `[]string{…}` or a map index. */
+function goPath(token: string, constants: GoConstants): string {
+  const literal = /^"([^"]*)"$/u.exec(token);
+  if (literal !== null) return literal[1];
+  return constants(token);
+}
+
+/**
+ * The paths `handler.go` puts into `administratorRoutes`: every element of a
+ * `for _, path := range []string{…}` whose body writes the map, and every
+ * direct `administratorRoutes[x] = struct{}{}`.
+ */
+function goAdministratorRoutes(sources: Map<string, string>, constants: GoConstants): Set<string> {
+  const handler = sources.get("handler.go") ?? "";
+  const start = handler.indexOf("administratorRoutes := make(");
+  const end = handler.indexOf("api.administratorRoutes = administratorRoutes", start);
+  assert.ok(start >= 0 && end > start, "handler.go no longer builds administratorRoutes the way this test reads it");
+  const region = handler.slice(start, end);
+  const routes = new Set<string>();
+  for (const [, list, body] of region.matchAll(/for _, path := range \[\]string\{([^}]*)\}\s*\{([^}]*)\}/gu)) {
+    if (!body.includes("administratorRoutes[path]")) continue;
+    for (const token of list.split(",").map((part) => part.trim()).filter((part) => part !== "")) {
+      routes.add(goPath(token, constants));
+    }
+  }
+  for (const [, token] of region.matchAll(/administratorRoutes\[([^\]]+)\] = struct\{\}\{\}/gu)) {
+    if (token.trim() !== "path") routes.add(goPath(token.trim(), constants));
+  }
+  return routes;
+}
+
+/**
+ * The paths the knowledge attempt boundary authenticates on its own: the
+ * `case` constants of `knowledgeAttemptFallbackAction`, plus the preview path
+ * `protectKnowledgeManagementRoutes` compares against directly.
+ */
+function goKnowledgeBoundaryRoutes(sources: Map<string, string>, constants: GoConstants): Set<string> {
+  const boundary = sources.get("knowledge_attempt_boundary.go") ?? "";
+  const start = boundary.indexOf("func knowledgeAttemptFallbackAction(");
+  const end = boundary.indexOf("\n}\n", start);
+  assert.ok(start >= 0 && end > start, "knowledge_attempt_boundary.go no longer has knowledgeAttemptFallbackAction");
+  const routes = new Set<string>();
+  for (const [, cases] of boundary.slice(start, end).matchAll(/case ([\w,\s]+):/gu)) {
+    for (const token of cases.split(",").map((part) => part.trim()).filter((part) => part !== "")) {
+      routes.add(goPath(token, constants));
+    }
+  }
+  for (const [, token] of boundary.matchAll(/request\.URL\.Path == (\w+)/gu)) routes.add(goPath(token, constants));
+  return routes;
+}
+
+/** The literals inside `ADMINISTRATOR_ROUTE_PATHS`, read from this module's source. */
+function typescriptAllowlist(): string[] {
+  const source = readFileSync(join(process.cwd(), "lib", "api", "administrator-session.ts"), "utf8");
+  const start = source.indexOf("ADMINISTRATOR_ROUTE_PATHS");
+  const end = source.indexOf("]);", start);
+  assert.ok(start >= 0 && end > start);
+  return [...source.slice(start, end).matchAll(/"(\/api\/[^"]+)"/gu)].map(([, literal]) => literal);
+}
+
+test("the allowlist is exactly the set of paths the Go server authenticates with a bearer", () => {
+  const sources = goServerSources();
+  const constants = goStringConstants(sources);
+  const administratorRoutes = goAdministratorRoutes(sources, constants);
+  const knowledgeGated = goKnowledgeBoundaryRoutes(sources, constants);
+  const allowlist = typescriptAllowlist();
+
+  // Sanity on the reading itself, so a regex that silently matched nothing
+  // cannot pass the parity check by comparing two empty sets.
+  assert.ok(administratorRoutes.size >= 40, `only ${administratorRoutes.size} Go administrator routes were read`);
+  assert.ok(knowledgeGated.size >= 10, `only ${knowledgeGated.size} knowledge boundary routes were read`);
+  assert.ok(administratorRoutes.has("/api/server/appearance/get"));
+  assert.ok(administratorRoutes.has("/api/server/appearance/update"));
+  assert.ok(administratorRoutes.has("/api/hec/operations/get"), "a constant-named path was not resolved");
+  assert.ok(knowledgeGated.has("/api/knowledge/objects/preview"));
+  for (const route of knowledgeGated) assert.ok(!administratorRoutes.has(route), `${route} is gated twice`);
+
+  // No duplicates, and every literal is something `isAdministratorRoutePath` admits.
+  assert.equal(new Set(allowlist).size, allowlist.length, "the allowlist repeats a path");
+  for (const route of allowlist) assert.equal(isAdministratorRoutePath(route), true, route);
+
+  const serverGated = [...administratorRoutes, ...knowledgeGated].toSorted();
+  assert.deepEqual(allowlist.toSorted(), serverGated);
+  for (const route of serverGated) assert.equal(isAdministratorRoutePath(route), true, route);
+  // Paths the server serves without a bearer never get one.
+  for (const route of ["/api/system/bootstrap", "/api/search/validate", "/api/dashboards/list", "/api/search/history/list"]) {
+    assert.equal(administratorRoutes.has(route) || knowledgeGated.has(route), false, route);
+    assert.equal(isAdministratorRoutePath(route), false, route);
+  }
 });
 
 test("token state route is administrator-authenticated and protobuf-bound", async () => {

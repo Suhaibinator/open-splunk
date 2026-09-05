@@ -23,6 +23,69 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// UiPalette is the instance-wide aesthetic every browser session paints,
+// including the sign-in page. Light and dark stay each user's own choice.
+type UiPalette int32
+
+const (
+	UiPalette_UI_PALETTE_UNSPECIFIED UiPalette = 0
+	UiPalette_UI_PALETTE_CLASSIC     UiPalette = 1
+	UiPalette_UI_PALETTE_OCEAN       UiPalette = 2
+	UiPalette_UI_PALETTE_EMBER       UiPalette = 3
+	UiPalette_UI_PALETTE_GRAPHITE    UiPalette = 4
+	UiPalette_UI_PALETTE_GLASS       UiPalette = 5
+	UiPalette_UI_PALETTE_TERMINAL    UiPalette = 6
+)
+
+// Enum value maps for UiPalette.
+var (
+	UiPalette_name = map[int32]string{
+		0: "UI_PALETTE_UNSPECIFIED",
+		1: "UI_PALETTE_CLASSIC",
+		2: "UI_PALETTE_OCEAN",
+		3: "UI_PALETTE_EMBER",
+		4: "UI_PALETTE_GRAPHITE",
+		5: "UI_PALETTE_GLASS",
+		6: "UI_PALETTE_TERMINAL",
+	}
+	UiPalette_value = map[string]int32{
+		"UI_PALETTE_UNSPECIFIED": 0,
+		"UI_PALETTE_CLASSIC":     1,
+		"UI_PALETTE_OCEAN":       2,
+		"UI_PALETTE_EMBER":       3,
+		"UI_PALETTE_GRAPHITE":    4,
+		"UI_PALETTE_GLASS":       5,
+		"UI_PALETTE_TERMINAL":    6,
+	}
+)
+
+func (x UiPalette) Enum() *UiPalette {
+	p := new(UiPalette)
+	*p = x
+	return p
+}
+
+func (x UiPalette) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (UiPalette) Descriptor() protoreflect.EnumDescriptor {
+	return file_open_splunk_server_settings_api_proto_enumTypes[0].Descriptor()
+}
+
+func (UiPalette) Type() protoreflect.EnumType {
+	return &file_open_splunk_server_settings_api_proto_enumTypes[0]
+}
+
+func (x UiPalette) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use UiPalette.Descriptor instead.
+func (UiPalette) EnumDescriptor() ([]byte, []int) {
+	return file_open_splunk_server_settings_api_proto_rawDescGZIP(), []int{0}
+}
+
 // SearchLimits is the complete node-wide search resource policy. Updates are
 // full replacements so related limits are validated as one coherent unit.
 type SearchLimits struct {
@@ -433,6 +496,258 @@ func (x *UpdateServerSettingsResponse) GetMaximums() *SearchLimits {
 	return nil
 }
 
+type VersionedUiAppearance struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Version       uint64                 `protobuf:"varint,1,opt,name=version,proto3" json:"version,omitempty"`
+	Palette       UiPalette              `protobuf:"varint,2,opt,name=palette,proto3,enum=open_splunk.UiPalette" json:"palette,omitempty"`
+	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=updated_at,json=updatedAt,proto3,oneof" json:"updated_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *VersionedUiAppearance) Reset() {
+	*x = VersionedUiAppearance{}
+	mi := &file_open_splunk_server_settings_api_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VersionedUiAppearance) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VersionedUiAppearance) ProtoMessage() {}
+
+func (x *VersionedUiAppearance) ProtoReflect() protoreflect.Message {
+	mi := &file_open_splunk_server_settings_api_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VersionedUiAppearance.ProtoReflect.Descriptor instead.
+func (*VersionedUiAppearance) Descriptor() ([]byte, []int) {
+	return file_open_splunk_server_settings_api_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *VersionedUiAppearance) GetVersion() uint64 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
+func (x *VersionedUiAppearance) GetPalette() UiPalette {
+	if x != nil {
+		return x.Palette
+	}
+	return UiPalette_UI_PALETTE_UNSPECIFIED
+}
+
+func (x *VersionedUiAppearance) GetUpdatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.UpdatedAt
+	}
+	return nil
+}
+
+type GetServerAppearanceRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetServerAppearanceRequest) Reset() {
+	*x = GetServerAppearanceRequest{}
+	mi := &file_open_splunk_server_settings_api_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetServerAppearanceRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetServerAppearanceRequest) ProtoMessage() {}
+
+func (x *GetServerAppearanceRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_open_splunk_server_settings_api_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetServerAppearanceRequest.ProtoReflect.Descriptor instead.
+func (*GetServerAppearanceRequest) Descriptor() ([]byte, []int) {
+	return file_open_splunk_server_settings_api_proto_rawDescGZIP(), []int{7}
+}
+
+type GetServerAppearanceResponse struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Current        *VersionedUiAppearance `protobuf:"bytes,1,opt,name=current,proto3" json:"current,omitempty"`
+	DefaultPalette UiPalette              `protobuf:"varint,2,opt,name=default_palette,json=defaultPalette,proto3,enum=open_splunk.UiPalette" json:"default_palette,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *GetServerAppearanceResponse) Reset() {
+	*x = GetServerAppearanceResponse{}
+	mi := &file_open_splunk_server_settings_api_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetServerAppearanceResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetServerAppearanceResponse) ProtoMessage() {}
+
+func (x *GetServerAppearanceResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_open_splunk_server_settings_api_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetServerAppearanceResponse.ProtoReflect.Descriptor instead.
+func (*GetServerAppearanceResponse) Descriptor() ([]byte, []int) {
+	return file_open_splunk_server_settings_api_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *GetServerAppearanceResponse) GetCurrent() *VersionedUiAppearance {
+	if x != nil {
+		return x.Current
+	}
+	return nil
+}
+
+func (x *GetServerAppearanceResponse) GetDefaultPalette() UiPalette {
+	if x != nil {
+		return x.DefaultPalette
+	}
+	return UiPalette_UI_PALETTE_UNSPECIFIED
+}
+
+type UpdateServerAppearanceRequest struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	ExpectedVersion uint64                 `protobuf:"varint,1,opt,name=expected_version,json=expectedVersion,proto3" json:"expected_version,omitempty"`
+	Palette         UiPalette              `protobuf:"varint,2,opt,name=palette,proto3,enum=open_splunk.UiPalette" json:"palette,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *UpdateServerAppearanceRequest) Reset() {
+	*x = UpdateServerAppearanceRequest{}
+	mi := &file_open_splunk_server_settings_api_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateServerAppearanceRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateServerAppearanceRequest) ProtoMessage() {}
+
+func (x *UpdateServerAppearanceRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_open_splunk_server_settings_api_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateServerAppearanceRequest.ProtoReflect.Descriptor instead.
+func (*UpdateServerAppearanceRequest) Descriptor() ([]byte, []int) {
+	return file_open_splunk_server_settings_api_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *UpdateServerAppearanceRequest) GetExpectedVersion() uint64 {
+	if x != nil {
+		return x.ExpectedVersion
+	}
+	return 0
+}
+
+func (x *UpdateServerAppearanceRequest) GetPalette() UiPalette {
+	if x != nil {
+		return x.Palette
+	}
+	return UiPalette_UI_PALETTE_UNSPECIFIED
+}
+
+type UpdateServerAppearanceResponse struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Current        *VersionedUiAppearance `protobuf:"bytes,1,opt,name=current,proto3" json:"current,omitempty"`
+	DefaultPalette UiPalette              `protobuf:"varint,2,opt,name=default_palette,json=defaultPalette,proto3,enum=open_splunk.UiPalette" json:"default_palette,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *UpdateServerAppearanceResponse) Reset() {
+	*x = UpdateServerAppearanceResponse{}
+	mi := &file_open_splunk_server_settings_api_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateServerAppearanceResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateServerAppearanceResponse) ProtoMessage() {}
+
+func (x *UpdateServerAppearanceResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_open_splunk_server_settings_api_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateServerAppearanceResponse.ProtoReflect.Descriptor instead.
+func (*UpdateServerAppearanceResponse) Descriptor() ([]byte, []int) {
+	return file_open_splunk_server_settings_api_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *UpdateServerAppearanceResponse) GetCurrent() *VersionedUiAppearance {
+	if x != nil {
+		return x.Current
+	}
+	return nil
+}
+
+func (x *UpdateServerAppearanceResponse) GetDefaultPalette() UiPalette {
+	if x != nil {
+		return x.DefaultPalette
+	}
+	return UiPalette_UI_PALETTE_UNSPECIFIED
+}
+
 var File_open_splunk_server_settings_api_proto protoreflect.FileDescriptor
 
 const file_open_splunk_server_settings_api_proto_rawDesc = "" +
@@ -470,7 +785,31 @@ const file_open_splunk_server_settings_api_proto_rawDesc = "" +
 	"\acurrent\x18\x01 \x01(\v2\".open_splunk.VersionedSearchLimitsR\acurrent\x125\n" +
 	"\bdefaults\x18\x02 \x01(\v2\x19.open_splunk.SearchLimitsR\bdefaults\x125\n" +
 	"\bminimums\x18\x03 \x01(\v2\x19.open_splunk.SearchLimitsR\bminimums\x125\n" +
-	"\bmaximums\x18\x04 \x01(\v2\x19.open_splunk.SearchLimitsR\bmaximumsBCZAgithub.com/Suhaibinator/open-splunk/gen/go/open_splunk;opensplunkb\x06proto3"
+	"\bmaximums\x18\x04 \x01(\v2\x19.open_splunk.SearchLimitsR\bmaximums\"\xb2\x01\n" +
+	"\x15VersionedUiAppearance\x12\x18\n" +
+	"\aversion\x18\x01 \x01(\x04R\aversion\x120\n" +
+	"\apalette\x18\x02 \x01(\x0e2\x16.open_splunk.UiPaletteR\apalette\x12>\n" +
+	"\n" +
+	"updated_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampH\x00R\tupdatedAt\x88\x01\x01B\r\n" +
+	"\v_updated_at\"\x1c\n" +
+	"\x1aGetServerAppearanceRequest\"\x9c\x01\n" +
+	"\x1bGetServerAppearanceResponse\x12<\n" +
+	"\acurrent\x18\x01 \x01(\v2\".open_splunk.VersionedUiAppearanceR\acurrent\x12?\n" +
+	"\x0fdefault_palette\x18\x02 \x01(\x0e2\x16.open_splunk.UiPaletteR\x0edefaultPalette\"|\n" +
+	"\x1dUpdateServerAppearanceRequest\x12)\n" +
+	"\x10expected_version\x18\x01 \x01(\x04R\x0fexpectedVersion\x120\n" +
+	"\apalette\x18\x02 \x01(\x0e2\x16.open_splunk.UiPaletteR\apalette\"\x9f\x01\n" +
+	"\x1eUpdateServerAppearanceResponse\x12<\n" +
+	"\acurrent\x18\x01 \x01(\v2\".open_splunk.VersionedUiAppearanceR\acurrent\x12?\n" +
+	"\x0fdefault_palette\x18\x02 \x01(\x0e2\x16.open_splunk.UiPaletteR\x0edefaultPalette*\xb3\x01\n" +
+	"\tUiPalette\x12\x1a\n" +
+	"\x16UI_PALETTE_UNSPECIFIED\x10\x00\x12\x16\n" +
+	"\x12UI_PALETTE_CLASSIC\x10\x01\x12\x14\n" +
+	"\x10UI_PALETTE_OCEAN\x10\x02\x12\x14\n" +
+	"\x10UI_PALETTE_EMBER\x10\x03\x12\x17\n" +
+	"\x13UI_PALETTE_GRAPHITE\x10\x04\x12\x14\n" +
+	"\x10UI_PALETTE_GLASS\x10\x05\x12\x17\n" +
+	"\x13UI_PALETTE_TERMINAL\x10\x06BCZAgithub.com/Suhaibinator/open-splunk/gen/go/open_splunk;opensplunkb\x06proto3"
 
 var (
 	file_open_splunk_server_settings_api_proto_rawDescOnce sync.Once
@@ -484,36 +823,50 @@ func file_open_splunk_server_settings_api_proto_rawDescGZIP() []byte {
 	return file_open_splunk_server_settings_api_proto_rawDescData
 }
 
-var file_open_splunk_server_settings_api_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_open_splunk_server_settings_api_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_open_splunk_server_settings_api_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_open_splunk_server_settings_api_proto_goTypes = []any{
-	(*SearchLimits)(nil),                 // 0: open_splunk.SearchLimits
-	(*VersionedSearchLimits)(nil),        // 1: open_splunk.VersionedSearchLimits
-	(*GetServerSettingsRequest)(nil),     // 2: open_splunk.GetServerSettingsRequest
-	(*GetServerSettingsResponse)(nil),    // 3: open_splunk.GetServerSettingsResponse
-	(*UpdateServerSettingsRequest)(nil),  // 4: open_splunk.UpdateServerSettingsRequest
-	(*UpdateServerSettingsResponse)(nil), // 5: open_splunk.UpdateServerSettingsResponse
-	(*durationpb.Duration)(nil),          // 6: google.protobuf.Duration
-	(*timestamppb.Timestamp)(nil),        // 7: google.protobuf.Timestamp
+	(UiPalette)(0),                         // 0: open_splunk.UiPalette
+	(*SearchLimits)(nil),                   // 1: open_splunk.SearchLimits
+	(*VersionedSearchLimits)(nil),          // 2: open_splunk.VersionedSearchLimits
+	(*GetServerSettingsRequest)(nil),       // 3: open_splunk.GetServerSettingsRequest
+	(*GetServerSettingsResponse)(nil),      // 4: open_splunk.GetServerSettingsResponse
+	(*UpdateServerSettingsRequest)(nil),    // 5: open_splunk.UpdateServerSettingsRequest
+	(*UpdateServerSettingsResponse)(nil),   // 6: open_splunk.UpdateServerSettingsResponse
+	(*VersionedUiAppearance)(nil),          // 7: open_splunk.VersionedUiAppearance
+	(*GetServerAppearanceRequest)(nil),     // 8: open_splunk.GetServerAppearanceRequest
+	(*GetServerAppearanceResponse)(nil),    // 9: open_splunk.GetServerAppearanceResponse
+	(*UpdateServerAppearanceRequest)(nil),  // 10: open_splunk.UpdateServerAppearanceRequest
+	(*UpdateServerAppearanceResponse)(nil), // 11: open_splunk.UpdateServerAppearanceResponse
+	(*durationpb.Duration)(nil),            // 12: google.protobuf.Duration
+	(*timestamppb.Timestamp)(nil),          // 13: google.protobuf.Timestamp
 }
 var file_open_splunk_server_settings_api_proto_depIdxs = []int32{
-	6,  // 0: open_splunk.SearchLimits.maximum_runtime:type_name -> google.protobuf.Duration
-	6,  // 1: open_splunk.SearchLimits.result_retention:type_name -> google.protobuf.Duration
-	0,  // 2: open_splunk.VersionedSearchLimits.limits:type_name -> open_splunk.SearchLimits
-	7,  // 3: open_splunk.VersionedSearchLimits.updated_at:type_name -> google.protobuf.Timestamp
-	1,  // 4: open_splunk.GetServerSettingsResponse.current:type_name -> open_splunk.VersionedSearchLimits
-	0,  // 5: open_splunk.GetServerSettingsResponse.defaults:type_name -> open_splunk.SearchLimits
-	0,  // 6: open_splunk.GetServerSettingsResponse.minimums:type_name -> open_splunk.SearchLimits
-	0,  // 7: open_splunk.GetServerSettingsResponse.maximums:type_name -> open_splunk.SearchLimits
-	0,  // 8: open_splunk.UpdateServerSettingsRequest.limits:type_name -> open_splunk.SearchLimits
-	1,  // 9: open_splunk.UpdateServerSettingsResponse.current:type_name -> open_splunk.VersionedSearchLimits
-	0,  // 10: open_splunk.UpdateServerSettingsResponse.defaults:type_name -> open_splunk.SearchLimits
-	0,  // 11: open_splunk.UpdateServerSettingsResponse.minimums:type_name -> open_splunk.SearchLimits
-	0,  // 12: open_splunk.UpdateServerSettingsResponse.maximums:type_name -> open_splunk.SearchLimits
-	13, // [13:13] is the sub-list for method output_type
-	13, // [13:13] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+	12, // 0: open_splunk.SearchLimits.maximum_runtime:type_name -> google.protobuf.Duration
+	12, // 1: open_splunk.SearchLimits.result_retention:type_name -> google.protobuf.Duration
+	1,  // 2: open_splunk.VersionedSearchLimits.limits:type_name -> open_splunk.SearchLimits
+	13, // 3: open_splunk.VersionedSearchLimits.updated_at:type_name -> google.protobuf.Timestamp
+	2,  // 4: open_splunk.GetServerSettingsResponse.current:type_name -> open_splunk.VersionedSearchLimits
+	1,  // 5: open_splunk.GetServerSettingsResponse.defaults:type_name -> open_splunk.SearchLimits
+	1,  // 6: open_splunk.GetServerSettingsResponse.minimums:type_name -> open_splunk.SearchLimits
+	1,  // 7: open_splunk.GetServerSettingsResponse.maximums:type_name -> open_splunk.SearchLimits
+	1,  // 8: open_splunk.UpdateServerSettingsRequest.limits:type_name -> open_splunk.SearchLimits
+	2,  // 9: open_splunk.UpdateServerSettingsResponse.current:type_name -> open_splunk.VersionedSearchLimits
+	1,  // 10: open_splunk.UpdateServerSettingsResponse.defaults:type_name -> open_splunk.SearchLimits
+	1,  // 11: open_splunk.UpdateServerSettingsResponse.minimums:type_name -> open_splunk.SearchLimits
+	1,  // 12: open_splunk.UpdateServerSettingsResponse.maximums:type_name -> open_splunk.SearchLimits
+	0,  // 13: open_splunk.VersionedUiAppearance.palette:type_name -> open_splunk.UiPalette
+	13, // 14: open_splunk.VersionedUiAppearance.updated_at:type_name -> google.protobuf.Timestamp
+	7,  // 15: open_splunk.GetServerAppearanceResponse.current:type_name -> open_splunk.VersionedUiAppearance
+	0,  // 16: open_splunk.GetServerAppearanceResponse.default_palette:type_name -> open_splunk.UiPalette
+	0,  // 17: open_splunk.UpdateServerAppearanceRequest.palette:type_name -> open_splunk.UiPalette
+	7,  // 18: open_splunk.UpdateServerAppearanceResponse.current:type_name -> open_splunk.VersionedUiAppearance
+	0,  // 19: open_splunk.UpdateServerAppearanceResponse.default_palette:type_name -> open_splunk.UiPalette
+	20, // [20:20] is the sub-list for method output_type
+	20, // [20:20] is the sub-list for method input_type
+	20, // [20:20] is the sub-list for extension type_name
+	20, // [20:20] is the sub-list for extension extendee
+	0,  // [0:20] is the sub-list for field type_name
 }
 
 func init() { file_open_splunk_server_settings_api_proto_init() }
@@ -522,18 +875,20 @@ func file_open_splunk_server_settings_api_proto_init() {
 		return
 	}
 	file_open_splunk_server_settings_api_proto_msgTypes[1].OneofWrappers = []any{}
+	file_open_splunk_server_settings_api_proto_msgTypes[6].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_open_splunk_server_settings_api_proto_rawDesc), len(file_open_splunk_server_settings_api_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   6,
+			NumEnums:      1,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_open_splunk_server_settings_api_proto_goTypes,
 		DependencyIndexes: file_open_splunk_server_settings_api_proto_depIdxs,
+		EnumInfos:         file_open_splunk_server_settings_api_proto_enumTypes,
 		MessageInfos:      file_open_splunk_server_settings_api_proto_msgTypes,
 	}.Build()
 	File_open_splunk_server_settings_api_proto = out.File

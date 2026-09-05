@@ -121,6 +121,16 @@ export const serverSettingsRoutes = {
     ServerSettingsApi.UpdateServerSettingsRequest,
     ServerSettingsApi.UpdateServerSettingsResponse,
   ),
+  getAppearance: defineProtobufRoute(
+    "/api/server/appearance/get",
+    ServerSettingsApi.GetServerAppearanceRequest,
+    ServerSettingsApi.GetServerAppearanceResponse,
+  ),
+  updateAppearance: defineProtobufRoute(
+    "/api/server/appearance/update",
+    ServerSettingsApi.UpdateServerAppearanceRequest,
+    ServerSettingsApi.UpdateServerAppearanceResponse,
+  ),
 } as const;
 
 export const indexRoutes = {

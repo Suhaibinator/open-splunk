@@ -247,6 +247,66 @@ of materialized rows remain correctness gates. Metrics and top/bottom
 screenshots are written beneath
 `test-results/browser-fixed-result-rendering/visual`.
 
+## Instance palette browser smoke
+
+`palette_smoke_test.go` proves the two halves of the administrator-selectable
+palette meet without Docker, ClickHouse, or a compiled server binary. It
+stages and builds the backend-mode static export, opens a real SQLite control
+plane in a temporary directory with the real audit journal and the real
+`server_search_settings` / `server_appearance_settings` singleton stores, and
+mounts the production browser API handler over that export on a random
+loopback port. The search-job manager is backed by a fixed executor that
+returns no rows: nothing ClickHouse-shaped is exercised, and nothing about the
+palette needs it.
+
+`palette-smoke/instance-palette.spec.ts`, run through
+`playwright.palette-smoke.config.ts`, then drives Chromium against that origin
+with an administrator bearer the Go test minted:
+
+1. a fresh browser loads `/signin/`, paints `data-palette="classic"`, and
+   caches it once `/api/system/bootstrap` answers;
+2. the administrator updates the palette to `terminal`; the next load paints
+   `terminal` after hydration and the cache follows;
+3. with the bootstrap route blocked, the next load paints `terminal` from the
+   cache before any network response, which an init-script mutation observer
+   records as the first `data-palette` write, together with whether `<body>`
+   existed yet: only the inline `<head>` boot script writes before `<body>`
+   is parsed, so `beforeBody: true` is what separates the boot script from
+   ThemeSync's mount-time repaint (deleting the boot script from
+   `app/layout.tsx` fails this step and every other first-paint check);
+4. the user picks Dark from the user menu; both attributes hold, and the boot
+   script paints both on a reload with bootstrap blocked again;
+5. the administrator updates to `glass`; the search workspace paints it and
+   the user menu's `.floating-menu` computes a translucent background at or
+   above the documented 80% floor with a `blur()` backdrop filter;
+6. a raw protobuf body carrying an out-of-range `UiPalette` number is
+   rejected with `400`, a stale `expected_version` with `409`, and the page
+   still paints `glass`.
+
+Back in Go, the durable singleton must read version 2 `glass`, agree with the
+live snapshot bootstrap serves, and the audit journal must hold exactly two
+`server_settings.update` events for `ui-palette`.
+
+Install the pinned Chromium build once, then run the gate explicitly:
+
+```sh
+npm ci
+npx --no-install playwright install chromium
+OPEN_SPLUNK_PALETTE_SMOKE=1 \
+  go test ./integration -run '^TestBrowserInstancePaletteSmoke$' -count=1 -timeout=10m -v
+```
+
+`OPEN_SPLUNK_BROWSER_EXECUTABLE` selects another Chromium-family browser, as
+for the other browser gates. Failure artifacts are written beneath
+`test-results/palette-smoke`. What this gate does not prove is the compiled
+`open-splunk-server` wiring of the same stores into its runtime settings
+object: the smoke restates that wiring over a test settings object.
+`TestBackendVertical` (`OPEN_SPLUNK_BACKEND_INTEGRATION=1`, Docker) covers the
+binary's own through `assertInstancePaletteRoundTrip`: a fresh control
+database bootstraps `classic`, an administrator update lands `ocean` at
+version 1, the unauthenticated bootstrap and a fresh authenticated read both
+serve it, and after the server restart the reloaded snapshot still does.
+
 ## Global stylesheet computed-style contracts
 
 `style-contracts/css-contracts.spec.ts` pins the behaviour of the application stylesheets that

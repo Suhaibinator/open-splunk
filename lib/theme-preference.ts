@@ -16,7 +16,20 @@
  * script: app/layout.tsx inlines it as the first child of `<head>`, so the
  * stylesheets that follow it already see the attribute. The unit test holds
  * the two spellings to the same table so they cannot drift.
+ *
+ * The second axis, the instance palette (`lib/palettes.ts`), rides the same
+ * machinery under `data-palette`. The administrator's choice arrives on
+ * `/api/system/bootstrap`, which a static export cannot read before it
+ * paints, so `applyInstancePalette` caches the server value under
+ * `PALETTE_STORAGE_KEY` and the boot script paints the cached palette on every
+ * later load; `ThemeSync` (app/_components/theme-sync.tsx) then takes the
+ * live value from the bootstrap envelope the page's own loader fetches and
+ * corrects the cache. The attribute is written explicitly on
+ * every load, `classic` included, so a stylesheet never has to reason about
+ * its absence.
  */
+
+import { DEFAULT_PALETTE, PALETTES, resolvePalette, type Palette } from "./palettes";
 
 /** Both themes the stylesheet can render. */
 export type Theme = "dark" | "light";
@@ -55,6 +68,19 @@ export function applyTheme(document: Pick<Document, "documentElement">, theme: T
 }
 
 /**
+ * `localStorage` key caching the instance palette the server last reported.
+ * It is a cache, not a preference: the boot script reads it before the first
+ * paint, and `ThemeSync` overwrites it from the bootstrap envelope every
+ * backend page resolves.
+ */
+export const PALETTE_STORAGE_KEY = "open-splunk.palette";
+
+/** Tells the stylesheet which palette to render. */
+export function applyPalette(document: Pick<Document, "documentElement">, palette: Palette): void {
+  document.documentElement.setAttribute("data-palette", palette);
+}
+
+/**
  * The pre-paint spelling of `resolveTheme` + `applyTheme`.
  *
  * Reads `localStorage`, `matchMedia` and `document` as free names so the unit
@@ -63,11 +89,20 @@ export function applyTheme(document: Pick<Document, "documentElement">, theme: T
  * in a document that blocks storage (a sandboxed frame, a browser set to deny
  * site data), which is why the read is guarded: a throw there would leave the
  * page with no theme at all rather than the system one.
+ *
+ * The palette read carries its own guard, as `syncPalette` does, so a throw
+ * on either key costs only that key; `PALETTES` is inlined so the script
+ * resolves exactly as `resolvePalette` does: a cached name this build does not
+ * ship, or no cache at all, paints classic.
  */
 export const THEME_BOOT_SCRIPT = "(function(){"
-  + `var stored=null;try{stored=localStorage.getItem(${JSON.stringify(THEME_STORAGE_KEY)})}catch(e){}`
+  + "var stored=null,palette=null;"
+  + `try{stored=localStorage.getItem(${JSON.stringify(THEME_STORAGE_KEY)})}catch(e){}`
+  + `try{palette=localStorage.getItem(${JSON.stringify(PALETTE_STORAGE_KEY)})}catch(e){}`
   + `var dark=stored==="dark"||(stored!=="light"&&matchMedia(${JSON.stringify(DARK_SCHEME_QUERY)}).matches);`
-  + 'document.documentElement.setAttribute("data-theme",dark?"dark":"light")'
+  + 'document.documentElement.setAttribute("data-theme",dark?"dark":"light");'
+  + `document.documentElement.setAttribute("data-palette",${JSON.stringify(PALETTES)}.indexOf(palette)<0`
+  + `?${JSON.stringify(DEFAULT_PALETTE)}:palette)`
   + "})()";
 
 /** Same-document notification that the preference was written. */
@@ -102,10 +137,84 @@ export function subscribeToThemePreference(listener: () => void): () => void {
   };
 }
 
+/**
+ * Copies the computed `--chrome-bar` into `<meta name="theme-color">`.
+ *
+ * The browser paints its own chrome (the address bar, the title bar of an
+ * installed app) from that meta tag, and app/layout.tsx can only give it the
+ * classic literal for the first paint. Every theme or palette application
+ * calls this afterwards so the browser chrome follows the product bar.
+ */
+export function syncThemeColorMeta(): void {
+  if (typeof window === "undefined") return;
+  try {
+    const meta = window.document.querySelector('meta[name="theme-color"]');
+    if (meta === null || typeof window.getComputedStyle !== "function") return;
+    const chromeBar = window.getComputedStyle(window.document.documentElement)
+      .getPropertyValue("--chrome-bar")
+      .trim();
+    if (chromeBar === "") return;
+    meta.setAttribute("content", chromeBar);
+  } catch {
+    // The meta is a courtesy to the browser chrome. A window that cannot
+    // compute styles keeps the first-paint colour; it must never keep the
+    // palette or theme application that called this from completing.
+  }
+}
+
 /** Re-resolves the theme from the stored preference and the system preference. */
 export function syncTheme(): void {
   if (typeof window === "undefined") return;
   applyTheme(document, resolveTheme(storedThemePreference(), window.matchMedia(DARK_SCHEME_QUERY).matches));
+  syncThemeColorMeta();
+}
+
+function storedPalette(): string | null {
+  try {
+    return window.localStorage.getItem(PALETTE_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** Re-resolves the palette from the cache the boot script read. */
+export function syncPalette(): void {
+  if (typeof window === "undefined") return;
+  applyPalette(document, resolvePalette(storedPalette()));
+  syncThemeColorMeta();
+}
+
+/**
+ * Paints a palette on this document only, leaving the cache alone: what the
+ * admin card does while a radio is clicked but not yet applied. Other tabs
+ * follow the cache, so a preview never reaches them, and the next boot still
+ * paints the server's value; `applyInstancePalette` with the saved palette
+ * takes the preview back.
+ */
+export function previewPalette(palette: Palette): void {
+  if (typeof window === "undefined") return;
+  applyPalette(document, palette);
+  syncThemeColorMeta();
+}
+
+/**
+ * Applies the palette the server reported: resolves it (an unknown name
+ * paints classic), caches it for the next boot, paints it, and updates the
+ * browser chrome colour. Applying the same palette twice changes nothing,
+ * which is what lets the admin card restore the saved value on the way out
+ * of a preview without checking whether one was showing.
+ */
+export function applyInstancePalette(palette: string): void {
+  if (typeof window === "undefined") return;
+  const resolved = resolvePalette(palette);
+  try {
+    window.localStorage.setItem(PALETTE_STORAGE_KEY, resolved);
+  } catch {
+    // Storage is blocked: the palette still paints this document, and the
+    // next load paints classic until the page's bootstrap arrives again.
+  }
+  applyPalette(document, resolved);
+  syncThemeColorMeta();
 }
 
 /**
@@ -127,6 +236,7 @@ export function setThemePreference(preference: ThemePreference): void {
     preference === "system" ? null : preference,
     window.matchMedia(DARK_SCHEME_QUERY).matches,
   ));
+  syncThemeColorMeta();
   window.dispatchEvent(new Event(THEME_PREFERENCE_EVENT));
 }
 

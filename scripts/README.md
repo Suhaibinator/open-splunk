@@ -46,6 +46,7 @@ npx --no-install playwright install chromium
 | `check-docs.mjs` | Owned-document, link, anchor, and wording validation. |
 | `test-frontend.mjs` | Explicit frontend/unit/style test dispatcher. |
 | `style-inventory.mjs` | Shared CSS parser/inventory used by styling tests. |
+| `palette-gallery.mjs` | Screenshot gallery of every palette in light and dark from the demo export; see [Theming](../docs/theming.md#guardrails-what-holds-this-in-place). |
 | `materialize-git-snapshot.mjs` | Clean committed-tree materialization for reproducible artifacts. |
 | `build-release.sh` | Cross-platform archive construction and identity verification. |
 | `build-oci.sh` | Local OCI build/identity/architecture verification. |

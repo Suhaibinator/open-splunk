@@ -108,7 +108,8 @@
 
 .floating-menu {
   animation: menu-in 100ms ease-out;
-  background: var(--bg-surface);
+  backdrop-filter: var(--backdrop-surface);
+  background: color-mix(in srgb, var(--bg-surface) var(--alpha-surface), transparent);
   border: 1px solid var(--border-strong);
   box-shadow: var(--shadow-lg);
   color: var(--fg-text);
@@ -226,7 +227,7 @@
   align-items: center;
   background: var(--accent);
   border-radius: 50%;
-  color: var(--chrome-fg);
+  color: var(--fg-inverse);
   display: inline-flex;
   font-size: var(--type-xxs);
   font-weight: 700;
@@ -275,7 +276,8 @@
 .toast {
   align-items: center;
   animation: toast-in 180ms ease-out;
-  background: var(--bg-inverse);
+  backdrop-filter: var(--backdrop-surface);
+  background: color-mix(in srgb, var(--bg-inverse) var(--alpha-surface), transparent);
   border-left: 4px solid var(--status-info);
   bottom: 20px;
   box-shadow: var(--shadow-toast);
@@ -333,7 +335,7 @@
 
 .suite-product-bar {
   align-items: stretch;
-  background: var(--chrome-bar);
+  background: color-mix(in srgb, var(--chrome-bar) var(--alpha-chrome), transparent);
   color: var(--chrome-fg);
   display: flex;
   height: 38px;
@@ -633,7 +635,7 @@
 
 .suite-app-bar {
   align-items: stretch;
-  background: var(--chrome-appbar);
+  background: color-mix(in srgb, var(--chrome-appbar) var(--alpha-chrome), transparent);
   color: var(--chrome-fg);
   display: flex;
   height: 34px;
@@ -673,6 +675,7 @@
 .suite-app-identity > span {
   align-items: center;
   background: var(--accent);
+  color: var(--fg-inverse);
   display: inline-flex;
   font-size: var(--type-lg);
   height: 22px;
@@ -961,7 +964,8 @@
     z-index: var(--z-drawer-scrim);
   }
   .drawer {
-    background: var(--bg-raised);
+    backdrop-filter: var(--backdrop-surface);
+    background: color-mix(in srgb, var(--bg-raised) var(--alpha-surface), transparent);
     border: 0;
     box-shadow: var(--shadow-drawer);
     color: var(--fg-text);
@@ -981,7 +985,7 @@
   .drawer > header > div { align-items: center; display: flex; gap: 9px; }
   .drawer > header > div > span:last-child { display: flex; flex-direction: column; gap: 2px; }
   .drawer > header small { color: var(--chrome-fg-faint); font-size: var(--type-xs); }
-.suite-user-avatar { align-items: center; background: var(--accent); border-radius: 50%; display: flex; height: 34px; justify-content: center; width: 34px; }
+.suite-user-avatar { align-items: center; background: var(--accent); border-radius: 50%; color: var(--fg-inverse); display: flex; height: 34px; justify-content: center; width: 34px; }
   .drawer > header button { background: transparent; border: 0; color: var(--chrome-fg-muted); font-size: var(--type-xxl); height: 44px; justify-content: center; padding: 0; width: 44px; }
   .drawer-label { color: var(--fg-muted); font-size: var(--type-xs); font-weight: 700; letter-spacing: 0.1em; padding: 15px var(--space-4) 6px; }
   .drawer > a { align-items: center; border-left: 3px solid transparent; display: flex; font-size: var(--type-sm); gap: var(--space-3); min-height: 47px; padding: 0 var(--space-4); text-decoration: none; }

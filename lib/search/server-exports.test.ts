@@ -178,6 +178,7 @@ function bootstrapModel(searchWebsocketPath: string | null): SystemBootstrapMode
     indexes: [],
     selectedAppId: null,
     serverTime: new Date("2026-07-26T00:00:00.000Z"),
+    palette: "classic",
   };
 }
 

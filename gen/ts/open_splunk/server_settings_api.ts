@@ -9,6 +9,73 @@ import { Duration } from "../google/protobuf/duration";
 import { Timestamp } from "../google/protobuf/timestamp";
 
 /**
+ * UiPalette is the instance-wide aesthetic every browser session paints,
+ * including the sign-in page. Light and dark stay each user's own choice.
+ */
+export enum UiPalette {
+  UI_PALETTE_UNSPECIFIED = 0,
+  UI_PALETTE_CLASSIC = 1,
+  UI_PALETTE_OCEAN = 2,
+  UI_PALETTE_EMBER = 3,
+  UI_PALETTE_GRAPHITE = 4,
+  UI_PALETTE_GLASS = 5,
+  UI_PALETTE_TERMINAL = 6,
+  UNRECOGNIZED = -1,
+}
+
+export function uiPaletteFromJSON(object: any): UiPalette {
+  switch (object) {
+    case 0:
+    case "UI_PALETTE_UNSPECIFIED":
+      return UiPalette.UI_PALETTE_UNSPECIFIED;
+    case 1:
+    case "UI_PALETTE_CLASSIC":
+      return UiPalette.UI_PALETTE_CLASSIC;
+    case 2:
+    case "UI_PALETTE_OCEAN":
+      return UiPalette.UI_PALETTE_OCEAN;
+    case 3:
+    case "UI_PALETTE_EMBER":
+      return UiPalette.UI_PALETTE_EMBER;
+    case 4:
+    case "UI_PALETTE_GRAPHITE":
+      return UiPalette.UI_PALETTE_GRAPHITE;
+    case 5:
+    case "UI_PALETTE_GLASS":
+      return UiPalette.UI_PALETTE_GLASS;
+    case 6:
+    case "UI_PALETTE_TERMINAL":
+      return UiPalette.UI_PALETTE_TERMINAL;
+    case -1:
+    case "UNRECOGNIZED":
+    default:
+      return UiPalette.UNRECOGNIZED;
+  }
+}
+
+export function uiPaletteToJSON(object: UiPalette): string {
+  switch (object) {
+    case UiPalette.UI_PALETTE_UNSPECIFIED:
+      return "UI_PALETTE_UNSPECIFIED";
+    case UiPalette.UI_PALETTE_CLASSIC:
+      return "UI_PALETTE_CLASSIC";
+    case UiPalette.UI_PALETTE_OCEAN:
+      return "UI_PALETTE_OCEAN";
+    case UiPalette.UI_PALETTE_EMBER:
+      return "UI_PALETTE_EMBER";
+    case UiPalette.UI_PALETTE_GRAPHITE:
+      return "UI_PALETTE_GRAPHITE";
+    case UiPalette.UI_PALETTE_GLASS:
+      return "UI_PALETTE_GLASS";
+    case UiPalette.UI_PALETTE_TERMINAL:
+      return "UI_PALETTE_TERMINAL";
+    case UiPalette.UNRECOGNIZED:
+    default:
+      return "UNRECOGNIZED";
+  }
+}
+
+/**
  * SearchLimits is the complete node-wide search resource policy. Updates are
  * full replacements so related limits are validated as one coherent unit.
  */
@@ -52,6 +119,30 @@ export interface UpdateServerSettingsResponse {
   defaults: SearchLimits | undefined;
   minimums: SearchLimits | undefined;
   maximums: SearchLimits | undefined;
+}
+
+export interface VersionedUiAppearance {
+  version: bigint;
+  palette: UiPalette;
+  updatedAt?: Date | undefined;
+}
+
+export interface GetServerAppearanceRequest {
+}
+
+export interface GetServerAppearanceResponse {
+  current: VersionedUiAppearance | undefined;
+  defaultPalette: UiPalette;
+}
+
+export interface UpdateServerAppearanceRequest {
+  expectedVersion: bigint;
+  palette: UiPalette;
+}
+
+export interface UpdateServerAppearanceResponse {
+  current: VersionedUiAppearance | undefined;
+  defaultPalette: UiPalette;
 }
 
 function createBaseSearchLimits(): SearchLimits {
@@ -888,6 +979,446 @@ export const UpdateServerSettingsResponse: MessageFns<UpdateServerSettingsRespon
     message.maximums = (object.maximums !== undefined && object.maximums !== null)
       ? SearchLimits.fromPartial(object.maximums)
       : undefined;
+    return message;
+  },
+};
+
+function createBaseVersionedUiAppearance(): VersionedUiAppearance {
+  return { version: 0n, palette: 0, updatedAt: undefined };
+}
+
+export const VersionedUiAppearance: MessageFns<VersionedUiAppearance> = {
+  encode(message: VersionedUiAppearance, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.version !== 0n) {
+      if (BigInt.asUintN(64, message.version) !== message.version) {
+        throw new globalThis.Error("value provided for field message.version of type uint64 too large");
+      }
+      writer.uint32(8).uint64(message.version);
+    }
+    if (message.palette !== 0) {
+      writer.uint32(16).int32(message.palette);
+    }
+    if (message.updatedAt !== undefined) {
+      Timestamp.encode(toTimestamp(message.updatedAt), writer.uint32(26).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): VersionedUiAppearance {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseVersionedUiAppearance();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 8) {
+              break;
+            }
+
+            message.version = reader.uint64() as bigint;
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.palette = reader.int32() as any;
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.updatedAt = fromTimestamp(Timestamp.decode(reader, reader.uint32()));
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): VersionedUiAppearance {
+    return {
+      version: isSet(object.version) ? BigInt(object.version) : 0n,
+      palette: isSet(object.palette) ? uiPaletteFromJSON(object.palette) : 0,
+      updatedAt: isSet(object.updatedAt)
+        ? fromJsonTimestamp(object.updatedAt)
+        : isSet(object.updated_at)
+        ? fromJsonTimestamp(object.updated_at)
+        : undefined,
+    };
+  },
+
+  toJSON(message: VersionedUiAppearance): unknown {
+    const obj: any = {};
+    if (message.version !== 0n) {
+      obj.version = message.version.toString();
+    }
+    if (message.palette !== 0) {
+      obj.palette = uiPaletteToJSON(message.palette);
+    }
+    if (message.updatedAt !== undefined) {
+      obj.updatedAt = message.updatedAt.toISOString();
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<VersionedUiAppearance>, I>>(base?: I): VersionedUiAppearance {
+    return VersionedUiAppearance.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<VersionedUiAppearance>, I>>(object: I): VersionedUiAppearance {
+    const message = createBaseVersionedUiAppearance();
+    message.version = (object.version !== undefined && object.version !== null) ? BigInt(object.version) : 0n;
+    message.palette = object.palette ?? 0;
+    message.updatedAt = object.updatedAt ?? undefined;
+    return message;
+  },
+};
+
+function createBaseGetServerAppearanceRequest(): GetServerAppearanceRequest {
+  return {};
+}
+
+export const GetServerAppearanceRequest: MessageFns<GetServerAppearanceRequest> = {
+  encode(_: GetServerAppearanceRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): GetServerAppearanceRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseGetServerAppearanceRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(_: any): GetServerAppearanceRequest {
+    return {};
+  },
+
+  toJSON(_: GetServerAppearanceRequest): unknown {
+    const obj: any = {};
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GetServerAppearanceRequest>, I>>(base?: I): GetServerAppearanceRequest {
+    return GetServerAppearanceRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GetServerAppearanceRequest>, I>>(_: I): GetServerAppearanceRequest {
+    const message = createBaseGetServerAppearanceRequest();
+    return message;
+  },
+};
+
+function createBaseGetServerAppearanceResponse(): GetServerAppearanceResponse {
+  return { current: undefined, defaultPalette: 0 };
+}
+
+export const GetServerAppearanceResponse: MessageFns<GetServerAppearanceResponse> = {
+  encode(message: GetServerAppearanceResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.current !== undefined) {
+      VersionedUiAppearance.encode(message.current, writer.uint32(10).fork()).join();
+    }
+    if (message.defaultPalette !== 0) {
+      writer.uint32(16).int32(message.defaultPalette);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): GetServerAppearanceResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseGetServerAppearanceResponse();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.current = VersionedUiAppearance.decode(reader, reader.uint32());
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.defaultPalette = reader.int32() as any;
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): GetServerAppearanceResponse {
+    return {
+      current: isSet(object.current) ? VersionedUiAppearance.fromJSON(object.current) : undefined,
+      defaultPalette: isSet(object.defaultPalette)
+        ? uiPaletteFromJSON(object.defaultPalette)
+        : isSet(object.default_palette)
+        ? uiPaletteFromJSON(object.default_palette)
+        : 0,
+    };
+  },
+
+  toJSON(message: GetServerAppearanceResponse): unknown {
+    const obj: any = {};
+    if (message.current !== undefined) {
+      obj.current = VersionedUiAppearance.toJSON(message.current);
+    }
+    if (message.defaultPalette !== 0) {
+      obj.defaultPalette = uiPaletteToJSON(message.defaultPalette);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GetServerAppearanceResponse>, I>>(base?: I): GetServerAppearanceResponse {
+    return GetServerAppearanceResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GetServerAppearanceResponse>, I>>(object: I): GetServerAppearanceResponse {
+    const message = createBaseGetServerAppearanceResponse();
+    message.current = (object.current !== undefined && object.current !== null)
+      ? VersionedUiAppearance.fromPartial(object.current)
+      : undefined;
+    message.defaultPalette = object.defaultPalette ?? 0;
+    return message;
+  },
+};
+
+function createBaseUpdateServerAppearanceRequest(): UpdateServerAppearanceRequest {
+  return { expectedVersion: 0n, palette: 0 };
+}
+
+export const UpdateServerAppearanceRequest: MessageFns<UpdateServerAppearanceRequest> = {
+  encode(message: UpdateServerAppearanceRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.expectedVersion !== 0n) {
+      if (BigInt.asUintN(64, message.expectedVersion) !== message.expectedVersion) {
+        throw new globalThis.Error("value provided for field message.expectedVersion of type uint64 too large");
+      }
+      writer.uint32(8).uint64(message.expectedVersion);
+    }
+    if (message.palette !== 0) {
+      writer.uint32(16).int32(message.palette);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): UpdateServerAppearanceRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseUpdateServerAppearanceRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 8) {
+              break;
+            }
+
+            message.expectedVersion = reader.uint64() as bigint;
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.palette = reader.int32() as any;
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): UpdateServerAppearanceRequest {
+    return {
+      expectedVersion: isSet(object.expectedVersion)
+        ? BigInt(object.expectedVersion)
+        : isSet(object.expected_version)
+        ? BigInt(object.expected_version)
+        : 0n,
+      palette: isSet(object.palette) ? uiPaletteFromJSON(object.palette) : 0,
+    };
+  },
+
+  toJSON(message: UpdateServerAppearanceRequest): unknown {
+    const obj: any = {};
+    if (message.expectedVersion !== 0n) {
+      obj.expectedVersion = message.expectedVersion.toString();
+    }
+    if (message.palette !== 0) {
+      obj.palette = uiPaletteToJSON(message.palette);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<UpdateServerAppearanceRequest>, I>>(base?: I): UpdateServerAppearanceRequest {
+    return UpdateServerAppearanceRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<UpdateServerAppearanceRequest>, I>>(
+    object: I,
+  ): UpdateServerAppearanceRequest {
+    const message = createBaseUpdateServerAppearanceRequest();
+    message.expectedVersion = (object.expectedVersion !== undefined && object.expectedVersion !== null)
+      ? BigInt(object.expectedVersion)
+      : 0n;
+    message.palette = object.palette ?? 0;
+    return message;
+  },
+};
+
+function createBaseUpdateServerAppearanceResponse(): UpdateServerAppearanceResponse {
+  return { current: undefined, defaultPalette: 0 };
+}
+
+export const UpdateServerAppearanceResponse: MessageFns<UpdateServerAppearanceResponse> = {
+  encode(message: UpdateServerAppearanceResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.current !== undefined) {
+      VersionedUiAppearance.encode(message.current, writer.uint32(10).fork()).join();
+    }
+    if (message.defaultPalette !== 0) {
+      writer.uint32(16).int32(message.defaultPalette);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): UpdateServerAppearanceResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseUpdateServerAppearanceResponse();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.current = VersionedUiAppearance.decode(reader, reader.uint32());
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.defaultPalette = reader.int32() as any;
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): UpdateServerAppearanceResponse {
+    return {
+      current: isSet(object.current) ? VersionedUiAppearance.fromJSON(object.current) : undefined,
+      defaultPalette: isSet(object.defaultPalette)
+        ? uiPaletteFromJSON(object.defaultPalette)
+        : isSet(object.default_palette)
+        ? uiPaletteFromJSON(object.default_palette)
+        : 0,
+    };
+  },
+
+  toJSON(message: UpdateServerAppearanceResponse): unknown {
+    const obj: any = {};
+    if (message.current !== undefined) {
+      obj.current = VersionedUiAppearance.toJSON(message.current);
+    }
+    if (message.defaultPalette !== 0) {
+      obj.defaultPalette = uiPaletteToJSON(message.defaultPalette);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<UpdateServerAppearanceResponse>, I>>(base?: I): UpdateServerAppearanceResponse {
+    return UpdateServerAppearanceResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<UpdateServerAppearanceResponse>, I>>(
+    object: I,
+  ): UpdateServerAppearanceResponse {
+    const message = createBaseUpdateServerAppearanceResponse();
+    message.current = (object.current !== undefined && object.current !== null)
+      ? VersionedUiAppearance.fromPartial(object.current)
+      : undefined;
+    message.defaultPalette = object.defaultPalette ?? 0;
     return message;
   },
 };
