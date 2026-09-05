@@ -67,6 +67,8 @@ const ADMINISTRATOR_ROUTE_PATHS: ReadonlySet<string> = new Set([
   "/api/knowledge/lookups/replace",
   "/api/knowledge/lookups/state/set",
   "/api/search/jobs/inspect",
+  "/api/server/appearance/get",
+  "/api/server/appearance/update",
   "/api/server/settings/get",
   "/api/server/settings/update",
 ]);

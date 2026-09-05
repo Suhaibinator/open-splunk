@@ -1,13 +1,44 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { UiPalette } from "@/gen/ts/open_splunk/server_settings_api";
 import { GetSystemBootstrapResponse } from "@/gen/ts/open_splunk/system_api";
+import { PALETTES } from "@/lib/palettes";
 
 import {
   MAXIMUM_BROWSER_BOOTSTRAP_APPS,
   analyzeSPLIndexScope,
   adaptSystemBootstrap,
 } from "./system-bootstrap";
+import { paletteToProto } from "./ui-palette";
+
+function paletteAt(uiPalette?: UiPalette) {
+  return adaptSystemBootstrap(GetSystemBootstrapResponse.fromPartial({
+    serverTime: new Date("2026-07-26T12:00:00Z"),
+    ...(uiPalette === undefined ? {} : { uiPalette }),
+  })).palette;
+}
+
+test("system bootstrap carries the instance palette and paints classic for anything else", () => {
+  const at = paletteAt;
+  // Absent: a server without a settings service leaves the field at zero.
+  assert.equal(at(), "classic");
+  assert.equal(at(UiPalette.UI_PALETTE_UNSPECIFIED), "classic");
+  assert.equal(at(UiPalette.UI_PALETTE_TERMINAL), "terminal");
+  // A newer server naming a palette this build does not ship.
+  assert.equal(at(UiPalette.UNRECOGNIZED), "classic");
+  assert.equal(at(99 as UiPalette), "classic");
+  for (const palette of PALETTES) assert.equal(at(paletteToProto(palette)), palette);
+
+  // The wire decoder hands an unknown number through untouched, so the
+  // adapter has to be the place that maps it rather than the enum.
+  const encoded = GetSystemBootstrapResponse.encode(GetSystemBootstrapResponse.fromPartial({
+    serverTime: new Date("2026-07-26T12:00:00Z"),
+    uiPalette: 99 as UiPalette,
+  })).finish();
+  assert.equal(GetSystemBootstrapResponse.decode(encoded).uiPalette, 99);
+  assert.equal(adaptSystemBootstrap(GetSystemBootstrapResponse.decode(encoded)).palette, "classic");
+});
 
 test("SPL index scope analysis collects selectors after an exhaustive stage", () => {
   assert.deepEqual(

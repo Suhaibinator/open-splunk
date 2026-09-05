@@ -26,6 +26,8 @@ export type {
   SystemBootstrapModel,
 } from "./system-bootstrap";
 
+export { paletteFromProto, paletteToProto } from "./ui-palette";
+
 export {
   isAdvertisedFeatureRouteUnavailable,
   isOptionalRouteUnavailable,

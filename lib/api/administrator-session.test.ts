@@ -46,7 +46,7 @@ import {
   ValidateKnowledgeObjectResponse,
 } from "@/gen/ts/open_splunk/knowledge_api";
 import { ValidateSearchRequest, ValidateSearchResponse } from "@/gen/ts/open_splunk/search_api";
-import { ingestionTokenRoutes, knowledgeRoutes, lookupRoutes, searchRoutes } from "./routes";
+import { ingestionTokenRoutes, knowledgeRoutes, lookupRoutes, searchRoutes, serverSettingsRoutes } from "./routes";
 
 const administratorToken = "admin-token-0123456789-abcdefghijkl";
 
@@ -94,6 +94,14 @@ test("administrator route allowlist excludes ordinary search and WebSocket paths
   assert.equal(isAdministratorRoutePath("/api/search/jobs/inspect"), true);
   assert.equal(isAdministratorRoutePath("/api/server/settings/get"), true);
   assert.equal(isAdministratorRoutePath("/api/server/settings/update"), true);
+  assert.equal(isAdministratorRoutePath("/api/server/appearance/get"), true);
+  assert.equal(isAdministratorRoutePath("/api/server/appearance/update"), true);
+  assert.equal(serverSettingsRoutes.getAppearance.path, "/api/server/appearance/get");
+  assert.equal(serverSettingsRoutes.updateAppearance.path, "/api/server/appearance/update");
+  assert.equal(serverSettingsRoutes.getAppearance.authorization, "administrator");
+  assert.equal(serverSettingsRoutes.updateAppearance.authorization, "administrator");
+  // The palette itself rides bootstrap, which the sign-in page reads without a token.
+  assert.equal(isAdministratorRoutePath("/api/system/bootstrap"), false);
   assert.equal(isAdministratorRoutePath("/api/search/jobs/create"), false);
   assert.equal(isAdministratorRoutePath("/api/search/suggestions"), false);
   assert.equal(isAdministratorRoutePath("/api/search/ws"), false);

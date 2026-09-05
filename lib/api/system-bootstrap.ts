@@ -8,10 +8,12 @@ import {
   type IndexSummary,
 } from "@/gen/ts/open_splunk/index";
 import type { BuildMetadata } from "@/gen/ts/open_splunk/common";
+import type { Palette } from "@/lib/palettes";
 
 import { durationToMilliseconds } from "./duration";
 import type { OpenSplunkApiClient } from "./open-splunk-client";
 import type { ProtobufRequestOptions } from "./protobuf-transport";
+import { paletteFromProto } from "./ui-palette";
 
 export const MAXIMUM_BROWSER_BOOTSTRAP_APPS = 256;
 
@@ -48,6 +50,8 @@ export interface SystemBootstrapModel {
   indexes: BrowserIndexModel[];
   selectedAppId: string | null;
   serverTime: Date;
+  /** The instance palette the administrator chose; classic when the server names none. */
+  palette: Palette;
 }
 
 function adaptIndex(index: IndexSummary): BrowserIndexModel {
@@ -118,6 +122,7 @@ export function adaptSystemBootstrap(response: GetSystemBootstrapResponse): Syst
     indexes: response.indexes.map(adaptIndex),
     selectedAppId: response.selectedAppId?.trim() || null,
     serverTime,
+    palette: paletteFromProto(response.uiPalette),
   };
 }
 

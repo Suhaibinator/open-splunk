@@ -66,6 +66,7 @@ function alertsBootstrap(): SystemBootstrapModel {
     indexes: [],
     selectedAppId: null,
     serverTime: now,
+    palette: "classic",
   };
 }
 

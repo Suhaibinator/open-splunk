@@ -94,6 +94,7 @@ const testFiles = [
   path.join("lib", "api", "result-column-presentation.test.ts"),
   path.join("lib", "api", "search-websocket.test.ts"),
   path.join("lib", "api", "system-bootstrap.test.ts"),
+  path.join("lib", "api", "ui-palette.test.ts"),
   path.join("lib", "search", "backend-data.test.ts"),
   path.join("lib", "search", "app-navigation.test.ts"),
   path.join("lib", "search", "alert-form.test.ts"),
