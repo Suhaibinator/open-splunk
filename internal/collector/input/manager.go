@@ -660,12 +660,16 @@ func (m *manager) updateState(discovered int, openErr string) {
 	m.stateMu.Lock()
 	defer m.stateMu.Unlock()
 	switch {
+	case readErr != "":
+		// A retained tailer can still be failing (for example, blocked framing
+		// recovery on a file rotated outside the include globs) after discovery
+		// matches nothing. That active error outranks MISSING, which would
+		// otherwise hide it until the source drained.
+		m.state = opensplunk.CollectorInputState_COLLECTOR_INPUT_STATE_ERROR
+		m.status = readErr
 	case discovered == 0:
 		m.state = opensplunk.CollectorInputState_COLLECTOR_INPUT_STATE_MISSING
 		m.status = fmt.Sprintf("no files match include globs %v", m.cfg.Include)
-	case readErr != "":
-		m.state = opensplunk.CollectorInputState_COLLECTOR_INPUT_STATE_ERROR
-		m.status = readErr
 	case openErr != "":
 		m.state = opensplunk.CollectorInputState_COLLECTOR_INPUT_STATE_UNREADABLE
 		m.status = openErr

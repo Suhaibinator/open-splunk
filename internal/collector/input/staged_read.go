@@ -679,10 +679,13 @@ func (t *tailer) guardFromBatch(batch *stagedBatch) (tailerRewriteGuard, error) 
 
 // prepareCommit performs the fallible half of a batch commit: it derives the
 // bounded trailing guard and durably records every pre-decode framing failure
-// through the daemon-owned rejection handler. Nothing observable changes on
-// failure; the cursor stays at the batch start so the caller can retry the
-// same source range from its still-open descriptor. The returned error is
-// already recorded as this file's health error.
+// through the daemon-owned rejection handler. On failure the source cursor
+// and event publication remain unchanged, so the caller can retry the same
+// source range from its still-open descriptor. Recovery artifacts may have
+// made partial durable progress: rejections recorded before the failing call
+// stay persisted and are recorded again on retry, each carrying exact source
+// coordinates. The returned error is already recorded as this file's health
+// error.
 func (t *tailer) prepareCommit(
 	ctx context.Context,
 	batch *stagedBatch,

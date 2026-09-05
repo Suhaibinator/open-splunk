@@ -2020,6 +2020,29 @@ func TestManagerHealthRetainsTailerErrorAcrossSuccessfulDiscoveryPolls(t *testin
 	}
 }
 
+// A retained tailer whose recovery is still failing outranks a zero-match
+// discovery pass: rotation outside the include globs must not hide the error
+// behind MISSING while the source is still open and blocked.
+func TestManagerHealthRetainsTailerErrorAcrossZeroMatchDiscovery(t *testing.T) {
+	t.Parallel()
+	m := &manager{
+		cfg:          Config{InputID: "in", Include: []string{"/logs/*.log"}},
+		sourceErrors: make(map[string]string),
+	}
+	m.setReadError("source", "/logs/app.log", errors.New("injected recovery failure"))
+	m.updateState(0, "")
+	got := m.Health()
+	if got.State != opensplunk.CollectorInputState_COLLECTOR_INPUT_STATE_ERROR ||
+		!strings.Contains(got.StatusMessage, "injected recovery failure") {
+		t.Fatalf("health after zero-match discovery = %+v, want retained ERROR", got)
+	}
+	m.clearReadError("source")
+	m.updateState(0, "")
+	if got := m.Health(); got.State != opensplunk.CollectorInputState_COLLECTOR_INPUT_STATE_MISSING {
+		t.Fatalf("health after recovery with no matches = %+v, want MISSING", got)
+	}
+}
+
 func TestManagerHealthSelectsSourceErrorByTrackingKey(t *testing.T) {
 	t.Parallel()
 	type sourceFailure struct {
