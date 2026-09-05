@@ -15,7 +15,8 @@ export const APPEARANCE_TITLE = "Appearance";
 
 /** The line under the heading. */
 export const APPEARANCE_DESCRIPTION =
-  "Instance-wide palette shown to every user, including the sign-in page. Light and dark stay each user's own choice.";
+  "Instance-wide palette shown to every user, including the sign-in page. Light and dark stay each user's own choice. "
+  + "Choosing a palette previews it in this browser; Apply saves it for everyone.";
 
 export interface PaletteOption {
   /** One line, a full sentence, shown under the label. */
