@@ -11,6 +11,7 @@ import {
 import type { OpenSplunkApiClient } from "@/lib/api";
 import { PALETTES, type Palette } from "@/lib/palettes";
 
+import { appearanceCardMarkup } from "./appearance-card-markup";
 import { PALETTE_OPTIONS, paletteOptionId } from "./appearance-form";
 import {
   APPEARANCE_DESCRIPTION,
@@ -68,6 +69,16 @@ test("the card lists every palette once as a radio in its label, with the plan's
     assert.ok(markup.includes(`<strong>${PALETTE_OPTIONS[palette].label}</strong>`), palette);
     assert.ok(markup.includes(`<small id="${id}-description">${PALETTE_OPTIONS[palette].description}</small>`), palette);
     assert.match(tag, new RegExp(`aria-describedby="${id}-description"`, "u"));
+  }
+});
+
+test("the gallery's string rendering of the card is byte for byte the static render", () => {
+  // scripts/palette-gallery.mjs inserts appearanceCardMarkup into the demo
+  // export, which has no card of its own; the card it shows is only worth
+  // looking at while it is the card that ships, saved and clean.
+  for (const selected of PALETTES) {
+    assert.equal(appearanceCardMarkup(selected), renderCard(selected, selected), selected);
+    assert.equal(appearanceCardMarkup(selected, "ocean"), renderCard(selected, selected, false, "ocean"), selected);
   }
 });
 

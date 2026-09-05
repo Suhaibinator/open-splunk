@@ -8,14 +8,15 @@
 // caches in localStorage before navigation, so the shipped boot script paints
 // the combination pre-hydration exactly as a real load would. The demo admin
 // console has no Appearance card (that is backend-only), so the card is
-// rebuilt from the same copy the React card renders, `PALETTE_OPTIONS` in
-// app/admin/appearance-form.ts, and inserted into the demo Server section
-// after its first settings card.
+// rebuilt as a string by app/admin/appearance-card-markup.ts -- which the
+// card's own unit test holds byte for byte to the React render -- and
+// inserted into the demo Server section after its first settings card.
 //
 // The palette list is `PALETTES` from lib/palettes.ts, imported rather than
 // restated, so a new palette joins the gallery the moment it joins the list.
 // The TypeScript modules are loaded through node's own type stripping; the
-// hooks below only teach the resolver the `@/` alias tsconfig.json declares.
+// hooks below only teach the resolver the `@/` alias tsconfig.json declares
+// and the extensionless relative imports the modules use among themselves.
 //
 // Usage: node scripts/palette-gallery.mjs [--out <dir>] [--only <palette>]
 //
@@ -54,8 +55,10 @@ const { only, out } = parseArguments(process.argv.slice(2));
 
 registerHooks({
   resolve(specifier, context, next) {
-    if (!specifier.startsWith("@/")) return next(specifier, context);
-    const base = path.join(repository, specifier.slice(2));
+    const aliased = specifier.startsWith("@/");
+    const relative = /^\.\.?\//u.test(specifier) && context.parentURL?.endsWith(".ts") === true;
+    if (!aliased && !relative) return next(specifier, context);
+    const base = aliased ? path.join(repository, specifier.slice(2)) : fileURLToPath(new URL(specifier, context.parentURL));
     const found = [base, `${base}.ts`, `${base}.tsx`, path.join(base, "index.ts")].find((candidate) => existsSync(candidate));
     if (found === undefined) throw new Error(`cannot resolve ${specifier} under ${repository}`);
     return next(pathToFileURL(found).href, context);
@@ -67,8 +70,8 @@ registerHooks({
 });
 
 const { PALETTES } = await import(pathToFileURL(path.join(repository, "lib", "palettes.ts")).href);
-const { APPEARANCE_DESCRIPTION, APPEARANCE_TITLE, paletteOptionId, paletteOptions } = await import(
-  pathToFileURL(path.join(repository, "app", "admin", "appearance-form.ts")).href
+const { appearanceCardMarkup } = await import(
+  pathToFileURL(path.join(repository, "app", "admin", "appearance-card-markup.ts")).href
 );
 
 if (only !== null && !PALETTES.includes(only)) throw new Error(`--only ${only} is not a palette; the list is ${PALETTES.join(", ")}`);
@@ -108,27 +111,6 @@ function freePort() {
       probe.close(() => resolve(port));
     });
   });
-}
-
-function escapeHtml(text) {
-  return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
-}
-
-/** The Appearance card as app/admin/appearance-settings.tsx renders it, with `selected` saved and checked. */
-function appearanceCardMarkup(selected) {
-  const radios = paletteOptions().map(([palette, option]) => {
-    const id = paletteOptionId(palette);
-    const checked = palette === selected;
-    return `<label${checked ? ' class="is-selected"' : ""} for="${id}">`
-      + `<input aria-describedby="${id}-description" aria-label="${escapeHtml(option.label)}"${checked ? " checked" : ""} id="${id}" name="appearance-palette" type="radio" value="${palette}">`
-      + `<span><strong>${escapeHtml(option.label)}</strong><small id="${id}-description">${escapeHtml(option.description)}</small></span></label>`;
-  }).join("");
-  return `<section class="suite-card settings-group"><header><h3>${escapeHtml(APPEARANCE_TITLE)}</h3>`
-    + `<p>${escapeHtml(APPEARANCE_DESCRIPTION)}</p></header>`
-    + `<div class="appearance-palette-options" role="radiogroup" aria-label="Palette">${radios}</div></section>`
-    + '<div class="settings-actions"><button class="button button--secondary" type="button"'
-    + `${selected === PALETTES[0] ? " disabled" : ""}>Reset to default</button>`
-    + '<button class="button button--primary" disabled type="submit">Apply</button></div>';
 }
 
 async function waitForServer(origin) {
