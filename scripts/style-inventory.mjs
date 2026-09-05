@@ -743,24 +743,36 @@ export async function tokenCascadeOrder(root) {
  */
 export async function collectTokenLayer(root) {
   const files = await listTokenStylesheets(root);
-  return Promise.all(files.map(async (file) => {
-    const blocks = [];
-    for (const block of cssBlocks(await readFile(file, "utf8"))) {
-      if (block.prelude.startsWith("@")) continue;
-      const scope = themeScopeOf(block);
-      const tokens = [];
-      for (const { property, value } of cssDeclarations(block.body)) {
-        if (property.startsWith("--")) tokens.push({ name: property, value });
-      }
-      blocks.push({
-        mode: scope?.mode ?? null,
-        palette: scope?.palette ?? null,
-        selector: block.prelude.replaceAll(/\s+/gu, " "),
-        tokens,
-      });
+  return Promise.all(files.map(async (file) => (
+    tokenLayerOfSource(relativePosix(root, file), await readFile(file, "utf8"))
+  )));
+}
+
+/**
+ * One token file's entry of `collectTokenLayer`, read from its source text.
+ *
+ * Split out so an invariant can be handed a synthetic file -- a palette block
+ * without `:where()`, a hex in a dark block -- and shown to refuse it, without
+ * the fixture having to exist on disk. `file` is the workspace-relative POSIX
+ * path the entry reports.
+ */
+export function tokenLayerOfSource(file, css) {
+  const blocks = [];
+  for (const block of cssBlocks(css)) {
+    if (block.prelude.startsWith("@")) continue;
+    const scope = themeScopeOf(block);
+    const tokens = [];
+    for (const { property, value } of cssDeclarations(block.body)) {
+      if (property.startsWith("--")) tokens.push({ name: property, value });
     }
-    return { blocks, file: relativePosix(root, file) };
-  }));
+    blocks.push({
+      mode: scope?.mode ?? null,
+      palette: scope?.palette ?? null,
+      selector: block.prelude.replaceAll(/\s+/gu, " "),
+      tokens,
+    });
+  }
+  return { blocks, file };
 }
 
 /**
@@ -807,17 +819,21 @@ export async function collectTokenComments(root) {
  */
 export async function collectTokenBlocks(root) {
   const files = await listTokenStylesheets(root);
-  return Promise.all(files.map(async (file) => {
-    const css = await readFile(file, "utf8");
-    return {
-      blocks: cssBlocks(css).map((block) => ({
-        ancestors: block.ancestors,
-        declarations: cssDeclarations(block.body),
-        prelude: block.prelude,
-      })),
-      file: relativePosix(root, file),
-    };
-  }));
+  return Promise.all(files.map(async (file) => (
+    tokenBlocksOfSource(relativePosix(root, file), await readFile(file, "utf8"))
+  )));
+}
+
+/** One token file's entry of `collectTokenBlocks`, read from its source text. */
+export function tokenBlocksOfSource(file, css) {
+  return {
+    blocks: cssBlocks(css).map((block) => ({
+      ancestors: block.ancestors,
+      declarations: cssDeclarations(block.body),
+      prelude: block.prelude,
+    })),
+    file,
+  };
 }
 
 /**
