@@ -126,6 +126,40 @@ export function adaptSystemBootstrap(response: GetSystemBootstrapResponse): Syst
   };
 }
 
+/** Told of every bootstrap envelope `getSystemBootstrap` resolves in this document. */
+export type SystemBootstrapListener = (bootstrap: SystemBootstrapModel) => void;
+
+const bootstrapListeners = new Set<SystemBootstrapListener>();
+
+/**
+ * Observes every bootstrap `getSystemBootstrap` resolves, whichever loader
+ * asked for it and whatever app it asked for.
+ *
+ * The envelope carries document-wide facts beside the caller's own answer --
+ * the instance palette above all -- and this is what lets a subscriber take
+ * them from the request a page already makes instead of issuing a second one.
+ * A listener is told after the caller's promise value is built and before it
+ * resolves; a listener that throws is isolated, since a loader must never
+ * fail because an observer of its envelope did.
+ */
+export function subscribeToSystemBootstrap(listener: SystemBootstrapListener): () => void {
+  bootstrapListeners.add(listener);
+  return () => {
+    bootstrapListeners.delete(listener);
+  };
+}
+
+function announceSystemBootstrap(bootstrap: SystemBootstrapModel): void {
+  for (const listener of Array.from(bootstrapListeners)) {
+    try {
+      listener(bootstrap);
+    } catch {
+      // The listener's failure is its own: the loader that fetched this
+      // envelope still gets it.
+    }
+  }
+}
+
 export async function getSystemBootstrap(
   client: OpenSplunkApiClient,
   preferredAppId?: string,
@@ -134,7 +168,9 @@ export async function getSystemBootstrap(
   const response = await client.system.bootstrap({
     preferredAppId: preferredAppId?.trim() || undefined,
   }, options);
-  return adaptSystemBootstrap(response);
+  const bootstrap = adaptSystemBootstrap(response);
+  announceSystemBootstrap(bootstrap);
+  return bootstrap;
 }
 
 export function supportsServerFeature(

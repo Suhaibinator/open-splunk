@@ -5,10 +5,14 @@ import { UiPalette } from "@/gen/ts/open_splunk/server_settings_api";
 import { GetSystemBootstrapResponse } from "@/gen/ts/open_splunk/system_api";
 import { PALETTES } from "@/lib/palettes";
 
+import type { OpenSplunkApiClient } from "./open-splunk-client";
 import {
   MAXIMUM_BROWSER_BOOTSTRAP_APPS,
   analyzeSPLIndexScope,
   adaptSystemBootstrap,
+  getSystemBootstrap,
+  subscribeToSystemBootstrap,
+  type SystemBootstrapModel,
 } from "./system-bootstrap";
 import { paletteToProto } from "./ui-palette";
 
@@ -100,4 +104,117 @@ test("system bootstrap rejects an oversized spoofed app catalog before mapping e
 
   assert.throws(() => adaptSystemBootstrap(response), /app catalog limit/);
   assert.equal(entryReads, 0);
+});
+
+/** A client whose bootstrap answers from a queue, recording what it was asked. */
+function bootstrapClient(answers: Array<() => Promise<GetSystemBootstrapResponse>>) {
+  const asked: Array<string | undefined> = [];
+  const client = {
+    system: {
+      bootstrap(request: { preferredAppId?: string }) {
+        asked.push(request.preferredAppId);
+        const next = answers.shift();
+        assert.ok(next, "unexpected bootstrap request");
+        return next();
+      },
+    },
+  } as unknown as OpenSplunkApiClient;
+  return { asked, client };
+}
+
+test("every resolved bootstrap is announced to subscribers, whoever asked and for whatever app", async () => {
+  const heard: Array<[string, SystemBootstrapModel]> = [];
+  const unsubscribeFirst = subscribeToSystemBootstrap((bootstrap) => heard.push(["first", bootstrap]));
+  const unsubscribeSecond = subscribeToSystemBootstrap((bootstrap) => heard.push(["second", bootstrap]));
+  try {
+    const { asked, client } = bootstrapClient([
+      () => Promise.resolve(GetSystemBootstrapResponse.fromPartial({
+        serverTime: new Date("2026-07-26T12:00:00Z"),
+        selectedAppId: "ops",
+        uiPalette: UiPalette.UI_PALETTE_OCEAN,
+      })),
+      () => Promise.resolve(GetSystemBootstrapResponse.fromPartial({
+        serverTime: new Date("2026-07-26T12:00:01Z"),
+        uiPalette: UiPalette.UI_PALETTE_EMBER,
+      })),
+    ]);
+    const withApp = await getSystemBootstrap(client, " ops ");
+    assert.deepEqual(asked, ["ops"]);
+    // Each caller keeps its own answer; subscribers see that same model.
+    assert.equal(withApp.selectedAppId, "ops");
+    assert.deepEqual(heard.map(([who, bootstrap]) => [who, bootstrap.palette, bootstrap === withApp]), [
+      ["first", "ocean", true],
+      ["second", "ocean", true],
+    ]);
+
+    unsubscribeFirst();
+    heard.length = 0;
+    const plain = await getSystemBootstrap(client);
+    assert.deepEqual(asked, ["ops", undefined]);
+    assert.equal(plain.palette, "ember");
+    assert.deepEqual(heard.map(([who, bootstrap]) => [who, bootstrap === plain]), [["second", true]]);
+  } finally {
+    unsubscribeFirst();
+    unsubscribeSecond();
+  }
+});
+
+test("a subscriber never hears a failed bootstrap, and a throwing subscriber never fails the loader", async () => {
+  const heard: SystemBootstrapModel[] = [];
+  const unsubscribeThrowing = subscribeToSystemBootstrap(() => {
+    throw new Error("the listener is broken");
+  });
+  const unsubscribeQuiet = subscribeToSystemBootstrap((bootstrap) => heard.push(bootstrap));
+  try {
+    const { client } = bootstrapClient([
+      () => Promise.reject(new Error("HTTP 503: Service Unavailable")),
+      // No clock: the adapter refuses the envelope before anyone hears of it.
+      () => Promise.resolve(GetSystemBootstrapResponse.fromPartial({})),
+      () => Promise.resolve(GetSystemBootstrapResponse.fromPartial({
+        serverTime: new Date("2026-07-26T12:00:00Z"),
+        uiPalette: UiPalette.UI_PALETTE_TERMINAL,
+      })),
+    ]);
+    await assert.rejects(getSystemBootstrap(client), /503/);
+    await assert.rejects(getSystemBootstrap(client), /server clock/);
+    assert.deepEqual(heard, []);
+    const bootstrap = await getSystemBootstrap(client);
+    assert.equal(bootstrap.palette, "terminal");
+    assert.deepEqual(heard, [bootstrap]);
+  } finally {
+    unsubscribeThrowing();
+    unsubscribeQuiet();
+  }
+});
+
+test("unsubscribing during an announcement neither skips a listener nor tells a removed one", async () => {
+  const order: string[] = [];
+  let unsubscribeLate: (() => void) | undefined;
+  const unsubscribeEarly = subscribeToSystemBootstrap(() => {
+    order.push("early");
+    unsubscribeLate?.();
+  });
+  unsubscribeLate = subscribeToSystemBootstrap(() => {
+    order.push("late");
+  });
+  const unsubscribeLast = subscribeToSystemBootstrap(() => {
+    order.push("last");
+  });
+  try {
+    const { client } = bootstrapClient([
+      () => Promise.resolve(GetSystemBootstrapResponse.fromPartial({ serverTime: new Date("2026-07-26T12:00:00Z") })),
+      () => Promise.resolve(GetSystemBootstrapResponse.fromPartial({ serverTime: new Date("2026-07-26T12:00:01Z") })),
+    ]);
+    await getSystemBootstrap(client);
+    // The set is walked as it stood when the envelope resolved: the listener
+    // removed mid-walk was still told once, the one after it was not skipped.
+    assert.deepEqual(order, ["early", "late", "last"]);
+    order.length = 0;
+    await getSystemBootstrap(client);
+    assert.deepEqual(order, ["early", "last"]);
+  } finally {
+    unsubscribeEarly();
+    unsubscribeLate?.();
+    unsubscribeLast();
+  }
 });

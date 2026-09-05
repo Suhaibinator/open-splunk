@@ -32,7 +32,7 @@ export const viewport: Viewport = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
-  const { apiBaseUrl, dataMode } = getFrontendRuntimeConfig();
+  const { dataMode } = getFrontendRuntimeConfig();
   return (
     // `data-theme` is written by the boot script below before React hydrates,
     // and the server render cannot know which value that will be, so the
@@ -54,7 +54,7 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }} />
       </head>
       <body>
-        <ThemeSync apiBaseUrl={apiBaseUrl} dataMode={dataMode} />
+        <ThemeSync dataMode={dataMode} />
         {children}
       </body>
     </html>

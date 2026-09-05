@@ -265,11 +265,20 @@ and the cache is what the pre-paint path reads:
   layout so the sign-in page gets it too) re-applies the cache on mount,
   follows `storage` events for both keys from other tabs, follows the
   operating system's own switch while the preference is System, and -- in
-  backend mode only -- fetches `/api/system/bootstrap` once and applies the
-  live palette. Bootstrap needs no bearer token, which is what lets the
-  sign-in page take the palette; every failure is swallowed, so the demo
-  export never asks and an unreachable backend keeps the cached or classic
-  palette.
+  backend mode only -- applies the live palette from every
+  `/api/system/bootstrap` envelope the page resolves. It issues no request
+  of its own: `getSystemBootstrap` (`lib/api/system-bootstrap.ts`) announces
+  each envelope it adapts through `subscribeToSystemBootstrap`, so the
+  request the product shell or a console already makes for its app catalog
+  is the one the palette rides on, and a page with the shell makes exactly
+  one bootstrap request in total. The sign-in page mounts neither, so
+  `app/signin/page.tsx` mounts `InstancePaletteFetch` (same file as
+  `ThemeSync`), which asks once per mount -- one in-flight request per API
+  base URL, so StrictMode's double mount joins rather than repeats -- and
+  lets the answer reach `ThemeSync` like any other loader's. Bootstrap needs
+  no bearer token, which is what lets the sign-in page take the palette at
+  all; every failure is swallowed, so the demo export never asks and an
+  unreachable backend keeps the cached or classic palette.
 - `applyInstancePalette(palette)` resolves the name (unknown paints classic),
   writes the cache, sets the attribute and updates the browser chrome colour.
   It is idempotent, which is what lets the admin card restore the saved value

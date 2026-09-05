@@ -22,8 +22,9 @@
  * `/api/system/bootstrap`, which a static export cannot read before it
  * paints, so `applyInstancePalette` caches the server value under
  * `PALETTE_STORAGE_KEY` and the boot script paints the cached palette on every
- * later load; `ThemeSync` (app/_components/theme-sync.tsx) then fetches the
- * live value and corrects the cache. The attribute is written explicitly on
+ * later load; `ThemeSync` (app/_components/theme-sync.tsx) then takes the
+ * live value from the bootstrap envelope the page's own loader fetches and
+ * corrects the cache. The attribute is written explicitly on
  * every load, `classic` included, so a stylesheet never has to reason about
  * its absence.
  */
@@ -69,7 +70,8 @@ export function applyTheme(document: Pick<Document, "documentElement">, theme: T
 /**
  * `localStorage` key caching the instance palette the server last reported.
  * It is a cache, not a preference: the boot script reads it before the first
- * paint, and `ThemeSync` overwrites it from bootstrap on every backend load.
+ * paint, and `ThemeSync` overwrites it from the bootstrap envelope every
+ * backend page resolves.
  */
 export const PALETTE_STORAGE_KEY = "open-splunk.palette";
 
@@ -209,7 +211,7 @@ export function applyInstancePalette(palette: string): void {
     window.localStorage.setItem(PALETTE_STORAGE_KEY, resolved);
   } catch {
     // Storage is blocked: the palette still paints this document, and the
-    // next load paints classic until ThemeSync fetches it again.
+    // next load paints classic until the page's bootstrap arrives again.
   }
   applyPalette(document, resolved);
   syncThemeColorMeta();
