@@ -418,8 +418,9 @@ func newSearchAttemptAuditStore(
 ) *Store {
 	t.Helper()
 	store, err := New(database, Options{
-		CursorKey:                 testCursorKey,
 		AuditAppender:             appender,
+		Clock:                     testStoreClock,
+		CursorKey:                 testCursorKey,
 		RequireSearchAttemptAudit: true,
 	})
 	if err != nil {
