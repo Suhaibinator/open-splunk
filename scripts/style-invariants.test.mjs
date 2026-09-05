@@ -98,7 +98,11 @@ import {
   readHarnessExportExpression,
   relativePosix,
   stripCssComments,
+  themeScopeOf,
+  tokenBlocksOfSource,
+  tokenCascadeOrder,
   tokenKind,
+  tokenLayerOfSource,
   universalSpacingSteps,
   valueComponents,
   withoutImportant,
@@ -108,6 +112,59 @@ const workspace = process.cwd();
 
 function describeList(items) {
   return items.map((item) => `  ${item}`).join("\n");
+}
+
+/* == The palette axis ========================================================== */
+
+/**
+ * The palette that is the base pair itself.
+ *
+ * `data-palette="classic"` selects nothing: the base light and base dark blocks
+ * of `tokens-color.css` and `tokens-scale.css` are what classic renders, so it
+ * is the one palette name without a `tokens-palette-<name>.css` file.
+ */
+const DEFAULT_PALETTE = "classic";
+
+/** The module that owns the palette vocabulary, and the array literal it exports. */
+const PALETTE_MODULE = "lib/theme-preference.ts";
+const PALETTES_LITERAL = /export\s+const\s+PALETTES\b[^=]*=\s*\[([^\]]*)\]/u;
+
+/**
+ * Reads the palette names from `lib/theme-preference.ts`'s `PALETTES` array
+ * literal, the one place the client spells them.
+ *
+ * Read by regex rather than imported: this suite runs under `node --test`
+ * without a TypeScript loader, and the array is a literal precisely so it can
+ * be read this way. A module that no longer exports the literal reads as the
+ * default palette alone -- the shape the repository had before palettes
+ * existed, and the shape in which no palette file may exist -- rather than as
+ * an error, so this suite stays green on a tree with no palettes while still
+ * failing the moment a palette file appears without a name behind it.
+ */
+async function readPaletteNames() {
+  return parsePaletteNames(await readFile(path.join(workspace, ...PALETTE_MODULE.split("/")), "utf8"));
+}
+
+/** `readPaletteNames` over the module's source text. */
+function parsePaletteNames(source) {
+  const literal = PALETTES_LITERAL.exec(source);
+  if (literal === null) return [DEFAULT_PALETTE];
+  return [...literal[1].matchAll(/"([a-z][a-z0-9-]*)"/gu)].map((match) => match[1]);
+}
+
+/** The token file a palette's blocks live in. */
+function paletteFile(name) {
+  return `app/styles/tokens-palette-${name}.css`;
+}
+
+/** The palette a token file belongs to, or `null` for the base pair. */
+function paletteOfFile(file) {
+  return /^app\/styles\/tokens-palette-([a-z][a-z0-9-]*)\.css$/u.exec(file)?.[1] ?? null;
+}
+
+/** A theme scope as a reader would name it: `classic dark`, `ocean light`. */
+function scopeLabel(palette, mode) {
+  return `${palette ?? DEFAULT_PALETTE} ${mode}`;
 }
 
 
@@ -176,9 +233,18 @@ test("the inventory reaches every stylesheet, test file and call site the suite 
     `the walker no longer reaches the colour tokens: ${tokenFiles.join(", ")}`,
   );
   const scale = layer.find((entry) => entry.file === "app/styles/tokens-scale.css");
+  const scaleTokens = scale.blocks.reduce((total, block) => total + block.tokens.length, 0);
   assert.ok(
-    scale.light.length > 20,
-    `app/styles/tokens-scale.css declares only ${scale.light.length} tokens; the scales are missing`,
+    scaleTokens > 20,
+    `app/styles/tokens-scale.css declares only ${scaleTokens} tokens; the scales are missing`,
+  );
+  const colour = layer.find((entry) => entry.file === "app/styles/tokens-color.css");
+  assert.deepEqual(
+    colour.blocks.map((block) => scopeLabel(block.palette, block.mode)),
+    ["classic light", "classic dark"],
+    "app/styles/tokens-color.css no longer parses as one base light block followed by one base dark\n"
+      + "block, so every per-scope assertion below is reading the wrong blocks or none:\n"
+      + describeList(colour.blocks.map((block) => `${block.selector} -> ${scopeLabel(block.palette, block.mode)}`)),
   );
 
   const audited = (await listNonTokenStylesheets(workspace))
@@ -229,43 +295,104 @@ test("the inventory reaches every stylesheet, test file and call site the suite 
 /** A colour written as characters rather than as a reference to a token. */
 const COLOUR_LITERAL = /#[0-9a-f]{3,8}\b|\b(?:rgba?|hsla?|oklch|lab)\(/iu;
 
+/**
+ * A value that is a colour and nothing else: a hex, or one colour function,
+ * in any spelling the token-file stylelint exemption lets through. A shadow
+ * carrying an `rgb()` ink is not one -- the scale tier writes those, and a
+ * palette may restate a shadow -- which is why this is a whole-value match
+ * rather than `COLOUR_LITERAL`.
+ */
+const WHOLE_COLOUR_LITERAL = /^(?:#[0-9a-f]{3,8}|(?:rgba?|hsla?|oklch|oklab|lab|lch|color)\([^()]*\))$/iu;
+
 /** Names a value reads through `var()`. */
 function referencedTokens(value) {
   return [...value.matchAll(/var\(\s*(--[\w-]+)/gu)].map((match) => match[1]);
 }
 
-test("no token name is declared in more than one place", async () => {
-  const layer = await collectTokenLayer(workspace);
+/** Every `{ file, block, token }` triple of a `collectTokenLayer` result, in source order. */
+function tokenDeclarationsOf(layer) {
+  return layer.flatMap((entry) => entry.blocks.flatMap((block) => (
+    block.tokens.map((token) => ({ block, file: entry.file, token }))
+  )));
+}
+
+/** Every `{ file, block, token }` triple in the token layer, in source order. */
+async function tokenDeclarations() {
+  return tokenDeclarationsOf(await collectTokenLayer(workspace));
+}
+
+/** True for the one block whose declarations introduce a name: the base light block. */
+function isBaseLight(block) {
+  return block.palette === null && block.mode === "light";
+}
+
+/**
+ * Every name declared twice in one theme scope, and every colour literal
+ * outside the base light block, for a `collectTokenLayer` result.
+ *
+ * One declaration per name per scope: the base light block introduces a
+ * name, and each of the other three block shapes may restate it once. A
+ * second declaration in the same scope -- the same block, or the base light
+ * block of a second file -- is the shape where file order decides the value.
+ * A literal is allowed in the base light block and nowhere else: a palette
+ * that wrote a hex, or an `rgb()` the token-file stylelint exemption lets
+ * through, would be a tier-1 primitive living outside the ladder the
+ * primitives tests read, invisible to every hue check and to the cascade order
+ * `tokenCascadeOrder` states.
+ */
+function declarationSiteProblems(layer) {
   const sites = new Map();
-  for (const entry of layer) {
-    for (const token of entry.light) {
-      sites.set(token.name, [...(sites.get(token.name) ?? []), `${entry.file} (${token.selector})`]);
+  const literals = [];
+  for (const { block, file, token } of tokenDeclarationsOf(layer)) {
+    const key = `${scopeLabel(block.palette, block.mode)} ${token.name}`;
+    sites.set(key, [...(sites.get(key) ?? []), `${file} (${block.selector})`]);
+    if (WHOLE_COLOUR_LITERAL.test(token.value) && !isBaseLight(block)) {
+      literals.push(`${file} (${block.selector}): ${token.name}: ${token.value}`);
     }
   }
   const duplicated = [...sites.entries()]
     .filter(([, places]) => places.length > 1)
-    .map(([name, places]) => `${name} declared in ${places.join(" and ")}`)
+    .map(([key, places]) => `${key} declared in ${places.join(" and ")}`)
     .toSorted();
+  return { duplicated, literals: literals.toSorted() };
+}
+
+/** Every name a block other than base light declares without base light declaring it first. */
+function inventedNames(layer) {
+  const declarations = tokenDeclarationsOf(layer);
+  const introduced = new Set(
+    declarations.filter(({ block }) => isBaseLight(block)).map(({ token }) => token.name),
+  );
+  return declarations
+    .filter(({ block, token }) => !isBaseLight(block) && !introduced.has(token.name))
+    .map(({ block, file, token }) => `${file}: ${token.name} (${block.selector})`)
+    .toSorted();
+}
+
+test("no token name is declared in more than one place within a scope", async () => {
+  const { duplicated, literals } = declarationSiteProblems(await collectTokenLayer(workspace));
   assert.deepEqual(
     duplicated,
     [],
-    "A token has two declaration sites, so which value wins depends on file order rather than on\n"
-      + `intent. Keep one declaration per name:\n${describeList(duplicated)}`,
+    "A token has two declaration sites in one theme scope, so which value wins depends on file order\n"
+      + `rather than on intent. Keep one declaration per name per scope:\n${describeList(duplicated)}`,
+  );
+  assert.deepEqual(
+    literals,
+    [],
+    "A theme block holds a colour literal. Only the base light block of app/styles/tokens-color.css\n"
+      + "declares primitives; a palette that needs a new hue step adds it there, on the 0-950 ladder,\n"
+      + `and points its semantic roles at it:\n${describeList(literals)}`,
   );
 });
 
 test("every token reference inside the layer resolves within the layer", async () => {
-  const layer = await collectTokenLayer(workspace);
-  const declared = new Set();
-  for (const entry of layer) {
-    for (const token of [...entry.light, ...entry.dark]) declared.add(token.name);
-  }
+  const declarations = await tokenDeclarations();
+  const declared = new Set(declarations.map(({ token }) => token.name));
   const dangling = [];
-  for (const entry of layer) {
-    for (const token of [...entry.light, ...entry.dark]) {
-      for (const reference of referencedTokens(token.value)) {
-        if (!declared.has(reference)) dangling.push(`${entry.file}: ${token.name} reads ${reference}`);
-      }
+  for (const { file, token } of declarations) {
+    for (const reference of referencedTokens(token.value)) {
+      if (!declared.has(reference)) dangling.push(`${file}: ${token.name} reads ${reference}`);
     }
   }
   assert.deepEqual(
@@ -290,13 +417,10 @@ test("every var() reference resolves to a declared custom property", async () =>
 });
 
 test("a token that names another token carries no colour literal of its own", async () => {
-  const layer = await collectTokenLayer(workspace);
   const mixed = [];
-  for (const entry of layer) {
-    for (const token of [...entry.light, ...entry.dark]) {
-      if (referencedTokens(token.value).length === 0) continue;
-      if (COLOUR_LITERAL.test(token.value)) mixed.push(`${entry.file}: ${token.name}: ${token.value}`);
-    }
+  for (const { file, token } of await tokenDeclarations()) {
+    if (referencedTokens(token.value).length === 0) continue;
+    if (COLOUR_LITERAL.test(token.value)) mixed.push(`${file}: ${token.name}: ${token.value}`);
   }
   assert.deepEqual(
     mixed.toSorted(),
@@ -307,37 +431,48 @@ test("a token that names another token carries no colour literal of its own", as
   );
 });
 
-test("the dark theme redefines only names the light theme declares", async () => {
-  const layer = await collectTokenLayer(workspace);
-  const light = new Set();
-  for (const entry of layer) {
-    for (const token of entry.light) light.add(token.name);
-  }
-  const introduced = [];
-  for (const entry of layer) {
-    for (const token of entry.dark) {
-      if (!light.has(token.name)) introduced.push(`${entry.file}: ${token.name} (${token.selector})`);
-    }
-  }
+test("every theme block redefines only names the base light block declares", async () => {
+  const invented = inventedNames(await collectTokenLayer(workspace));
   assert.deepEqual(
-    introduced.toSorted(),
+    invented,
     [],
-    "The dark block declares a token the light block does not, so that name is undefined for every\n"
-      + `reader on the default theme:\n${describeList(introduced.toSorted())}`,
+    "A theme block declares a token the base light block does not, so that name is undefined for every\n"
+      + "reader on the default theme, and a palette that introduced it would be the one file a retheme\n"
+      + `cannot see. Declare the name in the base light block first:\n${describeList(invented)}`,
   );
 });
 
-test("nothing outside the palette file reads a primitive", async () => {
+test("nothing outside the token layer reads a primitive", async () => {
   const leaks = (await collectPrimitiveReferences(workspace))
     .map(({ file, name }) => `${file} reads ${name}`)
     .toSorted();
   assert.deepEqual(
     [...new Set(leaks)],
     [],
-    "docs/theming.md: \"Nothing outside app/styles/tokens-color.css may reference a primitive.\" A rule\n"
-      + "that names a step has hard-coded a hue into a component: the theme block cannot move it, and\n"
+    "docs/theming.md: nothing outside the token layer may reference a primitive. A rule that names a\n"
+      + "step has hard-coded a hue into a component: no theme block or palette file can move it, and\n"
       + "no screenshot can tell it apart from the semantic token beside it. Point it at a tier-2 token,\n"
       + `or add one if no role fits:\n${describeList([...new Set(leaks)])}`,
+  );
+});
+
+test("no primitive hue family shares its name with a palette", async () => {
+  // `--ocean-500` would read as "the ocean palette's step 500" to anyone who
+  // knows the palette exists, and a hue named after a palette is a hue no
+  // other palette can borrow without the name lying about who owns it. Names
+  // are the whole interface between tier 1 and every palette file, so the two
+  // vocabularies stay disjoint.
+  const palettes = new Set(await readPaletteNames());
+  const { primitives } = await readTokenLayer();
+  const clashes = [...new Set([...primitives.keys()].map((name) => family(name)))]
+    .filter((hue) => palettes.has(hue))
+    .map((hue) => `--${hue}-* is a hue family and ${hue} is a palette`)
+    .toSorted();
+  assert.deepEqual(
+    clashes,
+    [],
+    "A tier-1 hue family carries a palette's name. Hue families are named for the colour, palettes for\n"
+      + `the look, and a name on both lists means every reader has to ask which:\n${describeList(clashes)}`,
   );
 });
 
@@ -367,7 +502,7 @@ const COMPONENT_KNOBS = [
 test("no stylesheet outside the token layer grows a token of its own", async () => {
   const declared = new Set();
   for (const block of await collectDeclarationBlocks(workspace, 1)) {
-    if (/^app\/styles\/tokens-[a-z]+\.css$/u.test(block.file)) continue;
+    if (/^app\/styles\/tokens-[a-z0-9-]+\.css$/u.test(block.file)) continue;
     for (const { property } of block.declarations) {
       if (property.startsWith("--")) declared.add(`${block.file}: ${property}`);
     }
@@ -385,55 +520,182 @@ test("no stylesheet outside the token layer grows a token of its own", async () 
   );
 });
 
-test("the token layer declares tokens and nothing else", async () => {
-  const files = await collectTokenBlocks(workspace);
-  const offenders = [];
-  for (const { blocks, file } of files) {
-    for (const { ancestors, declarations, prelude } of blocks) {
-      if (ancestors.length > 0) offenders.push(`${file}: ${prelude} is nested inside ${ancestors.join(" > ")}`);
-      if (!/^:root(?:\[data-theme="[a-z-]+"\])?$/u.test(prelude)) {
-        offenders.push(`${file}: ${prelude} is a rule, not a theme block`);
-      }
-      for (const { property } of declarations) {
-        // `color-scheme` is the one non-token declaration a theme block owes
-        // the browser: without it form controls and scrollbars keep the other
-        // theme's colours.
-        if (property.startsWith("--") || property === "color-scheme") continue;
-        offenders.push(`${file}: ${prelude} sets ${property}`);
-      }
-    }
+/**
+ * Everything wrong with one block of a token file, as the reader of the
+ * failure would want it said: its shape, the file it sits in, and what it
+ * declares. `palettes` is the set of names `PALETTES` lists.
+ *
+ * A `data-palette="classic"` block is refused by name rather than left to the
+ * file-ownership check, which a `tokens-palette-classic.css` would satisfy:
+ * classic is the base pair, the boot script writes `data-palette="classic"`
+ * explicitly, so such a block would apply and classic would stop rendering the
+ * base blocks alone -- the one promise every palette's resolution chain rests
+ * on.
+ */
+function tokenBlockProblems(file, block, palettes) {
+  const owner = paletteOfFile(file);
+  const problems = [];
+  const { ancestors, declarations, prelude } = block;
+  if (ancestors.length > 0) problems.push(`${file}: ${prelude} is nested inside ${ancestors.join(" > ")}`);
+  const scope = themeScopeOf(block);
+  if (scope === null) {
+    if (ancestors.length === 0) problems.push(`${file}: ${prelude} is a rule, not one of the four theme blocks`);
+  } else if (scope.palette === DEFAULT_PALETTE) {
+    problems.push(
+      `${file}: ${prelude} selects data-palette="${DEFAULT_PALETTE}", which is the base pair and has no block of its own`,
+    );
+  } else if (scope.palette !== null && !palettes.has(scope.palette)) {
+    problems.push(`${file}: ${prelude} selects a palette ${PALETTE_MODULE} does not list in PALETTES`);
+  } else if (scope.palette !== owner) {
+    problems.push(
+      `${file}: ${prelude} is the ${scopeLabel(scope.palette, scope.mode)} block, and this file holds only `
+      + `${owner === null ? "base" : owner} blocks`,
+    );
   }
+  for (const { property } of declarations) {
+    // `color-scheme` is the one non-token declaration a theme block owes
+    // the browser: without it form controls and scrollbars keep the other
+    // theme's colours.
+    if (property.startsWith("--") || property === "color-scheme") continue;
+    problems.push(`${file}: ${prelude} sets ${property}`);
+  }
+  return problems;
+}
+
+test("the token layer declares tokens and nothing else", async () => {
+  const palettes = new Set(await readPaletteNames());
+  const files = await collectTokenBlocks(workspace);
+  const offenders = files.flatMap(({ blocks, file }) => (
+    blocks.flatMap((block) => tokenBlockProblems(file, block, palettes))
+  ));
   assert.deepEqual(
     offenders.toSorted(),
     [],
-    "A token file grew something that is not a token. Rules belong in an application stylesheet\n"
-      + `or a module; keeping the layer declaration-only is what lets a theme be read at a\nglance:\n${describeList(offenders.toSorted())}`,
+    "A token file grew something that is not a token, or a theme block sits in the wrong file. Rules\n"
+      + "belong in an application stylesheet; a palette's two blocks belong in its own\n"
+      + "tokens-palette-<name>.css and the base pair in tokens-color.css and tokens-scale.css; classic\n"
+      + "is the base pair and no block may select it; and the four preludes are exact, because\n"
+      + "`:root[data-palette=\"x\"]` without `:where()` outranks the base dark block and leaks light\n"
+      + `grounds into dark mode:\n${describeList(offenders.toSorted())}`,
   );
 });
 
-test("every theme block sets color-scheme", async () => {
-  const files = await collectTokenBlocks(workspace);
-  const missing = [];
-  for (const { blocks, file } of files) {
-    // Only a file that defines colours has a theme to declare. The scale tier
-    // is shared by every theme, so a `color-scheme` there would be a claim it
-    // is not entitled to make.
-    const paintsColour = blocks.some(({ declarations }) => (
-      declarations.some(({ value }) => /^#[0-9a-f]{3,8}$/iu.test(value))
+/** The two files of the base pair, the only token files that are not a palette's. */
+const BASE_TOKEN_FILES = new Set(["app/styles/tokens-color.css", "app/styles/tokens-scale.css"]);
+
+/**
+ * Every way `names` (the `PALETTES` list) and a `collectTokenLayer` result
+ * disagree: a name without a file, a file without a name, a palette file whose
+ * blocks are not exactly [light, dark], a file for the default palette, and a
+ * token file that is neither the base pair nor a palette's.
+ *
+ * The last is named so a `tokens-extra.css` cannot slip into the layer as a
+ * third base file: `paletteOfFile` reads it as base, `tokenCascadeOrder`
+ * loads it among the palettes, and nothing else would ask whose it is.
+ */
+function paletteLedgerProblems(names, layer) {
+  const problems = [];
+  for (const name of names) {
+    if (name === DEFAULT_PALETTE) {
+      // Classic is the base pair: `data-palette="classic"` is meant to select
+      // nothing, so the one file a palette of that name could have is the one
+      // file that must not exist. Named here rather than left to the
+      // duplicate-declaration test, which only notices a classic file when
+      // its light block collides with a base name and says nothing about a
+      // dark-only one.
+      if (layer.some((entry) => entry.file === paletteFile(name))) {
+        problems.push(`${paletteFile(name)} exists, but ${name} is the base pair and has no palette file`);
+      }
+      continue;
+    }
+    const entry = layer.find((candidate) => candidate.file === paletteFile(name));
+    if (entry === undefined) {
+      problems.push(`${name} is in PALETTES but ${paletteFile(name)} does not exist`);
+      continue;
+    }
+    const shapes = entry.blocks.map((block) => (
+      block.mode === null ? `not a theme block (${block.selector})` : scopeLabel(block.palette, block.mode)
     ));
-    if (!paintsColour) continue;
-    for (const { declarations, prelude } of blocks) {
-      if (!declarations.some(({ property }) => property.startsWith("--"))) continue;
-      if (!declarations.some(({ property }) => property === "color-scheme")) {
-        missing.push(`${file}: ${prelude}`);
+    const expected = [scopeLabel(name, "light"), scopeLabel(name, "dark")];
+    if (shapes.join(", ") !== expected.join(", ")) {
+      problems.push(`${entry.file} holds [${shapes.join(", ")}] and must hold exactly [${expected.join(", ")}]`);
+    }
+  }
+  for (const entry of layer) {
+    const owner = paletteOfFile(entry.file);
+    if (owner === null && !BASE_TOKEN_FILES.has(entry.file)) {
+      problems.push(`${entry.file} is a token file that is neither the base pair nor a tokens-palette-<name>.css`);
+    }
+    if (owner !== null && !names.includes(owner)) {
+      problems.push(`${entry.file} exists but ${owner} is not in ${PALETTE_MODULE}'s PALETTES`);
+    }
+  }
+  return problems.toSorted();
+}
+
+test("every palette in PALETTES has one token file with one light and one dark block", async () => {
+  const names = await readPaletteNames();
+  assert.ok(
+    names.includes(DEFAULT_PALETTE),
+    `${PALETTE_MODULE} lists PALETTES without ${DEFAULT_PALETTE}, which is the base pair every palette resolves through`,
+  );
+  const problems = paletteLedgerProblems(names, await collectTokenLayer(workspace));
+  assert.deepEqual(
+    problems,
+    [],
+    `${PALETTE_MODULE}'s PALETTES and the tokens-palette-*.css files disagree. The client offers every name\n`
+      + "on that list, so a name without a file renders as classic while claiming not to, and a file\n"
+      + "without a name is a look nobody can select. Every palette but classic ships exactly one light\n"
+      + "and one dark block so the resolution chain has the same shape for all of them; classic is the\n"
+      + `base pair, so a file for it would change what every chain resolves through:\n${describeList(problems)}`,
+  );
+});
+
+/**
+ * Every theme block of a `collectTokenBlocks` result whose `color-scheme`
+ * disagrees with what it paints. `primitives` is the set of tier-1 names.
+ *
+ * `color-scheme` is what the browser paints scrollbars, form controls and the
+ * canvas behind the page with, so a block that restates a colour owes the
+ * browser the mode it belongs to, and a block that only restates scale --
+ * the scale file, or a palette's radii and shadows -- would be making a claim
+ * it is not entitled to make. It is an iff rather than an "at least": a
+ * `color-scheme` on a colourless block is inert today and misleading the day
+ * that block gains a colour of the other mode. A colour is a literal of any
+ * spelling or a reference to a primitive.
+ */
+function colourSchemeProblems(files, primitives) {
+  const offenders = [];
+  for (const { blocks, file } of files) {
+    for (const block of blocks) {
+      const scope = themeScopeOf(block);
+      if (scope === null) continue;
+      const paints = block.declarations.some(({ property, value }) => (
+        property.startsWith("--")
+        && (WHOLE_COLOUR_LITERAL.test(value) || referencedTokens(value).some((name) => primitives.has(name)))
+      ));
+      const schemes = block.declarations.filter(({ property }) => property === "color-scheme");
+      const site = `${file}: ${block.prelude}`;
+      if (paints && schemes.length === 0) offenders.push(`${site} restates a colour and declares no color-scheme`);
+      if (!paints && schemes.length > 0) offenders.push(`${site} restates no colour and declares color-scheme`);
+      for (const { value } of schemes) {
+        if (value !== scope.mode) offenders.push(`${site} is a ${scope.mode} block and declares color-scheme: ${value}`);
       }
     }
   }
+  return offenders.toSorted();
+}
+
+test("a theme block declares color-scheme exactly when it paints, and names its own mode", async () => {
+  const { primitives } = await readTokenLayer();
+  const offenders = colourSchemeProblems(await collectTokenBlocks(workspace), primitives);
   assert.deepEqual(
-    missing.toSorted(),
+    offenders.toSorted(),
     [],
-    "A theme block declares colours but no color-scheme, so the browser keeps painting scrollbars,\n"
-      + `form controls and the canvas behind the page in the other theme:\n${describeList(missing.toSorted())}`,
+    "A theme block and its color-scheme disagree. A block that restates a colour without one leaves the\n"
+      + "browser painting scrollbars, form controls and the canvas behind the page in the other mode; a\n"
+      + "block that declares one without painting is claiming a mode for the scale tier; and a value\n"
+      + `other than the block's own mode paints the controls against the page:\n${describeList(offenders.toSorted())}`,
   );
 });
 
@@ -470,8 +732,24 @@ const SEMANTIC_GROUPS = ["accent", "bg", "border", "chart", "chrome", "fg", "lev
 /** The three interaction tokens the documented grammar leaves ungrouped. */
 const INTERACTION_TOKENS = new Set(["--focus-ring", "--highlight", "--selection"]);
 
-/** Name families `app/styles/tokens-scale.css` is allowed to use. */
-const SCALE_FAMILIES = ["dur", "ease", "font", "opacity", "radius", "shadow", "space", "type", "z"];
+/**
+ * Name families `app/styles/tokens-scale.css` is allowed to use.
+ *
+ * `alpha` and `backdrop` are the translucency knobs a palette may turn: the
+ * opacity of the chrome bars and of raised surfaces, and the `backdrop-filter`
+ * behind a translucent surface. Classic holds them at `100%` and `none`.
+ */
+const SCALE_FAMILIES = ["alpha", "backdrop", "dur", "ease", "font", "opacity", "radius", "shadow", "space", "type", "z"];
+
+/**
+ * The lowest opacity a palette may give an `--alpha-*` knob, as a percentage.
+ *
+ * Every contrast ratio this suite proves is measured on the opaque hex the
+ * tokens resolve to. A surface painted at less than this over an unknown
+ * ground can drop below AA in ways no static check can see, so the floor is
+ * the point past which the proof stops meaning anything.
+ */
+const ALPHA_FLOOR = 80;
 
 /** The ladder a primitive step number may sit on: light at 0, darkest at 950. */
 const PRIMITIVE_STEPS = new Set([0, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 550, 600, 650, 700, 750, 800, 900, 950]);
@@ -508,6 +786,15 @@ const MANDATED_TEXT_PAIRS = [
 /** WCAG 2.2 AA for text below 18.66px, which is every size this product ships. */
 const AA_CONTRAST = 4.5;
 
+/**
+ * The contrast a palette promises where it promises more than AA.
+ *
+ * `graphite` is the high-contrast, near-monochrome palette and doubles as the
+ * accessibility option, so it is held to AAA (7:1) rather than AA. Every
+ * palette not listed here is held to `AA_CONTRAST`.
+ */
+const CONTRAST_FLOOR = { graphite: 7 };
+
 /** Role groups whose members must stay visually distinct from one another. */
 const ROLE_GROUPS = {
   accent: /^--accent(?:-|$)/u,
@@ -523,21 +810,99 @@ const ROLE_GROUPS = {
   syntax: /^--syntax-/u,
 };
 
-/** Reads the layer once and indexes it the way every assertion below needs. */
+/**
+ * Reads the layer once and indexes it the way every assertion below needs.
+ *
+ * `base.light` and `base.dark` are the two blocks of the base pair, merged
+ * across `tokens-color.css` and `tokens-scale.css`; `palettes` maps each
+ * palette name to its file and its two blocks; and `scopes` lists every
+ * palette x mode corner the cascade can land in, each with the `chain` of
+ * blocks the browser resolves it through, in cascade order:
+ *
+ *   classic light   [base.light]
+ *   classic dark    [base.light, base.dark]
+ *   P light         [base.light, P.light]
+ *   P dark          [base.light, P.light, base.dark, P.dark]
+ *
+ * A scope's `values` is that chain merged, later blocks winning, which is what
+ * `resolve` reads; `scopeWithout` below builds the same merge minus one block.
+ * `primitives` and `fileOf` are read off the base light block, the one block
+ * that introduces a name. A block whose prelude is not one of the four theme
+ * shapes is left out here -- "the token layer declares tokens and nothing
+ * else" reports it -- so a stray rule cannot be filed under a theme.
+ */
 async function readTokenLayer() {
-  const layer = await collectTokenLayer(workspace);
-  const light = new Map();
-  const dark = new Map();
+  return indexTokenLayer(await collectTokenLayer(workspace));
+}
+
+/** `readTokenLayer` over a `collectTokenLayer` result handed in, so a synthetic layer can be indexed. */
+function indexTokenLayer(layer) {
+  const base = { dark: new Map(), light: new Map() };
+  const palettes = new Map();
   const fileOf = new Map();
   for (const entry of layer) {
-    for (const token of entry.light) {
-      light.set(token.name, token.value);
-      fileOf.set(token.name, entry.file);
+    for (const block of entry.blocks) {
+      if (block.mode === null) continue;
+      let target;
+      if (block.palette === null) target = base[block.mode];
+      else {
+        if (!palettes.has(block.palette)) {
+          palettes.set(block.palette, { dark: new Map(), file: entry.file, light: new Map() });
+        }
+        target = palettes.get(block.palette)[block.mode];
+      }
+      for (const token of block.tokens) {
+        target.set(token.name, token.value);
+        if (isBaseLight(block)) fileOf.set(token.name, entry.file);
+      }
     }
-    for (const token of entry.dark) dark.set(token.name, token.value);
   }
-  const primitives = new Map([...light].filter(([, value]) => value.startsWith("#")));
-  return { dark, fileOf, light, primitives };
+  const primitives = new Map([...base.light].filter(([, value]) => value.startsWith("#")));
+  const scopes = [
+    { chain: [base.light], mode: "light", palette: null },
+    { chain: [base.light, base.dark], mode: "dark", palette: null },
+  ];
+  for (const [name, palette] of [...palettes].toSorted(([left], [right]) => left.localeCompare(right))) {
+    scopes.push({ chain: [base.light, palette.light], mode: "light", palette: name });
+    scopes.push({ chain: [base.light, palette.light, base.dark, palette.dark], mode: "dark", palette: name });
+  }
+  for (const scope of scopes) {
+    scope.label = scopeLabel(scope.palette, scope.mode);
+    scope.values = mergeChain(scope.chain);
+  }
+  return { base, fileOf, palettes, primitives, scopes };
+}
+
+/** A chain of blocks merged into one lookup, later blocks winning. */
+function mergeChain(chain) {
+  return new Map(chain.flatMap((block) => [...block]));
+}
+
+/**
+ * A scope's values as the browser would resolve them if `block` were deleted.
+ *
+ * This is how "restates nothing it does not change" is asked for a block in
+ * the middle of a chain: a palette light restatement is inert if the value
+ * with it equals the value without it, and only the chain that contains the
+ * block can answer that. `block` is one of the Maps in `scope.chain`.
+ */
+function scopeWithout(scope, block) {
+  return mergeChain(scope.chain.filter((candidate) => candidate !== block));
+}
+
+/** The scope whose chain ends in `block`: the corner that block's restatements land in. */
+function scopeEndingIn(scopes, block) {
+  return scopes.find((scope) => scope.chain.at(-1) === block);
+}
+
+/** Every block that restates the base light block, with the scope it lands in. */
+function restatingBlocks({ base, palettes, scopes }) {
+  const blocks = [{ block: base.dark, scope: scopeEndingIn(scopes, base.dark) }];
+  for (const palette of palettes.values()) {
+    blocks.push({ block: palette.light, scope: scopeEndingIn(scopes, palette.light) });
+    blocks.push({ block: palette.dark, scope: scopeEndingIn(scopes, palette.dark) });
+  }
+  return blocks;
 }
 
 /** Follows a chain of bare `var()` indirections down to the value it lands on. */
@@ -590,6 +955,10 @@ function valueKind(value) {
   if (value === undefined) return "undefined";
   if (/^#[0-9a-f]{3,8}$/iu.test(value) || /^(?:rgba?|hsla?|oklch|color)\(/iu.test(value)) return "colour";
   if (/^-?[\d.]+(?:px|rem|em|%)$/u.test(value)) return "length";
+  // A bare `0` is a length: CSS accepts it wherever a `px` goes, stylelint
+  // refuses `0px`, and a palette with square corners has to write
+  // `--radius-sm: 0` without splitting the --radius-* family in two.
+  if (value === "0") return "length";
   // A clamp(), min() or max() over lengths is a length: CSS accepts one
   // wherever it accepts a `px`, and reading it as a keyword would split the
   // --type-* family in two over a fluid step that is a font-size like the rest.
@@ -606,9 +975,12 @@ function family(name) {
 }
 
 test("every token name parses under the documented naming grammar", async () => {
-  const { light, primitives } = await readTokenLayer();
+  // The base light block introduces every name; "every theme block redefines
+  // only names the base light block declares" is what makes reading it alone
+  // complete.
+  const { base, primitives } = await readTokenLayer();
   const offenders = [];
-  for (const name of light.keys()) {
+  for (const name of base.light.keys()) {
     if (!/^--[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(name)) {
       offenders.push(`${name} is not lowercase kebab-case`);
       continue;
@@ -635,10 +1007,10 @@ test("every token name parses under the documented naming grammar", async () => 
 });
 
 test("no semantic or scale token name mentions a hue", async () => {
-  const { light, primitives } = await readTokenLayer();
+  const { base, primitives } = await readTokenLayer();
   const hues = new Set([...primitives.keys()].map((name) => family(name)));
   const offenders = [];
-  for (const name of light.keys()) {
+  for (const name of base.light.keys()) {
     if (primitives.has(name)) continue;
     const mentioned = name.slice(2).split("-").filter((segment) => hues.has(segment));
     if (mentioned.length > 0) offenders.push(`${name} names the hue ${mentioned.join(", ")}`);
@@ -701,44 +1073,65 @@ test("a primitive family runs light to dark as its step number rises", async () 
   );
 });
 
-test("every token in a name family holds the same kind of value", async () => {
-  const { fileOf, light } = await readTokenLayer();
+/**
+ * Every name family whose members resolve to different kinds of value in some
+ * scope of an indexed layer.
+ *
+ * Per scope rather than per block: a palette restates `--radius-sm: 0` or
+ * `--shadow-md` on its own, and the kind that has to agree is the kind a
+ * reader of var(--radius-sm) gets under that palette, which only the resolved
+ * chain can say.
+ */
+function familyKindMismatches({ base, fileOf, scopes }) {
   const families = new Map();
-  for (const name of light.keys()) {
+  for (const name of base.light.keys()) {
     families.set(family(name), [...(families.get(family(name)) ?? []), name]);
   }
   const mixed = [];
-  for (const [group, names] of families) {
-    const kinds = new Map();
-    for (const name of names) {
-      const kind = valueKind(resolve(name, light));
-      kinds.set(kind, [...(kinds.get(kind) ?? []), `${name} (${fileOf.get(name)})`]);
+  for (const scope of scopes) {
+    for (const [group, names] of families) {
+      const kinds = new Map();
+      for (const name of names) {
+        const kind = valueKind(resolve(name, scope.values));
+        kinds.set(kind, [...(kinds.get(kind) ?? []), `${name} (${fileOf.get(name)})`]);
+      }
+      if (kinds.size === 1) continue;
+      mixed.push(
+        `${scope.label} --${group}-*: ${[...kinds].map(([kind, members]) => `${kind} = ${members.join(", ")}`).join("; ")}`,
+      );
     }
-    if (kinds.size === 1) continue;
-    mixed.push(`--${group}-*: ${[...kinds].map(([kind, members]) => `${kind} = ${members.join(", ")}`).join("; ")}`);
   }
+  return mixed.toSorted();
+}
+
+test("every token in a name family holds the same kind of value in every scope", async () => {
+  const mixed = familyKindMismatches(await readTokenLayer());
   assert.deepEqual(
-    mixed.toSorted(),
+    mixed,
     [],
     "One name family means two different things, so nothing about var(--family-x) tells a reader\n"
       + "whether it is a colour or a length. Rename the family that has no consumers yet -- the scale\n"
-      + `tiers are still unread -- rather than the one with call sites:\n${describeList(mixed.toSorted())}`,
+      + `tiers are still unread -- rather than the one with call sites:\n${describeList(mixed)}`,
   );
 });
 
 test("a semantic token points at a primitive and a primitive holds a literal", async () => {
-  const { dark, light, primitives } = await readTokenLayer();
+  const { base, palettes, primitives } = await readTokenLayer();
+  const blocks = [["classic light", base.light], ["classic dark", base.dark]];
+  for (const [name, palette] of palettes) {
+    blocks.push([scopeLabel(name, "light"), palette.light], [scopeLabel(name, "dark"), palette.dark]);
+  }
   const offenders = [];
-  for (const [theme, declarations] of [["light", light], ["dark", dark]]) {
+  for (const [label, declarations] of blocks) {
     for (const [name, value] of declarations) {
       const references = [...value.matchAll(/var\(\s*(--[\w-]+)/gu)].map((match) => match[1]);
-      if (primitives.has(name) && theme === "light") {
+      if (primitives.has(name) && declarations === base.light) {
         if (references.length > 0) offenders.push(`${name} is a primitive but reads ${references.join(", ")}`);
         continue;
       }
       for (const reference of references) {
         if (!primitives.has(reference)) {
-          offenders.push(`${theme} ${name} reads ${reference}, which is not a tier-1 primitive`);
+          offenders.push(`${label} ${name} reads ${reference}, which is not a tier-1 primitive`);
         }
       }
     }
@@ -752,57 +1145,80 @@ test("a semantic token points at a primitive and a primitive holds a literal", a
   );
 });
 
-test("no two tokens in a role group resolve to the same colour in either theme", async () => {
-  const { dark, light, primitives } = await readTokenLayer();
-  const themed = new Map([...light, ...dark]);
+/** Every pair of same-group roles that resolve to one colour, in any scope of an indexed layer. */
+function roleGroupCollisions({ base, primitives, scopes }) {
   const collisions = [];
-  for (const [theme, scope] of [["light", light], ["dark", themed]]) {
+  for (const scope of scopes) {
     for (const [group, pattern] of Object.entries(ROLE_GROUPS)) {
       const byColour = new Map();
-      for (const name of light.keys()) {
+      for (const name of base.light.keys()) {
         if (primitives.has(name) || !pattern.test(name)) continue;
-        const value = resolve(name, scope);
+        const value = resolve(name, scope.values);
         byColour.set(value, [...(byColour.get(value) ?? []), name]);
       }
       for (const [value, names] of byColour) {
-        if (names.length > 1) collisions.push(`${theme} ${group}: ${names.join(" and ")} are both ${value}`);
+        if (names.length > 1) collisions.push(`${scope.label} ${group}: ${names.join(" and ")} are both ${value}`);
       }
     }
   }
+  return collisions.toSorted();
+}
+
+test("no two tokens in a role group resolve to the same colour in any scope", async () => {
+  const collisions = roleGroupCollisions(await readTokenLayer());
   assert.deepEqual(
-    collisions.toSorted(),
+    collisions,
     [],
     "Two roles in the same group render identically, so the interface cannot tell them apart. Either\n"
-      + `they are one role and want one token, or one of them needs its own step:\n${describeList(collisions.toSorted())}`,
+      + `they are one role and want one token, or one of them needs its own step:\n${describeList(collisions)}`,
   );
 });
 
-test("the dark theme restates nothing it does not change", async () => {
-  const { dark, light } = await readTokenLayer();
-  const themed = new Map([...light, ...dark]);
+/**
+ * Every restatement in an indexed layer that changes nothing.
+ *
+ * For every block after base light, and every name it declares: the value the
+ * browser lands on with the block has to differ from the value it lands on
+ * without it, in the scope that block's chain ends in. A palette dark
+ * restatement that equals what base dark already set, or a palette light one
+ * that equals classic light, is inert.
+ */
+function inertRestatements(layer) {
   const inert = [];
-  for (const [name, value] of dark) {
-    const after = resolve(name, themed);
-    if (after === resolve(name, light)) inert.push(`${name}: ${value} resolves to ${after} in both themes`);
+  for (const { block, scope } of restatingBlocks(layer)) {
+    const without = scopeWithout(scope, block);
+    for (const [name, value] of block) {
+      const after = resolve(name, scope.values);
+      if (after === resolve(name, without)) {
+        inert.push(`${scope.label}: ${name}: ${value} resolves to ${after} with or without the block`);
+      }
+    }
   }
+  return inert.toSorted();
+}
+
+test("no theme block restates a token it does not change", async () => {
+  const inert = inertRestatements(await readTokenLayer());
   assert.deepEqual(
-    inert.toSorted(),
+    inert,
     [],
     "docs/theming.md, Adding a theme, step 4: \"Restate only what changes.\" A restatement that changes\n"
-      + "nothing is dead weight a future theme has to keep in step with the light default, and it hides\n"
-      + `whether the equality was decided or accidental. Delete it:\n${describeList(inert.toSorted())}`,
+      + "nothing is dead weight a future theme has to keep in step with the blocks before it, and it\n"
+      + `hides whether the equality was decided or accidental. Delete it:\n${describeList(inert)}`,
   );
 });
 
 test("the dark theme restates every themeable semantic token", async () => {
-  const { dark, light, primitives } = await readTokenLayer();
+  // Base dark only: a palette restates what differs from the chain before it
+  // and inherits the rest, so completeness is a promise the base pair makes.
+  const { base, primitives } = await readTokenLayer();
   const missing = [];
-  for (const name of light.keys()) {
-    if (primitives.has(name) || dark.has(name)) continue;
+  for (const name of base.light.keys()) {
+    if (primitives.has(name) || base.dark.has(name)) continue;
     // The categorical ramp is documented as theme-independent: those twelve
     // hues separate from each other, not from the background.
     if (/^--chart-series-\d+$/u.test(name)) continue;
-    if (!light.get(name).startsWith("var(")) continue;
+    if (!base.light.get(name).startsWith("var(")) continue;
     missing.push(name);
   }
   assert.deepEqual(
@@ -814,40 +1230,112 @@ test("the dark theme restates every themeable semantic token", async () => {
   );
 });
 
-test("text keeps AA contrast against every ground its role comment promises", async () => {
-  const { dark, light } = await readTokenLayer();
-  const themed = new Map([...light, ...dark]);
+/**
+ * The contrast floor a scope is held to: the palette's entry in
+ * `CONTRAST_FLOOR`, else AA. Read with `Object.hasOwn` rather than by index: a
+ * palette is named by a string the file system accepts, and `constructor` or
+ * `toString` would otherwise read a function off `Object.prototype` and turn
+ * every `ratio < floor` into a comparison with NaN that never fails.
+ */
+function contrastFloorOf(palette) {
+  const name = palette ?? DEFAULT_PALETTE;
+  return Object.hasOwn(CONTRAST_FLOOR, name) ? CONTRAST_FLOOR[name] : AA_CONTRAST;
+}
+
+/**
+ * Every mandated text pair that misses its scope's contrast floor, in any
+ * scope of an indexed layer; a pair whose ink or ground does not resolve to a
+ * six-digit hex is reported rather than measured.
+ */
+function contrastFailures({ scopes }) {
   const failures = [];
-  for (const [theme, scope] of [["light", light], ["dark", themed]]) {
+  for (const scope of scopes) {
+    const floor = contrastFloorOf(scope.palette);
     for (const [foreground, background] of MANDATED_TEXT_PAIRS) {
-      const ink = resolve(foreground, scope);
-      const ground = resolve(background, scope);
-      assert.match(ink, /^#[0-9a-f]{6}$/iu, `${theme} ${foreground} is not a six-digit hex`);
-      assert.match(ground, /^#[0-9a-f]{6}$/iu, `${theme} ${background} is not a six-digit hex`);
+      const ink = resolve(foreground, scope.values);
+      const ground = resolve(background, scope.values);
+      const unresolved = [[foreground, ink], [background, ground]]
+        .filter(([, value]) => !/^#[0-9a-f]{6}$/iu.test(value ?? ""));
+      if (unresolved.length > 0) {
+        for (const [name, value] of unresolved) failures.push(`${scope.label}: ${name} is not a six-digit hex: ${value}`);
+        continue;
+      }
       const ratio = contrastRatio(ink, ground);
-      if (ratio < AA_CONTRAST) {
-        failures.push(`${theme}: ${foreground} (${ink}) on ${background} (${ground}) is ${ratio.toFixed(2)}:1`);
+      if (ratio < floor) {
+        failures.push(
+          `${scope.label}: ${foreground} (${ink}) on ${background} (${ground}) is ${ratio.toFixed(2)}:1, below ${floor}:1`,
+        );
       }
     }
   }
+  return failures.toSorted();
+}
+
+test("text keeps its contrast floor against every ground its role comment promises, in every scope", async () => {
+  const failures = contrastFailures(await readTokenLayer());
   assert.deepEqual(
-    failures.toSorted(),
+    failures,
     [],
-    `Text falls below WCAG AA (${AA_CONTRAST}:1) on a ground its own role comment names. A theme that\n`
-      + "ships this renders those labels unreadable, and a ratio near 1 renders them invisible:\n"
-      + `${describeList(failures.toSorted())}`,
+    `Text falls below its palette's contrast floor (WCAG AA, ${AA_CONTRAST}:1, or the higher floor\n`
+      + "CONTRAST_FLOOR pins for a palette) on a ground its own role comment names. A theme that ships\n"
+      + "this renders those labels unreadable, and a ratio near 1 renders them invisible:\n"
+      + `${describeList(failures)}`,
   );
 });
 
-test("every colour token states its role in one line", async () => {
+/** The four block shapes of an indexed layer as `[label, Map]` pairs, base pair first. */
+function labelledBlocks({ base, palettes }) {
+  const blocks = [["classic light", base.light], ["classic dark", base.dark]];
+  for (const [name, palette] of palettes) {
+    blocks.push([scopeLabel(name, "light"), palette.light], [scopeLabel(name, "dark"), palette.dark]);
+  }
+  return blocks;
+}
+
+/**
+ * Every `--alpha-*` declaration in an indexed layer that is not a percentage
+ * at or above `ALPHA_FLOOR`.
+ *
+ * Every contrast ratio above is proved on the opaque hex a token resolves to.
+ * A translucent chrome bar or raised surface composites that hex over whatever
+ * scrolls beneath it, and past a point no static check can say what the eye
+ * meets. `ALPHA_FLOOR` is that point; the base pair holds every `--alpha-*` at
+ * 100%, so only a palette can approach it.
+ */
+function alphaKnobProblems(layer) {
+  const offenders = [];
+  for (const [label, declarations] of labelledBlocks(layer)) {
+    for (const [name, value] of declarations) {
+      if (family(name) !== "alpha") continue;
+      const percent = /^(\d+(?:\.\d+)?)%$/u.exec(value);
+      if (percent === null) offenders.push(`${label}: ${name}: ${value} is not a percentage`);
+      else if (Number(percent[1]) < ALPHA_FLOOR) offenders.push(`${label}: ${name}: ${value} is below ${ALPHA_FLOOR}%`);
+    }
+  }
+  return offenders.toSorted();
+}
+
+test("a palette alpha knob never drops below 80%", async () => {
+  const offenders = alphaKnobProblems(await readTokenLayer());
+  assert.deepEqual(
+    offenders,
+    [],
+    `An --alpha-* knob is below ${ALPHA_FLOOR}%, or is not a percentage. AA contrast is proved on the opaque\n`
+      + "hex each token resolves to, and a surface more translucent than this composites that hex over\n"
+      + `an unknown ground where no static check can follow it:\n${describeList(offenders)}`,
+  );
+});
+
+test("every token outside the scale file states its role in one line", async () => {
   const files = await collectTokenComments(workspace);
   const undocumented = [];
   for (const { declarations, file } of files) {
     for (const { comment, name } of declarations) {
       // The scale file states each family's rationale in a banner above it,
       // which is the same promise made once for eight steps rather than eight
-      // times; only the colour tiers carry a comment per token.
-      if (file !== "app/styles/tokens-color.css") continue;
+      // times; the colour tier and every palette file carry a comment per
+      // token, because each restatement is a decision about a role.
+      if (file === "app/styles/tokens-scale.css") continue;
       if (comment === null || comment.length === 0) undocumented.push(`${file}: ${name}`);
     }
   }
@@ -1189,9 +1677,19 @@ test("app/styles/index.css loads tokens, base, the primitives, the features, the
   const loaded = imports.map((entry) => entry.file);
   // The head is pinned name by name because the band check below leaves the
   // sequence inside the primitive band free, and the later primitives are
-  // written to lean on the foundational ones above them.
+  // written to lean on the foundational ones above them. The token files come
+  // in `tokenCascadeOrder`: colour, scale, then every palette, because a
+  // palette's light block beats the base light block by source order alone
+  // (its `:where()` keeps it at the same specificity) and restates scale names
+  // as well as colour names.
+  const tokens = await tokenCascadeOrder(workspace);
+  assert.deepEqual(
+    tokens.toSorted(),
+    (await listTokenStylesheets(workspace)).map((file) => relativePosix(workspace, file)).toSorted(),
+    "tokenCascadeOrder no longer names every token file, so a palette file could load anywhere",
+  );
   const head = [
-    ...(await listTokenStylesheets(workspace)).map((file) => relativePosix(workspace, file)),
+    ...tokens,
     "app/styles/base.css",
     "app/styles/primitives/button.css",
     "app/styles/primitives/table.css",
@@ -1760,6 +2258,101 @@ test("cssBlocks records nesting so a themed block knows its at-rule", () => {
   );
 });
 
+/** `themeScopeOf` for an unnested block, which is the shape every theme block has. */
+function scopeOf(prelude) {
+  return themeScopeOf({ ancestors: [], prelude });
+}
+
+test("themeScopeOf accepts exactly the four theme preludes", () => {
+  assert.deepEqual(scopeOf(":root"), { mode: "light", palette: null });
+  assert.deepEqual(scopeOf(':root[data-theme="dark"]'), { mode: "dark", palette: null });
+  assert.deepEqual(scopeOf(':root:where([data-palette="ocean"])'), { mode: "light", palette: "ocean" });
+  assert.deepEqual(
+    scopeOf(':root[data-palette="ocean"][data-theme="dark"]'),
+    { mode: "dark", palette: "ocean" },
+  );
+});
+
+test("themeScopeOf rejects a palette light block without :where(), and a nested block", () => {
+  // `:root[data-palette="x"]` is (0,2,0): it ties with the base dark block and,
+  // being loaded after it, would paint the palette's light grounds under
+  // dark mode. Only the `:where()` spelling keeps the palette light block at
+  // the base light block's specificity.
+  assert.equal(scopeOf(':root[data-palette="ocean"]'), null);
+  // Nested inside an at-rule the block is conditional, and the four shapes
+  // are unconditional by definition; the base dark block reached through a
+  // `prefers-color-scheme` query is exactly what the boot script exists to
+  // avoid.
+  assert.equal(
+    themeScopeOf({ ancestors: ["@media (prefers-color-scheme: dark)"], prelude: ':root[data-theme="dark"]' }),
+    null,
+  );
+  // Neither a rule nor a spelling that merely contains the attribute.
+  assert.equal(scopeOf(".dark-row"), null);
+  assert.equal(scopeOf(':root[data-theme="dark"] .card'), null);
+  assert.equal(scopeOf(':root:where([data-palette="ocean"])[data-theme="dark"]'), null);
+});
+
+/** An unnested token-file block as `collectTokenBlocks` would report it. */
+function unnestedBlock(prelude, declarations = [{ property: "--radius-sm", value: "0" }]) {
+  return { ancestors: [], declarations, prelude };
+}
+
+test("tokenBlockProblems refuses a block that selects the default palette, in either mode", () => {
+  // Fixture-free: the rule is stated here so a classic file is refused by
+  // name, not left to whichever other invariant its contents happen to trip.
+  const palettes = new Set([DEFAULT_PALETTE, "ocean"]);
+  const classicFile = paletteFile(DEFAULT_PALETTE);
+  const colourFile = "app/styles/tokens-color.css";
+  const classicDark = `:root[data-palette="${DEFAULT_PALETTE}"][data-theme="dark"]`;
+  const classicLight = `:root:where([data-palette="${DEFAULT_PALETTE}"])`;
+  const refused = `selects data-palette="${DEFAULT_PALETTE}", which is the base pair and has no block of its own`;
+  assert.deepEqual(
+    tokenBlockProblems(classicFile, unnestedBlock(classicDark), palettes),
+    [`${classicFile}: ${classicDark} ${refused}`],
+  );
+  assert.deepEqual(
+    tokenBlockProblems(classicFile, unnestedBlock(classicLight), palettes),
+    [`${classicFile}: ${classicLight} ${refused}`],
+  );
+  // The refusal is about the palette, not the file: the same block in the
+  // colour file is refused for the same reason, before file ownership is asked.
+  assert.deepEqual(
+    tokenBlockProblems(colourFile, unnestedBlock(classicLight), palettes),
+    [`${colourFile}: ${classicLight} ${refused}`],
+  );
+  // The four legitimate shapes, each in its own file, raise nothing.
+  assert.deepEqual(tokenBlockProblems(colourFile, unnestedBlock(":root"), palettes), []);
+  assert.deepEqual(tokenBlockProblems("app/styles/tokens-scale.css", unnestedBlock(':root[data-theme="dark"]'), palettes), []);
+  assert.deepEqual(tokenBlockProblems(paletteFile("ocean"), unnestedBlock(':root:where([data-palette="ocean"])'), palettes), []);
+  assert.deepEqual(
+    tokenBlockProblems(paletteFile("ocean"), unnestedBlock(':root[data-palette="ocean"][data-theme="dark"]'), palettes),
+    [],
+  );
+  // And the checks it sits beside still fire: an unlisted palette, a block in
+  // the wrong file, a nested block, and a rule that is not a theme block.
+  assert.deepEqual(
+    tokenBlockProblems(paletteFile("sepia"), unnestedBlock(':root:where([data-palette="sepia"])'), palettes),
+    [`${paletteFile("sepia")}: :root:where([data-palette="sepia"]) selects a palette ${PALETTE_MODULE} does not list in PALETTES`],
+  );
+  assert.deepEqual(
+    tokenBlockProblems(colourFile, unnestedBlock(':root:where([data-palette="ocean"])'), palettes),
+    [`${colourFile}: :root:where([data-palette="ocean"]) is the ocean light block, and this file holds only base blocks`],
+  );
+  assert.deepEqual(
+    tokenBlockProblems(
+      colourFile,
+      { ancestors: ["@media (prefers-color-scheme: dark)"], declarations: [], prelude: ':root[data-theme="dark"]' },
+      palettes,
+    ),
+    [`${colourFile}: :root[data-theme="dark"] is nested inside @media (prefers-color-scheme: dark)`],
+  );
+  assert.deepEqual(
+    tokenBlockProblems(colourFile, unnestedBlock(".card", [{ property: "color", value: "red" }]), palettes),
+    [`${colourFile}: .card is a rule, not one of the four theme blocks`, `${colourFile}: .card sets color`],
+  );
+});
+
 test("cssDeclarations keeps a value that contains its own colons and commas", () => {
   const declarations = cssDeclarations(
     '--font-mono: "SFMono-Regular", Consolas, monospace;\n'
@@ -2133,4 +2726,505 @@ test("stripCssComments and collectStyledClasses agree on what the layer defines"
       + "stopped covering the rules Phase 4 moved out of the CSS modules",
   );
   assert.equal(stripCssComments("/* .ghost { color: red; } */ .live {}").includes("ghost"), false);
+});
+
+/* == 8. The palette invariants against synthetic files ======================== */
+//
+// Every check above reads the workspace, which today holds no palette file: a
+// generalised invariant can pass by having nothing to refuse. This section
+// hands each one a synthetic layer -- a base pair small enough to read, plus a
+// palette file written wrong in exactly one way -- and asserts the invariant
+// names the fault. The fixtures never touch the disk, so this file stays a
+// test file that opens no stylesheet.
+
+/** A colour file: the primitives and the roles the mandated pairs and role groups read. */
+const SYNTHETIC_COLOUR = `
+:root {
+  color-scheme: light;
+  --gray-0: #ffffff;
+  --gray-50: #f7f7f7;
+  --gray-100: #f0f0f0;
+  --gray-150: #e8e8e8;
+  --gray-300: #bbbbbb;
+  --gray-600: #666666;
+  --gray-700: #444444;
+  --gray-800: #2a2a2a;
+  --gray-900: #1a1a1a;
+  --gray-950: #0d0d0d;
+  --blue-300: #7aa7e0;
+  --blue-400: #4a86d8;
+  --blue-500: #1a5fb4;
+  --blue-700: #124a8f;
+  --bg-canvas: var(--gray-50);
+  --bg-surface: var(--gray-0);
+  --bg-subtle: var(--gray-100);
+  --bg-raised: var(--gray-150);
+  --bg-inverse: var(--gray-900);
+  --fg-text: var(--gray-700);
+  --fg-strong: var(--gray-950);
+  --fg-inverse: var(--gray-0);
+  --chrome-bar: var(--gray-900);
+  --chrome-appbar: var(--gray-800);
+  --chrome-hover: var(--gray-700);
+  --chrome-fg: var(--gray-0);
+  --accent: var(--blue-500);
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg-canvas: var(--gray-950);
+  --bg-surface: var(--gray-900);
+  --bg-subtle: var(--gray-800);
+  --bg-raised: var(--gray-700);
+  --bg-inverse: var(--gray-0);
+  --fg-text: var(--gray-100);
+  --fg-strong: var(--gray-0);
+  --fg-inverse: var(--gray-950);
+  --accent: var(--blue-700);
+}
+`;
+
+/** A scale file: the two knob families and one member each of two scale families. */
+const SYNTHETIC_SCALE = `
+:root {
+  --alpha-chrome: 100%;
+  --alpha-surface: 100%;
+  --backdrop-surface: none;
+  --radius-sm: 4px;
+  --shadow-md: 0 3px 9px rgb(21 35 43 / 24%);
+}
+`;
+
+const COLOUR_FILE = "app/styles/tokens-color.css";
+const SCALE_FILE = "app/styles/tokens-scale.css";
+
+/** The names `PALETTES` lists in every fixture below. */
+const SYNTHETIC_PALETTES = new Set([DEFAULT_PALETTE, "ocean", "graphite"]);
+
+/** A palette file with one light block and one dark block holding the given declarations. */
+function paletteSource(name, light, dark) {
+  return `:root:where([data-palette="${name}"]) {\n${light}\n}\n`
+    + `:root[data-palette="${name}"][data-theme="dark"] {\n${dark}\n}\n`;
+}
+
+/** The base pair plus whatever palette files are handed in, as `collectTokenLayer` would report them. */
+function syntheticLayer(paletteFiles = {}) {
+  return Object.entries({ [COLOUR_FILE]: SYNTHETIC_COLOUR, [SCALE_FILE]: SYNTHETIC_SCALE, ...paletteFiles })
+    .map(([file, css]) => tokenLayerOfSource(file, css));
+}
+
+/** The same files as `collectTokenBlocks` would report them. */
+function syntheticBlocks(paletteFiles = {}) {
+  return Object.entries({ [COLOUR_FILE]: SYNTHETIC_COLOUR, [SCALE_FILE]: SYNTHETIC_SCALE, ...paletteFiles })
+    .map(([file, css]) => tokenBlocksOfSource(file, css));
+}
+
+/** Every problem "the token layer declares tokens and nothing else" would report for these files. */
+function syntheticBlockProblems(paletteFiles) {
+  return syntheticBlocks(paletteFiles)
+    .flatMap(({ blocks, file }) => blocks.flatMap((block) => tokenBlockProblems(file, block, SYNTHETIC_PALETTES)))
+    .toSorted();
+}
+
+/** A well-formed ocean palette: one colour and one scale restatement per mode, every one a change. */
+const OCEAN = paletteFile("ocean");
+const OCEAN_LIGHT = "  color-scheme: light;\n  --accent: var(--blue-300);\n  --radius-sm: 6px;";
+const OCEAN_DARK = "  color-scheme: dark;\n  --accent: var(--blue-400);";
+
+test("the synthetic base pair and a well-formed palette pass every palette invariant", () => {
+  // The control: if the fixture itself tripped a check, every failure below
+  // would be proving nothing about the input it claims to refuse.
+  const files = { [OCEAN]: paletteSource("ocean", OCEAN_LIGHT, OCEAN_DARK) };
+  const layer = syntheticLayer(files);
+  const indexed = indexTokenLayer(layer);
+  assert.deepEqual(syntheticBlockProblems(files), []);
+  assert.deepEqual(declarationSiteProblems(layer), { duplicated: [], literals: [] });
+  assert.deepEqual(inventedNames(layer), []);
+  assert.deepEqual(paletteLedgerProblems([...SYNTHETIC_PALETTES].filter((name) => name !== "graphite"), layer), []);
+  assert.deepEqual(colourSchemeProblems(syntheticBlocks(files), indexed.primitives), []);
+  assert.deepEqual(roleGroupCollisions(indexed), []);
+  assert.deepEqual(inertRestatements(indexed), []);
+  assert.deepEqual(contrastFailures(indexed), []);
+  assert.deepEqual(alphaKnobProblems(indexed), []);
+  assert.deepEqual(familyKindMismatches(indexed), []);
+  assert.deepEqual(indexed.scopes.map((scope) => scope.label), ["classic light", "classic dark", "ocean light", "ocean dark"]);
+});
+
+test("the four scopes resolve a name set in all four blocks in cascade order", () => {
+  // `--accent` is set in every block: base light blue-500, ocean light
+  // blue-300, base dark blue-700, ocean dark blue-400. Each corner has to land
+  // on its own block's value, and ocean dark in particular must not see ocean
+  // light's value through the base dark block that sits between them.
+  const indexed = indexTokenLayer(syntheticLayer({
+    [OCEAN]: paletteSource(
+      "ocean",
+      "  color-scheme: light;\n  --accent: var(--blue-300);\n  --bg-canvas: var(--gray-100);",
+      "  color-scheme: dark;\n  --accent: var(--blue-400);",
+    ),
+  }));
+  const byLabel = new Map(indexed.scopes.map((scope) => [scope.label, scope.values]));
+  assert.deepEqual(
+    [...byLabel].map(([label, values]) => `${label} ${resolve("--accent", values)}`),
+    ["classic light #1a5fb4", "classic dark #124a8f", "ocean light #7aa7e0", "ocean dark #4a86d8"],
+  );
+  // A palette light restatement that base dark also restates: base dark wins
+  // in the palette's dark scope, because the `:where()` block loses to it.
+  assert.equal(resolve("--bg-canvas", byLabel.get("ocean light")), "#f0f0f0");
+  assert.equal(resolve("--bg-canvas", byLabel.get("ocean dark")), "#0d0d0d");
+  // And a palette light restatement base dark leaves alone carries into the dark scope.
+  assert.equal(resolve("--radius-sm", byLabel.get("classic dark")), "4px");
+  assert.deepEqual(indexed.scopes.map((scope) => scope.chain.length), [1, 2, 2, 4]);
+});
+
+test("a palette light block without :where() is refused as not a theme block, and its values never index", () => {
+  const files = {
+    [OCEAN]: `:root[data-palette="ocean"] {\n${OCEAN_LIGHT}\n}\n:root[data-palette="ocean"][data-theme="dark"] {\n${OCEAN_DARK}\n}\n`,
+  };
+  assert.deepEqual(syntheticBlockProblems(files), [
+    `${OCEAN}: :root[data-palette="ocean"] is a rule, not one of the four theme blocks`,
+  ]);
+  const layer = syntheticLayer(files);
+  assert.deepEqual(paletteLedgerProblems(["classic", "ocean"], layer), [
+    `${OCEAN} holds [not a theme block (:root[data-palette="ocean"]), ocean dark] and must hold exactly [ocean light, ocean dark]`,
+  ]);
+  // The block is not filed as ocean light either: the scope resolves to base.
+  const indexed = indexTokenLayer(layer);
+  const light = indexed.scopes.find((scope) => scope.label === "ocean light");
+  assert.equal(resolve("--accent", light.values), "#1a5fb4");
+  assert.equal(resolve("--radius-sm", light.values), "4px");
+});
+
+test("a palette block nested in an at-rule is refused and never indexed", () => {
+  const files = {
+    [OCEAN]: `@media (max-width: 760px) {\n:root:where([data-palette="ocean"]) {\n${OCEAN_LIGHT}\n}\n}\n`
+      + `:root[data-palette="ocean"][data-theme="dark"] {\n${OCEAN_DARK}\n}\n`,
+  };
+  // Both the nested block and the at-rule wrapping it are refused: the wrapper
+  // is a block in a token file that is not one of the four shapes.
+  assert.deepEqual(syntheticBlockProblems(files), [
+    `${OCEAN}: :root:where([data-palette="ocean"]) is nested inside @media (max-width: 760px)`,
+    `${OCEAN}: @media (max-width: 760px) is a rule, not one of the four theme blocks`,
+  ]);
+  const layer = syntheticLayer(files);
+  assert.deepEqual(paletteLedgerProblems(["classic", "ocean"], layer), [
+    `${OCEAN} holds [not a theme block (:root:where([data-palette="ocean"])), ocean dark] and must hold exactly [ocean light, ocean dark]`,
+  ]);
+  const light = indexTokenLayer(layer).scopes.find((scope) => scope.label === "ocean light");
+  assert.equal(resolve("--radius-sm", light.values), "4px");
+});
+
+test("themeScopeOf refuses every near-miss spelling of the four preludes", () => {
+  for (const prelude of [
+    ":root:where([data-palette=\"Ocean\"])",
+    ":root:where([data-palette='ocean'])",
+    ":root:where([data-palette=ocean])",
+    ":root :where([data-palette=\"ocean\"])",
+    ":root:where([data-palette=\"ocean\"]) ",
+    ":root:is([data-palette=\"ocean\"])",
+    ":root[data-palette=\"ocean\"]:where([data-theme=\"dark\"])",
+    ":root[data-theme=\"dark\"][data-palette=\"ocean\"]",
+    ":root[data-theme=\"dark\"]:where([data-palette=\"ocean\"])",
+    ":root[data-theme=\"light\"]",
+    "html",
+    ":root, :root[data-theme=\"dark\"]",
+  ]) {
+    const scope = themeScopeOf({ ancestors: [], prelude });
+    // A trailing space is the one difference `themeScopeOf` forgives, because
+    // `cssBlocks` trims preludes before it ever sees one.
+    if (prelude.endsWith(" ")) assert.deepEqual(scope, { mode: "light", palette: "ocean" });
+    else assert.equal(scope, null, `${prelude} was accepted as ${JSON.stringify(scope)}`);
+  }
+});
+
+test("a palette block that declares a colour literal of any spelling is refused", () => {
+  // A hex is the obvious primitive; `rgb()` is the one the token-file stylelint
+  // exemption lets through, so a palette could grow a primitive that way and
+  // no hue check would ever see it.
+  for (const literal of ["#ff0000", "rgb(255 0 0)", "hsl(0 100% 50%)", "oklch(0.6 0.2 30)"]) {
+    const layer = syntheticLayer({
+      [OCEAN]: paletteSource("ocean", `  color-scheme: light;\n  --accent: ${literal};`, OCEAN_DARK),
+    });
+    assert.deepEqual(declarationSiteProblems(layer).literals, [
+      `${OCEAN} (:root:where([data-palette="ocean"])): --accent: ${literal}`,
+    ]);
+  }
+  // A new primitive in a palette is both a literal and an invented name.
+  const layer = syntheticLayer({
+    [OCEAN]: paletteSource("ocean", "  color-scheme: light;\n  --teal-500: #008080;\n  --accent: var(--teal-500);", OCEAN_DARK),
+  });
+  assert.deepEqual(declarationSiteProblems(layer).literals, [
+    `${OCEAN} (:root:where([data-palette="ocean"])): --teal-500: #008080`,
+  ]);
+  assert.deepEqual(inventedNames(layer), [`${OCEAN}: --teal-500 (:root:where([data-palette="ocean"]))`]);
+  // The base dark block is held to the same rule as a palette.
+  const darkHex = syntheticLayer();
+  darkHex[0].blocks[1].tokens.push({ name: "--accent", value: "#123456" });
+  assert.deepEqual(declarationSiteProblems(darkHex).literals, [`${COLOUR_FILE} (:root[data-theme="dark"]): --accent: #123456`]);
+  // A shadow's ink is not a colour token: the scale tier writes those and a
+  // palette may restate a shadow, so a ring with an rgb() ink passes.
+  const ring = syntheticLayer({
+    [OCEAN]: paletteSource("ocean", "  --shadow-md: 0 0 0 1px rgb(0 0 0 / 40%);", OCEAN_DARK),
+  });
+  assert.deepEqual(declarationSiteProblems(ring).literals, []);
+});
+
+test("a palette block that restates a name the base never declares is refused", () => {
+  const layer = syntheticLayer({
+    [OCEAN]: paletteSource("ocean", `${OCEAN_LIGHT}\n  --fg-brand: var(--blue-500);`, `${OCEAN_DARK}\n  --radius-pill: 999px;`),
+  });
+  assert.deepEqual(inventedNames(layer), [
+    `${OCEAN}: --fg-brand (:root:where([data-palette="ocean"]))`,
+    `${OCEAN}: --radius-pill (:root[data-palette="ocean"][data-theme="dark"])`,
+  ]);
+});
+
+test("a name declared twice in one palette scope is refused, and the same name in two scopes is not", () => {
+  const twice = syntheticLayer({
+    [OCEAN]: paletteSource("ocean", `${OCEAN_LIGHT}\n  --accent: var(--blue-400);`, OCEAN_DARK),
+  });
+  assert.deepEqual(declarationSiteProblems(twice).duplicated, [
+    `ocean light --accent declared in ${OCEAN} (:root:where([data-palette="ocean"])) and ${OCEAN} (:root:where([data-palette="ocean"]))`,
+  ]);
+  // Two light blocks for one palette: the duplicate is per scope, not per block.
+  const split = syntheticLayer({
+    [OCEAN]: `${paletteSource("ocean", OCEAN_LIGHT, OCEAN_DARK)}:root:where([data-palette="ocean"]) {\n  --accent: var(--blue-400);\n}\n`,
+  });
+  assert.deepEqual(declarationSiteProblems(split).duplicated, [
+    `ocean light --accent declared in ${OCEAN} (:root:where([data-palette="ocean"])) and ${OCEAN} (:root:where([data-palette="ocean"]))`,
+  ]);
+  assert.deepEqual(paletteLedgerProblems(["classic", "ocean"], split), [
+    `${OCEAN} holds [ocean light, ocean dark, ocean light] and must hold exactly [ocean light, ocean dark]`,
+  ]);
+});
+
+test("a palette dark restatement that base dark already made, or palette light already made, is inert", () => {
+  // `--accent` equals base dark's blue-700; `--radius-sm` equals ocean light's
+  // 6px, which base dark leaves alone. Both change nothing in ocean dark.
+  const inert = indexTokenLayer(syntheticLayer({
+    [OCEAN]: paletteSource("ocean", OCEAN_LIGHT, "  color-scheme: dark;\n  --accent: var(--blue-700);\n  --radius-sm: 6px;"),
+  }));
+  assert.deepEqual(inertRestatements(inert), [
+    "ocean dark: --accent: var(--blue-700) resolves to #124a8f with or without the block",
+    "ocean dark: --radius-sm: 6px resolves to 6px with or without the block",
+  ]);
+  // The restatement is inert against the chain, not against the light block:
+  // ocean dark repeating ocean light's `--bg-canvas` is a real change, because
+  // base dark moved it in between. This is the terminal `--chrome-fg` case.
+  const live = indexTokenLayer(syntheticLayer({
+    [OCEAN]: paletteSource(
+      "ocean",
+      "  color-scheme: light;\n  --bg-canvas: var(--gray-100);",
+      "  color-scheme: dark;\n  --bg-canvas: var(--gray-100);",
+    ),
+  }));
+  assert.deepEqual(inertRestatements(live), []);
+  // A palette light restatement equal to base light is inert too.
+  const light = indexTokenLayer(syntheticLayer({
+    [OCEAN]: paletteSource("ocean", "  --radius-sm: 4px;", OCEAN_DARK),
+  }));
+  assert.deepEqual(inertRestatements(light), ["ocean light: --radius-sm: 4px resolves to 4px with or without the block"]);
+});
+
+test("a block that restates a colour without color-scheme, or with the other mode's, is refused", () => {
+  const primitives = indexTokenLayer(syntheticLayer()).primitives;
+  const missing = syntheticBlocks({
+    [OCEAN]: paletteSource("ocean", "  --accent: var(--blue-300);", "  color-scheme: dark;\n  --accent: var(--blue-400);"),
+  });
+  assert.deepEqual(colourSchemeProblems(missing, primitives), [
+    `${OCEAN}: :root:where([data-palette="ocean"]) restates a colour and declares no color-scheme`,
+  ]);
+  const swapped = syntheticBlocks({
+    [OCEAN]: paletteSource(
+      "ocean",
+      "  color-scheme: dark;\n  --accent: var(--blue-300);",
+      "  color-scheme: light dark;\n  --accent: var(--blue-400);",
+    ),
+  });
+  assert.deepEqual(colourSchemeProblems(swapped, primitives), [
+    `${OCEAN}: :root:where([data-palette="ocean"]) is a light block and declares color-scheme: dark`,
+    `${OCEAN}: :root[data-palette="ocean"][data-theme="dark"] is a dark block and declares color-scheme: light dark`,
+  ]);
+  // A literal counts as painting even though it is refused elsewhere.
+  const literal = syntheticBlocks({
+    [OCEAN]: paletteSource("ocean", "  --accent: rgb(1 2 3);", OCEAN_DARK),
+  });
+  assert.deepEqual(colourSchemeProblems(literal, primitives), [
+    `${OCEAN}: :root:where([data-palette="ocean"]) restates a colour and declares no color-scheme`,
+  ]);
+});
+
+test("a scale-only block that declares color-scheme is refused, and one that does not is accepted", () => {
+  const primitives = indexTokenLayer(syntheticLayer()).primitives;
+  const claimed = syntheticBlocks({
+    [OCEAN]: paletteSource("ocean", "  color-scheme: light;\n  --radius-sm: 6px;", "  color-scheme: dark;\n  --shadow-md: 0 0 0 1px rgb(0 0 0 / 40%);"),
+  });
+  assert.deepEqual(colourSchemeProblems(claimed, primitives), [
+    `${OCEAN}: :root:where([data-palette="ocean"]) restates no colour and declares color-scheme`,
+    `${OCEAN}: :root[data-palette="ocean"][data-theme="dark"] restates no colour and declares color-scheme`,
+  ]);
+  const silent = syntheticBlocks({
+    [OCEAN]: paletteSource("ocean", "  --radius-sm: 6px;\n  --alpha-surface: 90%;", "  --shadow-md: 0 0 0 1px rgb(0 0 0 / 40%);"),
+  });
+  assert.deepEqual(colourSchemeProblems(silent, primitives), []);
+  // The scale file's own base block is the same shape and passes for the same reason.
+  const scaleWithScheme = syntheticBlocks();
+  scaleWithScheme[1].blocks[0].declarations.push({ property: "color-scheme", value: "light" });
+  assert.deepEqual(colourSchemeProblems(scaleWithScheme, primitives), [
+    `${SCALE_FILE}: :root restates no colour and declares color-scheme`,
+  ]);
+});
+
+test("an alpha knob at 79% is refused, at 80% accepted, and a non-percentage refused", () => {
+  const at = (light, dark = "") => alphaKnobProblems(indexTokenLayer(syntheticLayer({
+    [OCEAN]: paletteSource("ocean", light, dark),
+  })));
+  assert.deepEqual(at("  --alpha-surface: 79%;"), ["ocean light: --alpha-surface: 79% is below 80%"]);
+  assert.deepEqual(at("  --alpha-surface: 79.99%;"), ["ocean light: --alpha-surface: 79.99% is below 80%"]);
+  assert.deepEqual(at("  --alpha-surface: 80%;"), []);
+  assert.deepEqual(at("  --alpha-chrome: 88%;", "  --alpha-surface: 80%;"), []);
+  assert.deepEqual(at("", "  --alpha-chrome: 60%;"), ["ocean dark: --alpha-chrome: 60% is below 80%"]);
+  assert.deepEqual(at("  --alpha-surface: 0.9;"), ["ocean light: --alpha-surface: 0.9 is not a percentage"]);
+  assert.deepEqual(at("  --alpha-surface: var(--alpha-chrome);"), ["ocean light: --alpha-surface: var(--alpha-chrome) is not a percentage"]);
+  assert.deepEqual(at("  --alpha-surface: calc(80%);"), ["ocean light: --alpha-surface: calc(80%) is not a percentage"]);
+  // The floor is on the knob family, not on the word: `--backdrop-*` is free.
+  assert.deepEqual(at("  --backdrop-surface: blur(14px) saturate(140%);"), []);
+});
+
+test("a role-group collision that exists only in a palette dark scope is reported there alone", () => {
+  // Ocean dark points `--bg-surface` at gray-950, which base dark already gave
+  // `--bg-canvas`: the two collide in ocean dark and nowhere else.
+  const collisions = roleGroupCollisions(indexTokenLayer(syntheticLayer({
+    [OCEAN]: paletteSource("ocean", OCEAN_LIGHT, "  color-scheme: dark;\n  --bg-surface: var(--gray-950);"),
+  })));
+  assert.deepEqual(collisions, ["ocean dark background: --bg-canvas and --bg-surface are both #0d0d0d"]);
+  // And one a palette light block causes: base dark leaves the chrome roles
+  // alone, so the light restatement carries into ocean dark and collides in
+  // both ocean scopes, and in neither classic scope.
+  const light = roleGroupCollisions(indexTokenLayer(syntheticLayer({
+    [OCEAN]: paletteSource("ocean", "  color-scheme: light;\n  --chrome-hover: var(--gray-800);", OCEAN_DARK),
+  })));
+  assert.deepEqual(light, [
+    "ocean dark chrome: --chrome-appbar and --chrome-hover are both #2a2a2a",
+    "ocean light chrome: --chrome-appbar and --chrome-hover are both #2a2a2a",
+  ]);
+});
+
+test("a contrast failure that exists only in a palette scope is reported there alone", () => {
+  const failures = contrastFailures(indexTokenLayer(syntheticLayer({
+    [OCEAN]: paletteSource("ocean", "  color-scheme: light;\n  --fg-text: var(--gray-300);", OCEAN_DARK),
+  })));
+  assert.deepEqual(failures.map((failure) => failure.replace(/ is [\d.]+:1, below /u, " below ")), [
+    "ocean light: --fg-text (#bbbbbb) on --bg-canvas (#f7f7f7) below 4.5:1",
+    "ocean light: --fg-text (#bbbbbb) on --bg-raised (#e8e8e8) below 4.5:1",
+    "ocean light: --fg-text (#bbbbbb) on --bg-subtle (#f0f0f0) below 4.5:1",
+    "ocean light: --fg-text (#bbbbbb) on --bg-surface (#ffffff) below 4.5:1",
+  ]);
+  assert.ok(failures.every((failure) => /is 1\.\d\d:1, below/u.test(failure)), failures.join("\n"));
+  // The same restatement in dark mode fails in ocean dark only.
+  const dark = contrastFailures(indexTokenLayer(syntheticLayer({
+    [OCEAN]: paletteSource("ocean", OCEAN_LIGHT, "  color-scheme: dark;\n  --chrome-fg: var(--gray-700);"),
+  })));
+  assert.ok(dark.length > 0 && dark.every((failure) => failure.startsWith("ocean dark: --chrome-fg")), dark.join("\n"));
+  // A pair that does not resolve to a hex is reported rather than measured.
+  const unresolved = contrastFailures(indexTokenLayer(syntheticLayer({
+    [OCEAN]: paletteSource("ocean", "  color-scheme: light;\n  --bg-canvas: transparent;", OCEAN_DARK),
+  })));
+  assert.deepEqual(unresolved, [
+    "ocean light: --bg-canvas is not a six-digit hex: transparent",
+    "ocean light: --bg-canvas is not a six-digit hex: transparent",
+  ]);
+});
+
+test("the contrast floor is the palette's own: graphite is held to 7:1 where ocean passes at 4.5:1", () => {
+  // gray-600 (#666666) is between 4.6:1 and 5.8:1 on every light ground: AA, but not AAA.
+  const restatement = "  color-scheme: light;\n  --fg-text: var(--gray-600);";
+  const ocean = contrastFailures(indexTokenLayer(syntheticLayer({
+    [OCEAN]: paletteSource("ocean", restatement, OCEAN_DARK),
+  })));
+  assert.deepEqual(ocean, []);
+  const graphite = contrastFailures(indexTokenLayer(syntheticLayer({
+    [paletteFile("graphite")]: paletteSource("graphite", restatement, "  color-scheme: dark;\n  --accent: var(--blue-400);"),
+  })));
+  assert.deepEqual(graphite.map((failure) => failure.split(" is ")[0]), [
+    "graphite light: --fg-text (#666666) on --bg-canvas (#f7f7f7)",
+    "graphite light: --fg-text (#666666) on --bg-raised (#e8e8e8)",
+    "graphite light: --fg-text (#666666) on --bg-subtle (#f0f0f0)",
+    "graphite light: --fg-text (#666666) on --bg-surface (#ffffff)",
+  ]);
+  assert.ok(graphite.every((failure) => failure.endsWith(", below 7:1")), graphite.join("\n"));
+  // A palette named after an Object.prototype member reads AA, not a function.
+  for (const name of ["constructor", "__proto__"]) {
+    assert.equal(contrastFloorOf(name), AA_CONTRAST, `${name} read a floor of ${String(contrastFloorOf(name))}`);
+  }
+  const prototype = contrastFailures(indexTokenLayer(syntheticLayer({
+    [paletteFile("constructor")]: paletteSource("constructor", "  color-scheme: light;\n  --fg-text: var(--gray-300);", OCEAN_DARK),
+  })));
+  assert.equal(prototype.length, 4, prototype.join("\n"));
+});
+
+test("a family kind mismatch that exists only in a palette scope is reported there alone", () => {
+  // `0` keeps the radius family a length; `none` would split it.
+  const square = familyKindMismatches(indexTokenLayer(syntheticLayer({
+    [OCEAN]: paletteSource("ocean", "  --radius-sm: 0;", OCEAN_DARK),
+  })));
+  assert.deepEqual(square, []);
+  const layer = syntheticLayer({
+    [OCEAN]: paletteSource("ocean", "  --radius-sm: none;", OCEAN_DARK),
+  });
+  layer[1].blocks[0].tokens.push({ name: "--radius-md", value: "8px" });
+  const mixed = familyKindMismatches(indexTokenLayer(layer));
+  assert.deepEqual(mixed, [
+    `ocean dark --radius-*: keyword or stack = --radius-sm (${SCALE_FILE}); length = --radius-md (${SCALE_FILE})`,
+    `ocean light --radius-*: keyword or stack = --radius-sm (${SCALE_FILE}); length = --radius-md (${SCALE_FILE})`,
+  ]);
+});
+
+test("a palette file for a name PALETTES does not list, or a name with no file, is refused", () => {
+  const sepia = paletteFile("sepia");
+  const files = { [sepia]: paletteSource("sepia", OCEAN_LIGHT, OCEAN_DARK) };
+  assert.deepEqual(syntheticBlockProblems(files), [
+    `${sepia}: :root:where([data-palette="sepia"]) selects a palette ${PALETTE_MODULE} does not list in PALETTES`,
+    `${sepia}: :root[data-palette="sepia"][data-theme="dark"] selects a palette ${PALETTE_MODULE} does not list in PALETTES`,
+  ]);
+  assert.deepEqual(paletteLedgerProblems(["classic", "ocean"], syntheticLayer(files)), [
+    `${sepia} exists but sepia is not in ${PALETTE_MODULE}'s PALETTES`,
+    `ocean is in PALETTES but ${OCEAN} does not exist`,
+  ]);
+  // The ocean blocks in a file named for another palette are refused as
+  // sitting in the wrong file, and that file's name is refused as unlisted.
+  const misplaced = { [sepia]: paletteSource("ocean", OCEAN_LIGHT, OCEAN_DARK) };
+  assert.deepEqual(syntheticBlockProblems(misplaced), [
+    `${sepia}: :root:where([data-palette="ocean"]) is the ocean light block, and this file holds only sepia blocks`,
+    `${sepia}: :root[data-palette="ocean"][data-theme="dark"] is the ocean dark block, and this file holds only sepia blocks`,
+  ]);
+  // A classic file is refused by the ledger even when its blocks are refused by name.
+  const classic = { [paletteFile(DEFAULT_PALETTE)]: paletteSource(DEFAULT_PALETTE, OCEAN_LIGHT, OCEAN_DARK) };
+  assert.deepEqual(paletteLedgerProblems(["classic", "ocean"], syntheticLayer(classic)), [
+    `${paletteFile(DEFAULT_PALETTE)} exists, but ${DEFAULT_PALETTE} is the base pair and has no palette file`,
+    `ocean is in PALETTES but ${OCEAN} does not exist`,
+  ]);
+  // A token file that is neither the base pair nor a palette's cannot pose as a third base file.
+  const extra = { "app/styles/tokens-extra.css": ":root {\n  --radius-lg: 12px;\n}\n" };
+  assert.deepEqual(paletteLedgerProblems(["classic"], syntheticLayer(extra)), [
+    "app/styles/tokens-extra.css is a token file that is neither the base pair nor a tokens-palette-<name>.css",
+  ]);
+  assert.deepEqual(inventedNames(syntheticLayer(extra)), []);
+});
+
+test("parsePaletteNames reads the PALETTES literal in the shapes the module may spell it", () => {
+  assert.deepEqual(
+    parsePaletteNames('export const PALETTES: readonly Palette[] = ["classic", "ocean", "ember"];'),
+    ["classic", "ocean", "ember"],
+  );
+  assert.deepEqual(
+    parsePaletteNames('export const PALETTES = [\n  "classic",\n  "ocean",\n] as const;'),
+    ["classic", "ocean"],
+  );
+  assert.deepEqual(
+    parsePaletteNames('export const PALETTE_STORAGE_KEY = "open-splunk.palette";\nexport const PALETTES: ReadonlyArray<Palette> = ["classic"];'),
+    ["classic"],
+  );
+  // No literal at all reads as the base pair alone.
+  assert.deepEqual(parsePaletteNames("export type Palette = \"classic\" | \"ocean\";"), [DEFAULT_PALETTE]);
+  // A name the file system could not hold, or that is not lowercase, is not a palette.
+  assert.deepEqual(parsePaletteNames('export const PALETTES = ["classic", "Ocean", "sepia tone", "9lives"];'), ["classic"]);
 });
