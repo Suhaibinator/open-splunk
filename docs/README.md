@@ -16,8 +16,8 @@ a document explicitly says otherwise.
 - [Knowledge](knowledge.md) covers field knowledge, lookups, immutable
   snapshots, lifecycle, and security.
 - [Theming](theming.md) defines the two-tier colour token layer, the
-  non-colour scales beside it, and the rule that no literal may live
-  outside them.
+  non-colour scales beside it, the palette and light/dark axes a theme
+  resolves through, and the rule that no literal may live outside them.
 - [Ingestion](ingestion.md) covers native collectors, token constraints,
   quotas, and collector operations.
 - [Insert coalescing](insert-coalescing.md) defines the durable logical-batch

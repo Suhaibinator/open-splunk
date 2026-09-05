@@ -66,6 +66,15 @@ rewrite the limits already attached to a running or retained job. The API
 validates the current supported ranges, so clients should use the returned
 settings rather than assuming these defaults are permanent.
 
+The same Server settings section carries the Appearance card, which sets the
+instance-wide UI palette every browser session paints, the sign-in page
+included; light and dark stay each user's own choice. Selecting a palette
+previews it in the administrator's own tab only; Apply writes it through
+`/api/server/appearance/update`, versioned separately from the search policy
+so the two forms never conflict with each other, and every other session
+picks it up on its next load through bootstrap. See
+[Theming](theming.md) for the palettes themselves.
+
 The semantic rule inventory is:
 
 | Rule | Contract |

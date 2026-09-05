@@ -4,18 +4,29 @@
  * Two tiers, and the boundary between them is the point of the file:
  *
  *   Tier 1 -- primitive palette. Raw hex, named after the hue and a lightness
- *   step. Nothing outside this file may read a primitive: they exist only so a
- *   tier 2 token has something to point at. Their steps were derived from the
- *   literal inventory the refactor started from, so every colour the product
- *   actually used lands within ~24 RGB units of a step.
+ *   step. Nothing outside the token layer may read a primitive: they exist
+ *   only so a tier 2 token has something to point at. Their steps were derived
+ *   from the literal inventory the refactor started from, so every colour the
+ *   product actually used lands within ~24 RGB units of a step. Every
+ *   primitive in the product lives in the base `:root` block below, the
+ *   steps the instance palettes reach included: a palette file declares no
+ *   primitive of its own, and a new hue step is added here with a comment
+ *   naming the palette that uses it.
  *
  *   Tier 2 -- semantic tokens. Named after the *role* a colour plays, never
- *   after the colour itself. These are the only names components, the
- *   application stylesheets, and the CSS modules may use, which is what makes a
- *   theme a one-file edit.
+ *   after the colour itself. These are the only names components and the
+ *   application stylesheets may use, which is what makes a theme a one-file
+ *   edit.
  *
- * A theme therefore restates tier 2 and leaves tier 1 alone: see the
- * `:root[data-theme="dark"]` block at the bottom, and docs/theming.md.
+ * A theme therefore restates tier 2 and leaves tier 1 alone. This file holds
+ * the base pair, `classic`: the `:root` block is base light and the
+ * `:root[data-theme="dark"]` block at the bottom is base dark, the one block
+ * held to restating every themeable role. Each other instance palette is one
+ * tokens-palette-<name>.css holding a light block
+ * (`:root:where([data-palette="…"])`) and a dark block
+ * (`:root[data-palette="…"][data-theme="dark"]`) that restate only what
+ * differs from this pair; the resolution order is base light < palette light
+ * < base dark < palette dark. See docs/theming.md, "Tokens and themes".
  *
  * The pre-refactor alias block that kept names like `--surface` and `--text`
  * alive through the migration is gone: every call site now reads a role, so the
