@@ -343,7 +343,8 @@
 }
 
 .completion-menu {
-  background: var(--bg-surface);
+  backdrop-filter: var(--backdrop-surface);
+  background: color-mix(in srgb, var(--bg-surface) var(--alpha-surface), transparent);
   border: 1px solid var(--border-strong);
   box-shadow: var(--shadow-lg);
   left: 28px;
@@ -459,7 +460,8 @@
 
 .time-popover {
   animation: menu-in 100ms ease-out;
-  background: var(--bg-surface);
+  backdrop-filter: var(--backdrop-surface);
+  background: color-mix(in srgb, var(--bg-surface) var(--alpha-surface), transparent);
   border: 1px solid var(--border-strong);
   box-shadow: var(--shadow-lg);
   color: var(--fg-text);

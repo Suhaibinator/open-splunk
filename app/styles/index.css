@@ -45,6 +45,11 @@
  */
 @import url("./tokens-color.css");
 @import url("./tokens-scale.css");
+@import url("./tokens-palette-ember.css");
+@import url("./tokens-palette-glass.css");
+@import url("./tokens-palette-graphite.css");
+@import url("./tokens-palette-ocean.css");
+@import url("./tokens-palette-terminal.css");
 @import url("./base.css");
 @import url("./primitives/button.css");
 @import url("./primitives/table.css");

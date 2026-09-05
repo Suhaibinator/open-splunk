@@ -3228,3 +3228,244 @@ test("parsePaletteNames reads the PALETTES literal in the shapes the module may 
   // A name the file system could not hold, or that is not lowercase, is not a palette.
   assert.deepEqual(parsePaletteNames('export const PALETTES = ["classic", "Ocean", "sepia tone", "9lives"];'), ["classic"]);
 });
+
+/* == 9. The shipped palette files, each broken one way at a time ============== */
+//
+// Section 8 proves each invariant on a synthetic layer small enough to read.
+// This proves the same invariants on the five files that ship: a check that
+// was generalised correctly but reads a real file wrong -- a comment shape
+// the parser skips, a declaration it drops -- would pass the synthetic layer
+// and stay silent on the palette that matters. Each probe takes the blocks
+// the inventory read (a test file may not open a stylesheet), writes them
+// back out as source, injects exactly one fault into one palette's file, and
+// asserts the invariant names that palette and no other. The unbroken
+// round trip is the control.
+
+/** One token file's blocks written back as source, declaration for declaration. */
+function serialiseBlocks(entry) {
+  return entry.blocks.map((block) => (
+    `${block.prelude} {\n${block.declarations.map(({ property, value }) => `  ${property}: ${value};`).join("\n")}\n}\n`
+  )).join("\n");
+}
+
+/**
+ * The shipped token layer with one palette's source swapped, as
+ * `collectTokenLayer` and `collectTokenBlocks` would each report it.
+ * `mutate` receives the palette's source text and returns the broken text.
+ */
+function shippedLayerWith(shipped, file, mutate) {
+  const sources = shipped.map((entry) => [entry.file, entry.file === file ? mutate(serialiseBlocks(entry)) : serialiseBlocks(entry)]);
+  return {
+    blocks: sources.map(([name, css]) => tokenBlocksOfSource(name, css)),
+    layer: sources.map(([name, css]) => tokenLayerOfSource(name, css)),
+  };
+}
+
+/** The shipped palettes as `{ name, file, light, dark }` with their two preludes. */
+async function shippedPalettes() {
+  const shipped = await collectTokenBlocks(workspace);
+  const names = (await readPaletteNames()).filter((name) => name !== DEFAULT_PALETTE);
+  return {
+    palettes: names.map((name) => ({
+      dark: `:root[data-palette="${name}"][data-theme="dark"]`,
+      file: paletteFile(name),
+      light: `:root:where([data-palette="${name}"])`,
+      name,
+    })),
+    shipped,
+  };
+}
+
+/** Every problem string that names a palette other than `own`. */
+function mentioningOtherPalettes(problems, own, names) {
+  return problems.filter((problem) => names.some((other) => other !== own && problem.includes(other)));
+}
+
+test("the shipped token layer survives a source round trip with every invariant still green", async () => {
+  const { palettes, shipped } = await shippedPalettes();
+  assert.ok(palettes.length >= 5, `only ${palettes.length} shipped palettes; the probes below would prove little`);
+  const real = await collectTokenLayer(workspace);
+  const { blocks, layer } = shippedLayerWith(shipped, null, (css) => css);
+  // The control: the written-back source parses to the same layer, block for
+  // block and token for token, so a fault the probes inject is the only
+  // difference between the real files and what each invariant is handed.
+  assert.deepEqual(layer, real);
+  const names = new Set(await readPaletteNames());
+  assert.deepEqual(blocks.flatMap((entry) => entry.blocks.flatMap((block) => tokenBlockProblems(entry.file, block, names))), []);
+  const indexed = indexTokenLayer(layer);
+  assert.deepEqual(declarationSiteProblems(layer), { duplicated: [], literals: [] });
+  assert.deepEqual(inventedNames(layer), []);
+  assert.deepEqual(colourSchemeProblems(blocks, indexed.primitives), []);
+  assert.deepEqual(inertRestatements(indexed), []);
+  assert.deepEqual(alphaKnobProblems(indexed), []);
+  assert.deepEqual(contrastFailures(indexed), []);
+  assert.deepEqual(familyKindMismatches(indexed), []);
+  assert.deepEqual(roleGroupCollisions(indexed), []);
+  assert.deepEqual(paletteLedgerProblems([...names], layer), []);
+});
+
+test("each shipped palette's light block is refused the moment :where() is dropped, and only that palette", async () => {
+  const { palettes, shipped } = await shippedPalettes();
+  const names = palettes.map(({ name }) => name);
+  for (const palette of palettes) {
+    const bare = `:root[data-palette="${palette.name}"]`;
+    const { blocks, layer } = shippedLayerWith(shipped, palette.file, (css) => css.replace(palette.light, bare));
+    const problems = blocks.flatMap((entry) => entry.blocks.flatMap((block) => tokenBlockProblems(entry.file, block, new Set([DEFAULT_PALETTE, ...names]))));
+    assert.deepEqual(problems, [`${palette.file}: ${bare} is a rule, not one of the four theme blocks`]);
+    const ledger = paletteLedgerProblems([DEFAULT_PALETTE, ...names], layer);
+    assert.deepEqual(ledger, [
+      `${palette.file} holds [not a theme block (${bare}), ${palette.name} dark] and must hold exactly [${palette.name} light, ${palette.name} dark]`,
+    ]);
+    // The bare block's values never index, so the palette's light scope
+    // reads as classic light and every light-only restatement is gone.
+    const indexed = indexTokenLayer(layer);
+    assert.deepEqual([...indexed.palettes.get(palette.name).light], []);
+    assert.deepEqual(mentioningOtherPalettes([...problems, ...ledger], palette.name, names), []);
+  }
+});
+
+test("a colour literal of any spelling in a shipped palette's dark block is refused for that file alone", async () => {
+  const { palettes, shipped } = await shippedPalettes();
+  const names = palettes.map(({ name }) => name);
+  for (const palette of palettes) {
+    for (const literal of ["#123456", "rgb(18 52 86)", "oklch(40% 0.1 250)"]) {
+      const { layer } = shippedLayerWith(shipped, palette.file, (css) => (
+        css.replace(`${palette.dark} {\n`, `${palette.dark} {\n  --accent: ${literal};\n`)
+      ));
+      const { duplicated, literals } = declarationSiteProblems(layer);
+      assert.deepEqual(literals, [`${palette.file} (${palette.dark}): --accent: ${literal}`]);
+      // Every shipped dark block restates --accent already, so the injected
+      // declaration is also the one duplicate in that scope, and nowhere else.
+      assert.deepEqual(duplicated, [`${palette.name} dark --accent declared in ${palette.file} (${palette.dark}) and ${palette.file} (${palette.dark})`]);
+      assert.deepEqual(mentioningOtherPalettes([...literals, ...duplicated], palette.name, names), []);
+    }
+  }
+});
+
+test("a name no base block introduces is refused in whichever shipped palette invents it", async () => {
+  const { palettes, shipped } = await shippedPalettes();
+  const names = palettes.map(({ name }) => name);
+  for (const palette of palettes) {
+    const { layer } = shippedLayerWith(shipped, palette.file, (css) => (
+      css.replace(`${palette.light} {\n`, `${palette.light} {\n  --accent-glow: var(--blue-100);\n`)
+    ));
+    const invented = inventedNames(layer);
+    assert.deepEqual(invented, [`${palette.file}: --accent-glow (${palette.light})`]);
+    assert.deepEqual(mentioningOtherPalettes(invented, palette.name, names), []);
+  }
+});
+
+test("a dark restatement that base dark already makes is inert in the shipped palette that carries it", async () => {
+  const { palettes, shipped } = await shippedPalettes();
+  const names = palettes.map(({ name }) => name);
+  const real = indexTokenLayer(await collectTokenLayer(workspace));
+  for (const palette of palettes) {
+    // A name base dark restates that this palette's dark block leaves alone:
+    // copying base dark's value into the palette changes nothing the
+    // browser lands on, which is exactly what the invariant refuses.
+    const own = real.palettes.get(palette.name);
+    const [name, value] = [...real.base.dark].find(([candidate]) => !own.dark.has(candidate) && !own.light.has(candidate));
+    const { layer } = shippedLayerWith(shipped, palette.file, (css) => (
+      css.replace(`${palette.dark} {\n`, `${palette.dark} {\n  ${name}: ${value};\n`)
+    ));
+    const scope = real.scopes.find((candidate) => candidate.label === scopeLabel(palette.name, "dark"));
+    const inert = inertRestatements(indexTokenLayer(layer));
+    assert.deepEqual(inert, [`${palette.name} dark: ${name}: ${value} resolves to ${resolve(name, scope.values)} with or without the block`]);
+    assert.deepEqual(mentioningOtherPalettes(inert, palette.name, names), []);
+  }
+});
+
+test("a shipped palette light block that loses its color-scheme is refused, and its mode cannot be swapped", async () => {
+  const { palettes, shipped } = await shippedPalettes();
+  const names = palettes.map(({ name }) => name);
+  const { primitives } = indexTokenLayer(await collectTokenLayer(workspace));
+  for (const palette of palettes) {
+    const missing = shippedLayerWith(shipped, palette.file, (css) => css.replace(`${palette.light} {\n  color-scheme: light;\n`, `${palette.light} {\n`));
+    assert.deepEqual(colourSchemeProblems(missing.blocks, primitives), [
+      `${palette.file}: ${palette.light} restates a colour and declares no color-scheme`,
+    ]);
+    const swapped = shippedLayerWith(shipped, palette.file, (css) => css.replace(`${palette.dark} {\n  color-scheme: dark;\n`, `${palette.dark} {\n  color-scheme: light;\n`));
+    const problems = colourSchemeProblems(swapped.blocks, primitives);
+    assert.deepEqual(problems, [`${palette.file}: ${palette.dark} is a dark block and declares color-scheme: light`]);
+    assert.deepEqual(mentioningOtherPalettes(problems, palette.name, names), []);
+  }
+});
+
+test("an alpha knob one point under the floor is refused in the shipped palette that turns it", async () => {
+  const { palettes, shipped } = await shippedPalettes();
+  const names = palettes.map(({ name }) => name);
+  for (const palette of palettes) {
+    const { layer } = shippedLayerWith(shipped, palette.file, (css) => {
+      // Glass already sets --alpha-surface in both blocks; lower its light
+      // value in place so the probe injects a fault, not a duplicate.
+      const lowered = css.replace(/--alpha-surface: \d+%;/u, "--alpha-surface: 79%;");
+      return lowered === css ? css.replace(`${palette.light} {\n`, `${palette.light} {\n  --alpha-surface: 79%;\n`) : lowered;
+    });
+    const problems = alphaKnobProblems(indexTokenLayer(layer));
+    assert.deepEqual(problems, [`${palette.name} light: --alpha-surface: 79% is below ${ALPHA_FLOOR}%`]);
+    assert.deepEqual(mentioningOtherPalettes(problems, palette.name, names), []);
+  }
+});
+
+test("body text painted in the canvas's own primitive fails contrast in that shipped palette's dark scope alone", async () => {
+  const { palettes, shipped } = await shippedPalettes();
+  const names = palettes.map(({ name }) => name);
+  const real = indexTokenLayer(await collectTokenLayer(workspace));
+  for (const palette of palettes) {
+    const scope = real.scopes.find((candidate) => candidate.label === scopeLabel(palette.name, "dark"));
+    const canvas = resolve("--bg-canvas", scope.values);
+    const [primitive] = [...real.primitives].find(([, hex]) => hex === canvas);
+    const { layer } = shippedLayerWith(shipped, palette.file, (css) => {
+      const restated = css.replace(new RegExp(`(${palette.dark.replaceAll(/[[\]]/gu, "\\$&")} \\{[^}]*?)--fg-text: var\\(--[a-z0-9-]+\\);`, "u"), `$1--fg-text: var(${primitive});`);
+      return restated === css ? css.replace(`${palette.dark} {\n`, `${palette.dark} {\n  --fg-text: var(${primitive});\n`) : restated;
+    });
+    const failures = contrastFailures(indexTokenLayer(layer));
+    assert.ok(failures.length > 0, `${palette.name}: --fg-text in the canvas colour passed the contrast floor`);
+    assert.ok(
+      failures.every((failure) => failure.startsWith(`${palette.name} dark: `)),
+      `${palette.name}: a failure landed outside the broken scope:\n${describeList(failures)}`,
+    );
+    assert.ok(
+      failures.some((failure) => failure.includes(`--fg-text (${canvas}) on --bg-canvas (${canvas}) is 1.00:1`)),
+      `${palette.name}: the injected pair is not among the failures:\n${describeList(failures)}`,
+    );
+    assert.deepEqual(mentioningOtherPalettes(failures, palette.name, names), []);
+  }
+});
+
+test("a keyword where the radius family holds lengths splits the family in the shipped palette that wrote it", async () => {
+  const { palettes, shipped } = await shippedPalettes();
+  const names = palettes.map(({ name }) => name);
+  for (const palette of palettes) {
+    const { layer } = shippedLayerWith(shipped, palette.file, (css) => {
+      const replaced = css.replace(/--radius-sm: [^;]+;/u, "--radius-sm: none;");
+      return replaced === css ? css.replace(`${palette.light} {\n`, `${palette.light} {\n  --radius-sm: none;\n`) : replaced;
+    });
+    const mixed = familyKindMismatches(indexTokenLayer(layer));
+    assert.deepEqual(mixed.map((line) => line.split(" --")[0]), [`${palette.name} dark`, `${palette.name} light`]);
+    assert.ok(mixed.every((line) => line.includes("keyword or stack = --radius-sm")), describeList(mixed));
+    assert.deepEqual(mentioningOtherPalettes(mixed, palette.name, names), []);
+  }
+});
+
+test("two foreground roles on one primitive collide in the shipped palette that merged them, and nowhere else", async () => {
+  const { palettes, shipped } = await shippedPalettes();
+  const names = palettes.map(({ name }) => name);
+  const real = indexTokenLayer(await collectTokenLayer(workspace));
+  for (const palette of palettes) {
+    const scope = real.scopes.find((candidate) => candidate.label === scopeLabel(palette.name, "light"));
+    const text = resolve("--fg-text", scope.values);
+    const [primitive] = [...real.primitives].find(([, hex]) => hex === text);
+    const { layer } = shippedLayerWith(shipped, palette.file, (css) => {
+      const restated = css.replace(new RegExp(`(${palette.light.replaceAll(/[()[\]]/gu, "\\$&")} \\{[^}]*?)--fg-strong: var\\(--[a-z0-9-]+\\);`, "u"), `$1--fg-strong: var(${primitive});`);
+      return restated === css ? css.replace(`${palette.light} {\n`, `${palette.light} {\n  --fg-strong: var(${primitive});\n`) : restated;
+    });
+    const collisions = roleGroupCollisions(indexTokenLayer(layer));
+    assert.ok(
+      collisions.some((line) => line.startsWith(`${palette.name} light foreground: `) && line.includes("--fg-strong") && line.includes("--fg-text")),
+      `${palette.name}: the merged pair is not reported:\n${describeList(collisions)}`,
+    );
+    assert.ok(collisions.every((line) => line.startsWith(`${palette.name} `)), describeList(collisions));
+    assert.deepEqual(mentioningOtherPalettes(collisions, palette.name, names), []);
+  }
+});

@@ -1,0 +1,72 @@
+/*
+ * Glass palette: translucent raised surfaces over a mist canvas, ocean's blue
+ * accent and slate-blue bars, softer corners and elevation. Restates only what
+ * differs from classic; see docs/theming.md, "Adding a theme".
+ */
+:root:where([data-palette="glass"]) {
+  color-scheme: light;
+
+  /* Backgrounds. */
+  --bg-canvas: var(--mist-100); /* The page behind every panel: a cool, faintly blue ground. */
+  --bg-subtle: var(--mist-150); /* Recessed strips inside a surface. */
+
+  /* Foregrounds: the mist grounds sit a shade below classic's, so the two inks that were marginal there deepen one step. */
+  --fg-muted: var(--gray-650); /* Secondary text: table headers, neutral badges, ghost buttons; clears AA on the mist strip. */
+  --fg-link: var(--blue-700); /* Anchor text, deepened to clear AA on the mist canvas. */
+
+  /* Borders: one rung lighter than classic, so a pane edge reads as glass. */
+  --border: var(--gray-250); /* Default rule between and around surfaces. */
+  --border-subtle: var(--mist-200); /* Faint divider inside one surface. */
+  --border-strong: var(--gray-300); /* Emphasised rule. */
+
+  /* Accent. */
+  --accent: var(--blue-600); /* Primary buttons, active tabs, progress. */
+  --accent-hover: var(--blue-700); /* Hovered and pressed accent. */
+  --accent-bright: var(--blue-450); /* Saturated accent fill: progress bars, timeline columns. */
+  --accent-inverse: var(--blue-350); /* The accent on --bg-inverse; clears AA on the dark inverse ground. */
+  --accent-soft: var(--blue-100); /* Accent-tinted background wash. */
+
+  /* Application chrome. */
+  --chrome-bar: var(--slateblue-900); /* Product bar. */
+  --chrome-appbar: var(--slateblue-700); /* App bar. */
+  --chrome-hover: var(--slateblue-600); /* Hovered or open bar item. */
+
+  /* Loading skeleton. */
+  --skeleton-base: var(--mist-200); /* Resting skeleton surface. */
+
+  /* Translucency knobs: scripts/style-invariants.test.mjs holds both alphas at or above 80%. */
+  --alpha-chrome: 88%; /* Opacity of the two chrome bars. */
+  --alpha-surface: 84%; /* Opacity of raised and overlay surfaces. */
+  --backdrop-surface: blur(14px) saturate(140%); /* Filter behind every translucent raised surface; the bars take the alpha only. */
+
+  /* Scale: softer corners, wider and fainter elevation. */
+  --radius-lg: 18px; /* Modal and card corners. */
+  --radius-md: 12px; /* Control and menu corners. */
+  --radius-sm: 6px; /* Input and badge corners. */
+  --shadow-lg: 0 16px 48px rgb(18 29 36 / 14%), 0 4px 12px rgb(18 29 36 / 8%); /* Wide, soft drop for menus and popovers. */
+  --shadow-xl: 0 28px 80px rgb(10 20 26 / 22%); /* Wide, soft drop for the modal card. */
+}
+
+:root[data-palette="glass"][data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Borders: one rung fainter than classic dark. */
+  --border: var(--gray-750); /* Default rule. */
+  --border-subtle: var(--gray-800); /* Faint divider inside one surface. */
+  --border-strong: var(--gray-700); /* Emphasised rule. */
+
+  /* Accent. */
+  --accent: var(--blue-400); /* Primary action colour. */
+  --accent-hover: var(--blue-350); /* Hovered and pressed accent. */
+  --accent-bright: var(--blue-300); /* Saturated accent fill. */
+  --accent-inverse: var(--blue-600); /* The accent on --bg-inverse, a light surface here; a label ink, so it clears AA. */
+  --accent-soft: var(--blue-800); /* Accent-tinted background wash. */
+
+  /* Application chrome. */
+  --chrome-bar: var(--slateblue-950); /* Product bar. */
+  --chrome-appbar: var(--slateblue-900); /* App bar. */
+  --chrome-hover: var(--slateblue-700); /* Hovered or open bar item. */
+
+  /* Translucency: a dark pane needs a little more body to keep text legible over content. */
+  --alpha-surface: 80%; /* Opacity of raised and overlay surfaces, at the floor. */
+}

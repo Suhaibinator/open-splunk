@@ -25,7 +25,8 @@
 
 .modal-card {
   animation: modal-in 140ms ease-out;
-  background: var(--bg-surface);
+  backdrop-filter: var(--backdrop-surface);
+  background: color-mix(in srgb, var(--bg-surface) var(--alpha-surface), transparent);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-xl);
