@@ -324,7 +324,6 @@
 
 .suite-product-bar {
   align-items: stretch;
-  backdrop-filter: var(--backdrop-surface);
   background: color-mix(in srgb, var(--chrome-bar) var(--alpha-chrome), transparent);
   color: var(--chrome-fg);
   display: flex;
@@ -622,7 +621,6 @@
 
 .suite-app-bar {
   align-items: stretch;
-  backdrop-filter: var(--backdrop-surface);
   background: color-mix(in srgb, var(--chrome-appbar) var(--alpha-chrome), transparent);
   color: var(--chrome-fg);
   display: flex;

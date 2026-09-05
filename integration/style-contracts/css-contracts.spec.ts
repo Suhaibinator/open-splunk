@@ -1038,13 +1038,27 @@ const AA_CONTRAST = 4.5;
 
 /** WCAG relative luminance of a browser-serialised opaque paint. */
 function luminance(paint: string): number {
-  const parsed = /^rgba?\((\d+),\s*(\d+),\s*(\d+)/u.exec(paint);
-  if (parsed === null) throw new Error(`unreadable paint ${paint}`);
-  const [red, green, blue] = [parsed[1], parsed[2], parsed[3]].map((channel) => {
-    const scaled = Number(channel) / 255;
-    return scaled <= 0.040_45 ? scaled / 12.92 : ((scaled + 0.055) / 1.055) ** 2.4;
-  });
+  const [red, green, blue] = srgbChannels(paint).map((scaled) => (
+    scaled <= 0.040_45 ? scaled / 12.92 : ((scaled + 0.055) / 1.055) ** 2.4
+  ));
   return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+}
+
+/**
+ * The three sRGB channels of a computed paint, each scaled to 0..1.
+ *
+ * Chromium serialises a plain colour as `rgb(r, g, b)` / `rgba(r, g, b, a)`
+ * with 0..255 channels, and a `color-mix()` result -- every translucency knob
+ * consumer, even at the inert 100% -- as `color(srgb r g b[ / a])` with 0..1
+ * floats. Any alpha is ignored: a ratio is taken on the paint's own hue, as the
+ * token invariants prove contrast on the opaque hex.
+ */
+function srgbChannels(paint: string): number[] {
+  const byte = /^rgba?\((\d+),\s*(\d+),\s*(\d+)/u.exec(paint);
+  if (byte !== null) return [byte[1], byte[2], byte[3]].map((channel) => Number(channel) / 255);
+  const float = /^color\(srgb\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)/u.exec(paint);
+  if (float !== null) return [float[1], float[2], float[3]].map((channel) => Math.min(1, Math.max(0, Number(channel))));
+  throw new Error(`unreadable paint ${paint}`);
 }
 
 /** Contrast ratio between two paints, in either order. */

@@ -30,10 +30,10 @@
   /* Loading skeleton. */
   --skeleton-base: var(--mist-200); /* Resting skeleton surface. */
 
-  /* Translucency knobs: the floor is 80% for surfaces and 85% for chrome. */
+  /* Translucency knobs: scripts/style-invariants.test.mjs holds both alphas at or above 80%. */
   --alpha-chrome: 88%; /* Opacity of the two chrome bars. */
   --alpha-surface: 84%; /* Opacity of raised and overlay surfaces. */
-  --backdrop-surface: blur(14px) saturate(140%); /* Filter behind every translucent surface. */
+  --backdrop-surface: blur(14px) saturate(140%); /* Filter behind every translucent raised surface; the bars take the alpha only. */
 
   /* Scale: softer corners, wider and fainter elevation. */
   --radius-lg: 18px; /* Modal and card corners. */
