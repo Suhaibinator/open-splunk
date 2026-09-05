@@ -454,6 +454,12 @@
   background: var(--bg-subtle);
 }
 
+/* The composer at --z-sticky is a stacking context, so its menus are held at
+   that layer however high their own z-index climbs -- and the fields rail,
+   the later sibling at the same step, then paints over the lower rows of an
+   open completion menu. Raise the composer for as long as it holds a menu,
+   the move the chrome bars make for a floating menu. */
+.search-composer:has(.completion-menu),
 .search-composer:has(.time-popover) {
   z-index: var(--z-dropdown);
 }

@@ -1537,9 +1537,12 @@ test.describe("field validation contracts", () => {
   });
 });
 
-function composerMarkup(lines: number, completionOpen = false): string {
+function composerMarkup(lines: number, completionOpen = false, fieldOptions = 1): string {
   const query = Array.from({ length: lines }, (_, index) => (index === 0 ? "index=main" : `| stage${index}`)).join("\n");
   const gutter = Array.from({ length: Math.max(2, lines) }, (_, index) => `<span>${index + 1}</span>`).join("");
+  const fields = Array.from({ length: fieldOptions }, (_, index) => (
+    `<button class="completion-option" id="spl-completion-${index + 1}" role="option" aria-selected="false" type="button"><code>field${index}</code><span>Field</span><kbd></kbd></button>`
+  )).join("");
   const menu = completionOpen
     ? `<div class="completion-menu" id="spl-completion-list" role="listbox" aria-label="SPL suggestions">
         <div class="completion-group" role="group" aria-labelledby="spl-completion-group-command">
@@ -1548,7 +1551,7 @@ function composerMarkup(lines: number, completionOpen = false): string {
         </div>
         <div class="completion-group" role="group" aria-labelledby="spl-completion-group-field">
           <div class="completion-title" id="spl-completion-group-field"><span>Fields</span><small>Fields seen in results</small></div>
-          <button class="completion-option" id="spl-completion-1" role="option" aria-selected="false" type="button"><code>status</code><span>Field</span><kbd></kbd></button>
+          ${fields}
         </div>
       </div>`
     : "";
@@ -2379,3 +2382,71 @@ const LIGHT_ONLY_RESTATEMENTS: ReadonlyArray<readonly [Palette, readonly string[
 const CHROME_STAYS_CLASSIC_IN_DARK: ReadonlySet<Palette> = new Set(
   LIGHT_ONLY_RESTATEMENTS.filter(([, names]) => names.includes("--chrome-bar")).map(([palette]) => palette),
 );
+
+// The search workspace's stacking: the composer and the fields rail are
+// siblings of one page, and the completion menu drops out of the composer over
+// whatever sits below it.
+const workspaceStackingMarkup = `
+  ${composerMarkup(2, true, 5)}
+  <div class="events-layout">
+    <aside class="fields-rail" aria-label="Search fields">
+      <div class="fields-topbar"><button type="button">Hide Fields</button><button type="button">All Fields</button></div>
+      <div class="field-filter"><span>⌕</span><input aria-label="Filter fields" placeholder="Filter fields"></div>
+    </aside>
+    <section class="event-results" aria-label="Events">
+      <div class="table-wrap">
+        <table class="table">
+          <thead><tr><th>Time</th><th>Event</th></tr></thead>
+          <tbody><tr><td>7/21/26</td><td><code>index=main</code></td></tr></tbody>
+        </table>
+      </div>
+    </section>
+  </div>`;
+
+test.describe("search workspace stacking", () => {
+  test("the open completion menu paints over the fields rail, in classic and glass, both modes", async ({ page }) => {
+    // `.search-composer` and `.fields-rail` both sit at --z-sticky, and the
+    // rail is the later sibling: the menu, trapped in the composer's stacking
+    // context however high its own z-index climbs, lost its lower rows to the
+    // rail. The composer lifts to --z-dropdown for as long as it holds the
+    // menu, the move the chrome bars make for a floating menu. Glass gives the
+    // menu a backdrop-filter, which opens a stacking context on the menu
+    // itself; that must not change which element the pointer reaches.
+    await mount(page, workspaceStackingMarkup, DESKTOP_WIDTH);
+    const scopes = (["classic", "glass"] as const).flatMap((palette) => THEME_MODES.map((mode) => ({ mode, palette })));
+    await sequentially(scopes, async ({ mode, palette }) => {
+      await applyScope(page, palette, mode);
+      const probe = await page.evaluate(() => {
+        const menu = document.querySelector(".completion-menu");
+        const rail = document.querySelector(".fields-rail");
+        const rows = document.querySelectorAll(".completion-menu .completion-option");
+        const lowest = rows[rows.length - 1];
+        if (menu === null || rail === null || lowest === undefined) throw new Error("fixture is missing the menu, its rows or the rail");
+        const row = lowest.getBoundingClientRect();
+        const box = rail.getBoundingClientRect();
+        const overlap = {
+          bottom: Math.min(row.bottom, box.bottom),
+          left: Math.max(row.left, box.left),
+          right: Math.min(row.right, box.right),
+          top: Math.max(row.top, box.top),
+        };
+        if (overlap.right - overlap.left < 1 || overlap.bottom - overlap.top < 1) {
+          throw new Error(`the lowest menu row does not overlap the rail: ${JSON.stringify({ rail: box, row })}`);
+        }
+        const x = (overlap.left + overlap.right) / 2;
+        const y = (overlap.top + overlap.bottom) / 2;
+        const hit = document.elementFromPoint(x, y);
+        return {
+          backdropFilter: globalThis.getComputedStyle(menu).backdropFilter,
+          hitInMenu: hit !== null && hit.closest(".completion-menu") !== null,
+          hitPath: hit === null ? null : [hit, hit.parentElement].map((node) => `${node?.tagName.toLowerCase()}.${node?.className}`).join(" < "),
+          x,
+          y,
+        };
+      });
+      expect(probe.hitInMenu, `${palette} ${mode}: the pointer at (${probe.x}, ${probe.y}) reaches ${probe.hitPath}, not the menu`).toBe(true);
+      // Glass is the palette that filters the menu; classic leaves it plain.
+      expect(probe.backdropFilter === "none", `${palette} ${mode}: backdrop-filter is ${probe.backdropFilter}`).toBe(palette === "classic");
+    });
+  });
+});

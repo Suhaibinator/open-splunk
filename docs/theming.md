@@ -339,6 +339,18 @@ palette file that restates the shadow), because a primitive has no lightness
 step for an alpha and a `color-mix()` cannot appear inside a value the scale
 layer owns.
 
+Page layers are ten steps: `--z-base` (1), `--z-sticky` (100), `--z-bar`
+(200), `--z-dropdown-scrim` (300), `--z-dropdown` (400), `--z-modal` (500),
+`--z-drawer-scrim` (600), `--z-drawer` (700), `--z-toast` (800) and
+`--z-skip-link` (1000). A positioned element on a step is a stacking context,
+so a menu inside it is held at its host's layer however high the menu's own
+step climbs; the host is raised instead for as long as it holds one.
+`.suite-product-bar`, `.search-title-row` and `.job-strip` move to
+`--z-dropdown` while they hold a `.floating-menu` or `.suite-popover`, and
+`.search-composer` does the same while it holds the `.completion-menu` or the
+`.time-popover`, which is what carries the completion menu over the fields
+rail -- a later sibling on the composer's own `--z-sticky` step.
+
 The type ramp is `--type-xxs` (9px) through `--type-xxl` (20px) plus the fluid
 `--type-display`. `body` in `base.css` sets `--type-md` (12px); most controls,
 tables and chrome set `--type-xs` (10px), which is why the ramp is
