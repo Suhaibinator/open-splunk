@@ -125,7 +125,7 @@
   --red-600: #b23b36; /* Pressed error colour. */
   --red-700: #8f2f2b; /* Deep error text. */
 
-  /* Purple: categorical only; the product assigns it no state. */
+  /* Purple: categorical only; the product assigns it no state. Glass takes it as its accent. */
   --purple-100: #efeaf6; /* Purple wash. */
   --purple-300: #cbb8e0; /* Graphite command ink in dark: purple that clears 7:1 on the dark surface. */
   --purple-400: #b094cf; /* Light purple: an ink that clears AA on a dark ground. */

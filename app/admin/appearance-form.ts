@@ -29,7 +29,7 @@ export const PALETTE_OPTIONS: Readonly<Record<Palette, PaletteOption>> = {
   ocean: { label: "Ocean", description: "Cool blue surfaces and slate-blue bars." },
   ember: { label: "Ember", description: "Warm neutrals with a rust accent." },
   graphite: { label: "Graphite", description: "Near-monochrome, high contrast; colour is reserved for state and code." },
-  glass: { label: "Glass", description: "Translucent surfaces, soft radii." },
+  glass: { label: "Glass", description: "Translucent surfaces, soft radii, purple accent." },
   terminal: { label: "Terminal", description: "Monospace UI, square corners, high contrast." },
 };
 

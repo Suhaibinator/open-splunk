@@ -1,7 +1,10 @@
 /*
- * Glass palette: translucent raised surfaces over a mist canvas, ocean's blue
- * accent and slate-blue bars, softer corners and elevation. Restates only what
- * differs from classic; see docs/theming.md, "Adding a theme".
+ * Glass palette: translucent raised surfaces over a mist canvas, a purple
+ * accent on slate-blue bars, softer corners and elevation. The accent is what
+ * tells glass from ocean at a glance: the two share the cool canvas and chrome,
+ * so glass takes the one tier-1 hue classic uses only decoratively, and moves
+ * the decorative second accent onto blue to keep the accent group distinct.
+ * Restates only what differs from classic; see docs/theming.md, "Adding a theme".
  */
 :root:where([data-palette="glass"]) {
   color-scheme: light;
@@ -19,12 +22,14 @@
   --border-subtle: var(--mist-200); /* Faint divider inside one surface. */
   --border-strong: var(--gray-300); /* Emphasised rule. */
 
-  /* Accent. */
-  --accent: var(--blue-600); /* Primary buttons, active tabs, progress. */
-  --accent-hover: var(--blue-700); /* Hovered and pressed accent. */
-  --accent-bright: var(--blue-450); /* Saturated accent fill: progress bars, timeline columns. */
-  --accent-inverse: var(--blue-350); /* The accent on --bg-inverse; clears AA on the dark inverse ground. */
-  --accent-soft: var(--blue-100); /* Accent-tinted background wash. */
+  /* Accent: purple, the hue classic keeps for decoration, promoted to the primary action colour. */
+  --accent: var(--purple-600); /* Primary buttons, active tabs, progress; white ink clears AA on it. */
+  --accent-hover: var(--purple-700); /* Hovered and pressed accent. */
+  --accent-bright: var(--purple-500); /* Saturated accent fill: progress bars, timeline columns. */
+  --accent-inverse: var(--purple-300); /* The accent on --bg-inverse; clears AA on the dark inverse ground. */
+  --accent-soft: var(--purple-100); /* Accent-tinted background wash. */
+  --accent-alt: var(--blue-800); /* Second decorative accent, moved off purple now that purple is the accent; deep enough for the completion menu's code ink on its translucent ground. */
+  --accent-alt-soft: var(--blue-100); /* Second decorative accent, as a background wash. */
 
   /* Application chrome. */
   --chrome-bar: var(--slateblue-900); /* Product bar. */
@@ -55,12 +60,14 @@
   --border-subtle: var(--gray-800); /* Faint divider inside one surface. */
   --border-strong: var(--gray-700); /* Emphasised rule. */
 
-  /* Accent. */
-  --accent: var(--blue-400); /* Primary action colour. */
-  --accent-hover: var(--blue-350); /* Hovered and pressed accent. */
-  --accent-bright: var(--blue-300); /* Saturated accent fill. */
-  --accent-inverse: var(--blue-600); /* The accent on --bg-inverse, a light surface here; a label ink, so it clears AA. */
-  --accent-soft: var(--blue-800); /* Accent-tinted background wash. */
+  /* Accent: lightened so it clears the dark ground, as the classic green does. */
+  --accent: var(--purple-400); /* Primary action colour; the dark inverse ink clears AA on it. */
+  --accent-hover: var(--purple-300); /* Hovered and pressed accent. */
+  --accent-bright: var(--purple-550); /* Saturated accent fill. */
+  --accent-inverse: var(--purple-600); /* The accent on --bg-inverse, a light surface here; a label ink, so it clears AA. */
+  --accent-soft: var(--purple-700); /* Accent-tinted background wash. */
+  --accent-alt: var(--blue-350); /* Second decorative accent, an ink in the completion menu; clears AA on the raised ground. */
+  --accent-alt-soft: var(--blue-800); /* Second decorative accent, as a background wash. */
 
   /* Application chrome. */
   --chrome-bar: var(--slateblue-950); /* Product bar. */

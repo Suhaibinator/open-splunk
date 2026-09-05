@@ -30,7 +30,7 @@ is:
 | 1 | `app/styles/tokens-color.css` | primitive palette, semantic colour roles, base dark-theme role overrides |
 | 2 | `app/styles/tokens-scale.css` | spacing, radii, type, stacking, elevation, motion, opacity, translucency knobs, fonts |
 | 3 | `app/styles/tokens-palette-ember.css` | ember palette: light and dark restatements of colour and scale roles |
-| 4 | `app/styles/tokens-palette-glass.css` | glass palette: translucency knobs, borders, accent, chrome, radii, shadows |
+| 4 | `app/styles/tokens-palette-glass.css` | glass palette: translucency knobs, borders, purple accent, chrome, radii, shadows |
 | 5 | `app/styles/tokens-palette-graphite.css` | graphite palette: 7:1 monochrome inks, gray accent and chrome, ring shadows |
 | 6 | `app/styles/tokens-palette-ocean.css` | ocean palette: mist canvas, blue accent, slate-blue chrome, softer scale |
 | 7 | `app/styles/tokens-palette-terminal.css` | terminal palette: mono type stack, square corners, ring shadows, phosphor |
