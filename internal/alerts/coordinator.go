@@ -450,6 +450,15 @@ func (coordinator *Coordinator) execute(ctx context.Context, snapshot RunSnapsho
 		summary.FailureCategory = string(FailureCanceled)
 		return coordinator.complete(ctx, summary, err)
 	}
+	// Resolve the retained-result link before any state-changing delivery
+	// step. A missing public base URL then fails the run without extending
+	// retention or consuming its single delivery authorization.
+	resultsURL, err := coordinator.resultsURL(jobID)
+	if err != nil {
+		summary.Outcome = RunDeliveryFailed
+		summary.FailureCategory = string(FailurePublicBaseURL)
+		return coordinator.complete(ctx, summary, err)
+	}
 	extendedExpiry, err := coordinator.retention.ExtendAlertSearchJob(ctx, snapshot.OwnerID, jobID, snapshot.TriggeredRetention)
 	if err != nil || extendedExpiry.IsZero() {
 		summary.Outcome = RunDeliveryFailed
@@ -492,12 +501,6 @@ func (coordinator *Coordinator) execute(ctx context.Context, snapshot RunSnapsho
 	if len(rows) > snapshot.Definition.SampleRows {
 		rows = rows[:snapshot.Definition.SampleRows]
 		sampleTruncated = true
-	}
-	resultsURL, err := coordinator.resultsURL(jobID)
-	if err != nil {
-		summary.Outcome = RunDeliveryUnknown
-		summary.FailureCategory = string(FailurePublicBaseURL)
-		return coordinator.complete(ctx, summary, err)
 	}
 	deliveryAt := coordinator.clock().UTC()
 	signed, err := BuildSignedPayload(WebhookPayload{

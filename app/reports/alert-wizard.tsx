@@ -6,7 +6,7 @@ import { type AlertFormErrors, type AlertFormValue, validateAlertForm } from "@/
 
 import { FieldNote, fieldControlProps } from "../_components/field-validation";
 import { Modal } from "../_components/modal";
-import { alertWizardInitialFocus } from "./alerts-ui-state";
+import { alertWizardInitialFocus, ONE_TIME_SECRET_NAVIGATION_BLOCKED_MESSAGE } from "./alerts-ui-state";
 import { Select, SelectOption } from "../_components/select";
 
 export interface AlertApplicationOption {
@@ -20,6 +20,7 @@ interface AlertWizardProps {
   administratorSignInRequired?: boolean;
   existingWebhookHostname?: string;
   initialValue: AlertFormValue;
+  navigationBlocked?: boolean;
   pending: boolean;
   submitError: string | null;
   validateSchedule: (value: AlertFormValue, signal: AbortSignal) => Promise<AlertFormErrors>;
@@ -61,6 +62,7 @@ export function AlertWizard({
   administratorSignInRequired = false,
   existingWebhookHostname,
   initialValue,
+  navigationBlocked = false,
   pending,
   submitError,
   validateSchedule,
@@ -322,6 +324,7 @@ export function AlertWizard({
           </>
         ) : null}
         {scheduleValidationError ? <p className="alerts-inline-error" role="alert">{scheduleValidationError}</p> : null}
+        {navigationBlocked ? <p className="alerts-inline-error" role="alert">{ONE_TIME_SECRET_NAVIGATION_BLOCKED_MESSAGE}</p> : null}
         {submitError ? <p className="alerts-inline-error" role="alert">{submitError}{administratorSignInRequired ? <> <Link href="/signin/">Administrator sign in</Link></> : null}</p> : null}
       </form>
     </Modal>
