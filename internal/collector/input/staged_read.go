@@ -677,14 +677,23 @@ func (t *tailer) guardFromBatch(batch *stagedBatch) (tailerRewriteGuard, error) 
 	}, nil
 }
 
-// commitBatch installs the validated cursor and bounded trailing guard before
-// publishing. A rewrite after this point cannot alter an already-staged event:
-// the next poll compares the installed old snapshot and burns a new generation.
-func (t *tailer) commitBatch(ctx context.Context, batch *stagedBatch) bool {
+// prepareCommit performs the fallible half of a batch commit: it derives the
+// bounded trailing guard and durably records every pre-decode framing failure
+// through the daemon-owned rejection handler. On failure the source cursor
+// and event publication remain unchanged, so the caller can retry the same
+// source range from its still-open descriptor. Recovery artifacts may have
+// made partial durable progress: rejections recorded before the failing call
+// stay persisted and are recorded again on retry, each carrying exact source
+// coordinates. The returned error is already recorded as this file's health
+// error.
+func (t *tailer) prepareCommit(
+	ctx context.Context,
+	batch *stagedBatch,
+) (tailerRewriteGuard, error) {
 	guard, err := t.guardFromBatch(batch)
 	if err != nil {
 		t.setReadError(err)
-		return false
+		return tailerRewriteGuard{}, err
 	}
 	for _, rejection := range batch.rejections {
 		if t.m.rejectionHandler == nil {
@@ -692,9 +701,21 @@ func (t *tailer) commitBatch(ctx context.Context, batch *stagedBatch) bool {
 		}
 		if err := t.m.rejectionHandler(ctx, rejection); err != nil {
 			t.setReadError(err)
-			return false
+			return tailerRewriteGuard{}, err
 		}
 	}
+	return guard, nil
+}
+
+// publishBatch installs the validated cursor and bounded trailing guard before
+// publishing. A rewrite after this point cannot alter an already-staged event:
+// the next poll compares the installed old snapshot and burns a new generation.
+// It returns false only when ctx is canceled mid-publication.
+func (t *tailer) publishBatch(
+	ctx context.Context,
+	batch *stagedBatch,
+	guard tailerRewriteGuard,
+) bool {
 	t.offset = batch.cursor.offset
 	t.nextLineNumber = batch.cursor.nextLineNumber
 	t.discardingOversize = batch.cursor.discardingOversize
@@ -718,6 +739,17 @@ func (t *tailer) commitBatch(ctx context.Context, batch *stagedBatch) bool {
 		}
 	}
 	return true
+}
+
+// commitBatch runs prepareCommit and publishBatch back to back. It returns
+// false when the recovery artifact could not be persisted (the range remains
+// retryable) or when ctx was canceled during publication.
+func (t *tailer) commitBatch(ctx context.Context, batch *stagedBatch) bool {
+	guard, err := t.prepareCommit(ctx, batch)
+	if err != nil {
+		return false
+	}
+	return t.publishBatch(ctx, batch, guard)
 }
 
 // finalizeRetirement establishes the finite cross-platform handoff boundary.
@@ -812,6 +844,15 @@ func (t *tailer) finalizeRetirement(
 		}
 		return false, false
 	}
+	// Persist framing-recovery artifacts before crossing the retirement
+	// boundary. A failed recovery write must keep the descriptor open and the
+	// range retryable, which is only possible while retirement is still
+	// provisional. The next poll re-stages the same final snapshot.
+	guard, err := t.prepareCommit(ctx, batch)
+	if err != nil {
+		t.retireStable = 0
+		return false, false
+	}
 
 	t.retireMu.Lock()
 	if !t.retireRequested.Load() || t.retireCommitted ||
@@ -877,7 +918,7 @@ func (t *tailer) finalizeRetirement(
 	// order, then release the bounded staging-memory permit before waiting on
 	// daemon/WAL durability. Holding a permit across that I/O boundary would let
 	// several retiring files stall otherwise independent active tailers.
-	t.commitBatch(ctx, batch)
+	t.publishBatch(ctx, batch, guard)
 	batch = nil
 	t.m.releaseStagedTransaction()
 	permitHeld = false

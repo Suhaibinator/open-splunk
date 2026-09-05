@@ -2306,3 +2306,85 @@ func TestSenderContinuesWhenResumePointUnknown(t *testing.T) {
 	cancel()
 	<-done
 }
+
+// stalledDialClient returns a client whose transport dial never completes
+// until the dial context ends, so Collect blocks inside stream establishment.
+// dialed is signaled once per dial attempt.
+func stalledDialClient(t *testing.T, dialed chan<- struct{}) *grpc.ClientConn {
+	t.Helper()
+	conn, err := grpc.NewClient(
+		"passthrough:///stalled",
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+			select {
+			case dialed <- struct{}{}:
+			default:
+			}
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	return conn
+}
+
+func TestSenderCancellationInterruptsStalledStreamOpen(t *testing.T) {
+	t.Parallel()
+	dialed := make(chan struct{}, 1)
+	opts := testOptions()
+	opts.DialTimeout = time.Minute
+	s := newTestSender(t, opts, newFakeQueue(), &memSink{}, nil, stalledDialClient(t, dialed))
+	cancel, done := runSender(t, s)
+
+	select {
+	case <-dialed:
+	case <-time.After(time.Second):
+		t.Fatal("sender did not start dialing")
+	}
+	started := time.Now()
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancellation did not interrupt a stalled stream open")
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("cancellation took %v while the stream open was stalled", elapsed)
+	}
+}
+
+func TestSenderDialTimeoutBoundsStalledStreamOpen(t *testing.T) {
+	t.Parallel()
+	dialed := make(chan struct{}, 1)
+	opts := testOptions()
+	opts.DialTimeout = 50 * time.Millisecond
+	s := newTestSender(t, opts, newFakeQueue(), &memSink{}, nil, stalledDialClient(t, dialed))
+	cancel, done := runSender(t, s)
+
+	select {
+	case <-dialed:
+	case <-time.After(time.Second):
+		t.Fatal("sender did not start dialing")
+	}
+	waitFor(t, "stream establishment timeout recorded", func() bool {
+		s.mu.Lock()
+		lastError := s.stats.LastError
+		s.mu.Unlock()
+		return strings.Contains(lastError, "stream establishment timed out after 50ms")
+	})
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return after cancel")
+	}
+}
