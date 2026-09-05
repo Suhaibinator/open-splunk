@@ -25,7 +25,7 @@ family prefix are already complete relative to `/api`.
 | Family | Relative paths |
 | --- | --- |
 | System | `/system/bootstrap` |
-| Server settings | `/server/settings/get`, `/update` |
+| Server settings | `/server/settings/get`, `/update`, `/server/appearance/get`, `/update` |
 | Search jobs | `/search/jobs/create`, `/get`, `/list`, `/results`, `/fields/list`, `/field-summary`, `/timeline`, `/cancel`, `/share`, `/inspect` |
 | Search tools | `/search/validate`, `/search/suggestions`, `/search/jobs/settings/get`, `/search/jobs/settings/update` |
 | History | `/search/history/get`, `/list`, `/delete`, `/clear` |
@@ -56,7 +56,12 @@ product version when present, the source revision, and the capabilities
 composed into that process. Optional families are usable only when their feature
 enum is advertised. A generated message or individually registered management
 route is not proof that the corresponding runtime, retained products, and
-browser family are complete.
+browser family are complete. Bootstrap also carries the live instance UI
+palette (`ui_palette`) so every page, the sign-in page included, paints the
+administrator's choice; `UI_PALETTE_UNSPECIFIED` means no settings service is
+configured and the client paints classic. Administrators read and replace the
+palette through `/server/appearance/get` and `/update`, which are versioned
+independently of the search-limits settings.
 
 Requests are raw-body bounded before decode. Malformed protobuf and invalid
 known enum values fail. Ordinary operations ignore unknown fields according to

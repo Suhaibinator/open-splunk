@@ -94,6 +94,14 @@ func newRuntimeSearchLifecycle(config runtimeSearchLifecycleConfig) (_ *runtimeS
 	if err != nil {
 		return nil, fmt.Errorf("load server settings: %w", err)
 	}
+	appearanceStore, err := control.NewServerAppearanceSettingsStore(config.controlDB, config.tenantID, config.auditAppender)
+	if err != nil {
+		return nil, fmt.Errorf("create server appearance store: %w", err)
+	}
+	initialAppearance, err := appearanceStore.Get(config.ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load server appearance settings: %w", err)
+	}
 	limitSource, err := searchlimits.NewSource(initialSettings.Limits)
 	if err != nil {
 		return nil, fmt.Errorf("load server settings policy: %w", err)
@@ -147,6 +155,7 @@ func newRuntimeSearchLifecycle(config runtimeSearchLifecycleConfig) (_ *runtimeS
 	lifecycle.closeSearchJobs = lifecycle.jobs.Close
 	lifecycle.serverSettings = &runtimeServerSettings{
 		store: settingsStore, source: limitSource, jobs: lifecycle.jobs, current: initialSettings,
+		appearanceStore: appearanceStore, appearance: initialAppearance,
 	}
 	lifecycle.preview, err = knowledgepreview.NewService(knowledgepreview.Config{
 		Searches: lifecycle.jobs, Writer: lifecycle.knowledge.writer,

@@ -40,6 +40,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/searchsuggestions"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
+	"github.com/Suhaibinator/open-splunk/internal/uipalette"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"google.golang.org/protobuf/proto"
@@ -579,11 +580,16 @@ type BootstrapConfig struct {
 }
 
 // Settings is the administrator mutation surface and live bootstrap
-// view for node-wide search limits.
+// view for node-wide settings: the search-limits policy and the instance
+// UI palette. One admin surface and one runtime object own both, under
+// SERVER_FEATURE_SERVER_SETTINGS_ADMIN.
 type Settings interface {
 	Get(context.Context) (control.ServerSearchSettings, error)
 	Update(context.Context, uint64, searchlimits.Policy) (control.ServerSearchSettings, error)
 	Current() control.ServerSearchSettings
+	GetAppearance(context.Context) (control.ServerAppearanceSettings, error)
+	UpdateAppearance(context.Context, uint64, uipalette.Palette) (control.ServerAppearanceSettings, error)
+	CurrentAppearance() control.ServerAppearanceSettings
 }
 
 // AlertCoordinator is the complete scheduled/run-now execution boundary. It
@@ -1216,7 +1222,10 @@ func NewHandler(config Config) (*Handler, error) {
 		administratorRoutes[searchAttemptAuditListPath] = struct{}{}
 	}
 	if api.serverSettings != nil {
-		for _, path := range []string{"/api/server/settings/get", "/api/server/settings/update"} {
+		for _, path := range []string{
+			"/api/server/settings/get", "/api/server/settings/update",
+			"/api/server/appearance/get", "/api/server/appearance/update",
+		} {
 			apiRoutes[path] = http.MethodPost
 			administratorRoutes[path] = struct{}{}
 		}

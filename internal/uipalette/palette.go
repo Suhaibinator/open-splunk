@@ -2,7 +2,10 @@
 // selects for every browser session, including the sign-in page.
 package uipalette
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // Palette names one shipped aesthetic. Values are the exact lower-case
 // identifiers persisted in server_appearance_settings and carried by the
@@ -16,7 +19,7 @@ const (
 	Ocean Palette = "ocean"
 	// Ember is warm neutrals with an orange-red accent.
 	Ember Palette = "ember"
-	// Graphite is near-monochrome, high contrast, minimal colour.
+	// Graphite is near-monochrome, high contrast, minimal color.
 	Graphite Palette = "graphite"
 	// Glass is translucent raised surfaces with softer radii and shadows.
 	Glass Palette = "glass"
@@ -39,10 +42,8 @@ func All() []Palette {
 // Validate accepts exactly the supported identifiers; matching is
 // case-sensitive and the empty string is rejected.
 func Validate(palette Palette) error {
-	for _, candidate := range all {
-		if palette == candidate {
-			return nil
-		}
+	if slices.Contains(all, palette) {
+		return nil
 	}
 	return fmt.Errorf("ui palette: %q is not a supported palette", string(palette))
 }

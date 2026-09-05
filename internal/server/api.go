@@ -72,10 +72,14 @@ func (handler *apiHandler) getSystemBootstrap(request *http.Request, input *open
 	}
 	defaultSearchTimeout := handler.bootstrap.DefaultSearchTimeout
 	searchResultRetention := handler.bootstrap.SearchResultRetention
+	// Without a settings service the palette stays UNSPECIFIED, which the
+	// client paints as classic.
+	uiPalette := opensplunk.UiPalette_UI_PALETTE_UNSPECIFIED
 	if handler.serverSettings != nil {
 		current := handler.serverSettings.Current()
 		defaultSearchTimeout = current.Limits.MaxRuntime
 		searchResultRetention = current.Limits.ResultRetention
+		uiPalette = uiPaletteToProto(handler.serverSettings.CurrentAppearance().Palette)
 	}
 	response := &opensplunk.GetSystemBootstrapResponse{
 		Build:               buildmetadata.Clone(handler.bootstrap.Build),
@@ -96,6 +100,7 @@ func (handler *apiHandler) getSystemBootstrap(request *http.Request, input *open
 		Apps:       apps,
 		Indexes:    indexSummaries,
 		ServerTime: timestamppb.New(handler.now().Round(0).UTC()),
+		UiPalette:  uiPalette,
 	}
 	if selectedAppID != "" {
 		response.SelectedAppId = new(selectedAppID)

@@ -29,7 +29,11 @@ Representative actions are:
 - `saved_search.create`, `.update`, `.duplicate`, and `.delete`;
 - knowledge `create`, `update`, `scope_change`, `enable`, `disable`, and
   `delete`; and
-- `server_settings.update` for the search-limits policy; and
+- `server_settings.update` for the node-wide settings singletons, where
+  `target_id` names the singleton (`search-limits` for the search policy,
+  `ui-palette` for the instance UI palette) and `target_version` is that
+  singleton's own committed version; old and new values are not recorded;
+  and
 - lookup `create`, `replace`, `enable`, `disable`, and `delete`.
 
 Protective knowledge quarantine belongs to the separate recovery journal.
