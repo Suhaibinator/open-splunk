@@ -119,8 +119,8 @@
   --space-statistics-column-text: 168px;
   --space-statistics-column-time: 220px;
 
-  /* Type scale. This product's body size is 10px, so the ramp is deliberately
-     bottom-heavy and --type-xs, not --type-md, is the default UI size. The
+  /* Type scale. body sets --type-md (12px), but most controls, tables and
+     chrome set --type-xs (10px), so the ramp is deliberately bottom-heavy. The
      family is --type-* rather than --text-* because --text and --text-strong
      are colours: one prefix cannot mean both a length and an ink.
 

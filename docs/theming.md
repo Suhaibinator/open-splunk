@@ -127,8 +127,9 @@ every palette file comment per token.)
 ### Naming
 
 - Primitives: `--<hue>-<step>`, step ascending from light to dark, with `0`
-  reserved for white and `950` for the deepest neutral. Intermediate steps
-  (`150`, `450`, `550`) exist where a role needed them.
+  reserved for white and `950` for the deepest neutral. Off-hundred steps
+  (`50`, `150`, `250`, `350`, `450`, `550`, `650`, `750`) exist where a role
+  needed them; check the ladder before adding one.
 - Semantic tokens: a group prefix, then the role, then any modifier. The
   groups, in the order the invariant lists them, are
   accent, bg, border, chart, chrome, fg, level, skeleton, status, syntax;
@@ -333,12 +334,15 @@ Elevation is a size ladder (`--shadow-sm` through `--shadow-xl`) plus three
 drops named for the surface whose direction no size can express
 (`--shadow-drawer`, `--shadow-sheet`, `--shadow-toast`). A palette may restate
 a shadow whole -- graphite and terminal turn every drop into a hairline ring --
-but its ink stays a literal inside the scale file, because a primitive has no
-lightness step for an alpha and a `color-mix()` cannot appear inside a value
-the scale layer owns.
+but its ink stays a literal inside the token layer (the scale file, or the
+palette file that restates the shadow), because a primitive has no lightness
+step for an alpha and a `color-mix()` cannot appear inside a value the scale
+layer owns.
 
 The type ramp is `--type-xxs` (9px) through `--type-xxl` (20px) plus the fluid
-`--type-display`; body size is 10px, so `--type-xs` is the default UI size.
+`--type-display`. `body` in `base.css` sets `--type-md` (12px); most controls,
+tables and chrome set `--type-xs` (10px), which is why the ramp is
+bottom-heavy.
 `--font-sans`, `--font-mono` and `--font-serif` are the three stacks; terminal
 restates `--font-sans` to the mono stack literal, because a semantic token may
 not point at another token.
@@ -458,7 +462,7 @@ The knobs that exist today:
 
 ## Adding a theme
 
-A palette is one CSS file plus the name spelled in the five places that must
+A palette is one CSS file plus the name spelled in the eight places that must
 agree on it. The stylesheet never needs to know a new palette exists beyond
 its token file; everything else is the guardrails' job.
 
@@ -498,9 +502,13 @@ its token file; everything else is the guardrails' job.
    `internal/uipalette/palette.go` (the constant and the `all` list), a
    `UiPalette` value appended to `proto/open_splunk/server_settings_api.proto`
    (never renumbered; regenerate with `make proto` and update the enum pin in
-   `contracts_test.go`), and a new SQLite migration that rebuilds the
-   `palette` CHECK on `server_appearance_settings` (`0011` is shipped and
-   digest-pinned, so it is not edited). Keep all of them in the same order.
+   `contracts_test.go`), the hand-written wire map `uiPaletteWireValues` in
+   `internal/server/server_settings_api.go` (both `uiPaletteToProto` and
+   `uiPaletteFromProto` read it; the build passes without the entry, and only
+   `go test ./internal/server` holds it to `uipalette.All()`), and a new
+   SQLite migration that rebuilds the `palette` CHECK on
+   `server_appearance_settings` (`0011` is shipped and digest-pinned, so it is
+   not edited). Keep all of them in the same order.
 7. **Run the guardrails and extend the contracts.** `npm run lint:css` and
    `npm run test:frontend` prove the file shape, the four preludes, the
    `color-scheme` rule, "primitives only in base light", "restate only what
@@ -508,8 +516,8 @@ its token file; everything else is the guardrails' job.
    palette's entry in `CONTRAST_FLOOR` when it promises more, as graphite
    promises 7:1) and the 80% alpha floor, in all twelve scopes; the
    `lib/api/ui-palette` and `appearance-form` unit tests hold the client
-   lists to `PALETTES`; `go test ./...` holds the enum, the CHECK and the
-   sanitizer to the same list. `npm run test:contracts` runs the palette
+   lists to `PALETTES`; `go test ./...` holds the enum, the CHECK, the wire
+   map and the sanitizer to the same list. `npm run test:contracts` runs the palette
    contracts over every name in `PALETTES` automatically; add a dedicated
    contract only for a behaviour peculiar to the new palette, as glass has for
    translucency and terminal for the mono face.
