@@ -15,7 +15,7 @@ import {
   type UpdateServerAppearanceRequest,
 } from "@/gen/ts/open_splunk/server_settings_api";
 import { HttpError, type OpenSplunkApiClient } from "@/lib/api";
-import type { Palette } from "@/lib/palettes";
+import { PALETTES, type Palette } from "@/lib/palettes";
 import { fakeEvent, type FakeElement } from "@/lib/testing/fake-dom";
 import { PALETTE_STORAGE_KEY } from "@/lib/theme-preference";
 
@@ -378,6 +378,300 @@ test("a load failure paints nothing and unmounting restores nothing", async () =
   assert.deepEqual(checkedRadios(mounted.container), ["graphite"]);
   await mounted.unmount();
   assert.equal(paletteOnDocument(), "graphite");
+  assert.deepEqual(reactErrors, []);
+});
+
+/* == Break phase: round trips, late answers, and a 409 that lands on the preview == */
+
+/** A promise the test settles by hand, for answers that arrive after the card is gone. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((resolveIt, rejectIt) => {
+    resolve = resolveIt;
+    reject = rejectIt;
+  });
+  return { promise, reject, resolve };
+}
+
+for (const detour of PALETTES.filter((palette) => palette !== "ocean")) {
+  test(`a detour through ${detour} and back to the saved palette is a clean round trip through the radios`, async () => {
+    const server = fakeServer();
+    server.gets.push(() => Promise.resolve(envelope("ocean", 7n)));
+    const mounted = await mount(server);
+    await mounted.choose(detour);
+    assert.equal(paletteOnDocument(), detour);
+    assert.equal(mounted.button("Apply").disabled, false);
+    await mounted.choose("ocean");
+    assert.equal(paletteOnDocument(), "ocean");
+    assert.deepEqual(checkedRadios(mounted.container), ["ocean"]);
+    assert.equal(mounted.button("Apply").disabled, true);
+    assert.equal(mounted.dirty.at(-1), false);
+    assert.equal(browser.dispatchWindowEvent("beforeunload").defaultPrevented, false);
+    // Only the load wrote the cache: the preview and the return both went
+    // through `previewPalette`, never `applyInstancePalette`.
+    assert.deepEqual(browser.storageWrites, [[PALETTE_STORAGE_KEY, "ocean"]]);
+    assert.deepEqual(server.requests, [["get"]]);
+    assert.deepEqual(reactErrors, []);
+    await mounted.unmount();
+  });
+}
+
+test("a 409 whose reload returns the previewed palette itself leaves nothing to apply", async () => {
+  const server = fakeServer();
+  server.gets.push(() => Promise.resolve(envelope("classic", 3n)));
+  server.updates.push(() => Promise.reject(new HttpError({ message: "version conflict", status: 409, url: "/api/server/appearance" })));
+  // Another administrator applied glass in the meantime: the very palette
+  // this one had previewed.
+  server.gets.push(() => Promise.resolve(envelope("glass", 4n)));
+  const mounted = await mount(server);
+  await mounted.choose("glass");
+  await mounted.submit();
+
+  assert.equal(paletteOnDocument(), "glass");
+  assert.equal(browser.storage.get(PALETTE_STORAGE_KEY), "glass");
+  assert.deepEqual(checkedRadios(mounted.container), ["glass"]);
+  assert.equal(mounted.button("Apply").disabled, true);
+  assert.equal(mounted.dirty.at(-1), false);
+  assert.equal(browser.dispatchWindowEvent("beforeunload").defaultPrevented, false);
+  // The restore painted classic before the reload painted glass: the document
+  // never showed a preview the server had not confirmed.
+  assert.deepEqual(browser.storageWrites, [
+    [PALETTE_STORAGE_KEY, "classic"],
+    [PALETTE_STORAGE_KEY, "classic"],
+    [PALETTE_STORAGE_KEY, "glass"],
+  ]);
+  assert.equal(mounted.statuses.length, 1);
+  assert.equal(mounted.statuses[0]?.[1], "warning");
+  // A further apply from here would be a no-op, and the form refuses it.
+  await mounted.submit();
+  assert.deepEqual(server.requests.map(([kind]) => kind), ["get", "update", "get"]);
+  assert.deepEqual(reactErrors, []);
+  await mounted.unmount();
+});
+
+test("an apply the server answers with a different palette follows the server, and Apply stays disabled", async () => {
+  const server = fakeServer();
+  server.gets.push(() => Promise.resolve(envelope("classic", 3n)));
+  // The server normalised the request to something else.
+  server.updates.push(() => Promise.resolve(UpdateServerAppearanceResponse.fromPartial(envelope("ocean", 4n))));
+  const mounted = await mount(server);
+  await mounted.choose("ember");
+  await mounted.submit();
+
+  assert.equal(paletteOnDocument(), "ocean");
+  assert.equal(browser.storage.get(PALETTE_STORAGE_KEY), "ocean");
+  assert.deepEqual(checkedRadios(mounted.container), ["ocean"]);
+  assert.equal(mounted.button("Apply").disabled, true);
+  assert.equal(mounted.dirty.at(-1), false);
+  assert.deepEqual(mounted.statuses, [["Palette set to Ocean. Every user sees it on their next page load.", "success"]]);
+  // Choosing what the server holds is not dirty; choosing what was asked for is.
+  await mounted.choose("ocean");
+  assert.equal(mounted.button("Apply").disabled, true);
+  await mounted.choose("ember");
+  assert.equal(mounted.button("Apply").disabled, false);
+  assert.deepEqual(reactErrors, []);
+  await mounted.unmount();
+});
+
+test("an apply whose answer names no current value fails closed and keeps the preview", async () => {
+  const server = fakeServer();
+  server.gets.push(() => Promise.resolve(envelope("classic", 3n)));
+  server.updates.push(() => Promise.resolve(UpdateServerAppearanceResponse.fromPartial({})));
+  const mounted = await mount(server);
+  await mounted.choose("terminal");
+  await mounted.submit();
+  assert.equal(paletteOnDocument(), "terminal");
+  assert.equal(browser.storage.get(PALETTE_STORAGE_KEY), "classic");
+  assert.deepEqual(checkedRadios(mounted.container), ["terminal"]);
+  assert.equal(mounted.button("Apply").disabled, false);
+  assert.deepEqual(mounted.statuses, [["The server returned incomplete appearance settings.", "warning"]]);
+  await mounted.unmount();
+  assert.equal(paletteOnDocument(), "classic");
+  assert.deepEqual(reactErrors, []);
+});
+
+test("unmounting while an apply is in flight restores the saved palette; the late answer then settles on the server's value", async () => {
+  const server = fakeServer();
+  server.gets.push(() => Promise.resolve(envelope("classic", 3n)));
+  const late = deferred<UpdateServerAppearanceResponse>();
+  server.updates.push(() => late.promise);
+  const mounted = await mount(server);
+  await mounted.choose("terminal");
+  const form = mounted.container.querySelector("form");
+  assert.ok(form);
+  await act(async () => {
+    form.dispatchEvent(fakeEvent("submit"));
+  });
+  assert.equal(mounted.button("Applying…").disabled, true);
+  assert.equal(paletteOnDocument(), "terminal");
+
+  await mounted.unmount();
+  // The preview is gone with the card.
+  assert.equal(paletteOnDocument(), "classic");
+  assert.equal(browser.storage.get(PALETTE_STORAGE_KEY), "classic");
+  assert.equal(mounted.dirty.at(-1), false);
+
+  // The server did apply it: what it holds is what every tab must show.
+  late.resolve(UpdateServerAppearanceResponse.fromPartial(envelope("terminal", 4n)));
+  await settle();
+  assert.equal(paletteOnDocument(), "terminal");
+  assert.equal(browser.storage.get(PALETTE_STORAGE_KEY), "terminal");
+  assert.deepEqual(reactErrors, []);
+});
+
+test("a rejected apply that lands after unmount repaints nothing", async () => {
+  const server = fakeServer();
+  server.gets.push(() => Promise.resolve(envelope("ocean", 3n)));
+  const late = deferred<UpdateServerAppearanceResponse>();
+  server.updates.push(() => late.promise);
+  const mounted = await mount(server);
+  await mounted.choose("graphite");
+  const form = mounted.container.querySelector("form");
+  assert.ok(form);
+  await act(async () => {
+    form.dispatchEvent(fakeEvent("submit"));
+  });
+  await mounted.unmount();
+  assert.equal(paletteOnDocument(), "ocean");
+  browser.storageWrites.length = 0;
+  late.reject(new HttpError({ message: "forbidden", status: 403, url: "/api/server/appearance" }));
+  await settle();
+  assert.equal(paletteOnDocument(), "ocean");
+  assert.deepEqual(browser.storageWrites, []);
+  assert.deepEqual(reactErrors, []);
+});
+
+test("a 409 that lands after unmount restores the saved palette and then adopts the reload", async () => {
+  const server = fakeServer();
+  server.gets.push(() => Promise.resolve(envelope("classic", 3n)));
+  const late = deferred<UpdateServerAppearanceResponse>();
+  server.updates.push(() => late.promise);
+  server.gets.push(() => Promise.resolve(envelope("ember", 4n)));
+  const mounted = await mount(server);
+  await mounted.choose("glass");
+  const form = mounted.container.querySelector("form");
+  assert.ok(form);
+  await act(async () => {
+    form.dispatchEvent(fakeEvent("submit"));
+  });
+  await mounted.unmount();
+  assert.equal(paletteOnDocument(), "classic");
+  late.reject(new HttpError({ message: "version conflict", status: 409, url: "/api/server/appearance" }));
+  await settle();
+  // Never glass: the preview was abandoned at unmount and the reload names ember.
+  assert.equal(paletteOnDocument(), "ember");
+  assert.equal(browser.storage.get(PALETTE_STORAGE_KEY), "ember");
+  assert.ok(!browser.storageWrites.some(([, value]) => value === "glass"), JSON.stringify(browser.storageWrites));
+  assert.deepEqual(reactErrors, []);
+});
+
+test("a load that resolves after unmount neither paints nor caches", async () => {
+  const server = fakeServer();
+  const late = deferred<GetServerAppearanceResponse>();
+  server.gets.push(() => late.promise);
+  browser.document.documentElement.setAttribute("data-palette", "terminal");
+  const mounted = await mount(server);
+  assert.match(mounted.container.textContent, /Loading appearance/u);
+  await mounted.unmount();
+  late.resolve(envelope("ocean", 2n));
+  await settle();
+  assert.equal(paletteOnDocument(), "terminal");
+  assert.deepEqual(browser.storageWrites, []);
+  assert.deepEqual(mounted.dirty, [false, false]);
+  assert.deepEqual(reactErrors, []);
+});
+
+test("a load that rejects after unmount is silent", async () => {
+  const server = fakeServer();
+  const late = deferred<GetServerAppearanceResponse>();
+  server.gets.push(() => late.promise);
+  const mounted = await mount(server);
+  await mounted.unmount();
+  late.reject(new Error("backend away"));
+  await settle();
+  assert.equal(paletteOnDocument(), "classic");
+  assert.deepEqual(reactErrors, []);
+});
+
+test("a 409 whose reload is slow restores the saved palette before the reload lands, and keeps the card busy", async () => {
+  const server = fakeServer();
+  server.gets.push(() => Promise.resolve(envelope("classic", 3n)));
+  server.updates.push(() => Promise.reject(new HttpError({ message: "version conflict", status: 409, url: "/api/server/appearance" })));
+  const slow = deferred<GetServerAppearanceResponse>();
+  server.gets.push(() => slow.promise);
+  const mounted = await mount(server);
+  await mounted.choose("terminal");
+  await mounted.submit();
+  // Between the conflict and the reload the document already shows the saved
+  // palette, and no radio is offered while the version is unknown.
+  assert.equal(paletteOnDocument(), "classic");
+  assert.equal(mounted.container.querySelector("form"), null);
+  assert.match(mounted.container.textContent, /Loading appearance/u);
+  assert.deepEqual(mounted.statuses, []);
+  slow.resolve(envelope("ocean", 4n));
+  await settle();
+  assert.equal(paletteOnDocument(), "ocean");
+  assert.deepEqual(checkedRadios(mounted.container), ["ocean"]);
+  assert.equal(mounted.button("Apply").disabled, true);
+  assert.equal(mounted.statuses.length, 1);
+  assert.deepEqual(reactErrors, []);
+  await mounted.unmount();
+});
+
+test("swapping the client mid-preview reloads from the new client and drops the preview", async () => {
+  const first = fakeServer();
+  first.gets.push(() => Promise.resolve(envelope("classic", 3n)));
+  const second = fakeServer();
+  second.gets.push(() => Promise.resolve(envelope("graphite", 9n)));
+  const container = browser.document.body.appendChild(browser.document.createElement("div"));
+  const root = createRoot(container as unknown as Element);
+  const dirty: boolean[] = [];
+  const render = (server: FakeServer) => act(async () => {
+    root.render(
+      <AppearanceSettings
+        client={server.client}
+        onDirtyChange={(value) => dirty.push(value)}
+        onStatus={() => {}}
+      />,
+    );
+  });
+  await render(first);
+  await settle();
+  const radio = container.querySelector(`#${paletteOptionId("ember")}`);
+  assert.ok(radio);
+  await act(async () => {
+    radio.checked = true;
+    radio.dispatchEvent(fakeEvent("click"));
+  });
+  assert.equal(paletteOnDocument(), "ember");
+  assert.equal(dirty.at(-1), true);
+
+  await render(second);
+  await settle();
+  assert.deepEqual(second.requests, [["get"]]);
+  assert.equal(paletteOnDocument(), "graphite");
+  assert.equal(browser.storage.get(PALETTE_STORAGE_KEY), "graphite");
+  assert.deepEqual(checkedRadios(container), ["graphite"]);
+  assert.equal(dirty.at(-1), false);
+  // The next apply names the new client's version.
+  second.updates.push(() => Promise.resolve(UpdateServerAppearanceResponse.fromPartial(envelope("ember", 10n))));
+  const emberAgain = container.querySelector(`#${paletteOptionId("ember")}`);
+  assert.ok(emberAgain);
+  await act(async () => {
+    emberAgain.checked = true;
+    emberAgain.dispatchEvent(fakeEvent("click"));
+  });
+  const form = container.querySelector("form");
+  assert.ok(form);
+  await act(async () => {
+    form.dispatchEvent(fakeEvent("submit"));
+  });
+  await settle();
+  assert.deepEqual(second.requests.at(-1), ["update", { expectedVersion: 9n, palette: UiPalette.UI_PALETTE_EMBER }]);
+  await act(async () => root.unmount());
+  container.parentNode?.removeChild(container);
+  assert.equal(paletteOnDocument(), "ember");
   assert.deepEqual(reactErrors, []);
 });
 

@@ -88,14 +88,15 @@ export function applyPalette(document: Pick<Document, "documentElement">, palett
  * site data), which is why the read is guarded: a throw there would leave the
  * page with no theme at all rather than the system one.
  *
- * The palette read shares the guard, and `PALETTES` is inlined so the script
+ * The palette read carries its own guard, as `syncPalette` does, so a throw
+ * on either key costs only that key; `PALETTES` is inlined so the script
  * resolves exactly as `resolvePalette` does: a cached name this build does not
  * ship, or no cache at all, paints classic.
  */
 export const THEME_BOOT_SCRIPT = "(function(){"
   + "var stored=null,palette=null;"
-  + `try{stored=localStorage.getItem(${JSON.stringify(THEME_STORAGE_KEY)});`
-  + `palette=localStorage.getItem(${JSON.stringify(PALETTE_STORAGE_KEY)})}catch(e){}`
+  + `try{stored=localStorage.getItem(${JSON.stringify(THEME_STORAGE_KEY)})}catch(e){}`
+  + `try{palette=localStorage.getItem(${JSON.stringify(PALETTE_STORAGE_KEY)})}catch(e){}`
   + `var dark=stored==="dark"||(stored!=="light"&&matchMedia(${JSON.stringify(DARK_SCHEME_QUERY)}).matches);`
   + 'document.documentElement.setAttribute("data-theme",dark?"dark":"light");'
   + `document.documentElement.setAttribute("data-palette",${JSON.stringify(PALETTES)}.indexOf(palette)<0`
@@ -144,13 +145,19 @@ export function subscribeToThemePreference(listener: () => void): () => void {
  */
 export function syncThemeColorMeta(): void {
   if (typeof window === "undefined") return;
-  const meta = window.document.querySelector('meta[name="theme-color"]');
-  if (meta === null) return;
-  const chromeBar = window.getComputedStyle(window.document.documentElement)
-    .getPropertyValue("--chrome-bar")
-    .trim();
-  if (chromeBar === "") return;
-  meta.setAttribute("content", chromeBar);
+  try {
+    const meta = window.document.querySelector('meta[name="theme-color"]');
+    if (meta === null || typeof window.getComputedStyle !== "function") return;
+    const chromeBar = window.getComputedStyle(window.document.documentElement)
+      .getPropertyValue("--chrome-bar")
+      .trim();
+    if (chromeBar === "") return;
+    meta.setAttribute("content", chromeBar);
+  } catch {
+    // The meta is a courtesy to the browser chrome. A window that cannot
+    // compute styles keeps the first-paint colour; it must never keep the
+    // palette or theme application that called this from completing.
+  }
 }
 
 /** Re-resolves the theme from the stored preference and the system preference. */

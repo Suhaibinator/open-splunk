@@ -260,8 +260,9 @@ export class FakeElement extends FakeNode {
     this.setAttribute("name", value);
   }
 
+  /** An `<input>` with no `type` attribute is a text input, as in a browser; react-dom routes change events on it. */
   public get type(): string {
-    return this.getAttribute("type") ?? "";
+    return this.getAttribute("type") ?? (this.nodeName === "INPUT" ? "text" : "");
   }
 
   public set type(value: string) {
@@ -307,6 +308,8 @@ export class FakeDocument extends FakeNode {
   public readonly body: FakeElement;
   public readonly documentElement: FakeElement;
   public readonly head: FakeElement;
+  /** react-dom asks `"oninput" in document` at load time; without it, text inputs only change on a keyup polyfill. */
+  public readonly oninput: null = null;
 
   public constructor() {
     super(null, 9, "#document");
@@ -316,6 +319,11 @@ export class FakeDocument extends FakeNode {
   }
 
   public createElement(name: string): FakeElement {
+    return new FakeElement(this, name);
+  }
+
+  /** An inline `<svg>` icon is created through the namespaced form; nothing here draws it. */
+  public createElementNS(_namespace: string | null, name: string): FakeElement {
     return new FakeElement(this, name);
   }
 
@@ -331,14 +339,33 @@ export interface FakeBrowser {
   document: FakeDocument;
   /** `getComputedStyle(documentElement).getPropertyValue(name)` answers from here, given the element. */
   computedStyle: Map<string, (documentElement: FakeElement) => string>;
+  media: FakeMedia;
   /** Every `localStorage.setItem` in order. */
   storageWrites: Array<[string, string]>;
   storage: Map<string, string>;
-  /** Dispatches `type` on `window` (the component's `beforeunload` guard listens there). */
-  dispatchWindowEvent(type: string): FakeEvent;
+  /** While true every `localStorage` member throws a `SecurityError`, as a document that denies site data does. */
+  storageBlocked: boolean;
+  /**
+   * Dispatches `type` on `window` (the component's `beforeunload` guard
+   * listens there). `init` is copied onto the event first: a `storage` event
+   * from another tab carries `key` and `newValue`.
+   */
+  dispatchWindowEvent(type: string, init?: Record<string, unknown>): FakeEvent;
   /** Puts the globals back. */
   uninstall(): void;
   windowListeners: Map<string, Set<Listener>>;
+}
+
+/** The operating-system colour-scheme preference `matchMedia` reports, and the `change` listeners on it. */
+export interface FakeMedia {
+  /** Every listener registered for `change` on a media query, alive until removed. */
+  changeListeners: Set<Listener>;
+  /** Fires `change` on every registered query, the way an OS theme switch does. */
+  dispatchChange(): void;
+  /** What `matches` reports; flip it before a sync or a change. */
+  prefersDark: boolean;
+  /** Every query string `matchMedia` was asked for, in order. */
+  queries: string[];
 }
 
 /** react-dom walks focus through iframes with an `instanceof` on this; nothing here is one. */
@@ -360,12 +387,31 @@ export function installFakeBrowser(): FakeBrowser {
   const storage = new Map<string, string>();
   const storageWrites: Array<[string, string]> = [];
   const windowListeners = new Map<string, Set<Listener>>();
+  const media: FakeMedia = {
+    changeListeners: new Set(),
+    dispatchChange() {
+      for (const listener of Array.from(media.changeListeners)) listener(fakeEvent("change"));
+    },
+    prefersDark: false,
+    queries: [],
+  };
+  const dispatchWindowEvent = (type: string, init: Record<string, unknown> = {}): FakeEvent => {
+    const dispatched = Object.assign(fakeEvent(type), init);
+    for (const listener of Array.from(windowListeners.get(type) ?? [])) listener(dispatched);
+    return dispatched;
+  };
+  const storageGate = () => {
+    if (browser.storageBlocked) throw new DOMException("The operation is insecure.", "SecurityError");
+  };
   const window = {
     addEventListener(type: string, listener: Listener | null) {
       if (listener === null) return;
       const listeners = windowListeners.get(type) ?? new Set<Listener>();
       windowListeners.set(type, listeners);
       listeners.add(listener);
+    },
+    dispatchEvent(event: { type: string }) {
+      return !dispatchWindowEvent(event.type).defaultPrevented;
     },
     document,
     event: undefined,
@@ -377,14 +423,34 @@ export function installFakeBrowser(): FakeBrowser {
       };
     },
     localStorage: {
-      getItem: (key: string) => storage.get(key) ?? null,
+      getItem(key: string) {
+        storageGate();
+        return storage.get(key) ?? null;
+      },
       removeItem(key: string) {
+        storageGate();
         storage.delete(key);
       },
       setItem(key: string, value: string) {
+        storageGate();
         storage.set(key, value);
         storageWrites.push([key, value]);
       },
+    },
+    matchMedia(query: string) {
+      media.queries.push(query);
+      return {
+        addEventListener(type: string, listener: Listener) {
+          if (type === "change") media.changeListeners.add(listener);
+        },
+        get matches() {
+          return media.prefersDark;
+        },
+        media: query,
+        removeEventListener(type: string, listener: Listener) {
+          if (type === "change") media.changeListeners.delete(listener);
+        },
+      };
     },
     removeEventListener(type: string, listener: Listener | null) {
       if (listener === null) return;
@@ -396,16 +462,14 @@ export function installFakeBrowser(): FakeBrowser {
   globals.window = window;
   globals.document = document;
   globals.IS_REACT_ACT_ENVIRONMENT = true;
-  return {
+  const browser: FakeBrowser = {
     chromeMeta,
     computedStyle,
-    dispatchWindowEvent(type) {
-      const dispatched = fakeEvent(type);
-      for (const listener of Array.from(windowListeners.get(type) ?? [])) listener(dispatched);
-      return dispatched;
-    },
+    dispatchWindowEvent,
     document,
+    media,
     storage,
+    storageBlocked: false,
     storageWrites,
     uninstall() {
       globals.window = previous.window;
@@ -414,4 +478,5 @@ export function installFakeBrowser(): FakeBrowser {
     },
     windowListeners,
   };
+  return browser;
 }

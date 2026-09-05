@@ -41,3 +41,23 @@ test("anything the enum cannot name paints classic", () => {
   assert.equal(paletteFromProto(99 as UiPalette), "classic");
   assert.equal(paletteFromProto(-2 as UiPalette), "classic");
 });
+
+test("every enum number from -1 to 7 maps to exactly the palette at that position, or classic", () => {
+  // 0 is UNSPECIFIED, 1..6 are the six palettes in PALETTES order, 7 is the
+  // first number a future server could add, and -1 is ts-proto's UNRECOGNIZED.
+  const expected: Record<number, string> = { [-1]: "classic", 0: "classic", 7: "classic" };
+  PALETTES.forEach((palette, index) => {
+    expected[index + 1] = palette;
+  });
+  for (let number = -1; number <= 7; number += 1) {
+    assert.equal(paletteFromProto(number as UiPalette), expected[number], `enum ${number}`);
+  }
+  assert.equal(UiPalette.UNRECOGNIZED, -1);
+  assert.equal(UiPalette.UI_PALETTE_UNSPECIFIED, 0);
+  assert.equal(Object.values(UiPalette).filter((value) => typeof value === "number").length, PALETTES.length + 2);
+  // Number-like values that are not integers, and non-numbers, never match a
+  // Map keyed by integers; a loose comparison would have let "1" through.
+  for (const odd of [1.5, Number.NaN, "1", "ocean", null, true, 1n]) {
+    assert.equal(paletteFromProto(odd as unknown as UiPalette), "classic", String(odd));
+  }
+});

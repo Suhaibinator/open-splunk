@@ -11,6 +11,7 @@ import {
   previewPalette,
   resolveTheme,
   syncPalette,
+  syncTheme,
   syncThemeColorMeta,
   THEME_BOOT_SCRIPT,
   THEME_PREFERENCES,
@@ -194,6 +195,8 @@ test("the boot script is a single self-contained statement with no module syntax
 interface FakeWindow {
   attributes: Map<string, string>;
   chromeBar: string;
+  /** Whether `window.getComputedStyle` exists, and whether calling it throws. */
+  computedStyle: "available" | "absent" | "throws";
   meta: { content: string | null } | null;
   storage: Map<string, string>;
   storageBlocked: boolean;
@@ -211,6 +214,7 @@ function withFakeWindow<T>(setup: Partial<FakeWindow>, body: (fake: FakeWindow) 
   const fake: FakeWindow = {
     attributes: new Map(),
     chromeBar: " var(--slate-900) ",
+    computedStyle: "available",
     meta: { content: "first-paint" },
     storage: new Map(),
     storageBlocked: false,
@@ -246,10 +250,11 @@ function withFakeWindow<T>(setup: Partial<FakeWindow>, body: (fake: FakeWindow) 
       fake.writes.push([key, value]);
     },
   };
-  const window = {
+  const window: { document: unknown; getComputedStyle?: (element: unknown) => unknown; localStorage: unknown } = {
     document,
     getComputedStyle(element: unknown) {
       assert.equal(element, documentElement);
+      if (fake.computedStyle === "throws") throw new TypeError("getComputedStyle is not usable here");
       return {
         getPropertyValue(name: string) {
           assert.equal(name, "--chrome-bar");
@@ -259,6 +264,7 @@ function withFakeWindow<T>(setup: Partial<FakeWindow>, body: (fake: FakeWindow) 
     },
     localStorage,
   };
+  if (fake.computedStyle === "absent") delete window.getComputedStyle;
   const globals = globalThis as { document?: unknown; window?: unknown };
   globals.window = window;
   globals.document = document;
@@ -383,4 +389,250 @@ test("syncPalette re-applies the cache and falls back to classic", () => {
     syncPalette();
     assert.equal(fake.attributes.get("data-palette"), "classic");
   });
+});
+
+/* == Break phase: hostile caches, misbehaving storage, and boot-versus-module == */
+
+/**
+ * Cached values a boot script has to survive: strings that would break out
+ * of a quoted context if they were ever interpolated rather than compared,
+ * names that exist on every object's prototype (an `in` or a property lookup
+ * would find them), near misses of shipped names, and the spellings a
+ * corrupt or foreign write leaves behind. Every one paints classic.
+ */
+const HOSTILE_PALETTES: readonly string[] = [
+  '"ocean"',
+  "'ocean'",
+  "ocean\"",
+  "</script><script>document.title='x'</script>",
+  "ocean</script>",
+  "ocean\u0000",
+  "ocean\n",
+  " ocean",
+  "ocean ",
+  "Ocean",
+  "OCEAN",
+  "océan",
+  "classic,ocean",
+  JSON.stringify(PALETTES),
+  "constructor",
+  "__proto__",
+  "prototype",
+  "hasOwnProperty",
+  "toString",
+  "valueOf",
+  "length",
+  "indexOf",
+  "includes",
+  "0",
+  "1",
+  "-1",
+  "NaN",
+  "undefined",
+  "null",
+  "[object Object]",
+  "true",
+];
+
+/** Values a shimmed storage might hand back that a browser never would. */
+const NON_STRING_PALETTES: ReadonlyArray<[label: string, value: unknown]> = [
+  ["undefined", undefined],
+  ["a number", 1],
+  ["an array whose string form is a palette", ["ocean"]],
+  ["a String object", new String("ocean")],
+  ["an object with a palette toString", { toString: () => "ocean" }],
+];
+
+/** How storage misbehaves across the boot script's two reads. */
+type ThrowMode = "none" | "first" | "second" | "both";
+const THROW_MODES: readonly ThrowMode[] = ["none", "first", "second", "both"];
+
+/**
+ * A storage that throws on the reads `mode` names, counting reads from the
+ * moment it is built: one instance per run, since the boot script and the
+ * module each read twice.
+ */
+function misbehavingStorage(theme: string | null, palette: unknown, mode: ThrowMode): BootStorage {
+  let reads = 0;
+  return {
+    getItem(key: string) {
+      reads += 1;
+      const first = reads === 1;
+      if (mode === "both" || (mode === "first" && first) || (mode === "second" && !first)) {
+        throw new DOMException("The operation is insecure.", "SecurityError");
+      }
+      if (key === THEME_STORAGE_KEY) return theme;
+      if (key === PALETTE_STORAGE_KEY) return palette as string | null;
+      return null;
+    },
+  };
+}
+
+/**
+ * The module's own reading of the same storage: `syncTheme` then
+ * `syncPalette`, each with its own guarded read, in the order the boot
+ * script reads. What comes back is what the boot script must have written.
+ */
+function moduleResolution(storage: BootStorage, prefersDark: boolean): Array<[string, string]> {
+  const attributes = new Map<string, string>();
+  const document = {
+    documentElement: {
+      setAttribute(name: string, value: string) {
+        attributes.set(name, value);
+      },
+    },
+    querySelector: () => null,
+  };
+  const window = {
+    document,
+    localStorage: { getItem: (key: string) => storage.getItem(key) },
+    matchMedia: () => ({ matches: prefersDark }),
+  };
+  const globals = globalThis as { document?: unknown; window?: unknown };
+  globals.window = window;
+  globals.document = document;
+  try {
+    syncTheme();
+    syncPalette();
+  } finally {
+    delete globals.window;
+    delete globals.document;
+  }
+  return [...attributes];
+}
+
+test("the boot script equals the module under every palette x theme x storage-throw combination", () => {
+  const palettes: ReadonlyArray<string | null> = [...CACHED_PALETTES, ...HOSTILE_PALETTES];
+  let runs = 0;
+  for (const mode of THROW_MODES) {
+    for (const stored of [...STORED_VALUES, "sepia", ""]) {
+      for (const prefersDark of [false, true]) {
+        for (const cached of palettes) {
+          const label = `mode=${mode} stored=${JSON.stringify(stored)} prefersDark=${prefersDark} palette=${JSON.stringify(cached)}`;
+          const boot = runBootScript(misbehavingStorage(stored, cached, mode), prefersDark);
+          const expected = moduleResolution(misbehavingStorage(stored, cached, mode), prefersDark);
+          assert.deepEqual([...boot.attributes], expected, label);
+          // The expectation itself, spelled out: a throw costs only the key it
+          // hit, so a blocked theme read still leaves the cached palette
+          // standing and vice versa.
+          const themeReadable = mode === "none" || mode === "second";
+          const paletteReadable = mode === "none" || mode === "first";
+          assert.deepEqual(expected, [
+            ["data-theme", resolveTheme(themeReadable ? stored : null, prefersDark)],
+            ["data-palette", paletteReadable ? resolvePalette(cached) : DEFAULT_PALETTE],
+          ], label);
+          // Both keys are always attempted: the second read never depends on
+          // the first succeeding.
+          assert.deepEqual(boot.reads, [THEME_STORAGE_KEY, PALETTE_STORAGE_KEY], label);
+          runs += 1;
+        }
+      }
+    }
+  }
+  assert.ok(runs > 1000, `only ${runs} combinations were exercised`);
+});
+
+test("a hostile cached palette paints classic in the boot script and the module alike", () => {
+  for (const cached of HOSTILE_PALETTES) {
+    assert.equal(resolvePalette(cached), DEFAULT_PALETTE, JSON.stringify(cached));
+    const run = runBootScript(storageOf("light", cached), false);
+    assert.equal(run.attributes.get("data-palette"), DEFAULT_PALETTE, JSON.stringify(cached));
+    assert.equal(run.attributes.get("data-theme"), "light", JSON.stringify(cached));
+  }
+  // The inlined list is what makes the comparison exact rather than a
+  // prefix or substring match: a shipped name never appears inside another.
+  for (const palette of PALETTES) {
+    for (const other of PALETTES) {
+      if (other !== palette) assert.ok(!other.includes(palette), `${palette} is a substring of ${other}`);
+    }
+    assert.doesNotMatch(palette, /["'<>\\\s]/u, `${palette} would need escaping in the boot script`);
+  }
+});
+
+test("a non-string from a shimmed storage paints classic in the boot script and the module alike", () => {
+  for (const [label, value] of NON_STRING_PALETTES) {
+    assert.equal(resolvePalette(value as string), DEFAULT_PALETTE, label);
+    const run = runBootScript(misbehavingStorage("dark", value, "none"), false);
+    assert.deepEqual([...run.attributes], [["data-theme", "dark"], ["data-palette", DEFAULT_PALETTE]], label);
+    assert.deepEqual(moduleResolution(misbehavingStorage("dark", value, "none"), false), [...run.attributes], label);
+  }
+});
+
+test("a prototype key in the cache neither resolves nor reaches a prototype", () => {
+  // `indexOf` on the inlined array and `includes` on PALETTES both compare by
+  // value; a lookup by property name would find these on Array.prototype or
+  // Object.prototype and paint an undefined palette.
+  for (const key of ["constructor", "__proto__", "hasOwnProperty", "toString", "length", "0"]) {
+    withFakeWindow({ storage: new Map([[PALETTE_STORAGE_KEY, key]]) }, (fake) => {
+      syncPalette();
+      assert.equal(fake.attributes.get("data-palette"), DEFAULT_PALETTE, key);
+      applyInstancePalette(key);
+      assert.equal(fake.attributes.get("data-palette"), DEFAULT_PALETTE, key);
+      assert.equal(fake.storage.get(PALETTE_STORAGE_KEY), DEFAULT_PALETTE, key);
+    });
+  }
+  assert.equal(Object.getPrototypeOf(PALETTES), Array.prototype);
+  assert.equal(new Function(`return ${JSON.stringify(PALETTES)}.indexOf("__proto__")`)(), -1);
+});
+
+test("applyInstancePalette with an unknown server value overwrites a stale cache so the next boot is classic", () => {
+  for (const stale of PALETTES.filter((palette) => palette !== DEFAULT_PALETTE)) {
+    for (const unknown of ["sepia", "", "CLASSIC", "constructor", "</script>", "ocean\n"]) {
+      withFakeWindow({ storage: new Map([[PALETTE_STORAGE_KEY, stale]]) }, (fake) => {
+        // The boot script painted the stale palette from the cache.
+        const before = runBootScript({ getItem: (key) => fake.storage.get(key) ?? null }, false);
+        assert.equal(before.attributes.get("data-palette"), stale);
+
+        applyInstancePalette(unknown);
+        assert.equal(fake.attributes.get("data-palette"), DEFAULT_PALETTE, `${stale} <- ${JSON.stringify(unknown)}`);
+        assert.equal(fake.storage.get(PALETTE_STORAGE_KEY), DEFAULT_PALETTE, `${stale} <- ${JSON.stringify(unknown)}`);
+        assert.deepEqual(fake.writes, [[PALETTE_STORAGE_KEY, DEFAULT_PALETTE]]);
+
+        // The next boot reads the corrected cache, not the stale name.
+        const after = runBootScript({ getItem: (key) => fake.storage.get(key) ?? null }, false);
+        assert.equal(after.attributes.get("data-palette"), DEFAULT_PALETTE, `${stale} <- ${JSON.stringify(unknown)}`);
+      });
+    }
+  }
+});
+
+test("applyInstancePalette with blocked storage cannot correct the cache, and says so by painting only", () => {
+  // Nothing can be done about the stale value; the point is that the call
+  // neither throws nor leaves the document on the stale palette.
+  withFakeWindow({ storage: new Map([[PALETTE_STORAGE_KEY, "ocean"]]), storageBlocked: true }, (fake) => {
+    assert.doesNotThrow(() => applyInstancePalette("sepia"));
+    assert.equal(fake.attributes.get("data-palette"), DEFAULT_PALETTE);
+    assert.deepEqual(fake.writes, []);
+    assert.equal(fake.storage.get(PALETTE_STORAGE_KEY), "ocean");
+  });
+});
+
+test("syncThemeColorMeta survives a window that cannot compute styles, and so do its callers", () => {
+  for (const computedStyle of ["absent", "throws"] as const) {
+    withFakeWindow({ computedStyle }, (fake) => {
+      assert.doesNotThrow(syncThemeColorMeta, computedStyle);
+      assert.equal(fake.meta?.content, "first-paint", computedStyle);
+      // The palette still lands and the cache is still written: the meta is
+      // the last step of each application, never a gate on it.
+      assert.doesNotThrow(() => applyInstancePalette("ember"), computedStyle);
+      assert.equal(fake.attributes.get("data-palette"), "ember", computedStyle);
+      assert.deepEqual(fake.writes, [[PALETTE_STORAGE_KEY, "ember"]], computedStyle);
+      assert.doesNotThrow(() => previewPalette("glass"), computedStyle);
+      assert.equal(fake.attributes.get("data-palette"), "glass", computedStyle);
+      assert.doesNotThrow(syncPalette, computedStyle);
+      assert.equal(fake.meta?.content, "first-paint", computedStyle);
+    });
+  }
+  // With the meta absent nothing is computed at all, whether or not styles could be.
+  withFakeWindow({ computedStyle: "absent", meta: null }, () => assert.doesNotThrow(syncThemeColorMeta));
+  withFakeWindow({ computedStyle: "throws", meta: null }, () => assert.doesNotThrow(syncThemeColorMeta));
+});
+
+test("the boot script's two reads are guarded separately", () => {
+  // One try around both reads would skip the palette whenever the theme read
+  // threw; the module guards each key on its own, so the script must too.
+  assert.equal((THEME_BOOT_SCRIPT.match(/try\{/gu) ?? []).length, 2);
+  assert.equal((THEME_BOOT_SCRIPT.match(/catch\(e\)\{\}/gu) ?? []).length, 2);
+  const themeBlocked = misbehavingStorage("dark", "terminal", "first");
+  assert.deepEqual([...runBootScript(themeBlocked, false).attributes], [["data-theme", "light"], ["data-palette", "terminal"]]);
 });
