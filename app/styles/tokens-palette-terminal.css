@@ -1,0 +1,101 @@
+/*
+ * Terminal palette: monospace everywhere, square corners, flat rings for
+ * elevation. Light is paper with a green accent; dark is carbon with phosphor.
+ * Restates only what differs from classic; see docs/theming.md, "Adding a theme".
+ */
+:root:where([data-palette="terminal"]) {
+  color-scheme: light;
+
+  /* Backgrounds: the canvas lightens and the raised surface flattens onto it. */
+  --bg-canvas: var(--gray-50); /* The page behind every panel: paper. */
+  --bg-raised: var(--gray-100); /* Menus and popovers sit flat, one rung below the canvas. */
+
+  /* Foregrounds: one rung darker than classic. */
+  --fg-text: var(--gray-900); /* Body text. */
+  --fg-strong: var(--gray-950); /* Headings and emphasised text. */
+  --fg-secondary: var(--gray-800); /* Ink one step lighter than body text. */
+  --fg-muted: var(--gray-650); /* Secondary text. */
+  --fg-faint: var(--gray-550); /* Tertiary text. */
+  --fg-link: var(--green-800); /* Anchor text. */
+
+  /* Borders: hard rules. */
+  --border: var(--gray-500); /* Default rule between and around surfaces. */
+  --border-subtle: var(--gray-300); /* Faint divider inside one surface. */
+  --border-strong: var(--gray-800); /* Emphasised rule. */
+  --border-focus: var(--green-800); /* Focused control edge. */
+
+  /* Accent. */
+  --accent: var(--green-800); /* Primary buttons, active tabs, progress. */
+  --accent-hover: var(--green-900); /* Hovered and pressed accent. */
+  --accent-soft: var(--phosphor-100); /* Accent-tinted background wash. */
+
+  /* Application chrome: gray bars with phosphor labels. */
+  --chrome-bar: var(--gray-950); /* Product bar. */
+  --chrome-appbar: var(--gray-900); /* App bar. */
+  --chrome-hover: var(--gray-800); /* Hovered or open bar item. */
+  --chrome-fg: var(--phosphor-300); /* Text and icons on either bar. */
+
+  /* Interaction. */
+  --focus-ring: var(--green-800); /* Focus outline drawn outside a control. */
+
+  /* Scale: one type stack, no corners, elevation as a hard 1px ring. */
+  --font-sans: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; /* The UI face is the code face. */
+  --radius-lg: 0; /* Modal and card corners. */
+  --radius-md: 0; /* Control and menu corners. */
+  --radius-pill: 0; /* Badge and pill corners. */
+  --radius-sm: 0; /* Input and badge corners. */
+  --shadow-drawer: 0 0 0 1px rgb(40 52 61 / 100%); /* Drawer edge ring. */
+  --shadow-lg: 0 0 0 1px rgb(40 52 61 / 100%); /* Menu and popover ring. */
+  --shadow-md: 0 0 0 1px rgb(40 52 61 / 100%); /* Raised card ring. */
+  --shadow-sheet: 0 0 0 1px rgb(40 52 61 / 100%); /* Phone sheet ring. */
+  --shadow-sm: 0 0 0 1px rgb(40 52 61 / 60%); /* Resting card ring. */
+  --shadow-toast: 0 0 0 1px rgb(40 52 61 / 100%); /* Toast ring. */
+  --shadow-xl: 0 0 0 1px rgb(40 52 61 / 100%); /* Modal ring. */
+}
+
+:root[data-palette="terminal"][data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Backgrounds: pure neutral carbon. */
+  --bg-canvas: var(--carbon-950); /* The page behind every panel. */
+  --bg-surface: var(--carbon-900); /* Panels, cards, tables, dialogs. */
+  --bg-subtle: var(--carbon-800); /* Recessed strips inside a surface. */
+  --bg-raised: var(--carbon-700); /* A surface lifted off the canvas. */
+
+  /* Foregrounds: one rung lighter than classic dark. */
+  --fg-text: var(--gray-100); /* Body text. */
+  --fg-strong: var(--gray-0); /* Headings and emphasised text. */
+  --fg-link: var(--phosphor-400); /* Anchor text. */
+
+  /* Borders. */
+  --border-focus: var(--phosphor-400); /* Focused control edge. */
+
+  /* Accent: phosphor. */
+  --accent: var(--phosphor-500); /* Primary action colour. */
+  --accent-hover: var(--phosphor-400); /* Hovered and pressed accent. */
+  --accent-bright: var(--phosphor-300); /* Saturated accent fill. */
+  --accent-inverse: var(--phosphor-700); /* The accent on --bg-inverse, a light surface here; a label ink, so it clears AA. */
+  --accent-soft: var(--phosphor-800); /* Accent-tinted background wash. */
+
+  /* SPL syntax: the string ink joins the accent hue. */
+  --syntax-string: var(--phosphor-400); /* A quoted string. */
+
+  /* Application chrome: carbon bars, phosphor labels restated because classic dark changes them in between. */
+  --chrome-bar: var(--carbon-950); /* Product bar. */
+  --chrome-appbar: var(--carbon-900); /* App bar. */
+  --chrome-hover: var(--carbon-800); /* Hovered or open bar item. */
+  --chrome-fg: var(--phosphor-300); /* Text and icons on either bar. */
+
+  /* Interaction. */
+  --selection: var(--phosphor-800); /* Selected row or range. */
+  --focus-ring: var(--phosphor-400); /* Focus outline. */
+
+  /* Scale: the rings turn light so they still edge a surface on carbon. */
+  --shadow-drawer: 0 0 0 1px rgb(230 234 236 / 40%); /* Drawer edge ring. */
+  --shadow-lg: 0 0 0 1px rgb(230 234 236 / 40%); /* Menu and popover ring. */
+  --shadow-md: 0 0 0 1px rgb(230 234 236 / 40%); /* Raised card ring. */
+  --shadow-sheet: 0 0 0 1px rgb(230 234 236 / 40%); /* Phone sheet ring. */
+  --shadow-sm: 0 0 0 1px rgb(230 234 236 / 24%); /* Resting card ring. */
+  --shadow-toast: 0 0 0 1px rgb(230 234 236 / 40%); /* Toast ring. */
+  --shadow-xl: 0 0 0 1px rgb(230 234 236 / 40%); /* Modal ring. */
+}
