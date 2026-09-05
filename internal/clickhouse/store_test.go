@@ -209,6 +209,38 @@ func TestStageDurablyQueuesHECWithoutSynchronousClickHouseWrite(t *testing.T) {
 	}
 }
 
+func TestStagePreservesDurableAcceptanceWhenLeaseReleaseFails(t *testing.T) {
+	t.Parallel()
+	sequencer := &fakeVisibilitySequencer{
+		reservation: visibility.Reservation{Sequence: 17, HECRequestSequence: 4, HECAcknowledgmentID: 9},
+		releaseErr:  errors.New("database is busy after durable reservation"),
+	}
+	connection := &fakeStoreConnection{batch: &fakeWriteBatch{}}
+	store := mustTestStoreWithVisibility(t, connection, fixedRetention(time.Hour), sequencer)
+	batch := validStoreBatch()
+	batch.Source = ingest.HECSource("hec-token")
+	batch.CollectorID = ""
+	batch.Events[0].Source, batch.Events[0].CollectorID = batch.Source, ""
+	batch.HECAdmission = &ingest.HECStageAdmission{TokenID: "hec-token", TokenVersion: 1, RequestID: batch.BatchID, AcknowledgmentEnabled: true, Channel: "channel", CreatedAt: batch.ReceivedAt}
+	result, err := store.Stage(context.Background(), batch)
+	if err != nil || result.State != ingest.StoredBatchPending || result.HECRequestSequence != 4 || result.HECAcknowledgmentID != 9 {
+		t.Fatalf("durably accepted request reported as retryable failure: %+v, %v", result, err)
+	}
+	if len(sequencer.reservation.Outbox) == 0 || !slices.Equal(sequencer.released, []uint64{17}) || connection.prepareCalls != 0 {
+		t.Fatal("staged outbox was not retained for asynchronous recovery")
+	}
+	if telemetry := store.HECReconciliationTelemetry(); telemetry.Available || telemetry.Retries != 1 {
+		t.Fatalf("cleanup failure was not exposed to reconciliation health: %+v", telemetry)
+	}
+	sequencer.releaseErr = nil
+	if err := store.ReconcilePending(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(connection.batch.rows) != 1 || !slices.Equal(sequencer.committed, []uint64{17}) {
+		t.Fatal("accepted request failed to reconcile exactly once")
+	}
+}
+
 func TestStageAcceptsIndependentHECRequestsFromOneToken(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

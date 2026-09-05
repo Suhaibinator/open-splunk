@@ -111,8 +111,9 @@ func waitForBackendLoadStorage(
 		)
 		if lastErr == nil {
 			if lastRows > expected {
+				lastExact, lastErr = readBackendLoadStorageState(queryContext, connection, tenantID, indexName)
 				queryCancel()
-				t.Fatalf("backend load storage rows = %d, want at most %d", lastRows, expected)
+				t.Fatalf("backend load storage rows = %d, want at most %d; exact_state=%+v query_error=%v", lastRows, expected, lastExact, lastErr)
 			}
 			if lastRows == expected {
 				lastExact, lastErr = readBackendLoadStorageState(

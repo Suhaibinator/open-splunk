@@ -1008,6 +1008,7 @@ func runBackendHECDurableLoad(t *testing.T, plan backendHECLoadPlan) {
 	}
 
 	expectedRows := nativeCount + load.acceptedEvents()
+	t.Logf("HEC drain accounting: expected_rows=%d native_events=%d small=%s full=%s operations=%+v", expectedRows, nativeCount, load.small.summary(plan.Duration), load.full.summary(plan.Duration), finalOperations)
 	waitForBackendLoadStorage(
 		t,
 		ctx,
