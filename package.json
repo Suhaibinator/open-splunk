@@ -15,6 +15,7 @@
     "build": "node scripts/build-ui.mjs",
     "lint": "oxlint . && npm run lint:css",
     "test:contracts": "playwright test --config=playwright.contracts.config.ts",
+    "test:dashboards": "playwright test --config=playwright.dashboards.config.ts",
     "test:frontend": "node scripts/test-frontend.mjs",
     "test:workspace": "playwright test --config=playwright.workspace.config.ts",
     "check:docs": "node scripts/check-docs.mjs",

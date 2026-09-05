@@ -45,6 +45,7 @@ import {
   type ReportsView,
 } from "./reports-view-state";
 import { ScheduledReportActions, ScheduledReportStatus } from "./scheduled-report-controls";
+import { Select, SelectOption } from "../_components/select";
 
 type SavedSearchScope = "all" | "private" | "app" | "global";
 type SortOrder = "updated" | "name";
@@ -589,19 +590,19 @@ export function BackendReportsConsole({ apiBaseUrl, onViewChange, view }: Backen
                 <span className="sr-only">Filter saved searches</span><i aria-hidden="true"><AppIcon name="search" size="sm" /></i>
                 <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find by name, SPL, app, or owner" />
               </label>
-              <label className="reports-select-field">
+              <label htmlFor="backend-reports-console-choice-595" className="reports-select-field">
                 <span>App</span>
-                <select value={appFilter} onChange={(event) => setAppFilter(event.target.value)}>
-                  <option value="all">All apps</option>
-                  {Object.entries(appNames).toSorted((left, right) => left[1].localeCompare(right[1])).map(([appId, appName]) => <option value={appId} key={appId}>{appName}</option>)}
-                </select>
+                <Select id="backend-reports-console-choice-595" value={appFilter} onValueChange={(selectedValue) => setAppFilter(selectedValue)}>
+                  <SelectOption value="all">All apps</SelectOption>
+                  {Object.entries(appNames).toSorted((left, right) => left[1].localeCompare(right[1])).map(([appId, appName]) => <SelectOption value={appId} key={appId}>{appName}</SelectOption>)}
+                </Select>
               </label>
-              <label className="reports-select-field">
+              <label htmlFor="backend-reports-console-choice-602" className="reports-select-field">
                 <span>Sort</span>
-                <select value={sort} onChange={(event) => setSort(event.target.value as SortOrder)}>
-                  <option value="updated">Recently modified</option>
-                  <option value="name">Name</option>
-                </select>
+                <Select id="backend-reports-console-choice-602" value={sort} onValueChange={(selectedValue) => setSort(selectedValue as SortOrder)}>
+                  <SelectOption value="updated">Recently modified</SelectOption>
+                  <SelectOption value="name">Name</SelectOption>
+                </Select>
               </label>
             </div>
 

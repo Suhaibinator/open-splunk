@@ -42,6 +42,7 @@ import {
   type KnowledgeQuarantinePreparation,
   type KnowledgeValidationReceipt,
 } from "./knowledge-manager-data";
+import { Select, SelectOption } from "../_components/select";
 
 export type KnowledgeTierOneDefinitionKind =
   | "regex-extraction"
@@ -573,29 +574,29 @@ export function KnowledgeMutationEditor({
 
       <div className="knowledge-manager__mutation-grid">
         <label htmlFor={`${id}-kind`}><span>Definition type</span>
-          <select
+          <Select
             id={`${id}-kind`}
             value={draft.kind}
-            onChange={(event) => changeDraft({
-              kind: event.currentTarget.value as KnowledgeTierOneDefinitionKind,
+            onValueChange={(selectedValue) => changeDraft({
+              kind: selectedValue as KnowledgeTierOneDefinitionKind,
             })}
             disabled={editing || saving}
           >
             {TIER_ONE_KIND_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>{option.label}</option>
+              <SelectOption key={option.value} value={option.value}>{option.label}</SelectOption>
             ))}
-          </select>
+          </Select>
         </label>
         <label htmlFor={`${id}-app`}><span>App</span>
-          <select
+          <Select
             id={`${id}-app`}
             value={draft.appId}
-            onChange={(event) => changeDraft({ appId: event.currentTarget.value })}
+            onValueChange={(selectedValue) => changeDraft({ appId: selectedValue })}
             disabled={saving}
             required
           >
-            {apps.map((app) => <option key={app.appId} value={app.appId}>{app.label}</option>)}
-          </select>
+            {apps.map((app) => <SelectOption key={app.appId} value={app.appId}>{app.label}</SelectOption>)}
+          </Select>
         </label>
         <label htmlFor={`${id}-name`}><span>Name</span>
           <input
@@ -609,18 +610,18 @@ export function KnowledgeMutationEditor({
           />
         </label>
         <label htmlFor={`${id}-sharing`}><span>Sharing</span>
-          <select
+          <Select
             id={`${id}-sharing`}
             value={draft.sharingScope}
-            onChange={(event) => changeDraft({
-              sharingScope: event.currentTarget.value as KnowledgeMutationSharingScope,
+            onValueChange={(selectedValue) => changeDraft({
+              sharingScope: selectedValue as KnowledgeMutationSharingScope,
             })}
             disabled={saving}
           >
-            <option value="private">Private</option>
-            <option value="app">App</option>
-            <option value="global">Global</option>
-          </select>
+            <SelectOption value="private">Private</SelectOption>
+            <SelectOption value="app">App</SelectOption>
+            <SelectOption value="global">Global</SelectOption>
+          </Select>
         </label>
         <label className="knowledge-manager__mutation-wide" htmlFor={`${id}-description`}>
           <span>Description <small>(optional)</small></span>
@@ -747,10 +748,10 @@ function KnowledgeMutationBodyFields({
   return <div className="knowledge-manager__mutation-grid">
     {fields}
     <label htmlFor={`${id}-overwrite`}><span>Existing destination</span>
-      <select id={`${id}-overwrite`} value={draft.overwrite} onChange={(event) => changeDraft({ overwrite: event.currentTarget.value as KnowledgeMutationOverwrite })} disabled={busy}>
-        <option value="preserve">Preserve existing value</option>
-        <option value="replace">Replace existing value</option>
-      </select>
+      <Select id={`${id}-overwrite`} value={draft.overwrite} onValueChange={(selectedValue) => changeDraft({ overwrite: selectedValue as KnowledgeMutationOverwrite })} disabled={busy}>
+        <SelectOption value="preserve">Preserve existing value</SelectOption>
+        <SelectOption value="replace">Replace existing value</SelectOption>
+      </Select>
     </label>
   </div>;
 }

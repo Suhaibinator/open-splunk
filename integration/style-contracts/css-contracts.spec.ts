@@ -438,19 +438,85 @@ test.describe("search workspace touch targets", () => {
 
 const KNOWLEDGE_FILTER_OPTIONS = ["App scope", "Object type", "Sharing", "State"];
 
+function selectMarkup(value: string): string {
+  return `<div class="select"><button class="select__trigger" type="button" role="combobox" aria-haspopup="listbox" aria-expanded="false"><span class="select__value">${value}</span><svg class="app-icon" aria-hidden="true"></svg></button><input class="select__input" type="text" aria-hidden="true" tabindex="-1" value="${value}"><div class="select__listbox" role="listbox" popover="manual" data-open="false"><button class="select__option" type="button" role="option" aria-selected="true" data-active="true">${value}</button></div></div>`;
+}
+
+const selectCardMarkup = `
+<section class="suite-card">
+  <div class="suite-card-body">
+    <label><span>Result density</span>${selectMarkup("Comfortable")}</label>
+  </div>
+</section>`;
+
+for (const width of [DESKTOP_WIDTH, COMPACT_WIDTH, MOBILE_WIDTH, NARROW_WIDTH, 390]) {
+  test(`open selects stay inside the ${width}px card viewport and repaint`, async ({ page }) => {
+    const inspectTheme = async (theme: "dark" | "light") => {
+      await mount(page, selectCardMarkup, width);
+      await page.evaluate((selectedTheme) => {
+        document.documentElement.setAttribute("data-theme", selectedTheme);
+        const listbox = document.querySelector<HTMLElement>(".select__listbox");
+        if (listbox === null) throw new Error("fixture is missing the Select listbox");
+        listbox.dataset.open = "true";
+        listbox.showPopover();
+      }, theme);
+
+      const geometry = await page.locator(".select__listbox").evaluate((element) => {
+        const bounds = element.getBoundingClientRect();
+        const trigger = document.querySelector(".select__trigger")?.getBoundingClientRect();
+        const body = document.querySelector(".suite-card-body")?.getBoundingClientRect();
+        if (trigger === undefined || body === undefined) throw new Error("fixture is incomplete");
+        const style = getComputedStyle(element);
+        return {
+          background: style.backgroundColor,
+          bodyLeft: body.left,
+          bodyRight: body.right,
+          color: style.color,
+          left: bounds.left,
+          right: bounds.right,
+          triggerLeft: trigger.left,
+          triggerRight: trigger.right,
+          viewportWidth: document.documentElement.clientWidth,
+        };
+      });
+      expect(geometry.left).toBeGreaterThanOrEqual(0);
+      expect(geometry.right).toBeLessThanOrEqual(geometry.viewportWidth);
+      expect(geometry.bodyLeft).toBeGreaterThanOrEqual(0);
+      expect(geometry.bodyRight).toBeLessThanOrEqual(geometry.viewportWidth);
+      expect(geometry.left).toBeCloseTo(geometry.triggerLeft, 0);
+      expect(geometry.right).toBeLessThanOrEqual(Math.min(
+        geometry.triggerRight,
+        geometry.viewportWidth,
+      ));
+      expect(geometry.right - geometry.left).toBeGreaterThanOrEqual(
+        Math.min(200, geometry.viewportWidth / 2),
+      );
+      await page.screenshot({
+        path: `/private/tmp/open-splunk-select-card-${theme}-${width}.png`,
+      });
+      return geometry;
+    };
+
+    const light = await inspectTheme("light");
+    const dark = await inspectTheme("dark");
+    expect(dark.background).not.toBe(light.background);
+    expect(dark.color).not.toBe(light.color);
+  });
+}
+
 const knowledgeManagerMarkup = `
 <div class="knowledge-manager">
   <div class="knowledge-manager__toolbar">
     <div class="knowledge-manager__filters">
       ${KNOWLEDGE_FILTER_OPTIONS.map((label) => `
-      <label><span>${label}</span><select><option>All</option></select></label>`).join("")}
+      <label><span>${label}</span>${selectMarkup("All")}</label>`).join("")}
     </div>
   </div>
   <div class="knowledge-manager__advanced-filter-grid">
     <label><span>Name</span><input value="" /></label>
     <label><span>Owner</span><input value="" /></label>
     <label><span>Updated after</span><input value="" /></label>
-    <label><span>Updated before</span><select><option>Any</option></select></label>
+    <label><span>Updated before</span>${selectMarkup("Any")}</label>
   </div>
   <div class="knowledge-manager__workspace knowledge-manager__workspace--detail">
     <div class="knowledge-manager__list-panel">
@@ -467,10 +533,10 @@ const knowledgeManagerMarkup = `
     </div>
     <section class="knowledge-manager__detail" tabindex="-1">
       <div class="knowledge-manager__mutation-grid knowledge-manager__mutation-grid--selectors">
-        <label><span>App</span><select><option>search</option></select></label>
+        <label><span>App</span>${selectMarkup("search")}</label>
         <label><span>Owner</span><input value="" /></label>
-        <label><span>Scope</span><select><option>App</option></select></label>
-        <label><span>State</span><select><option>Active</option></select></label>
+        <label><span>Scope</span>${selectMarkup("App")}</label>
+        <label><span>State</span>${selectMarkup("Active")}</label>
       </div>
       <div class="knowledge-manager__mutation-grid">
         <label><span>Name</span><input value="" /></label>
@@ -541,9 +607,9 @@ test.describe("knowledge manager layout contracts", () => {
       ]);
     }));
     await Promise.all([
-      ".knowledge-manager__filters select",
+      ".knowledge-manager__filters .select__trigger",
       ".knowledge-manager__advanced-filter-grid input",
-      ".knowledge-manager__advanced-filter-grid select",
+      ".knowledge-manager__advanced-filter-grid .select__trigger",
     ].map(async (control) => {
       const field = page.locator(control).first();
       await Promise.all([
@@ -582,11 +648,11 @@ test.describe("knowledge manager layout contracts", () => {
 
     // Touch targets grow and font sizes stop triggering iOS zoom-on-focus.
     await Promise.all([
-      ".knowledge-manager__toolbar select",
+      ".knowledge-manager__toolbar .select__trigger",
       ".knowledge-manager__advanced-filter-grid input",
-      ".knowledge-manager__advanced-filter-grid select",
+      ".knowledge-manager__advanced-filter-grid .select__trigger",
       ".knowledge-manager__mutation-grid input",
-      ".knowledge-manager__mutation-grid select",
+      ".knowledge-manager__mutation-grid .select__trigger",
       ".knowledge-manager__delete-confirmation input",
     ].map(async (selector) => {
       const control = page.locator(selector).first();
@@ -644,7 +710,7 @@ test.describe("knowledge manager layout contracts", () => {
     await mount(page, knowledgeManagerMarkup, DESKTOP_WIDTH);
 
     // Sequential by nature: only one element holds keyboard focus at a time.
-    await expectKeyboardFocusRing(page, ".knowledge-manager__filters select");
+    await expectKeyboardFocusRing(page, ".knowledge-manager__filters .select__trigger");
     await expectKeyboardFocusRing(page, ".knowledge-manager__advanced-filter-grid input");
     await expectKeyboardFocusRing(page, ".knowledge-manager__row");
     await expectKeyboardFocusRing(page, ".knowledge-manager__mutation-grid textarea");
@@ -1250,15 +1316,15 @@ const analyticsMetricsMarkup = `
 const analyticsContextMarkup = `
 <section class="analytics-context-bar">
   <div><span class="analytics-context-icon">i</span><div><strong>Search workload</strong><small>Filters update the summary fixtures.</small></div></div>
-  <label><span>Time range</span><select><option>Last 24 hours</option></select></label>
-  <label><span>Environment</span><select><option>All</option></select></label>
+  <label><span>Time range</span>${selectMarkup("Last 24 hours")}</label>
+  <label><span>Environment</span>${selectMarkup("All")}</label>
 </section>`;
 
 const operationsHeaderMarkup = `
 <header class="dashboard-title-row">
   <div><span class="suite-eyebrow">OPERATIONS</span><h1>Service overview</h1></div>
   <div class="operations-header-actions">
-    <label class="operations-range-picker"><span>Metrics range</span><select><option>Last 24 hours</option></select></label>
+    <label class="operations-range-picker"><span>Metrics range</span>${selectMarkup("Last 24 hours")}</label>
     <span class="badge badge--outline operations-preview-badge">Preview data</span>
     <span class="operations-update-status">Fixture timestamp: Jul 21, 4:00 PM</span>
   </div>

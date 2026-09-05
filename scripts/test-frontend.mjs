@@ -30,6 +30,7 @@ const testFiles = [
   path.join("app", "_components", "field-validation.test.tsx"),
   path.join("app", "_components", "modal.test.tsx"),
   path.join("app", "_components", "product-shell.test.tsx"),
+  path.join("app", "_components", "select.test.tsx"),
   path.join("app", "_components", "status.test.tsx"),
   path.join("app", "home-dashboard-data.test.ts"),
   path.join("app", "analytics", "analytics-data.test.ts"),

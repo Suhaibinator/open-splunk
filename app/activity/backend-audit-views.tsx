@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -41,6 +42,7 @@ import {
   type MutationAuditFilters,
   type SearchAttemptAuditFilters,
 } from "./backend-audit-data";
+import { Select, SelectOption } from "../_components/select";
 
 interface AuditViewProps {
   apiBaseUrl: string;
@@ -225,12 +227,13 @@ function AuditPaging({
 }
 
 function PageSizeField({ maximumPageSize, value, onChange }: { maximumPageSize: number; value: number; onChange(value: number): void }) {
+  const id = `backend-audit-page-size-${useId().replace(/:/gu, "")}`;
   return (
-    <label>
+    <label htmlFor={id}>
       <span>Rows per page</span>
-      <select value={value} onChange={(event) => onChange(Number(event.target.value))}>
-        {pageSizeOptions(maximumPageSize).map((option) => <option key={option} value={option}>{option}</option>)}
-      </select>
+      <Select id={id} value={String(value)} onValueChange={(selectedValue) => onChange(Number(selectedValue))}>
+        {pageSizeOptions(maximumPageSize).map((option) => <SelectOption key={option} value={String(option)}>{option}</SelectOption>)}
+      </Select>
     </label>
   );
 }
@@ -296,9 +299,9 @@ export function BackendMutationAudit({ apiBaseUrl, maximumPageSize }: AuditViewP
           <form className="suite-card audit-filter-card" onSubmit={applyFilters}>
             <header><div><h2>Mutation filters</h2><p>Every filter is exact and runs on the server.</p></div><div><button type="button" disabled={!dirty && filters.actions.length === 0 && filters.actorId === undefined && filters.targetKind === undefined} onClick={clearFilters}>Clear</button><button className="button button--primary" type="submit">{dirty ? "Apply filters" : "Refresh"}</button></div></header>
             <div className="audit-filter-grid">
-              <label className="audit-action-filter"><span>Actions</span><select multiple size={5} value={draftActions.map(String)} onChange={(event) => setDraftActions([...event.currentTarget.selectedOptions].map((option) => Number(option.value) as AuditAction))}>{mutationAuditActionOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><small>Select one or more; no selection means every action.</small></label>
+              <fieldset className="audit-action-filter"><legend>Actions</legend><div className="audit-action-options">{mutationAuditActionOptions.map((option) => <label key={option.value}><input type="checkbox" checked={draftActions.includes(option.value)} onChange={(event) => setDraftActions((current) => event.target.checked ? [...current, option.value] : current.filter((value) => value !== option.value))} /><span>{option.label}</span></label>)}</div><small>Select one or more; no selection means every action.</small></fieldset>
               <label><span>Actor ID</span><input value={draftActorId} onChange={(event) => setDraftActorId(event.target.value)} placeholder="Exact actor ID" /></label>
-              <label><span>Target kind</span><select value={draftTargetKind ?? ""} onChange={(event) => setDraftTargetKind(event.target.value === "" ? undefined : Number(event.target.value) as AuditTargetKind)}><option value="">Every target kind</option>{mutationAuditTargetOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+              <label htmlFor="backend-audit-views-choice-302"><span>Target kind</span><Select id="backend-audit-views-choice-302" value={draftTargetKind === undefined ? "" : String(draftTargetKind)} onValueChange={(selectedValue) => setDraftTargetKind(selectedValue === "" ? undefined : Number(selectedValue) as AuditTargetKind)}><SelectOption value="">Every target kind</SelectOption>{mutationAuditTargetOptions.map((option) => <SelectOption key={option.value} value={String(option.value)}>{option.label}</SelectOption>)}</Select></label>
               <PageSizeField maximumPageSize={maximumPageSize} value={draftPageSize} onChange={setDraftPageSize} />
             </div>
           </form>

@@ -123,6 +123,17 @@ import {
   type BoundedRecorder,
 } from "./browser_harness";
 
+async function chooseSelectOption(control: Locator, name: string): Promise<void> {
+  await control.click();
+  const listboxId = await control.getAttribute("aria-controls");
+  expect(listboxId).not.toBeNull();
+  await control.page().locator(`[id="${listboxId}"]`).getByRole("option", { name, exact: true }).click();
+}
+
+function selectValue(control: Locator): Locator {
+  return control.locator("xpath=..").locator(".select__input");
+}
+
 const baseURL = requiredEnvironment("OPEN_SPLUNK_E2E_BASE_URL");
 const searchSPL = requiredEnvironment("OPEN_SPLUNK_E2E_SPL");
 const earliest = requiredEnvironment("OPEN_SPLUNK_E2E_EARLIEST");
@@ -1088,12 +1099,14 @@ test("Mutation Audit renders historical Knowledge events without the Knowledge f
     const legacyRow = mutationPanel.getByRole("row").filter({ hasText: legacyTargetId });
     await expect(legacyRow).toContainText("Saved search");
     await expect(legacyRow).not.toContainText(/App:|Type:|Sharing:/);
-    await expect(mutationPanel.getByLabel("Target kind").locator("option").filter({
-      hasText: "Knowledge object",
-    })).toHaveCount(1);
-    await expect(mutationPanel.getByLabel("Actions").locator("option").filter({
-      hasText: /^Knowledge object ·/,
-    })).toHaveCount(6);
+    await mutationPanel.getByLabel("Target kind").click();
+    await expect(mutationPanel.getByRole("option", { name: "Knowledge object", exact: true }))
+      .toHaveCount(1);
+    await page.keyboard.press("Escape");
+    await mutationPanel.getByLabel("Actions").click();
+    await expect(mutationPanel.getByRole("option", { name: /^Knowledge object ·/ }))
+      .toHaveCount(6);
+    await page.keyboard.press("Escape");
     expect(await page.evaluate(() => Reflect.get(globalThis, "__auditScriptExecuted")))
       .toBeUndefined();
   });
@@ -1843,7 +1856,7 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one exact
   const selectorFilter = manager.getByLabel("Selector text");
   await ownerFilter.fill(" \towner-7 ");
   await textFilter.fill(" latency error ");
-  await sharingFilter.selectOption("private");
+  await chooseSelectOption(sharingFilter, "Private");
   await selectorFilter.fill(" source::api ");
   await waitForBrowserRender(page);
   expect(listRequests).toHaveLength(expectedListRequestCount);
@@ -1859,6 +1872,7 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one exact
   await expect(ownerFilter).toHaveValue("owner-7");
   await expect(textFilter).toHaveValue("latency error");
   await expect(selectorFilter).toHaveValue("source::api");
+  await expect(selectValue(sharingFilter)).toHaveValue("private");
   expect(new URL(page.url()).search).toBe("");
 
   const continuationListRequest: ListKnowledgeObjectsRequest = {
@@ -2264,21 +2278,11 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one exact
   await expectNextListRequest("Clear", initialListRequest);
   await expect(ownerFilter).toHaveValue("");
   await expect(textFilter).toHaveValue("");
-  await expect(sharingFilter).toHaveValue("all");
+  await expect(selectValue(sharingFilter)).toHaveValue("all");
   await expect(selectorFilter).toHaveValue("");
 
-  await sharingFilter.evaluate((element) => {
-    const select = element as HTMLSelectElement;
-    select.add(new Option("Forged", "future-sharing"));
-  });
-  await sharingFilter.selectOption("future-sharing");
-  await expect(manager.getByText("Knowledge Manager unavailable")).toBeVisible({ timeout });
-  await expect(manager.getByRole("button", { name: "Retry" })).toHaveCount(0);
-  await waitForBrowserRender(page);
-  expect(listRequests).toHaveLength(expectedListRequestCount);
-  await sharingFilter.selectOption("all");
   await manager.getByRole("button", { name: "Apply filters" }).click();
-  await expectNextListRequest("forged-sharing recovery", initialListRequest);
+  await expectNextListRequest("cleared-filter reapply", initialListRequest);
 
   await page.setViewportSize({ width: 375, height: 812 });
   expect((await manager.locator(".knowledge-manager__advanced-filter-grid").evaluate(
@@ -2289,7 +2293,7 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one exact
     await manager.getByRole("button", { name: "Create knowledge object" }).click();
     const form = manager.locator(".knowledge-manager__mutation-form");
     await expect(form.getByRole("heading", { name: "Create knowledge object" })).toBeVisible();
-    await form.getByLabel("Definition type").selectOption("regex-extraction");
+    await chooseSelectOption(form.getByLabel("Definition type"), "Field extraction");
     await form.getByLabel("Name").fill("browser_regex_stale");
     await form.getByLabel("Source patterns").fill("source::browser");
     await form.getByLabel("Regex pattern").fill("status=(?<status>[0-9]+)");

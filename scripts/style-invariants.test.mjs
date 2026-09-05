@@ -106,6 +106,15 @@ import {
 
 const workspace = process.cwd();
 
+test("application selection controls use the themed shared primitive", async () => {
+  const sources = await listSourceFiles(workspace);
+  const candidates = sources.filter((file) => file.endsWith(".tsx") && !file.includes(".test."));
+  const contents = await Promise.all(candidates.map((file) => readFile(file, "utf8")));
+  const nativeControls = candidates.filter((_, index) => /<select(?:\s|>)/u.test(contents[index]))
+    .map((file) => relativePosix(workspace, file));
+  assert.deepEqual(nativeControls, [], "Use Select/SelectOption or an explicit checkbox group so options follow the application theme.");
+});
+
 function describeList(items) {
   return items.map((item) => `  ${item}`).join("\n");
 }
@@ -874,17 +883,6 @@ const ledgerPath = path.join(workspace, "scripts", "css-literal-debt.json");
  */
 const ALLOWED_TYPESCRIPT_COLOURS = ["app/layout.tsx: #1e252b"];
 
-/**
- * The one colour no `var()` can reach.
- *
- * The select arrow is an SVG inside a `data:` URI, which the browser parses as
- * its own document: a custom property declared on this page is not in scope
- * there. docs/theming.md records it as needing a mask or an inline SVG rather
- * than a token.
- */
-const ENCODED_COLOUR_SITE =
-  "app/dashboards/operations-dashboard.css | .operations-range-picker select | background: %23526068";
-
 /** The four levels the log data carries, each painted from one token. */
 const SEVERITY_TOKENS = {
   debug: "--level-debug",
@@ -949,7 +947,7 @@ test("no declaration keeps a literal that a token already spells exactly", async
 test("no new colour is hidden inside a percent-encoded data URI", async () => {
   assert.deepEqual(
     await collectEncodedColourLiterals(workspace),
-    [ENCODED_COLOUR_SITE],
+    [],
     "A colour written as `%23rrggbb` inside a `data:` URI is invisible to every other check\n"
       + "here, to `npm run lint:css`, and to a reader searching for `#`. It is also unreachable\n"
       + "by a token, because the SVG is a separate document: the fix is a mask or an inline SVG\n"

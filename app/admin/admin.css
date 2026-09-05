@@ -157,9 +157,7 @@
 .settings-form-grid label > span,
 .admin-form label > span:first-child { font-size: var(--type-xs); font-weight: 600; }
 .settings-form-grid input,
-.settings-form-grid select,
-.admin-form input,
-.admin-form select { background: var(--bg-surface); border: 1px solid var(--border-strong); height: 34px; padding: 0 9px; }
+.admin-form input { background: var(--bg-surface); border: 1px solid var(--border-strong); height: 34px; padding: 0 9px; }
 .admin-form textarea { background: var(--bg-surface); border: 1px solid var(--border-strong); font: inherit; line-height: 1.45; min-height: 70px; padding: 7px 9px; resize: vertical; width: 100%; }
 .admin-policy-grid { display: grid; gap: var(--space-3); grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .admin-policy-grid > label { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
@@ -229,17 +227,12 @@
 .lookup-manager__toolbar label > span,
 .lookup-manager__editor label > span,
 .lookup-manager__upload label > span { color: var(--fg-muted); font-size: var(--type-xxs); font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
-.knowledge-manager__filters select,
 .knowledge-manager__advanced-filter-grid input,
-.knowledge-manager__advanced-filter-grid select,
 .knowledge-manager__mutation-grid input,
-.knowledge-manager__mutation-grid select,
 .knowledge-manager__delete-confirmation input,
 .knowledge-preview input,
 .lookup-manager__toolbar input,
-.lookup-manager__toolbar select,
-.lookup-manager__editor input:not([type="checkbox"], [type="file"]),
-.lookup-manager__editor select { background: var(--bg-surface); border: 1px solid var(--border-strong); font-size: var(--type-xs); height: 34px; min-width: 0; padding: 0 9px; width: 100%; }
+.lookup-manager__editor input:not([type="checkbox"], [type="file"]) { background: var(--bg-surface); border: 1px solid var(--border-strong); font-size: var(--type-xs); height: 34px; min-width: 0; padding: 0 9px; width: 100%; }
 .knowledge-manager__toolbar > p { align-items: flex-end; display: flex; flex-direction: column; font-size: var(--type-xs); gap: 2px; margin: 0; }
 .knowledge-manager__toolbar > p strong { color: var(--fg-text); font-size: var(--type-md); font-weight: 600; }
 .knowledge-manager__toolbar > p span { color: var(--fg-muted); }
@@ -448,7 +441,6 @@ button.knowledge-manager__row.knowledge-manager__row--selected:hover { backgroun
 .knowledge-preview__table-scroll code { overflow-wrap: anywhere; white-space: pre-wrap; }
 .knowledge-manager button:focus-visible,
 .knowledge-manager input:focus-visible,
-.knowledge-manager select:focus-visible,
 .knowledge-manager textarea:focus-visible { outline: 3px solid color-mix(in srgb, var(--focus-ring) 28%, transparent); outline-offset: 1px; }
 
 /* Capability-gated Lookup Manager */
@@ -498,7 +490,6 @@ button.knowledge-manager__row.knowledge-manager__row--selected:hover { backgroun
 .lookup-manager__empty-preview { color: var(--fg-muted); font-size: var(--type-xs); margin: 0; padding: 14px; }
 .lookup-manager button:focus-visible,
 .lookup-manager input:focus-visible,
-.lookup-manager select:focus-visible,
 .lookup-manager textarea:focus-visible { outline: 3px solid color-mix(in srgb, var(--focus-ring) 28%, transparent); outline-offset: 1px; }
 
 /* Responsive
@@ -530,17 +521,13 @@ button.knowledge-manager__row.knowledge-manager__row--selected:hover { backgroun
 
 @media (max-width: 760px) {
   .admin-mobile-section-picker { background: var(--bg-surface); border: 1px solid var(--border); display: grid; gap: 5px; margin-bottom: 10px; padding: 10px; }
-  .admin-mobile-section-picker select { background: var(--bg-surface); border: 1px solid var(--border-strong); font-size: var(--type-xl); height: 44px; padding: 0 9px; }
   .admin-layout { display: block; }
   .admin-sidebar { display: none; }
   .knowledge-manager__header { align-items: flex-start; gap: 10px; }
   .knowledge-manager__toolbar { align-items: stretch; flex-direction: column; }
   .knowledge-manager__toolbar label { min-width: 0; width: 100%; }
-  .knowledge-manager__toolbar select,
   .knowledge-manager__advanced-filter-grid input,
-  .knowledge-manager__advanced-filter-grid select,
   .knowledge-manager__mutation-grid input,
-  .knowledge-manager__mutation-grid select,
   .knowledge-manager__delete-confirmation input { font-size: var(--type-xl); height: 44px; }
   .knowledge-manager__mutation-grid textarea { font-size: var(--type-xl); }
   .knowledge-manager__toolbar > p { align-items: flex-start; }
@@ -586,9 +573,7 @@ button.knowledge-manager__row.knowledge-manager__row--selected:hover { backgroun
   .lookup-manager__mapping-grid { grid-template-columns: 1fr; }
   .lookup-manager__editor-wide { grid-column: 1; }
   .lookup-manager__toolbar input,
-  .lookup-manager__toolbar select,
-  .lookup-manager__editor input:not([type="checkbox"], [type="file"]),
-  .lookup-manager__editor select { font-size: var(--type-xl); height: 44px; }
+  .lookup-manager__editor input:not([type="checkbox"], [type="file"]) { font-size: var(--type-xl); height: 44px; }
   .lookup-manager__editor textarea { font-size: var(--type-xl); }
   .lookup-manager__upload { align-items: stretch; grid-template-columns: 1fr; }
   .lookup-manager__upload button { min-height: 42px; }
@@ -605,7 +590,6 @@ button.knowledge-manager__row.knowledge-manager__row--selected:hover { backgroun
   .admin-toolbar--collector > label:nth-child(2) { min-width: 0; width: 100%; }
   .admin-toolbar > label,
   .admin-toolbar input,
-  .admin-toolbar select,
   .admin-toolbar > button { font-size: var(--type-xl); height: 44px; }
   .admin-pagination-footer { align-items: stretch; flex-direction: column; }
   .admin-pagination-footer .button { width: 100%; }
@@ -622,9 +606,7 @@ button.knowledge-manager__row.knowledge-manager__row--selected:hover { backgroun
   .settings-form-grid { grid-template-columns: 1fr; }
   .admin-policy-grid { grid-template-columns: 1fr; }
   .settings-form-grid input,
-  .settings-form-grid select,
-  .admin-form input,
-  .admin-form select { font-size: var(--type-xl); height: 44px; }
+  .admin-form input { font-size: var(--type-xl); height: 44px; }
   .admin-form textarea { font-size: var(--type-xl); }
   .token-reveal { grid-template-columns: auto 1fr; }
   .token-reveal > div { align-items: stretch; flex-direction: column; grid-column: 1 / -1; }

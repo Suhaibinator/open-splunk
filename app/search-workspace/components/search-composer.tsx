@@ -20,6 +20,7 @@ import { AppIcon, StatusIcon } from "../../_components/app-icon";
 import { Button } from "../../_components/button";
 import type { KeyboardPlatform } from "../keyboard-shortcuts";
 import { SearchEditor, type CompletionItem } from "./search-editor";
+import { Select, SelectOption } from "../../_components/select";
 
 const PHONE_VIEWPORT = "(max-width: 760px)";
 
@@ -271,8 +272,8 @@ export function SearchComposer({
                       <h3>Relative time</h3><p>Search backward from the current moment.</p>
                       <div className="relative-time-row">
                         <label><span>Last</span><input type="number" min="1" max="999" value={relativeAmount} onChange={(event) => onRelativeRangeChange(Number(event.target.value), relativeUnit)} /></label>
-                        <label><span>Unit</span><select value={relativeUnit} onChange={(event) => onRelativeRangeChange(relativeAmount, event.target.value as "m" | "h" | "d")}><option value="m">Minutes</option><option value="h">Hours</option><option value="d">Days</option></select></label>
-                        <label><span>Anchor</span><select value="now" disabled><option value="now">Now</option></select></label>
+                        <label htmlFor="search-composer-choice-275"><span>Unit</span><Select id="search-composer-choice-275" value={relativeUnit} onValueChange={(selectedValue) => onRelativeRangeChange(relativeAmount, selectedValue as "m" | "h" | "d")}><SelectOption value="m">Minutes</SelectOption><SelectOption value="h">Hours</SelectOption><SelectOption value="d">Days</SelectOption></Select></label>
+                        <label htmlFor="search-composer-choice-276"><span>Anchor</span><Select id="search-composer-choice-276" value="now" disabled><SelectOption value="now">Now</SelectOption></Select></label>
                       </div>
                     </div>
                   ) : null}

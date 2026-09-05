@@ -46,6 +46,7 @@ import {
   validHECMetadataDefault,
 } from "./token-creation";
 import type { BackendAdminSection as AdminSection } from "./knowledge-manager-feature";
+import { Select, SelectOption } from "../_components/select";
 
 export type ResourceState = "loading" | "available" | "unavailable" | "error";
 
@@ -340,10 +341,10 @@ export function HECTokenProfileFields(props: HECTokenProfileFieldsProps) {
       <legend>HEC profile</legend>
       <label htmlFor={`${props.idPrefix}-hec-default-index`}>
         <span>Default index <small>(optional)</small></span>
-        <select id={`${props.idPrefix}-hec-default-index`} value={props.defaultIndex} onChange={(event) => props.onDefaultIndexChange(event.target.value)} aria-invalid={props.defaultIndex.length > 0 && !props.selectedIndexes.has(props.defaultIndex)}>
-          <option value="">No token default (requests must provide an index)</option>
-          {[...props.selectedIndexes].toSorted().map((name) => <option value={name} key={name}>{name}</option>)}
-        </select>
+        <Select id={`${props.idPrefix}-hec-default-index`} value={props.defaultIndex} onValueChange={(selectedValue) => props.onDefaultIndexChange(selectedValue)} aria-invalid={props.defaultIndex.length > 0 && !props.selectedIndexes.has(props.defaultIndex)}>
+          <SelectOption value="">No token default (requests must provide an index)</SelectOption>
+          {[...props.selectedIndexes].toSorted().map((name) => <SelectOption value={name} key={name}>{name}</SelectOption>)}
+        </Select>
         <small>When set, this index must remain in the token&apos;s allowed scope. Allowed scope alone is never an implicit default.</small>
       </label>
       {metadataFields.map((field) => {

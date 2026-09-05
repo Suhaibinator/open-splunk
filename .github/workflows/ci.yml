@@ -128,6 +128,9 @@ jobs:
       - name: Test workspace behaviour against the static export
         run: npm run test:workspace
 
+      - name: Test backend dashboard workflows with mocked API responses
+        run: npm run test:dashboards
+
   go-lint:
     name: Go lint
     runs-on: ubuntu-latest

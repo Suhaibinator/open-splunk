@@ -6,6 +6,17 @@
    and it comes after the primitives above so the chrome can lean on them. */
 
 /* Product chrome */
+.suite-card-body {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-4);
+}
+
+.suite-card-body > :first-child,
+.suite-card-body > :last-child {
+  margin-block: 0;
+}
+
 .search-actions,
 .job-primary,
 .job-controls,
@@ -509,6 +520,9 @@
 /* The theme radios of the user popover: a fieldset so the legend names the
    group. Every row carries the check glyph so the three labels align; only
    the checked row shows it. */
+
+/* Unpainted fieldsets shared by product preferences and activity filters. */
+.audit-action-filter,
 .suite-theme-menu {
   border: 0;
   margin: 0;
@@ -744,8 +758,7 @@
 }
 
 .suite-page-actions,
-.home-hero-actions,
-.dashboard-title-row > div:last-child {
+.home-hero-actions {
   align-items: center;
   display: flex;
   gap: 7px;
@@ -987,8 +1000,7 @@
   .suite-page-heading,
   .dashboard-title-row,
   .home-hero { align-items: stretch; flex-direction: column; gap: var(--space-3); }
-  .suite-page-actions,
-  .dashboard-title-row > div:last-child { flex-wrap: wrap; }
+  .suite-page-actions { flex-wrap: wrap; }
   .suite-page-actions .button,
   .dashboard-title-row .button { min-height: 38px; }
   .home-hero-actions { display: grid; grid-template-columns: 1fr 1fr; }

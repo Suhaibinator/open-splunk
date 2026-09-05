@@ -10,6 +10,7 @@ import { HECTokenProfileFields, TokenPolicyFields, TokenScopePicker, tokenCanBeR
 import { tokenPolicyFormFromToken, tokenPolicyIsValid, type TokenPolicyForm } from "./ingestion-policy-form";
 import type { TokenRecoveryOwnership } from "./token-create-recovery-policy";
 import { COLLECTOR_ID_ERROR, tokenUsesHEC, validCollectorId, validHECMetadataDefault } from "./token-creation";
+import { Select, SelectOption } from "../_components/select";
 
 export interface TokenCreateFormValue {
   collectorId: string;
@@ -110,7 +111,7 @@ export function TokenCreationDialog({
       <form className="admin-form" id="create-token-form" onSubmit={submit}>
         <label htmlFor="new-token-name"><span>Token name</span><input id="new-token-name" value={name} onChange={(event) => setName(event.target.value)} placeholder="prod-api-collector" autoComplete="off" /></label>
         <label htmlFor="new-token-description"><span>Description <small>(optional)</small></span><input id="new-token-description" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Production collector credential" /></label>
-        <label htmlFor="new-token-purpose"><span>Purpose</span><select id="new-token-purpose" value={purpose} onChange={(event) => { const next = Number(event.target.value) as IngestionTokenPurpose; setPurpose(next); if (tokenUsesHEC(next)) setCollectorId(""); }}><option value={IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR}>Native collector</option><option value={IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_HEC} disabled={!hecEnabled}>HTTP Event Collector (HEC){hecEnabled ? "" : " — disabled on server"}</option></select><small>Purpose is an immutable transport boundary. HEC credentials can only be created while the server advertises HEC ingestion.</small></label>
+        <label htmlFor="new-token-purpose"><span>Purpose</span><Select id="new-token-purpose" value={String(purpose)} onValueChange={(selectedValue) => { const next = Number(selectedValue) as IngestionTokenPurpose; setPurpose(next); if (tokenUsesHEC(next)) setCollectorId(""); }}><SelectOption value={String(IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR)}>Native collector</SelectOption><SelectOption value={String(IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_HEC)} disabled={!hecEnabled}>HTTP Event Collector (HEC){hecEnabled ? "" : " — disabled on server"}</SelectOption></Select><small>Purpose is an immutable transport boundary. HEC credentials can only be created while the server advertises HEC ingestion.</small></label>
         {creatingHECToken ? null : (
           <label htmlFor="new-token-collector-id">
             <span>Collector ID</span>

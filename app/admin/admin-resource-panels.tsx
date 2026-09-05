@@ -31,6 +31,8 @@ import { StatusLabel } from "../_components/status";
 import { AppIcon } from "../_components/app-icon";
 import { formatMediumDateTime } from "../_components/date-format";
 import { Modal } from "../_components/modal";
+import { AppCreateDialog } from "../_components/app-create-dialog";
+import { AppFields } from "../_components/app-fields";
 import {
   appForm,
   blankAppForm,
@@ -38,6 +40,7 @@ import {
   sameStrings,
   type AppFormState,
 } from "./admin-resource-data";
+import { Select, SelectOption } from "../_components/select";
 
 type LoadState = "loading" | "available" | "unavailable" | "error";
 
@@ -67,27 +70,6 @@ function appStateLabel(state: AppState): string {
   if (state === AppState.APP_STATE_ACTIVE) return "Active";
   if (state === AppState.APP_STATE_ARCHIVED) return "Archived";
   return "Unknown";
-}
-
-function AppFields({ form, onChange, editing }: {
-  form: AppFormState;
-  onChange: (form: AppFormState) => void;
-  editing: boolean;
-}) {
-  return (
-    <div className="admin-form">
-      <label htmlFor="app-slug"><span>Slug</span><input id="app-slug" value={form.slug} disabled={editing} required pattern="[a-z0-9][a-z0-9_-]*" onChange={(event) => onChange({ ...form, slug: event.target.value })} /><small>Lowercase durable identifier; it cannot be changed later.</small></label>
-      <label htmlFor="app-display-name"><span>Display name</span><input id="app-display-name" value={form.displayName} required onChange={(event) => onChange({ ...form, displayName: event.target.value })} /></label>
-      <label htmlFor="app-description"><span>Description <small>(optional)</small></span><input id="app-description" value={form.description} onChange={(event) => onChange({ ...form, description: event.target.value })} /></label>
-      <label htmlFor="app-indexes"><span>Default indexes <small>(optional)</small></span><input id="app-indexes" value={form.indexNames} placeholder="main, security" onChange={(event) => onChange({ ...form, indexNames: event.target.value })} /><small>Comma-separated index names used as the app’s default search scope.</small></label>
-      <label className="admin-checkbox"><input type="checkbox" aria-label="Configure a default time range" checked={form.hasTimeRange} onChange={(event) => onChange({ ...form, hasTimeRange: event.target.checked })} /><span><strong>Configure a default time range</strong><small>Otherwise consumers use their endpoint defaults.</small></span></label>
-      {form.hasTimeRange ? <>
-        <label htmlFor="app-earliest"><span>Earliest</span><input id="app-earliest" value={form.earliest} placeholder="-24h" onChange={(event) => onChange({ ...form, earliest: event.target.value })} /></label>
-        <label htmlFor="app-latest"><span>Latest</span><input id="app-latest" value={form.latest} placeholder="now" onChange={(event) => onChange({ ...form, latest: event.target.value })} /></label>
-        <label htmlFor="app-timezone"><span>Timezone</span><input id="app-timezone" value={form.timezone} placeholder="UTC" onChange={(event) => onChange({ ...form, timezone: event.target.value })} /></label>
-      </> : null}
-    </div>
-  );
 }
 
 export function AppsAdminPanel({ apiBaseUrl, bootstrap }: PanelProps) {
@@ -206,24 +188,6 @@ export function AppsAdminPanel({ apiBaseUrl, bootstrap }: PanelProps) {
     }
   }
 
-  async function createApp(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const definition = definitionFromForm(form);
-    setBusy(true);
-    setNotice(null);
-    try {
-      const response = await client.apps.create({ definition, clientRequestId: undefined });
-      if (response.app === undefined) throw new Error("The server returned an empty app workspace.");
-      setModal(null);
-      setNotice(`App “${response.app.definition?.displayName || definition.slug}” was created.`);
-      load();
-    } catch (mutationError) {
-      setNotice(errorMessage(mutationError));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function updateApp(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (target === null || target.definition === undefined) return;
@@ -308,7 +272,7 @@ export function AppsAdminPanel({ apiBaseUrl, bootstrap }: PanelProps) {
       {notice === null ? null : <output className="access-mode-notice"><span>i</span><div><strong>App administration</strong><p>{notice}</p></div></output>}
       <form className="admin-toolbar" onSubmit={(event) => { event.preventDefault(); setAppliedQuery(query); }}>
         <label><span className="sr-only">Filter apps</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter apps by name or slug" /></label>
-        <label><span className="sr-only">App state</span><select value={stateFilter} onChange={(event) => setStateFilter(event.target.value as typeof stateFilter)}><option value="all">All states</option><option value="active">Active</option><option value="archived">Archived</option></select></label>
+        <label htmlFor="admin-resource-panels-choice-275"><span className="sr-only">App state</span><Select id="admin-resource-panels-choice-275" value={stateFilter} onValueChange={(selectedValue) => setStateFilter(selectedValue as typeof stateFilter)}><SelectOption value="all">All states</SelectOption><SelectOption value="active">Active</SelectOption><SelectOption value="archived">Archived</SelectOption></Select></label>
         <button type="submit">Apply</button><button type="button" onClick={load}>Refresh</button>
       </form>
       {apps.length === 0 ? <BackendResourceState kind="empty" title={appliedQuery || stateFilter !== "all" ? "No matching apps" : "No apps configured"} message={appliedQuery || stateFilter !== "all" ? "Clear the filters to show the complete app catalog." : "Create an app to define a UI and knowledge-object scope."} action={appliedQuery || stateFilter !== "all" ? <button type="button" onClick={() => { setQuery(""); setAppliedQuery(""); setStateFilter("all"); }}>Clear filters</button> : undefined} /> : (
@@ -332,7 +296,7 @@ export function AppsAdminPanel({ apiBaseUrl, bootstrap }: PanelProps) {
       )}
       <div className="admin-pagination-footer"><strong>{countLabel(apps.length, total, totalExact, "app", "apps")}</strong>{nextPageToken === null ? null : <button className="button button--secondary" type="button" disabled={loadingMore || busy} onClick={() => void loadMore()}>{loadingMore ? "Loading…" : "Load more apps"}</button>}</div>
 
-      {modal === "create" ? <Modal title="Create app" subtitle="Create an app workspace and its default search context." onClose={() => !busy && setModal(null)} footer={<><button className="button button--secondary" type="button" disabled={busy} onClick={() => setModal(null)}>Cancel</button><button className="button button--primary" type="submit" form="create-app-form" disabled={busy || !form.slug.trim() || !form.displayName.trim()}>{busy ? "Creating…" : "Create app"}</button></>}><form id="create-app-form" onSubmit={(event) => void createApp(event)}>{notice === null ? null : <div className="access-mode-notice" role="alert"><span>!</span><div><strong>App could not be created</strong><p>{notice}</p></div></div>}<AppFields form={form} onChange={setForm} editing={false} /></form></Modal> : null}
+      {modal === "create" ? <AppCreateDialog apiBaseUrl={apiBaseUrl} onClose={() => setModal(null)} onCreated={(app) => { setModal(null); setNotice(`App “${app.definition?.displayName || app.appId}” was created.`); load(); }} /> : null}
       {modal === "edit" && target !== null ? <Modal title={`Edit ${target.definition?.displayName || "app"}`} subtitle="The app slug remains immutable." onClose={() => !busy && setModal(null)} footer={<><button className="button button--secondary" type="button" disabled={busy} onClick={() => setModal(null)}>Cancel</button><button className="button button--primary" type="submit" form="edit-app-form" disabled={busy || !form.displayName.trim()}>{busy ? "Saving…" : "Save changes"}</button></>}><form id="edit-app-form" onSubmit={(event) => void updateApp(event)}>{notice === null ? null : <div className="access-mode-notice" role="alert"><span>!</span><div><strong>App could not be updated</strong><p>{notice}</p></div></div>}<AppFields form={form} onChange={setForm} editing /></form></Modal> : null}
       {modal === "delete" && target?.definition !== undefined ? <Modal title={`Delete ${target.definition.displayName}`} subtitle="This permanently removes an archived, unreferenced app." onClose={() => !busy && setModal(null)} footer={<><button className="button button--secondary" type="button" disabled={busy} onClick={() => setModal(null)}>Cancel</button><button className="button button--danger" type="submit" form="delete-app-form" disabled={busy || confirmation !== target.definition.slug}>{busy ? "Deleting…" : "Delete permanently"}</button></>}><form id="delete-app-form" className="admin-form" onSubmit={(event) => void deleteApp(event)}><div className="access-mode-notice" role="alert"><span>!</span><div><strong>This cannot be undone</strong><p>{notice ?? "Deletion succeeds only if the app is archived and no saved objects still reference it."}</p></div></div><label htmlFor="delete-app-confirmation"><span>Type <code>{target.definition.slug}</code> to confirm</span><input id="delete-app-confirmation" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} autoComplete="off" /></label></form></Modal> : null}
     </div>
@@ -537,7 +501,7 @@ export function CollectorFleetPanel({ apiBaseUrl, bootstrap }: PanelProps) {
       <form className="admin-toolbar admin-toolbar--collector" onSubmit={(event) => { event.preventDefault(); setAppliedQuery(query); setAppliedIndexFilter(indexFilter); }}>
         <label><span className="sr-only">Filter collectors</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Name, ID, or hostname" /></label>
         <label><span className="sr-only">Filter by index</span><input value={indexFilter} onChange={(event) => setIndexFilter(event.target.value)} placeholder="Authorized index" /></label>
-        <label><span className="sr-only">Connection state</span><select value={stateFilter} onChange={(event) => setStateFilter(event.target.value as typeof stateFilter)}><option value="all">All states</option><option value="online">Online</option><option value="stale">Stale</option><option value="offline">Offline</option><option value="disabled">Disabled</option></select></label>
+        <label htmlFor="admin-resource-panels-choice-504"><span className="sr-only">Connection state</span><Select id="admin-resource-panels-choice-504" value={stateFilter} onValueChange={(selectedValue) => setStateFilter(selectedValue as typeof stateFilter)}><SelectOption value="all">All states</SelectOption><SelectOption value="online">Online</SelectOption><SelectOption value="stale">Stale</SelectOption><SelectOption value="offline">Offline</SelectOption><SelectOption value="disabled">Disabled</SelectOption></Select></label>
         <button type="submit">Apply</button>
       </form>
       {collectors.length === 0 ? <BackendResourceState kind="empty" title={appliedQuery || appliedIndexFilter || stateFilter !== "all" ? "No matching collectors" : "No collectors connected"} message={appliedQuery || appliedIndexFilter || stateFilter !== "all" ? "Clear the filters to show the complete collector fleet." : "Collectors appear after they establish an authenticated connection."} action={appliedQuery || appliedIndexFilter || stateFilter !== "all" ? <button type="button" onClick={() => { setQuery(""); setAppliedQuery(""); setIndexFilter(""); setAppliedIndexFilter(""); setStateFilter("all"); }}>Clear filters</button> : undefined} /> : (

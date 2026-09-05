@@ -14,6 +14,7 @@ import { PageHeading } from "../_components/product-shell";
 import { Modal } from "../_components/modal";
 import { ADMIN_SECTION_QUERY_PARAMETER, adminSectionPath, resolveAdminSection } from "./admin-navigation";
 import { BackendAdminConsole } from "./backend-admin-console";
+import { Select, SelectOption } from "../_components/select";
 
 type AdminSection = "overview" | "indexes" | "collectors" | "access" | "server";
 
@@ -146,9 +147,9 @@ function DemoAdminConsole() {
 
       <div className="admin-mobile-section-picker">
         <label htmlFor="admin-section">Administration section</label>
-        <select id="admin-section" value={section} onChange={(event) => navigateSection(event.target.value as AdminSection)}>
-          {NAV_ITEMS.map((item) => <option value={item.key} key={item.key}>{item.label}</option>)}
-        </select>
+        <Select id="admin-section" value={section} onValueChange={(selectedValue) => navigateSection(selectedValue as AdminSection)}>
+          {NAV_ITEMS.map((item) => <SelectOption value={item.key} key={item.key}>{item.label}</SelectOption>)}
+        </Select>
       </div>
 
       <div className="admin-layout">
@@ -193,7 +194,7 @@ function DemoAdminConsole() {
         >
           <form className="admin-form" id="create-index-form" onSubmit={createIndex}>
             <label htmlFor="new-index-name"><span>Index name</span><input id="new-index-name" value={indexName} onChange={(event) => setIndexName(event.target.value)} placeholder="application-logs" /><small>Lowercase letters, numbers, hyphens, and underscores.</small></label>
-            <label htmlFor="new-index-retention"><span>Retention</span><select id="new-index-retention" value={retention} onChange={(event) => setRetention(event.target.value)}><option value="7">7 days</option><option value="14">14 days</option><option value="30">30 days</option><option value="90">90 days</option></select><small>Events older than this window are removed automatically.</small></label>
+            <label htmlFor="new-index-retention"><span>Retention</span><Select id="new-index-retention" value={retention} onValueChange={(selectedValue) => setRetention(selectedValue)}><SelectOption value="7">7 days</SelectOption><SelectOption value="14">14 days</SelectOption><SelectOption value="30">30 days</SelectOption><SelectOption value="90">90 days</SelectOption></Select><small>Events older than this window are removed automatically.</small></label>
             <div className="access-mode-notice" role="note"><span>i</span><div><strong>Preview-only change</strong><p>The simulated index is searchable only as interface state and disappears when this page reloads.</p></div></div>
           </form>
         </Modal>
@@ -333,6 +334,6 @@ function AccessSection() {
 
 function ServerSection({ saving, onSave }: { saving: boolean; onSave: (event: FormEvent<HTMLFormElement>) => void }) {
   return (
-    <form className="admin-section-stack server-settings" onSubmit={onSave}><header className="admin-section-header"><div><h2>Server settings</h2><p>Preview search limits, locale, and result retention controls.</p></div><button className="button button--primary" type="submit" disabled={saving}>{saving ? "Applying…" : "Apply preview settings"}</button></header><section className="suite-card settings-group"><header><h3>Search behavior</h3><p>Preview defaults shown when a user creates a search job.</p></header><div className="settings-form-grid"><label><span>Default time range</span><select defaultValue="24h"><option value="15m">Last 15 minutes</option><option value="4h">Last 4 hours</option><option value="24h">Last 24 hours</option><option value="7d">Last 7 days</option></select><small>Users can override this for each search.</small></label><label><span>Maximum runtime</span><div className="input-with-unit"><input type="number" defaultValue="300" min="10" /><b>seconds</b></div><small>Long-running searches are canceled automatically.</small></label><label><span>Maximum result rows</span><input type="number" defaultValue="50000" min="1000" step="1000" /><small>Exports have a separate server-side limit.</small></label><label><span>Concurrent searches</span><input type="number" defaultValue="4" min="1" max="32" /><small>Maximum active jobs for this node.</small></label></div></section><section className="suite-card settings-group"><header><h3>Regional settings</h3><p>How dates and times are displayed in the browser.</p></header><div className="settings-form-grid"><label><span>Time zone</span><select defaultValue="America/Los_Angeles"><option>America/Los_Angeles</option><option>UTC</option><option>America/New_York</option></select></label><label><span>Week starts on</span><select defaultValue="sunday"><option value="sunday">Sunday</option><option value="monday">Monday</option></select></label></div></section><section className="suite-card danger-zone"><header><div><h3>Diagnostic bundle</h3><p>Diagnostic bundle generation is not connected in this preview.</p></div><button className="button" type="button">Generate bundle</button></header></section></form>
+    <form className="admin-section-stack server-settings" onSubmit={onSave}><header className="admin-section-header"><div><h2>Server settings</h2><p>Preview search limits, locale, and result retention controls.</p></div><button className="button button--primary" type="submit" disabled={saving}>{saving ? "Applying…" : "Apply preview settings"}</button></header><section className="suite-card settings-group"><header><h3>Search behavior</h3><p>Preview defaults shown when a user creates a search job.</p></header><div className="settings-form-grid"><label htmlFor="admin-default-time-range"><span>Default time range</span><Select id="admin-default-time-range" defaultValue="24h"><SelectOption value="15m">Last 15 minutes</SelectOption><SelectOption value="4h">Last 4 hours</SelectOption><SelectOption value="24h">Last 24 hours</SelectOption><SelectOption value="7d">Last 7 days</SelectOption></Select><small>Users can override this for each search.</small></label><label><span>Maximum runtime</span><div className="input-with-unit"><input type="number" defaultValue="300" min="10" /><b>seconds</b></div><small>Long-running searches are canceled automatically.</small></label><label><span>Maximum result rows</span><input type="number" defaultValue="50000" min="1000" step="1000" /><small>Exports have a separate server-side limit.</small></label><label><span>Concurrent searches</span><input type="number" defaultValue="4" min="1" max="32" /><small>Maximum active jobs for this node.</small></label></div></section><section className="suite-card settings-group"><header><h3>Regional settings</h3><p>How dates and times are displayed in the browser.</p></header><div className="settings-form-grid"><label htmlFor="admin-time-zone"><span>Time zone</span><Select id="admin-time-zone" defaultValue="America/Los_Angeles"><SelectOption>America/Los_Angeles</SelectOption><SelectOption>UTC</SelectOption><SelectOption>America/New_York</SelectOption></Select></label><label htmlFor="admin-week-start"><span>Week starts on</span><Select id="admin-week-start" defaultValue="sunday"><SelectOption value="sunday">Sunday</SelectOption><SelectOption value="monday">Monday</SelectOption></Select></label></div></section><section className="suite-card danger-zone"><header><div><h3>Diagnostic bundle</h3><p>Diagnostic bundle generation is not connected in this preview.</p></div><button className="button" type="button">Generate bundle</button></header></section></form>
   );
 }

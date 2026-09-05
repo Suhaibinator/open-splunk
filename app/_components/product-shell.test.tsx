@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { renderToStaticMarkup } from "react-dom/server";
+import { AppState } from "@/gen/ts/open_splunk/app";
 
 import { ProductShell, productMenuControlId, ThemeMenu } from "./product-shell";
 
@@ -42,4 +43,26 @@ test("the theme menu checks exactly one radio for every preference", () => {
     assert.match(markup, new RegExp(`aria-checked="true"[^>]*>(?:<svg[^]*?</svg>)?${label}</button>`, "u"));
     assert.match(markup, /<fieldset class="suite-theme-menu"><legend class="suite-menu-label">Theme<\/legend>/u);
   }
+});
+
+test("a controlled backend app catalog keeps dashboard navigation in place", () => {
+  const markup = renderToStaticMarkup(
+    <ProductShell
+      activeSection="dashboards"
+      appName="Dashboards"
+      backendAppCatalog={{
+        apps: [{ appId: "app-1", slug: "grade-this", displayName: "GradeThis", defaultIndexNames: [], state: AppState.APP_STATE_ACTIVE }],
+        onSelect: () => undefined,
+        selectedAppId: "app-1",
+        state: "available",
+      }}
+      dataMode="backend"
+    >
+      <p>Dashboard content</p>
+    </ProductShell>,
+  );
+
+  assert.match(markup, /App: <strong>GradeThis<\/strong>/u);
+  assert.match(markup, /aria-label="Dashboards navigation"/u);
+  assert.doesNotMatch(markup, /GradeThis Operations/u);
 });

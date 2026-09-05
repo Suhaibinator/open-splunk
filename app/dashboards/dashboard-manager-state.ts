@@ -10,6 +10,25 @@ export interface DashboardManagerError {
   readonly retry: DashboardLoadRetry | null;
 }
 
+export type DashboardViewState = "loading" | "unavailable" | "error" | "no-apps" | "empty" | "ready";
+
+/** Keeps request failures and missing prerequisites distinct from a valid empty catalog. */
+export function dashboardViewState(input: {
+  appCount: number;
+  available: boolean;
+  dashboardCount: number;
+  error: DashboardManagerError | null;
+  loadedCatalog: boolean;
+  loading: boolean;
+}): DashboardViewState {
+  if (input.loading) return "loading";
+  if (!input.available) return "unavailable";
+  if (!input.loadedCatalog) return input.error === null ? "loading" : "error";
+  if (input.appCount === 0) return "no-apps";
+  if (input.dashboardCount === 0) return "empty";
+  return "ready";
+}
+
 /** Keeps retry authority attached to the load request that actually failed. */
 export function dashboardLoadError(
   message: string,
