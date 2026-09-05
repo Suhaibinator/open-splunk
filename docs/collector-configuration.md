@@ -257,6 +257,26 @@ that must be redacted before the collector writes its local WAL.
 
 ## Fixed runtime behavior
 
+Checkpoint advances append one checksummed transaction containing only changed
+source positions and sync it before terminal WAL reclamation. The collector
+periodically compacts `checkpoints/checkpoints.journal` into
+`checkpoints/checkpoints.json` when the journal reaches the larger of 1 MiB or
+the snapshot size. Compaction retains historical file identities: age alone
+does not establish that a rotated file is safe to forget. Version-1 snapshots
+migrate on the first mutation. The resulting version-2 state requires the new
+collector; do not downgrade it or back up only the JSON file. Stop the collector
+and preserve its entire state directory for a consistent backup.
+
+The daemon reserves WAL sequence numbers in groups of 128 to amortize metadata
+file and directory syncs. Every appended batch still receives its own WAL
+fsync before success. Restart skips unused reserved sequences; gaps are normal
+and never authorize skipping a pending batch. The WAL format remains readable
+by older collectors, which also skip to the persisted next sequence.
+
+Staged file reads start at 4 KiB and grow geometrically when productive reads
+remain backlogged. Event-count saturation and low utilization shrink the window
+geometrically; the existing per-event byte and staged-event bounds still apply.
+
 The following values are implementation defaults and are not YAML, environment,
 or CLI settings:
 

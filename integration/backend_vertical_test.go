@@ -2514,12 +2514,7 @@ func waitForCollectorDiscovery(
 }
 
 func readCollectorCheckpoints(stateDir string) ([]input.Checkpoint, error) {
-	checkpoints, err := input.NewCheckpointStore(filepath.Join(stateDir, "checkpoints"))
-	if err != nil {
-		return nil, err
-	}
-	list, listErr := checkpoints.List()
-	return list, errors.Join(listErr, checkpoints.Close())
+	return input.ReadCheckpoints(filepath.Join(stateDir, "checkpoints"))
 }
 
 func assertDurableCollectorState(t *testing.T, stateDir string, wantOffset, wantLine uint64) {
