@@ -21,33 +21,43 @@ is:
 | ---: | --- | --- |
 | 1 | `app/styles/tokens-color.css` | primitive palette, semantic colour roles, dark-theme role overrides |
 | 2 | `app/styles/tokens-scale.css` | spacing, radii, type, stacking, elevation, motion, opacity, fonts |
-| 3 | `app/styles/base.css` | reset, element defaults, focus ring, shared keyframes |
-| 4 | `app/styles/primitives/button.css` | `.button` and modifiers |
-| 5 | `app/styles/primitives/table.css` | `.table-wrap`, `.table`, modifiers and card mode |
-| 6 | `app/styles/primitives/form.css` | fields, labels, form and settings layouts |
-| 7 | `app/styles/primitives/modal.css` | dialog shell and modal-only surfaces |
-| 8 | `app/styles/primitives/status.css` | `.status` and `.badge` |
-| 9 | `app/styles/primitives/layout.css` | product shell, drawer, toasts and suite layouts |
-| 10 | `app/styles/primitives/chart.css` | shared chart geometry |
-| 11 | `app/styles/primitives/skeleton.css` | shared loading placeholders and reduced-motion behavior |
-| 12 | `app/search-workspace/search-editor.css` | search title, editor and time picker |
-| 13 | `app/search-workspace/search-job.css` | job strip, tabs and timeline |
-| 14 | `app/search-workspace/search-fields.css` | fields rail and events |
-| 15 | `app/search-workspace/search-results.css` | patterns, statistics and result grids |
-| 16 | `app/admin/admin.css` | administration and knowledge surfaces |
-| 17 | `app/activity/activity.css` | activity console |
-| 18 | `app/datasets/datasets.css` | dataset cards and field catalog |
-| 19 | `app/signin/signin.css` | sign-in page |
-| 20 | `app/home.css` | landing page |
-| 21 | `app/_components/backend-resource-state.css` | connected-backend empty/error state |
-| 22 | `app/dashboards/dashboards.css` | dashboard page rules |
-| 23 | `app/analytics/analytics.css` | analytics console; `analytics-` namespace |
-| 24 | `app/dashboards/operations-dashboard.css` | operations dashboard; `operations-` namespace |
-| 25 | `app/reports/reports.css` | reports and saved searches; `reports-` namespace |
-| 26 | `app/reports/alerts.css` | alert management; `alerts-` namespace |
-| 27 | `app/search-workspace/components/workspace-dialogs.css` | workspace dialogs; `workspace-dialog-` namespace |
-| 28 | `app/search-workspace/panels/visualization-panel.css` | result visualizations; `visualization-` namespace |
-| 29 | `app/styles/interaction.css` | coarse-pointer and reduced-motion floors |
+| 3 | `app/styles/tokens-palette-ember.css` | ember palette: light and dark restatements of colour and scale roles |
+| 4 | `app/styles/tokens-palette-glass.css` | glass palette: translucency knobs, borders, accent, chrome, radii, shadows |
+| 5 | `app/styles/tokens-palette-graphite.css` | graphite palette: 7:1 monochrome inks, gray accent and chrome, ring shadows |
+| 6 | `app/styles/tokens-palette-ocean.css` | ocean palette: mist canvas, blue accent, slate-blue chrome, softer scale |
+| 7 | `app/styles/tokens-palette-terminal.css` | terminal palette: mono type stack, square corners, ring shadows, phosphor |
+| 8 | `app/styles/base.css` | reset, element defaults, focus ring, shared keyframes |
+| 9 | `app/styles/primitives/button.css` | `.button` and modifiers |
+| 10 | `app/styles/primitives/table.css` | `.table-wrap`, `.table`, modifiers and card mode |
+| 11 | `app/styles/primitives/form.css` | fields, labels, form and settings layouts |
+| 12 | `app/styles/primitives/modal.css` | dialog shell and modal-only surfaces |
+| 13 | `app/styles/primitives/status.css` | `.status` and `.badge` |
+| 14 | `app/styles/primitives/layout.css` | product shell, drawer, toasts and suite layouts |
+| 15 | `app/styles/primitives/chart.css` | shared chart geometry |
+| 16 | `app/styles/primitives/skeleton.css` | shared loading placeholders and reduced-motion behavior |
+| 17 | `app/search-workspace/search-editor.css` | search title, editor and time picker |
+| 18 | `app/search-workspace/search-job.css` | job strip, tabs and timeline |
+| 19 | `app/search-workspace/search-fields.css` | fields rail and events |
+| 20 | `app/search-workspace/search-results.css` | patterns, statistics and result grids |
+| 21 | `app/admin/admin.css` | administration and knowledge surfaces |
+| 22 | `app/activity/activity.css` | activity console |
+| 23 | `app/datasets/datasets.css` | dataset cards and field catalog |
+| 24 | `app/signin/signin.css` | sign-in page |
+| 25 | `app/home.css` | landing page |
+| 26 | `app/_components/backend-resource-state.css` | connected-backend empty/error state |
+| 27 | `app/dashboards/dashboards.css` | dashboard page rules |
+| 28 | `app/analytics/analytics.css` | analytics console; `analytics-` namespace |
+| 29 | `app/dashboards/operations-dashboard.css` | operations dashboard; `operations-` namespace |
+| 30 | `app/reports/reports.css` | reports and saved searches; `reports-` namespace |
+| 31 | `app/reports/alerts.css` | alert management; `alerts-` namespace |
+| 32 | `app/search-workspace/components/workspace-dialogs.css` | workspace dialogs; `workspace-dialog-` namespace |
+| 33 | `app/search-workspace/panels/visualization-panel.css` | result visualizations; `visualization-` namespace |
+| 34 | `app/styles/interaction.css` | coarse-pointer and reduced-motion floors |
+
+The five palette files must follow both base token files: a palette's light
+block is written as `:root:where([data-palette="…"])` so it keeps base light's
+specificity and beats it by source order alone, which is what lets the base
+dark block still outrank it in dark mode.
 
 Primitives precede features so a feature may supply layout around a primitive.
 `interaction.css` is last because its accessibility floors must outrank both.
