@@ -760,7 +760,7 @@ export function BackendServerSettings({
   const editable = supportsServerFeature(bootstrap, ServerFeature.SERVER_FEATURE_SERVER_SETTINGS_ADMIN);
   return (
     <div className="admin-section-stack">
-      <header className="admin-section-header"><div><h2>Server settings</h2><p>{editable ? "Persistent node-wide search resource limits." : "Read-only limits advertised to this browser."}</p></div><span>{editable ? "Administrator settings" : "Bootstrap values"}</span></header>
+      <header className="admin-section-header"><div><h2>Server settings</h2><p>{editable ? "Persistent node-wide search resource limits and appearance." : "Read-only limits and palette advertised to this browser."}</p></div><span>{editable ? "Administrator settings" : "Bootstrap values"}</span></header>
       {editable ? <><SearchLimitsSettings client={client} onStatus={onStatus} onDirtyChange={setLimitsDirty} /><AppearanceSettings client={client} onStatus={onStatus} onDirtyChange={setAppearanceDirty} /></> : <><div className="access-mode-notice" role="note"><span>i</span><div><strong>Configuration writes are unavailable</strong><p>The backend does not advertise editable server settings. These values cannot be changed from this page.</p></div></div>
       <section className="suite-card settings-group">
         <header><h3>{APPEARANCE_TITLE}</h3><p>{APPEARANCE_DESCRIPTION}</p></header>
