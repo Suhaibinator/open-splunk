@@ -47,6 +47,17 @@ test("one-time secret recovery has no escape controls before acknowledgement", (
   assert.match(markup, /I confirm that I saved this secret/u);
   assert.match(markup, />I’m done<\/button>/u);
   assert.match(markup, /<button[^>]*disabled=""[^>]*>I’m done<\/button>/u);
+  assert.doesNotMatch(markup, /Navigation is blocked/u);
+});
+
+test("secret recovery explains blocked navigation while the one-time guard is active", () => {
+  const markup = renderToStaticMarkup(createElement(AlertSecretRecovery, {
+    alertName: "Errors",
+    navigationBlocked: true,
+    secret: "one-time-secret",
+    onClose: () => {},
+  }));
+  assert.match(markup, /<p class="alerts-inline-error" role="alert">Navigation is blocked while a one-time signing secret is being issued/u);
 });
 
 test("each alert wizard step moves focus to its first relevant control", () => {

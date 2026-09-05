@@ -7308,6 +7308,7 @@ export function SearchWorkspace({
           })) ?? []}
           administratorSignInRequired={saveAsAlert.administratorSignInRequired}
           initialValue={saveAsAlert.draft}
+          navigationBlocked={saveAsAlert.navigationBlocked}
           pending={saveAsAlert.pending}
           returnFocus={saveAsButtonRef.current}
           submitError={saveAsAlert.error}
@@ -7319,6 +7320,7 @@ export function SearchWorkspace({
       {saveAsAlert.secret === null ? null : (
         <AlertSecretRecovery
           alertName={saveAsAlert.secret.name}
+          navigationBlocked={saveAsAlert.navigationBlocked}
           secret={saveAsAlert.secret.value}
           returnFocus={saveAsButtonRef.current}
           onClose={saveAsAlert.closeSecret}

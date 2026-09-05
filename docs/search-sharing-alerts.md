@@ -65,12 +65,16 @@ count. Updating or disabling an alert affects future claims; deleting an alert
 with an active run is rejected.
 
 Successful exact results compare the row count using `>`, `<`, `=`, or `!=`.
-A truncated result is only a lower bound. It may prove `>` and may prove `!=`
-when the lower bound is already above the threshold; comparisons that cannot be
-proved are indeterminate and do not deliver. Failed, canceled, expired, or
-interrupted searches never deliver.
+A truncated result is only a lower bound. A bound above the threshold proves
+`>` and `!=`, a bound at or above the threshold disproves `<`, and a bound above
+the threshold disproves `=`. Every other truncated comparison is indeterminate.
+Neither false nor indeterminate evaluations deliver. Failed, canceled, expired,
+or interrupted searches never deliver.
 
-A triggered alert extends its job lifetime to the longer of `dispatch.ttl` and
+A triggered alert first resolves its retained-results link; without a
+configured public base URL the run is recorded as a delivery failure before
+retention is extended or its single delivery authorization is consumed. It
+then extends its job lifetime to the longer of `dispatch.ttl` and
 the webhook TTL, whose default is `10p`, before delivery. Delivery is one
 best-effort HTTPS POST with a ten-second timeout, no proxy, no redirects, no
 retry, and a bounded response read. Any 2xx response succeeds.

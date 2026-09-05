@@ -9,6 +9,10 @@ import {
   type AlertFormValue,
 } from "@/lib/search/alert-form";
 
+/** Shown while the one-time secret guard is swallowing link and history navigation. */
+export const ONE_TIME_SECRET_NAVIGATION_BLOCKED_MESSAGE =
+  "Navigation is blocked while a one-time signing secret is being issued. Finish this step before leaving the page.";
+
 export function defaultAlertForm(overrides: Partial<AlertFormValue> = {}): AlertFormValue {
   return {
     name: "",

@@ -72,6 +72,60 @@ func TestCoordinatorExecutesTriggeredDeliveryEndToEnd(t *testing.T) {
 	}
 }
 
+func TestCoordinatorMissingPublicBaseURLFailsBeforeDeliveryPreparation(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, time.August, 30, 9, 0, 0, 0, time.UTC)
+	runs := &coordinatorRunStore{
+		due:             []RunSnapshot{coordinatorSnapshot(now)},
+		completedSignal: make(chan struct{}, MaximumAlertsPerOwner),
+		attemptSignal:   make(chan struct{}, MaximumAlertsPerOwner),
+	}
+	jobs := coordinatorJobReader{job: SearchJobSnapshot{
+		ID: "job-1", State: SearchJobCompleted, StartedAt: now.Add(time.Second),
+		FinishedAt: now.Add(2 * time.Second), ExpiresAt: now.Add(10 * time.Minute), ResultCount: 12,
+	}}
+	poller := coordinatorPoller{wait: func(ctx context.Context, ownerID, jobID string, reader SearchJobReader) (SearchJobSnapshot, error) {
+		return reader.ReadAlertSearchJob(ctx, ownerID, jobID)
+	}}
+	retention := &coordinatorRetention{expiresAt: now.Add(50 * time.Minute)}
+	authorizer := &coordinatorAuthorizer{opened: OpenedDeliverySecrets{Endpoint: "https://hooks.example.test/alert", Secret: bytes.Repeat([]byte{0x5a}, SecretBytes)}}
+	deliverer := &coordinatorDeliverer{deliver: func(context.Context, string, SignedPayload) (DeliveryResult, error) {
+		t.Error("delivery must not be attempted without a public base URL")
+		return DeliveryResult{}, errors.New("unexpected delivery")
+	}}
+	coordinator, err := NewCoordinator(CoordinatorOptions{
+		RunRepository: runs, Admission: &coordinatorAdmission{jobID: "job-1"}, Jobs: jobs,
+		Results: &coordinatorResults{}, Retention: retention, Authorizer: authorizer, Deliverer: deliverer,
+		Poller: poller, Clock: func() time.Time { return now }, ConcurrencyLimit: 1,
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator() error = %v", err)
+	}
+	t.Cleanup(func() {
+		shutdownContext, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := coordinator.Close(shutdownContext); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	})
+	if err := coordinator.Step(context.Background(), now); err != nil {
+		t.Fatalf("Step() error = %v", err)
+	}
+	completed := waitForCompleted(t, runs, 1)[0]
+	if completed.Outcome != RunDeliveryFailed || completed.FailureCategory != string(FailurePublicBaseURL) || completed.Evaluation != EvaluationTrue {
+		t.Fatalf("completed = %#v", completed)
+	}
+	retention.mu.Lock()
+	retentionCalls := retention.calls
+	retention.mu.Unlock()
+	authorizer.mu.Lock()
+	authorizerCalls := authorizer.calls
+	authorizer.mu.Unlock()
+	if retentionCalls != 0 || authorizerCalls != 0 {
+		t.Fatalf("retention calls = %d, authorization calls = %d, want none before the results link resolves", retentionCalls, authorizerCalls)
+	}
+}
+
 func TestCoordinatorEvaluationOutcomesDoNotDeliver(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, time.August, 30, 10, 0, 0, 0, time.UTC)
@@ -85,7 +139,8 @@ func TestCoordinatorEvaluationOutcomesDoNotDeliver(t *testing.T) {
 	}{
 		{name: "exact false", condition: Condition{Operator: ConditionGreaterThan, Threshold: 4}, count: 4, want: RunNotTriggered, certainty: EvaluationFalse},
 		{name: "truncated indeterminate", condition: Condition{Operator: ConditionEqual, Threshold: 8}, count: 8, truncated: true, want: RunIndeterminate, certainty: EvaluationIndeterminate},
-		{name: "truncated less remains indeterminate", condition: Condition{Operator: ConditionLessThan, Threshold: 8}, count: 9, truncated: true, want: RunIndeterminate, certainty: EvaluationIndeterminate},
+		{name: "truncated less below threshold stays indeterminate", condition: Condition{Operator: ConditionLessThan, Threshold: 8}, count: 7, truncated: true, want: RunIndeterminate, certainty: EvaluationIndeterminate},
+		{name: "truncated less at threshold is disproved", condition: Condition{Operator: ConditionLessThan, Threshold: 8}, count: 9, truncated: true, want: RunNotTriggered, certainty: EvaluationFalse},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -129,7 +184,6 @@ func TestCoordinatorSecretRotationWinsBeforeDeliveryPreparation(t *testing.T) {
 		deliveryIDCalls.Add(1)
 		return "", errors.New("delivery ID must not be generated")
 	}
-	coordinator.publicBaseURL = "://invalid"
 
 	if err := coordinator.Step(context.Background(), now); err != nil {
 		t.Fatalf("Step() error = %v", err)

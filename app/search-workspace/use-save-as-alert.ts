@@ -31,6 +31,7 @@ export interface SaveAsAlertController {
   closeSecret: () => void;
   draft: AlertFormValue | null;
   error: string | null;
+  navigationBlocked: boolean;
   open: (prepare: (bootstrap: SystemBootstrapModel) => AlertFormValue) => Promise<void>;
   pending: boolean;
   secret: AlertSigningSecret | null;
@@ -129,6 +130,7 @@ export function useSaveAsAlert({
     closeSecret: issuance.closeRecovery,
     draft,
     error,
+    navigationBlocked: issuance.navigationBlocked,
     open,
     pending,
     secret: issuance.secret,
