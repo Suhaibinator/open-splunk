@@ -14,11 +14,13 @@ import {
   UpdateServerAppearanceResponse,
   type UpdateServerAppearanceRequest,
 } from "@/gen/ts/open_splunk/server_settings_api";
-import { HttpError, type OpenSplunkApiClient } from "@/lib/api";
+import { GetSystemBootstrapResponse } from "@/gen/ts/open_splunk/system_api";
+import { getSystemBootstrap, HttpError, type OpenSplunkApiClient } from "@/lib/api";
 import { PALETTES, type Palette } from "@/lib/palettes";
 import { fakeEvent, type FakeElement } from "@/lib/testing/fake-dom";
 import { PALETTE_STORAGE_KEY } from "@/lib/theme-preference";
 
+import { ThemeSync } from "../_components/theme-sync";
 import { paletteOptionId } from "./appearance-form";
 import { AppearanceSettings } from "./appearance-settings";
 
@@ -672,6 +674,98 @@ test("swapping the client mid-preview reloads from the new client and drops the 
   await act(async () => root.unmount());
   container.parentNode?.removeChild(container);
   assert.equal(paletteOnDocument(), "ember");
+  assert.deepEqual(reactErrors, []);
+});
+
+/**
+ * Resolves a `/api/system/bootstrap` envelope naming `palette` through the
+ * same `getSystemBootstrap` every loader on the page uses, which is what
+ * announces it to `ThemeSync`: the console's Reload and the shell's catalog
+ * retry, as the card sees them.
+ */
+function resolveBootstrap(palette: Palette): Promise<unknown> {
+  const client = {
+    system: {
+      bootstrap: () => Promise.resolve(GetSystemBootstrapResponse.fromPartial({
+        serverTime: new Date("2026-09-05T00:00:00Z"),
+        uiPalette: PROTO[palette],
+      })),
+    },
+  } as unknown as OpenSplunkApiClient;
+  return act(() => getSystemBootstrap(client));
+}
+
+test("a bootstrap envelope the page resolves mid-preview repaints the server's palette under ThemeSync, and the preview stays on top", async () => {
+  const server = fakeServer();
+  server.gets.push(() => Promise.resolve(envelope("classic", 3n)));
+  // ThemeSync mounts from the root layout, ahead of the page, so it observes
+  // the envelope first: the order the fix relies on.
+  const themeContainer = browser.document.body.appendChild(browser.document.createElement("div"));
+  const themeRoot = createRoot(themeContainer as unknown as Element);
+  await act(async () => {
+    themeRoot.render(<ThemeSync dataMode="backend" />);
+  });
+  const mounted = await mount(server);
+  assert.equal(paletteOnDocument(), "classic");
+  await mounted.choose("ember");
+  assert.equal(paletteOnDocument(), "ember");
+  assert.equal(browser.chromeMeta.getAttribute("content"), "bar(ember)");
+
+  // The console's Reload lands while the preview shows.
+  await resolveBootstrap("classic");
+  assert.equal(paletteOnDocument(), "ember");
+  assert.equal(browser.chromeMeta.getAttribute("content"), "bar(ember)");
+  assert.deepEqual(checkedRadios(mounted.container), ["ember"]);
+  assert.equal(mounted.dirty.at(-1), true);
+  assert.equal(mounted.button("Apply").disabled, false);
+  // The cache is ThemeSync's: it holds the server's value, never the preview.
+  assert.equal(browser.storage.get(PALETTE_STORAGE_KEY), "classic");
+  assert.ok(!browser.storageWrites.some(([, value]) => value === "ember"), JSON.stringify(browser.storageWrites));
+
+  // A second preview after the refresh is guarded the same way.
+  await mounted.choose("terminal");
+  await resolveBootstrap("classic");
+  assert.equal(paletteOnDocument(), "terminal");
+  assert.equal(browser.storage.get(PALETTE_STORAGE_KEY), "classic");
+
+  // Once the preview is abandoned the envelope paints as it always did.
+  await mounted.click("Reset to default");
+  assert.equal(mounted.dirty.at(-1), false);
+  assert.equal(paletteOnDocument(), "classic");
+  await resolveBootstrap("ocean");
+  assert.equal(paletteOnDocument(), "ocean");
+  assert.equal(browser.storage.get(PALETTE_STORAGE_KEY), "ocean");
+
+  await mounted.unmount();
+  // The card's own exit restores the palette it loaded; a later envelope is
+  // ThemeSync's alone.
+  assert.equal(paletteOnDocument(), "classic");
+  await resolveBootstrap("glass");
+  assert.equal(paletteOnDocument(), "glass");
+  await act(async () => themeRoot.unmount());
+  themeContainer.parentNode?.removeChild(themeContainer);
+  assert.deepEqual(reactErrors, []);
+});
+
+test("an applied choice needs no guard: the envelope that follows names the same palette", async () => {
+  const server = fakeServer();
+  server.gets.push(() => Promise.resolve(envelope("classic", 3n)));
+  server.updates.push(() => Promise.resolve(UpdateServerAppearanceResponse.fromPartial(envelope("ember", 4n))));
+  const themeContainer = browser.document.body.appendChild(browser.document.createElement("div"));
+  const themeRoot = createRoot(themeContainer as unknown as Element);
+  await act(async () => {
+    themeRoot.render(<ThemeSync dataMode="backend" />);
+  });
+  const mounted = await mount(server);
+  await mounted.choose("ember");
+  await mounted.submit();
+  assert.equal(mounted.dirty.at(-1), false);
+  await resolveBootstrap("ember");
+  assert.equal(paletteOnDocument(), "ember");
+  assert.equal(browser.storage.get(PALETTE_STORAGE_KEY), "ember");
+  await mounted.unmount();
+  await act(async () => themeRoot.unmount());
+  themeContainer.parentNode?.removeChild(themeContainer);
   assert.deepEqual(reactErrors, []);
 });
 

@@ -286,7 +286,11 @@ and the cache is what the pre-paint path reads:
 - `previewPalette(palette)` paints this document only and leaves the cache
   alone: what the Appearance card does while a radio is selected but not yet
   applied. Other tabs follow the cache, so a preview never reaches them, and
-  the next boot still paints the server's value.
+  the next boot still paints the server's value. While a preview shows, the
+  card also subscribes to `subscribeToSystemBootstrap` and paints the preview
+  again after each envelope, so the console's Reload or the shell's catalog
+  retry -- which make `ThemeSync` repaint the server's palette -- cannot take
+  the preview off the document while the radio still shows it.
 - `syncThemeColorMeta()` copies the computed `--chrome-bar` into
   `<meta name="theme-color">` after every theme or palette application, so the
   address bar and an installed app's title bar follow the product bar.
