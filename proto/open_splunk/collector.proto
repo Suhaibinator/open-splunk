@@ -24,6 +24,7 @@ enum CollectorCapability {
   COLLECTOR_CAPABILITY_GZIP = 4;
   COLLECTOR_CAPABILITY_MULTILINE = 5;
   COLLECTOR_CAPABILITY_TYPED_FIELDS = 6;
+  COLLECTOR_CAPABILITY_LOSSLESS_REPACKING = 7;
 }
 
 enum CollectorInputType {
@@ -137,6 +138,10 @@ message CollectRequest {
     EventBatch batch = 11;
     CollectorHeartbeat heartbeat = 12;
     CollectorGoodbye goodbye = 13;
+    // Exact original batch, including its original identity. The server first
+    // recovers any durable outcome; only a durable REPACK_REQUIRED rejection
+    // authorizes replacing it with new child identities.
+    EventBatch repack_batch = 14;
   }
 }
 
@@ -163,6 +168,7 @@ message CollectorReady {
   AckDurability acknowledgment_durability = 13;
   optional uint64 resume_after_batch_sequence = 14;
   BuildMetadata build = 15;
+  bool supports_batch_repacking = 16;
 }
 
 // Host/source rejection precedence and public violations are normative in
@@ -214,6 +220,9 @@ enum BatchRejectionCode {
   BATCH_REJECTION_CODE_COLLECTOR_ID_MISMATCH = 6;
   BATCH_REJECTION_CODE_PROTOCOL_VIOLATION = 7;
   BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS = 8;
+  // The original identity is durably fenced against ingestion. Retain its
+  // source checkpoint barrier until every losslessly repacked child is terminal.
+  BATCH_REJECTION_CODE_REPACK_REQUIRED = 9;
 }
 
 // BatchReject is a permanent, terminal rejection of the complete batch.

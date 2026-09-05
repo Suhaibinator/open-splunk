@@ -270,12 +270,32 @@ and preserve its entire state directory for a consistent backup.
 The daemon reserves WAL sequence numbers in groups of 128 to amortize metadata
 file and directory syncs. Every appended batch still receives its own WAL
 fsync before success. Restart skips unused reserved sequences; gaps are normal
-and never authorize skipping a pending batch. The WAL format remains readable
-by older collectors, which also skip to the persisted next sequence.
+and never authorize skipping a pending batch. WAL metadata version 1 is read
+and upgraded to version 2 on mutation. Version 2 records required repacking
+manifests; older collectors must not open this state. Preserve every WAL
+segment and `repack-*.json` manifest together with `meta.json`.
 
 Staged file reads start at 4 KiB and grow geometrically when productive reads
 remain backlogged. Event-count saturation and low utilization shrink the window
 geometrically; the existing per-event byte and staged-event bounds still apply.
+
+The server advertises 32 in-flight batches by default. It pipelines durable
+commit waits with a 32 MiB per-stream encoded-batch budget, while serializing
+authority checks, sequence admission, and response sends. Acknowledgments stay
+exact: an out-of-order response never substitutes for an earlier batch's
+per-event outcome.
+
+When both peers negotiate lossless repacking, an oversized queued batch is sent
+as an exact-identity recovery request. A committed or pending original is
+recovered, not split. Only a durable `REPACK_REQUIRED` rejection authorizes new
+child identities. The collector atomically persists a checksummed manifest,
+uses slices of the original WAL record as child storage (no duplicate event
+payloads or temporary queue-capacity spike), and retains the source checkpoint
+barrier and backing segment until all children are terminal. Children retain
+their IDs across restart and can be split again after another limit reduction.
+An individually unsendable event gets its own durable rejection/dead letter;
+otherwise-valid siblings continue. Without negotiated support, the existing
+fail-closed behavior retains an oversized multi-event batch for recovery.
 
 The following values are implementation defaults and are not YAML, environment,
 or CLI settings:

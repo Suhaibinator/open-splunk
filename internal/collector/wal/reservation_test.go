@@ -35,6 +35,9 @@ func TestSequenceReservationsAmortizeMetadataAndSurviveRestart(t *testing.T) {
 	if err != nil || meta.NextBatchSequence != 13 || meta.LastAckedBatchSequence != 5 {
 		t.Fatalf("ack lost reservation: %+v, %v", meta, err)
 	}
+	if pending, err := HasPendingRecords(opts.Dir); err != nil || !pending {
+		t.Fatalf("pending records not detected: %t, %v", pending, err)
+	}
 	if err := q.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -52,6 +55,12 @@ func TestSequenceReservationsAmortizeMetadataAndSurviveRestart(t *testing.T) {
 	batch, err := q.Append(makeEvents("after-restart"))
 	if err != nil || batch.GetBatchSequence() != 13 {
 		t.Fatalf("unused reservations reused: %v, %v", batch, err)
+	}
+	if err := q.AckThrough(13); err != nil {
+		t.Fatal(err)
+	}
+	if pending, err := HasPendingRecords(opts.Dir); err != nil || pending {
+		t.Fatalf("unused reservation mistaken for backlog: %t, %v", pending, err)
 	}
 }
 

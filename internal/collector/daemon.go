@@ -999,6 +999,7 @@ func capabilities(cfg *config.Config, anyMultiline bool) []opensplunk.CollectorC
 		opensplunk.CollectorCapability_COLLECTOR_CAPABILITY_DURABLE_QUEUE,
 		opensplunk.CollectorCapability_COLLECTOR_CAPABILITY_PARTIAL_EVENT_REJECTION,
 		opensplunk.CollectorCapability_COLLECTOR_CAPABILITY_TYPED_FIELDS,
+		opensplunk.CollectorCapability_COLLECTOR_CAPABILITY_LOSSLESS_REPACKING,
 	}
 	if cfg.Server.Compression == "gzip" {
 		caps = append(caps, opensplunk.CollectorCapability_COLLECTOR_CAPABILITY_GZIP)

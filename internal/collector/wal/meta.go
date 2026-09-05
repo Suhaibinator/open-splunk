@@ -19,7 +19,7 @@ const metaFileName = "meta.json"
 const metaTempName = "meta.json.tmp"
 
 // currentFormatVersion is the on-disk format version stamped into meta.json.
-const currentFormatVersion uint32 = 1
+const currentFormatVersion uint32 = 2
 
 // walMeta is the durable counter state persisted atomically to meta.json.
 //
@@ -30,9 +30,15 @@ const currentFormatVersion uint32 = 1
 // last_acked_batch_sequence is the cumulative acknowledgment high-water mark:
 // every batch with sequence <= last_acked_batch_sequence is considered acked.
 type walMeta struct {
-	FormatVersion          uint32 `json:"format_version"`
-	NextBatchSequence      uint64 `json:"next_batch_sequence"`
-	LastAckedBatchSequence uint64 `json:"last_acked_batch_sequence"`
+	FormatVersion          uint32            `json:"format_version"`
+	NextBatchSequence      uint64            `json:"next_batch_sequence"`
+	LastAckedBatchSequence uint64            `json:"last_acked_batch_sequence"`
+	PendingRepacks         []repackReference `json:"pending_repacks,omitempty"`
+}
+
+type repackReference struct {
+	Parent  uint64 `json:"parent"`
+	Through uint64 `json:"through"`
 }
 
 // readMeta loads meta.json from dir. It returns (meta, true, nil) when the file
@@ -58,7 +64,7 @@ func readMeta(dir string) (walMeta, bool, error) {
 		}
 		return walMeta{}, false, fmt.Errorf("collector/wal: parse meta trailing data: %w", err)
 	}
-	if m.FormatVersion != currentFormatVersion {
+	if m.FormatVersion != 1 && m.FormatVersion != currentFormatVersion {
 		return walMeta{}, false, fmt.Errorf(
 			"collector/wal: meta has unsupported format_version %d (want %d); provision fresh collector state",
 			m.FormatVersion, currentFormatVersion,
@@ -73,6 +79,13 @@ func readMeta(dir string) (walMeta, bool, error) {
 			"collector/wal: meta has last_acked_batch_sequence %d at or beyond next_batch_sequence %d",
 			m.LastAckedBatchSequence, m.NextBatchSequence,
 		)
+	}
+	previous := uint64(0)
+	for _, ref := range m.PendingRepacks {
+		if m.FormatVersion != currentFormatVersion || ref.Parent <= previous || ref.Through <= ref.Parent || ref.Through >= m.NextBatchSequence {
+			return walMeta{}, false, errors.New("collector/wal: invalid repack inventory")
+		}
+		previous = ref.Parent
 	}
 	return m, true, nil
 }

@@ -151,6 +151,23 @@ for its own durable terminal result; cancellation or a lost response leaves
 the staged batch available to exact retry and background recovery. The full
 failure and resource contract is in [Insert coalescing](insert-coalescing.md).
 
+Native streams pipeline up to 32 batch commit waits by default, additionally
+bounded by 32 MiB of encoded pending batches per stream. Request authority and
+sequence admission remain ordered; completion can be out of order and carries
+only that batch's exact disposition. This lets one collector contribute
+multiple logical batches to a coalesced insert without weakening commit
+durability or reinterpreting previously admitted authority.
+
+Peers may negotiate `LOSSLESS_REPACKING` in Hello/Ready. A `repack_batch` request
+contains the **unchanged original** EventBatch, even if it exceeds the current
+deployment's negotiated limits (immutable protocol hard bounds still apply).
+Exact durable lookup runs first. Only when the original has no accepted side
+effects may the server durably fence it with `REPACK_REQUIRED`. That rejection
+authorizes replacing it with new child identities; a timeout or Ready resume
+hint does not. The original's local checkpoint barrier remains until all child
+outcomes have been handled. A committed original replays its acknowledgment
+instead, preventing duplicates when an earlier acknowledgment was lost.
+
 ## Container deployment
 
 Successful `v0.MINOR.PATCH` publications produce a public,

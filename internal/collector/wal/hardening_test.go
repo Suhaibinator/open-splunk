@@ -86,7 +86,7 @@ func TestOpenRejectsInvalidOrUnknownMetaState(t *testing.T) {
 	}{
 		{
 			name: "unsupported version",
-			meta: `{"format_version":2,"next_batch_sequence":1,"last_acked_batch_sequence":0}`,
+			meta: `{"format_version":3,"next_batch_sequence":1,"last_acked_batch_sequence":0}`,
 			want: "unsupported format_version",
 		},
 		{

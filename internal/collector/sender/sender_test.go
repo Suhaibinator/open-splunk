@@ -539,8 +539,11 @@ func (fs *fakeServer) Collect(stream opensplunk.CollectorIngestService_CollectSe
 			return nil // EOF or cancellation ends the stream cleanly
 		}
 		switch {
-		case req.GetBatch() != nil:
+		case req.GetBatch() != nil || req.GetRepackBatch() != nil:
 			batch := req.GetBatch()
+			if batch == nil {
+				batch = req.GetRepackBatch()
+			}
 			fs.mu.Lock()
 			fs.received = append(fs.received, batch)
 			fs.byID[batch.GetBatchSequence()] = batch
