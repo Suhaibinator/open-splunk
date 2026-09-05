@@ -13,7 +13,7 @@
   --fg-muted: var(--gray-700); /* Secondary text. */
   --fg-faint: var(--gray-600); /* Tertiary text; the faintest ink still above 4.5:1 on white. */
   --fg-inverse-muted: var(--gray-300); /* Secondary text on --bg-inverse, lifted to clear 7:1. */
-  --fg-link: var(--blue-800); /* Anchor text: the one retained hue, deep enough for 7:1 on white. */
+  --fg-link: var(--blue-900); /* Anchor text: the one retained hue, deep enough for 7:1 on the striped row as well as on white. */
 
   /* Borders: one rung stronger than classic. */
   --border: var(--gray-400); /* Default rule between and around surfaces. */
@@ -81,7 +81,7 @@
   --accent-bright: var(--gray-300); /* Saturated accent fill. */
   --accent-inverse: var(--gray-700); /* The accent on --bg-inverse, a light surface here; a label ink, so it clears 7:1. */
   --accent-soft: var(--gray-800); /* Accent-tinted background wash. */
-  --accent-alt: var(--gray-400); /* Second decorative accent; an ink in the completion menu. */
+  --accent-alt: var(--gray-250); /* Second decorative accent; an ink in the completion menu, light enough to clear 7:1 on the selection wash. */
   --accent-alt-soft: var(--gray-750); /* Second decorative accent, as a background wash. */
 
   /* SPL syntax: same hues as classic dark, each one step lighter so it clears 7:1 on --bg-surface. */

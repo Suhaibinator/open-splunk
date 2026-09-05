@@ -85,6 +85,7 @@
   --green-700: #477f2b; /* Primary accent. */
   --green-800: #376a20; /* Pressed and hovered accent. */
   --green-900: #2c5619; /* Graphite string ink and terminal pressed accent: the one green that clears 7:1 on white. */
+  --green-950: #204214; /* Dark accent wash: deep enough that the hovered accent reads as ink on it. */
 
   /* Blue: informational hue, links, focus, and selection. */
   --blue-100: #e8f3f9; /* Informational wash. */
@@ -94,9 +95,10 @@
   --blue-400: #5290b0; /* Light informational fill; the debug severity swatch. */
   --blue-450: #2f8ac1; /* Saturated interaction blue: focus rings. */
   --blue-500: #3b88ad; /* Mid informational fill. */
-  --blue-600: #2878a8; /* Primary informational colour and link text. */
-  --blue-700: #256e96; /* Pressed informational colour. */
+  --blue-600: #2878a8; /* Primary informational colour. */
+  --blue-700: #256e96; /* Pressed informational colour, and link text: the step that clears AA on the recessed strip. */
   --blue-800: #175d81; /* Deepest informational colour. */
+  --blue-900: #10394f; /* Dark selection wash and ocean's dark accent wash, the blue every ink the menus lay on it clears AA on; graphite's link in light, where it clears 7:1 on the striped row. */
 
   /* Amber: caution and highlight hue. */
   --amber-50: #fff8e9; /* Warning wash. */
@@ -204,7 +206,7 @@
   --fg-faint: var(--gray-500); /* Tertiary text: placeholders, disabled labels. */
   --fg-inverse: var(--gray-0); /* Text on --bg-inverse. */
   --fg-inverse-muted: var(--gray-400); /* Secondary text on --bg-inverse. */
-  --fg-link: var(--blue-600); /* Anchor text. */
+  --fg-link: var(--blue-700); /* Anchor text; deep enough to clear AA on the striped row's --bg-subtle. */
 
   /* Borders. */
   --border: var(--gray-300); /* Default rule between and around surfaces. */
@@ -348,8 +350,8 @@
   --accent-hover: var(--green-400); /* Hovered and pressed accent. */
   --accent-bright: var(--green-300); /* Saturated accent fill. */
   --accent-inverse: var(--green-700); /* The accent on --bg-inverse, which is a light surface here; a label ink, so it clears AA. */
-  --accent-soft: var(--green-800); /* Accent-tinted background wash. */
-  --accent-alt: var(--purple-400); /* Second decorative accent; an ink in the completion menu, so it clears AA. */
+  --accent-soft: var(--green-950); /* Accent-tinted background wash; deep enough that --accent-hover reads as ink on it. */
+  --accent-alt: var(--purple-400); /* Second decorative accent; an ink in the completion menu, so it clears AA on --selection too. */
   --accent-alt-soft: var(--purple-600); /* Second decorative accent, as a background wash. */
 
   /* Status. */
@@ -366,7 +368,7 @@
   --status-warning-edge: var(--amber-600); /* Needs attention, as the border around its own wash. */
   --status-warning-soft: var(--amber-700); /* Needs attention, as a background wash. */
   --status-warning-strong: var(--amber-200); /* Needs attention, as ink on its own wash. */
-  --status-error: var(--red-400); /* Failed. */
+  --status-error: var(--red-350); /* Failed; the danger button's ground, so the inverse ink clears AA on it. */
   --status-error-edge: var(--red-600); /* Failed, as the border around its own wash. */
   --status-error-soft: var(--red-700); /* Failed, as a background wash. */
   --status-error-strong: var(--red-200); /* Failed, as ink on its own wash. */
@@ -404,7 +406,7 @@
 
   /* Interaction. */
   --highlight: var(--amber-600); /* Matched search term inside a result. */
-  --selection: var(--blue-800); /* Selected row or range. */
+  --selection: var(--blue-900); /* Selected row or range; deep enough that the completion menu's --accent-alt reads as ink on it. */
   --focus-ring: var(--blue-200); /* Focus outline. */
 
   /* Loading skeleton. */

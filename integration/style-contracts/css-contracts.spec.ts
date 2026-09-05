@@ -1903,35 +1903,24 @@ const STATE_COLOURED_TEXT: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * The readable pairs the base pair itself renders under AA today, in
- * `READABLE_TEXT` order: link ink and the info badge on their light washes,
- * and in dark the danger button, the success and error badges, the
- * completion menu's code ink and the selected preset. Recorded so a palette
- * cannot make one of them worse and a change to classic cannot add to the
- * list unnoticed; fixing one is a deliberate visual change that also
- * removes it here.
+ * The readable pairs the base pair itself renders under AA, in
+ * `READABLE_TEXT` order. Empty: every surface in `READABLE_TEXT` clears AA in
+ * classic light and dark, so each palette is held to its own floor on all of
+ * them. The ledger stays so that a change to classic which drops a pair under
+ * AA fails here by name rather than passing as an inherited shortfall, and
+ * so that a deliberate regression has one place to be recorded and reviewed.
  *
- * Each entry is a token pair, not a rule, and every one is a fix waiting to
- * be made rather than a floor to keep: in light, `--fg-link` on the striped
- * row's `--bg-subtle` and `--status-info` on `--status-info-soft`; in dark,
- * `--fg-inverse` on `--status-error` (the danger button, about 3.9:1),
- * `--accent-hover` on `--accent-soft` (the success badge and the selected
- * preset), `--status-info` and `--status-error` on their own washes, and
- * `--accent-alt` on the completion menu's `--bg-surface` (about 3.4:1).
- * Retuning those tokens in `tokens-color.css` is tracked as a follow-up to
- * the palette work; the ledger shrinks as each lands.
+ * The nine pairs that used to sit here were retired by retuning the tokens
+ * behind them rather than the rules that read them: the link ink deepened one
+ * step so it clears the striped row's `--bg-subtle`; the info and error
+ * badges paint their `-strong` ink, the one the ramp already provides for
+ * text on its own wash; and in dark the danger button's `--status-error`,
+ * the accent wash `--accent-soft` and the selection wash `--selection` each
+ * moved one primitive step so the ink the design lays on them reads.
  */
 const CLASSIC_CONTRAST_SHORTFALLS: Readonly<Record<ThemeMode, readonly string[]>> = {
-  dark: [
-    ".button-row .button--danger",
-    ".badge--success",
-    ".badge--info",
-    ".badge--error",
-    ".completion-option code",
-    '.completion-option[aria-selected="true"] code',
-    ".preset-grid button.selected",
-  ],
-  light: [".table a", ".badge--info"],
+  dark: [],
+  light: [],
 };
 
 test.describe("palette contracts", () => {
@@ -1954,11 +1943,12 @@ test.describe("palette contracts", () => {
     // is how graphite's 7:1 is proved on the page rather than in the file.
     //
     // Classic is measured first and its shortfalls are a ledger, not a
-    // floor: the pairs below sit under AA in the base pair today, and a
-    // palette that leaves them alone inherits the same ratio. A palette may
-    // not render one of them lower than classic does, every other surface
-    // has to clear the palette's own floor, and a new classic shortfall, or
-    // one that has been fixed, fails here until the ledger is updated.
+    // floor: a pair recorded there sits under AA in the base pair, and a
+    // palette that leaves it alone inherits the same ratio, so a palette may
+    // not render it lower than classic does. Every other surface -- today,
+    // every surface -- has to clear the palette's own floor, and a new
+    // classic shortfall, or one that has been fixed, fails here until the
+    // ledger is updated.
     await mountShell(page, MOBILE_WIDTH - 60);
     const classic = new Map<ThemeMode, Map<string, number>>();
     await inEveryScope(page, async ({ mode, palette }) => {

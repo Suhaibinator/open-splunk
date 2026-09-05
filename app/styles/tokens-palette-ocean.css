@@ -9,9 +9,8 @@
   --bg-canvas: var(--mist-100); /* The page behind every panel: a cool, faintly blue ground. */
   --bg-subtle: var(--mist-150); /* Recessed strips inside a surface, one step cooler than the canvas. */
 
-  /* Foregrounds: the mist grounds sit a shade below classic's, so the two inks that were marginal there deepen one step. */
+  /* Foregrounds: the mist grounds sit a shade below classic's, so the one ink that was marginal there deepens one step. */
   --fg-muted: var(--gray-650); /* Secondary text: table headers, neutral badges, ghost buttons; clears AA on the mist strip. */
-  --fg-link: var(--blue-700); /* Anchor text, deepened to clear AA on the mist canvas. */
 
   /* Borders. */
   --border-subtle: var(--mist-200); /* Faint divider inside one surface, cooled to sit on the mist canvas. */
@@ -47,7 +46,7 @@
   --accent-hover: var(--blue-350); /* Hovered and pressed accent. */
   --accent-bright: var(--blue-300); /* Saturated accent fill. */
   --accent-inverse: var(--blue-600); /* The accent on --bg-inverse, a light surface here; a label ink, so it clears AA. */
-  --accent-soft: var(--blue-800); /* Accent-tinted background wash. */
+  --accent-soft: var(--blue-900); /* Accent-tinted background wash; deep enough that --accent-hover reads as ink on it. */
 
   /* Application chrome: the slate-blue bars deepen instead of turning gray. */
   --chrome-bar: var(--slateblue-950); /* Product bar. */

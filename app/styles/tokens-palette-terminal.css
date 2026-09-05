@@ -76,6 +76,7 @@
   --accent-bright: var(--phosphor-300); /* Saturated accent fill. */
   --accent-inverse: var(--phosphor-700); /* The accent on --bg-inverse, a light surface here; a label ink, so it clears AA. */
   --accent-soft: var(--phosphor-800); /* Accent-tinted background wash. */
+  --accent-alt: var(--purple-300); /* Second decorative accent; an ink in the completion menu, one step lighter than classic dark's so it clears AA on the phosphor selection wash. */
 
   /* SPL syntax: the string ink joins the accent hue. */
   --syntax-string: var(--phosphor-400); /* A quoted string. */
