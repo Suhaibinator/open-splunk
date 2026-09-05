@@ -87,10 +87,11 @@ type queue struct {
 	opts Options
 	dir  string
 
-	mu        sync.Mutex
-	closed    bool
-	nextSeq   uint64
-	lastAcked uint64
+	mu            sync.Mutex
+	closed        bool
+	nextSeq       uint64
+	reservedUntil uint64
+	lastAcked     uint64
 
 	unacked []batchDesc
 	// unackedHeadWaste counts descriptors cleared from the front since the
@@ -684,10 +685,10 @@ func (q *queue) Append(events []*opensplunk.LogEvent) (*opensplunk.EventBatch, e
 		return nil, err
 	}
 
-	// Durably advance the sequence counter BEFORE writing the record so a crash
-	// here burns the sequence (a gap) rather than ever reusing it.
+	// Reserve sequences BEFORE publishing records. Each reservation is durable;
+	// unused identities are burned on restart rather than reused.
 	q.nextSeq = seq + 1
-	if err := q.persistMetaLocked(); err != nil {
+	if err := q.reserveSequencesLocked(); err != nil {
 		// Do not roll the counter back. A failure after rename but during the
 		// directory fsync is ambiguous: the new meta may already be visible or even
 		// durable. Burning this sequence in memory is always safe; reusing it on a
@@ -1494,9 +1495,25 @@ func (q *queue) persistMetaLocked() error {
 	}
 	return persist(q.dir, walMeta{
 		FormatVersion:          currentFormatVersion,
-		NextBatchSequence:      q.nextSeq,
+		NextBatchSequence:      max(q.nextSeq, q.reservedUntil),
 		LastAckedBatchSequence: q.lastAcked,
 	})
+}
+
+func (q *queue) reserveSequencesLocked() error {
+	if q.nextSeq <= q.reservedUntil {
+		return nil
+	}
+	size := max(uint64(1), q.opts.SequenceReservationSize)
+	reserved := q.nextSeq + min(size-1, math.MaxUint64-q.nextSeq)
+	previous := q.reservedUntil
+	q.reservedUntil = reserved
+	if err := q.persistMetaLocked(); err != nil {
+		// Retry must persist the reservation again: a failed sync is ambiguous.
+		q.reservedUntil = previous
+		return err
+	}
+	return nil
 }
 
 // sealActiveAfterSequenceBurnLocked preserves the invariant that every live

@@ -58,8 +58,14 @@ func (t *tailer) resetStagedReadWindow() {
 func (t *tailer) tuneProductiveStagedReadWindow(batch *stagedBatch) {
 	consumed := batch.cursor.offset - batch.start
 	current := t.currentStagedReadWindow()
-	if batch.eventLimit || consumed <= current/4 {
-		t.resetStagedReadWindow()
+	switch {
+	case batch.eventLimit || consumed <= current/4:
+		// Shrink geometrically rather than restarting at 4 KiB: short lines
+		// should converge on a useful window instead of repeatedly overshooting
+		// the event-count bound and paying for the same growth cycle.
+		t.stagedWindow = max(min(initialStagedReadBytes, t.m.readWindow), current/2)
+	case !batch.reachedObservedEnd() && consumed >= current-current/4:
+		t.growStagedReadWindow()
 	}
 }
 

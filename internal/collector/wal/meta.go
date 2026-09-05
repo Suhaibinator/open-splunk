@@ -23,10 +23,9 @@ const currentFormatVersion uint32 = 1
 
 // walMeta is the durable counter state persisted atomically to meta.json.
 //
-// next_batch_sequence is the sequence that will be assigned to the next
-// appended batch. It is advanced and made durable BEFORE the batch record is
-// written, so a crash between the meta write and the record write burns the
-// sequence (leaving a gap) rather than ever reusing it.
+// next_batch_sequence is the first unreserved sequence. It is advanced and
+// made durable BEFORE any record in the reserved range is written. Recovery
+// skips the unused suffix, so crashes leave gaps rather than reuse identities.
 //
 // last_acked_batch_sequence is the cumulative acknowledgment high-water mark:
 // every batch with sequence <= last_acked_batch_sequence is considered acked.

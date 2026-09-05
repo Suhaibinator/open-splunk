@@ -250,11 +250,12 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 		maxQueueBytes = uint64(config.DefaultMaxQueueBytes)
 	}
 	queue, err := wal.Open(wal.Options{
-		Dir:             filepath.Join(stateDir, walSubdir),
-		MaxQueueBytes:   maxQueueBytes,
-		SegmentMaxBytes: defaultSegmentMaxBytes,
-		Sync:            wal.SyncAlways,
-		CollectorID:     collectorID,
+		Dir:                     filepath.Join(stateDir, walSubdir),
+		MaxQueueBytes:           maxQueueBytes,
+		SegmentMaxBytes:         defaultSegmentMaxBytes,
+		Sync:                    wal.SyncAlways,
+		SequenceReservationSize: 128,
+		CollectorID:             collectorID,
 	})
 	if err != nil {
 		_ = checkpoints.Close()
