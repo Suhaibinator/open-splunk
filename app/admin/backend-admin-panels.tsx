@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { useEffect, useState } from "react";
 
 import { ServerFeature } from "@/gen/ts/open_splunk/system_api";
 import {
@@ -38,6 +39,8 @@ import {
   type PolicyFieldKind,
   type TokenPolicyForm,
 } from "./ingestion-policy-form";
+import { PALETTE_OPTIONS } from "./appearance-form";
+import { APPEARANCE_DESCRIPTION, APPEARANCE_TITLE, AppearanceSettings } from "./appearance-settings";
 import { SearchLimitsSettings } from "./search-limits-settings";
 import {
   hecProfileSummary,
@@ -734,6 +737,15 @@ export function BackendServerSettings({
   onStatus: (message: string, kind: "success" | "warning") => void;
   onDirtyChange: (dirty: boolean) => void;
 }) {
+  // The console holds one dirty flag for the whole section, and two forms
+  // live here: each reports its own, and the OR is what leaves.
+  const [limitsDirty, setLimitsDirty] = useState(false);
+  const [appearanceDirty, setAppearanceDirty] = useState(false);
+  const dirty = limitsDirty || appearanceDirty;
+  useEffect(() => {
+    onDirtyChange(dirty);
+    return () => onDirtyChange(false);
+  }, [dirty, onDirtyChange]);
   if (bootstrap === null) {
     return (
       <BackendResourceState
@@ -749,7 +761,13 @@ export function BackendServerSettings({
   return (
     <div className="admin-section-stack">
       <header className="admin-section-header"><div><h2>Server settings</h2><p>{editable ? "Persistent node-wide search resource limits." : "Read-only limits advertised to this browser."}</p></div><span>{editable ? "Administrator settings" : "Bootstrap values"}</span></header>
-      {editable ? <SearchLimitsSettings client={client} onStatus={onStatus} onDirtyChange={onDirtyChange} /> : <><div className="access-mode-notice" role="note"><span>i</span><div><strong>Configuration writes are unavailable</strong><p>The backend does not advertise editable server settings. These values cannot be changed from this page.</p></div></div>
+      {editable ? <><SearchLimitsSettings client={client} onStatus={onStatus} onDirtyChange={setLimitsDirty} /><AppearanceSettings client={client} onStatus={onStatus} onDirtyChange={setAppearanceDirty} /></> : <><div className="access-mode-notice" role="note"><span>i</span><div><strong>Configuration writes are unavailable</strong><p>The backend does not advertise editable server settings. These values cannot be changed from this page.</p></div></div>
+      <section className="suite-card settings-group">
+        <header><h3>{APPEARANCE_TITLE}</h3><p>{APPEARANCE_DESCRIPTION}</p></header>
+        <dl className="backend-definition-list">
+          <div><dt>Palette</dt><dd>{PALETTE_OPTIONS[bootstrap.palette].label}</dd></div>
+        </dl>
+      </section>
       <section className="suite-card settings-group">
         <header><h3>Search and result limits</h3><p>Authoritative limits returned by system bootstrap.</p></header>
         <dl className="backend-definition-list">

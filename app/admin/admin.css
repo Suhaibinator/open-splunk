@@ -167,6 +167,13 @@
 .admin-form label > small { color: var(--fg-muted); font-size: var(--type-xs); }
 .settings-actions { align-items: center; display: flex; gap: 10px; justify-content: flex-end; }
 .settings-invalid-summary { color: var(--status-error); font-size: var(--type-xs); margin-right: auto; }
+.appearance-palette-options { display: grid; gap: var(--space-2); grid-template-columns: repeat(3, minmax(0, 1fr)); padding: var(--space-4); }
+.appearance-palette-options label { align-items: flex-start; border: 1px solid var(--border); border-radius: var(--radius-sm); cursor: pointer; display: flex; gap: var(--space-2); min-width: 0; padding: 10px var(--space-3); }
+.appearance-palette-options label.is-selected { background: var(--accent-soft); border-color: var(--accent-bright); }
+.appearance-palette-options input { accent-color: var(--accent); flex: none; height: 16px; margin: 2px 0 0; width: 16px; }
+.appearance-palette-options label > span { display: flex; flex-direction: column; gap: 2px; }
+.appearance-palette-options strong { font-size: var(--type-xs); }
+.appearance-palette-options small { color: var(--fg-muted); font-size: var(--type-xs); line-height: 1.4; }
 .input-with-unit { align-items: center; display: flex; }
 .input-with-unit input { min-width: 0; width: 100%; }
 .input-with-unit b { align-items: center; background: var(--bg-subtle); border: 1px solid var(--border-strong); border-left: 0; display: flex; font-size: var(--type-xs); font-weight: 400; height: 34px; padding: 0 9px; }
@@ -526,6 +533,7 @@ button.knowledge-manager__row.knowledge-manager__row--selected:hover { backgroun
   .lookup-manager__selector-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .collector-grid { grid-template-columns: 1fr; }
   .collector-card dl { grid-template-columns: repeat(4, 1fr); }
+  .appearance-palette-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 760px) {
@@ -620,6 +628,7 @@ button.knowledge-manager__row.knowledge-manager__row--selected:hover { backgroun
   .permission-grid { grid-template-columns: 1fr; }
   .permission-grid > span:nth-child(odd) { border-right: 0; margin-right: 0; padding-right: 0; }
   .settings-form-grid { grid-template-columns: 1fr; }
+  .appearance-palette-options { grid-template-columns: 1fr; padding: var(--space-3); }
   .admin-policy-grid { grid-template-columns: 1fr; }
   .settings-form-grid input,
   .settings-form-grid select,
