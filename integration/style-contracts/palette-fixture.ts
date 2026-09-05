@@ -5,11 +5,12 @@
  * surface at once -- does any element paint its ink in its own ground, does
  * every raised surface keep its alpha, does the mono face reach every control
  * -- so they need the shell, the editor, a table, every button and badge, the
- * modal family, the drawer and the toast on one page. The markup mirrors the
- * DOM the React components render (`app/_components/product-shell.tsx`,
+ * modal family, the drawer, the toast, the admin sidebar and the Appearance
+ * card on one page. The markup mirrors the DOM the React components render
+ * (`app/_components/product-shell.tsx`,
  * `app/search-workspace/components/search-editor.tsx`, the modal component,
- * the shared drawer) closely enough that every class here is one the
- * stylesheets already select on. `SHELL_SELECTORS` names the elements a
+ * the shared drawer, `app/admin/appearance-settings.tsx`) closely enough
+ * that every class here is one the stylesheets already select on. `SHELL_SELECTORS` names the elements a
  * classic pixel-parity capture compares across a change; the list is long on
  * purpose, because a knob that leaks touches a surface nobody was looking at.
  */
@@ -116,6 +117,24 @@ export const SHELL_FIXTURE = `
     </div>
     <form class="form-stack"><label><span>Name</span><input type="text" value="Errors" /><small>Shown in the list</small></label><label><span>Notes</span><textarea>Notes</textarea></label></form>
     <span class="skeleton skeleton--line"></span>
+    <div class="admin-layout">
+      <aside class="admin-sidebar">
+        <span class="admin-sidebar-label">Administration</span>
+        <button type="button" class="active"><i>S</i><span><strong>Server</strong><small>Settings and appearance</small></span><b>›</b></button>
+        <button type="button"><i>U</i><span><strong>Users</strong><small>Accounts and roles</small></span><b>›</b></button>
+      </aside>
+      <div class="admin-content">
+        <form class="server-settings admin-section-stack">
+          <section class="suite-card settings-group">
+            <header><h3>Appearance</h3><p>Instance-wide palette shown to every user.</p></header>
+            <div class="appearance-palette-options" role="radiogroup" aria-label="Palette">
+              <label class="is-selected" for="appearance-palette-classic"><input checked id="appearance-palette-classic" name="appearance-palette" type="radio" value="classic" /><span><strong>Classic</strong><small>The current Splunk-style look.</small></span></label>
+              <label for="appearance-palette-ocean"><input id="appearance-palette-ocean" name="appearance-palette" type="radio" value="ocean" /><span><strong>Ocean</strong><small>Cool blue surfaces and slate-blue bars.</small></span></label>
+            </div>
+          </section>
+        </form>
+      </div>
+    </div>
   </main>
   <div class="modal-layer">
     <div class="modal-backdrop"></div>
@@ -244,6 +263,19 @@ export const SHELL_SELECTORS: readonly string[] = [
   ".form-stack textarea",
   ".form-stack label small",
   ".skeleton",
+  ".admin-sidebar",
+  ".admin-sidebar-label",
+  ".admin-sidebar > button",
+  ".admin-sidebar > button.active",
+  ".admin-sidebar > button.active > i",
+  ".admin-sidebar > button small",
+  ".admin-sidebar > button.active small",
+  ".appearance-palette-options",
+  ".appearance-palette-options label",
+  ".appearance-palette-options label.is-selected",
+  ".appearance-palette-options strong",
+  ".appearance-palette-options small",
+  ".appearance-palette-options label.is-selected small",
   ".modal-layer",
   ".modal-backdrop",
   ".modal-card",

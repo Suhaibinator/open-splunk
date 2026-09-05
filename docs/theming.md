@@ -587,6 +587,14 @@ contracts, in `integration/style-contracts/css-contracts.spec.ts`, are:
 | terminal alone sets the mono face on body text and squares every corner | `--font-sans` and the radii |
 | a palette light restatement never outranks the base dark block | the `:where()` order dependency |
 
+`node scripts/palette-gallery.mjs` is the eye's check on the contracts: after
+`npm run build` it captures the sign-in page, the search workspace and the
+admin Server section under every palette in light and dark from the demo
+export, and lays them out as one PNG per page under
+`test-results/palette-gallery/`. Review a new palette, or a change to the
+chrome, a knob or a shared primitive, against it; the palette list comes from
+`lib/palettes.ts`, so nothing has to be added for a new name.
+
 The JSON ledgers have distinct roles:
 
 - `css-literal-debt.json` is exact allowed literal debt;

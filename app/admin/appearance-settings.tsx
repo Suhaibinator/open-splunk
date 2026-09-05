@@ -11,7 +11,17 @@ import { createErrorMessage } from "@/lib/error-message";
 import type { Palette } from "@/lib/palettes";
 import { applyInstancePalette, previewPalette } from "@/lib/theme-preference";
 
-import { PALETTE_OPTIONS, paletteOptionId, paletteOptions } from "./appearance-form";
+import {
+  APPEARANCE_DESCRIPTION,
+  APPEARANCE_TITLE,
+  PALETTE_OPTIONS,
+  paletteOptionId,
+  paletteOptions,
+} from "./appearance-form";
+
+// The card's copy lives beside the option data so the markup test, the
+// read-only row and the palette gallery script can all quote it.
+export { APPEARANCE_DESCRIPTION, APPEARANCE_TITLE } from "./appearance-form";
 
 /** The saved appearance as the card holds it: the version the next update must name, and two palettes. */
 export interface AppearanceModel {
@@ -19,11 +29,6 @@ export interface AppearanceModel {
   palette: Palette;
   version: bigint;
 }
-
-/** The card's copy, exported so the markup test and the read-only row can quote it. */
-export const APPEARANCE_TITLE = "Appearance";
-export const APPEARANCE_DESCRIPTION =
-  "Instance-wide palette shown to every user, including the sign-in page. Light and dark stay each user's own choice.";
 
 /**
  * Narrows a get or update envelope to the model, or `null` when the server
