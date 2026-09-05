@@ -595,6 +595,14 @@ export, and lays them out as one PNG per page under
 chrome, a knob or a shared primitive, against it; the palette list comes from
 `lib/palettes.ts`, so nothing has to be added for a new name.
 
+Palette work (a new `tokens-palette-*.css`, `lib/palettes.ts`, the boot
+script, `ThemeSync`, or the appearance API) has a fourth layer:
+`OPEN_SPLUNK_PALETTE_SMOKE=1 go test ./integration -run
+'^TestBrowserInstancePaletteSmoke$'` proves the administrator's choice reaches
+bootstrap, the cache, the pre-paint boot script and the painted page in a real
+browser, without Docker. See `integration/README.md`, section "Instance
+palette browser smoke".
+
 The JSON ledgers have distinct roles:
 
 - `css-literal-debt.json` is exact allowed literal debt;
