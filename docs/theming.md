@@ -469,8 +469,10 @@ its token file; everything else is the guardrails' job.
 1. **Add the file and import it.** Create
    `app/styles/tokens-palette-<name>.css` and `@import` it in
    `app/styles/index.css` after `tokens-scale.css`, among the other palette
-   files in name order. The file holds exactly two blocks, light then dark,
-   and nothing that is not a token (or `color-scheme`).
+   files in name order, and add its row to the cascade table under
+   [Where a rule lives](#where-a-rule-lives) (no test holds that table to
+   `index.css`). The file holds exactly two blocks, light then dark, and
+   nothing that is not a token (or `color-scheme`).
 2. **Add hue steps to tier 1.** Any colour the palette needs that no
    primitive already provides goes into the base `:root` of
    `tokens-color.css`, as `--<hue>-<step>` on the `0`-`950` ladder, darker
@@ -513,14 +515,21 @@ its token file; everything else is the guardrails' job.
    `npm run test:frontend` prove the file shape, the four preludes, the
    `color-scheme` rule, "primitives only in base light", "restate only what
    changes", the role-group collisions, the contrast floor (AA, or the
-   palette's entry in `CONTRAST_FLOOR` when it promises more, as graphite
-   promises 7:1) and the 80% alpha floor, in all twelve scopes; the
+   palette's entry in `PALETTE_CONTRAST_FLOOR` in `lib/palettes.ts` when it
+   promises more, as graphite promises 7:1; the invariants read that literal
+   by regex and the contracts import it, so it is spelled once) and the 80%
+   alpha floor, in all twelve scopes; the
    `lib/api/ui-palette` and `appearance-form` unit tests hold the client
    lists to `PALETTES`; `go test ./...` holds the enum, the CHECK, the wire
    map and the sanitizer to the same list. `npm run test:contracts` runs the palette
    contracts over every name in `PALETTES` automatically; add a dedicated
    contract only for a behaviour peculiar to the new palette, as glass has for
-   translucency and terminal for the mono face.
+   translucency and terminal for the mono face. If the palette restates a
+   token in its light block and leaves it to classic dark on purpose (most
+   often `--chrome-bar`, as graphite does), register it in
+   `LIGHT_ONLY_RESTATEMENTS` in `css-contracts.spec.ts`: that table is the
+   one ledger for the fact, and the identity contract "every palette moves
+   the accent and the chrome bar" reads its chrome exception from it.
 
 ## How to make a visual change
 

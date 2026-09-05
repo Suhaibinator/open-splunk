@@ -152,6 +152,31 @@ function parsePaletteNames(source) {
   return [...literal[1].matchAll(/"([a-z][a-z0-9-]*)"/gu)].map((match) => match[1]);
 }
 
+/** The object literal in `lib/palettes.ts` that names the palettes promising more than AA. */
+const CONTRAST_FLOOR_LITERAL = /export\s+const\s+PALETTE_CONTRAST_FLOOR\b[^=]*=\s*\{([^}]*)\}/u;
+
+/**
+ * Reads the contrast floors from `lib/palettes.ts`'s `PALETTE_CONTRAST_FLOOR`
+ * literal, the one place a palette's promise is spelled: the computed-style
+ * contracts import the same table, so a palette held to 7:1 on the hex here
+ * is held to 7:1 on the page too. Read by regex for the same reason
+ * `PALETTES` is; a module without the literal promises AA everywhere.
+ */
+async function readContrastFloors() {
+  return parseContrastFloors(await readFile(path.join(workspace, ...PALETTE_MODULE.split("/")), "utf8"));
+}
+
+/** `readContrastFloors` over the module's source text: `{ palette: floor }`, with no prototype. */
+function parseContrastFloors(source) {
+  const literal = CONTRAST_FLOOR_LITERAL.exec(source);
+  const floors = Object.create(null);
+  if (literal === null) return floors;
+  for (const [, name, floor] of literal[1].matchAll(/(?:^|[\s{,])([a-z][a-z0-9-]*)\s*:\s*(\d+(?:\.\d+)?)/gu)) {
+    floors[name] = Number(floor);
+  }
+  return floors;
+}
+
 /** The token file a palette's blocks live in. */
 function paletteFile(name) {
   return `app/styles/tokens-palette-${name}.css`;
@@ -786,15 +811,6 @@ const MANDATED_TEXT_PAIRS = [
 /** WCAG 2.2 AA for text below 18.66px, which is every size this product ships. */
 const AA_CONTRAST = 4.5;
 
-/**
- * The contrast a palette promises where it promises more than AA.
- *
- * `graphite` is the high-contrast, near-monochrome palette and doubles as the
- * accessibility option, so it is held to AAA (7:1) rather than AA. Every
- * palette not listed here is held to `AA_CONTRAST`.
- */
-const CONTRAST_FLOOR = { graphite: 7 };
-
 /** Role groups whose members must stay visually distinct from one another. */
 const ROLE_GROUPS = {
   accent: /^--accent(?:-|$)/u,
@@ -832,11 +848,15 @@ const ROLE_GROUPS = {
  * else" reports it -- so a stray rule cannot be filed under a theme.
  */
 async function readTokenLayer() {
-  return indexTokenLayer(await collectTokenLayer(workspace));
+  return indexTokenLayer(await collectTokenLayer(workspace), await readContrastFloors());
 }
 
-/** `readTokenLayer` over a `collectTokenLayer` result handed in, so a synthetic layer can be indexed. */
-function indexTokenLayer(layer) {
+/**
+ * `readTokenLayer` over a `collectTokenLayer` result handed in, so a synthetic
+ * layer can be indexed; `floors` is the `PALETTE_CONTRAST_FLOOR` table the
+ * contrast check reads, AA everywhere when omitted.
+ */
+function indexTokenLayer(layer, floors = {}) {
   const base = { dark: new Map(), light: new Map() };
   const palettes = new Map();
   const fileOf = new Map();
@@ -870,7 +890,7 @@ function indexTokenLayer(layer) {
     scope.label = scopeLabel(scope.palette, scope.mode);
     scope.values = mergeChain(scope.chain);
   }
-  return { base, fileOf, palettes, primitives, scopes };
+  return { base, fileOf, floors, palettes, primitives, scopes };
 }
 
 /** A chain of blocks merged into one lookup, later blocks winning. */
@@ -1231,15 +1251,16 @@ test("the dark theme restates every themeable semantic token", async () => {
 });
 
 /**
- * The contrast floor a scope is held to: the palette's entry in
- * `CONTRAST_FLOOR`, else AA. Read with `Object.hasOwn` rather than by index: a
- * palette is named by a string the file system accepts, and `constructor` or
- * `toString` would otherwise read a function off `Object.prototype` and turn
- * every `ratio < floor` into a comparison with NaN that never fails.
+ * The contrast floor a scope is held to: the palette's entry in `floors`
+ * (the `PALETTE_CONTRAST_FLOOR` table), else AA. Read with `Object.hasOwn`
+ * rather than by index: a palette is named by a string the file system
+ * accepts, and `constructor` or `toString` would otherwise read a function
+ * off `Object.prototype` and turn every `ratio < floor` into a comparison
+ * with NaN that never fails.
  */
-function contrastFloorOf(palette) {
+function contrastFloorOf(palette, floors) {
   const name = palette ?? DEFAULT_PALETTE;
-  return Object.hasOwn(CONTRAST_FLOOR, name) ? CONTRAST_FLOOR[name] : AA_CONTRAST;
+  return Object.hasOwn(floors, name) ? floors[name] : AA_CONTRAST;
 }
 
 /**
@@ -1247,10 +1268,10 @@ function contrastFloorOf(palette) {
  * scope of an indexed layer; a pair whose ink or ground does not resolve to a
  * six-digit hex is reported rather than measured.
  */
-function contrastFailures({ scopes }) {
+function contrastFailures({ floors, scopes }) {
   const failures = [];
   for (const scope of scopes) {
-    const floor = contrastFloorOf(scope.palette);
+    const floor = contrastFloorOf(scope.palette, floors);
     for (const [foreground, background] of MANDATED_TEXT_PAIRS) {
       const ink = resolve(foreground, scope.values);
       const ground = resolve(background, scope.values);
@@ -1277,7 +1298,7 @@ test("text keeps its contrast floor against every ground its role comment promis
     failures,
     [],
     `Text falls below its palette's contrast floor (WCAG AA, ${AA_CONTRAST}:1, or the higher floor\n`
-      + "CONTRAST_FLOOR pins for a palette) on a ground its own role comment names. A theme that ships\n"
+      + `PALETTE_CONTRAST_FLOOR in ${PALETTE_MODULE} pins for a palette) on a ground its own role comment names. A theme that ships\n`
       + "this renders those labels unreadable, and a ratio near 1 renders them invisible:\n"
       + `${describeList(failures)}`,
   );
@@ -2800,6 +2821,9 @@ const SCALE_FILE = "app/styles/tokens-scale.css";
 /** The names `PALETTES` lists in every fixture below. */
 const SYNTHETIC_PALETTES = new Set([DEFAULT_PALETTE, "ocean", "graphite"]);
 
+/** The `PALETTE_CONTRAST_FLOOR` table every fixture below is held to: graphite promises 7:1. */
+const SYNTHETIC_FLOORS = { graphite: 7 };
+
 /** A palette file with one light block and one dark block holding the given declarations. */
 function paletteSource(name, light, dark) {
   return `:root:where([data-palette="${name}"]) {\n${light}\n}\n`
@@ -3143,7 +3167,11 @@ test("the contrast floor is the palette's own: graphite is held to 7:1 where oce
   assert.deepEqual(ocean, []);
   const graphite = contrastFailures(indexTokenLayer(syntheticLayer({
     [paletteFile("graphite")]: paletteSource("graphite", restatement, "  color-scheme: dark;\n  --accent: var(--blue-400);"),
-  })));
+  }), SYNTHETIC_FLOORS));
+  // The same palette held to AA alone passes: the floor, not the file, is what fails it.
+  assert.deepEqual(contrastFailures(indexTokenLayer(syntheticLayer({
+    [paletteFile("graphite")]: paletteSource("graphite", restatement, "  color-scheme: dark;\n  --accent: var(--blue-400);"),
+  }))), []);
   assert.deepEqual(graphite.map((failure) => failure.split(" is ")[0]), [
     "graphite light: --fg-text (#666666) on --bg-canvas (#f7f7f7)",
     "graphite light: --fg-text (#666666) on --bg-raised (#e8e8e8)",
@@ -3153,11 +3181,15 @@ test("the contrast floor is the palette's own: graphite is held to 7:1 where oce
   assert.ok(graphite.every((failure) => failure.endsWith(", below 7:1")), graphite.join("\n"));
   // A palette named after an Object.prototype member reads AA, not a function.
   for (const name of ["constructor", "__proto__"]) {
-    assert.equal(contrastFloorOf(name), AA_CONTRAST, `${name} read a floor of ${String(contrastFloorOf(name))}`);
+    assert.equal(
+      contrastFloorOf(name, SYNTHETIC_FLOORS),
+      AA_CONTRAST,
+      `${name} read a floor of ${String(contrastFloorOf(name, SYNTHETIC_FLOORS))}`,
+    );
   }
   const prototype = contrastFailures(indexTokenLayer(syntheticLayer({
     [paletteFile("constructor")]: paletteSource("constructor", "  color-scheme: light;\n  --fg-text: var(--gray-300);", OCEAN_DARK),
-  })));
+  }), SYNTHETIC_FLOORS));
   assert.equal(prototype.length, 4, prototype.join("\n"));
 });
 
@@ -3229,6 +3261,33 @@ test("parsePaletteNames reads the PALETTES literal in the shapes the module may 
   assert.deepEqual(parsePaletteNames('export const PALETTES = ["classic", "Ocean", "sepia tone", "9lives"];'), ["classic"]);
 });
 
+test("parseContrastFloors reads the PALETTE_CONTRAST_FLOOR literal in the shapes the module may spell it", () => {
+  assert.deepEqual(
+    { ...parseContrastFloors("export const PALETTE_CONTRAST_FLOOR: Readonly<Partial<Record<Palette, number>>> = { graphite: 7 };") },
+    { graphite: 7 },
+  );
+  assert.deepEqual(
+    { ...parseContrastFloors("export const PALETTE_CONTRAST_FLOOR = {\n  graphite: 7,\n  terminal: 4.5,\n} as const;") },
+    { graphite: 7, terminal: 4.5 },
+  );
+  // No literal, or an empty one, promises AA everywhere; the table has no prototype to read a floor off.
+  assert.deepEqual({ ...parseContrastFloors('export const PALETTES = ["classic"];') }, {});
+  assert.deepEqual({ ...parseContrastFloors("export const PALETTE_CONTRAST_FLOOR = {};") }, {});
+  assert.equal(Object.getPrototypeOf(parseContrastFloors("export const PALETTE_CONTRAST_FLOOR = { graphite: 7 };")), null);
+  assert.equal(contrastFloorOf("graphite", parseContrastFloors("export const PALETTE_CONTRAST_FLOOR = { graphite: 7 };")), 7);
+  assert.equal(contrastFloorOf("ocean", parseContrastFloors("export const PALETTE_CONTRAST_FLOOR = { graphite: 7 };")), AA_CONTRAST);
+});
+
+test("every palette PALETTE_CONTRAST_FLOOR names is in PALETTES and promises at least AA", async () => {
+  const names = new Set(await readPaletteNames());
+  const floors = await readContrastFloors();
+  assert.ok(Object.hasOwn(floors, "graphite"), "graphite is the accessibility palette and promises 7:1");
+  for (const [name, floor] of Object.entries(floors)) {
+    assert.ok(names.has(name), `${PALETTE_MODULE}: PALETTE_CONTRAST_FLOOR names ${name}, which PALETTES does not list`);
+    assert.ok(floor >= AA_CONTRAST, `${PALETTE_MODULE}: ${name} promises ${floor}:1, below AA`);
+  }
+});
+
 /* == 9. The shipped palette files, each broken one way at a time ============== */
 //
 // Section 8 proves each invariant on a synthetic layer small enough to read.
@@ -3292,7 +3351,7 @@ test("the shipped token layer survives a source round trip with every invariant 
   assert.deepEqual(layer, real);
   const names = new Set(await readPaletteNames());
   assert.deepEqual(blocks.flatMap((entry) => entry.blocks.flatMap((block) => tokenBlockProblems(entry.file, block, names))), []);
-  const indexed = indexTokenLayer(layer);
+  const indexed = indexTokenLayer(layer, await readContrastFloors());
   assert.deepEqual(declarationSiteProblems(layer), { duplicated: [], literals: [] });
   assert.deepEqual(inventedNames(layer), []);
   assert.deepEqual(colourSchemeProblems(blocks, indexed.primitives), []);
@@ -3410,7 +3469,8 @@ test("an alpha knob one point under the floor is refused in the shipped palette 
 test("body text painted in the canvas's own primitive fails contrast in that shipped palette's dark scope alone", async () => {
   const { palettes, shipped } = await shippedPalettes();
   const names = palettes.map(({ name }) => name);
-  const real = indexTokenLayer(await collectTokenLayer(workspace));
+  const floors = await readContrastFloors();
+  const real = indexTokenLayer(await collectTokenLayer(workspace), floors);
   for (const palette of palettes) {
     const scope = real.scopes.find((candidate) => candidate.label === scopeLabel(palette.name, "dark"));
     const canvas = resolve("--bg-canvas", scope.values);
@@ -3419,7 +3479,7 @@ test("body text painted in the canvas's own primitive fails contrast in that shi
       const restated = css.replace(new RegExp(`(${palette.dark.replaceAll(/[[\]]/gu, "\\$&")} \\{[^}]*?)--fg-text: var\\(--[a-z0-9-]+\\);`, "u"), `$1--fg-text: var(${primitive});`);
       return restated === css ? css.replace(`${palette.dark} {\n`, `${palette.dark} {\n  --fg-text: var(${primitive});\n`) : restated;
     });
-    const failures = contrastFailures(indexTokenLayer(layer));
+    const failures = contrastFailures(indexTokenLayer(layer, floors));
     assert.ok(failures.length > 0, `${palette.name}: --fg-text in the canvas colour passed the contrast floor`);
     assert.ok(
       failures.every((failure) => failure.startsWith(`${palette.name} dark: `)),

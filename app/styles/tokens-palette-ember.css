@@ -1,6 +1,13 @@
 /*
  * Ember palette: warm sand and umber neutrals, rust accent, orange focus. Restates
  * only what differs from classic; see docs/theming.md, "Adding a theme".
+ *
+ * A deliberate trade: the light accent (rust-500) sits near the destructive
+ * red (--status-error, red-500) in lightness and hue, so a primary and a
+ * danger button read as relatives rather than opposites. The danger button
+ * is always paired with a secondary Cancel, never a primary, and the warm
+ * brief was worth more than the one step toward orange (orange-600) that
+ * would roughly double the distance; dark separates the two well on its own.
  */
 :root:where([data-palette="ember"]) {
   color-scheme: light;

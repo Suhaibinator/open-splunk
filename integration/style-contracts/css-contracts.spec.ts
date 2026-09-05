@@ -9,7 +9,7 @@
 // getComputedStyle, which is what the rules actually promise.
 import { expect, test, type Page } from "@playwright/test";
 
-import { type Palette, PALETTES, resolvePalette } from "../../lib/palettes";
+import { type Palette, PALETTE_CONTRAST_FLOOR, PALETTES, resolvePalette } from "../../lib/palettes";
 import { resolveTheme, THEME_BOOT_SCRIPT } from "../../lib/theme-preference";
 import { addApplicationStyles } from "./application-stylesheets";
 import { KNOB_CONSUMERS, SHELL_FIXTURE } from "./palette-fixture";
@@ -1686,9 +1686,7 @@ const PALETTE_SCOPES: ReadonlyArray<{ mode: ThemeMode; palette: Palette }> = PAL
   THEME_MODES.map((mode) => ({ mode, palette }))
 ));
 
-/** The contrast floor a palette promises where it promises more than AA. */
-const PALETTE_CONTRAST_FLOOR: Readonly<Record<string, number>> = { graphite: 7 };
-
+/** The contrast floor a palette promises: its `PALETTE_CONTRAST_FLOOR` entry, else AA. */
 function contrastFloorOf(palette: Palette): number {
   return Object.hasOwn(PALETTE_CONTRAST_FLOOR, palette) ? PALETTE_CONTRAST_FLOOR[palette]! : AA_CONTRAST;
 }
@@ -1912,6 +1910,16 @@ const STATE_COLOURED_TEXT: ReadonlySet<string> = new Set([
  * cannot make one of them worse and a change to classic cannot add to the
  * list unnoticed; fixing one is a deliberate visual change that also
  * removes it here.
+ *
+ * Each entry is a token pair, not a rule, and every one is a fix waiting to
+ * be made rather than a floor to keep: in light, `--fg-link` on the striped
+ * row's `--bg-subtle` and `--status-info` on `--status-info-soft`; in dark,
+ * `--fg-inverse` on `--status-error` (the danger button, about 3.9:1),
+ * `--accent-hover` on `--accent-soft` (the success badge and the selected
+ * preset), `--status-info` and `--status-error` on their own washes, and
+ * `--accent-alt` on the completion menu's `--bg-surface` (about 3.4:1).
+ * Retuning those tokens in `tokens-color.css` is tracked as a follow-up to
+ * the palette work; the ledger shrinks as each lands.
  */
 const CLASSIC_CONTRAST_SHORTFALLS: Readonly<Record<ThemeMode, readonly string[]>> = {
   dark: [
