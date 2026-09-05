@@ -126,11 +126,11 @@ function describeList(items) {
 const DEFAULT_PALETTE = "classic";
 
 /** The module that owns the palette vocabulary, and the array literal it exports. */
-const PALETTE_MODULE = "lib/theme-preference.ts";
+const PALETTE_MODULE = "lib/palettes.ts";
 const PALETTES_LITERAL = /export\s+const\s+PALETTES\b[^=]*=\s*\[([^\]]*)\]/u;
 
 /**
- * Reads the palette names from `lib/theme-preference.ts`'s `PALETTES` array
+ * Reads the palette names from `lib/palettes.ts`'s `PALETTES` array
  * literal, the one place the client spells them.
  *
  * Read by regex rather than imported: this suite runs under `node --test`
