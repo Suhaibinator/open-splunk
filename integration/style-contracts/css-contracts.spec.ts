@@ -9,7 +9,9 @@
 // getComputedStyle, which is what the rules actually promise.
 import { expect, test, type Page } from "@playwright/test";
 
+import { type Palette, PALETTES } from "../../lib/palettes";
 import { addApplicationStyles } from "./application-stylesheets";
+import { KNOB_CONSUMERS, SHELL_FIXTURE } from "./palette-fixture";
 
 const COMPACT_WIDTH = 980;
 const MOBILE_WIDTH = 760;
@@ -1632,5 +1634,486 @@ test.describe("SPL editor auto-grow", () => {
     await expect(page.locator("#spl-completion-0")).toHaveCSS("background-color", selection!);
     await expect(page.locator("#spl-completion-1")).toHaveCSS("background-color", surface!);
     expect(selection).not.toEqual(surface);
+  });
+});
+
+// Palette probes: every palette x mode, on one page that carries the shell,
+// the editor, a table, every button and badge, the modal family, the drawer
+// and the toast (integration/style-contracts/palette-fixture.ts). The token
+// invariants prove contrast on the hex each token resolves to; these read the
+// same promises off the live cascade, where a rule that reads the wrong role,
+// a knob that leaks past its consumer, or a palette light block that outranks
+// base dark would show up as a painted pixel rather than a token value.
+type ThemeMode = "dark" | "light";
+
+const THEME_MODES: readonly ThemeMode[] = ["light", "dark"];
+
+/** Every palette x mode corner the cascade can land in. */
+const PALETTE_SCOPES: ReadonlyArray<{ mode: ThemeMode; palette: Palette }> = PALETTES.flatMap((palette) => (
+  THEME_MODES.map((mode) => ({ mode, palette }))
+));
+
+/** The contrast floor a palette promises where it promises more than AA. */
+const PALETTE_CONTRAST_FLOOR: Readonly<Record<string, number>> = { graphite: 7 };
+
+function contrastFloorOf(palette: Palette): number {
+  return Object.hasOwn(PALETTE_CONTRAST_FLOOR, palette) ? PALETTE_CONTRAST_FLOOR[palette]! : AA_CONTRAST;
+}
+
+/** WCAG 2.2 non-text contrast: a focus indicator against what surrounds it. */
+const NON_TEXT_CONTRAST = 3;
+
+/** The alpha of a computed paint: `rgba(... , a)`, `color(srgb ... / a)`, else 1. */
+function paintAlpha(paint: string): number {
+  const byte = /^rgba\(\d+,\s*\d+,\s*\d+,\s*([\d.]+)\)$/u.exec(paint);
+  if (byte !== null) return Number(byte[1]);
+  const float = /^color\(srgb\s+[-\d.]+\s+[-\d.]+\s+[-\d.]+\s*\/\s*([\d.]+)\)$/u.exec(paint);
+  if (float !== null) return Number(float[1]);
+  return 1;
+}
+
+/** Two paints with the same hue, alpha aside, within a channel's rounding. */
+function sameHue(first: string, second: string): boolean {
+  const left = srgbChannels(first);
+  const right = srgbChannels(second);
+  return left.every((channel, index) => Math.abs(channel - (right[index] ?? Number.NaN)) < 1 / 255);
+}
+
+async function mountShell(page: Page, width: number): Promise<void> {
+  await page.setViewportSize({ height: 900, width });
+  await page.setContent(SHELL_FIXTURE);
+  await addApplicationStyles(page);
+  // The entry animations of the menus, the modal and the toast would leave
+  // opacity mid-flight; the skeleton shimmer and the pulse never end.
+  await page.evaluate(() => {
+    for (const animation of document.getAnimations()) {
+      const end = animation.effect?.getComputedTiming().endTime;
+      if (end === undefined || end === Number.POSITIVE_INFINITY) animation.cancel();
+      else animation.finish();
+    }
+  });
+}
+
+/** Writes the two attributes the boot script writes, exactly as it writes them. */
+async function applyScope(page: Page, palette: Palette, mode: ThemeMode): Promise<void> {
+  await page.evaluate(([nextPalette, nextMode]) => {
+    document.documentElement.setAttribute("data-palette", nextPalette);
+    document.documentElement.setAttribute("data-theme", nextMode);
+  }, [palette, mode] as const);
+}
+
+/**
+ * Runs `body` for each item in turn. The palette probes rewrite the root's
+ * attributes and then read the page, so the scopes have to be visited one
+ * after another on the one page rather than raced through `Promise.all`.
+ */
+async function sequentially<T>(items: readonly T[], body: (item: T) => Promise<void>): Promise<void> {
+  const [head, ...rest] = items;
+  if (items.length === 0) return;
+  await body(head as T);
+  await sequentially(rest, body);
+}
+
+/** `sequentially` over every palette x mode, with the scope applied before each visit. */
+async function inEveryScope(page: Page, body: (scope: { mode: ThemeMode; palette: Palette }) => Promise<void>): Promise<void> {
+  await sequentially(PALETTE_SCOPES, async (scope) => {
+    await applyScope(page, scope.palette, scope.mode);
+    await body(scope);
+  });
+}
+
+/**
+ * The ink of each element and the ground the eye meets it on: every
+ * background from the body down to the element itself composited in order,
+ * so a 9% wash over a bar, or a glass pane at 84% over the canvas, reads as
+ * the colour it actually paints rather than as its own translucent value.
+ *
+ * With `selectors`, one entry per selector in order; without, every element
+ * under the shell that carries text of its own (a text node, or a control).
+ */
+async function inkedElements(
+  page: Page,
+  selectors: readonly string[] | null = null,
+): Promise<Array<{ ground: string; ink: string; label: string }>> {
+  return page.evaluate((targets) => {
+    // Chromium hands back `rgb()` / `rgba()` with byte channels, or the
+    // `color(srgb …)` form with unit floats for a `color-mix()` paint.
+    const byteForm = /^rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)$/u;
+    const floatForm = /^color\(srgb\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)(?:\s*\/\s*([\d.]+))?\)$/u;
+    function groundBehind(element: Element): string {
+      const chain: Element[] = [];
+      for (let node: Element | null = element; node !== null; node = node.parentElement) chain.unshift(node);
+      let composite: [number, number, number] = [1, 1, 1];
+      for (const node of chain) {
+        const paint = globalThis.getComputedStyle(node).backgroundColor;
+        const byte = byteForm.exec(paint);
+        const float = floatForm.exec(paint);
+        const scale = byte === null ? 1 : 255;
+        const parsed = byte ?? float;
+        if (parsed === null) continue;
+        const alpha = parsed[4] === undefined ? 1 : Number(parsed[4]);
+        if (alpha === 0) continue;
+        const [red, green, blue] = [parsed[1], parsed[2], parsed[3]].map((channel) => Number(channel) / scale);
+        composite = [
+          alpha * red! + (1 - alpha) * composite[0],
+          alpha * green! + (1 - alpha) * composite[1],
+          alpha * blue! + (1 - alpha) * composite[2],
+        ];
+      }
+      return `rgb(${composite.map((channel) => Math.round(channel * 255)).join(", ")})`;
+    }
+    if (targets !== null) {
+      return targets.map((selector) => {
+        const element = document.querySelector(selector);
+        if (element === null) throw new Error(`fixture is missing ${selector}`);
+        return { ground: groundBehind(element), ink: globalThis.getComputedStyle(element).color, label: selector };
+      });
+    }
+    const found: Array<{ ground: string; ink: string; label: string }> = [];
+    for (const element of document.querySelectorAll(".suite-shell *")) {
+      const hasText = [...element.childNodes].some((node) => (
+        node.nodeType === Node.TEXT_NODE && (node.textContent ?? "").trim() !== ""
+      )) || element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement;
+      if (!hasText) continue;
+      const style = globalThis.getComputedStyle(element);
+      if (style.display === "none" || style.visibility === "hidden") continue;
+      // The element and up to two ancestors, as `tag.class` steps.
+      const trail: Element[] = [element];
+      for (let parent = element.parentElement; parent !== null && trail.length < 3; parent = parent.parentElement) {
+        trail.unshift(parent);
+      }
+      const label = trail
+        .map((node) => `${node.tagName.toLowerCase()}${[...node.classList].map((name) => `.${name}`).join("")}`)
+        .join(" > ");
+      found.push({ ground: groundBehind(element), ink: style.color, label });
+    }
+    return found;
+  }, selectors);
+}
+
+/**
+ * The surfaces whose ink the AA sweep holds to the palette floor: the text a
+ * user reads, not the decorative or deliberately faint. `--fg-faint` is
+ * placeholder ink and a disabled button is dimmed by opacity, so neither is
+ * a promise the token layer makes; everything here reads a role whose comment
+ * names the ground it sits on.
+ */
+const READABLE_TEXT: readonly string[] = [
+  ".body-copy",
+  ".body-copy a",
+  ".body-copy code",
+  ".table th",
+  ".table td",
+  ".table a",
+  ".button-row .button:not([aria-disabled])",
+  ".button-row .button--primary",
+  ".button-row .button--secondary",
+  ".button-row .button--danger",
+  ".button-row .button--ghost",
+  ".badge",
+  ".badge--success",
+  ".badge--info",
+  ".badge--warning",
+  ".badge--error",
+  ".badge--neutral",
+  ".activity-count",
+  ".suite-app-identity > span",
+  ".suite-app-icon",
+  ".user-summary > span",
+  ".drawer .suite-user-avatar",
+  ".suite-app-switcher",
+  ".suite-primary-nav a",
+  ".suite-primary-nav a.active",
+  ".floating-menu button strong",
+  ".floating-menu button.selected strong",
+  ".suite-popover > a strong",
+  ".completion-option code",
+  '.completion-option[aria-selected="true"] code',
+  ".time-range-button",
+  ".time-picker-nav button",
+  ".preset-grid button.selected",
+  ".spl-command",
+  ".spl-field",
+  ".spl-string",
+  ".spl-pipe",
+  ".spl-function",
+  ".spl-boolean",
+  ".spl-operator",
+  ".modal-header h2",
+  ".modal-body",
+  ".modal-footer .button--primary",
+  ".drawer > a",
+  ".drawer > a.active",
+  ".drawer > header strong",
+  ".toast strong",
+  ".toast-success strong",
+  ".form-stack > label > span",
+  ".form-stack input",
+];
+
+/**
+ * The readable surfaces painted from the status ramp rather than the
+ * foreground and ground roles. Status hues stay classic in every palette so a
+ * state keeps its meaning, and graphite's 7:1 promise is made on its
+ * monochrome text (the mandated pairs the token invariants hold), so these
+ * are held to AA in every palette rather than to the palette's own floor.
+ */
+const STATE_COLOURED_TEXT: ReadonlySet<string> = new Set([
+  ".button-row .button--danger",
+  ".badge--info",
+  ".badge--warning",
+  ".badge--error",
+]);
+
+/**
+ * The readable pairs the base pair itself renders under AA today, in
+ * `READABLE_TEXT` order: link ink and the info badge on their light washes,
+ * and in dark the danger button, the success and error badges, the
+ * completion menu's code ink and the selected preset. Recorded so a palette
+ * cannot make one of them worse and a change to classic cannot add to the
+ * list unnoticed; fixing one is a deliberate visual change that also
+ * removes it here.
+ */
+const CLASSIC_CONTRAST_SHORTFALLS: Readonly<Record<ThemeMode, readonly string[]>> = {
+  dark: [
+    ".button-row .button--danger",
+    ".badge--success",
+    ".badge--info",
+    ".badge--error",
+    ".completion-option code",
+    '.completion-option[aria-selected="true"] code',
+    ".preset-grid button.selected",
+  ],
+  light: [".table a", ".badge--info"],
+};
+
+test.describe("palette contracts", () => {
+  test("no element in the shell paints its ink in its own ground, in any palette or mode", async ({ page }) => {
+    await mountShell(page, DESKTOP_WIDTH);
+    await inEveryScope(page, async ({ mode, palette }) => {
+      const inked = await inkedElements(page);
+      expect(inked.length, `${palette} ${mode}: no inked element found, so this proves nothing`).toBeGreaterThan(80);
+      const invisible = inked
+        .filter(({ ground, ink }) => paintAlpha(ink) > 0 && sameHue(ink, ground))
+        .map(({ ground, ink, label }) => `${label}: ${ink} on ${ground}`);
+      expect(invisible, `${palette} ${mode}: text painted in the colour of the ground behind it`).toEqual([]);
+    });
+  });
+
+  test("readable text clears its palette's contrast floor on the live page, in every palette and mode", async ({ page }) => {
+    // The token invariants hold the mandated pairs to the floor on the hex;
+    // this holds the rendered ink of every surface a user reads to the same
+    // floor, on whatever ground the cascade actually put behind it -- which
+    // is how graphite's 7:1 is proved on the page rather than in the file.
+    //
+    // Classic is measured first and its shortfalls are a ledger, not a
+    // floor: the pairs below sit under AA in the base pair today, and a
+    // palette that leaves them alone inherits the same ratio. A palette may
+    // not render one of them lower than classic does, every other surface
+    // has to clear the palette's own floor, and a new classic shortfall, or
+    // one that has been fixed, fails here until the ledger is updated.
+    await mountShell(page, MOBILE_WIDTH - 60);
+    const classic = new Map<ThemeMode, Map<string, number>>();
+    await inEveryScope(page, async ({ mode, palette }) => {
+      const painted = await inkedElements(page, READABLE_TEXT);
+      const ratios = new Map(painted.map(({ ground, ink, label }) => [label, contrastRatio(ink, ground)]));
+      if (palette === "classic") {
+        classic.set(mode, ratios);
+        const short = [...ratios].filter(([, ratio]) => ratio < AA_CONTRAST).map(([label]) => label);
+        expect(short, `classic ${mode}: the readable pairs under AA are not the ones the ledger records`)
+          .toEqual(CLASSIC_CONTRAST_SHORTFALLS[mode]);
+        return;
+      }
+      const floor = contrastFloorOf(palette);
+      const short = [...ratios]
+        .filter(([label, ratio]) => {
+          const inherited = classic.get(mode)!.get(label)!;
+          const required = STATE_COLOURED_TEXT.has(label) ? AA_CONTRAST : floor;
+          return ratio < (inherited < AA_CONTRAST ? inherited - 0.005 : required);
+        })
+        .map(([label, ratio]) => `${label} is ${ratio.toFixed(2)}:1`);
+      expect(short, `${palette} ${mode}: text below ${floor}:1 on the ground the cascade painted behind it`).toEqual([]);
+    });
+  });
+
+  test("a keyboard-focused primary button shows a ring that clears 3:1 against its surround, in every palette and mode", async ({ page }) => {
+    await mountShell(page, DESKTOP_WIDTH);
+    const control = page.locator(".button-row .button--primary");
+    await inEveryScope(page, async ({ mode, palette }) => {
+      await control.evaluate((element: HTMLElement) => element.focus());
+      await page.keyboard.press("Shift+Tab");
+      await page.keyboard.press("Tab");
+      await expect(control).toBeFocused();
+      const ring = await control.evaluate((element) => {
+        const style = globalThis.getComputedStyle(element);
+        const surround = globalThis.getComputedStyle(element.parentElement as HTMLElement).backgroundColor;
+        const canvas = globalThis.getComputedStyle(document.body).backgroundColor;
+        return {
+          colour: style.outlineColor,
+          style: style.outlineStyle,
+          surround: surround === "rgba(0, 0, 0, 0)" ? canvas : surround,
+          width: Number.parseFloat(style.outlineWidth),
+        };
+      });
+      expect(ring.style, `${palette} ${mode}: outline style`).toEqual("solid");
+      expect(ring.width, `${palette} ${mode}: outline width`).toBeGreaterThanOrEqual(2);
+      expect(paintAlpha(ring.colour), `${palette} ${mode}: the ring is translucent`).toEqual(1);
+      const ratio = contrastRatio(ring.colour, ring.surround);
+      expect(
+        ratio,
+        `${palette} ${mode}: focus ring ${ring.colour} on ${ring.surround} is ${ratio.toFixed(2)}:1`,
+      ).toBeGreaterThanOrEqual(NON_TEXT_CONTRAST);
+    });
+  });
+
+  test("the two chrome bars are distinct from each other and stand off the canvas, in every palette and mode", async ({ page }) => {
+    await mountShell(page, DESKTOP_WIDTH);
+    await inEveryScope(page, async ({ mode, palette }) => {
+      const [productBar, appBar, canvas] = await paints(page, [
+        [".suite-product-bar", "backgroundColor"],
+        [".suite-app-bar", "backgroundColor"],
+        ["body", "backgroundColor"],
+      ]);
+      expect(sameHue(productBar!, appBar!), `${palette} ${mode}: both bars are ${productBar}`).toBe(false);
+      expect(sameHue(appBar!, canvas!), `${palette} ${mode}: the app bar is the canvas, ${canvas}`).toBe(false);
+      // Classic dark paints the product bar in the canvas's own deepest
+      // neutral and lets the app bar draw the edge; a palette's dark block
+      // may follow that arrangement, so only the light block owes a
+      // product bar that stands off the page.
+      if (mode === "light") {
+        expect(sameHue(productBar!, canvas!), `${palette} light: the product bar is the canvas, ${canvas}`).toBe(false);
+      }
+    });
+  });
+
+  test("glass alone makes the raised surfaces translucent, and each one's opaque token still clears the text floor", async ({ page }) => {
+    // The drawer's paint lives in the 760px fold, so the page is mounted
+    // below it; every other consumer paints the same at any width.
+    await mountShell(page, MOBILE_WIDTH - 60);
+    const grounds: ReadonlyArray<readonly [string, string, string, boolean]> = [
+      // consumer, ground token, ink token, takes the backdrop filter
+      [".completion-menu", "--bg-surface", "--fg-text", true],
+      [".drawer", "--bg-raised", "--fg-text", true],
+      [".floating-menu", "--bg-surface", "--fg-text", true],
+      [".modal-card", "--bg-surface", "--fg-text", true],
+      [".suite-app-bar", "--chrome-appbar", "--chrome-fg", false],
+      [".suite-product-bar", "--chrome-bar", "--chrome-fg", false],
+      [".time-popover", "--bg-surface", "--fg-text", true],
+      [".toast", "--bg-inverse", "--fg-inverse", true],
+    ];
+    expect(grounds.map(([consumer]) => consumer)).toEqual([...KNOB_CONSUMERS]);
+    await inEveryScope(page, async ({ mode, palette }) => {
+      const floor = contrastFloorOf(palette);
+      const tokens = await resolveTokens(page, grounds.flatMap(([, ground, ink]) => [ground, ink]));
+      const painted = await page.evaluate((consumers) => consumers.map((selector) => {
+        const element = document.querySelector(selector);
+        if (element === null) throw new Error(`fixture is missing ${selector}`);
+        const style = globalThis.getComputedStyle(element);
+        return { background: style.backgroundColor, filter: style.backdropFilter };
+      }), grounds.map(([consumer]) => consumer));
+      for (const [index, [consumer, ground, ink, filtered]] of grounds.entries()) {
+        const { background, filter } = painted[index]!;
+        const opaque = tokens[index * 2]!;
+        const inkPaint = tokens[index * 2 + 1]!;
+        const site = `${palette} ${mode} ${consumer}`;
+        // The paint is the token's own hue whatever the alpha: a knob turns
+        // opacity, never colour, so a consumer reading a different role
+        // than its opaque fallback would show here.
+        expect(sameHue(background, opaque), `${site}: paints ${background}, not its token ${opaque}`).toBe(true);
+        if (palette === "glass") {
+          expect(paintAlpha(background), `${site}: opaque under glass`).toBeLessThan(1);
+          expect(paintAlpha(background), `${site}: below the 80% translucency floor`).toBeGreaterThanOrEqual(0.8);
+          expect(filter !== "none", `${site}: backdrop-filter ${filter}`).toBe(filtered);
+        } else {
+          expect(paintAlpha(background), `${site}: translucent outside glass`).toEqual(1);
+          expect(filter, `${site}: a backdrop filter outside glass`).toEqual("none");
+        }
+        const ratio = contrastRatio(inkPaint, opaque);
+        expect(ratio, `${site}: ${ink} on the opaque ${ground} is ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(floor);
+      }
+    });
+  });
+
+  test("terminal alone sets the mono face on body text and squares every corner", async ({ page }) => {
+    await mountShell(page, MOBILE_WIDTH - 60);
+    // Each corner here is a full radius in classic at this width; the
+    // composer's two controls square one edge on purpose to butt the editor,
+    // and the modal card is the square phone sheet below 760px, so neither
+    // is the shape terminal is asked to flatten.
+    const cornered = [
+      ".button-row .button",
+      ".badge",
+      ".suite-app-icon",
+      ".activity-count",
+      ".form-stack input",
+    ];
+    await inEveryScope(page, async ({ mode, palette }) => {
+      const [mono] = await page.evaluate(() => {
+        const probe = document.createElement("span");
+        probe.style.fontFamily = "var(--font-mono)";
+        document.body.append(probe);
+        const family = globalThis.getComputedStyle(probe).fontFamily;
+        probe.remove();
+        return [family];
+      });
+      const [bodyFamily, tdFamily, buttonFamily, inputFamily] = await page.evaluate(() => (
+        ["body", ".table td", ".button-row .button", ".form-stack input"].map((selector) => (
+          globalThis.getComputedStyle(document.querySelector(selector) as Element).fontFamily
+        ))
+      ));
+      const radii = await page.evaluate((selectors) => selectors.map((selector) => (
+        globalThis.getComputedStyle(document.querySelector(selector) as Element).borderTopLeftRadius
+      )), cornered);
+      if (palette === "terminal") {
+        expect(bodyFamily, `${mode}: body face`).toEqual(mono);
+        expect(bodyFamily).toContain("monospace");
+        expect(tdFamily, `${mode}: table cell face`).toEqual(mono);
+        expect(buttonFamily, `${mode}: button face`).toEqual(mono);
+        expect(inputFamily, `${mode}: input face`).toEqual(mono);
+        expect(radii, `${mode}: a rounded corner survives under terminal`).toEqual(cornered.map(() => "0px"));
+      } else {
+        expect(bodyFamily, `${palette} ${mode}: body text in the mono face`).not.toEqual(mono);
+        expect(bodyFamily).not.toContain("monospace");
+        expect(
+          cornered.filter((_, index) => radii[index] === "0px"),
+          `${palette} ${mode}: a corner is square outside terminal (${radii.join(", ")})`,
+        ).toEqual([]);
+      }
+    });
+  });
+
+  test("a palette light restatement never outranks the base dark block", async ({ page }) => {
+    // `:root:where([data-palette])` keeps the light block at the base
+    // block's specificity so source order alone lets it win in light and
+    // base dark still beats it in dark. A token the palette restates only in
+    // its light block therefore renders in dark exactly as classic dark does;
+    // a light block written without `:where()` would leak its light grounds
+    // under every dark page.
+    await mount(page, "", DESKTOP_WIDTH);
+    const lightOnly: ReadonlyArray<readonly [Palette, readonly string[]]> = [
+      ["ocean", ["--bg-canvas", "--bg-subtle", "--border-subtle", "--skeleton-base"]],
+      ["glass", ["--bg-canvas", "--bg-subtle", "--skeleton-base"]],
+      ["terminal", ["--fg-secondary", "--fg-muted", "--fg-faint", "--border", "--border-subtle", "--border-strong"]],
+      ["graphite", ["--chrome-bar", "--chrome-appbar", "--chrome-hover"]],
+    ];
+    const tokens = [...new Set(lightOnly.flatMap(([, names]) => names))];
+    await applyScope(page, "classic", "dark");
+    const classicDark = await resolveTokens(page, tokens);
+    await applyScope(page, "classic", "light");
+    const classicLight = await resolveTokens(page, tokens);
+    await sequentially(lightOnly, async ([palette, names]) => {
+      await applyScope(page, palette, "light");
+      const light = await resolveTokens(page, names);
+      await applyScope(page, palette, "dark");
+      const dark = await resolveTokens(page, names);
+      for (const [index, token] of names.entries()) {
+        const position = tokens.indexOf(token);
+        expect(
+          light[index],
+          `${palette} light: ${token} is unchanged from classic, so this proves nothing`,
+        ).not.toEqual(classicLight[position]);
+        expect(dark[index], `${palette} dark: ${token} leaked from the palette's light block`).toEqual(classicDark[position]);
+      }
+    });
   });
 });
