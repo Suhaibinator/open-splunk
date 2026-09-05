@@ -9,7 +9,7 @@ import type {
 import { isHttpStatus, paletteFromProto, paletteToProto, type OpenSplunkApiClient } from "@/lib/api";
 import { createErrorMessage } from "@/lib/error-message";
 import type { Palette } from "@/lib/palettes";
-import { applyInstancePalette } from "@/lib/theme-preference";
+import { applyInstancePalette, previewPalette } from "@/lib/theme-preference";
 
 import { PALETTE_OPTIONS, paletteOptionId, paletteOptions } from "./appearance-form";
 
@@ -112,11 +112,13 @@ export function AppearanceCard({
  * The Appearance form: loads the saved palette, previews a click live on
  * this document, and writes the choice back under the version it loaded.
  *
- * The preview goes through `applyInstancePalette`, the same call the live
- * bootstrap uses, so what the administrator sees is exactly what every user
- * will get. Because that call also caches the value for the next boot, the
- * saved palette is restored on every path that abandons the preview: a
- * reload, a 409 conflict, and unmount.
+ * The preview goes through `previewPalette`, which paints this document and
+ * nothing else: the cache stays the server's value, so the other tabs that
+ * follow it, and the next boot of this one, never see a palette that was only
+ * clicked. `applyInstancePalette`, the call the live bootstrap uses, is kept
+ * for what the server confirmed (the load, an applied choice) and for taking
+ * a preview back on every path that abandons it: a reload, a 409 conflict,
+ * and unmount.
  */
 export function AppearanceSettings({
   client,
@@ -215,7 +217,7 @@ export function AppearanceSettings({
 
   const choose = (palette: Palette) => {
     setSelected(palette);
-    applyInstancePalette(palette);
+    previewPalette(palette);
   };
 
   const save = async (event: FormEvent) => {

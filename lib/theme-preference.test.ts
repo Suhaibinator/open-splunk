@@ -8,6 +8,7 @@ import {
   applyTheme,
   DARK_SCHEME_QUERY,
   PALETTE_STORAGE_KEY,
+  previewPalette,
   resolveTheme,
   syncPalette,
   syncThemeColorMeta,
@@ -275,6 +276,36 @@ test("the window-side functions are inert on the server", () => {
     syncPalette();
     syncThemeColorMeta();
     applyInstancePalette("ocean");
+    previewPalette("ocean");
+  });
+});
+
+test("previewPalette paints and recolours the chrome without touching the cache", () => {
+  for (const palette of PALETTES) {
+    withFakeWindow({ chromeBar: `--${palette}-bar`, storage: new Map([[PALETTE_STORAGE_KEY, "ember"]]) }, (fake) => {
+      previewPalette(palette);
+      assert.equal(fake.attributes.get("data-palette"), palette);
+      assert.equal(fake.meta?.content, `--${palette}-bar`);
+      // The cache is the server's: a preview is not a value another tab or
+      // the next boot may take, so it is never written.
+      assert.deepEqual(fake.writes, []);
+      assert.equal(fake.storage.get(PALETTE_STORAGE_KEY), "ember");
+    });
+  }
+  // Blocked storage is not even consulted.
+  withFakeWindow({ storageBlocked: true }, (fake) => {
+    assert.doesNotThrow(() => previewPalette("graphite"));
+    assert.equal(fake.attributes.get("data-palette"), "graphite");
+  });
+});
+
+test("applyInstancePalette after a preview restores both the document and the cache", () => {
+  withFakeWindow({ storage: new Map([[PALETTE_STORAGE_KEY, "classic"]]) }, (fake) => {
+    previewPalette("terminal");
+    assert.equal(fake.attributes.get("data-palette"), "terminal");
+    applyInstancePalette("classic");
+    assert.equal(fake.attributes.get("data-palette"), "classic");
+    assert.deepEqual(fake.writes, [[PALETTE_STORAGE_KEY, "classic"]]);
   });
 });
 

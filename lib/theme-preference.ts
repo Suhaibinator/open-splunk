@@ -176,10 +176,24 @@ export function syncPalette(): void {
 }
 
 /**
+ * Paints a palette on this document only, leaving the cache alone: what the
+ * admin card does while a radio is clicked but not yet applied. Other tabs
+ * follow the cache, so a preview never reaches them, and the next boot still
+ * paints the server's value; `applyInstancePalette` with the saved palette
+ * takes the preview back.
+ */
+export function previewPalette(palette: Palette): void {
+  if (typeof window === "undefined") return;
+  applyPalette(document, palette);
+  syncThemeColorMeta();
+}
+
+/**
  * Applies the palette the server reported: resolves it (an unknown name
  * paints classic), caches it for the next boot, paints it, and updates the
  * browser chrome colour. Applying the same palette twice changes nothing,
- * which is what lets the admin card preview freely and restore on the way out.
+ * which is what lets the admin card restore the saved value on the way out
+ * of a preview without checking whether one was showing.
  */
 export function applyInstancePalette(palette: string): void {
   if (typeof window === "undefined") return;
