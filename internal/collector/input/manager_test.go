@@ -103,6 +103,7 @@ type managerTestHooks struct {
 	afterSnapshotChunk func(tailerPollObservation)
 	beforeRetireCommit func(tailerPollObservation)
 	afterRetireCancel  func(tailerPollObservation)
+	rejectionHandler   RejectionHandler
 }
 
 func startManagerWithHooks(
@@ -129,6 +130,7 @@ func startManagerWithHooks(
 	concrete.afterSnapshotChunkObserver = hooks.afterSnapshotChunk
 	concrete.beforeRetireCommitObserver = hooks.beforeRetireCommit
 	concrete.afterRetireCancelObserver = hooks.afterRetireCancel
+	concrete.rejectionHandler = hooks.rejectionHandler
 	ctx, cancel := context.WithCancel(context.Background())
 	col := &collected{}
 	drained := make(chan struct{})

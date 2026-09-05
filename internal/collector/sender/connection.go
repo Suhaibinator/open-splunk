@@ -97,6 +97,13 @@ type scheduledRetry struct {
 	done   chan struct{}
 }
 
+// openResult carries the outcome of opening a Collect stream off the
+// connection goroutine so establishment can be abandoned on cancellation.
+type openResult struct {
+	stream opensplunk.CollectorIngestService_CollectClient
+	err    error
+}
+
 func (s *Sender) newConn(ctx context.Context, cancel, streamCancel context.CancelFunc, stream opensplunk.CollectorIngestService_CollectClient) *conn {
 	c := &conn{
 		s:            s,
@@ -127,9 +134,40 @@ func (s *Sender) runConnection(parent context.Context) (connected bool, reconnec
 	if err != nil {
 		return false, 0, fmt.Errorf("collector/sender: read token: %w", err)
 	}
-	stream, err := s.client.Collect(withBearer(streamCtx, token), s.collectCallOptions()...)
-	if err != nil {
-		return false, 0, classifyPreReadyError(err)
+
+	// DialTimeout bounds the whole attempt: transport establishment, Hello, and
+	// Ready. Start it before opening the stream. Collect blocks while the
+	// channel connects (the client dials lazily), so opening runs on its own
+	// goroutine and is aborted through streamCtx when the parent is canceled or
+	// the deadline passes.
+	var readyTimer <-chan time.Time
+	if s.opts.DialTimeout > 0 {
+		timer := time.NewTimer(s.opts.DialTimeout)
+		readyTimer = timer.C
+		defer timer.Stop()
+	}
+	opened := make(chan openResult, 1)
+	go func() {
+		stream, err := s.client.Collect(withBearer(streamCtx, token), s.collectCallOptions()...)
+		opened <- openResult{stream: stream, err: err}
+	}()
+	var stream opensplunk.CollectorIngestService_CollectClient
+	select {
+	case result := <-opened:
+		if result.err != nil {
+			return false, 0, classifyPreReadyError(result.err)
+		}
+		stream = result.stream
+	case <-parent.Done():
+		// Canceling streamCtx unblocks a Collect waiting on the connecting
+		// channel. Join it so no opener survives into another connection.
+		streamCancel()
+		<-opened
+		return false, 0, parent.Err()
+	case <-readyTimer:
+		streamCancel()
+		<-opened
+		return false, 0, fmt.Errorf("collector/sender: stream establishment timed out after %s", s.opts.DialTimeout)
 	}
 
 	c := s.newConn(ctx, cancel, streamCancel, stream)
@@ -141,13 +179,6 @@ func (s *Sender) runConnection(parent context.Context) (connected bool, reconnec
 		}
 		handshakeDone <- c.receiveReady()
 	}()
-	var readyTimer <-chan time.Time
-	var timer *time.Timer
-	if s.opts.DialTimeout > 0 {
-		timer = time.NewTimer(s.opts.DialTimeout)
-		readyTimer = timer.C
-		defer timer.Stop()
-	}
 	select {
 	case err := <-handshakeDone:
 		if err != nil {

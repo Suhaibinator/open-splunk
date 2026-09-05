@@ -1186,7 +1186,22 @@ func (t *tailer) run(ctx context.Context) {
 			}
 			continue
 		}
-		if !t.commitBatch(ctx, batch) {
+		guard, commitErr := t.prepareCommit(ctx, batch)
+		if commitErr != nil {
+			// The recovery artifact could not be persisted. Keep the descriptor
+			// and the health error, leave the cursor at the batch start, and retry
+			// the same source range after a poll interval. Exiting here would
+			// close a rotated or unlinked file whose unread bytes are reachable
+			// only through this descriptor.
+			batch = nil
+			t.m.releaseStagedTransaction()
+			t.retireStable = 0
+			if !pollTimer.wait(ctx) {
+				return
+			}
+			continue
+		}
+		if !t.publishBatch(ctx, batch, guard) {
 			t.m.releaseStagedTransaction()
 			return
 		}
