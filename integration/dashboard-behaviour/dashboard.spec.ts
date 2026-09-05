@@ -44,7 +44,7 @@ function dashboard(dashboardId: string, appId: string, name: string): Dashboard 
   };
 }
 
-test("creates the first dashboard from the single onboarding card", async ({ page }) => {
+test("creates the first dashboard from the single onboarding card", async ({ page }, testInfo) => {
   await mockBootstrap(page);
   await mockDashboardList(page, []);
   await page.route("**/api/dashboards/create", async (route) => {
@@ -60,16 +60,16 @@ test("creates the first dashboard from the single onboarding card", async ({ pag
 
   await page.goto("/dashboards/");
   await expect(page.getByRole("heading", { name: "Create your first dashboard" })).toBeVisible();
-  await page.screenshot({ path: "/private/tmp/open-splunk-dashboard-empty.png", fullPage: true });
+  await page.screenshot({ path: testInfo.outputPath("dashboard-empty.png"), fullPage: true });
   await expect(page.getByText("Select a dashboard")).toHaveCount(0);
   await page.getByLabel("Dashboard name").fill("Service overview");
   await page.getByRole("button", { name: "Create dashboard" }).click();
   await expect(page.getByRole("heading", { name: "Dashboard settings" })).toBeVisible();
   await expect(page.getByText("Service overview", { exact: true })).toBeVisible();
-  await page.screenshot({ path: "/private/tmp/open-splunk-dashboard-editor.png", fullPage: true });
+  await page.screenshot({ path: testInfo.outputPath("dashboard-editor.png"), fullPage: true });
 });
 
-test("creates the prerequisite app and continues into dashboard onboarding", async ({ page }) => {
+test("creates the prerequisite app and continues into dashboard onboarding", async ({ page }, testInfo) => {
   let created = false;
   await page.route("**/api/system/bootstrap", (route) => route.fulfill({
     status: 200,
@@ -95,7 +95,7 @@ test("creates the prerequisite app and continues into dashboard onboarding", asy
 
   await page.goto("/dashboards/");
   await expect(page.getByRole("heading", { name: "Create an app workspace first" })).toBeVisible();
-  await page.screenshot({ path: "/private/tmp/open-splunk-dashboard-no-app.png", fullPage: true });
+  await page.screenshot({ path: testInfo.outputPath("dashboard-no-app.png"), fullPage: true });
   await page.getByRole("button", { name: "Create app" }).click();
   await page.getByLabel("Slug").fill("new-app");
   await page.getByLabel("Display name").fill("New App");
@@ -271,7 +271,7 @@ test("rapid app selections commit only the latest successful catalog", async ({ 
 
 for (const theme of ["light", "dark"] as const) {
   for (const width of [980, 760, 480, 390]) {
-    test(`dashboard onboarding stays contained at ${width}px in ${theme} theme`, async ({ page }) => {
+    test(`dashboard onboarding stays contained at ${width}px in ${theme} theme`, async ({ page }, testInfo) => {
       await mockBootstrap(page);
       await mockDashboardList(page, []);
       await page.addInitScript(([key, value]) => window.localStorage.setItem(key, value), ["open-splunk.theme", theme]);
@@ -283,7 +283,7 @@ for (const theme of ["light", "dark"] as const) {
       expect(bounds).not.toBeNull();
       expect(bounds!.x).toBeGreaterThanOrEqual(0);
       expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
-      await page.screenshot({ path: `/private/tmp/open-splunk-dashboard-${theme}-${width}.png`, fullPage: true });
+      await page.screenshot({ path: testInfo.outputPath(`dashboard-${theme}-${width}.png`), fullPage: true });
     });
   }
 }

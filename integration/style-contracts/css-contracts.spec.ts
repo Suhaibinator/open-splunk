@@ -450,7 +450,7 @@ const selectCardMarkup = `
 </section>`;
 
 for (const width of [DESKTOP_WIDTH, COMPACT_WIDTH, MOBILE_WIDTH, NARROW_WIDTH, 390]) {
-  test(`open selects stay inside the ${width}px card viewport and repaint`, async ({ page }) => {
+  test(`open selects stay inside the ${width}px card viewport and repaint`, async ({ page }, testInfo) => {
     const inspectTheme = async (theme: "dark" | "light") => {
       await mount(page, selectCardMarkup, width);
       await page.evaluate((selectedTheme) => {
@@ -492,7 +492,7 @@ for (const width of [DESKTOP_WIDTH, COMPACT_WIDTH, MOBILE_WIDTH, NARROW_WIDTH, 3
         Math.min(200, geometry.viewportWidth / 2),
       );
       await page.screenshot({
-        path: `/private/tmp/open-splunk-select-card-${theme}-${width}.png`,
+        path: testInfo.outputPath(`select-card-${theme}-${width}.png`),
       });
       return geometry;
     };
