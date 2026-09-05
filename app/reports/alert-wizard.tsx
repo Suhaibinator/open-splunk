@@ -7,6 +7,7 @@ import { type AlertFormErrors, type AlertFormValue, validateAlertForm } from "@/
 import { FieldNote, fieldControlProps } from "../_components/field-validation";
 import { Modal } from "../_components/modal";
 import { alertWizardInitialFocus, ONE_TIME_SECRET_NAVIGATION_BLOCKED_MESSAGE } from "./alerts-ui-state";
+import { Select, SelectOption } from "../_components/select";
 
 export interface AlertApplicationOption {
   defaultIndexNames: readonly string[];
@@ -198,26 +199,26 @@ export function AlertWizard({
             </label>
             <label htmlFor="alerts-application">
               <span>Application</span>
-              <select
+              <Select
                 className="button button--secondary button--block"
                 id="alerts-application"
                 value={value.appId ?? ""}
-                onChange={(event) => {
-                  const application = applicationOptions.find((option) => option.id === event.target.value);
+                onValueChange={(selectedValue) => {
+                  const application = applicationOptions.find((option) => option.id === selectedValue);
                   validationRef.current?.abort();
                   setScheduleErrors({});
                   setScheduleValidationError(null);
                   setValue((current) => ({
                     ...current,
-                    appId: event.target.value,
+                    appId: selectedValue,
                     indexScope: [...(application?.defaultIndexNames ?? [])],
                   }));
                 }}
                 {...fieldControlProps("alerts-application", visibleErrors.appId ?? visibleErrors.indexScope ?? null)}
               >
-                {applicationOptions.length === 0 ? <option value={value.appId ?? "search"}>{value.appId ?? "search"}</option> : null}
-                {applicationOptions.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
-              </select>
+                {applicationOptions.length === 0 ? <SelectOption value={value.appId ?? "search"}>{value.appId ?? "search"}</SelectOption> : null}
+                {applicationOptions.map((option) => <SelectOption key={option.id} value={option.id}>{option.name}</SelectOption>)}
+              </Select>
               <FieldNote fieldId="alerts-application" error={visibleErrors.appId ?? visibleErrors.indexScope ?? null}>
                 {value.indexScope.length === 0 ? "No searchable indexes are available for this application." : `Searches ${value.indexScope.join(", ")}.`}
               </FieldNote>
@@ -269,12 +270,12 @@ export function AlertWizard({
             <div className="alerts-form-grid">
               <label htmlFor="alerts-operator">
                 <span>Result count condition</span>
-                <select className="button button--secondary button--block" id="alerts-operator" value={value.operator} onChange={(event) => update("operator", Number(event.target.value) as AlertConditionOperator)} {...fieldControlProps("alerts-operator", visibleErrors.operator ?? null)}>
-                  <option value={AlertConditionOperator.ALERT_CONDITION_OPERATOR_GREATER_THAN}>Greater than</option>
-                  <option value={AlertConditionOperator.ALERT_CONDITION_OPERATOR_LESS_THAN}>Less than</option>
-                  <option value={AlertConditionOperator.ALERT_CONDITION_OPERATOR_EQUAL}>Equal to</option>
-                  <option value={AlertConditionOperator.ALERT_CONDITION_OPERATOR_NOT_EQUAL}>Not equal to</option>
-                </select>
+                <Select className="button button--secondary button--block" id="alerts-operator" value={String(value.operator)} onValueChange={(selectedValue) => update("operator", Number(selectedValue) as AlertConditionOperator)} {...fieldControlProps("alerts-operator", visibleErrors.operator ?? null)}>
+                  <SelectOption value={String(AlertConditionOperator.ALERT_CONDITION_OPERATOR_GREATER_THAN)}>Greater than</SelectOption>
+                  <SelectOption value={String(AlertConditionOperator.ALERT_CONDITION_OPERATOR_LESS_THAN)}>Less than</SelectOption>
+                  <SelectOption value={String(AlertConditionOperator.ALERT_CONDITION_OPERATOR_EQUAL)}>Equal to</SelectOption>
+                  <SelectOption value={String(AlertConditionOperator.ALERT_CONDITION_OPERATOR_NOT_EQUAL)}>Not equal to</SelectOption>
+                </Select>
                 <FieldNote fieldId="alerts-operator" error={visibleErrors.operator ?? null} />
               </label>
               <label htmlFor="alerts-threshold">

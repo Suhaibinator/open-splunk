@@ -31,6 +31,7 @@ import { COMPACT_NUMBER_FORMAT, NUMBER_FORMAT } from "../constants";
 import { formatExactNumericText } from "../formatters";
 import type { ChartStyle, LegendPosition, StackMode } from "../model";
 import { describeTimechartCoverage, type TimechartCoverage } from "../timechart-series";
+import { Select, SelectOption } from "../../_components/select";
 
 interface VisualizationPanelProps {
   chartStyle: ChartStyle;
@@ -812,15 +813,15 @@ export function VisualizationPanel({
           onVisualizationEdited();
           onChartTitleChange(event.target.value);
         }} /></label>
-        <label><span>Legend</span><select value={legendPosition} onChange={(event) => {
+        <label htmlFor="visualization-panel-choice-816"><span>Legend</span><Select id="visualization-panel-choice-816" value={legendPosition} onValueChange={(selectedValue) => {
           onVisualizationEdited();
-          onLegendPositionChange(event.target.value as LegendPosition);
-        }}><option value="bottom">Bottom</option><option value="right">Right</option><option value="none">Hidden</option></select></label>
+          onLegendPositionChange(selectedValue as LegendPosition);
+        }}><SelectOption value="bottom">Bottom</SelectOption><SelectOption value="right">Right</SelectOption><SelectOption value="none">Hidden</SelectOption></Select></label>
         {supportsStacking ? (
-          <label><span>Stacking</span><select value={effectiveStackMode} onChange={(event) => {
+          <label htmlFor="visualization-panel-choice-821"><span>Stacking</span><Select id="visualization-panel-choice-821" value={effectiveStackMode} onValueChange={(selectedValue) => {
             onVisualizationEdited();
-            onStackModeChange(event.target.value as StackMode);
-          }}><option value="none">None</option><option value="stacked">Stacked</option><option value="stacked100">100%</option></select></label>
+            onStackModeChange(selectedValue as StackMode);
+          }}><SelectOption value="none">None</SelectOption><SelectOption value="stacked">Stacked</SelectOption><SelectOption value="stacked100">100%</SelectOption></Select></label>
         ) : null}
         {isTimeSeriesChart ? (
           <div className="visualization-interaction-note"><strong>Inspect values</strong><span>Hover, tap, or focus the plot and use the arrow keys.</span></div>

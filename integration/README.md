@@ -1,5 +1,18 @@
 # Backend vertical integration
 
+## Dashboard and shared control browser tests
+
+Run `npm run test:dashboards` to exercise backend-mode dashboard onboarding,
+app creation, app switching, error recovery, and the editor against mocked
+protobuf responses. Its isolated Next development output lives in
+`.cache/dashboard-next`; no running backend or Docker is required.
+
+Run `npm run build && npm run test:workspace` for the demo export, including
+the shared dropdown's filtering, keyboard, and nested-dialog behavior.
+`npm run test:contracts` checks themed popup geometry and padded state cards
+at desktop and mobile widths. Install the pinned browser with
+`npx --no-install playwright install chromium` before these suites.
+
 ## Development workflow smoke test
 
 The opt-in development workflow gate generates a Git-independent development

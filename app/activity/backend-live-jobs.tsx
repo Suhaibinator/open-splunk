@@ -39,6 +39,7 @@ import {
   searchJobStateLabel,
 } from "./backend-activity-shared";
 import { summarizeByteQuantity } from "@/lib/byte-quantity";
+import { Select, SelectOption } from "../_components/select";
 
 type LiveJobFilter = "all" | "active" | "completed" | "failed" | "canceled";
 type LoadState = "loading" | "available" | "unavailable" | "error";
@@ -478,12 +479,12 @@ export function BackendLiveJobs({ apiBaseUrl }: BackendLiveJobsProps) {
                     placeholder="Filter source SPL"
                   />
                 </label>
-                <label className="live-jobs-app-filter">
+                <label htmlFor="backend-live-jobs-choice-484" className="live-jobs-app-filter">
                   <span className="sr-only">Filter live jobs by app</span>
-                  <select value={appId} onChange={(event) => setAppId(event.target.value)}>
-                    <option value="">All apps</option>
-                    {apps.map((app) => <option value={app.id} key={app.id}>{app.label}</option>)}
-                  </select>
+                  <Select id="backend-live-jobs-choice-484" value={appId} onValueChange={(selectedValue) => setAppId(selectedValue)}>
+                    <SelectOption value="">All apps</SelectOption>
+                    {apps.map((app) => <SelectOption value={app.id} key={app.id}>{app.label}</SelectOption>)}
+                  </Select>
                 </label>
               </div>
             </header>

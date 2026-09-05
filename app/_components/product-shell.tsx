@@ -47,6 +47,14 @@ interface ProductShellProps {
    * has no app list to switch with in its place.
    */
   appSwitcher?: ReactNode;
+  backendAppCatalog?: {
+    apps: AppSummary[];
+    error?: string | null;
+    onRetry?: () => void;
+    onSelect: (appId: string) => void;
+    selectedAppId: string | null;
+    state: BackendAppCatalogState;
+  };
   /** Replaces the built-in utilities nav, for a page with its own menus. */
   utilities?: ReactNode;
   /** The demo/backend band above the page content. */
@@ -163,6 +171,7 @@ export function ProductShell({
   apiBaseUrl = "",
   appName,
   appSwitcher,
+  backendAppCatalog,
   children,
   dataMode,
   disclosure = true,
@@ -175,7 +184,7 @@ export function ProductShell({
   shellTestId,
   utilities,
 }: ProductShellProps) {
-  const ownsCatalog = appSwitcher === undefined;
+  const ownsCatalog = appSwitcher === undefined && backendAppCatalog === undefined;
   const [menu, setMenu] = useState<ProductMenu | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [backendApps, setBackendApps] = useState<AppSummary[]>([]);
@@ -207,11 +216,15 @@ export function ProductShell({
   const sessionInitial = localSession ? "L" : "A";
   const sessionLabel = localSession ? "Local session" : "Administrator";
   const sessionDetail = localSession ? "Single-user backend mode" : "admin@localhost";
-  const selectedBackendApp = backendApps.find((app) => app.appId === selectedBackendAppId);
-  const navigationBackendAppId = selectedBackendAppId ?? preferredAppId;
+  const displayedBackendApps = backendAppCatalog?.apps ?? backendApps;
+  const displayedBackendAppId = backendAppCatalog?.selectedAppId ?? selectedBackendAppId;
+  const displayedCatalogState = backendAppCatalog?.state ?? backendAppCatalogState;
+  const displayedCatalogError = backendAppCatalog?.error ?? backendAppCatalogError;
+  const selectedBackendApp = displayedBackendApps.find((app) => app.appId === displayedBackendAppId);
+  const navigationBackendAppId = displayedBackendAppId ?? preferredAppId;
   const switcherAppName = dataMode === "backend" && selectedBackendApp !== undefined
     ? appLabel(selectedBackendApp)
-    : appName;
+    : backendAppCatalog !== undefined ? "No app selected" : appName;
   const backendDisclosure = activeSection === "search"
     ? "Searches and supported search objects use the configured backend."
     : activeSection === "admin"
@@ -412,20 +425,23 @@ export function ProductShell({
             <div className="suite-popover suite-app-popover" id={PRODUCT_MENU_POPOVER_IDS.apps} role="menu" data-suite-menu="apps">
               <span className="suite-menu-label">{dataMode === "backend" ? "Server apps" : "Your apps"}</span>
               {dataMode === "backend" ? (
-                backendAppCatalogState === "loading" ? (
+                displayedCatalogState === "loading" ? (
                   <output className="suite-app-catalog-state"><i className="suite-app-icon suite-app-icon--muted" aria-hidden="true">…</i><span><strong>Loading apps</strong><small>Reading system bootstrap</small></span></output>
-                ) : backendAppCatalogState === "error" ? (
-                  <button role="menuitem" type="button" onClick={() => setBackendAppCatalogGeneration((current) => current + 1)}><i className="suite-app-icon suite-app-icon--muted" aria-hidden="true">!</i><span><strong>Retry app catalog</strong><small>{backendAppCatalogError}</small></span></button>
-                ) : backendApps.length === 0 ? (
+                ) : displayedCatalogState === "error" ? (
+                  <button role="menuitem" type="button" onClick={() => { if (backendAppCatalog?.onRetry) backendAppCatalog.onRetry(); else setBackendAppCatalogGeneration((current) => current + 1); }}><i className="suite-app-icon suite-app-icon--muted" aria-hidden="true">!</i><span><strong>Retry app catalog</strong><small>{displayedCatalogError}</small></span></button>
+                ) : displayedBackendApps.length === 0 ? (
                   <output className="suite-app-catalog-state"><i className="suite-app-icon suite-app-icon--muted" aria-hidden="true">—</i><span><strong>No authorized apps</strong><small>The backend returned an empty app catalog</small></span></output>
-                ) : backendApps.map((app) => {
-                  const selected = app.appId === selectedBackendAppId;
+                ) : displayedBackendApps.map((app) => {
+                  const selected = app.appId === displayedBackendAppId;
                   const label = appLabel(app);
-                  return (
-                    <Link className={selected ? "selected" : undefined} role="menuitem" href={backendAppSearchHref(app.appId)} key={app.appId} onClick={() => closeMenu()} aria-label={`Open ${label} in Search`}>
+                  const contents = <>
                       <i className="suite-app-icon" aria-hidden="true">{label.charAt(0).toUpperCase() || "⌕"}</i>
                       <span><strong>{label}</strong><small>{appDetail(app, selected)}</small></span>
-                    </Link>
+                    </>;
+                  return backendAppCatalog ? (
+                    <button className={selected ? "selected" : undefined} role="menuitem" type="button" key={app.appId} onClick={() => { backendAppCatalog.onSelect(app.appId); closeMenu(); }} aria-label={`Select ${label}`}>{contents}</button>
+                  ) : (
+                    <Link className={selected ? "selected" : undefined} role="menuitem" href={backendAppSearchHref(app.appId)} key={app.appId} onClick={() => closeMenu()} aria-label={`Open ${label} in Search`}>{contents}</Link>
                   );
                 })
               ) : (
@@ -499,19 +515,22 @@ export function ProductShell({
           <header><div><span className="suite-user-avatar" aria-hidden="true">{sessionInitial}</span><span><strong>{sessionLabel}</strong><small>{sessionDetail}</small></span></div><button type="button" aria-label="Close navigation" onClick={() => setMobileOpen(false)}><AppIcon name="close" size="lg" /></button></header>
           <span className="drawer-label">APPLICATION</span>
           <Link className={activeSection === "home" ? "active" : undefined} aria-current={activeSection === "home" ? "page" : undefined} href={productHref("/")}><span aria-hidden="true"><AppIcon name="home" size="md" /></span>Home</Link>
-          {!ownsCatalog ? (
+          {appSwitcher !== undefined ? (
             <Link className={activeSection === "search" ? "active" : undefined} aria-current={activeSection === "search" ? "page" : undefined} href={productHref("/search/events/")}><span aria-hidden="true"><AppIcon name="search" size="md" /></span>{appName}</Link>
           ) : dataMode === "backend" ? (
-            backendAppCatalogState === "loading" ? (
+            displayedCatalogState === "loading" ? (
               <output className="drawer-app-state">Loading server apps…</output>
-            ) : backendAppCatalogState === "error" ? (
-              <button className="drawer-app-retry" type="button" onClick={() => setBackendAppCatalogGeneration((current) => current + 1)}>Retry server apps</button>
-            ) : backendApps.length === 0 ? (
+            ) : displayedCatalogState === "error" ? (
+              <button className="drawer-app-retry" type="button" onClick={() => { if (backendAppCatalog?.onRetry) backendAppCatalog.onRetry(); else setBackendAppCatalogGeneration((current) => current + 1); }}>Retry server apps</button>
+            ) : displayedBackendApps.length === 0 ? (
               <output className="drawer-app-state">No authorized server apps</output>
-            ) : backendApps.map((app) => {
+            ) : displayedBackendApps.map((app) => {
               const label = appLabel(app);
-              const selected = app.appId === selectedBackendAppId;
-              return <Link className={selected ? "selected-app" : undefined} href={backendAppSearchHref(app.appId)} key={`mobile-${app.appId}`}><span aria-hidden="true">{label.charAt(0).toUpperCase() || "⌕"}</span>{label}{selected ? <b>Selected</b> : null}</Link>;
+              const selected = app.appId === displayedBackendAppId;
+              const contents = <><span aria-hidden="true">{label.charAt(0).toUpperCase() || "⌕"}</span>{label}{selected ? <b>Selected</b> : null}</>;
+              return backendAppCatalog
+                ? <button className={selected ? "selected-app" : undefined} type="button" onClick={() => { backendAppCatalog.onSelect(app.appId); setMobileOpen(false); }} key={`mobile-${app.appId}`}>{contents}</button>
+                : <Link className={selected ? "selected-app" : undefined} href={backendAppSearchHref(app.appId)} key={`mobile-${app.appId}`}>{contents}</Link>;
             })
           ) : (
             <Link className={activeSection === "search" ? "active" : undefined} aria-current={activeSection === "search" ? "page" : undefined} href={productHref("/search/events/")}><span aria-hidden="true"><AppIcon name="search" size="md" /></span>Search &amp; Reporting</Link>

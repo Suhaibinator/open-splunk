@@ -17,6 +17,7 @@ import {
   reportsViewFromPathname,
   type ReportsView,
 } from "./reports-view-state";
+import { Select, SelectOption } from "../_components/select";
 
 type ReportScope = "all" | "mine" | "scheduled" | "favorites";
 type ReportType = "all" | "chart" | "statistics" | "events";
@@ -323,31 +324,31 @@ function DemoReportsConsole() {
               placeholder="Find by name, SPL, or owner"
             />
           </label>
-          <label className="reports-select-field">
+          <label htmlFor="reports-console-choice-329" className="reports-select-field">
             <span>Type</span>
-            <select value={type} onChange={(event) => setType(event.target.value as ReportType)}>
-              <option value="all">All types</option>
-              <option value="chart">Charts</option>
-              <option value="statistics">Statistics</option>
-              <option value="events">Event lists</option>
-            </select>
+            <Select id="reports-console-choice-329" value={type} onValueChange={(selectedValue) => setType(selectedValue as ReportType)}>
+              <SelectOption value="all">All types</SelectOption>
+              <SelectOption value="chart">Charts</SelectOption>
+              <SelectOption value="statistics">Statistics</SelectOption>
+              <SelectOption value="events">Event lists</SelectOption>
+            </Select>
           </label>
-          <label className="reports-select-field">
+          <label htmlFor="reports-console-choice-338" className="reports-select-field">
             <span>Status</span>
-            <select value={status} onChange={(event) => setStatus(event.target.value as "all" | ReportStatus)}>
-              <option value="all">All statuses</option>
-              <option value="Scheduled">Scheduled</option>
-              <option value="Manual">Manual</option>
-              <option value="Paused">Paused</option>
-            </select>
+            <Select id="reports-console-choice-338" value={status} onValueChange={(selectedValue) => setStatus(selectedValue as "all" | ReportStatus)}>
+              <SelectOption value="all">All statuses</SelectOption>
+              <SelectOption value="Scheduled">Scheduled</SelectOption>
+              <SelectOption value="Manual">Manual</SelectOption>
+              <SelectOption value="Paused">Paused</SelectOption>
+            </Select>
           </label>
-          <label className="reports-select-field">
+          <label htmlFor="reports-console-choice-347" className="reports-select-field">
             <span>Sort</span>
-            <select value={sort} onChange={(event) => setSort(event.target.value as SortOrder)}>
-              <option value="modified">Recently modified</option>
-              <option value="name">Name</option>
-              <option value="nextRun">Next scheduled run</option>
-            </select>
+            <Select id="reports-console-choice-347" value={sort} onValueChange={(selectedValue) => setSort(selectedValue as SortOrder)}>
+              <SelectOption value="modified">Recently modified</SelectOption>
+              <SelectOption value="name">Name</SelectOption>
+              <SelectOption value="nextRun">Next scheduled run</SelectOption>
+            </Select>
           </label>
         </div>
 

@@ -982,8 +982,7 @@
   font-weight: 700;
 }
 
-.visualization-settings input:not([type="checkbox"]),
-.visualization-settings select {
+.visualization-settings input:not([type="checkbox"]) {
   background: var(--bg-surface);
   border: 1px solid var(--border);
   height: 31px;

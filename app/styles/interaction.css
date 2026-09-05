@@ -12,12 +12,13 @@
 
 @media (max-width: 760px) {
   .splunk-shell input,
-  .splunk-shell select,
   .splunk-shell textarea { font-size: var(--type-xl); }
 }
 
 @media (pointer: coarse) {
   .button,
+  .select__trigger,
+  .select__option,
   .drawer-trigger,
   .mobile-search-actions > button,
   .suite-primary-nav a,
@@ -25,7 +26,6 @@
   .result-tabs button,
   .chart-toggle button,
   .visualization-settings input,
-  .visualization-settings select,
   .timeline-toolbar button,
   .event-toolbar button,
   .event-chips button,
@@ -75,8 +75,7 @@
   .resource-toolbar > .button--toolbar {
     min-height: var(--space-7);
   }
-  .knowledge-manager button,
-  .knowledge-manager select { min-height: 44px; }
+  .knowledge-manager button { min-height: 44px; }
   .time-series-chart__inspect { touch-action: pan-y; }
 }
 

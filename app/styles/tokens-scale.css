@@ -87,6 +87,11 @@
   --space-button-notice-gap: 5px; /* Notice-dismiss icon alignment gap. */
   --space-button-toolbar-gap: 5px; /* Toolbar icon-and-label gap. */
   --space-button-toolbar-inline-padding: 10px; /* Toolbar action inline padding. */
+  --space-select-control-height: 34px; /* Shared single-value select trigger height. */
+  --space-dashboard-onboarding-width: 520px; /* Readable dashboard setup card width. */
+  --space-select-active-outline: 1px; /* Keyboard-active select option outline thickness. */
+  --space-select-listbox-max-height: 280px; /* Viewport-capped scrolling select option surface. */
+  --space-select-touch-height: 44px; /* Coarse-pointer target height for select controls and rows. */
 
   /* Statistics-table geometry. Column dimensions are read by the client so the
      pure layout reducer and the CSS surface share the same scale source. */

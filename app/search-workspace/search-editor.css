@@ -592,7 +592,6 @@
 }
 
 .relative-time-row input,
-.relative-time-row select,
 .absolute-time-row input {
   background: var(--bg-surface);
   border: 1px solid var(--border-strong);
