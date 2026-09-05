@@ -101,7 +101,7 @@ function firstPaint(page: Page): Promise<FirstPaintRecord | undefined> {
   return page.evaluate(() => (window as unknown as FirstPaintWindow).openSplunkPaletteSmoke);
 }
 
-/** Loads a page and resolves once its ThemeSync bootstrap fetch has answered. */
+/** Loads a page and resolves once its one bootstrap request has answered. */
 async function loadWithBootstrap(page: Page, url: string): Promise<number> {
   const bootstrap = page.waitForResponse((response) => response.url().endsWith("/api/system/bootstrap"));
   await page.goto(url, { waitUntil: "domcontentloaded" });
@@ -172,7 +172,8 @@ test("the administrator's palette reaches bootstrap, the cache, the boot script 
 
   await test.step("the next load paints terminal after hydration and caches it", async () => {
     expect(await loadWithBootstrap(page, "/signin/")).toBe(200);
-    // The boot script still had the classic cache; ThemeSync corrects it.
+    // The boot script still had the classic cache; the sign-in page's one
+    // bootstrap request reaches ThemeSync, which corrects it.
     expect(await firstPaint(page)).toEqual({ beforeBody: true, firstPalette: "classic", firstTheme: "light" });
     await expect(html).toHaveAttribute("data-palette", "terminal");
     await expect.poll(() => cachedPalette(page)).toBe("terminal");
@@ -187,7 +188,7 @@ test("the administrator's palette reaches bootstrap, the cache, the boot script 
     await page.goto("/signin/", { waitUntil: "domcontentloaded" });
     expect(await firstPaint(page)).toEqual({ beforeBody: true, firstPalette: "terminal", firstTheme: "light" });
     await expect(html).toHaveAttribute("data-palette", "terminal");
-    // ThemeSync asked, got nothing, and left the cached paint alone.
+    // The sign-in page asked, got nothing, and left the cached paint alone.
     await expect.poll(() => blockedBootstraps).toBeGreaterThan(0);
     await expect(html).toHaveAttribute("data-palette", "terminal");
     expect(await cachedPalette(page)).toBe("terminal");

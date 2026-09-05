@@ -265,11 +265,20 @@ and the cache is what the pre-paint path reads:
   layout so the sign-in page gets it too) re-applies the cache on mount,
   follows `storage` events for both keys from other tabs, follows the
   operating system's own switch while the preference is System, and -- in
-  backend mode only -- fetches `/api/system/bootstrap` once and applies the
-  live palette. Bootstrap needs no bearer token, which is what lets the
-  sign-in page take the palette; every failure is swallowed, so the demo
-  export never asks and an unreachable backend keeps the cached or classic
-  palette.
+  backend mode only -- applies the live palette from every
+  `/api/system/bootstrap` envelope the page resolves. It issues no request
+  of its own: `getSystemBootstrap` (`lib/api/system-bootstrap.ts`) announces
+  each envelope it adapts through `subscribeToSystemBootstrap`, so the
+  request the product shell or a console already makes for its app catalog
+  is the one the palette rides on, and a page with the shell makes exactly
+  one bootstrap request in total. The sign-in page mounts neither, so
+  `app/signin/page.tsx` mounts `InstancePaletteFetch` (same file as
+  `ThemeSync`), which asks once per mount -- one in-flight request per API
+  base URL, so StrictMode's double mount joins rather than repeats -- and
+  lets the answer reach `ThemeSync` like any other loader's. Bootstrap needs
+  no bearer token, which is what lets the sign-in page take the palette at
+  all; every failure is swallowed, so the demo export never asks and an
+  unreachable backend keeps the cached or classic palette.
 - `applyInstancePalette(palette)` resolves the name (unknown paints classic),
   writes the cache, sets the attribute and updates the browser chrome colour.
   It is idempotent, which is what lets the admin card restore the saved value
@@ -277,7 +286,11 @@ and the cache is what the pre-paint path reads:
 - `previewPalette(palette)` paints this document only and leaves the cache
   alone: what the Appearance card does while a radio is selected but not yet
   applied. Other tabs follow the cache, so a preview never reaches them, and
-  the next boot still paints the server's value.
+  the next boot still paints the server's value. While a preview shows, the
+  card also subscribes to `subscribeToSystemBootstrap` and paints the preview
+  again after each envelope, so the console's Reload or the shell's catalog
+  retry -- which make `ThemeSync` repaint the server's palette -- cannot take
+  the preview off the document while the radio still shows it.
 - `syncThemeColorMeta()` copies the computed `--chrome-bar` into
   `<meta name="theme-color">` after every theme or palette application, so the
   address bar and an installed app's title bar follow the product bar.

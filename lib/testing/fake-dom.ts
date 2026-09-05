@@ -8,7 +8,9 @@
  * rest) needs a real render root, and a real render root needs a host: the
  * handful of DOM members react-dom reads and writes -- a tree, attributes, a
  * few reflected input properties, listeners, `querySelectorAll` for radio
- * groups -- plus the slice of `window` that `lib/theme-preference.ts` reads.
+ * groups -- plus the slice of `window` that `lib/theme-preference.ts` reads,
+ * a URL with no query string, and an `IntersectionObserver` that never fires
+ * so a mounted `next/link` stays quiet.
  * Nothing here lays out, styles, or navigates; it is a mock, not a browser,
  * and it is kept to what the tests that import it exercise.
  *
@@ -374,6 +376,25 @@ class FakeIFrameElement {
 }
 
 /**
+ * An observer nothing ever scrolls into view. `next/link` watches each link
+ * with one to decide when to prefetch; without the constructor it falls back
+ * to an idle-callback timer that fires a state update outside `act`.
+ */
+class FakeIntersectionObserver {
+  public disconnect(): void {
+    // Nothing was ever observed.
+  }
+
+  public observe(): void {
+    // Nothing ever becomes visible.
+  }
+
+  public unobserve(): void {
+    // Nothing was ever observed.
+  }
+}
+
+/**
  * Installs `window`, `document`, and `IS_REACT_ACT_ENVIRONMENT` on
  * `globalThis`. Call it before `react-dom/client` is first imported in the
  * process: that module decides at load time whether it can use the DOM.
@@ -422,6 +443,8 @@ export function installFakeBrowser(): FakeBrowser {
         getPropertyValue: (name: string) => computedStyle.get(name)?.(document.documentElement) ?? "",
       };
     },
+    /** The page's URL: the root, carrying no query string, so no app preference. */
+    location: { hash: "", pathname: "/", search: "" },
     localStorage: {
       getItem(key: string) {
         storageGate();
@@ -457,10 +480,21 @@ export function installFakeBrowser(): FakeBrowser {
       windowListeners.get(type)?.delete(listener);
     },
   };
-  const globals = globalThis as { document?: unknown; IS_REACT_ACT_ENVIRONMENT?: boolean; window?: unknown };
-  const previous = { document: globals.document, react: globals.IS_REACT_ACT_ENVIRONMENT, window: globals.window };
+  const globals = globalThis as {
+    document?: unknown;
+    IntersectionObserver?: unknown;
+    IS_REACT_ACT_ENVIRONMENT?: boolean;
+    window?: unknown;
+  };
+  const previous = {
+    document: globals.document,
+    intersection: globals.IntersectionObserver,
+    react: globals.IS_REACT_ACT_ENVIRONMENT,
+    window: globals.window,
+  };
   globals.window = window;
   globals.document = document;
+  globals.IntersectionObserver = FakeIntersectionObserver;
   globals.IS_REACT_ACT_ENVIRONMENT = true;
   const browser: FakeBrowser = {
     chromeMeta,
@@ -474,6 +508,7 @@ export function installFakeBrowser(): FakeBrowser {
     uninstall() {
       globals.window = previous.window;
       globals.document = previous.document;
+      globals.IntersectionObserver = previous.intersection;
       globals.IS_REACT_ACT_ENVIRONMENT = previous.react;
     },
     windowListeners,

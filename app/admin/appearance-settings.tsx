@@ -6,7 +6,13 @@ import type {
   GetServerAppearanceResponse,
   UpdateServerAppearanceResponse,
 } from "@/gen/ts/open_splunk/server_settings_api";
-import { isHttpStatus, paletteFromProto, paletteToProto, type OpenSplunkApiClient } from "@/lib/api";
+import {
+  isHttpStatus,
+  paletteFromProto,
+  paletteToProto,
+  subscribeToSystemBootstrap,
+  type OpenSplunkApiClient,
+} from "@/lib/api";
 import { createErrorMessage } from "@/lib/error-message";
 import type { Palette } from "@/lib/palettes";
 import { applyInstancePalette, previewPalette } from "@/lib/theme-preference";
@@ -124,6 +130,13 @@ export function AppearanceCard({
  * for what the server confirmed (the load, an applied choice) and for taking
  * a preview back on every path that abandons it: a reload, a 409 conflict,
  * and unmount.
+ *
+ * A preview outlives the page's own bootstrap traffic. `ThemeSync` paints the
+ * server's palette from every `/api/system/bootstrap` envelope this document
+ * resolves, and the console's Reload and the shell's catalog retry resolve one
+ * without the card knowing; while a preview is showing the card observes the
+ * same envelopes and paints the preview again after each, so the document
+ * keeps matching the checked radio until the choice is applied or abandoned.
  */
 export function AppearanceSettings({
   client,
@@ -212,6 +225,17 @@ export function AppearanceSettings({
     window.addEventListener("beforeunload", protect);
     return () => window.removeEventListener("beforeunload", protect);
   }, [dirty]);
+
+  // The palette showing as a preview, or `null` while the document holds
+  // the server's value. `ThemeSync` subscribed when the root layout mounted
+  // and this subscribes only once a preview shows, so an envelope reaches
+  // `ThemeSync` first and the preview is painted last; the cache is left to
+  // `ThemeSync`, which is what keeps it the server's value throughout.
+  const showing = dirty ? selected : null;
+  useEffect(() => {
+    if (showing === null) return;
+    return subscribeToSystemBootstrap(() => previewPalette(showing));
+  }, [showing]);
 
   if (state === "error") {
     return <div className="access-mode-notice" role="alert"><span>!</span><div><strong>Appearance could not be loaded</strong><p>{error}</p><button type="button" onClick={() => void reload()}>Retry</button></div></div>;
