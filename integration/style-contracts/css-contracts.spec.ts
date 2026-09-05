@@ -1882,6 +1882,12 @@ const READABLE_TEXT: readonly string[] = [
   ".toast-success strong",
   ".form-stack > label > span",
   ".form-stack input",
+  ".admin-sidebar > button.active strong",
+  ".admin-sidebar > button.active small",
+  ".admin-sidebar > button:not(.active) small",
+  ".appearance-palette-options label.is-selected strong",
+  ".appearance-palette-options label.is-selected small",
+  ".appearance-palette-options label:not(.is-selected) small",
 ];
 
 /**
@@ -2123,12 +2129,7 @@ test.describe("palette contracts", () => {
     // a light block written without `:where()` would leak its light grounds
     // under every dark page.
     await mount(page, "", DESKTOP_WIDTH);
-    const lightOnly: ReadonlyArray<readonly [Palette, readonly string[]]> = [
-      ["ocean", ["--bg-canvas", "--bg-subtle", "--border-subtle", "--skeleton-base"]],
-      ["glass", ["--bg-canvas", "--bg-subtle", "--skeleton-base"]],
-      ["terminal", ["--fg-secondary", "--fg-muted", "--fg-faint", "--border", "--border-subtle", "--border-strong"]],
-      ["graphite", ["--chrome-bar", "--chrome-appbar", "--chrome-hover"]],
-    ];
+    const lightOnly = LIGHT_ONLY_RESTATEMENTS;
     const tokens = [...new Set(lightOnly.flatMap(([, names]) => names))];
     await applyScope(page, "classic", "dark");
     const classicDark = await resolveTokens(page, tokens);
@@ -2307,8 +2308,16 @@ test.describe("palette contracts", () => {
       await page.goto(`${origin}/`);
       await addApplicationStyles(page);
       booted.set(palette, await resolveTokens(page, identity));
+    });
+    // The routed page is compared with a page the script never ran on: the
+    // fixture page every other palette contract reads, with the attributes
+    // written by hand. Reading the routed page twice would compare it with
+    // itself, since writing the attributes the script already wrote changes
+    // nothing there.
+    await mount(page, "", DESKTOP_WIDTH);
+    await sequentially([...PALETTES, "sepia"], async (palette) => {
       await applyScope(page, resolvePalette(palette), "light");
-      expect(booted.get(palette), `cached ${palette}: the boot script paints differently from its attribute`)
+      expect(booted.get(palette), `cached ${palette}: the boot script paints differently from its attribute on the fixture page`)
         .toEqual(await resolveTokens(page, identity));
     });
     expect(booted.get("sepia"), "an unknown cached palette paints classic").toEqual(booted.get("classic"));
@@ -2340,10 +2349,25 @@ async function snapshotScope(page: Page): Promise<ScopeSnapshot> {
 }
 
 /**
- * Palettes whose dark block leaves the chrome to classic dark on purpose.
- * Graphite paints its bars in the deepest neutral in both modes ("colour is
- * reserved for state and code"), which is also classic dark's product bar, so
- * a dark restatement would be inert and the invariant that refuses inert
- * restatements keeps it out of the file.
+ * The tokens a palette restates in its light block and leaves alone in dark,
+ * so that its dark renders them exactly as classic dark does. Graphite's
+ * chrome is here because it paints its bars in the deepest neutral in both
+ * modes ("colour is reserved for state and code"), which is also classic
+ * dark's product bar: a dark restatement would be inert, and the invariant
+ * that refuses inert restatements keeps it out of the file.
+ *
+ * This is the one ledger for the fact: a new palette whose dark chrome stays
+ * classic's is registered here, under `--chrome-bar`, and the identity
+ * contract below reads it from this table.
  */
-const CHROME_STAYS_CLASSIC_IN_DARK: ReadonlySet<Palette> = new Set(["graphite"]);
+const LIGHT_ONLY_RESTATEMENTS: ReadonlyArray<readonly [Palette, readonly string[]]> = [
+  ["ocean", ["--bg-canvas", "--bg-subtle", "--border-subtle", "--skeleton-base"]],
+  ["glass", ["--bg-canvas", "--bg-subtle", "--skeleton-base"]],
+  ["terminal", ["--fg-secondary", "--fg-muted", "--fg-faint", "--border", "--border-subtle", "--border-strong"]],
+  ["graphite", ["--chrome-bar", "--chrome-appbar", "--chrome-hover"]],
+];
+
+/** Palettes whose dark block leaves the chrome bar to classic dark on purpose, read off the ledger above. */
+const CHROME_STAYS_CLASSIC_IN_DARK: ReadonlySet<Palette> = new Set(
+  LIGHT_ONLY_RESTATEMENTS.filter(([, names]) => names.includes("--chrome-bar")).map(([palette]) => palette),
+);

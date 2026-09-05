@@ -10,6 +10,7 @@
 .admin-sidebar > button > span { display: flex; flex-direction: column; gap: 2px; }
 .admin-sidebar > button strong { font-size: var(--type-xs); }
 .admin-sidebar > button small { color: var(--fg-muted); font-size: var(--type-xs); }
+.admin-sidebar > button.active small { color: var(--fg-text); }
 .admin-sidebar > button > b { color: var(--fg-muted); font-size: var(--type-lg); font-weight: 400; }
 .admin-sidebar-meta { align-items: center; border-top: 1px solid var(--border-subtle); display: flex; gap: 5px; margin-top: 9px; padding: var(--space-3); }
 .admin-sidebar-meta > div { display: flex; flex-direction: column; gap: 2px; }
@@ -174,6 +175,7 @@
 .appearance-palette-options label > span { display: flex; flex-direction: column; gap: 2px; }
 .appearance-palette-options strong { font-size: var(--type-xs); }
 .appearance-palette-options small { color: var(--fg-muted); font-size: var(--type-xs); line-height: 1.4; }
+.appearance-palette-options label.is-selected small { color: var(--fg-text); }
 .input-with-unit { align-items: center; display: flex; }
 .input-with-unit input { min-width: 0; width: 100%; }
 .input-with-unit b { align-items: center; background: var(--bg-subtle); border: 1px solid var(--border-strong); border-left: 0; display: flex; font-size: var(--type-xs); font-weight: 400; height: 34px; padding: 0 9px; }

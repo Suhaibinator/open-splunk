@@ -218,6 +218,14 @@ theme resolution, primitive states, chart sizing, modal layers, tap-target
 floors, and similar behavior. Install the repository-pinned Chromium runtime
 once with `npx --no-install playwright install chromium`.
 
+`node scripts/palette-gallery.mjs` is the eye's check on the contracts: after
+`npm run build` it captures the sign-in page, the search workspace and the
+admin Server section under every palette in light and dark from the demo
+export, and lays them out as one PNG per page under
+`test-results/palette-gallery/`. Review a new palette, or a change to the
+chrome, a knob or a shared primitive, against it; the palette list comes from
+`lib/palettes.ts`, so nothing has to be added for a new name.
+
 The JSON ledgers have distinct roles:
 
 - `css-literal-debt.json` is exact allowed literal debt;

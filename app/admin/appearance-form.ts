@@ -1,12 +1,22 @@
 import { PALETTES, type Palette } from "@/lib/palettes";
 
 /**
- * The Appearance card's data: what each palette is called and the one line
- * that tells an administrator what choosing it does. Data only -- the names
- * come from `lib/palettes.ts`, the wire mapping from `lib/api/ui-palette.ts`,
- * and the card itself from appearance-settings.tsx -- so the copy can be held
- * to the palette list by a unit test without rendering anything.
+ * The Appearance card's data: its heading, what each palette is called and
+ * the one line that tells an administrator what choosing it does. Data only
+ * -- the names come from `lib/palettes.ts`, the wire mapping from
+ * `lib/api/ui-palette.ts`, and the card itself from appearance-settings.tsx
+ * -- so the copy can be held to the palette list by a unit test without
+ * rendering anything, and `scripts/palette-gallery.mjs` can rebuild the card
+ * from the same copy on the demo export, which has no Appearance card.
  */
+
+/** The card's heading. */
+export const APPEARANCE_TITLE = "Appearance";
+
+/** The line under the heading. */
+export const APPEARANCE_DESCRIPTION =
+  "Instance-wide palette shown to every user, including the sign-in page. Light and dark stay each user's own choice.";
+
 export interface PaletteOption {
   /** One line, a full sentence, shown under the label. */
   description: string;
