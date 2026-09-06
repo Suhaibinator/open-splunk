@@ -184,6 +184,7 @@ test.afterEach(() => Promise.all(Array.from(mounts, (mounted) => mounted.unmount
 
 test.beforeEach(() => {
   reactErrors.length = 0;
+  browser.storageBlocked = false;
   browser.storage.clear();
   browser.storageWrites.length = 0;
   browser.document.documentElement.setAttribute("data-palette", "classic");
@@ -695,13 +696,17 @@ function resolveBootstrap(palette: Palette): Promise<unknown> {
   return act(() => getSystemBootstrap(client));
 }
 
-test("a bootstrap envelope the page resolves mid-preview repaints the server's palette under ThemeSync, and the preview stays on top", async () => {
+test("a bootstrap envelope the page resolves mid-preview repaints the server's palette under ThemeSync, and the preview stays on top", async (t) => {
   const server = fakeServer();
   server.gets.push(() => Promise.resolve(envelope("classic", 3n)));
   // ThemeSync mounts from the root layout, ahead of the page, so it observes
   // the envelope first: the order the fix relies on.
   const themeContainer = browser.document.body.appendChild(browser.document.createElement("div"));
   const themeRoot = createRoot(themeContainer as unknown as Element);
+  t.after(async () => {
+    await act(async () => themeRoot.unmount());
+    themeContainer.parentNode?.removeChild(themeContainer);
+  });
   await act(async () => {
     themeRoot.render(<ThemeSync dataMode="backend" />);
   });
@@ -736,16 +741,57 @@ test("a bootstrap envelope the page resolves mid-preview repaints the server's p
   assert.equal(paletteOnDocument(), "ocean");
   assert.equal(browser.storage.get(PALETTE_STORAGE_KEY), "ocean");
 
+  browser.storageWrites.length = 0;
   await mounted.unmount();
-  // The card's own exit restores the palette it loaded; a later envelope is
-  // ThemeSync's alone.
-  assert.equal(paletteOnDocument(), "classic");
+  // Leaving settings must retain the newer server value without broadcasting
+  // the card's older snapshot to other tabs.
+  assert.equal(paletteOnDocument(), "ocean");
+  assert.equal(browser.chromeMeta.getAttribute("content"), "bar(ocean)");
+  assert.equal(browser.storage.get(PALETTE_STORAGE_KEY), "ocean");
+  assert.deepEqual(browser.storageWrites, []);
   await resolveBootstrap("glass");
   assert.equal(paletteOnDocument(), "glass");
-  await act(async () => themeRoot.unmount());
-  themeContainer.parentNode?.removeChild(themeContainer);
   assert.deepEqual(reactErrors, []);
 });
+
+for (const source of ["bootstrap", "storage", "blocked storage"] as const) {
+  for (const preview of [false, true]) {
+    test(`unmount preserves the latest ${source} palette with preview=${preview}`, async (t) => {
+      const themeContainer = browser.document.body.appendChild(browser.document.createElement("div"));
+      const themeRoot = createRoot(themeContainer as unknown as Element);
+      t.after(async () => {
+        await act(async () => themeRoot.unmount());
+        themeContainer.parentNode?.removeChild(themeContainer);
+        browser.storageBlocked = false;
+      });
+      await act(async () => themeRoot.render(<ThemeSync dataMode="backend" />));
+      const server = fakeServer();
+      server.gets.push(() => Promise.resolve(envelope("classic", 3n)));
+      const mounted = await mount(server);
+      if (source === "storage") {
+        browser.storage.set(PALETTE_STORAGE_KEY, "ocean");
+        await act(async () => {
+          browser.dispatchWindowEvent("storage", { key: PALETTE_STORAGE_KEY });
+        });
+      } else {
+        browser.storageBlocked = source === "blocked storage";
+        await resolveBootstrap("ocean");
+      }
+      assert.equal(paletteOnDocument(), "ocean");
+      if (preview) {
+        await mounted.choose("ember");
+        assert.equal(paletteOnDocument(), "ember");
+      }
+      browser.storageWrites.length = 0;
+      await mounted.unmount();
+      assert.equal(paletteOnDocument(), "ocean");
+      assert.equal(browser.chromeMeta.getAttribute("content"), "bar(ocean)");
+      assert.equal(browser.storage.get(PALETTE_STORAGE_KEY), source === "blocked storage" ? "classic" : "ocean");
+      assert.deepEqual(browser.storageWrites, []);
+      assert.deepEqual(reactErrors, []);
+    });
+  }
+}
 
 test("an applied choice needs no guard: the envelope that follows names the same palette", async () => {
   const server = fakeServer();

@@ -15,7 +15,7 @@ import {
 } from "@/lib/api";
 import { createErrorMessage } from "@/lib/error-message";
 import type { Palette } from "@/lib/palettes";
-import { applyInstancePalette, previewPalette } from "@/lib/theme-preference";
+import { applyInstancePalette, previewPalette, restoreInstancePalette } from "@/lib/theme-preference";
 
 import {
   APPEARANCE_DESCRIPTION,
@@ -128,8 +128,8 @@ export function AppearanceCard({
  * follow it, and the next boot of this one, never see a palette that was only
  * clicked. `applyInstancePalette`, the call the live bootstrap uses, is kept
  * for what the server confirmed (the load, an applied choice) and for taking
- * a preview back on every path that abandons it: a reload, a 409 conflict,
- * and unmount.
+ * a preview back on a reload or a 409 conflict. Unmount restores the latest
+ * observed instance palette without writing the card's snapshot to the cache.
  *
  * A preview outlives the page's own bootstrap traffic. `ThemeSync` paints the
  * server's palette from every `/api/system/bootstrap` envelope this document
@@ -158,16 +158,15 @@ export function AppearanceSettings({
     setError(null);
   }
 
-  // The palette to restore when the preview is abandoned. A ref rather than
-  // the state itself because the unmount cleanup below has to read the value
-  // current at unmount, not the one captured when the effect was registered.
-  const savedPalette = useRef<Palette | null>(null);
+  // A failed or unfinished initial load has no preview to restore. Once the
+  // card loads, cleanup uses the document's latest instance value; the saved
+  // form may be older than a bootstrap response or another tab's update.
+  const hasLoadedPalette = useRef(false);
   useEffect(() => {
-    savedPalette.current = saved?.palette ?? null;
+    hasLoadedPalette.current = saved !== null;
   }, [saved]);
   useEffect(() => () => {
-    const palette = savedPalette.current;
-    if (palette !== null) applyInstancePalette(palette);
+    if (hasLoadedPalette.current) restoreInstancePalette();
   }, []);
 
   const adopt = useCallback((model: AppearanceModel) => {
