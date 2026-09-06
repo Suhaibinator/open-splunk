@@ -281,8 +281,12 @@ and the cache is what the pre-paint path reads:
   unreachable backend keeps the cached or classic palette.
 - `applyInstancePalette(palette)` resolves the name (unknown paints classic),
   writes the cache, sets the attribute and updates the browser chrome colour.
-  It is idempotent, which is what lets the admin card restore the saved value
-  on the way out of a preview without checking whether one was showing.
+  It also remembers the instance value for this document when storage is blocked.
+- `restoreInstancePalette()` abandons the Appearance card's preview on unmount,
+  restoring the latest instance value observed through an appearance response,
+  bootstrap response or storage synchronization. It updates the document and
+  browser chrome without writing the cache, so leaving settings cannot broadcast
+  the card's older saved palette to other tabs.
 - `previewPalette(palette)` paints this document only and leaves the cache
   alone: what the Appearance card does while a radio is selected but not yet
   applied. Other tabs follow the cache, so a preview never reaches them, and

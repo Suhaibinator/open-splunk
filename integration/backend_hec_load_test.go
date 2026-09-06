@@ -969,7 +969,8 @@ func runBackendHECDurableLoad(t *testing.T, plan backendHECLoadPlan) {
 	stopPressure()
 	control := <-pressureDone
 	if control.err != nil {
-		t.Fatalf("HEC load control-plane pressure: %v", control.err)
+		t.Fatalf("HEC load control-plane pressure: %v\nserver logs:\n%s", control.err,
+			redactForFailure(serverProcess.Logs(), protectedValues...))
 	}
 	if control.mutations == 0 {
 		t.Fatal("HEC load control-plane pressure completed no mutations")

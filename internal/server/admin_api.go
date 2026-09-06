@@ -27,6 +27,7 @@ import (
 	"github.com/Suhaibinator/SRouter/pkg/codec"
 	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
+	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -1579,12 +1580,26 @@ func (handler *apiHandler) setIngestionTokenEnabled(
 		input.GetExpectedVersion(),
 		input.GetEnabled(),
 	)
-	if err := mapAdministrativeCallError(
+	if mappedErr := mapAdministrativeCallError(
 		request.Context(),
 		err,
 		"ingestion token",
-	); err != nil {
-		return nil, err
+	); mappedErr != nil {
+		var httpErr *router.HTTPError
+		if errors.As(mappedErr, &httpErr) && httpErr.StatusCode == http.StatusServiceUnavailable {
+			// Store errors can contain SQL parameters or token metadata. Keep
+			// diagnostics to classifications, never the error text or token ID.
+			code := 0
+			var databaseErr interface{ Code() int }
+			if errors.As(err, &databaseErr) {
+				code = databaseErr.Code()
+			}
+			handler.logger.Error("ingestion token state update unavailable",
+				zap.Bool("database_contention", control.IsDatabaseContention(err)),
+				zap.Int("database_error_code", code),
+			)
+		}
+		return nil, mappedErr
 	}
 	targetState := auth.CollectorTokenStateDisabled
 	if input.GetEnabled() {

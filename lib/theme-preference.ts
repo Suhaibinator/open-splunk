@@ -75,6 +75,10 @@ export function applyTheme(document: Pick<Document, "documentElement">, theme: T
  */
 export const PALETTE_STORAGE_KEY = "open-splunk.palette";
 
+// Keep the latest instance value apart from previews, including when storage
+// is blocked. A document owns its snapshot for exactly its own lifetime.
+const instancePalettes = new WeakMap<Document, Palette>();
+
 /** Tells the stylesheet which palette to render. */
 export function applyPalette(document: Pick<Document, "documentElement">, palette: Palette): void {
   document.documentElement.setAttribute("data-palette", palette);
@@ -180,16 +184,25 @@ function storedPalette(): string | null {
 /** Re-resolves the palette from the cache the boot script read. */
 export function syncPalette(): void {
   if (typeof window === "undefined") return;
-  applyPalette(document, resolvePalette(storedPalette()));
+  const palette = resolvePalette(storedPalette());
+  instancePalettes.set(document, palette);
+  applyPalette(document, palette);
   syncThemeColorMeta();
+}
+
+/** Abandons a preview without publishing an older settings snapshot to other tabs. */
+export function restoreInstancePalette(): void {
+  if (typeof window === "undefined") return;
+  const palette = instancePalettes.get(document);
+  if (palette !== undefined) previewPalette(palette);
 }
 
 /**
  * Paints a palette on this document only, leaving the cache alone: what the
  * admin card does while a radio is clicked but not yet applied. Other tabs
  * follow the cache, so a preview never reaches them, and the next boot still
- * paints the server's value; `applyInstancePalette` with the saved palette
- * takes the preview back.
+ * paints the server's value; `restoreInstancePalette` takes the preview back
+ * to the latest instance value observed in this document.
  */
 export function previewPalette(palette: Palette): void {
   if (typeof window === "undefined") return;
@@ -200,13 +213,13 @@ export function previewPalette(palette: Palette): void {
 /**
  * Applies the palette the server reported: resolves it (an unknown name
  * paints classic), caches it for the next boot, paints it, and updates the
- * browser chrome colour. Applying the same palette twice changes nothing,
- * which is what lets the admin card restore the saved value on the way out
- * of a preview without checking whether one was showing.
+ * browser chrome colour. The remembered value remains available when storage
+ * is blocked and is never replaced by a document-only preview.
  */
 export function applyInstancePalette(palette: string): void {
   if (typeof window === "undefined") return;
   const resolved = resolvePalette(palette);
+  instancePalettes.set(document, resolved);
   try {
     window.localStorage.setItem(PALETTE_STORAGE_KEY, resolved);
   } catch {
