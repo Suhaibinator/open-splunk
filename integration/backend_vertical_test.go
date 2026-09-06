@@ -2239,10 +2239,14 @@ func waitForCollectorWALAcknowledgedThroughCurrent(
 	)
 	for {
 		last, lastErr = readCollectorWALMeta(stateDir)
+		var pending bool
+		if lastErr == nil {
+			pending, lastErr = wal.HasPendingRecords(filepath.Join(stateDir, "wal"))
+		}
 		if lastErr == nil &&
 			last.LastAckedBatchSequence > 0 &&
 			last.LastAckedBatchSequence < ^uint64(0) &&
-			last.NextBatchSequence == last.LastAckedBatchSequence+1 {
+			last.NextBatchSequence > last.LastAckedBatchSequence && !pending {
 			return
 		}
 		if process.Exited() {
@@ -2514,12 +2518,7 @@ func waitForCollectorDiscovery(
 }
 
 func readCollectorCheckpoints(stateDir string) ([]input.Checkpoint, error) {
-	checkpoints, err := input.NewCheckpointStore(filepath.Join(stateDir, "checkpoints"))
-	if err != nil {
-		return nil, err
-	}
-	list, listErr := checkpoints.List()
-	return list, errors.Join(listErr, checkpoints.Close())
+	return input.ReadCheckpoints(filepath.Join(stateDir, "checkpoints"))
 }
 
 func assertDurableCollectorState(t *testing.T, stateDir string, wantOffset, wantLine uint64) {
@@ -2542,7 +2541,7 @@ func assertDurableCollectorState(t *testing.T, stateDir string, wantOffset, want
 		stats.OldestEventAge != 0 ||
 		stats.LastAckedBatchSequence == 0 ||
 		stats.LastAckedBatchSequence == ^uint64(0) ||
-		stats.NextBatchSequence != stats.LastAckedBatchSequence+1 ||
+		stats.NextBatchSequence <= stats.LastAckedBatchSequence ||
 		stats.QuarantinedSegments != 0 {
 		t.Fatalf("durable collector WAL state = %+v, want drained queue with a terminal acknowledgment", stats)
 	}

@@ -18,6 +18,7 @@ export enum CollectorCapability {
   COLLECTOR_CAPABILITY_GZIP = 4,
   COLLECTOR_CAPABILITY_MULTILINE = 5,
   COLLECTOR_CAPABILITY_TYPED_FIELDS = 6,
+  COLLECTOR_CAPABILITY_LOSSLESS_REPACKING = 7,
   UNRECOGNIZED = -1,
 }
 
@@ -44,6 +45,9 @@ export function collectorCapabilityFromJSON(object: any): CollectorCapability {
     case 6:
     case "COLLECTOR_CAPABILITY_TYPED_FIELDS":
       return CollectorCapability.COLLECTOR_CAPABILITY_TYPED_FIELDS;
+    case 7:
+    case "COLLECTOR_CAPABILITY_LOSSLESS_REPACKING":
+      return CollectorCapability.COLLECTOR_CAPABILITY_LOSSLESS_REPACKING;
     case -1:
     case "UNRECOGNIZED":
     default:
@@ -67,6 +71,8 @@ export function collectorCapabilityToJSON(object: CollectorCapability): string {
       return "COLLECTOR_CAPABILITY_MULTILINE";
     case CollectorCapability.COLLECTOR_CAPABILITY_TYPED_FIELDS:
       return "COLLECTOR_CAPABILITY_TYPED_FIELDS";
+    case CollectorCapability.COLLECTOR_CAPABILITY_LOSSLESS_REPACKING:
+      return "COLLECTOR_CAPABILITY_LOSSLESS_REPACKING";
     case CollectorCapability.UNRECOGNIZED:
     default:
       return "UNRECOGNIZED";
@@ -360,6 +366,11 @@ export enum BatchRejectionCode {
   BATCH_REJECTION_CODE_COLLECTOR_ID_MISMATCH = 6,
   BATCH_REJECTION_CODE_PROTOCOL_VIOLATION = 7,
   BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS = 8,
+  /**
+   * BATCH_REJECTION_CODE_REPACK_REQUIRED - The original identity is durably fenced against ingestion. Retain its
+   * source checkpoint barrier until every losslessly repacked child is terminal.
+   */
+  BATCH_REJECTION_CODE_REPACK_REQUIRED = 9,
   UNRECOGNIZED = -1,
 }
 
@@ -392,6 +403,9 @@ export function batchRejectionCodeFromJSON(object: any): BatchRejectionCode {
     case 8:
     case "BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS":
       return BatchRejectionCode.BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS;
+    case 9:
+    case "BATCH_REJECTION_CODE_REPACK_REQUIRED":
+      return BatchRejectionCode.BATCH_REJECTION_CODE_REPACK_REQUIRED;
     case -1:
     case "UNRECOGNIZED":
     default:
@@ -419,6 +433,8 @@ export function batchRejectionCodeToJSON(object: BatchRejectionCode): string {
       return "BATCH_REJECTION_CODE_PROTOCOL_VIOLATION";
     case BatchRejectionCode.BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS:
       return "BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS";
+    case BatchRejectionCode.BATCH_REJECTION_CODE_REPACK_REQUIRED:
+      return "BATCH_REJECTION_CODE_REPACK_REQUIRED";
     case BatchRejectionCode.UNRECOGNIZED:
     default:
       return "UNRECOGNIZED";
@@ -660,6 +676,13 @@ export interface CollectRequest {
     | { $case: "batch"; value: EventBatch }
     | { $case: "heartbeat"; value: CollectorHeartbeat }
     | { $case: "goodbye"; value: CollectorGoodbye }
+    | //
+    /**
+     * Exact original batch, including its original identity. The server first
+     * recovers any durable outcome; only a durable REPACK_REQUIRED rejection
+     * authorizes replacing it with new child identities.
+     */
+    { $case: "repackBatch"; value: EventBatch }
     | undefined;
 }
 
@@ -677,6 +700,7 @@ export interface CollectorReady {
   acknowledgmentDurability: AckDurability;
   resumeAfterBatchSequence?: bigint | undefined;
   build: BuildMetadata | undefined;
+  supportsBatchRepacking: boolean;
 }
 
 export interface EventRejection {
@@ -2281,6 +2305,9 @@ export const CollectRequest: MessageFns<CollectRequest> = {
       case "goodbye":
         CollectorGoodbye.encode(message.payload.value, writer.uint32(106).fork()).join();
         break;
+      case "repackBatch":
+        EventBatch.encode(message.payload.value, writer.uint32(114).fork()).join();
+        break;
     }
     return writer;
   },
@@ -2346,6 +2373,14 @@ export const CollectRequest: MessageFns<CollectRequest> = {
             message.payload = { $case: "goodbye", value: CollectorGoodbye.decode(reader, reader.uint32()) };
             continue;
           }
+          case 14: {
+            if (tag !== 114) {
+              break;
+            }
+
+            message.payload = { $case: "repackBatch", value: EventBatch.decode(reader, reader.uint32()) };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -2378,6 +2413,10 @@ export const CollectRequest: MessageFns<CollectRequest> = {
         ? { $case: "heartbeat", value: CollectorHeartbeat.fromJSON(object.heartbeat) }
         : isSet(object.goodbye)
         ? { $case: "goodbye", value: CollectorGoodbye.fromJSON(object.goodbye) }
+        : isSet(object.repackBatch)
+        ? { $case: "repackBatch", value: EventBatch.fromJSON(object.repackBatch) }
+        : isSet(object.repack_batch)
+        ? { $case: "repackBatch", value: EventBatch.fromJSON(object.repack_batch) }
         : undefined,
     };
   },
@@ -2398,6 +2437,8 @@ export const CollectRequest: MessageFns<CollectRequest> = {
       obj.heartbeat = CollectorHeartbeat.toJSON(message.payload.value);
     } else if (message.payload?.$case === "goodbye") {
       obj.goodbye = CollectorGoodbye.toJSON(message.payload.value);
+    } else if (message.payload?.$case === "repackBatch") {
+      obj.repackBatch = EventBatch.toJSON(message.payload.value);
     }
     return obj;
   },
@@ -2436,6 +2477,12 @@ export const CollectRequest: MessageFns<CollectRequest> = {
         }
         break;
       }
+      case "repackBatch": {
+        if (object.payload?.value !== undefined && object.payload?.value !== null) {
+          message.payload = { $case: "repackBatch", value: EventBatch.fromPartial(object.payload.value) };
+        }
+        break;
+      }
     }
     return message;
   },
@@ -2455,6 +2502,7 @@ function createBaseCollectorReady(): CollectorReady {
     acknowledgmentDurability: 0,
     resumeAfterBatchSequence: undefined,
     build: undefined,
+    supportsBatchRepacking: false,
   };
 }
 
@@ -2506,6 +2554,9 @@ export const CollectorReady: MessageFns<CollectorReady> = {
     }
     if (message.build !== undefined) {
       BuildMetadata.encode(message.build, writer.uint32(122).fork()).join();
+    }
+    if (message.supportsBatchRepacking !== false) {
+      writer.uint32(128).bool(message.supportsBatchRepacking);
     }
     return writer;
   },
@@ -2619,6 +2670,14 @@ export const CollectorReady: MessageFns<CollectorReady> = {
             message.build = BuildMetadata.decode(reader, reader.uint32());
             continue;
           }
+          case 16: {
+            if (tag !== 128) {
+              break;
+            }
+
+            message.supportsBatchRepacking = reader.bool();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -2689,6 +2748,11 @@ export const CollectorReady: MessageFns<CollectorReady> = {
         ? BigInt(object.resume_after_batch_sequence)
         : undefined,
       build: isSet(object.build) ? BuildMetadata.fromJSON(object.build) : undefined,
+      supportsBatchRepacking: isSet(object.supportsBatchRepacking)
+        ? globalThis.Boolean(object.supportsBatchRepacking)
+        : isSet(object.supports_batch_repacking)
+        ? globalThis.Boolean(object.supports_batch_repacking)
+        : false,
     };
   },
 
@@ -2730,6 +2794,9 @@ export const CollectorReady: MessageFns<CollectorReady> = {
     if (message.build !== undefined) {
       obj.build = BuildMetadata.toJSON(message.build);
     }
+    if (message.supportsBatchRepacking !== false) {
+      obj.supportsBatchRepacking = message.supportsBatchRepacking;
+    }
     return obj;
   },
 
@@ -2761,6 +2828,7 @@ export const CollectorReady: MessageFns<CollectorReady> = {
     message.build = (object.build !== undefined && object.build !== null)
       ? BuildMetadata.fromPartial(object.build)
       : undefined;
+    message.supportsBatchRepacking = object.supportsBatchRepacking ?? false;
     return message;
   },
 };

@@ -609,7 +609,15 @@ func (s *Store) stageAdmitted(ctx context.Context, batch ingest.StoreBatch) (ing
 		s.noteStagedLogicalBatch(reservation.StoredRowCount)
 	}
 	if err := s.releaseAttempt(reservation.Sequence, attemptID, nil); err != nil {
-		return ingest.StageResult{}, err
+		// Reserve already committed the complete request and acknowledgment.
+		// Cleanup failure cannot turn that acceptance into a retryable HTTP
+		// rejection: the outbox will still deliver it. Release deactivates the
+		// process lease even on failure, so reconciliation can reclaim ownership.
+		s.lifecycleMu.Lock()
+		s.reconcileErr = err
+		s.lifecycleMu.Unlock()
+		s.reconciliationRetries.Add(1)
+		s.wakeReconciler()
 	}
 	return ingest.StageResult{
 		VisibilitySequence:  reservation.Sequence,

@@ -133,7 +133,7 @@ func TestCheckpointStoreRoundTripAndDeterministicOrder(t *testing.T) {
 	}
 }
 
-func TestCheckpointStoreAcceptsOnlyCurrentFormatVersion(t *testing.T) {
+func TestCheckpointStoreAcceptsSupportedFormatVersions(t *testing.T) {
 	t.Parallel()
 	identity := canonicalIdentityForTest(1, 2, 1, "ab", 64)
 
@@ -145,6 +145,9 @@ func TestCheckpointStoreAcceptsOnlyCurrentFormatVersion(t *testing.T) {
 				InputID: "input-a", Identity: identity, Path: "/logs/app.log", Offset: 10,
 			}},
 		})
+		if err := os.WriteFile(filepath.Join(dir, checkpointJournalName), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
 		store, err := NewCheckpointStore(dir)
 		if err != nil {
 			t.Fatalf("NewCheckpointStore: %v", err)
@@ -156,7 +159,7 @@ func TestCheckpointStoreAcceptsOnlyCurrentFormatVersion(t *testing.T) {
 		dir := t.TempDir()
 		writeCheckpointDocument(t, dir, checkpointDoc{Version: checkpointFormatVersion + 1})
 		_, err := NewCheckpointStore(dir)
-		if err == nil || !strings.Contains(err.Error(), "unsupported version 2") ||
+		if err == nil || !strings.Contains(err.Error(), "unsupported version 3") ||
 			!strings.Contains(err.Error(), "fresh collector state") {
 			t.Fatalf("NewCheckpointStore error = %v, want explicit fresh-state rejection", err)
 		}
@@ -259,7 +262,7 @@ func TestCheckpointStoreSetManyRejectsHostileBatchAtomically(t *testing.T) {
 			}
 
 			persistCalls := 0
-			store.persistSnapshot = func([]Checkpoint) error {
+			store.persistUpdates = func([]Checkpoint) error {
 				persistCalls++
 				return nil
 			}

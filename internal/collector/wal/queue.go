@@ -41,6 +41,7 @@ const quarantineStorageRefreshInterval = time.Second
 // batchDesc locates one unacked batch record on disk and caches the cheap
 // bookkeeping the queue needs without holding the marshaled batch in memory.
 type batchDesc struct {
+	repacked    *repackChild
 	seq         uint64
 	segName     string
 	payloadOff  int64
@@ -87,10 +88,11 @@ type queue struct {
 	opts Options
 	dir  string
 
-	mu        sync.Mutex
-	closed    bool
-	nextSeq   uint64
-	lastAcked uint64
+	mu            sync.Mutex
+	closed        bool
+	nextSeq       uint64
+	reservedUntil uint64
+	lastAcked     uint64
 
 	unacked []batchDesc
 	// unackedHeadWaste counts descriptors cleared from the front since the
@@ -107,6 +109,7 @@ type queue struct {
 	// by the persisted cumulative high-water mark. It is intentionally volatile:
 	// losing it on crash only causes safe at-least-once replay.
 	terminal map[uint64]struct{}
+	repacks  map[uint64]repackPlan
 
 	segments        []*segInfo
 	activeSeg       *segInfo
@@ -189,8 +192,23 @@ func openQueue(opts Options) (*queue, error) {
 	}
 	q.nextSeq = m.NextBatchSequence
 	q.lastAcked = m.LastAckedBatchSequence
+	for _, ref := range m.PendingRepacks {
+		if ref.Through <= q.lastAcked {
+			continue
+		}
+		plan, err := readRepackPlan(filepath.Join(q.dir, repackFileName(ref.Parent)))
+		if err != nil {
+			return nil, fmt.Errorf("collector/wal: required repack manifest: %w", err)
+		}
+		if plan.Children[len(plan.Children)-1].Sequence != ref.Through {
+			return nil, errors.New("collector/wal: repack inventory disagrees with manifest")
+		}
+	}
 
 	if err := q.recover(); err != nil {
+		return nil, err
+	}
+	if err := q.recoverRepacks(); err != nil {
 		return nil, err
 	}
 	if err := q.refreshStorageStatsLocked(); err != nil {
@@ -684,10 +702,10 @@ func (q *queue) Append(events []*opensplunk.LogEvent) (*opensplunk.EventBatch, e
 		return nil, err
 	}
 
-	// Durably advance the sequence counter BEFORE writing the record so a crash
-	// here burns the sequence (a gap) rather than ever reusing it.
+	// Reserve sequences BEFORE publishing records. Each reservation is durable;
+	// unused identities are burned on restart rather than reused.
 	q.nextSeq = seq + 1
-	if err := q.persistMetaLocked(); err != nil {
+	if err := q.reserveSequencesLocked(); err != nil {
 		// Do not roll the counter back. A failure after rename but during the
 		// directory fsync is ambiguous: the new meta may already be visible or even
 		// durable. Burning this sequence in memory is always safe; reusing it on a
@@ -897,6 +915,10 @@ func (q *queue) NextBatch(ctx context.Context) (*opensplunk.EventBatch, error) {
 		if q.deliverIdx < len(q.unacked) {
 			d := q.unacked[q.deliverIdx]
 			q.deliverIdx++
+			if _, parent := q.repacks[d.seq]; parent {
+				q.mu.Unlock()
+				continue
+			}
 			q.mu.Unlock()
 			return q.readBatch(d)
 		}
@@ -916,7 +938,11 @@ func (q *queue) NextBatch(ctx context.Context) (*opensplunk.EventBatch, error) {
 // segment cannot be reclaimed while the batch is unacked, so the read is safe
 // without holding the queue lock.
 func (q *queue) readBatch(d batchDesc) (*opensplunk.EventBatch, error) {
-	return readRecordPayload(filepath.Join(q.dir, d.segName), d.payloadOff, d.payloadLen, d.crc)
+	batch, err := readRecordPayload(filepath.Join(q.dir, d.segName), d.payloadOff, d.payloadLen, d.crc)
+	if err != nil || d.repacked == nil {
+		return batch, err
+	}
+	return repackBatch(batch, *d.repacked), nil
 }
 
 // Ack implements Queue.Ack. It records one exact terminal disposition. A later
@@ -934,7 +960,13 @@ func (q *queue) Ack(batchSequence uint64) error {
 	if !q.hasSequenceLocked(batchSequence) {
 		return fmt.Errorf("%w: sequence %d is not queued", ErrInvalidAck, batchSequence)
 	}
+	if _, parent := q.repacks[batchSequence]; parent {
+		return fmt.Errorf("%w: repacked parent requires child outcomes", ErrInvalidAck)
+	}
 	q.terminal[batchSequence] = struct{}{}
+	for parent := range q.repackTerminalParents(batchSequence, false) {
+		q.terminal[parent] = struct{}{}
+	}
 	return q.advanceTerminalLocked()
 }
 
@@ -964,11 +996,20 @@ func (q *queue) AckThrough(batchSequence uint64) error {
 	if !q.hasSequenceLocked(batchSequence) {
 		return fmt.Errorf("%w: cumulative sequence %d is not queued", ErrInvalidAck, batchSequence)
 	}
+	if _, parent := q.repacks[batchSequence]; parent {
+		return fmt.Errorf("%w: repacked parent requires child outcomes", ErrInvalidAck)
+	}
 	for _, d := range q.unacked {
 		if d.seq > batchSequence {
 			break
 		}
+		if _, parent := q.repacks[d.seq]; parent {
+			continue
+		}
 		q.terminal[d.seq] = struct{}{}
+	}
+	for parent := range q.repackTerminalParents(batchSequence, true) {
+		q.terminal[parent] = struct{}{}
 	}
 	return q.advanceTerminalLocked()
 }
@@ -1002,7 +1043,11 @@ func (q *queue) prepareAckPlanLocked(batchSequence uint64, cumulative bool) (ack
 		return ackPlan{}, fmt.Errorf("%w: %s %d is not queued", ErrInvalidAck, kind, batchSequence)
 	}
 
+	if _, parent := q.repacks[batchSequence]; parent {
+		return ackPlan{}, fmt.Errorf("%w: repacked parent requires child outcomes", ErrInvalidAck)
+	}
 	var plan ackPlan
+	completedParents := q.repackTerminalParents(batchSequence, cumulative)
 	prefixLength := 0
 	markGroupCount := 0
 	for descriptorIndex, d := range q.unacked {
@@ -1010,6 +1055,9 @@ func (q *queue) prepareAckPlanLocked(batchSequence uint64, cumulative bool) (ack
 		hypotheticallyTerminal := alreadyTerminal || d.seq == batchSequence
 		if cumulative && d.seq <= batchSequence {
 			hypotheticallyTerminal = true
+		}
+		if _, parent := q.repacks[d.seq]; parent {
+			_, hypotheticallyTerminal = completedParents[d.seq]
 		}
 		if !hypotheticallyTerminal {
 			break
@@ -1401,7 +1449,7 @@ func (q *queue) reclaimLocked() error {
 			return errors.Join(removeErr, fmt.Errorf("collector/wal: fsync dir after reclaim: %w", err))
 		}
 	}
-	return removeErr
+	return errors.Join(removeErr, q.reclaimRepackPlans())
 }
 
 func segmentPhysicalBytes(segments []*segInfo) uint64 {
@@ -1428,11 +1476,17 @@ func (q *queue) Stats() Stats {
 		}
 	}
 	lastSyncError := ""
+	queuedBatches := uint64(len(q.unacked))
+	for parent := range q.repacks {
+		if parent > q.lastAcked {
+			queuedBatches--
+		}
+	}
 	if q.syncErr != nil {
 		lastSyncError = q.syncErr.Error()
 	}
 	return Stats{
-		QueuedBatches:          uint64(len(q.unacked)),
+		QueuedBatches:          queuedBatches,
 		QueuedEvents:           q.queuedEvents,
 		QueuedBytes:            q.liveBytes,
 		OldestEventAge:         oldest,
@@ -1494,9 +1548,26 @@ func (q *queue) persistMetaLocked() error {
 	}
 	return persist(q.dir, walMeta{
 		FormatVersion:          currentFormatVersion,
-		NextBatchSequence:      q.nextSeq,
+		NextBatchSequence:      max(q.nextSeq, q.reservedUntil),
 		LastAckedBatchSequence: q.lastAcked,
+		PendingRepacks:         q.repackReferences(),
 	})
+}
+
+func (q *queue) reserveSequencesLocked() error {
+	if q.nextSeq <= q.reservedUntil {
+		return nil
+	}
+	size := max(uint64(1), q.opts.SequenceReservationSize)
+	reserved := q.nextSeq + min(size-1, math.MaxUint64-q.nextSeq)
+	previous := q.reservedUntil
+	q.reservedUntil = reserved
+	if err := q.persistMetaLocked(); err != nil {
+		// Retry must persist the reservation again: a failed sync is ambiguous.
+		q.reservedUntil = previous
+		return err
+	}
+	return nil
 }
 
 // sealActiveAfterSequenceBurnLocked preserves the invariant that every live

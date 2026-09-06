@@ -68,6 +68,10 @@ type Options struct {
 	Sync SyncPolicy
 	// SyncInterval is used when Sync == SyncInterval.
 	SyncInterval time.Duration
+	// SequenceReservationSize amortizes durable sequence allocation across this
+	// many appends. Zero uses one. Unused reservations are skipped on restart;
+	// batch identities are never reused and every SyncAlways record still syncs.
+	SequenceReservationSize uint64
 
 	// CollectorID is stamped onto every sealed EventBatch so the sender
 	// transmits it without further mutation.

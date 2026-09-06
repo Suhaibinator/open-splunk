@@ -33,6 +33,7 @@ const (
 	CollectorCapability_COLLECTOR_CAPABILITY_GZIP                    CollectorCapability = 4
 	CollectorCapability_COLLECTOR_CAPABILITY_MULTILINE               CollectorCapability = 5
 	CollectorCapability_COLLECTOR_CAPABILITY_TYPED_FIELDS            CollectorCapability = 6
+	CollectorCapability_COLLECTOR_CAPABILITY_LOSSLESS_REPACKING      CollectorCapability = 7
 )
 
 // Enum value maps for CollectorCapability.
@@ -45,6 +46,7 @@ var (
 		4: "COLLECTOR_CAPABILITY_GZIP",
 		5: "COLLECTOR_CAPABILITY_MULTILINE",
 		6: "COLLECTOR_CAPABILITY_TYPED_FIELDS",
+		7: "COLLECTOR_CAPABILITY_LOSSLESS_REPACKING",
 	}
 	CollectorCapability_value = map[string]int32{
 		"COLLECTOR_CAPABILITY_UNSPECIFIED":             0,
@@ -54,6 +56,7 @@ var (
 		"COLLECTOR_CAPABILITY_GZIP":                    4,
 		"COLLECTOR_CAPABILITY_MULTILINE":               5,
 		"COLLECTOR_CAPABILITY_TYPED_FIELDS":            6,
+		"COLLECTOR_CAPABILITY_LOSSLESS_REPACKING":      7,
 	}
 )
 
@@ -382,6 +385,9 @@ const (
 	BatchRejectionCode_BATCH_REJECTION_CODE_COLLECTOR_ID_MISMATCH    BatchRejectionCode = 6
 	BatchRejectionCode_BATCH_REJECTION_CODE_PROTOCOL_VIOLATION       BatchRejectionCode = 7
 	BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS     BatchRejectionCode = 8
+	// The original identity is durably fenced against ingestion. Retain its
+	// source checkpoint barrier until every losslessly repacked child is terminal.
+	BatchRejectionCode_BATCH_REJECTION_CODE_REPACK_REQUIRED BatchRejectionCode = 9
 )
 
 // Enum value maps for BatchRejectionCode.
@@ -396,6 +402,7 @@ var (
 		6: "BATCH_REJECTION_CODE_COLLECTOR_ID_MISMATCH",
 		7: "BATCH_REJECTION_CODE_PROTOCOL_VIOLATION",
 		8: "BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS",
+		9: "BATCH_REJECTION_CODE_REPACK_REQUIRED",
 	}
 	BatchRejectionCode_value = map[string]int32{
 		"BATCH_REJECTION_CODE_UNSPECIFIED":              0,
@@ -407,6 +414,7 @@ var (
 		"BATCH_REJECTION_CODE_COLLECTOR_ID_MISMATCH":    6,
 		"BATCH_REJECTION_CODE_PROTOCOL_VIOLATION":       7,
 		"BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS":     8,
+		"BATCH_REJECTION_CODE_REPACK_REQUIRED":          9,
 	}
 )
 
@@ -1266,6 +1274,7 @@ type CollectRequest struct {
 	//	*CollectRequest_Batch
 	//	*CollectRequest_Heartbeat
 	//	*CollectRequest_Goodbye
+	//	*CollectRequest_RepackBatch
 	Payload       isCollectRequest_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1358,6 +1367,15 @@ func (x *CollectRequest) GetGoodbye() *CollectorGoodbye {
 	return nil
 }
 
+func (x *CollectRequest) GetRepackBatch() *EventBatch {
+	if x != nil {
+		if x, ok := x.Payload.(*CollectRequest_RepackBatch); ok {
+			return x.RepackBatch
+		}
+	}
+	return nil
+}
+
 type isCollectRequest_Payload interface {
 	isCollectRequest_Payload()
 }
@@ -1378,6 +1396,13 @@ type CollectRequest_Goodbye struct {
 	Goodbye *CollectorGoodbye `protobuf:"bytes,13,opt,name=goodbye,proto3,oneof"`
 }
 
+type CollectRequest_RepackBatch struct {
+	// Exact original batch, including its original identity. The server first
+	// recovers any durable outcome; only a durable REPACK_REQUIRED rejection
+	// authorizes replacing it with new child identities.
+	RepackBatch *EventBatch `protobuf:"bytes,14,opt,name=repack_batch,json=repackBatch,proto3,oneof"`
+}
+
 func (*CollectRequest_Hello) isCollectRequest_Payload() {}
 
 func (*CollectRequest_Batch) isCollectRequest_Payload() {}
@@ -1385,6 +1410,8 @@ func (*CollectRequest_Batch) isCollectRequest_Payload() {}
 func (*CollectRequest_Heartbeat) isCollectRequest_Payload() {}
 
 func (*CollectRequest_Goodbye) isCollectRequest_Payload() {}
+
+func (*CollectRequest_RepackBatch) isCollectRequest_Payload() {}
 
 // CollectorReady completes stream negotiation and declares hard server limits.
 type CollectorReady struct {
@@ -1401,6 +1428,7 @@ type CollectorReady struct {
 	AcknowledgmentDurability AckDurability          `protobuf:"varint,13,opt,name=acknowledgment_durability,json=acknowledgmentDurability,proto3,enum=open_splunk.AckDurability" json:"acknowledgment_durability,omitempty"`
 	ResumeAfterBatchSequence *uint64                `protobuf:"varint,14,opt,name=resume_after_batch_sequence,json=resumeAfterBatchSequence,proto3,oneof" json:"resume_after_batch_sequence,omitempty"`
 	Build                    *BuildMetadata         `protobuf:"bytes,15,opt,name=build,proto3" json:"build,omitempty"`
+	SupportsBatchRepacking   bool                   `protobuf:"varint,16,opt,name=supports_batch_repacking,json=supportsBatchRepacking,proto3" json:"supports_batch_repacking,omitempty"`
 	unknownFields            protoimpl.UnknownFields
 	sizeCache                protoimpl.SizeCache
 }
@@ -1517,6 +1545,13 @@ func (x *CollectorReady) GetBuild() *BuildMetadata {
 		return x.Build
 	}
 	return nil
+}
+
+func (x *CollectorReady) GetSupportsBatchRepacking() bool {
+	if x != nil {
+		return x.SupportsBatchRepacking
+	}
+	return false
 }
 
 type EventRejection struct {
@@ -2259,7 +2294,7 @@ const file_open_splunk_collector_proto_rawDesc = "" +
 	"\x06reason\x18\x01 \x01(\x0e2#.open_splunk.CollectorGoodbyeReasonR\x06reason\x12\x1d\n" +
 	"\amessage\x18\x02 \x01(\tH\x00R\amessage\x88\x01\x01B\n" +
 	"\n" +
-	"\b_message\"\xdb\x02\n" +
+	"\b_message\"\x99\x03\n" +
 	"\x0eCollectRequest\x12'\n" +
 	"\x0fstream_sequence\x18\x01 \x01(\x04R\x0estreamSequence\x123\n" +
 	"\asent_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x06sentAt\x123\n" +
@@ -2267,8 +2302,9 @@ const file_open_splunk_collector_proto_rawDesc = "" +
 	" \x01(\v2\x1b.open_splunk.CollectorHelloH\x00R\x05hello\x12/\n" +
 	"\x05batch\x18\v \x01(\v2\x17.open_splunk.EventBatchH\x00R\x05batch\x12?\n" +
 	"\theartbeat\x18\f \x01(\v2\x1f.open_splunk.CollectorHeartbeatH\x00R\theartbeat\x129\n" +
-	"\agoodbye\x18\r \x01(\v2\x1d.open_splunk.CollectorGoodbyeH\x00R\agoodbyeB\t\n" +
-	"\apayload\"\xef\x05\n" +
+	"\agoodbye\x18\r \x01(\v2\x1d.open_splunk.CollectorGoodbyeH\x00R\agoodbye\x12<\n" +
+	"\frepack_batch\x18\x0e \x01(\v2\x17.open_splunk.EventBatchH\x00R\vrepackBatchB\t\n" +
+	"\apayload\"\xa9\x06\n" +
 	"\x0eCollectorReady\x12\x1b\n" +
 	"\tstream_id\x18\x01 \x01(\tR\bstreamId\x12,\n" +
 	"\x12server_instance_id\x18\x02 \x01(\tR\x10serverInstanceId\x12;\n" +
@@ -2283,7 +2319,8 @@ const file_open_splunk_collector_proto_rawDesc = "" +
 	"\x12authorized_indexes\x18\f \x03(\tR\x11authorizedIndexes\x12W\n" +
 	"\x19acknowledgment_durability\x18\r \x01(\x0e2\x1a.open_splunk.AckDurabilityR\x18acknowledgmentDurability\x12B\n" +
 	"\x1bresume_after_batch_sequence\x18\x0e \x01(\x04H\x00R\x18resumeAfterBatchSequence\x88\x01\x01\x120\n" +
-	"\x05build\x18\x0f \x01(\v2\x1a.open_splunk.BuildMetadataR\x05buildB\x1e\n" +
+	"\x05build\x18\x0f \x01(\v2\x1a.open_splunk.BuildMetadataR\x05build\x128\n" +
+	"\x18supports_batch_repacking\x18\x10 \x01(\bR\x16supportsBatchRepackingB\x1e\n" +
 	"\x1c_resume_after_batch_sequenceJ\x04\b\x03\x10\x04J\x04\b\x04\x10\x05J\x04\b\x05\x10\x06R\x0eserver_versionR\x0eprotocol_majorR\x0eprotocol_minor\"\xd8\x01\n" +
 	"\x0eEventRejection\x12\x1f\n" +
 	"\vevent_index\x18\x01 \x01(\rR\n" +
@@ -2351,7 +2388,7 @@ const file_open_splunk_collector_proto_rawDesc = "" +
 	"retryBatch\x123\n" +
 	"\bthrottle\x18\x0e \x01(\v2\x15.open_splunk.ThrottleH\x00R\bthrottle\x123\n" +
 	"\x06notice\x18\x0f \x01(\v2\x19.open_splunk.ServerNoticeH\x00R\x06noticeB\t\n" +
-	"\apayload*\xa4\x02\n" +
+	"\apayload*\xd1\x02\n" +
 	"\x13CollectorCapability\x12$\n" +
 	" COLLECTOR_CAPABILITY_UNSPECIFIED\x10\x00\x12#\n" +
 	"\x1fCOLLECTOR_CAPABILITY_FILE_INPUT\x10\x01\x12&\n" +
@@ -2359,7 +2396,8 @@ const file_open_splunk_collector_proto_rawDesc = "" +
 	",COLLECTOR_CAPABILITY_PARTIAL_EVENT_REJECTION\x10\x03\x12\x1d\n" +
 	"\x19COLLECTOR_CAPABILITY_GZIP\x10\x04\x12\"\n" +
 	"\x1eCOLLECTOR_CAPABILITY_MULTILINE\x10\x05\x12%\n" +
-	"!COLLECTOR_CAPABILITY_TYPED_FIELDS\x10\x06*Y\n" +
+	"!COLLECTOR_CAPABILITY_TYPED_FIELDS\x10\x06\x12+\n" +
+	"'COLLECTOR_CAPABILITY_LOSSLESS_REPACKING\x10\a*Y\n" +
 	"\x12CollectorInputType\x12$\n" +
 	" COLLECTOR_INPUT_TYPE_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19COLLECTOR_INPUT_TYPE_FILE\x10\x01*\x8f\x02\n" +
@@ -2393,7 +2431,7 @@ const file_open_splunk_collector_proto_rawDesc = "" +
 	"%EVENT_REJECTION_CODE_REDACTION_POLICY\x10\n" +
 	"\x12*\n" +
 	"&EVENT_REJECTION_CODE_UNAUTHORIZED_HOST\x10\v\x12,\n" +
-	"(EVENT_REJECTION_CODE_UNAUTHORIZED_SOURCE\x10\f*\xa4\x03\n" +
+	"(EVENT_REJECTION_CODE_UNAUTHORIZED_SOURCE\x10\f*\xce\x03\n" +
 	"\x12BatchRejectionCode\x12$\n" +
 	" BATCH_REJECTION_CODE_UNSPECIFIED\x10\x00\x12)\n" +
 	"%BATCH_REJECTION_CODE_INVALID_BATCH_ID\x10\x01\x12*\n" +
@@ -2403,7 +2441,8 @@ const file_open_splunk_collector_proto_rawDesc = "" +
 	"-BATCH_REJECTION_CODE_EVENT_ID_DIGEST_MISMATCH\x10\x05\x12.\n" +
 	"*BATCH_REJECTION_CODE_COLLECTOR_ID_MISMATCH\x10\x06\x12+\n" +
 	"'BATCH_REJECTION_CODE_PROTOCOL_VIOLATION\x10\a\x12-\n" +
-	")BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS\x10\b*\xd1\x01\n" +
+	")BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS\x10\b\x12(\n" +
+	"$BATCH_REJECTION_CODE_REPACK_REQUIRED\x10\t*\xd1\x01\n" +
 	"\x10RetryBatchReason\x12\"\n" +
 	"\x1eRETRY_BATCH_REASON_UNSPECIFIED\x10\x00\x12\"\n" +
 	"\x1eRETRY_BATCH_REASON_SERVER_BUSY\x10\x01\x12*\n" +
@@ -2491,38 +2530,39 @@ var file_open_splunk_collector_proto_depIdxs = []int32{
 	12, // 16: open_splunk.CollectRequest.batch:type_name -> open_splunk.EventBatch
 	15, // 17: open_splunk.CollectRequest.heartbeat:type_name -> open_splunk.CollectorHeartbeat
 	16, // 18: open_splunk.CollectRequest.goodbye:type_name -> open_splunk.CollectorGoodbye
-	26, // 19: open_splunk.CollectorReady.server_time:type_name -> google.protobuf.Timestamp
-	28, // 20: open_splunk.CollectorReady.heartbeat_interval:type_name -> google.protobuf.Duration
-	4,  // 21: open_splunk.CollectorReady.acknowledgment_durability:type_name -> open_splunk.AckDurability
-	29, // 22: open_splunk.CollectorReady.build:type_name -> open_splunk.BuildMetadata
-	5,  // 23: open_splunk.EventRejection.code:type_name -> open_splunk.EventRejectionCode
-	30, // 24: open_splunk.EventRejection.violations:type_name -> open_splunk.FieldViolation
-	4,  // 25: open_splunk.BatchAck.durability:type_name -> open_splunk.AckDurability
-	19, // 26: open_splunk.BatchAck.rejected_events:type_name -> open_splunk.EventRejection
-	26, // 27: open_splunk.BatchAck.committed_at:type_name -> google.protobuf.Timestamp
-	6,  // 28: open_splunk.BatchReject.code:type_name -> open_splunk.BatchRejectionCode
-	30, // 29: open_splunk.BatchReject.violations:type_name -> open_splunk.FieldViolation
-	7,  // 30: open_splunk.RetryBatch.reason:type_name -> open_splunk.RetryBatchReason
-	28, // 31: open_splunk.RetryBatch.retry_after:type_name -> google.protobuf.Duration
-	8,  // 32: open_splunk.Throttle.reason:type_name -> open_splunk.ThrottleReason
-	28, // 33: open_splunk.Throttle.minimum_send_delay:type_name -> google.protobuf.Duration
-	26, // 34: open_splunk.Throttle.effective_until:type_name -> google.protobuf.Timestamp
-	9,  // 35: open_splunk.ServerNotice.type:type_name -> open_splunk.ServerNoticeType
-	28, // 36: open_splunk.ServerNotice.reconnect_after:type_name -> google.protobuf.Duration
-	26, // 37: open_splunk.CollectResponse.sent_at:type_name -> google.protobuf.Timestamp
-	18, // 38: open_splunk.CollectResponse.ready:type_name -> open_splunk.CollectorReady
-	20, // 39: open_splunk.CollectResponse.batch_ack:type_name -> open_splunk.BatchAck
-	21, // 40: open_splunk.CollectResponse.batch_reject:type_name -> open_splunk.BatchReject
-	22, // 41: open_splunk.CollectResponse.retry_batch:type_name -> open_splunk.RetryBatch
-	23, // 42: open_splunk.CollectResponse.throttle:type_name -> open_splunk.Throttle
-	24, // 43: open_splunk.CollectResponse.notice:type_name -> open_splunk.ServerNotice
-	17, // 44: open_splunk.CollectorIngestService.Collect:input_type -> open_splunk.CollectRequest
-	25, // 45: open_splunk.CollectorIngestService.Collect:output_type -> open_splunk.CollectResponse
-	45, // [45:46] is the sub-list for method output_type
-	44, // [44:45] is the sub-list for method input_type
-	44, // [44:44] is the sub-list for extension type_name
-	44, // [44:44] is the sub-list for extension extendee
-	0,  // [0:44] is the sub-list for field type_name
+	12, // 19: open_splunk.CollectRequest.repack_batch:type_name -> open_splunk.EventBatch
+	26, // 20: open_splunk.CollectorReady.server_time:type_name -> google.protobuf.Timestamp
+	28, // 21: open_splunk.CollectorReady.heartbeat_interval:type_name -> google.protobuf.Duration
+	4,  // 22: open_splunk.CollectorReady.acknowledgment_durability:type_name -> open_splunk.AckDurability
+	29, // 23: open_splunk.CollectorReady.build:type_name -> open_splunk.BuildMetadata
+	5,  // 24: open_splunk.EventRejection.code:type_name -> open_splunk.EventRejectionCode
+	30, // 25: open_splunk.EventRejection.violations:type_name -> open_splunk.FieldViolation
+	4,  // 26: open_splunk.BatchAck.durability:type_name -> open_splunk.AckDurability
+	19, // 27: open_splunk.BatchAck.rejected_events:type_name -> open_splunk.EventRejection
+	26, // 28: open_splunk.BatchAck.committed_at:type_name -> google.protobuf.Timestamp
+	6,  // 29: open_splunk.BatchReject.code:type_name -> open_splunk.BatchRejectionCode
+	30, // 30: open_splunk.BatchReject.violations:type_name -> open_splunk.FieldViolation
+	7,  // 31: open_splunk.RetryBatch.reason:type_name -> open_splunk.RetryBatchReason
+	28, // 32: open_splunk.RetryBatch.retry_after:type_name -> google.protobuf.Duration
+	8,  // 33: open_splunk.Throttle.reason:type_name -> open_splunk.ThrottleReason
+	28, // 34: open_splunk.Throttle.minimum_send_delay:type_name -> google.protobuf.Duration
+	26, // 35: open_splunk.Throttle.effective_until:type_name -> google.protobuf.Timestamp
+	9,  // 36: open_splunk.ServerNotice.type:type_name -> open_splunk.ServerNoticeType
+	28, // 37: open_splunk.ServerNotice.reconnect_after:type_name -> google.protobuf.Duration
+	26, // 38: open_splunk.CollectResponse.sent_at:type_name -> google.protobuf.Timestamp
+	18, // 39: open_splunk.CollectResponse.ready:type_name -> open_splunk.CollectorReady
+	20, // 40: open_splunk.CollectResponse.batch_ack:type_name -> open_splunk.BatchAck
+	21, // 41: open_splunk.CollectResponse.batch_reject:type_name -> open_splunk.BatchReject
+	22, // 42: open_splunk.CollectResponse.retry_batch:type_name -> open_splunk.RetryBatch
+	23, // 43: open_splunk.CollectResponse.throttle:type_name -> open_splunk.Throttle
+	24, // 44: open_splunk.CollectResponse.notice:type_name -> open_splunk.ServerNotice
+	17, // 45: open_splunk.CollectorIngestService.Collect:input_type -> open_splunk.CollectRequest
+	25, // 46: open_splunk.CollectorIngestService.Collect:output_type -> open_splunk.CollectResponse
+	46, // [46:47] is the sub-list for method output_type
+	45, // [45:46] is the sub-list for method input_type
+	45, // [45:45] is the sub-list for extension type_name
+	45, // [45:45] is the sub-list for extension extendee
+	0,  // [0:45] is the sub-list for field type_name
 }
 
 func init() { file_open_splunk_collector_proto_init() }
@@ -2542,6 +2582,7 @@ func file_open_splunk_collector_proto_init() {
 		(*CollectRequest_Batch)(nil),
 		(*CollectRequest_Heartbeat)(nil),
 		(*CollectRequest_Goodbye)(nil),
+		(*CollectRequest_RepackBatch)(nil),
 	}
 	file_open_splunk_collector_proto_msgTypes[8].OneofWrappers = []any{}
 	file_open_splunk_collector_proto_msgTypes[10].OneofWrappers = []any{}

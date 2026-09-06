@@ -612,9 +612,9 @@ func TestTailerEmptyFingerprintTransitionRetriesCheckpointFailure(t *testing.T) 
 	t.Parallel()
 	tracked, store, emptyIdentity := newEmptyFingerprintTransitionTailer(t)
 	injected := errors.New("injected checkpoint failure")
-	originalPersist := store.persistSnapshot
+	originalPersist := store.persistUpdates
 	persistAttempts := 0
-	store.persistSnapshot = func(checkpoints []Checkpoint) error {
+	store.persistUpdates = func(checkpoints []Checkpoint) error {
 		persistAttempts++
 		if persistAttempts == 1 {
 			return injected
@@ -898,9 +898,9 @@ func TestManagerBatchesLegacyCheckpointCursorUpgrades(t *testing.T) {
 		t.Fatalf("seed legacy checkpoints: %v", err)
 	}
 
-	originalPersist := store.persistSnapshot
+	originalPersist := store.persistUpdates
 	var writes atomic.Uint64
-	store.persistSnapshot = func(checkpoints []Checkpoint) error {
+	store.persistUpdates = func(checkpoints []Checkpoint) error {
 		writes.Add(1)
 		return originalPersist(checkpoints)
 	}
@@ -2394,8 +2394,8 @@ func TestTailerStagedReadWindowEvolution(t *testing.T) {
 		cursor: tailerCursor{offset: 28 << 10},
 	}
 	tracked.tuneProductiveStagedReadWindow(lowUtilization)
-	if got := tracked.currentStagedReadWindow(); got != initialStagedReadBytes {
-		t.Fatalf("low-utilization window = %d, want %d", got, initialStagedReadBytes)
+	if got := tracked.currentStagedReadWindow(); got != 16<<10 {
+		t.Fatalf("low-utilization window = %d, want %d", got, 16<<10)
 	}
 
 	tracked.stagedWindow = 32 << 10
@@ -2405,8 +2405,21 @@ func TestTailerStagedReadWindowEvolution(t *testing.T) {
 		eventLimit: true,
 	}
 	tracked.tuneProductiveStagedReadWindow(eventLimited)
+	if got := tracked.currentStagedReadWindow(); got != 16<<10 {
+		t.Fatalf("event-limited window = %d, want %d", got, 16<<10)
+	}
+	for range 8 {
+		tracked.tuneProductiveStagedReadWindow(eventLimited)
+	}
 	if got := tracked.currentStagedReadWindow(); got != initialStagedReadBytes {
-		t.Fatalf("event-limited window = %d, want %d", got, initialStagedReadBytes)
+		t.Fatalf("window shrank below initial bound: %d", got)
+	}
+	for _, want := range []uint64{8 << 10, 16 << 10, 32 << 10, 64 << 10, 64 << 10} {
+		current := tracked.currentStagedReadWindow()
+		tracked.tuneProductiveStagedReadWindow(&stagedBatch{snapshotEnd: current, observedEnd: 128 << 10, cursor: tailerCursor{offset: current}})
+		if got := tracked.currentStagedReadWindow(); got != want {
+			t.Fatalf("backlogged productive window = %d, want %d", got, want)
+		}
 	}
 }
 

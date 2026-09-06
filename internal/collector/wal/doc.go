@@ -32,6 +32,13 @@
 //	<dir>/segment-<seq20>.wal       append-only records; <seq20> is the zero-padded
 //	                                20-digit batch_sequence of the segment's first batch
 //	<dir>/segment-<seq20>.wal.corrupt  quarantined segment tail after a CRC failure
+//	<dir>/repack-<seq20>.json       checksummed child views over an original record
+//
+// Metadata version 2 inventories required repack manifests. Version 1 is
+// migrated on mutation. Repacking creates stable child identities only after a
+// durable server rejection fences the original; no event payload is copied.
+// The backing segment and source checkpoint barrier remain until all children
+// are terminal, including descendants after repeated repacking.
 //
 // Each record is length-prefixed and checksummed:
 //
