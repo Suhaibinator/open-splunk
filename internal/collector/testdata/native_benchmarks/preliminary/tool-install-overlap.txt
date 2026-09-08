@@ -1,0 +1,26 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeDecoder/docker-json-file         	  996946	      2405 ns/op	  46.58 MB/s	    3048 B/op	      72 allocs/op
+BenchmarkNativeDecoder/docker-json-file         	 1000000	      2298 ns/op	  48.74 MB/s	    3048 B/op	      72 allocs/op
+BenchmarkNativeDecoder/docker-json-file         	 1000000	      2252 ns/op	  49.73 MB/s	    3048 B/op	      72 allocs/op
+BenchmarkNativeDecoder/docker-json-file         	  989217	      2241 ns/op	  49.97 MB/s	    3048 B/op	      72 allocs/op
+BenchmarkNativeDecoder/docker-json-file         	 1000000	      2360 ns/op	  47.46 MB/s	    3048 B/op	      72 allocs/op
+BenchmarkNativeDecoder/docker-json-file         	  955652	      2471 ns/op	  45.33 MB/s	    3048 B/op	      72 allocs/op
+BenchmarkNativeDecoder/docker-json-file         	  948572	      2393 ns/op	  46.80 MB/s	    3048 B/op	      72 allocs/op
+BenchmarkNativeDecoder/docker-json-file         	 1000000	      2247 ns/op	  49.85 MB/s	    3048 B/op	      72 allocs/op
+BenchmarkNativeDecoder/docker-json-file         	 1000000	      2244 ns/op	  49.91 MB/s	    3048 B/op	      72 allocs/op
+BenchmarkNativeDecoder/docker-json-file         	 1000000	      2244 ns/op	  49.90 MB/s	    3048 B/op	      72 allocs/op
+BenchmarkNativeDecoder/nginx-combined           	 1000000	      2100 ns/op	  48.56 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/nginx-combined           	 1000000	      2111 ns/op	  48.32 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/nginx-combined           	 1000000	      2209 ns/op	  46.16 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/nginx-combined           	 1000000	      2259 ns/op	  45.15 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/nginx-combined           	 1000000	      2219 ns/op	  45.96 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/nginx-combined           	 1000000	      2261 ns/op	  45.12 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/nginx-combined           	 1000000	      2234 ns/op	  45.66 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/nginx-combined           	 1000000	      2259 ns/op	  45.16 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/nginx-combined           	 1000000	      2292 ns/op	  44.51 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/nginx-combined           	 1000000	      2240 ns/op	  45.54 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/apache-common            	 1202637	      1981 ns/op	  42.90 MB/s	    2664 B/op	      56 allocs/op
+BenchmarkNativeDecoder/apache-common            	

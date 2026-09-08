@@ -1,0 +1,465 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	  111136	      2068 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/log4j2-pattern         	  115971	      2062 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/log4j2-pattern         	  119157	      2058 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/log4j2-pattern         	  118502	      2060 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/log4j2-pattern         	  114271	      2068 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/log4j2-pattern         	  120140	      2064 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/log4j2-pattern         	  115125	      2082 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/log4j2-pattern         	  115062	      2081 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/log4j2-pattern         	  115537	      2082 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/log4j2-pattern         	  113953	      2085 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/log4j2-pattern         	  113890	      2067 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/log4j2-pattern         	  111303	      2091 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/log4j2-pattern         	  113973	      2073 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/log4j2-pattern         	  111639	      2079 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/log4j2-pattern         	  120624	      2051 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/log4j2-pattern         	  114397	      2067 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/log4j2-pattern         	  115861	      2065 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/log4j2-pattern         	  113493	      2077 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/log4j2-pattern         	  116358	      2083 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/log4j2-pattern         	  116612	      2065 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	  120829	      2068 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	  116115	      2075 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	  115971	      2090 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	  115484	      2092 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	  114223	      2078 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	  115364	      2064 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	  116964	      2070 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	  116386	      2077 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	  118288	      2081 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	  114129	      2088 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	  113834	      2094 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	  115270	      2040 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	  116745	      2037 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	  115446	      2039 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	  116197	      2034 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	  118575	      2049 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	  116314	      2053 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	  116534	      2055 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	  114702	      2060 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	  114868	      2083 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   65088	      3668 ns/op	 294.41 MB/s	    7064 B/op	      50 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   66247	      3694 ns/op	 292.37 MB/s	    7064 B/op	      50 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   63358	      3726 ns/op	 289.82 MB/s	    7064 B/op	      50 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   63306	      3703 ns/op	 291.69 MB/s	    7064 B/op	      50 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   65329	      3658 ns/op	 295.24 MB/s	    7064 B/op	      50 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   64989	      3692 ns/op	 292.55 MB/s	    7064 B/op	      50 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   64932	      3706 ns/op	 291.42 MB/s	    7064 B/op	      50 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   65131	      3749 ns/op	 288.10 MB/s	    7064 B/op	      50 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   64656	      3701 ns/op	 291.78 MB/s	    7064 B/op	      50 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   65714	      3640 ns/op	 296.67 MB/s	    7064 B/op	      50 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   64674	      3728 ns/op	 289.74 MB/s	    7064 B/op	      50 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   64168	      3689 ns/op	 292.76 MB/s	    7064 B/op	      50 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   65012	      3668 ns/op	 294.46 MB/s	    7064 B/op	      50 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   68026	      3700 ns/op	 291.93 MB/s	    7064 B/op	      50 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   66050	      3646 ns/op	 296.18 MB/s	    7064 B/op	      50 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   67071	      3623 ns/op	 298.07 MB/s	    7064 B/op	      50 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   64756	      3668 ns/op	 294.47 MB/s	    7064 B/op	      50 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   66510	      3613 ns/op	 298.91 MB/s	    7064 B/op	      50 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   64639	      3660 ns/op	 295.06 MB/s	    7064 B/op	      50 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   66693	      3655 ns/op	 295.47 MB/s	    7064 B/op	      50 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	   88096	      2702 ns/op	 405.24 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	   90328	      2678 ns/op	 408.89 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	   91047	      2701 ns/op	 405.35 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	   91970	      2687 ns/op	 407.59 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	   90627	      2685 ns/op	 407.81 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	   89883	      2691 ns/op	 406.96 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	   92854	      2681 ns/op	 408.47 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	   91875	      2681 ns/op	 408.41 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	   89946	      2664 ns/op	 411.00 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	   90314	      2665 ns/op	 410.85 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	   91174	      2692 ns/op	 406.78 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	   89906	      2677 ns/op	 409.03 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	   91189	      2696 ns/op	 406.13 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	   88748	      2683 ns/op	 408.09 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	   91624	      2678 ns/op	 408.83 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	   91652	      2641 ns/op	 414.62 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	   88028	      2683 ns/op	 408.11 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	   90955	      2667 ns/op	 410.61 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	   92992	      2661 ns/op	 411.54 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	   91804	      2666 ns/op	 410.72 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	   95265	      2507 ns/op	 425.97 MB/s	    2200 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	   95122	      2520 ns/op	 423.87 MB/s	    2200 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	   95722	      2524 ns/op	 423.19 MB/s	    2200 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	   93805	      2537 ns/op	 420.99 MB/s	    2200 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	   95773	      2503 ns/op	 426.73 MB/s	    2200 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	   97135	      2503 ns/op	 426.61 MB/s	    2200 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	   93772	      2523 ns/op	 423.38 MB/s	    2200 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	   97633	      2519 ns/op	 424.04 MB/s	    2200 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	   96000	      2524 ns/op	 423.09 MB/s	    2200 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	   94746	      2544 ns/op	 419.86 MB/s	    2200 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	   95995	      2542 ns/op	 420.13 MB/s	    2200 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	   94873	      2534 ns/op	 421.40 MB/s	    2200 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	   92253	      2541 ns/op	 420.29 MB/s	    2200 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	   94942	      2551 ns/op	 418.60 MB/s	    2200 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	   92295	      2518 ns/op	 424.17 MB/s	    2200 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	   98420	      2459 ns/op	 434.25 MB/s	    2200 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	   97998	      2455 ns/op	 435.07 MB/s	    2200 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	   99768	      2471 ns/op	 432.25 MB/s	    2200 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	   98320	      2460 ns/op	 434.22 MB/s	    2200 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	   97821	      2451 ns/op	 435.80 MB/s	    2200 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	   94112	      2624 ns/op	 417.37 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	   91051	      2644 ns/op	 414.22 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	   91603	      2643 ns/op	 414.35 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	   92241	      2644 ns/op	 414.08 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	   93182	      2606 ns/op	 420.12 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	   91833	      2612 ns/op	 419.30 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	   92047	      2597 ns/op	 421.72 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	   93624	      2599 ns/op	 421.36 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	   91987	      2651 ns/op	 413.05 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	   93642	      2620 ns/op	 417.95 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	   89179	      2622 ns/op	 417.61 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	   92216	      2583 ns/op	 423.87 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	   93886	      2579 ns/op	 424.58 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	   94003	      2643 ns/op	 414.37 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	   90420	      2665 ns/op	 410.95 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	   90915	      2688 ns/op	 407.31 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	   91260	      2684 ns/op	 407.92 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	   90735	      2707 ns/op	 404.50 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	   93033	      2705 ns/op	 404.77 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	   90722	      2606 ns/op	 420.22 MB/s	    2344 B/op	      25 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  136315	      1748 ns/op	 591.03 MB/s	    2184 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  132636	      1795 ns/op	 575.45 MB/s	    2184 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  133455	      1809 ns/op	 571.11 MB/s	    2184 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  135205	      1760 ns/op	 586.98 MB/s	    2184 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  137682	      1806 ns/op	 571.94 MB/s	    2184 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  133726	      1742 ns/op	 592.88 MB/s	    2184 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  136950	      1741 ns/op	 593.47 MB/s	    2184 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  135602	      1799 ns/op	 574.10 MB/s	    2184 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  137250	      1830 ns/op	 564.63 MB/s	    2184 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  133616	      1819 ns/op	 568.05 MB/s	    2184 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  133566	      1772 ns/op	 582.92 MB/s	    2184 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  136081	      1778 ns/op	 581.03 MB/s	    2184 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  130914	      1802 ns/op	 573.17 MB/s	    2184 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  130356	      1822 ns/op	 567.02 MB/s	    2184 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  136614	      1770 ns/op	 583.70 MB/s	    2184 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  137145	      1757 ns/op	 588.09 MB/s	    2184 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  132253	      1823 ns/op	 566.60 MB/s	    2184 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  135578	      1767 ns/op	 584.44 MB/s	    2184 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  138604	      1752 ns/op	 589.49 MB/s	    2184 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  137463	      1770 ns/op	 583.74 MB/s	    2184 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  142989	      1671 ns/op	 612.67 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  145178	      1663 ns/op	 615.73 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  134653	      1712 ns/op	 598.29 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  141368	      1694 ns/op	 604.42 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  137655	      1712 ns/op	 598.23 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  140307	      1679 ns/op	 609.85 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  148027	      1668 ns/op	 613.99 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  137200	      1689 ns/op	 606.22 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  138494	      1688 ns/op	 606.65 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  143223	      1643 ns/op	 623.10 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  138440	      1673 ns/op	 611.91 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  140162	      1703 ns/op	 601.35 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  136684	      1757 ns/op	 582.69 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  125037	      1829 ns/op	 559.85 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  139075	      1719 ns/op	 595.67 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  140155	      1707 ns/op	 599.82 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  138925	      1721 ns/op	 595.06 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  135543	      1751 ns/op	 584.95 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  131719	      1768 ns/op	 579.12 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  133110	      1728 ns/op	 592.72 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  136125	      1764 ns/op	 580.50 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  132644	      1751 ns/op	 584.74 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  136969	      1715 ns/op	 597.15 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  136478	      1733 ns/op	 590.99 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  134234	      1716 ns/op	 596.66 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  142208	      1706 ns/op	 600.07 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  139998	      1719 ns/op	 595.68 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  138918	      1708 ns/op	 599.44 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  136250	      1766 ns/op	 579.70 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  142392	      1690 ns/op	 605.75 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  141249	      1691 ns/op	 605.39 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  140397	      1696 ns/op	 603.94 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  138300	      1677 ns/op	 610.61 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  137130	      1694 ns/op	 604.37 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  141645	      1721 ns/op	 595.17 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  142770	      1750 ns/op	 585.16 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  134311	      1708 ns/op	 599.68 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  142412	      1738 ns/op	 589.08 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  132464	      1773 ns/op	 577.46 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  135122	      1764 ns/op	 580.55 MB/s	    3072 B/op	      21 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    7029	     31077 ns/op	 529.00 MB/s	   85786 B/op	      54 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    6978	     31788 ns/op	 517.17 MB/s	   85786 B/op	      54 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    7036	     31193 ns/op	 527.04 MB/s	   85786 B/op	      54 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    7574	     30466 ns/op	 539.62 MB/s	   85786 B/op	      54 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    7958	     31594 ns/op	 520.35 MB/s	   85786 B/op	      54 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    7603	     31021 ns/op	 529.96 MB/s	   85786 B/op	      54 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    6864	     31040 ns/op	 529.65 MB/s	   85786 B/op	      54 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    7304	     31480 ns/op	 522.23 MB/s	   85786 B/op	      54 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    7004	     32009 ns/op	 513.60 MB/s	   85786 B/op	      54 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    7428	     31324 ns/op	 524.84 MB/s	   85786 B/op	      54 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    7636	     31003 ns/op	 530.27 MB/s	   85786 B/op	      54 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    6897	     30953 ns/op	 531.13 MB/s	   85786 B/op	      54 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    7358	     31679 ns/op	 518.96 MB/s	   85786 B/op	      54 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    7215	     32728 ns/op	 502.32 MB/s	   85786 B/op	      54 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    7526	     31937 ns/op	 514.76 MB/s	   85786 B/op	      54 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    7428	     30562 ns/op	 537.92 MB/s	   85786 B/op	      54 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    7242	     31454 ns/op	 522.67 MB/s	   85786 B/op	      54 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    6950	     31413 ns/op	 523.35 MB/s	   85786 B/op	      54 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    7324	     30979 ns/op	 530.67 MB/s	   85786 B/op	      54 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    7027	     30629 ns/op	 536.75 MB/s	   85786 B/op	      54 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	    9914	     28530 ns/op	 576.76 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	    8959	     28507 ns/op	 577.23 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	    9925	     28478 ns/op	 577.82 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	    9697	     28488 ns/op	 577.61 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	    9674	     28554 ns/op	 576.28 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	    9127	     28701 ns/op	 573.32 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	    9820	     28609 ns/op	 575.16 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	    9790	     28146 ns/op	 584.63 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	    9636	     28660 ns/op	 574.15 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	    9775	     28872 ns/op	 569.92 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	    8841	     28551 ns/op	 576.33 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	    9950	     28518 ns/op	 577.01 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	    8374	     29565 ns/op	 556.58 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	    9531	     28820 ns/op	 570.96 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	    8652	     28758 ns/op	 572.19 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	    8924	     28331 ns/op	 580.80 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	    9820	     28611 ns/op	 575.13 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	    9790	     28817 ns/op	 571.02 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	    9660	     28567 ns/op	 576.02 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	    9890	     28500 ns/op	 577.36 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	   10000	     28164 ns/op	 583.30 MB/s	   19480 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	    9813	     28748 ns/op	 571.44 MB/s	   19480 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	    9981	     28166 ns/op	 583.25 MB/s	   19480 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	    9289	     28608 ns/op	 574.25 MB/s	   19480 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	    9940	     28323 ns/op	 580.02 MB/s	   19480 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	    9648	     28135 ns/op	 583.90 MB/s	   19480 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	   10000	     28290 ns/op	 580.71 MB/s	   19480 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	    9903	     28408 ns/op	 578.28 MB/s	   19480 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	    9829	     28696 ns/op	 572.47 MB/s	   19480 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	    8985	     28649 ns/op	 573.43 MB/s	   19480 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	   10000	     28561 ns/op	 575.20 MB/s	   19480 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	   10000	     28552 ns/op	 575.37 MB/s	   19480 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	    9823	     28600 ns/op	 574.40 MB/s	   19480 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	    9967	     28692 ns/op	 572.57 MB/s	   19480 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	    9535	     28894 ns/op	 568.55 MB/s	   19480 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	    9993	     28484 ns/op	 576.74 MB/s	   19480 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	   10000	     28185 ns/op	 582.87 MB/s	   19480 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	    9993	     29012 ns/op	 566.25 MB/s	   19480 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	   10000	     28796 ns/op	 570.49 MB/s	   19480 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	   10000	     28944 ns/op	 567.57 MB/s	   19480 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	    9804	     29309 ns/op	 561.43 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	    8996	     28661 ns/op	 574.12 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	    8421	     28965 ns/op	 568.10 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	    9759	     28204 ns/op	 583.43 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	    9836	     28157 ns/op	 584.40 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	    9919	     28476 ns/op	 577.85 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	   10000	     28527 ns/op	 576.83 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	    8482	     28608 ns/op	 575.18 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	   10000	     28227 ns/op	 582.95 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	    9807	     28692 ns/op	 573.51 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	    8712	     28751 ns/op	 572.32 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	    9979	     28274 ns/op	 581.99 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	    9955	     28303 ns/op	 581.39 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	    9198	     28471 ns/op	 577.96 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	    9979	     28379 ns/op	 579.83 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	    9981	     29361 ns/op	 560.45 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	    9727	     28348 ns/op	 580.46 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	    9930	     28646 ns/op	 574.42 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	    9608	     28211 ns/op	 583.28 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	    9752	     28541 ns/op	 576.54 MB/s	   19624 B/op	      25 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   12577	     19018 ns/op	 861.97 MB/s	   19464 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   12493	     18963 ns/op	 864.49 MB/s	   19464 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   12590	     19153 ns/op	 855.88 MB/s	   19464 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   12922	     18698 ns/op	 876.71 MB/s	   19464 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   12534	     19144 ns/op	 856.31 MB/s	   19464 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   12445	     19285 ns/op	 850.06 MB/s	   19464 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   12421	     19348 ns/op	 847.26 MB/s	   19464 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   12819	     18765 ns/op	 873.58 MB/s	   19464 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   12572	     19057 ns/op	 860.23 MB/s	   19464 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   12943	     18666 ns/op	 878.24 MB/s	   19464 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   12619	     19047 ns/op	 860.64 MB/s	   19464 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   12405	     19309 ns/op	 848.96 MB/s	   19464 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   12570	     19061 ns/op	 860.03 MB/s	   19464 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   12511	     19185 ns/op	 854.47 MB/s	   19464 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   12608	     19110 ns/op	 857.82 MB/s	   19464 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   12470	     19204 ns/op	 853.64 MB/s	   19464 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   12555	     19092 ns/op	 858.63 MB/s	   19464 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   12639	     19066 ns/op	 859.79 MB/s	   19464 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   12357	     19611 ns/op	 835.93 MB/s	   19464 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   12795	     18872 ns/op	 868.66 MB/s	   19464 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   13344	     17872 ns/op	 916.76 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   13388	     18008 ns/op	 909.84 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   13340	     17894 ns/op	 915.61 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   13586	     17675 ns/op	 926.93 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   13551	     17690 ns/op	 926.20 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   13372	     17965 ns/op	 911.98 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   13539	     17646 ns/op	 928.49 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   13634	     17600 ns/op	 930.92 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   13400	     17840 ns/op	 918.40 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   13365	     18018 ns/op	 909.31 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   13628	     17662 ns/op	 927.64 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   13572	     17645 ns/op	 928.54 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   13466	     17792 ns/op	 920.86 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   13420	     17759 ns/op	 922.59 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   13580	     17656 ns/op	 927.95 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   13418	     17825 ns/op	 919.16 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   12957	     18390 ns/op	 890.92 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   13488	     17941 ns/op	 913.24 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   13051	     18321 ns/op	 894.26 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   13072	     18365 ns/op	 892.12 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   12748	     18776 ns/op	 872.60 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   12813	     18725 ns/op	 874.96 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   12690	     18829 ns/op	 870.14 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   13120	     18273 ns/op	 896.62 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   13029	     18434 ns/op	 888.78 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   12793	     18722 ns/op	 875.11 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   12980	     18466 ns/op	 887.25 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   13113	     18197 ns/op	 900.38 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   13732	     17528 ns/op	 934.75 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   13507	     17775 ns/op	 921.73 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   13430	     18147 ns/op	 902.84 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   13222	     18055 ns/op	 907.47 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   13268	     18072 ns/op	 906.60 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   13263	     17980 ns/op	 911.23 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   13597	     17625 ns/op	 929.60 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   13575	     17834 ns/op	 918.71 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   13250	     17966 ns/op	 911.94 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   13381	     17970 ns/op	 911.77 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   13630	     17638 ns/op	 928.90 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   13441	     17928 ns/op	 913.90 MB/s	   33792 B/op	      21 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     664	    359514 ns/op	 729.32 MB/s	 1320751 B/op	      58 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     657	    354861 ns/op	 738.88 MB/s	 1320750 B/op	      58 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     651	    360559 ns/op	 727.20 MB/s	 1320752 B/op	      58 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     681	    355375 ns/op	 737.81 MB/s	 1320751 B/op	      58 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     669	    364294 ns/op	 719.75 MB/s	 1320752 B/op	      58 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     669	    357846 ns/op	 732.72 MB/s	 1320751 B/op	      58 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     658	    364308 ns/op	 719.72 MB/s	 1320753 B/op	      58 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     670	    361774 ns/op	 724.76 MB/s	 1320751 B/op	      58 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     661	    357702 ns/op	 733.01 MB/s	 1320751 B/op	      58 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     667	    354807 ns/op	 738.99 MB/s	 1320751 B/op	      58 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     667	    356984 ns/op	 734.49 MB/s	 1320751 B/op	      58 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     666	    357817 ns/op	 732.78 MB/s	 1320751 B/op	      58 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     667	    359544 ns/op	 729.26 MB/s	 1320751 B/op	      58 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     664	    376943 ns/op	 695.60 MB/s	 1320751 B/op	      58 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     636	    367897 ns/op	 712.70 MB/s	 1320751 B/op	      58 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     663	    357151 ns/op	 734.14 MB/s	 1320751 B/op	      58 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     638	    361042 ns/op	 726.23 MB/s	 1320751 B/op	      58 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     680	    351793 ns/op	 745.32 MB/s	 1320751 B/op	      58 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     661	    361932 ns/op	 724.45 MB/s	 1320751 B/op	      58 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     660	    366151 ns/op	 716.10 MB/s	 1320751 B/op	      58 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     546	    428466 ns/op	 611.99 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     579	    446170 ns/op	 587.70 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     578	    418355 ns/op	 626.78 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     559	    418642 ns/op	 626.35 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     567	    418495 ns/op	 626.57 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     573	    414479 ns/op	 632.64 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     576	    411734 ns/op	 636.86 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     583	    416363 ns/op	 629.78 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     555	    431520 ns/op	 607.66 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     554	    424131 ns/op	 618.24 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     538	    438692 ns/op	 597.72 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     570	    413489 ns/op	 634.15 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     586	    415989 ns/op	 630.34 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     562	    412146 ns/op	 636.22 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     588	    407683 ns/op	 643.18 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     577	    409204 ns/op	 640.79 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     561	    410400 ns/op	 638.92 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     584	    410239 ns/op	 639.18 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     588	    408936 ns/op	 641.21 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     561	    411748 ns/op	 636.83 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     589	    411475 ns/op	 637.19 MB/s	  271384 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     576	    408710 ns/op	 641.50 MB/s	  271384 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     586	    407086 ns/op	 644.06 MB/s	  271384 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     590	    409164 ns/op	 640.79 MB/s	  271384 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     588	    407681 ns/op	 643.12 MB/s	  271384 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     562	    409057 ns/op	 640.96 MB/s	  271384 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     528	    425585 ns/op	 616.06 MB/s	  271384 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     590	    407675 ns/op	 643.13 MB/s	  271384 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     574	    416497 ns/op	 629.51 MB/s	  271384 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     586	    406521 ns/op	 644.96 MB/s	  271384 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     577	    408711 ns/op	 641.50 MB/s	  271384 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     586	    405344 ns/op	 646.83 MB/s	  271384 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     588	    406294 ns/op	 645.32 MB/s	  271384 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     591	    407401 ns/op	 643.56 MB/s	  271384 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     582	    414109 ns/op	 633.14 MB/s	  271384 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     586	    408558 ns/op	 641.74 MB/s	  271384 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     564	    410792 ns/op	 638.25 MB/s	  271384 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     585	    409054 ns/op	 640.96 MB/s	  271384 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     578	    409431 ns/op	 640.37 MB/s	  271384 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     570	    415607 ns/op	 630.86 MB/s	  271384 B/op	      21 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     542	    435956 ns/op	 601.47 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     538	    424602 ns/op	 617.55 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     584	    414650 ns/op	 632.38 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     556	    414132 ns/op	 633.17 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     584	    408520 ns/op	 641.87 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     592	    410735 ns/op	 638.40 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     568	    417235 ns/op	 628.46 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     588	    409838 ns/op	 639.80 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     588	    411703 ns/op	 636.90 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     588	    414257 ns/op	 632.98 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     568	    410244 ns/op	 639.17 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     592	    407104 ns/op	 644.10 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     583	    409003 ns/op	 641.11 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     592	    406048 ns/op	 645.77 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     607	    402219 ns/op	 651.92 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     567	    401113 ns/op	 653.72 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     590	    398273 ns/op	 658.38 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     603	    396520 ns/op	 661.29 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     604	    392817 ns/op	 667.52 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     598	    398219 ns/op	 658.47 MB/s	  271528 B/op	      25 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	     910	    255489 ns/op	1026.08 MB/s	  271368 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	     916	    242257 ns/op	1082.13 MB/s	  271368 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	     879	    269176 ns/op	 973.91 MB/s	  271368 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	     891	    260075 ns/op	1007.99 MB/s	  271368 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	     883	    270076 ns/op	 970.67 MB/s	  271368 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	    1048	    263759 ns/op	 993.91 MB/s	  271368 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	    1018	    268185 ns/op	 977.51 MB/s	  271368 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	     873	    258634 ns/op	1013.61 MB/s	  271368 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	     998	    266045 ns/op	 985.37 MB/s	  271368 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	     878	    270121 ns/op	 970.50 MB/s	  271368 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	     873	    269215 ns/op	 973.77 MB/s	  271368 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	     885	    268135 ns/op	 977.69 MB/s	  271368 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	     888	    269978 ns/op	 971.02 MB/s	  271368 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	     878	    269886 ns/op	 971.35 MB/s	  271368 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	     882	    268639 ns/op	 975.86 MB/s	  271368 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	     880	    271173 ns/op	 966.74 MB/s	  271368 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	     870	    268482 ns/op	 976.43 MB/s	  271368 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	     885	    269690 ns/op	 972.05 MB/s	  271368 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	     866	    271532 ns/op	 965.46 MB/s	  271368 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	     913	    265405 ns/op	 987.75 MB/s	  271368 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	     978	    241270 ns/op	1086.52 MB/s	  525312 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	     962	    239491 ns/op	1094.59 MB/s	  525312 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	    1002	    236122 ns/op	1110.20 MB/s	  525312 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	     985	    238743 ns/op	1098.02 MB/s	  525312 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	     998	    238417 ns/op	1099.52 MB/s	  525312 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	     966	    243684 ns/op	1075.75 MB/s	  525312 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	     978	    240143 ns/op	1091.62 MB/s	  525312 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	     993	    238450 ns/op	1099.37 MB/s	  525312 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	     988	    242242 ns/op	1082.16 MB/s	  525312 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	     961	    243928 ns/op	1074.68 MB/s	  525312 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	     992	    238652 ns/op	1098.44 MB/s	  525312 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	    1010	    237645 ns/op	1103.09 MB/s	  525312 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	     986	    242505 ns/op	1080.98 MB/s	  525312 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	    1020	    238008 ns/op	1101.41 MB/s	  525312 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	    1011	    238050 ns/op	1101.21 MB/s	  525312 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	     964	    241013 ns/op	1087.68 MB/s	  525312 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	     987	    239253 ns/op	1095.68 MB/s	  525312 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	     966	    251370 ns/op	1042.86 MB/s	  525312 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	     964	    247121 ns/op	1060.79 MB/s	  525312 B/op	      21 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	     973	    244407 ns/op	1072.57 MB/s	  525312 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	     904	    244396 ns/op	1072.62 MB/s	  525312 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	     966	    244443 ns/op	1072.41 MB/s	  525312 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	     980	    242885 ns/op	1079.29 MB/s	  525312 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	     990	    242155 ns/op	1082.55 MB/s	  525312 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	     978	    238829 ns/op	1097.62 MB/s	  525312 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	    1004	    236426 ns/op	1108.78 MB/s	  525312 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	     997	    239133 ns/op	1096.23 MB/s	  525312 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	    1003	    240494 ns/op	1090.02 MB/s	  525312 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	     980	    243094 ns/op	1078.36 MB/s	  525312 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	    1000	    242599 ns/op	1080.57 MB/s	  525312 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	    1018	    234594 ns/op	1117.44 MB/s	  525312 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	    1011	    238167 ns/op	1100.68 MB/s	  525312 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	     948	    235860 ns/op	1111.44 MB/s	  525312 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	    1005	    243706 ns/op	1075.66 MB/s	  525312 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	     970	    244128 ns/op	1073.80 MB/s	  525312 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	     963	    243390 ns/op	1077.05 MB/s	  525312 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	     955	    242348 ns/op	1081.68 MB/s	  525312 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	     978	    240098 ns/op	1091.82 MB/s	  525312 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	     990	    241708 ns/op	1084.55 MB/s	  525312 B/op	      21 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	    1011	    240774 ns/op	1088.76 MB/s	  525312 B/op	      21 allocs/op
+PASS

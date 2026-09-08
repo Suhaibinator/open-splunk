@@ -1,0 +1,46 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector/parserconfig
+cpu: Apple M4 Max
+                              │ pattern.txt │
+                              │   sec/op    │
+PatternCompile                  1.856µ ± 1%
+PatternCapture/exact            93.88n ± 2%
+PatternCapture/whitespace       99.08n ± 2%
+PatternCapture/mixed            96.32n ± 1%
+PatternAlmostMatching/1024      1.512µ ± 3%
+PatternAlmostMatching/16384     26.41µ ± 1%
+PatternAlmostMatching/1048576   1.506m ± 2%
+geomean                         1.931µ
+
+                              │ pattern.txt  │
+                              │     B/op     │
+PatternCompile                  1.547Ki ± 0%
+PatternCapture/exact              120.0 ± 0%
+PatternCapture/whitespace         120.0 ± 0%
+PatternCapture/mixed              120.0 ± 0%
+PatternAlmostMatching/1024      1.078Ki ± 0%
+PatternAlmostMatching/16384     16.08Ki ± 0%
+PatternAlmostMatching/1048576   1.000Mi ± 0%
+geomean                         1.718Ki
+
+                              │ pattern.txt │
+                              │  allocs/op  │
+PatternCompile                   20.00 ± 0%
+PatternCapture/exact             2.000 ± 0%
+PatternCapture/whitespace        2.000 ± 0%
+PatternCapture/mixed             2.000 ± 0%
+PatternAlmostMatching/1024       3.000 ± 0%
+PatternAlmostMatching/16384      3.000 ± 0%
+PatternAlmostMatching/1048576    3.000 ± 0%
+geomean                          3.306
+
+                              │ pattern.txt  │
+                              │     B/s      │
+PatternCapture/exact            193.0Mi ± 2%
+PatternCapture/whitespace       163.6Mi ± 2%
+PatternCapture/mixed            207.9Mi ± 1%
+PatternAlmostMatching/1024      646.0Mi ± 3%
+PatternAlmostMatching/16384     591.6Mi ± 1%
+PatternAlmostMatching/1048576   663.8Mi ± 2%
+geomean                         344.3Mi

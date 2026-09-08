@@ -1,0 +1,42 @@
+Issue #104 executed verification before review wave 1
+Source candidate: d874217530a8f8187919f5e65232f999c48900f6
+
+PASS npm run typecheck; npm run lint; npm run check:docs;
+     npm run test:frontend
+PASS npx --no-install playwright install chromium
+PASS npm run test:contracts (57 tests)
+PASS npm run build; npm run test:workspace (33 tests)
+PASS go build ./...; go vet ./...; go test ./...
+PASS go test -race ./internal/collector/... (full suite)
+PASS final Apache source-fidelity regression race checks
+PASS each new fuzz target for >=60 seconds:
+     native logfmt 96,130 executions; native Java 250,757;
+     native fixed formats 422,214; compiled literal scanner 6,380,346;
+     pattern compile/capture 900,348; timestamp 6,076,429.
+PASS OPEN_SPLUNK_BACKEND_INTEGRATION=1 OPEN_SPLUNK_BACKEND_LOAD=1
+     go test ./integration -run '^TestBackendNativeFormats$'
+       -count=1 -timeout=15m -v
+     Compiled daemon/server, ClickHouse, all seven formats;
+     60,000 mixed NDJSON/Java records scheduled over 30 seconds,
+     30.32 seconds including drain/verification; exact values/IDs/checkpoints.
+PASS existing backend vertical integration (90.853 seconds)
+PASS existing backend sustained collector load (65.55 seconds)
+PASS golangci-lint v2.13.1, GOOS=linux, GOMAXPROCS=2:
+     golangci-lint run --concurrency=2 --timeout=10m
+       --max-issues-per-linter=0 --max-same-issues=0
+     Result: 0 issues. Ran against a complete source snapshot matching the
+     CI checkout, without untracked installed node_modules (which otherwise
+     introduces unrelated third-party Go code into ./...). No lint exclusions
+     or suppressions added. Initial unconstrained local lint caused memory
+     pressure; final run bounded tool concurrency only.
+
+TDD: dedicated Docker/access, logfmt/Java, and durability/security agents
+owned tests before production parsers. Initial recognition failures and
+subsequent semantic/durable-pipeline failures were recorded. Later regressions
+covered explicit redaction of escaped/positional values, logfmt Unicode
+surrogates, and Apache's producer-specific empty authenticated user spelling.
+Expected fixture values were independently specified and source grounded.
+
+Benchmark commands, revisions, machine, all comparative samples and profiles
+are retained beside this file. Review outcomes and any renewed verification
+will be recorded after review; this file does not assert review completion.
