@@ -20,10 +20,11 @@ const (
 
 // Options contains source-format options. A nil pointer means no parser block.
 type Options struct {
-	Fields          map[string]string `yaml:"fields"`
-	Pattern         string            `yaml:"pattern"`
-	TimestampLayout string            `yaml:"timestamp_layout"`
-	Timezone        string            `yaml:"timezone"`
+	Fields          map[string]string `yaml:"fields,omitempty"`
+	Pattern         string            `yaml:"pattern,omitempty"`
+	TimestampLayout string            `yaml:"timestamp_layout,omitempty"`
+	Timezone        string            `yaml:"timezone,omitempty"`
+	supplied        optionPresence
 }
 
 // Compiled is immutable after construction and safe for concurrent decoding.
@@ -58,16 +59,22 @@ func Compile(format string, options *Options) (*Compiled, error) {
 	if len(o.TimestampLayout) > maxPatternBytes || len(o.Timezone) > maxNameBytes {
 		return nil, errors.New("timestamp configuration exceeds limit")
 	}
+	if o.supplied&layoutPresent != 0 && o.TimestampLayout == "" {
+		return nil, errors.New("timestamp_layout must not be empty")
+	}
+	if o.supplied&timezonePresent != 0 && o.Timezone == "" {
+		return nil, errors.New("timezone must not be empty")
+	}
 	c.explicitLayout = o.TimestampLayout != ""
 	if format == "logfmt" {
-		if o.Pattern != "" {
+		if o.Pattern != "" || o.supplied&patternPresent != 0 {
 			return nil, errors.New("logfmt does not accept pattern")
 		}
 		if err := c.compileFields(o.Fields); err != nil {
 			return nil, err
 		}
 	} else {
-		if o.Fields != nil {
+		if o.Fields != nil || o.supplied&fieldsPresent != 0 {
 			return nil, errors.New("pattern inputs do not accept fields")
 		}
 		parts, hasTimestamp, err := compilePattern(o.Pattern)

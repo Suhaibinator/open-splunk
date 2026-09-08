@@ -1,0 +1,30 @@
+Issue #104 independent review waves
+
+Wave 1 fixed candidate: 13fc6ad36688f3b837e04de16cd9d68f89573958
+Baseline: a8092b5111b98c3d18fcacb6e1a6b49918f1e030
+
+2 gpt-6-astra:
+- correctness/durability: clean; targeted native + durability tests passed.
+- security/adversarial semantics: clean; added independent tests for no default
+  keyword redaction across all 7 formats and NDJSON/raw, escaped/nested secrets,
+  rename chains, payload-free Unicode errors and trusted metadata/static fields.
+3 gpt-5.6-sol:
+- code quality/API design: one actionable finding. YAML logfmt parser.pattern:
+  '' was accepted because the string zero value lost option presence. Added
+  independent config.Load regression, observed expected rejection failure.
+- efficiency/performance: clean; inspected isolated evidence, linear scanner
+  behavior, immutable state, NDJSON allocations/path and profile output.
+- test quality/producer fidelity: clean; independently checked source-backed
+  fixture semantics and real-file/compiled backend coverage; tests passed.
+2 gpt-5.6-terra:
+- framing/restart: clean; targeted durability, multiline, pending WAL, withheld
+  ack, recovery failure, framing and input tests passed.
+- bounds/fuzz/errors/timestamps: clean; independent inspection and targeted
+  collector/parserconfig tests passed.
+
+Resolution: retain YAML option presence through strict unmarshalling; reject
+explicit irrelevant/empty options, unknown/duplicate keys and alias-key
+bypasses while preserving valid merges, defaults and programmatic roundtrips.
+Regression was red before the fix; full config/parserconfig race tests passed.
+No-policy security regressions also passed under race detection. The second
+full review wave follows renewed validation and integration of updated main.
