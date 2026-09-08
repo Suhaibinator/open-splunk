@@ -219,9 +219,19 @@ func TestDelivererSnapshotsPrivateHostAllowlist(t *testing.T) {
 
 func TestDelivererRejectsBeforeClientAndSanitizesFailures(t *testing.T) {
 	t.Parallel()
+	for _, address := range []string{"127.0.0.1", "5f00::1"} {
+		t.Run(address, func(t *testing.T) {
+			t.Parallel()
+			testDelivererRejectsBeforeClientAndSanitizesFailures(t, netip.MustParseAddr(address))
+		})
+	}
+}
+
+func testDelivererRejectsBeforeClientAndSanitizesFailures(t *testing.T, address netip.Addr) {
+	t.Helper()
 	clientCalled := false
 	deliverer, err := NewDeliverer(DeliveryOptions{
-		Resolver: staticResolver{addresses: []netip.Addr{netip.MustParseAddr("127.0.0.1")}},
+		Resolver: staticResolver{addresses: []netip.Addr{address}},
 		ClientFactory: func(http.RoundTripper, time.Duration) HTTPDoer {
 			clientCalled = true
 			return doerFunc(func(*http.Request) (*http.Response, error) { return nil, errors.New("unused") })
@@ -230,9 +240,9 @@ func TestDelivererRejectsBeforeClientAndSanitizesFailures(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDeliverer() error = %v", err)
 	}
-	_, err = deliverer.Deliver(context.Background(), "https://secret.internal.invalid/hook", SignedPayload{})
-	if err == nil || clientCalled {
-		t.Fatalf("Deliver() error = %v, clientCalled = %v", err, clientCalled)
+	result, err := deliverer.Deliver(context.Background(), "https://secret.internal.invalid/hook", SignedPayload{})
+	if err == nil || result.Delivered || result.Category != DeliveryDestinationRejected || clientCalled {
+		t.Fatalf("Deliver() = %#v, %v, clientCalled = %v", result, err, clientCalled)
 	}
 	if strings.Contains(err.Error(), "secret.internal") {
 		t.Fatalf("error disclosed destination: %v", err)
