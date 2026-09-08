@@ -183,6 +183,24 @@ visibility, and outbox work. Concurrent duplicates, ambiguous inserts,
 restart, and stream takeover therefore cannot double-charge inside the retained
 replay horizon.
 
+Each tenant/source has a durable pending budget of 10,000 batches, 128 MiB of
+outbox payload, and 128 MiB of response metadata, within shared ceilings of
+20,000 batches and 256 MiB for each byte dimension. Native sources use the
+authenticated bound collector ID, so replacing its credential does not reset
+the budget. HEC uses the stable token record ID. Client-selected batch IDs,
+channels, hosts, sources, and indexes do not create new budgets. These limits
+apply even when token and index rate quotas are unlimited.
+
+All accepted work remains charged while pending, including released leases,
+write-group members, ambiguous sends, and work recovered after restart. Existing
+replay proceeds at capacity; commit or safe abandonment frees capacity. An
+upgrade preserves old reservations without assigning an inferred owner: their
+unattributed usage counts against every new admission until it drains. A large
+old backlog can therefore temporarily pause fresh ingestion after upgrade.
+The budgets prevent one source from filling the shared queue; multiple
+independently provisioned sources can still fill it. Existing ambiguous-send
+barriers and ordered recovery continue to protect visibility consistency.
+
 The logical collector batch remains the unit of identity, quota, response, and
 acknowledgment, but it is not normally the physical ClickHouse insert. The
 server durably coalesces ordered pending batches toward 10,000 rows or 16 MiB,
