@@ -810,6 +810,7 @@ func runWithOptions(config options) error {
 			Addr:              config.httpAddress,
 			Handler:           rootHandler,
 			TLSConfig:         httpTLSConfig,
+			ErrorLog:          newHTTPServerErrorLog(logger),
 			ReadHeaderTimeout: 5 * time.Second,
 			ReadTimeout:       30 * time.Second,
 			// Keep ordinary API writes short. The raw export handler explicitly

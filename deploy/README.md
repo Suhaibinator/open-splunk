@@ -130,7 +130,11 @@ options may subsequently apply a documented derived-default rule.
 The default JSON logger writes one record per line to standard error with an
 ISO-8601 timestamp, level, `open-splunk-server` logger name, caller, message,
 and typed context fields. The console encoder exposes the same information in a
-human-readable form. The selected logger is also used by the embedded router.
+human-readable form. The selected logger is also used by the embedded router
+and the HTTP server's transport diagnostics. Direct-TLS handshake failures share
+a budget of ten diagnostic records per second across all client addresses and
+failure reasons; excess records are suppressed. Other HTTP server errors and
+process operational records remain unsampled.
 
 For administrator and ClickHouse credentials, select either the raw value or
 the file at one configuration tier. Supplying both forms at the same tier is
