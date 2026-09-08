@@ -248,7 +248,10 @@ func TestCountMatches(t *testing.T) {
 			t.Fatalf("write %s: %v", name, err)
 		}
 	}
-	got := countMatches([]string{filepath.Join(dir, "*")}, []string{"*.tmp"})
+	got, err := countMatches([]string{filepath.Join(dir, "*")}, []string{"*.tmp"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got != 2 {
 		t.Fatalf("countMatches = %d, want 2 (a.log, b.log)", got)
 	}

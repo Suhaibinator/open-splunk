@@ -24,9 +24,12 @@ type checkpointResumeView struct {
 func newCheckpointResumeView(
 	durable input.CheckpointStore,
 	pending []input.Checkpoint,
-) (input.ManagerCheckpointStore, *checkpointResumeView) {
+) (input.ManagerCheckpointStore, *checkpointResumeView, error) {
 	if len(pending) == 0 {
-		return durable, nil
+		return durable, nil, nil
+	}
+	if err := durable.ReservePending(pending); err != nil {
+		return nil, nil, err
 	}
 	byTrackingKey := make(map[inputFileKey]input.Checkpoint, len(pending))
 	for _, checkpoint := range pending {
@@ -37,7 +40,11 @@ func newCheckpointResumeView(
 	}
 	view := &checkpointResumeView{durable: durable, pending: byTrackingKey}
 	view.active.Store(true)
-	return view, view
+	return view, view, nil
+}
+
+func (view *checkpointResumeView) TryAcquireSource() (func(), bool) {
+	return view.durable.TryAcquireSource()
 }
 
 func (view *checkpointResumeView) Get(

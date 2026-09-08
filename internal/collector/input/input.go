@@ -153,6 +153,9 @@ type Checkpoint struct {
 // manager-originated metadata writes at those coordinates until terminal
 // delivery advances the underlying durable checkpoint.
 type ManagerCheckpointStore interface {
+	// TryAcquireSource shares a live-source budget across all input managers.
+	// Its release function must run after the source descriptor is closed.
+	TryAcquireSource() (release func(), acquired bool)
 	// Get returns the checkpoint for inputID and id and whether one exists.
 	Get(inputID string, id FileIdentity) (Checkpoint, bool, error)
 	// Set records one discovery, generation, or compatibility-cursor update.
@@ -167,6 +170,8 @@ type ManagerCheckpointStore interface {
 // must be safe for concurrent use.
 type CheckpointStore interface {
 	ManagerCheckpointStore
+	// ReservePending reserves identity capacity for nonterminal WAL positions.
+	ReservePending(checkpoints []Checkpoint) error
 	// Delete removes the checkpoint for inputID and id, if any.
 	Delete(inputID string, id FileIdentity) error
 	// List returns all persisted checkpoints (used for reconciliation).
