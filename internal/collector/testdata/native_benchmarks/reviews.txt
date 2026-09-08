@@ -60,3 +60,11 @@ All new regressions passed after recorded failures. Configuration/parserconfig
 race and vet passed; the new structured timestamp fuzz target passed 60 seconds
 and 595,762 cases. Renewed validation and complete wave 3 follow.
 No production ingestion ordering change or test assertion relaxation was made.
+
+Root audit before wave 3: explicit logfmt mappings to established same-role
+body/traceId/spanId aliases and ASCII case variants were rejected. Independent
+red tests confirmed this. Same-role checks now use the existing ASCII folding
+policy and include body, while runtime source matching stays exact; protected
+metadata and cross-role reserved mappings still reject. Config/parserconfig
+race tests passed. Pinned lint required errors.AsType for the timestamp prefix
+parse error; corrected and timestamp regressions/fuzz seeds remained green.

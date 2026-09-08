@@ -184,7 +184,7 @@ func (p timeParser) parseOffset(value string) (int, bool) {
 		// numbers. Reformatting a suffix loses those spellings. The full timestamp
 		// has already parsed successfully, so the sentinel must be the first error.
 		_, err := time.Parse(p.zoneProbeLayout, value)
-		parseErr, ok := err.(*time.ParseError)
+		parseErr, ok := errors.AsType[*time.ParseError](err)
 		if !ok || !strings.HasSuffix(parseErr.LayoutElem, "\x00") {
 			return 0, false
 		}

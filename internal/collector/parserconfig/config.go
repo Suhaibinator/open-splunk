@@ -150,11 +150,14 @@ func validName(name string) bool {
 func invalidPattern(reason string) error { return fmt.Errorf("invalid parser pattern: %s", reason) }
 
 func roleAlias(role, key string) bool {
+	// Reservation checks fold ASCII case; same-role exceptions must agree.
+	// Only this comparison folds: compiled source mappings retain exact keys.
+	key = eventfields.FoldASCII(key)
 	switch role {
 	case "timestamp":
 		return key == "timestamp" || key == "ts" || key == "time" || key == "@timestamp"
 	case "message":
-		return key == "message" || key == "msg"
+		return key == "message" || key == "msg" || key == "body"
 	case "level":
 		return key == "level" || key == "severity" || key == "severity_text"
 	case "trace_id":
