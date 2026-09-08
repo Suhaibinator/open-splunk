@@ -229,8 +229,8 @@ func (connection *connection) readLoop() bool {
 		if uint64(len(data)) > connection.service.config.maximumFrameBytes {
 			return connection.fatalProtocolError("", opensplunk.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_FRAME_TOO_LARGE, "binary command frame exceeds the configured limit")
 		}
-		var command opensplunk.SearchWebSocketCommand
-		if err := proto.Unmarshal(data, &command); err != nil {
+		command, failure := decodeCommand(data, connection.service.config.maximumSubscriptions, connection.service.config.maximumQueuedFrames)
+		if command == nil {
 			if !connection.sendProtocolError("", opensplunk.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND, "command is not valid protobuf", nil, false) {
 				return false
 			}
@@ -244,7 +244,10 @@ func (connection *connection) readLoop() bool {
 			}
 			continue
 		}
-		if failure := connection.handleCommand(requestID, &command); failure != nil {
+		if failure == nil {
+			failure = connection.handleCommand(requestID, command)
+		}
+		if failure != nil {
 			if !connection.sendProtocolError(
 				requestID, failure.code, failure.message, failure.violations, failure.connectionWillClose,
 			) {
