@@ -113,3 +113,9 @@ in final4/. No competing task-owned agents/builds ran; external observed build
 or test overlap excludes complete sample groups, independent of timing values.
 The earlier full-test-binary 1.31% difference is retained, and the controlled
 triple does not prove it came from the extra format comparison alone.
+
+Post-measurement final checks: npm run check:docs passed (24 files),
+git diff --check passed. Complete review wave 3 returned seven clean results
+with additional executed targeted/package tests, no source/test changes.
+All seven reviewers inspected fixed ec0f6341 vs fb9cef37; production source
+remains identical to 16b3c3a7 used by complete gates and final4 measurements.

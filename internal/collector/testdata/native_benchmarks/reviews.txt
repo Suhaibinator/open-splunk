@@ -98,3 +98,42 @@ The diagnostic triple does not establish the string comparison as the sole
 cause of the earlier full-test-binary slowdown; test metadata also changed.
 No statistically significant final production regression with identical test
 registration was measured. Full third review wave starts after these gates.
+
+Wave 3 fixed candidate: ec0f6341eaddb983dcc58aacc9fd28e17608fbce
+Base: fb9cef37499bcb3706312a46d70f70a2c304721c
+Production source identical to fully validated/measured 16b3c3a7.
+2 gpt-6-astra:
+- correctness/durability: CLEAN. Independently inspected full production diff,
+  projections, immutable config, timestamp spelling/offset/gaps/folds, and
+  rejection/WAL/ack/checkpoint handoffs. Targeted parser/config/native/recovery,
+  trailing replay, pending WAL, withheld ack and persistence-failure tests pass.
+- security/adversarial semantics: CLEAN. Full production diff, bounds, trusted
+  metadata/static precedence, redaction provenance and payload-free diagnostics;
+  focused security/redaction/limits/timestamp and offline WAL/recovery tests pass.
+  Independently confirmed no default keyword redaction across all formats.
+3 gpt-5.6-sol:
+- code quality/API/configuration: CLEAN. Full production/docs diff, startup
+  ordering, immutable ownership, shared compilation and limits; full collector,
+  parserconfig and config package tests pass. No edits.
+- efficiency/performance: CLEAN. Direct NDJSON integer branch, immutable state,
+  KMP/native linear scanners, opt-in redactor costs, timestamp lexical walk,
+  and final3/final4 evidence independently assessed. Full collector/parserconfig
+  package tests pass; no timings were run alongside reviewers. No edits.
+- test quality/producer fidelity: CLEAN. Independent oracles, producer records,
+  all-malformed/trailing replay, persistence failures, WAL/retry/ack/restart,
+  partial/rotation/multiline/backend corpus and lexical timestamp cases checked.
+  Targeted native formats/time/precision/offset tests pass. No edits.
+2 gpt-5.6-terra:
+- framing/restart: CLEAN. CRLF/partial/rotation/copytruncate, oversized multiline
+  resynchronization and native reuse of durable framing/recovery paths checked.
+  Targeted partial/rotation, multiline resync, pending WAL and text E2E pass.
+- bounds/fuzz/error handling: CLEAN. 1MiB/1024/256/aggregate/nesting/static bounds,
+  malformed scanner safety, KMP linearity, time walks and seeded fuzz reviewed.
+  Targeted bounds/access/concurrency/time boundary tests pass. A temporary
+  hypothesis about a long decimal literal after seconds was disproved by Go's
+  independent parser (it consumes an implicit fraction and rejects the spelling).
+  It was not a candidate defect; no workspace changes remain from that probe.
+
+Outcome: one complete requested 2 Astra + 3 Sol + 2 Terra wave reports zero
+remaining actionable findings. No production or test code changed during or
+after this wave. Only this evidence and PR delivery metadata follow.
