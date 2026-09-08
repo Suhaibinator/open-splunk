@@ -120,7 +120,7 @@ type StateConfig struct {
 // Source, Sourcetype, Host, Fields) are attached to every event and can never
 // be overridden by payload content.
 type InputConfig struct {
-	Parser     *parserconfig.Options `yaml:"parser"`
+	Parser     *parserconfig.Options `yaml:"parser,omitempty"`
 	ID         string                `yaml:"id"`
 	Type       string                `yaml:"type"`
 	Include    []string              `yaml:"include"`

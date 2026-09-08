@@ -9,12 +9,12 @@ import (
 )
 
 type timeParser struct {
-	layout      string
-	location    *time.Location
-	zoneToken   string
-	zoneSuffix  string
-	fixed       bool
-	fixedOffset int
+	layout          string
+	location        *time.Location
+	zoneToken       string
+	zoneProbeLayout string
+	fixed           bool
+	fixedOffset     int
 }
 
 func compileTime(layout, zone string) (timeParser, error) {
@@ -47,7 +47,9 @@ func compileTime(layout, zone string) (timeParser, error) {
 				}
 				zoneStart = i
 				p.zoneToken = token
-				p.zoneSuffix = p.layout[i+len(token):]
+				if i+len(token) < len(p.layout) {
+					p.zoneProbeLayout = p.layout[:i] + "\x00"
+				}
 				i += len(token) - 1
 				break
 			}
@@ -109,10 +111,15 @@ func (c *Compiled) ParseTime(value string) (time.Time, error) {
 		return time.Time{}, errors.New("invalid timestamp")
 	}
 	if p.location == nil {
-		if !p.validOffset(value, parsed) {
+		offset, valid := p.parseOffset(value)
+		if !valid {
 			return time.Time{}, errors.New("invalid timestamp offset")
 		}
-		return boundedTime(parsed)
+		// Derive the instant from the original numeric offset. In particular,
+		// Go currently treats -00:00:01 as its internal unspecified-offset
+		// sentinel; trusting the returned zone would silently lose one second.
+		_, parsedOffset := parsed.Zone()
+		return boundedTime(parsed.Add(time.Duration(parsedOffset-offset) * time.Second))
 	}
 	if p.fixed {
 		return boundedTime(parsed.Add(-time.Duration(p.fixedOffset) * time.Second))
@@ -155,41 +162,69 @@ func boundedTime(value time.Time) (time.Time, error) {
 	return utc, nil
 }
 
-func (p timeParser) validOffset(value string, parsed time.Time) bool {
+func (p timeParser) parseOffset(value string) (int, bool) {
 	if p.zoneToken == "" {
-		return true
+		return 0, true
 	}
-	suffix := parsed.Format(p.zoneSuffix)
-	if !strings.HasSuffix(value, suffix) {
-		return false
-	}
-	end := len(value) - len(suffix)
-	if end > 0 && value[end-1] == 'Z' && p.zoneToken[0] == 'Z' {
-		return true
-	}
-	size := len(p.zoneToken)
-	if end < size {
-		return false
-	}
-	zone := value[end-size : end]
-	if zone[0] != '+' && zone[0] != '-' {
-		return false
-	}
-	digits := strings.ReplaceAll(zone[1:], ":", "")
-	for i := 0; i < len(digits); i += 2 {
-		part, err := strconv.Atoi(digits[i : i+2])
-		if err != nil {
-			return false
+	zone := value
+	if p.zoneProbeLayout == "" {
+		// Terminal zone tokens have fixed width (or a single Z). This includes
+		// RFC3339 and avoids a second parse or allocation for the common path.
+		if len(value) > 0 && value[len(value)-1] == 'Z' && p.zoneToken[0] == 'Z' {
+			return 0, true
 		}
+		if len(value) < len(p.zoneToken) {
+			return 0, false
+		}
+		zone = value[len(value)-len(p.zoneToken):]
+	} else {
+		// Parse the original prefix once, terminating at an impossible zone byte.
+		// ValueElem then starts at the original zone spelling, even when preceding
+		// layout tokens permit optional fractions, padding, or variable-width
+		// numbers. Reformatting a suffix loses those spellings. The full timestamp
+		// has already parsed successfully, so the sentinel must be the first error.
+		_, err := time.Parse(p.zoneProbeLayout, value)
+		parseErr, ok := err.(*time.ParseError)
+		if !ok || !strings.HasSuffix(parseErr.LayoutElem, "\x00") {
+			return 0, false
+		}
+		zone = parseErr.ValueElem
+		if len(zone) > 0 && zone[0] == 'Z' && p.zoneToken[0] == 'Z' {
+			return 0, true
+		}
+		if len(zone) < len(p.zoneToken) {
+			return 0, false
+		}
+		zone = zone[:len(p.zoneToken)]
+	}
+	if zone[0] != '+' && zone[0] != '-' {
+		return 0, false
+	}
+	offset, multiplier := 0, 3600
+	for i := 1; i < len(zone); {
+		if zone[i] == ':' {
+			i++
+			continue
+		}
+		if i+1 >= len(zone) || !asciiDigits(zone[i:i+2]) {
+			return 0, false
+		}
+		part := int(zone[i]-'0')*10 + int(zone[i+1]-'0')
 		limit := 59
-		if i == 0 {
+		if i == 1 {
 			limit = 23
 		}
 		if part > limit {
-			return false
+			return 0, false
 		}
+		offset += part * multiplier
+		multiplier /= 60
+		i += 2
 	}
-	return true
+	if zone[0] == '-' {
+		offset = -offset
+	}
+	return offset, true
 }
 
 func asciiDigits(value string) bool {

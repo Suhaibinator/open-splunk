@@ -28,3 +28,35 @@ bypasses while preserving valid merges, defaults and programmatic roundtrips.
 Regression was red before the fix; full config/parserconfig race tests passed.
 No-policy security regressions also passed under race detection. The second
 full review wave follows renewed validation and integration of updated main.
+
+Wave 2 fixed candidate: 893d35fb9166d88885b9127e3f9521ce9812ac36
+Base: fb9cef37499bcb3706312a46d70f70a2c304721c
+2 gpt-6-astra:
+- correctness/durability: valid nonterminal timezone layouts reject alternate
+  Go-valid suffix spellings (fractional trailing zeros). Independent decoder
+  regression fails for logfmt and both Java formats. Durability otherwise clean.
+- security/adversarial semantics: clean, targeted tests passed.
+3 gpt-5.6-sol:
+- quality/API and test-quality reviewers independently reproduced the same
+  outer parser:null hole: a nil pointer bypasses parser mapping validation.
+  Both independently owned regressions are retained. Other areas clean.
+- performance/efficiency: clean; final 20-pair evidence and bounded scanners
+  independently checked.
+2 gpt-5.6-terra:
+- framing/restart: clean; targeted suites passed.
+- bounds/fuzz/errors: clean after retracting an internal-constructor-only
+  nested-static-object hypothesis. User YAML permits only validated flat
+  string static fields, so that hypothetical configuration cannot reach daemon
+  construction. No user-facing defect was demonstrated by that probe.
+
+Resolution: validate the effective outer parser node as a mapping using the
+parent YAML decoder, retaining KnownFields and merge precedence. Add omitempty
+for programmatic input configuration roundtrips while rejecting explicit null.
+For timestamps, locate nonterminal offsets from original spelling using one
+bounded prefix parse; terminal offsets retain the fast path. Structured positive
+fuzzing additionally found Go's -00:00:01 sentinel behavior; derive the instant
+from the validated original offset, retaining the discovered regression seed.
+All new regressions passed after recorded failures. Configuration/parserconfig
+race and vet passed; the new structured timestamp fuzz target passed 60 seconds
+and 595,762 cases. Renewed validation and complete wave 3 follow.
+No production ingestion ordering change or test assertion relaxation was made.
