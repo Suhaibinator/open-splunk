@@ -49,7 +49,9 @@ values make the YAML configuration invalid. The output of `validate`,
 
 `validate` proves that the YAML and referenced environment values parse, local
 configuration constraints hold, and the input globs can be evaluated in the
-current mount namespace. It deliberately does **not**:
+current mount namespace. Parser options, delimiter patterns, timestamp layouts,
+and timezone names are validated before evaluating globs. It does not open or
+parse source logs and deliberately does **not**:
 
 - read or validate the token file;
 - read or parse `server.tls.ca_file`;
@@ -186,7 +188,8 @@ alphanumeric; later characters may also contain `.`, `_`, `:`, and `-`.
 | `type` | string | `file` | Only `file` is supported. |
 | `include` | list of globs | Required | One or more file globs. At most 256 patterns, each 1 through 16 KiB. Patterns use Go/filepath glob syntax. |
 | `exclude` | list of globs | Empty | Removes include matches. At most 256 patterns, each 1 through 16 KiB. A pattern is checked against both the complete path and basename. |
-| `format` | string | `ndjson` | `ndjson` parses one JSON object per framed event; `raw` retains the framed bytes as the event body. |
+| `format` | string | `ndjson` | Selects one of the explicit [input formats](#input-formats) below. There is no format detection or fallback. |
+| `parser` | mapping | Absent | Options for `logfmt`, `log4j2-pattern`, or `logback-pattern`. Other formats reject this block, including an empty `{}`. |
 | `start_at` | string | `end` | `beginning` starts a newly discovered existing file at offset zero; `end` starts it at its current EOF. Durable checkpoints and pending WAL positions take precedence after the file is known. |
 | `index` | string | Required | Canonical destination index. It must exist, be enabled, and be authorized by the token at ingestion time. |
 | `source` | string | Input `id` | Source metadata, valid UTF-8 without control characters, at most 4,096 bytes. |
@@ -202,6 +205,190 @@ container, use the mounted destination path, not the host path. Prefer
 rename/recreate rotation and keep rotated files matched and readable until
 their checkpoints have advanced.
 
+### Input formats
+
+Each input uses one parser compiled at startup. NDJSON keeps its direct JSON
+decoding path even when other inputs use Java patterns. Parsing produces the
+same canonical event and typed dynamic fields used by existing inputs and
+processors; it does not require a different server schema.
+
+| `format` | Expected record and projection |
+|---|---|
+| `ndjson` | One JSON object per framed event, with existing canonical field aliases and exact numeric conversion. |
+| `raw` | Uninterpreted framed bytes. Valid UTF-8 also becomes the message; binary input does not invent text. |
+| `docker-json-file` | Docker JSON envelope: required string `log` becomes the message, required RFC3339Nano string `time` becomes event time, and required `stdout`/`stderr` string `stream` becomes `docker_stream`. Nonreserved extra fields retain JSON types. |
+| `nginx-combined` | NGINX's built-in combined access format with default escaping. |
+| `apache-common` | Apache Common Log Format: `%h %l %u %t "%r" %>s %b`. |
+| `apache-combined` | Apache common format followed by quoted Referer and User-Agent. |
+| `logfmt` | Space/tab-separated `key=value` fields, with optional canonical-key mappings. |
+| `log4j2-pattern` | UTF-8 emitted text matched by an explicit collector delimiter pattern. |
+| `logback-pattern` | The same delimiter engine, configured for a Logback producer's emitted text. |
+
+The fixed Docker and access formats follow the producer documentation:
+[Docker JSON file](https://docs.docker.com/engine/logging/drivers/json-file/),
+[NGINX access logging](https://nginx.org/en/docs/http/ngx_http_log_module.html#log_format),
+and [Apache access logging](https://httpd.apache.org/docs/2.4/mod/mod_log_config.html#formats).
+Custom access layouts, NGINX `escape=json`/`escape=none`, syslog, CRI fragment
+reassembly, and journald are outside these presets.
+
+For example, add this input to a complete collector configuration:
+
+```yaml
+inputs:
+  - id: docker-app
+    include: [/var/log/container-copy/*.log]
+    format: docker-json-file
+    start_at: beginning
+    index: application
+    host: app-01
+```
+
+Docker's decoded message keeps its embedded and trailing newline characters.
+Envelope duplicates, missing members, wrong member types, invalid Unicode,
+invalid timestamps, and conflicting `docker_stream` extras are rejected. Docker
+timestamps require an explicit offset and at most nine fractional digits.
+
+Access presets emit `client_address`, `ident`, `user`, `request`, `method`,
+`request_target`, `protocol`, `status`, and `response_bytes`; combined presets
+also emit `referrer` and `user_agent`. Event time comes from the bracketed
+timestamp and message from the decoded request. HTTP status does not infer a
+severity. Status must contain exactly three decimal digits; response bytes
+must fit an unsigned 64-bit integer. Values up to the signed 64-bit maximum
+use signed integer fields, and larger byte counts use unsigned fields.
+
+A dash omits unavailable identity/header values. Apache `%b` dash means zero
+response bytes; a NGINX byte-count dash omits that field. Empty quoted headers
+remain empty strings. NGINX uses `\xHH` escapes; Apache additionally accepts
+escaped quotes, backslashes, and its C-style whitespace escapes. Invalid
+escapes, broken delimiters, and extra columns reject the envelope. A malformed
+HTTP request inside a valid envelope remains an event with the original
+decoded request; components are emitted only for an unambiguous
+`METHOD target HTTP/d.d` request. Decoded non-UTF-8 values remain typed bytes,
+and a binary request does not become a text message.
+
+### `inputs[].parser`
+
+| Field | Applies to | Behavior |
+|---|---|---|
+| `fields` | `logfmt` | Maps canonical roles `timestamp`, `message`, `level`, `trace_id`, and `span_id` to source keys. Unspecified roles use the same-named key. All effective source keys must be distinct and valid; unrelated reserved metadata names cannot be mapped. |
+| `pattern` | Java formats | Required emitted-text delimiter pattern, at most 16 KiB, with at most 1,024 distinct captures and a terminal `%{message}`. |
+| `timestamp_layout` | logfmt and Java | A complete [Go time layout](https://pkg.go.dev/time#pkg-constants). Required for a Java `timestamp` capture; optional for logfmt. |
+| `timezone` | logfmt and Java | Required only for an offset-free explicit layout: `UTC`, `+HH:MM`, `-HH:MM`, or an IANA name such as `America/Los_Angeles`. Rejected without a layout or when that layout already contains an offset. |
+
+Unknown options and options irrelevant to the selected format are configuration
+errors. A timezone abbreviation such as `PST` or an `MST` layout token is
+unsupported. Layouts must include a complete date. Parsed instants must fall
+within years 1 through 9999 UTC; fractional seconds beyond nine digits are
+rejected instead of truncated. IANA timezone data is available in the binary.
+A local wall time must identify exactly one instant: both spring-forward gaps
+and repeated fall-back times are rejected. The machine's local timezone is
+never an implicit default. Prefer producer timestamps containing offsets when
+logs cross daylight-saving transitions.
+
+#### logfmt
+
+```yaml
+inputs:
+  - id: service-logfmt
+    include: [/var/log/service/*.log]
+    format: logfmt
+    index: application
+    parser:
+      fields:
+        timestamp: ts
+        message: msg
+        level: severity
+```
+
+This accepts a record such as
+`ts=2026-02-28T20:30:12Z severity=INFO msg="job finished" count=3 ok=true`.
+Without an explicit layout, text timestamps use RFC3339 and numeric timestamps
+use exact Unix seconds with nanosecond precision. A configured layout requires
+a text timestamp. An absent timestamp uses collection time; an invalid supplied
+timestamp rejects the record. Canonical message, level, trace, and span values
+must be strings.
+
+Quoted values use JSON string escaping and remain strings, including
+`count="3"` and `ok="true"`. Unquoted `true`/`false` become Booleans and
+JSON-shaped numbers use the existing exact integer/decimal conversion.
+Other unquoted values remain strings, including `null`; `key=` is an empty
+string. Values may contain `=`. Duplicate keys, bare tokens, broken quoted
+strings, invalid names, control characters in unquoted values, empty records,
+and invalid UTF-8 are rejected. Mapped canonical keys are consumed rather than
+duplicated into dynamic fields.
+
+#### Log4j2 and Logback patterns
+
+The collector pattern describes **emitted text**. It does not interpret the
+conversion programs documented by
+[Log4j2 Pattern Layout](https://logging.apache.org/log4j/2.x/manual/pattern-layout.html)
+or [Logback layouts](https://logback.qos.ch/manual/layouts.html).
+For Log4j2 output such as
+`[2026-02-28 20:30:12,123] INFO  [main] example.Job - completed`, configure:
+
+```yaml
+inputs:
+  - id: java-log4j2
+    include: [/var/log/java/log4j2.log]
+    format: log4j2-pattern
+    index: application
+    parser:
+      pattern: '[%{timestamp}] %{level} [%{thread}] %{logger} - %{message}'
+      timestamp_layout: '2006-01-02 15:04:05,000'
+      timezone: UTC
+    multiline:
+      line_start_pattern: '^\[\d{4}-\d{2}-\d{2} '
+      flush_after: 1s
+```
+
+For Logback output such as
+`2026-02-28T20:30:12.123+00:00 [main] WARN example.Job - retrying`, use
+`format: logback-pattern` with:
+
+```yaml
+parser:
+  pattern: '%{timestamp} [%{thread}] %{level} %{logger} - %{message}'
+  timestamp_layout: '2006-01-02T15:04:05.000Z07:00'
+```
+
+`%{timestamp}`, `%{message}`, `%{level}`, `%{trace_id}`, and `%{span_id}`
+populate canonical fields; other captures become string fields. A pattern
+without `timestamp` uses collection time and must omit timestamp options.
+`%%` matches a literal percent. Duplicate names, adjacent captures, reserved
+metadata captures, and any text after the final `%{message}` are invalid.
+Spaces/tabs in delimiter runs match one or more spaces/tabs, accommodating
+padded levels. Other delimiter text matches exactly. Matching proceeds left
+to right at the first complete delimiter and never revisits an earlier choice;
+choose delimiters that cannot occur inside the preceding capture.
+
+Header captures cannot contain line breaks. Terminal `%{message}` consumes the
+remainder, including stack traces and blank continuation lines assembled by
+`multiline`. Set `line_start_pattern` narrowly enough that exception text does
+not resemble a new header. Parsing alone does not join physical lines.
+
+### Parser bounds and metadata
+
+Every new parser observes `max_event_bytes` with a hard ceiling of 1 MiB.
+Field names are limited to 256 UTF-8 bytes. Parsed fields/captures are bounded
+before reserved names are discarded; output also observes the shared
+1,024-field, 16-level dynamic nesting, and 1 MiB aggregate field-path-name
+budgets, including static fields. Docker's JSON tokenizer additionally bounds
+nesting and total members before conversion. Records exceeding a bound are
+rejected rather than partially projected.
+
+Payloads cannot replace configured routing, source identity, or other reserved
+canonical metadata. Static fields win dynamic collisions. The decoder preserves
+the exact framed bytes as raw, excluding the final framing delimiter. This raw
+reaches ingestion unchanged when redaction is absent. Event IDs bind the
+original bytes and source position even when explicit redaction sanitizes raw
+after decoding.
+
+When migrating an existing input from `raw`, set `sourcetype` explicitly if
+queries must retain the old value: its default follows `format`. Keep the
+input ID and durable state to continue at the existing cursor. Changing the
+parser does not reparse already queued WAL events or replay acknowledged
+history; use a separately planned replay when historical reparsing is needed.
+
 ### `inputs[].multiline`
 
 | Field | Type | Default | Requirements and behavior |
@@ -216,7 +403,7 @@ matching start line.
 
 ### Decode, framing, and recovery
 
-Decode and framing failures happen before WAL append. Malformed NDJSON,
+Decode and framing failures happen before WAL append. Malformed input records,
 invalid canonical values or timestamps, and oversized framed records are
 synchronously appended and fsynced to `dead-letter.jsonl` before being
 skipped. Each source artifact contains a fixed rejection code, input ID, file
@@ -229,9 +416,17 @@ health error and retries the same source range.
 
 The warning remains payload-free (`skipping undecodable record` with source
 coordinates), and heartbeat dropped-event counters include these records. Use
-`raw` for non-JSON or binary-shaped input and alert on the warning and counter.
+an explicit matching parser or select `raw` when uninterpreted bytes are
+intended; a parser failure never falls back to raw. Alert on the warning and counter.
 Dead-letter files also contain durable batches the server permanently rejects
 and locally oversized records that had crossed the WAL boundary.
+
+A rejected trailing record does not by itself advance the terminal checkpoint.
+Its artifact is durable, but it may be reread and recorded again after restart
+until a later acknowledged event covers its position. An all-malformed file
+has the same behavior. A physical line without its final delimiter remains
+incomplete under ordinary line framing; configure multiline inactivity flushing
+when that explicit framing behavior is needed.
 
 ## `processors` reference
 
@@ -254,6 +449,30 @@ Static input metadata is established independently of the dynamic processor
 chain. Redaction is opt-in: there is no implicit sensitive-field list, and an
 empty processor list stores event content as received. Configure every field
 that must be redacted before the collector writes its local WAL.
+
+For the Docker, access, logfmt, and Java formats, explicitly configured
+redaction also follows source fields into their parsed projections. It includes
+active rename aliases whose values originate in the source, and sensitive
+assignments found inside decoded content. Escaped source values and positional
+captures cannot always be safely removed by matching a lexical key in raw.
+In those cases the collector conservatively replaces the **entire raw and
+message**, alongside the sensitive fields, before WAL append. Unrelated message
+text can therefore be removed by an intentional field-redaction policy.
+
+The first sensitive source in deterministic parser-projection order supplies
+the whole-text replacement; embedded-content detection uses `[REDACTED]` as
+its fallback. Individual fields retain their configured replacement markers.
+Sensitive canonical trace/span IDs are cleared, a sensitive level becomes its
+replacement with unspecified severity, and a sensitive timestamp falls back
+to collection time. Trusted metadata and static-field provenance remain
+protected, and the original event ID is retained. Native source reparsing runs
+only when redaction is explicitly configured; NDJSON and raw keep their
+existing sanitizer behavior and do not enter this native parsing path.
+
+Decode/framing rejection artifacts precede this sanitizer and retain their
+original sensitive recovery bytes (or the bounded prefix for an oversized
+record). Redaction of successfully parsed events does not sanitize those
+owner-only recovery artifacts.
 
 ## Fixed runtime behavior
 

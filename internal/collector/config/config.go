@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	collectorinput "github.com/Suhaibinator/open-splunk/internal/collector/input"
+	"github.com/Suhaibinator/open-splunk/internal/collector/parserconfig"
 	"github.com/Suhaibinator/open-splunk/internal/collectorlimits"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/indexname"
@@ -119,17 +120,18 @@ type StateConfig struct {
 // Source, Sourcetype, Host, Fields) are attached to every event and can never
 // be overridden by payload content.
 type InputConfig struct {
-	ID         string            `yaml:"id"`
-	Type       string            `yaml:"type"`
-	Include    []string          `yaml:"include"`
-	Exclude    []string          `yaml:"exclude"`
-	Format     string            `yaml:"format"`
-	StartAt    string            `yaml:"start_at"`
-	Index      string            `yaml:"index"`
-	Source     string            `yaml:"source"`
-	Sourcetype string            `yaml:"sourcetype"`
-	Host       string            `yaml:"host"`
-	Fields     map[string]string `yaml:"fields"`
+	Parser     *parserconfig.Options `yaml:"parser"`
+	ID         string                `yaml:"id"`
+	Type       string                `yaml:"type"`
+	Include    []string              `yaml:"include"`
+	Exclude    []string              `yaml:"exclude"`
+	Format     string                `yaml:"format"`
+	StartAt    string                `yaml:"start_at"`
+	Index      string                `yaml:"index"`
+	Source     string                `yaml:"source"`
+	Sourcetype string                `yaml:"sourcetype"`
+	Host       string                `yaml:"host"`
+	Fields     map[string]string     `yaml:"fields"`
 	// Multiline, when set, enables multi-line event assembly for this input.
 	Multiline *MultilineConfig `yaml:"multiline"`
 	// MaxEventBytes caps a single framed event; zero means the package default.
@@ -377,10 +379,8 @@ func (c *Config) Validate() error {
 		if in.Type != "file" {
 			return fmt.Errorf("input %q: type must be %q, got %q", id, "file", in.Type)
 		}
-		switch in.Format {
-		case "ndjson", "raw":
-		default:
-			return fmt.Errorf("input %q: format must be \"ndjson\" or \"raw\", got %q", id, in.Format)
+		if _, err := parserconfig.Compile(in.Format, in.Parser); err != nil {
+			return fmt.Errorf("input %q: parser: %w", id, err)
 		}
 		switch in.StartAt {
 		case "beginning", "end":
