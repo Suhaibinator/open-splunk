@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -43,6 +44,7 @@ func TestGroupedStoreStagesWaitsAndCoalescesOrderedLogicalBatches(t *testing.T) 
 		results <- outcome{result: result, err: err}
 	}()
 	waitForPendingReservations(t, sequencer, 2)
+	waitForNativeWaiters(t, store.commitWaiters, 2)
 	if got := store.commitWaiters.size(); got != 2 {
 		t.Fatalf("native waiter count = %d, want 2", got)
 	}
@@ -672,6 +674,21 @@ func openStoreGroupSequencer(t *testing.T) *visibility.SQLiteSequencer {
 	}
 	t.Cleanup(func() { _ = sequencer.Close() })
 	return sequencer
+}
+
+func waitForNativeWaiters(t *testing.T, waiters *commitWaiters, want uint32) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		got := waiters.size()
+		if got == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("native waiter count = %d, want %d", got, want)
+		}
+		runtime.Gosched()
+	}
 }
 
 func waitForPendingReservations(t *testing.T, sequencer visibility.Sequencer, want uint32) {
