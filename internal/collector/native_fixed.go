@@ -272,11 +272,28 @@ func (d *Decoder) decodeAccess(event *opensplunk.LogEvent, raw []byte) error {
 	appendText("client_address", address, true)
 	appendText("ident", ident, true)
 	appendText("user", user, true)
-	appendText("request", request, false)
-	if method, target, protocol, valid := nativeFixedRequest(request); valid {
-		appendText("method", method, false)
-		appendText("request_target", target, false)
-		appendText("protocol", protocol, false)
+	first, second, requestValid := nativeFixedRequest(request)
+	if utf8.Valid(request) {
+		// Own the request once, then share its immutable backing bytes across the
+		// canonical message and projections. None of these strings alias raw or
+		// the scanner's temporary escape buffer.
+		requestText := string(request)
+		event.Message = &requestText
+		fields = append(fields, &opensplunk.TypedObjectField{Name: "request", Value: nativeFixedString(requestText)})
+		if requestValid {
+			fields = append(fields,
+				&opensplunk.TypedObjectField{Name: "method", Value: nativeFixedString(requestText[:first])},
+				&opensplunk.TypedObjectField{Name: "request_target", Value: nativeFixedString(requestText[first+1 : second])},
+				&opensplunk.TypedObjectField{Name: "protocol", Value: nativeFixedString(requestText[second+1:])},
+			)
+		}
+	} else {
+		appendText("request", request, false)
+		if requestValid {
+			appendText("method", request[:first], false)
+			appendText("request_target", request[first+1:second], false)
+			appendText("protocol", request[second+1:], false)
+		}
 	}
 	fields = append(fields, &opensplunk.TypedObjectField{Name: "status", Value: statusValue})
 	if responseValue != nil {
@@ -285,9 +302,6 @@ func (d *Decoder) decodeAccess(event *opensplunk.LogEvent, raw []byte) error {
 	if d.cfg.Format != "apache-common" {
 		appendText("referrer", referrer, true)
 		appendText("user_agent", agent, true)
-	}
-	if utf8.Valid(request) {
-		event.Message = new(string(request))
 	}
 	event.EventTime = eventTime
 	event.EventTimeSource = opensplunk.EventTimeSource_EVENT_TIME_SOURCE_PARSED
@@ -435,34 +449,38 @@ func nativeFixedInteger(value uint64) *opensplunk.TypedValue {
 
 func nativeFixedText(value []byte) *opensplunk.TypedValue {
 	if utf8.Valid(value) {
-		return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_StringValue{StringValue: string(value)}}
+		return nativeFixedString(string(value))
 	}
 	return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_BytesValue{BytesValue: bytes.Clone(value)}}
 }
 
-func nativeFixedRequest(value []byte) (method, target, protocol []byte, ok bool) {
-	first := bytes.IndexByte(value, ' ')
+func nativeFixedString(value string) *opensplunk.TypedValue {
+	return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_StringValue{StringValue: value}}
+}
+
+func nativeFixedRequest(value []byte) (first, second int, ok bool) {
+	first = bytes.IndexByte(value, ' ')
 	if first < 1 {
-		return nil, nil, nil, false
+		return 0, 0, false
 	}
-	second := bytes.IndexByte(value[first+1:], ' ')
+	second = bytes.IndexByte(value[first+1:], ' ')
 	if second < 1 {
-		return nil, nil, nil, false
+		return 0, 0, false
 	}
 	second += first + 1
-	method, target, protocol = value[:first], value[first+1:second], value[second+1:]
+	method, target, protocol := value[:first], value[first+1:second], value[second+1:]
 	if len(protocol) != 8 || !bytes.Equal(protocol[:5], []byte("HTTP/")) || protocol[5] < '0' || protocol[5] > '9' || protocol[6] != '.' || protocol[7] < '0' || protocol[7] > '9' {
-		return nil, nil, nil, false
+		return 0, 0, false
 	}
 	for _, c := range method {
 		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && !strings.ContainsRune("!#$%&'*+-.^_`|~", rune(c)) {
-			return nil, nil, nil, false
+			return 0, 0, false
 		}
 	}
 	for _, c := range target {
 		if c <= ' ' || c == 0x7f {
-			return nil, nil, nil, false
+			return 0, 0, false
 		}
 	}
-	return method, target, protocol, true
+	return first, second, true
 }

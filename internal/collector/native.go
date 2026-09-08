@@ -25,7 +25,9 @@ func (d *Decoder) decodeNative(event *opensplunk.LogEvent, raw []byte) (*openspl
 	if err != nil {
 		return nil, err
 	}
-	event.Fields = d.mergeConstants(event.Fields.GetFields())
+	if len(d.constants) != 0 {
+		event.Fields = d.mergeConstants(event.Fields.GetFields())
+	}
 	budget := nativeFieldBudget{fields: min(d.cfg.MaxJSONFields, eventfields.MaximumStoredFieldsPerEvent), names: eventfields.MaximumStoredFieldNamesBytes, depth: min(d.cfg.MaxJSONDepth, eventfields.MaximumDynamicPathSegments)}
 	if err := budget.object(event.Fields, 1, 0); err != nil {
 		return nil, err
