@@ -23,3 +23,10 @@ presence, original timestamp suffix, negative-one-second offset fuzz and
 same-role alias failures before their respective fixes. Review source revisions
 and findings are recorded in ../reviews.txt. Payload values here are synthetic
 fixtures; all outputs are copied verbatim from the recorded local runs.
+
+Literal precision failures cover parser and logfmt/both Java decoder projections.
+The independent precision-adversarial red run used a read-only overlay of the
+committed pre-fix parser because the shared tree already contained the fix.
+Short-year-red independently specifies all 20 signed two-character year values.
+Implementation scaffold/configuration failures are distinguished above from
+semantic failures, and recorded infrastructure errors are not claimed as defects.
