@@ -74,7 +74,7 @@ func TestHandlerLiveHTTP2Backpressure(t *testing.T) {
 			perTokenLimit:    1,
 			firstCredential:  "transport-a",
 			secondCredential: "transport-b",
-			wantAuthCalls:    1,
+			wantAuthCalls:    2,
 		},
 		{
 			name:             "per-token gate",

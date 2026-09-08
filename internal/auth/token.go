@@ -941,6 +941,9 @@ func (store *Store) AuthenticateHEC(
 	if ctx == nil {
 		return Authentication{}, fmt.Errorf("%w: nil context", control.ErrInvalidArgument)
 	}
+	if err := store.preflightHECAuthentication(ctx, plaintext); err != nil {
+		return Authentication{}, classifyHECAuthenticationError(err)
+	}
 	checkedAt := databaseTime(store.now())
 	tx := store.orm.WithContext(ctx).Begin()
 	if tx.Error != nil {
@@ -975,6 +978,30 @@ func (store *Store) AuthenticateHEC(
 	}
 	finished = true
 	return authentication, nil
+}
+
+// preflightHECAuthentication rejects unusable credentials without reserving
+// SQLite's writer. The read-only transaction keeps allocation guards and
+// authority hydration in one snapshot. Its result never authorizes work: the
+// successful write transaction must authenticate again before recording use.
+func (store *Store) preflightHECAuthentication(
+	ctx context.Context,
+	plaintext string,
+) (returnedErr error) {
+	tx := store.orm.WithContext(ctx).Begin(&sql.TxOptions{ReadOnly: true})
+	if tx.Error != nil {
+		return fmt.Errorf("begin HEC credential preflight: %w", tx.Error)
+	}
+	finished := false
+	defer finishTokenTransaction(tx, &finished, &returnedErr)
+	if _, err := store.authenticateHEC(tx, plaintext, databaseTime(store.now())); err != nil {
+		return err
+	}
+	if err := tx.Commit().Error; err != nil {
+		return fmt.Errorf("commit HEC credential preflight: %w", err)
+	}
+	finished = true
+	return nil
 }
 
 func classifyHECAuthenticationError(err error) error {

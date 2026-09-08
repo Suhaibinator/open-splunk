@@ -102,6 +102,7 @@ type Handler struct {
 	tenantID        string
 	now             func() time.Time
 	newRequestID    RequestIDGenerator
+	authSlots       chan struct{}
 	globalSlots     chan struct{}
 	healthSlots     chan struct{}
 	perTokenLimit   int
@@ -157,6 +158,7 @@ func New(config Config) (*Handler, error) {
 		tenantID:        config.TenantID,
 		now:             config.Now,
 		newRequestID:    config.NewRequestID,
+		authSlots:       make(chan struct{}, config.MaximumConcurrentRequests),
 		globalSlots:     make(chan struct{}, config.MaximumConcurrentRequests),
 		healthSlots:     make(chan struct{}, min(defaultMaximumConcurrentHealthRequests, config.MaximumConcurrentRequests)),
 		perTokenLimit:   config.MaximumConcurrentRequestsPerToken,
@@ -233,17 +235,17 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 		handler.writeError(response, hec.NewProtocolError(hec.ErrorQueryAuthorizationDisabled, nil))
 		return
 	}
+	authentication, err := handler.authenticate(request)
+	if err != nil {
+		handler.writeError(response, err)
+		return
+	}
 	releaseGlobal, err := handler.beginGlobal()
 	if err != nil {
 		handler.writeError(response, err)
 		return
 	}
 	defer releaseGlobal()
-	authentication, err := handler.authenticate(request)
-	if err != nil {
-		handler.writeError(response, err)
-		return
-	}
 	query, err := parseEndpointQuery(request.URL.RawQuery, route.Endpoint, handler.limits)
 	if err != nil {
 		handler.writeError(response, err)
@@ -317,6 +319,14 @@ func (handler *Handler) authenticate(request *http.Request) (auth.Authentication
 	if err != nil {
 		handler.metrics.observeAuthenticationFailure()
 		return auth.Authentication{}, err
+	}
+	// Authentication is bounded independently of protected body/staging work.
+	// Optional authenticated health probes use this same short-lived gate.
+	select {
+	case handler.authSlots <- struct{}{}:
+		defer func() { <-handler.authSlots }()
+	default:
+		return auth.Authentication{}, hec.NewProtocolError(hec.ErrorServerBusy, nil)
 	}
 	authentication, err := handler.authenticator.AuthenticateHEC(request.Context(), plaintext)
 	if err == nil {

@@ -998,7 +998,7 @@ func TestHandlerConcurrencyGatesGloballyAndPerToken(t *testing.T) {
 			perTokenLimit: 1,
 			firstSecret:   "token-a",
 			secondSecret:  "token-b",
-			wantAuthCalls: 1,
+			wantAuthCalls: 2,
 		},
 		{
 			name:          "per token",
