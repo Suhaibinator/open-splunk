@@ -2,6 +2,7 @@ package parserconfig
 
 import (
 	"errors"
+
 	yaml "go.yaml.in/yaml/v3"
 )
 
