@@ -25,7 +25,7 @@ func TestPerfReviewAstraCaptureIntoErrorsAndLargeFallback(t *testing.T) {
 		}
 	}
 	var pattern, raw strings.Builder
-	for i := 0; i < 1023; i++ {
+	for i := range 1023 {
 		fmt.Fprintf(&pattern, "%%{f%d}|", i)
 		raw.WriteString("value|")
 	}
