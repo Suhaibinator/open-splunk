@@ -50,14 +50,19 @@ type runtimeHECTestAuthenticator struct {
 	err            error
 }
 
-func (authenticator *runtimeHECTestAuthenticator) AuthenticateHEC(
+func (authenticator *runtimeHECTestAuthenticator) AuthenticateHECWithAdmission(
 	_ context.Context,
 	credential string,
+	admit auth.HECRequestAdmission,
 ) (auth.Authentication, error) {
 	authenticator.mu.Lock()
 	defer authenticator.mu.Unlock()
 	authenticator.credentials = append(authenticator.credentials, credential)
-	return authenticator.authentication, authenticator.err
+	if authenticator.err != nil {
+		return auth.Authentication{}, authenticator.err
+	}
+	_, err := admit(authenticator.authentication)
+	return authenticator.authentication, err
 }
 
 func (authenticator *runtimeHECTestAuthenticator) snapshot() []string {

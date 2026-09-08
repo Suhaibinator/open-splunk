@@ -37,10 +37,10 @@ const (
 	maximumRetryAfterSeconds                 = 3_600
 )
 
-// Authenticator resolves a plaintext HEC credential into a safe, current
-// policy snapshot and records successful token use.
+// Authenticator identifies a credential without writes, calls admission once,
+// then revalidates current policy and records use under the admitted context.
 type Authenticator interface {
-	AuthenticateHEC(context.Context, string) (auth.Authentication, error)
+	AuthenticateHECWithAdmission(context.Context, string, auth.HECRequestAdmission) (auth.Authentication, error)
 }
 
 // AdmissionStager owns request-atomic normalization, authorization, quota,
@@ -75,14 +75,16 @@ type RequestIDGenerator func() (string, error)
 // Config requires the complete HEC dependency set. Construction fails rather
 // than registering a partial protocol surface.
 type Config struct {
-	Next                              http.Handler
-	Authenticator                     Authenticator
-	Admission                         AdmissionStager
-	Acknowledgments                   visibility.HECAcknowledgmentReader
-	Health                            HealthChecker
-	Metrics                           *Metrics
-	Limits                            hec.Limits
-	TenantID                          string
+	Next            http.Handler
+	Authenticator   Authenticator
+	Admission       AdmissionStager
+	Acknowledgments visibility.HECAcknowledgmentReader
+	Health          HealthChecker
+	Metrics         *Metrics
+	Limits          hec.Limits
+	TenantID        string
+	// MaximumConcurrentRequests bounds authentication and protected work as
+	// separate stages; their independent ceilings may overlap.
 	MaximumConcurrentRequests         int
 	MaximumConcurrentRequestsPerToken int
 	Now                               func() time.Time
@@ -235,17 +237,23 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 		handler.writeError(response, hec.NewProtocolError(hec.ErrorQueryAuthorizationDisabled, nil))
 		return
 	}
-	authentication, err := handler.authenticate(request)
+	var release func()
+	defer func() {
+		if release != nil {
+			release()
+		}
+	}()
+	protectedContext := request.Context()
+	authentication, err := handler.authenticate(request, func(identity auth.Authentication) (context.Context, error) {
+		var admissionErr error
+		protectedContext, release, admissionErr = handler.beginAdmission(request.Context(), identity.TokenID)
+		return protectedContext, admissionErr
+	})
 	if err != nil {
 		handler.writeError(response, err)
 		return
 	}
-	releaseGlobal, err := handler.beginGlobal()
-	if err != nil {
-		handler.writeError(response, err)
-		return
-	}
-	defer releaseGlobal()
+	request = request.WithContext(protectedContext)
 	query, err := parseEndpointQuery(request.URL.RawQuery, route.Endpoint, handler.limits)
 	if err != nil {
 		handler.writeError(response, err)
@@ -268,17 +276,6 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 		handler.writeError(response, hec.NewProtocolError(hec.ErrorAcknowledgmentDisabled, nil))
 		return
 	}
-	protectedContext, release, err := handler.beginToken(
-		request.Context(),
-		authentication.TokenID,
-	)
-	if err != nil {
-		handler.writeError(response, err)
-		return
-	}
-	defer release()
-	request = request.WithContext(protectedContext)
-
 	switch route.Endpoint {
 	case hec.EndpointEvent:
 		receivedAt := handler.now().Round(0).UTC()
@@ -309,7 +306,7 @@ func (handler *Handler) validateFraming(request *http.Request, endpoint hec.Endp
 	return hec.ParseContentEncoding(request.Header.Values("Content-Encoding"))
 }
 
-func (handler *Handler) authenticate(request *http.Request) (auth.Authentication, error) {
+func (handler *Handler) authenticate(request *http.Request, admit auth.HECRequestAdmission) (auth.Authentication, error) {
 	values := request.Header.Values("Authorization")
 	plaintext, err := hec.ParseAuthorization(
 		values,
@@ -328,9 +325,12 @@ func (handler *Handler) authenticate(request *http.Request) (auth.Authentication
 	default:
 		return auth.Authentication{}, hec.NewProtocolError(hec.ErrorServerBusy, nil)
 	}
-	authentication, err := handler.authenticator.AuthenticateHEC(request.Context(), plaintext)
+	authentication, err := handler.authenticator.AuthenticateHECWithAdmission(request.Context(), plaintext, admit)
 	if err == nil {
 		return authentication, nil
+	}
+	if _, ok := errors.AsType[*hec.ProtocolError](err); ok {
+		return auth.Authentication{}, err
 	}
 	handler.metrics.observeAuthenticationFailure()
 	if errors.Is(err, auth.ErrInactiveToken) {
@@ -344,6 +344,22 @@ func (handler *Handler) authenticate(request *http.Request) (auth.Authentication
 		return auth.Authentication{}, hec.NewProtocolError(hec.ErrorInvalidToken, err)
 	}
 	return auth.Authentication{}, hec.NewProtocolError(hec.ErrorInternal, err)
+}
+
+func (handler *Handler) beginAdmission(parent context.Context, tokenID string) (context.Context, func(), error) {
+	releaseGlobal, err := handler.beginGlobal()
+	if err != nil {
+		return nil, nil, err
+	}
+	protectedContext, releaseToken, err := handler.beginToken(parent, tokenID)
+	if err != nil {
+		releaseGlobal()
+		return nil, nil, err
+	}
+	return protectedContext, func() {
+		releaseToken()
+		releaseGlobal()
+	}, nil
 }
 
 func (handler *Handler) beginGlobal() (func(), error) {

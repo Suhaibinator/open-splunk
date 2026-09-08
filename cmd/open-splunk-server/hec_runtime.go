@@ -16,7 +16,7 @@ import (
 )
 
 type runtimeHECAuthenticator interface {
-	AuthenticateHEC(context.Context, string) (auth.Authentication, error)
+	AuthenticateHECWithAdmission(context.Context, string, auth.HECRequestAdmission) (auth.Authentication, error)
 }
 
 type runtimeHECSequencer interface {

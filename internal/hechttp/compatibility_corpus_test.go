@@ -555,7 +555,7 @@ type compatibilityAuthenticator struct {
 	err            error
 }
 
-func (fake *compatibilityAuthenticator) AuthenticateHEC(_ context.Context, credential string) (auth.Authentication, error) {
+func (fake *compatibilityAuthenticator) AuthenticateHECWithAdmission(_ context.Context, credential string, admit auth.HECRequestAdmission) (auth.Authentication, error) {
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	fake.calls++
@@ -566,7 +566,11 @@ func (fake *compatibilityAuthenticator) AuthenticateHEC(_ context.Context, crede
 	if fake.credential == "" || credential != fake.credential {
 		return auth.Authentication{}, auth.ErrUnauthorized
 	}
-	return fake.authentication, fake.err
+	if fake.err != nil {
+		return auth.Authentication{}, fake.err
+	}
+	_, err := admit(fake.authentication)
+	return fake.authentication, err
 }
 
 func (fake *compatibilityAuthenticator) snapshot() (int, bool) {

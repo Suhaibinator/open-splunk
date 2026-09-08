@@ -1,9 +1,11 @@
 package hechttp
 
 import (
+	"context"
 	"errors"
 	"net/http"
 
+	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/hec"
 )
 
@@ -32,9 +34,25 @@ func (handler *Handler) serveHealth(response http.ResponseWriter, request *http.
 	}
 	defer releaseHealth()
 	if len(request.Header.Values("Authorization")) != 0 {
-		_, authErr := handler.authenticate(request)
+		var releaseToken func()
+		defer func() {
+			if releaseToken != nil {
+				releaseToken()
+			}
+		}()
+		_, authErr := handler.authenticate(request, func(identity auth.Authentication) (context.Context, error) {
+			if !handler.tokenSlots.acquire(identity.TokenID, handler.perTokenLimit) {
+				return nil, hec.NewProtocolError(hec.ErrorServerBusy, nil)
+			}
+			releaseToken = func() { handler.tokenSlots.release(identity.TokenID) }
+			return request.Context(), nil
+		})
 		if authErr != nil {
 			var failure *hec.ProtocolError
+			if errors.As(authErr, &failure) && failure.Kind == hec.ErrorServerBusy {
+				handler.writeResponse(response, hec.NewResponse(hec.ResultUnhealthyQueuesFull), 0, 0)
+				return
+			}
 			if errors.As(authErr, &failure) && failure.Kind == hec.ErrorTokenDisabled {
 				handler.writeResponse(response, hec.NewResponse(hec.ResultHealthTokenDisabled), 0, 0)
 				return

@@ -119,6 +119,22 @@ func TestAuthenticateHECRejectsCredentialsWithoutSQLiteWriterAdmission(t *testin
 	if observations != 0 {
 		t.Fatalf("rejected authentication wrote %d last-use observations", observations)
 	}
+	admissionRejected := errors.New("request capacity unavailable")
+	if _, err := store.AuthenticateHECWithAdmission(ctx, valid.Secret.Plaintext(), func(identity Authentication) (context.Context, error) {
+		if identity.TokenID != valid.Token.ID {
+			t.Fatalf("admission received unexpected identity %q", identity.TokenID)
+		}
+		return nil, admissionRejected
+	}); !errors.Is(err, admissionRejected) || control.IsDatabaseContention(err) {
+		t.Fatalf("admission rejection reached the SQLite writer: %v", err)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := store.AuthenticateHECWithAdmission(ctx, valid.Secret.Plaintext(), func(Authentication) (context.Context, error) {
+		return canceled, nil
+	}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("final authentication ignored its admitted context: %v", err)
+	}
 }
 
 func TestAuthenticateHECRechecksAuthorityAfterReadOnlyPreflight(t *testing.T) {

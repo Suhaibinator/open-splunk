@@ -4,10 +4,12 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/auth"
+	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 )
 
@@ -102,6 +104,106 @@ func TestHandlerPendingAuthenticationDoesNotConsumeProtectedAdmission(t *testing
 	}
 }
 
+func TestHandlerReleasesAdmissionWhenFinalAuthenticationFails(t *testing.T) {
+	t.Parallel()
+	for _, health := range []bool{false, true} {
+		method, path, contentType, body := http.MethodPost, "/services/collector/event", "application/json", `{"event":"accepted"}`
+		failureStatus, failureBody := http.StatusForbidden, `{"text":"Invalid token","code":4}`
+		successBody := `{"text":"Success","code":0}`
+		if health {
+			method, path, contentType, body = http.MethodGet, "/services/collector/health", "", ""
+			failureStatus, failureBody = http.StatusBadRequest, `{"text":"Invalid token","code":21}`
+			successBody = `{"text":"HEC is healthy","code":17}`
+		}
+		t.Run(path, func(t *testing.T) {
+			t.Parallel()
+			var completions atomic.Int32
+			harness := newHandlerHarness(t, func(config *Config, harness *handlerHarness) {
+				config.MaximumConcurrentRequests = 1
+				config.MaximumConcurrentRequestsPerToken = 1
+				harness.auth.afterAdmission = func(context.Context) error {
+					if completions.Add(1) == 1 {
+						return auth.ErrUnauthorized
+					}
+					return nil
+				}
+			})
+			rejected := perform(harness.handler, hecRequest(method, path, contentType, "Splunk token", "", body))
+			assertHECResponse(t, rejected, failureStatus, failureBody, nil)
+			accepted := perform(harness.handler, hecRequest(method, path, contentType, "Splunk token", "", body))
+			assertHECResponse(t, accepted, http.StatusOK, successBody, nil)
+			if len(harness.handler.globalSlots) != 0 || len(harness.handler.authSlots) != 0 {
+				t.Fatal("final authentication retained capacity")
+			}
+		})
+	}
+}
+
+func TestHandlerRejectsCapacityBeforeRecordingTokenUse(t *testing.T) {
+	t.Parallel()
+	for _, gate := range []string{"global", "token", "health token"} {
+		t.Run(gate, func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			db, err := control.Open(ctx, t.TempDir()+"/control.sqlite")
+			if err != nil {
+				t.Fatalf("open control database: %v", err)
+			}
+			t.Cleanup(func() { _ = db.Close() })
+			if _, err := db.CreateIndex(ctx, control.IndexDefinition{Name: "main", DisplayName: "Main", IngestionEnabled: true, SearchEnabled: true}); err != nil {
+				t.Fatalf("create index: %v", err)
+			}
+			store, err := auth.NewStore(db, []byte("0123456789abcdef0123456789abcdef"))
+			if err != nil {
+				t.Fatalf("create token store: %v", err)
+			}
+			issued, err := store.CreateCollectorToken(ctx, auth.CreateCollectorTokenRequest{
+				Name: "admission-before-use", Purpose: auth.IngestionTokenPurposeHEC,
+				AllowedIndexNames: []string{"main"}, HECProfile: auth.HECTokenProfile{DefaultIndexName: "main"},
+			})
+			if err != nil {
+				t.Fatalf("create HEC token: %v", err)
+			}
+			harness := newHandlerHarness(t, func(config *Config, _ *handlerHarness) {
+				config.Authenticator = store
+				config.MaximumConcurrentRequests = 1
+				config.MaximumConcurrentRequestsPerToken = 1
+			})
+			var release func()
+			if gate == "global" {
+				release, err = harness.handler.beginGlobal()
+				if err != nil {
+					t.Fatalf("reserve global capacity: %v", err)
+				}
+			} else {
+				if !harness.handler.tokenSlots.acquire(issued.Token.ID, 1) {
+					t.Fatal("reserve token capacity")
+				}
+				release = func() { harness.handler.tokenSlots.release(issued.Token.ID) }
+			}
+			method, path, contentType, body := http.MethodPost, "/services/collector/event", "application/json", `{"event":"accepted"}`
+			busyBody, successBody := `{"text":"Server is busy","code":9}`, `{"text":"Success","code":0}`
+			if gate == "health token" {
+				method, path, contentType, body = http.MethodGet, "/services/collector/health", "", ""
+				busyBody, successBody = `{"text":"HEC is unhealthy, queues are full","code":18}`, `{"text":"HEC is healthy","code":17}`
+			}
+			response := perform(harness.handler, hecRequest(method, path, contentType, "Splunk "+issued.Secret.Plaintext(), "", body))
+			assertHECResponse(t, response, http.StatusServiceUnavailable, busyBody, nil)
+			current, err := store.GetCollectorToken(ctx, issued.Token.ID)
+			if err != nil || !current.LastUsedAt.IsZero() {
+				t.Fatalf("capacity-rejected request recorded token use: %v, %v", current.LastUsedAt, err)
+			}
+			release()
+			response = perform(harness.handler, hecRequest(method, path, contentType, "Splunk "+issued.Secret.Plaintext(), "", body))
+			assertHECResponse(t, response, http.StatusOK, successBody, nil)
+			current, err = store.GetCollectorToken(ctx, issued.Token.ID)
+			if err != nil || current.LastUsedAt.IsZero() {
+				t.Fatalf("admitted request did not record token use: %v, %v", current.LastUsedAt, err)
+			}
+		})
+	}
+}
+
 func TestHandlerBoundsAuthenticationAcrossRoutesAndReleasesCanceledWork(t *testing.T) {
 	t.Parallel()
 	entered := make(chan struct{})
@@ -137,7 +239,7 @@ func TestHandlerBoundsAuthenticationAcrossRoutesAndReleasesCanceledWork(t *testi
 			}
 			if path == "/services/collector/health" {
 				method, contentType = http.MethodGet, ""
-				wantStatus, wantBody = http.StatusBadRequest, `{"text":"Invalid token","code":21}`
+				wantStatus, wantBody = http.StatusServiceUnavailable, `{"text":"HEC is unhealthy, queues are full","code":18}`
 			}
 			body := newTrackingBody("must remain unread")
 			request := httptest.NewRequestWithContext(t.Context(), method, path, body)
