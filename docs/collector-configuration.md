@@ -161,6 +161,14 @@ connection to an Open Splunk server. The server-side listener settings are
 `OPEN_SPLUNK_SERVER_COLLECTOR_GRPC_TLS_PRIVATE_KEY_FILE`; see the
 [server configuration reference](../deploy/README.md#server-configuration).
 
+The server allows 10 seconds for transport setup and 30 seconds from accepting
+the connection to sending `CollectorReady`, including bearer authentication and
+collector session admission. Connections that do not reach Ready within that
+budget close and release their listener slot; HTTP/2 activity and unsuccessful
+RPCs do not extend it. Established collector streams retain their normal
+heartbeat and connection lifetime policies. The shipped collector already
+limits each complete connection attempt to 10 seconds and retries with backoff.
+
 ## `state` reference
 
 | Field | Type | Default | Requirements and behavior |
