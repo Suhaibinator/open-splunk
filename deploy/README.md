@@ -31,6 +31,51 @@ network trusted: containers on that network can reach the server directly.
 The tested ClickHouse release is `26.7.5.10`. Pin that release instead of using
 the mutable `clickhouse/clickhouse-server:latest` tag.
 
+## Protect the environment file
+
+Before adding either credential, create the environment file from the
+repository root:
+
+```sh
+cd deploy
+umask 077
+./generate-env.sh --production
+```
+
+The generator copies `.env.example` to `.env` with mode `0600`, owned by the
+invoking user, and refuses to overwrite any existing file or symlink. It
+publishes the complete file from private temporary storage without replacing
+an existing destination, including during concurrent setup. It does not
+change permissions on an existing production directory. For another Compose
+project, pass its absolute `.env` path as the second argument.
+
+Run this as the host account that runs Compose. The file is read by the host
+Compose client, so it does not need to belong to container UID `65532`.
+The deployment directory and its parents must be controlled by trusted
+operators, with no write access for other users. Keep the editing shell's
+`umask 077`, verify the file remains `0600` after saving, and configure the
+editor to keep swap files and backup copies private. Apply the same protection
+to any secret-bearing YAML, copied environment files, and archived backups.
+
+### Existing environment files and upgrades
+
+Keep existing settings and credentials when upgrading; do not regenerate or
+replace `.env`. As its owning Compose account, first verify that it is a
+regular file owned by that account, then restrict it before editing or
+starting Compose:
+
+```sh
+umask 077
+test ! -L .env && test -f .env && chmod 0600 .env && ls -l .env
+```
+
+The listing must show the expected owner and `-rw-------`. Resolve unexpected
+ownership or a symlink before continuing. Protect existing copies and editor
+backups too. If either credential was previously readable by untrusted local
+users, rotate the administrator token and ClickHouse password, update all
+consumers, and recreate the affected containers. Changing file permissions
+does not revoke a credential that was already copied.
+
 ## Server configuration
 
 Every normal server setting has both a CLI flag and an explicitly registered
@@ -251,6 +296,10 @@ shared value in the Compose `.env` file instead of duplicating it in YAML:
 CLICKHOUSE_PASSWORD=replace-with-the-existing-clickhouse-password
 ```
 
+Before editing that project's `.env`, follow
+[Protect the environment file](#protect-the-environment-file), including the
+existing-file procedure when ClickHouse already has one.
+
 ### Configure browser access
 
 The supplied service listens on `0.0.0.0:8080` inside the container so Docker
@@ -312,7 +361,10 @@ It is unrelated to the ClickHouse password. Generate it once and retain it:
 openssl rand -base64 48
 ```
 
-Paste the single-line output into `.env` without a `Bearer ` prefix:
+Paste the single-line output into the private `.env` created
+[above](#protect-the-environment-file), without a `Bearer ` prefix. Generate
+and paste it in a private terminal session; do not put the credential itself
+in shell commands, logs, or shared terminal transcripts:
 
 ```dotenv
 OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN=replace-with-the-generated-value
@@ -322,14 +374,7 @@ The token must contain 32 through 512 ASCII characters from letters, digits,
 `-._~+/`, with `=` permitted only as trailing base64 padding. Do not add spaces,
 quotes, or line breaks to the value.
 
-Create the environment file:
-
-```sh
-cd deploy
-cp .env.example .env
-```
-
-Set these values in `.env`:
+Set these values in the private `.env`:
 
 ```dotenv
 OPEN_SPLUNK_DEPLOY_SERVER_IMAGE=ghcr.io/suhaibinator/open-splunk-server:0.MINOR.PATCH
