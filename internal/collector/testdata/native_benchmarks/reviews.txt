@@ -1,0 +1,139 @@
+Issue #104 independent review waves
+
+Wave 1 fixed candidate: 13fc6ad36688f3b837e04de16cd9d68f89573958
+Baseline: a8092b5111b98c3d18fcacb6e1a6b49918f1e030
+
+2 gpt-6-astra:
+- correctness/durability: clean; targeted native + durability tests passed.
+- security/adversarial semantics: clean; added independent tests for no default
+  keyword redaction across all 7 formats and NDJSON/raw, escaped/nested secrets,
+  rename chains, payload-free Unicode errors and trusted metadata/static fields.
+3 gpt-5.6-sol:
+- code quality/API design: one actionable finding. YAML logfmt parser.pattern:
+  '' was accepted because the string zero value lost option presence. Added
+  independent config.Load regression, observed expected rejection failure.
+- efficiency/performance: clean; inspected isolated evidence, linear scanner
+  behavior, immutable state, NDJSON allocations/path and profile output.
+- test quality/producer fidelity: clean; independently checked source-backed
+  fixture semantics and real-file/compiled backend coverage; tests passed.
+2 gpt-5.6-terra:
+- framing/restart: clean; targeted durability, multiline, pending WAL, withheld
+  ack, recovery failure, framing and input tests passed.
+- bounds/fuzz/errors/timestamps: clean; independent inspection and targeted
+  collector/parserconfig tests passed.
+
+Resolution: retain YAML option presence through strict unmarshalling; reject
+explicit irrelevant/empty options, unknown/duplicate keys and alias-key
+bypasses while preserving valid merges, defaults and programmatic roundtrips.
+Regression was red before the fix; full config/parserconfig race tests passed.
+No-policy security regressions also passed under race detection. The second
+full review wave follows renewed validation and integration of updated main.
+
+Wave 2 fixed candidate: 893d35fb9166d88885b9127e3f9521ce9812ac36
+Base: fb9cef37499bcb3706312a46d70f70a2c304721c
+2 gpt-6-astra:
+- correctness/durability: valid nonterminal timezone layouts reject alternate
+  Go-valid suffix spellings (fractional trailing zeros). Independent decoder
+  regression fails for logfmt and both Java formats. Durability otherwise clean.
+- security/adversarial semantics: clean, targeted tests passed.
+3 gpt-5.6-sol:
+- quality/API and test-quality reviewers independently reproduced the same
+  outer parser:null hole: a nil pointer bypasses parser mapping validation.
+  Both independently owned regressions are retained. Other areas clean.
+- performance/efficiency: clean; final 20-pair evidence and bounded scanners
+  independently checked.
+2 gpt-5.6-terra:
+- framing/restart: clean; targeted suites passed.
+- bounds/fuzz/errors: clean after retracting an internal-constructor-only
+  nested-static-object hypothesis. User YAML permits only validated flat
+  string static fields, so that hypothetical configuration cannot reach daemon
+  construction. No user-facing defect was demonstrated by that probe.
+
+Resolution: validate the effective outer parser node as a mapping using the
+parent YAML decoder, retaining KnownFields and merge precedence. Add omitempty
+for programmatic input configuration roundtrips while rejecting explicit null.
+For timestamps, locate nonterminal offsets from original spelling using one
+bounded prefix parse; terminal offsets retain the fast path. Structured positive
+fuzzing additionally found Go's -00:00:01 sentinel behavior; derive the instant
+from the validated original offset, retaining the discovered regression seed.
+All new regressions passed after recorded failures. Configuration/parserconfig
+race and vet passed; the new structured timestamp fuzz target passed 60 seconds
+and 595,762 cases. Renewed validation and complete wave 3 follow.
+No production ingestion ordering change or test assertion relaxation was made.
+
+Root audit before wave 3: explicit logfmt mappings to established same-role
+body/traceId/spanId aliases and ASCII case variants were rejected. Independent
+red tests confirmed this. Same-role checks now use the existing ASCII folding
+policy and include body, while runtime source matching stays exact; protected
+metadata and cross-role reserved mappings still reject. Config/parserconfig
+race tests passed. Pinned lint required errors.AsType for the timestamp prefix
+parse error; corrected and timestamp regressions/fuzz seeds remained green.
+
+Additional root audit before wave 3: valid Go timestamp layouts containing
+literal decimal digit runs (for example a suffix .8888888888) were rejected
+as excessive fractional precision. Independent root parser/decoder regressions
+failed for logfmt and both Java formats. A separate test agent added 15 valid
+token-boundary fixtures and 24 precision-rejection cases, with pre-fix failure
+evidence obtained through a read-only overlay of the committed parser.
+The fix compiles an optional lexical spelling walk for layouts with decimal
+literals, while Go retains semantic parsing authority. Common layouts avoid
+allocating that walk; actual fractions beyond nine digits remain rejected.
+Renewed checks, timings and the full third review wave follow this correction.
+
+Performance remediation before wave 3: the completed two-second canonical
+follow-up detected a significant 1.31% slowdown on source e30af276 despite
+unchanged allocations. The first one-second set was noisy and was not used
+to declare success. A bounded Sol investigation identified the extra format
+string comparison in the NDJSON path. Format classification now happens once
+at construction; the direct JSON path has one integer branch. A controlled
+benchmark-only registry comparison also removes added test metadata as a
+measurement confound. All original samples and the failing gate remain retained.
+
+Additional signed-short-year regression: Go accepts +6 and -6 for layout 06;
+the optional precision walk now consumes the validated two-character spelling.
+All 20 signed single-digit spellings have independently specified expected
+times. Final source 16b3c3a7 passed complete Go/race, pinned Linux lint, all
+three compiled backend gates and the final4 controlled performance gate.
+The diagnostic triple does not establish the string comparison as the sole
+cause of the earlier full-test-binary slowdown; test metadata also changed.
+No statistically significant final production regression with identical test
+registration was measured. Full third review wave starts after these gates.
+
+Wave 3 fixed candidate: ec0f6341eaddb983dcc58aacc9fd28e17608fbce
+Base: fb9cef37499bcb3706312a46d70f70a2c304721c
+Production source identical to fully validated/measured 16b3c3a7.
+2 gpt-6-astra:
+- correctness/durability: CLEAN. Independently inspected full production diff,
+  projections, immutable config, timestamp spelling/offset/gaps/folds, and
+  rejection/WAL/ack/checkpoint handoffs. Targeted parser/config/native/recovery,
+  trailing replay, pending WAL, withheld ack and persistence-failure tests pass.
+- security/adversarial semantics: CLEAN. Full production diff, bounds, trusted
+  metadata/static precedence, redaction provenance and payload-free diagnostics;
+  focused security/redaction/limits/timestamp and offline WAL/recovery tests pass.
+  Independently confirmed no default keyword redaction across all formats.
+3 gpt-5.6-sol:
+- code quality/API/configuration: CLEAN. Full production/docs diff, startup
+  ordering, immutable ownership, shared compilation and limits; full collector,
+  parserconfig and config package tests pass. No edits.
+- efficiency/performance: CLEAN. Direct NDJSON integer branch, immutable state,
+  KMP/native linear scanners, opt-in redactor costs, timestamp lexical walk,
+  and final3/final4 evidence independently assessed. Full collector/parserconfig
+  package tests pass; no timings were run alongside reviewers. No edits.
+- test quality/producer fidelity: CLEAN. Independent oracles, producer records,
+  all-malformed/trailing replay, persistence failures, WAL/retry/ack/restart,
+  partial/rotation/multiline/backend corpus and lexical timestamp cases checked.
+  Targeted native formats/time/precision/offset tests pass. No edits.
+2 gpt-5.6-terra:
+- framing/restart: CLEAN. CRLF/partial/rotation/copytruncate, oversized multiline
+  resynchronization and native reuse of durable framing/recovery paths checked.
+  Targeted partial/rotation, multiline resync, pending WAL and text E2E pass.
+- bounds/fuzz/error handling: CLEAN. 1MiB/1024/256/aggregate/nesting/static bounds,
+  malformed scanner safety, KMP linearity, time walks and seeded fuzz reviewed.
+  Targeted bounds/access/concurrency/time boundary tests pass. A temporary
+  hypothesis about a long decimal literal after seconds was disproved by Go's
+  independent parser (it consumes an implicit fraction and rejects the spelling).
+  It was not a candidate defect; no workspace changes remain from that probe.
+
+Outcome: one complete requested 2 Astra + 3 Sol + 2 Terra wave reports zero
+remaining actionable findings. No production or test code changed during or
+after this wave. Only this evidence and PR delivery metadata follow.

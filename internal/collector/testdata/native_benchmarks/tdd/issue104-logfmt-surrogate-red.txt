@@ -1,0 +1,8 @@
+--- FAIL: TestNativeLogfmtRejectsUnpairedSurrogates (0.00s)
+    native_text_impl_test.go:9: accepted unpaired surrogate in message="\ud800"
+    native_text_impl_test.go:9: accepted unpaired surrogate in message="\udc00"
+    native_text_impl_test.go:9: accepted unpaired surrogate in message="\ud800x"
+    native_text_impl_test.go:9: accepted unpaired surrogate in message="\ud800\u0041"
+FAIL
+FAIL	github.com/Suhaibinator/open-splunk/internal/collector	0.491s
+FAIL

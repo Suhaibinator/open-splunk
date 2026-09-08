@@ -1,0 +1,22 @@
+File: issue104-final.test
+Type: alloc_space
+Time: 2026-09-07 23:31:42 PDT
+Showing nodes accounting for 4287.89MB, 90.76% of 4724.23MB total
+Dropped 72 nodes (cum <= 23.62MB)
+Showing top 15 nodes out of 53
+      flat  flat%   sum%        cum   cum%
+  674.13MB 14.27% 14.27%  4715.91MB 99.82%  github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).Decode
+  464.02MB  9.82% 24.09%   956.08MB 20.24%  github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodePattern
+  434.03MB  9.19% 33.28%   434.03MB  9.19%  google.golang.org/protobuf/types/known/timestamppb.New (inline)
+  355.55MB  7.53% 40.81%   355.55MB  7.53%  github.com/Suhaibinator/open-splunk/internal/collector/parserconfig.(*Compiled).Capture
+  353.53MB  7.48% 48.29%   353.53MB  7.48%  github.com/Suhaibinator/open-splunk/internal/collector.sourceOrigin
+  349.02MB  7.39% 55.68%  1262.56MB 26.73%  github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt
+  302.04MB  6.39% 62.07%   302.04MB  6.39%  crypto/internal/fips140/sha256.New (inline)
+  279.51MB  5.92% 67.99%   279.51MB  5.92%  math/big.nat.make (inline)
+  259.52MB  5.49% 73.48%   259.52MB  5.49%  encoding/hex.EncodeToString (inline)
+  256.53MB  5.43% 78.91%   256.53MB  5.43%  bytes.Clone (inline)
+  172.01MB  3.64% 82.55%   172.01MB  3.64%  github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).mergeConstants
+  150.51MB  3.19% 85.74%   507.52MB 10.74%  github.com/Suhaibinator/open-splunk/internal/collector.typedJSONNumber
+      88MB  1.86% 87.60%       88MB  1.86%  strings.(*genericReplacer).Replace
+   76.50MB  1.62% 89.22%   230.01MB  4.87%  github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).nativeCanonical
+      73MB  1.55% 90.76%       73MB  1.55%  crypto/internal/fips140/sha256.(*Digest).Sum

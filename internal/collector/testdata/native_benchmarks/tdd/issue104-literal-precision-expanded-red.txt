@@ -1,0 +1,17 @@
+--- FAIL: TestTimestampLiteralDecimalPrecision (0.00s)
+    --- FAIL: TestTimestampLiteralDecimalPrecision/.8888888888 (0.00s)
+        literal_precision_regression_test.go:18: literal digits are not fractional seconds: invalid timestamp
+    --- FAIL: TestTimestampLiteralDecimalPrecision/,8888888888 (0.00s)
+        literal_precision_regression_test.go:18: literal digits are not fractional seconds: invalid timestamp
+--- FAIL: TestTimestampLiteralAndRealFractionPrecision (0.00s)
+    literal_precision_regression_test.go:63: literal changed valid precision: got 0001-01-01 00:00:00 +0000 UTC, invalid timestamp; want 2026-09-08 12:34:56.123456789 +0000 UTC (prefix=false explicit=false separator=".")
+    literal_precision_regression_test.go:63: literal changed valid precision: got 0001-01-01 00:00:00 +0000 UTC, invalid timestamp; want 2026-09-08 12:34:56.123456789 +0000 UTC (prefix=false explicit=false separator=",")
+    literal_precision_regression_test.go:63: literal changed valid precision: got 0001-01-01 00:00:00 +0000 UTC, invalid timestamp; want 2026-09-08 12:34:56.123456789 +0000 UTC (prefix=false explicit=true separator=".")
+    literal_precision_regression_test.go:63: literal changed valid precision: got 0001-01-01 00:00:00 +0000 UTC, invalid timestamp; want 2026-09-08 12:34:56.123456789 +0000 UTC (prefix=false explicit=true separator=",")
+    literal_precision_regression_test.go:63: literal changed valid precision: got 0001-01-01 00:00:00 +0000 UTC, invalid timestamp; want 2026-09-08 12:34:56.123456789 +0000 UTC (prefix=true explicit=false separator=".")
+    literal_precision_regression_test.go:63: literal changed valid precision: got 0001-01-01 00:00:00 +0000 UTC, invalid timestamp; want 2026-09-08 12:34:56.123456789 +0000 UTC (prefix=true explicit=false separator=",")
+    literal_precision_regression_test.go:63: literal changed valid precision: got 0001-01-01 00:00:00 +0000 UTC, invalid timestamp; want 2026-09-08 12:34:56.123456789 +0000 UTC (prefix=true explicit=true separator=".")
+    literal_precision_regression_test.go:63: literal changed valid precision: got 0001-01-01 00:00:00 +0000 UTC, invalid timestamp; want 2026-09-08 12:34:56.123456789 +0000 UTC (prefix=true explicit=true separator=",")
+FAIL
+FAIL	github.com/Suhaibinator/open-splunk/internal/collector/parserconfig	0.422s
+FAIL

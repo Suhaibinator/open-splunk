@@ -936,6 +936,7 @@ func buildInput(in *config.InputConfig, defaultHost string, checkpoints input.Ma
 	service, constants := buildConstants(in.Fields)
 
 	dec, err := NewDecoder(DecodeConfig{
+		Parser:         in.Parser,
 		Format:         InputFormat(in.Format),
 		InputID:        in.ID,
 		IndexName:      index,

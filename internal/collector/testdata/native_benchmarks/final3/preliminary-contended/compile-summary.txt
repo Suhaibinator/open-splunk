@@ -1,0 +1,21 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+                                  │ compile.txt │
+                                  │   sec/op    │
+NativeJavaCompile/log4j2-pattern    2.139µ ± 3%
+NativeJavaCompile/logback-pattern   2.228µ ± 6%
+geomean                             2.183µ
+
+                                  │ compile.txt  │
+                                  │     B/op     │
+NativeJavaCompile/log4j2-pattern    1.516Ki ± 0%
+NativeJavaCompile/logback-pattern   1.516Ki ± 0%
+geomean                             1.516Ki
+
+                                  │ compile.txt │
+                                  │  allocs/op  │
+NativeJavaCompile/log4j2-pattern     17.00 ± 0%
+NativeJavaCompile/logback-pattern    17.00 ± 0%
+geomean                              17.00

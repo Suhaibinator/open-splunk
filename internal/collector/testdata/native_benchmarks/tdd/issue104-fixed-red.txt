@@ -1,0 +1,36 @@
+--- FAIL: TestNativeFixedAccessEscapesAndSentinels (0.00s)
+    --- FAIL: TestNativeFixedAccessEscapesAndSentinels/nginx-combined (0.00s)
+        native_fixed_test.go:133: Decode: native parser not implemented
+    --- FAIL: TestNativeFixedAccessEscapesAndSentinels/apache-combined (0.00s)
+        native_fixed_test.go:133: Decode: native parser not implemented
+    native_fixed_test.go:154: Decode: native parser not implemented
+--- FAIL: TestNativeFixedAccessPresets (0.00s)
+    --- FAIL: TestNativeFixedAccessPresets/nginx-combined (0.00s)
+        native_fixed_test.go:97: Decode: native parser not implemented
+    --- FAIL: TestNativeFixedAccessPresets/apache-common (0.00s)
+        native_fixed_test.go:97: Decode: native parser not implemented
+    --- FAIL: TestNativeFixedAccessPresets/apache-combined (0.00s)
+        native_fixed_test.go:97: Decode: native parser not implemented
+--- FAIL: TestNativeFixedAccessMalformedRequestIsAnEvent (0.00s)
+    --- FAIL: TestNativeFixedAccessMalformedRequestIsAnEvent/nginx-combined (0.00s)
+        native_fixed_test.go:168: Decode: native parser not implemented
+    --- FAIL: TestNativeFixedAccessMalformedRequestIsAnEvent/apache-common (0.00s)
+        native_fixed_test.go:168: Decode: native parser not implemented
+    --- FAIL: TestNativeFixedAccessMalformedRequestIsAnEvent/apache-combined (0.00s)
+        native_fixed_test.go:168: Decode: native parser not implemented
+--- FAIL: TestNativeFixedE2EFramingRejectionAndCheckpoint (0.00s)
+    --- FAIL: TestNativeFixedE2EFramingRejectionAndCheckpoint/apache-combined (0.00s)
+        native_fixed_e2e_test.go:24: listen: listen tcp 127.0.0.1:0: bind: operation not permitted
+    --- FAIL: TestNativeFixedE2EFramingRejectionAndCheckpoint/nginx-combined (0.00s)
+        native_fixed_e2e_test.go:24: listen: listen tcp 127.0.0.1:0: bind: operation not permitted
+    --- FAIL: TestNativeFixedE2EFramingRejectionAndCheckpoint/apache-common (0.00s)
+        native_fixed_e2e_test.go:24: listen: listen tcp 127.0.0.1:0: bind: operation not permitted
+    --- FAIL: TestNativeFixedE2EFramingRejectionAndCheckpoint/docker-json-file (0.00s)
+        native_fixed_e2e_test.go:24: listen: listen tcp 127.0.0.1:0: bind: operation not permitted
+--- FAIL: TestNativeFixedDockerCanonicalAndExtras (0.00s)
+    native_fixed_test.go:25: Decode: native parser not implemented
+--- FAIL: TestNativeFixedDockerBounds (0.00s)
+    native_fixed_test.go:207: Decode: native parser not implemented
+FAIL
+FAIL	github.com/Suhaibinator/open-splunk/internal/collector	0.367s
+FAIL

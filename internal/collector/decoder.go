@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/collector/parserconfig"
 	"github.com/Suhaibinator/open-splunk/internal/collectorlimits"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/jsonnumber"
@@ -51,6 +52,7 @@ type DecodeConfig struct {
 	MaxLineBytes   int
 	MaxJSONDepth   int
 	MaxJSONFields  int
+	Parser         *parserconfig.Options
 }
 
 // SourcePosition is the durable origin of one framed event. Both line fields
@@ -73,14 +75,23 @@ type Decoder struct {
 	cfg           DecodeConfig
 	constants     []*opensplunk.TypedObjectField
 	constantNames map[string]struct{}
+	parser        *parserconfig.Compiled
+	kind          decoderKind
 }
+
+type decoderKind uint8
+
+const (
+	decoderNDJSON decoderKind = iota
+	decoderRaw
+	decoderNative
+)
 
 // NewDecoder validates and takes an independent copy of cfg.
 func NewDecoder(cfg DecodeConfig) (*Decoder, error) {
-	switch cfg.Format {
-	case InputFormatNDJSON, InputFormatRaw:
-	default:
-		return nil, fmt.Errorf("unsupported input format %q", cfg.Format)
+	compiled, err := parserconfig.Compile(string(cfg.Format), cfg.Parser)
+	if err != nil {
+		return nil, err
 	}
 	for name, value := range map[string]string{
 		"input ID": cfg.InputID, "index name": cfg.IndexName, "source": cfg.Source,
@@ -108,6 +119,11 @@ func NewDecoder(cfg DecodeConfig) (*Decoder, error) {
 	if cfg.MaxLineBytes < 1 || cfg.MaxJSONDepth < 1 || cfg.MaxJSONFields < 1 {
 		return nil, errors.New("decoder limits must be positive")
 	}
+	if cfg.Format != InputFormatNDJSON && cfg.Format != InputFormatRaw {
+		if cfg.MaxLineBytes > defaultMaxLineBytes || cfg.MaxJSONFields > defaultMaxJSONFields {
+			return nil, errors.New("native decoder limits exceed the event or field ceiling")
+		}
+	}
 
 	constants, err := cloneAndValidateConstants(cfg.ConstantFields)
 	if err != nil {
@@ -118,7 +134,17 @@ func NewDecoder(cfg DecodeConfig) (*Decoder, error) {
 		constantNames[field.GetName()] = struct{}{}
 	}
 	cfg.ConstantFields = nil
-	return &Decoder{cfg: cfg, constants: constants, constantNames: constantNames}, nil
+	cfg.Parser = nil
+	// Format validation and classification happen once. NDJSON enters its direct
+	// JSON path with one integer branch, without comparing format strings per event.
+	kind := decoderNative
+	switch cfg.Format {
+	case InputFormatNDJSON:
+		kind = decoderNDJSON
+	case InputFormatRaw:
+		kind = decoderRaw
+	}
+	return &Decoder{cfg: cfg, constants: constants, constantNames: constantNames, parser: compiled, kind: kind}, nil
 }
 
 // Decode converts raw to an independent event. raw must not contain the file
@@ -174,12 +200,15 @@ func (d *Decoder) Decode(raw []byte, position SourcePosition, collectedAt time.T
 		event.RawEncoding = opensplunk.RawEncoding_RAW_ENCODING_UTF8
 	}
 
-	if d.cfg.Format == InputFormatRaw {
-		if event.RawEncoding == opensplunk.RawEncoding_RAW_ENCODING_UTF8 {
-			event.Message = new(string(raw))
+	if d.kind != decoderNDJSON {
+		if d.kind == decoderRaw {
+			if event.RawEncoding == opensplunk.RawEncoding_RAW_ENCODING_UTF8 {
+				event.Message = new(string(raw))
+			}
+			event.Fields = d.mergeConstants(nil)
+			return event, nil
 		}
-		event.Fields = d.mergeConstants(nil)
-		return event, nil
+		return d.decodeNative(event, raw)
 	}
 
 	parsed, err := parseJSONObject(raw, d.cfg.MaxJSONDepth, d.cfg.MaxJSONFields)

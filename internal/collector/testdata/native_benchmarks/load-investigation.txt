@@ -1,0 +1,22 @@
+Renewed load verification after merging main fb9cef37
+
+Initial combined backend run: NativeFormats PASS (60,000 mixed records in
+30.29 seconds including drain/verification); Vertical PASS; SustainedLoad
+failed its existing intermediate exact-source-prefix assertion:
+12,800 unique events/times spanned the first 14,000 source timestamps.
+
+Investigation: ingestion releases the next admission before Store reserves
+visibility sequence. Concurrent batch reservation order can differ from source
+order. This is a possible scheduling explanation, not proof of a specific root
+cause or data loss. The ingestion/store/visibility/sender code is byte-identical
+to current main; this PR changes none of those paths.
+
+Unmodified main fb9cef37: TestBackendSustainedLoad PASS (86.22 seconds),
+30,000 exact final events/unique IDs. Baseline failure was NOT reproduced.
+
+Unchanged candidate repeated with -count=2: both runs PASS (71.49 and 46.24
+seconds; 120.624 seconds total package runtime), including exact intermediate
+prefix assertions, final unique IDs, WAL/checkpoints and concurrent search.
+No test assertion or production ordering behavior was changed to obtain these
+results. The initial failure remains part of the verification history; it was
+not omitted or represented as a reproduced baseline failure.

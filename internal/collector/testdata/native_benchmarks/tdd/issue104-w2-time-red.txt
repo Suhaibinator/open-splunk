@@ -1,0 +1,58 @@
+--- FAIL: TestOffsetBeforeVariableTimestampSuffix (0.00s)
+    --- FAIL: TestOffsetBeforeVariableTimestampSuffix/0 (0.00s)
+        time_offset_regression_test.go:37: invalid timestamp offset
+    --- FAIL: TestOffsetBeforeVariableTimestampSuffix/1 (0.00s)
+        time_offset_regression_test.go:37: invalid timestamp offset
+    --- FAIL: TestOffsetBeforeVariableTimestampSuffix/2 (0.00s)
+        time_offset_regression_test.go:37: invalid timestamp offset
+    --- FAIL: TestOffsetBeforeVariableTimestampSuffix/4 (0.00s)
+        time_offset_regression_test.go:37: invalid timestamp offset
+    --- FAIL: TestOffsetBeforeVariableTimestampSuffix/5 (0.00s)
+        time_offset_regression_test.go:37: invalid timestamp offset
+    --- FAIL: TestOffsetBeforeVariableTimestampSuffix/7 (0.00s)
+        time_offset_regression_test.go:37: invalid timestamp offset
+    --- FAIL: TestOffsetBeforeVariableTimestampSuffix/8 (0.00s)
+        time_offset_regression_test.go:37: invalid timestamp offset
+--- FAIL: TestAllNumericOffsetFormsKeepOriginalSpelling (0.00s)
+    --- FAIL: TestAllNumericOffsetFormsKeepOriginalSpelling/-07/+05/terminal=false (0.00s)
+        time_offset_regression_test.go:72: invalid timestamp offset
+    --- FAIL: TestAllNumericOffsetFormsKeepOriginalSpelling/Z07/-05/terminal=false (0.00s)
+        time_offset_regression_test.go:72: invalid timestamp offset
+    --- FAIL: TestAllNumericOffsetFormsKeepOriginalSpelling/-0700/+0530/terminal=false (0.00s)
+        time_offset_regression_test.go:72: invalid timestamp offset
+    --- FAIL: TestAllNumericOffsetFormsKeepOriginalSpelling/Z0700/-0530/terminal=false (0.00s)
+        time_offset_regression_test.go:72: invalid timestamp offset
+    --- FAIL: TestAllNumericOffsetFormsKeepOriginalSpelling/-07:00/+05:30/terminal=false (0.00s)
+        time_offset_regression_test.go:72: invalid timestamp offset
+    --- FAIL: TestAllNumericOffsetFormsKeepOriginalSpelling/Z07:00/-05:30/terminal=false (0.00s)
+        time_offset_regression_test.go:72: invalid timestamp offset
+    --- FAIL: TestAllNumericOffsetFormsKeepOriginalSpelling/-070000/+053045/terminal=false (0.00s)
+        time_offset_regression_test.go:72: invalid timestamp offset
+    --- FAIL: TestAllNumericOffsetFormsKeepOriginalSpelling/Z070000/-053045/terminal=false (0.00s)
+        time_offset_regression_test.go:72: invalid timestamp offset
+    --- FAIL: TestAllNumericOffsetFormsKeepOriginalSpelling/-07:00:00/+05:30:45/terminal=false (0.00s)
+        time_offset_regression_test.go:72: invalid timestamp offset
+    --- FAIL: TestAllNumericOffsetFormsKeepOriginalSpelling/Z07:00:00/-05:30:45/terminal=false (0.00s)
+        time_offset_regression_test.go:72: invalid timestamp offset
+    --- FAIL: TestAllNumericOffsetFormsKeepOriginalSpelling/Z07/Z/terminal=false (0.00s)
+        time_offset_regression_test.go:72: invalid timestamp offset
+    --- FAIL: TestAllNumericOffsetFormsKeepOriginalSpelling/Z0700/Z/terminal=false (0.00s)
+        time_offset_regression_test.go:72: invalid timestamp offset
+    --- FAIL: TestAllNumericOffsetFormsKeepOriginalSpelling/Z07:00/Z/terminal=false (0.00s)
+        time_offset_regression_test.go:72: invalid timestamp offset
+    --- FAIL: TestAllNumericOffsetFormsKeepOriginalSpelling/Z070000/Z/terminal=false (0.00s)
+        time_offset_regression_test.go:72: invalid timestamp offset
+    --- FAIL: TestAllNumericOffsetFormsKeepOriginalSpelling/Z07:00:00/Z/terminal=false (0.00s)
+        time_offset_regression_test.go:72: invalid timestamp offset
+FAIL
+FAIL	github.com/Suhaibinator/open-splunk/internal/collector/parserconfig	0.300s
+--- FAIL: TestReviewW2AstraCorrectnessOffsetBeforeVariableTimestampSuffix (0.00s)
+    --- FAIL: TestReviewW2AstraCorrectnessOffsetBeforeVariableTimestampSuffix/logfmt (0.00s)
+        review_w2_astra_correctness_test.go:30: valid configured Go timestamp rejected: invalid timestamp offset
+    --- FAIL: TestReviewW2AstraCorrectnessOffsetBeforeVariableTimestampSuffix/log4j2-pattern (0.00s)
+        review_w2_astra_correctness_test.go:30: valid configured Go timestamp rejected: invalid timestamp offset
+    --- FAIL: TestReviewW2AstraCorrectnessOffsetBeforeVariableTimestampSuffix/logback-pattern (0.00s)
+        review_w2_astra_correctness_test.go:30: valid configured Go timestamp rejected: invalid timestamp offset
+FAIL
+FAIL	github.com/Suhaibinator/open-splunk/internal/collector	0.377s
+FAIL

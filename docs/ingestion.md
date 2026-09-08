@@ -12,6 +12,48 @@ processor, and TLS surface is documented in
 [Collector configuration](collector-configuration.md). HEC is documented
 separately in [HEC](hec.md).
 
+## Choosing a source format
+
+Set `inputs[].format` to match the producer: `ndjson`, `raw`,
+`docker-json-file`, `nginx-combined`, `apache-common`, `apache-combined`,
+`logfmt`, `log4j2-pattern`, or `logback-pattern`. The collector selects one
+parser per input at startup; it does not guess formats or retry malformed
+records as raw. See [Input formats](collector-configuration.md#input-formats)
+for projections, producer references, and complete parser examples.
+
+Docker records retain their JSON envelope as raw while exposing the original
+message, nanosecond timestamp, and stream field. Access presets expose typed
+status and byte counts alongside the request and client/header fields.
+Malformed HTTP request text inside a valid access envelope remains available
+for investigation. logfmt supports canonical-key mappings and exact numeric
+conversion. Java inputs require an emitted-text delimiter pattern; configure
+multiline framing separately for exceptions. Offset-free timestamps require an
+explicit timezone, and ambiguous or nonexistent IANA local times are rejected.
+
+Run `validate` before restarting with parser changes. It validates patterns,
+field mappings, layouts, and timezone names without opening source logs or
+contacting the server. Keep the input ID and state directory to preserve the
+cursor, and set `sourcetype` explicitly when migrating from `raw` if existing
+queries depend on its old value. Parser changes apply to newly read records;
+pending WAL batches retain their existing parsed events. They do not trigger a
+historical replay.
+
+The decoder preserves original framed bytes in raw, and event IDs bind those
+bytes and source position. With explicit redaction, native parsers track
+sensitive source fields, active source-derived rename aliases, and embedded
+assignments into parsed fields. They conservatively replace the entire raw and
+message when lexical scrubbing cannot safely remove those values; configured
+field replacements and trusted static metadata remain intact. See the
+[processor reference](collector-configuration.md#processors-reference) for
+replacement precedence and canonical-field behavior. Event IDs remain based on
+the original input, while decode/framing recovery artifacts retain sensitive
+original bytes outside this sanitizer.
+
+Configure redaction before collecting sensitive data, and monitor decode
+failures when enabling a strict parser. Custom access layouts, Java
+conversion-pattern interpretation, syslog, CRI reassembly, and journald are not
+supported by these formats.
+
 ## Token and collector authority
 
 A native ingestion token has immutable native purpose, at least one explicit
@@ -316,6 +358,13 @@ source coordinates before a later valid record can advance the checkpoint. A
 failed recovery write leaves the cursor unchanged; decode recovery stops the
 run and framing recovery keeps the input on the same retryable range. See
 [Decode, framing, and recovery](collector-configuration.md#decode-framing-and-recovery).
+
+A trailing malformed record is durable in the recovery journal but does not
+independently advance a terminal checkpoint. It can therefore be reread after
+restart until a later acknowledged event covers its source position; the same
+applies to an all-malformed file. Monitor the failure counters and repair the
+producer/configuration rather than assuming repeated recovery artifacts mean
+successful ingestion.
 
 ## Restart, backup, and token rotation
 

@@ -1,0 +1,30 @@
+--- FAIL: TestTimestampPrecisionAdversarialLiteralBoundaries (0.00s)
+    --- FAIL: TestTimestampPrecisionAdversarialLiteralBoundaries/compact-adjacent-tokens (0.00s)
+        precision_adversarial_test.go:106: literal/token boundary changed timestamp: got=0001-01-01 00:00:00 +0000 UTC err=invalid timestamp want=2026-09-08 11:04:56.123456789 +0000 UTC
+    --- FAIL: TestTimestampPrecisionAdversarialLiteralBoundaries/unpadded-clock-with-adjacent-meridiem (0.00s)
+        precision_adversarial_test.go:106: literal/token boundary changed timestamp: got=0001-01-01 00:00:00 +0000 UTC err=invalid timestamp want=2026-09-08 13:32:03.123456789 +0000 UTC
+    --- FAIL: TestTimestampPrecisionAdversarialLiteralBoundaries/unpadded-tokens-padded-value (0.00s)
+        precision_adversarial_test.go:106: literal/token boundary changed timestamp: got=0001-01-01 00:00:00 +0000 UTC err=invalid timestamp want=2026-09-08 13:02:03.000000009 +0000 UTC
+    --- FAIL: TestTimestampPrecisionAdversarialLiteralBoundaries/space-padded-day-offset-before-clock (0.00s)
+        precision_adversarial_test.go:106: literal/token boundary changed timestamp: got=0001-01-01 00:00:00 +0000 UTC err=invalid timestamp want=2026-09-08 11:04:56.123456789 +0000 UTC
+    --- FAIL: TestTimestampPrecisionAdversarialLiteralBoundaries/unpadded-day-variable-whitespace (0.00s)
+        precision_adversarial_test.go:106: literal/token boundary changed timestamp: got=0001-01-01 00:00:00 +0000 UTC err=invalid timestamp want=2026-09-08 11:04:56.123456789 +0000 UTC
+    --- FAIL: TestTimestampPrecisionAdversarialLiteralBoundaries/space-padded-year-day (0.00s)
+        precision_adversarial_test.go:106: literal/token boundary changed timestamp: got=0001-01-01 00:00:00 +0000 UTC err=invalid timestamp want=2026-01-08 12:34:56.123456789 +0000 UTC
+    --- FAIL: TestTimestampPrecisionAdversarialLiteralBoundaries/literal-between-clock-and-offset (0.00s)
+        precision_adversarial_test.go:106: literal/token boundary changed timestamp: got=0001-01-01 00:00:00 +0000 UTC err=invalid timestamp want=2026-09-08 11:04:56.123456789 +0000 UTC
+    --- FAIL: TestTimestampPrecisionAdversarialLiteralBoundaries/seconds-offset-at-start (0.00s)
+        precision_adversarial_test.go:106: literal/token boundary changed timestamp: got=0001-01-01 00:00:00 +0000 UTC err=invalid timestamp want=2026-09-08 12:35:26.123456789 +0000 UTC
+    --- FAIL: TestTimestampPrecisionAdversarialLiteralBoundaries/zero-padded-explicit-fraction-with-other-separator-literal (0.00s)
+        precision_adversarial_test.go:106: literal/token boundary changed timestamp: got=0001-01-01 00:00:00 +0000 UTC err=invalid timestamp want=2026-09-08 12:34:56.000000009 +0000 UTC
+    --- FAIL: TestTimestampPrecisionAdversarialLiteralBoundaries/explicit-optional-fraction-absent-with-literal (0.00s)
+        precision_adversarial_test.go:106: literal/token boundary changed timestamp: got=0001-01-01 00:00:00 +0000 UTC err=invalid timestamp want=2026-09-08 12:34:56 +0000 UTC
+    --- FAIL: TestTimestampPrecisionAdversarialLiteralBoundaries/repeated-seconds-later-fraction-wins (0.00s)
+        precision_adversarial_test.go:106: literal/token boundary changed timestamp: got=0001-01-01 00:00:00 +0000 UTC err=invalid timestamp want=2026-09-08 12:34:56.000000009 +0000 UTC
+    --- FAIL: TestTimestampPrecisionAdversarialLiteralBoundaries/repeated-seconds-earlier-fraction-persists (0.00s)
+        precision_adversarial_test.go:106: literal/token boundary changed timestamp: got=0001-01-01 00:00:00 +0000 UTC err=invalid timestamp want=2026-09-08 12:34:56.123456789 +0000 UTC
+    --- FAIL: TestTimestampPrecisionAdversarialLiteralBoundaries/fraction-token-away-from-seconds (0.00s)
+        precision_adversarial_test.go:106: literal/token boundary changed timestamp: got=0001-01-01 00:00:00 +0000 UTC err=invalid timestamp want=2026-09-08 12:34:56.000000009 +0000 UTC
+FAIL
+FAIL	github.com/Suhaibinator/open-splunk/internal/collector/parserconfig	0.258s
+FAIL

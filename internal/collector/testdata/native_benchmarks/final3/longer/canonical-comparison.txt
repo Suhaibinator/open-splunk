@@ -1,0 +1,21 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+                        │ canonical-before.txt │        canonical-after.txt         │
+                        │        sec/op        │   sec/op     vs base               │
+NDJSONDecoder/canonical            1.608µ ± 0%   1.629µ ± 0%  +1.31% (p=0.000 n=20)
+
+                        │ canonical-before.txt │         canonical-after.txt         │
+                        │         B/s          │     B/s       vs base               │
+NDJSONDecoder/canonical           61.07Mi ± 0%   60.30Mi ± 0%  -1.27% (p=0.000 n=20)
+
+                        │ canonical-before.txt │       canonical-after.txt        │
+                        │         B/op         │     B/op      vs base            │
+NDJSONDecoder/canonical           2.406Ki ± 0%   2.406Ki ± 0%  ~ (p=1.000 n=20) ¹
+¹ all samples are equal
+
+                        │ canonical-before.txt │      canonical-after.txt       │
+                        │      allocs/op       │ allocs/op   vs base            │
+NDJSONDecoder/canonical             55.00 ± 0%   55.00 ± 0%  ~ (p=1.000 n=20) ¹
+¹ all samples are equal

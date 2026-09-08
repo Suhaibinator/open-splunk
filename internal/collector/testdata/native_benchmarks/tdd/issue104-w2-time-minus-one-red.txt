@@ -1,0 +1,14 @@
+fuzz: elapsed: 0s, gathering baseline coverage: 0/3 completed
+fuzz: elapsed: 0s, gathering baseline coverage: 3/3 completed, now fuzzing with 2 workers
+fuzz: minimizing 48-byte failing input file
+fuzz: elapsed: 0s, minimizing
+--- FAIL: FuzzOriginalOffsetSpelling (0.11s)
+    --- FAIL: FuzzOriginalOffsetSpelling (0.00s)
+        time_offset_regression_test.go:192: layout="2006-01-02 -07:00:00 15:4:5.999999999" value="2048-01-21 -00:00:01 0:48:48.048000000": got=2048-01-21 00:48:48.048 +0000 UTC want=2048-01-21 00:48:49.048 +0000 UTC
+    
+    Failing input written to testdata/fuzz/FuzzOriginalOffsetSpelling/85754bb81a8de53f
+    To re-run:
+    go test -run=FuzzOriginalOffsetSpelling/85754bb81a8de53f
+FAIL
+exit status 1
+FAIL	github.com/Suhaibinator/open-splunk/internal/collector/parserconfig	0.357s

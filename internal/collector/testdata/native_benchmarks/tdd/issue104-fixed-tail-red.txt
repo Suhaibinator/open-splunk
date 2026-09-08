@@ -1,0 +1,12 @@
+--- FAIL: TestNativeFixedE2ERejectedTailDoesNotInventCheckpoint (0.00s)
+    --- FAIL: TestNativeFixedE2ERejectedTailDoesNotInventCheckpoint/nginx-combined/trailing-malformed (10.27s)
+        native_fixed_e2e_test.go:189: timed out waiting for two source rejections and terminal acknowledgments
+    --- FAIL: TestNativeFixedE2ERejectedTailDoesNotInventCheckpoint/apache-combined/trailing-malformed (10.27s)
+        native_fixed_e2e_test.go:189: timed out waiting for two source rejections and terminal acknowledgments
+    --- FAIL: TestNativeFixedE2ERejectedTailDoesNotInventCheckpoint/docker-json-file/trailing-malformed (10.27s)
+        native_fixed_e2e_test.go:189: timed out waiting for two source rejections and terminal acknowledgments
+    --- FAIL: TestNativeFixedE2ERejectedTailDoesNotInventCheckpoint/apache-common/trailing-malformed (10.27s)
+        native_fixed_e2e_test.go:189: timed out waiting for two source rejections and terminal acknowledgments
+FAIL
+FAIL	github.com/Suhaibinator/open-splunk/internal/collector	10.635s
+FAIL
