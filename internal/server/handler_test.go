@@ -1654,6 +1654,7 @@ func TestSPAFallbackNeverShadowsAPI(t *testing.T) {
 	if response.Header().Get("Cache-Control") != "no-cache" {
 		t.Fatalf("SPA cache = %q", response.Header().Get("Cache-Control"))
 	}
+	assertSPAFramePolicy(t, response.Header())
 
 	request = httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/not-a-route", nil)
 	response = httptest.NewRecorder()
