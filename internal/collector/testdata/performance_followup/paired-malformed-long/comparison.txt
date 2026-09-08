@@ -1,0 +1,27 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+                                      │ /tmp/collector-perf-20260908/paired-malformed-long/before.txt │ /tmp/collector-perf-20260908/paired-malformed-long/after.txt │
+                                      │                            sec/op                             │                sec/op                  vs base               │
+NativeMalformed/nginx-combined/262144                                                     385.6µ ± 1%                             383.0µ ± 0%  -0.67% (p=0.046 n=20)
+NativeMalformed/logfmt/262144                                                             224.4µ ± 6%                             220.5µ ± 7%       ~ (p=0.529 n=20)
+geomean                                                                                   294.2µ                                  290.6µ       -1.20%
+
+                                      │ /tmp/collector-perf-20260908/paired-malformed-long/before.txt │ /tmp/collector-perf-20260908/paired-malformed-long/after.txt │
+                                      │                              B/s                              │                  B/s                   vs base               │
+NativeMalformed/nginx-combined/262144                                                    648.5Mi ± 1%                            652.9Mi ± 0%  +0.68% (p=0.045 n=20)
+NativeMalformed/logfmt/262144                                                            1.088Gi ± 6%                            1.107Gi ± 6%       ~ (p=0.529 n=20)
+geomean                                                                                  850.0Mi                                 860.4Mi       +1.21%
+
+                                      │ /tmp/collector-perf-20260908/paired-malformed-long/before.txt │ /tmp/collector-perf-20260908/paired-malformed-long/after.txt │
+                                      │                             B/op                              │                 B/op                   vs base               │
+NativeMalformed/nginx-combined/262144                                                    265.2Ki ± 0%                            264.9Ki ± 0%  -0.11% (p=0.000 n=20)
+NativeMalformed/logfmt/262144                                                            265.0Ki ± 0%                            264.7Ki ± 0%  -0.10% (p=0.000 n=20)
+geomean                                                                                  265.1Ki                                 264.8Ki       -0.11%
+
+                                      │ /tmp/collector-perf-20260908/paired-malformed-long/before.txt │ /tmp/collector-perf-20260908/paired-malformed-long/after.txt │
+                                      │                           allocs/op                           │              allocs/op                vs base                │
+NativeMalformed/nginx-combined/262144                                                      25.00 ± 0%                             16.00 ± 0%  -36.00% (p=0.000 n=20)
+NativeMalformed/logfmt/262144                                                              21.00 ± 0%                             13.00 ± 0%  -38.10% (p=0.000 n=20)
+geomean                                                                                    22.91                                  14.42       -37.06%

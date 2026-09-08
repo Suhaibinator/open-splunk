@@ -8,7 +8,9 @@ import (
 	"unicode/utf8"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/collector/parserconfig"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
+	"github.com/Suhaibinator/open-splunk/internal/jsonnumber"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -59,10 +61,12 @@ func (d *Decoder) decodeLogfmt(event *opensplunk.LogEvent, raw []byte) error {
 		if at < len(raw) && raw[at] == '"' {
 			at++
 			closed := false
+			escaped := false
 			for at < len(raw) {
 				c := raw[at]
 				at++
 				if c == '\\' {
+					escaped = true
 					if at < len(raw) {
 						at++
 					}
@@ -77,11 +81,20 @@ func (d *Decoder) decodeLogfmt(event *opensplunk.LogEvent, raw []byte) error {
 				return errors.New("invalid quoted logfmt value")
 			}
 			var decoded string
-			if err := json.Unmarshal(raw[start:at], &decoded); err != nil {
-				return errors.New("invalid logfmt string escape")
-			}
-			if !nativeJSONSurrogatesValid(raw[start:at]) {
-				return errors.New("logfmt string contains an unpaired Unicode surrogate")
+			if escaped {
+				if err := json.Unmarshal(raw[start:at], &decoded); err != nil {
+					return errors.New("invalid logfmt string escape")
+				}
+				if !nativeJSONSurrogatesValid(raw[start:at]) {
+					return errors.New("logfmt string contains an unpaired Unicode surrogate")
+				}
+			} else {
+				for _, c := range raw[start+1 : at-1] {
+					if c < ' ' {
+						return errors.New("invalid logfmt string escape")
+					}
+				}
+				decoded = string(raw[start+1 : at-1])
 			}
 			value = decoded
 		} else {
@@ -98,7 +111,7 @@ func (d *Decoder) decodeLogfmt(event *opensplunk.LogEvent, raw []byte) error {
 				value = true
 			case text == "false":
 				value = false
-			case len(token) > 0 && (token[0] == '-' || (token[0] >= '0' && token[0] <= '9')) && json.Valid(token):
+			case len(token) > 0 && (token[0] == '-' || (token[0] >= '0' && token[0] <= '9')) && jsonnumber.Valid(text):
 				value = json.Number(text)
 			default:
 				value = text
@@ -128,7 +141,8 @@ func (d *Decoder) decodeLogfmt(event *opensplunk.LogEvent, raw []byte) error {
 }
 
 func (d *Decoder) decodePattern(event *opensplunk.LogEvent, raw []byte) error {
-	captures, err := d.parser.Capture(raw)
+	var local [8]parserconfig.Capture
+	captures, err := d.parser.CaptureInto(raw, local[:0])
 	if err != nil {
 		return err
 	}

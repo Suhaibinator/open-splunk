@@ -215,7 +215,7 @@ func (d *Decoder) Decode(raw []byte, position SourcePosition, collectedAt time.T
 	if err != nil {
 		return nil, fmt.Errorf("decode NDJSON event: %w", err)
 	}
-	if err := d.extractCanonical(event, parsed, collectedAt); err != nil {
+	if err := d.extractCanonical(event, parsed); err != nil {
 		return nil, err
 	}
 	dynamic, err := dynamicFields(parsed)
@@ -226,7 +226,7 @@ func (d *Decoder) Decode(raw []byte, position SourcePosition, collectedAt time.T
 	return event, nil
 }
 
-func (d *Decoder) extractCanonical(event *opensplunk.LogEvent, object jsonObject, fallback time.Time) error {
+func (d *Decoder) extractCanonical(event *opensplunk.LogEvent, object jsonObject) error {
 	if value, found, err := oneCanonical(object, "timestamp", "ts", "time", "@timestamp"); err != nil {
 		return err
 	} else if found && value != nil {
@@ -239,8 +239,6 @@ func (d *Decoder) extractCanonical(event *opensplunk.LogEvent, object jsonObject
 			return fmt.Errorf("invalid event timestamp: %w", err)
 		}
 		event.EventTimeSource = opensplunk.EventTimeSource_EVENT_TIME_SOURCE_PARSED
-	} else {
-		event.EventTime = timestamppb.New(fallback)
 	}
 
 	if value, found, err := oneCanonical(object, "level", "severity", "severity_text"); err != nil {
@@ -284,6 +282,14 @@ func (d *Decoder) extractCanonical(event *opensplunk.LogEvent, object jsonObject
 }
 
 func (d *Decoder) mergeConstants(dynamic []*opensplunk.TypedObjectField) *opensplunk.TypedObject {
+	if len(d.constants) == 0 {
+		// Dynamic fields belong to this decode, so no second slice is needed.
+		// Preserve the established nonnil representation of empty fields.
+		if dynamic == nil {
+			dynamic = []*opensplunk.TypedObjectField{}
+		}
+		return &opensplunk.TypedObject{Fields: dynamic}
+	}
 	fields := make([]*opensplunk.TypedObjectField, 0, len(dynamic)+len(d.constants))
 	positions := make(map[string]int, len(dynamic)+len(d.constants))
 	for _, field := range dynamic {
@@ -605,8 +611,15 @@ func sourceOrigin(inputID string, position SourcePosition) *opensplunk.EventOrig
 
 func stableEventID(inputID string, position SourcePosition, raw []byte) string {
 	hash := sha256.New()
-	writeHashString(hash, inputID)
-	writeHashString(hash, position.FileIdentity)
+	// Keep writes on the concrete digest path so temporary headers and string
+	// conversions do not escape through an interface-taking helper.
+	var length [8]byte
+	binary.BigEndian.PutUint64(length[:], uint64(len(inputID)))
+	_, _ = hash.Write(length[:])
+	_, _ = hash.Write([]byte(inputID))
+	binary.BigEndian.PutUint64(length[:], uint64(len(position.FileIdentity)))
+	_, _ = hash.Write(length[:])
+	_, _ = hash.Write([]byte(position.FileIdentity))
 	// LineNumber is deliberately excluded. Framers reconstruct line counts on
 	// restart, while byte coordinates and the persisted file-generation identity
 	// remain stable. Including it would turn a crash replay into a new event ID.
@@ -614,21 +627,13 @@ func stableEventID(inputID string, position SourcePosition, raw []byte) string {
 	binary.BigEndian.PutUint64(integers[0:8], position.StartOffset)
 	binary.BigEndian.PutUint64(integers[8:16], position.EndOffset)
 	_, _ = hash.Write(integers[:])
-	writeHashBytes(hash, raw)
-	return hex.EncodeToString(hash.Sum(nil))
-}
-
-type byteWriter interface {
-	Write([]byte) (int, error)
-}
-
-func writeHashString(hash byteWriter, value string) { writeHashBytes(hash, []byte(value)) }
-
-func writeHashBytes(hash byteWriter, value []byte) {
-	var length [8]byte
-	binary.BigEndian.PutUint64(length[:], uint64(len(value)))
+	binary.BigEndian.PutUint64(length[:], uint64(len(raw)))
 	_, _ = hash.Write(length[:])
-	_, _ = hash.Write(value)
+	_, _ = hash.Write(raw)
+	var digest [sha256.Size]byte
+	var encoded [sha256.Size * 2]byte
+	hex.Encode(encoded[:], hash.Sum(digest[:0]))
+	return string(encoded[:])
 }
 
 func cloneAndValidateConstants(object *opensplunk.TypedObject) ([]*opensplunk.TypedObjectField, error) {

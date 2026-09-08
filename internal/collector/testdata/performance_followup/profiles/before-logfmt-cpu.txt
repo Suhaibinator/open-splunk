@@ -1,0 +1,169 @@
+File: before-bench.test
+Type: cpu
+Time: 2026-09-08 08:43:50 PDT
+Duration: 2.63s, Total samples = 2.29s (86.92%)
+Showing nodes accounting for 1.90s, 82.97% of 2.29s total
+Dropped 102 nodes (cum <= 0.01s)
+      flat  flat%   sum%        cum   cum%
+     0.68s 29.69% 29.69%      0.68s 29.69%  runtime.kevent
+     0.09s  3.93% 33.62%      0.10s  4.37%  runtime.tryDeferToSpanScan
+     0.06s  2.62% 36.24%      0.07s  3.06%  strings.IndexByte (inline)
+     0.05s  2.18% 38.43%      0.05s  2.18%  runtime.madvise
+     0.05s  2.18% 40.61%      0.05s  2.18%  runtime.typePointers.next
+     0.04s  1.75% 42.36%      0.04s  1.75%  internal/runtime/atomic.(*UnsafePointer).Load (inline)
+     0.03s  1.31% 43.67%      0.03s  1.31%  encoding/hex.Encode (inline)
+     0.03s  1.31% 44.98%      1.22s 53.28%  github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt
+     0.03s  1.31% 46.29%      0.04s  1.75%  internal/runtime/maps.(*Map).getWithoutKeySmallFastStr
+     0.03s  1.31% 47.60%      0.04s  1.75%  runtime.(*mspan).moveInlineMarks
+     0.03s  1.31% 48.91%      0.03s  1.31%  runtime.acquirem (inline)
+     0.03s  1.31% 50.22%      0.07s  3.06%  runtime.concatstrings
+     0.03s  1.31% 51.53%      0.03s  1.31%  runtime.getMCache (inline)
+     0.03s  1.31% 52.84%      0.13s  5.68%  runtime.mallocgcSmallNoScanSC5
+     0.03s  1.31% 54.15%      0.07s  3.06%  runtime.mallocgcSmallNoScanSlowPath
+     0.03s  1.31% 55.46%      0.14s  6.11%  runtime.mallocgcTinySC2
+     0.03s  1.31% 56.77%      0.03s  1.31%  runtime.memmove
+     0.03s  1.31% 58.08%      0.03s  1.31%  runtime.releasem (inline)
+     0.03s  1.31% 59.39%      0.10s  4.37%  strings.IndexAny
+     0.02s  0.87% 60.26%      0.05s  2.18%  crypto/internal/fips140/sha256.(*Digest).Write
+     0.02s  0.87% 61.14%      0.02s  0.87%  crypto/internal/fips140/sha256.blockSHA2
+     0.02s  0.87% 62.01%      0.02s  0.87%  encoding/json/internal/jsonopts.(*Struct).Join
+     0.02s  0.87% 62.88%      0.07s  3.06%  encoding/json/jsontext.(*decoderState).reset
+     0.02s  0.87% 63.76%      0.05s  2.18%  gcWriteBarrier
+     0.02s  0.87% 64.63%      0.02s  0.87%  internal/bytealg.IndexByteString
+     0.02s  0.87% 65.50%      0.03s  1.31%  internal/runtime/maps.(*Map).putSlotSmallFastStr
+     0.02s  0.87% 66.38%      0.10s  4.37%  math/big.(*Rat).SetFloat64
+     0.02s  0.87% 67.25%      0.05s  2.18%  runtime.mapassign_faststr
+     0.02s  0.87% 68.12%      0.02s  0.87%  runtime.memclrNoHeapPointers
+     0.02s  0.87% 69.00%      0.06s  2.62%  runtime.scanObjectsSmall
+     0.02s  0.87% 69.87%      0.02s  0.87%  time.parseRFC3339[go.shape.string].func1 (inline)
+     0.01s  0.44% 70.31%      0.34s 14.85%  encoding/json.checkValid
+     0.01s  0.44% 70.74%      0.08s  3.49%  encoding/json/internal/jsonwire.(*InvalidTextError).Error
+     0.01s  0.44% 71.18%      0.02s  0.87%  encoding/json/v2.makeStringArshaler.func2
+     0.01s  0.44% 71.62%      1.30s 56.77%  github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeNative
+     0.01s  0.44% 72.05%      0.07s  3.06%  github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).mergeConstants
+     0.01s  0.44% 72.49%      1.52s 66.38%  github.com/Suhaibinator/open-splunk/internal/collector.BenchmarkNativeDecoder.func1
+     0.01s  0.44% 72.93%      0.02s  0.87%  github.com/Suhaibinator/open-splunk/internal/collector.nativeValidName
+     0.01s  0.44% 73.36%      0.02s  0.87%  internal/stringslite.Index
+     0.01s  0.44% 73.80%      0.06s  2.62%  math/big.(*Int).Set (inline)
+     0.01s  0.44% 74.24%      0.05s  2.18%  math/big.(*Int).lehmerGCD
+     0.01s  0.44% 74.67%      0.04s  1.75%  math/big.(*Rat).Cmp
+     0.01s  0.44% 75.11%      0.08s  3.49%  math/big.(*Rat).norm
+     0.01s  0.44% 75.55%      0.02s  0.87%  math/big.nat.div
+     0.01s  0.44% 75.98%      0.02s  0.87%  math/big.nat.scan
+     0.01s  0.44% 76.42%      0.10s  4.37%  runtime.(*mcache).nextFree
+     0.01s  0.44% 76.86%      0.02s  0.87%  runtime.(*wbBuf).get2 (inline)
+     0.01s  0.44% 77.29%      0.03s  1.31%  runtime.bulkBarrierPreWrite
+     0.01s  0.44% 77.73%      0.02s  0.87%  runtime.findObject
+     0.01s  0.44% 78.17%      0.39s 17.03%  runtime.mallocgc
+     0.01s  0.44% 78.60%      0.02s  0.87%  runtime.mallocgcSmallNoScanSC2
+     0.01s  0.44% 79.04%      0.02s  0.87%  runtime.mallocgcSmallNoscan
+     0.01s  0.44% 79.48%      0.05s  2.18%  runtime.mallocgcSmallScanNoHeaderSC2
+     0.01s  0.44% 79.91%      0.06s  2.62%  runtime.mallocgcSmallScanNoHeaderSC3
+     0.01s  0.44% 80.35%      0.12s  5.24%  runtime.mallocgcSmallScanNoHeaderSC6
+     0.01s  0.44% 80.79%      0.06s  2.62%  runtime.mallocgcTinySlowPath
+     0.01s  0.44% 81.22%      0.06s  2.62%  runtime.mapaccess2_faststr
+     0.01s  0.44% 81.66%      0.10s  4.37%  runtime.scanObject
+     0.01s  0.44% 82.10%      0.07s  3.06%  runtime.slicebytetostring
+     0.01s  0.44% 82.53%      0.02s  0.87%  strings.(*genericReplacer).WriteString
+     0.01s  0.44% 82.97%      0.02s  0.87%  sync.(*Pool).Put
+         0     0% 82.97%      0.02s  0.87%  crypto/internal/fips140/sha256.(*Digest).Sum
+         0     0% 82.97%      0.02s  0.87%  crypto/internal/fips140/sha256.(*Digest).checkSum
+         0     0% 82.97%      0.03s  1.31%  crypto/internal/fips140/sha256.New (inline)
+         0     0% 82.97%      0.02s  0.87%  crypto/internal/fips140/sha256.block
+         0     0% 82.97%      0.03s  1.31%  crypto/sha256.New (inline)
+         0     0% 82.97%      0.04s  1.75%  encoding/hex.EncodeToString (inline)
+         0     0% 82.97%      0.09s  3.93%  encoding/json.Unmarshal (inline)
+         0     0% 82.97%      0.34s 14.85%  encoding/json.Valid (inline)
+         0     0% 82.97%      0.21s  9.17%  encoding/json.transformSyntacticError
+         0     0% 82.97%      0.02s  0.87%  encoding/json/internal/jsonwire.NewInvalidCharacterError[go.shape.[]uint8]
+         0     0% 82.97%      0.02s  0.87%  encoding/json/jsontext.(*Decoder).ReadValue (inline)
+         0     0% 82.97%      0.03s  1.31%  encoding/json/jsontext.(*decoderState).CheckEOF (inline)
+         0     0% 82.97%      0.02s  0.87%  encoding/json/jsontext.(*decoderState).ReadValue
+         0     0% 82.97%      0.03s  1.31%  encoding/json/jsontext.(*decoderState).checkEOF
+         0     0% 82.97%      0.02s  0.87%  encoding/json/jsontext.(*decoderState).consumeNumber
+         0     0% 82.97%      0.02s  0.87%  encoding/json/jsontext.(*decoderState).consumeValue
+         0     0% 82.97%      0.07s  3.06%  encoding/json/jsontext.export.GetBufferedDecoder (inline)
+         0     0% 82.97%      0.03s  1.31%  encoding/json/jsontext.export.PutBufferedDecoder
+         0     0% 82.97%      0.07s  3.06%  encoding/json/jsontext.getBufferedDecoder
+         0     0% 82.97%      0.03s  1.31%  encoding/json/jsontext.putBufferedDecoder (inline)
+         0     0% 82.97%      0.09s  3.93%  encoding/json/v2.Unmarshal
+         0     0% 82.97%      0.03s  1.31%  encoding/json/v2.lookupArshaler
+         0     0% 82.97%      0.06s  2.62%  encoding/json/v2.unmarshalDecode
+         0     0% 82.97%      1.50s 65.50%  github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).Decode
+         0     0% 82.97%      0.04s  1.75%  github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).nativeCanonical
+         0     0% 82.97%      0.02s  0.87%  github.com/Suhaibinator/open-splunk/internal/collector.sourceOrigin
+         0     0% 82.97%      0.14s  6.11%  github.com/Suhaibinator/open-splunk/internal/collector.stableEventID
+         0     0% 82.97%      0.40s 17.47%  github.com/Suhaibinator/open-splunk/internal/collector.typedJSONNumber
+         0     0% 82.97%      0.41s 17.90%  github.com/Suhaibinator/open-splunk/internal/collector.typedJSONValue
+         0     0% 82.97%      0.03s  1.31%  github.com/Suhaibinator/open-splunk/internal/collector.writeHashBytes
+         0     0% 82.97%      0.03s  1.31%  github.com/Suhaibinator/open-splunk/internal/collector.writeHashString (inline)
+         0     0% 82.97%      0.03s  1.31%  github.com/Suhaibinator/open-splunk/internal/collector/parserconfig.(*Compiled).CanonicalField (inline)
+         0     0% 82.97%      0.03s  1.31%  github.com/Suhaibinator/open-splunk/internal/collector/parserconfig.(*Compiled).ParseTime
+         0     0% 82.97%      0.38s 16.59%  github.com/Suhaibinator/open-splunk/internal/jsonnumber.Classify
+         0     0% 82.97%      0.21s  9.17%  github.com/Suhaibinator/open-splunk/internal/jsonnumber.ParseDecimalRat
+         0     0% 82.97%      0.03s  1.31%  google.golang.org/protobuf/types/known/timestamppb.New (inline)
+         0     0% 82.97%      0.02s  0.87%  internal/stringslite.IndexByte (inline)
+         0     0% 82.97%      0.03s  1.31%  internal/sync.(*HashTrieMap[go.shape.interface {},go.shape.interface {}]).Load
+         0     0% 82.97%      0.02s  0.87%  math/big.(*Int).Abs (inline)
+         0     0% 82.97%      0.05s  2.18%  math/big.(*Int).Exp (inline)
+         0     0% 82.97%      0.02s  0.87%  math/big.(*Int).SetString
+         0     0% 82.97%      0.05s  2.18%  math/big.(*Int).exp
+         0     0% 82.97%      0.03s  1.31%  math/big.(*Int).scaleDenom
+         0     0% 82.97%      0.02s  0.87%  math/big.(*Int).scan
+         0     0% 82.97%      0.02s  0.87%  math/big.(*Int).setFromScanner
+         0     0% 82.97%      0.08s  3.49%  math/big.(*Rat).SetFrac
+         0     0% 82.97%      0.05s  2.18%  math/big.nat.expNN
+         0     0% 82.97%      0.15s  6.55%  math/big.nat.make (inline)
+         0     0% 82.97%      0.06s  2.62%  math/big.nat.mul
+         0     0% 82.97%      0.06s  2.62%  math/big.nat.mulAddWW
+         0     0% 82.97%      0.08s  3.49%  math/big.nat.set (inline)
+         0     0% 82.97%      0.09s  3.93%  runtime.(*mcache).refill
+         0     0% 82.97%      0.08s  3.49%  runtime.(*mcentral).cacheSpan
+         0     0% 82.97%      0.06s  2.62%  runtime.(*mheap).alloc.func1
+         0     0% 82.97%      0.06s  2.62%  runtime.(*mheap).allocSpan
+         0     0% 82.97%      0.02s  0.87%  runtime.(*mheap).nextSpanForSweep
+         0     0% 82.97%      0.02s  0.87%  runtime.(*spanSet).pop
+         0     0% 82.97%      0.05s  2.18%  runtime.(*sweepLocked).sweep
+         0     0% 82.97%      0.03s  1.31%  runtime.convTstring
+         0     0% 82.97%      0.03s  1.31%  runtime.deductAssistCredit
+         0     0% 82.97%      0.06s  2.62%  runtime.deductSweepCredit
+         0     0% 82.97%      0.18s  7.86%  runtime.gcAssistAlloc
+         0     0% 82.97%      0.18s  7.86%  runtime.gcAssistAlloc.func2
+         0     0% 82.97%      0.18s  7.86%  runtime.gcAssistAlloc1
+         0     0% 82.97%      0.17s  7.42%  runtime.gcDrainN
+         0     0% 82.97%      0.21s  9.17%  runtime.gcMarkTermination.func3
+         0     0% 82.97%      0.46s 20.09%  runtime.gcStart.func4
+         0     0% 82.97%      0.04s  1.75%  runtime.mProf_Malloc
+         0     0% 82.97%      0.19s  8.30%  runtime.makeslice
+         0     0% 82.97%      0.03s  1.31%  runtime.mallocgcSmallScanNoHeaderSC5
+         0     0% 82.97%      0.11s  4.80%  runtime.mallocgcSmallScanSlowPath
+         0     0% 82.97%      0.03s  1.31%  runtime.mapaccess1_faststr
+         0     0% 82.97%      0.02s  0.87%  runtime.markroot
+         0     0% 82.97%      0.68s 29.69%  runtime.netpoll
+         0     0% 82.97%      0.06s  2.62%  runtime.newobject
+         0     0% 82.97%      0.04s  1.75%  runtime.profilealloc
+         0     0% 82.97%      0.02s  0.87%  runtime.rawbyteslice
+         0     0% 82.97%      0.03s  1.31%  runtime.rawstring (inline)
+         0     0% 82.97%      0.03s  1.31%  runtime.rawstringtmp
+         0     0% 82.97%      0.06s  2.62%  runtime.scanSpan
+         0     0% 82.97%      0.68s 29.69%  runtime.startTheWorldWithSema
+         0     0% 82.97%      0.03s  1.31%  runtime.stkbucket
+         0     0% 82.97%      0.02s  0.87%  runtime.stringtoslicebyte
+         0     0% 82.97%      0.06s  2.62%  runtime.sweepone
+         0     0% 82.97%      0.05s  2.18%  runtime.sysUsed (inline)
+         0     0% 82.97%      0.05s  2.18%  runtime.sysUsedOS (inline)
+         0     0% 82.97%      0.99s 43.23%  runtime.systemstack
+         0     0% 82.97%      0.04s  1.75%  runtime.wbBufFlush
+         0     0% 82.97%      0.04s  1.75%  runtime.wbBufFlush.func1
+         0     0% 82.97%      0.04s  1.75%  runtime.wbBufFlush1
+         0     0% 82.97%      0.03s  1.31%  runtime.wbMove
+         0     0% 82.97%      0.08s  3.49%  strings.(*Replacer).Replace
+         0     0% 82.97%      0.08s  3.49%  strings.(*genericReplacer).Replace
+         0     0% 82.97%      0.10s  4.37%  strings.ContainsAny (inline)
+         0     0% 82.97%      0.02s  0.87%  strings.Index (inline)
+         0     0% 82.97%      0.07s  3.06%  strings.IndexRune
+         0     0% 82.97%      0.03s  1.31%  sync.(*Map).Load (inline)
+         0     0% 82.97%      1.52s 66.38%  testing.(*B).run1.func1
+         0     0% 82.97%      1.52s 66.38%  testing.(*B).runN
+         0     0% 82.97%      0.03s  1.31%  time.Parse
+         0     0% 82.97%      0.03s  1.31%  time.parseRFC3339[go.shape.string]

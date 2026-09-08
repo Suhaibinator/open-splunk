@@ -177,6 +177,13 @@ func (l literal) find(value string) (int, int) {
 // collisions choose the first complete delimiter; later captures never cause
 // an earlier delimiter choice to be revisited.
 func (c *Compiled) Capture(raw []byte) ([]Capture, error) {
+	return c.CaptureInto(raw, nil)
+}
+
+// CaptureInto has Capture's semantics and reuses destination capacity when it
+// fits. The result replaces destination's contents. Captured strings own their
+// bytes independently of raw; no destination storage is retained by Compiled.
+func (c *Compiled) CaptureInto(raw []byte, destination []Capture) ([]Capture, error) {
 	if len(c.parts) == 0 {
 		return nil, errors.New("parser has no capture pattern")
 	}
@@ -192,7 +199,10 @@ func (c *Compiled) Capture(raw []byte) ([]Capture, error) {
 		return nil, errors.New("record does not match pattern prefix")
 	}
 	text = text[end:]
-	captures := make([]Capture, 0, len(c.parts)-1)
+	captures := destination[:0]
+	if cap(captures) < len(c.parts)-1 {
+		captures = make([]Capture, 0, len(c.parts)-1)
+	}
 	for _, part := range c.parts[1:] {
 		if part.name == "message" {
 			captures = append(captures, Capture{Name: part.name, Value: text})

@@ -1,0 +1,140 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeMalformed/nginx-combined/262144         	    2902	    405154 ns/op	 647.20 MB/s	  271532 B/op	      25 allocs/op
+BenchmarkNativeMalformed/logfmt/262144                 	    4890	    232064 ns/op	1129.66 MB/s	  271368 B/op	      21 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeMalformed/nginx-combined/262144         	    2797	    388759 ns/op	 674.49 MB/s	  271532 B/op	      25 allocs/op
+BenchmarkNativeMalformed/logfmt/262144                 	    5154	    232888 ns/op	1125.66 MB/s	  271368 B/op	      21 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeMalformed/nginx-combined/262144         	    2919	    375446 ns/op	 698.41 MB/s	  271531 B/op	      25 allocs/op
+BenchmarkNativeMalformed/logfmt/262144                 	    5221	    231088 ns/op	1134.43 MB/s	  271368 B/op	      21 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeMalformed/nginx-combined/262144         	    2854	    404395 ns/op	 648.41 MB/s	  271532 B/op	      25 allocs/op
+BenchmarkNativeMalformed/logfmt/262144                 	    4395	    261360 ns/op	1003.03 MB/s	  271368 B/op	      21 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeMalformed/nginx-combined/262144         	    2870	    387101 ns/op	 677.38 MB/s	  271532 B/op	      25 allocs/op
+BenchmarkNativeMalformed/logfmt/262144                 	    5817	    203692 ns/op	1287.01 MB/s	  271368 B/op	      21 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeMalformed/nginx-combined/262144         	    2757	    387435 ns/op	 676.80 MB/s	  271532 B/op	      25 allocs/op
+BenchmarkNativeMalformed/logfmt/262144                 	    5223	    209452 ns/op	1251.61 MB/s	  271368 B/op	      21 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeMalformed/nginx-combined/262144         	    3044	    373895 ns/op	 701.31 MB/s	  271531 B/op	      25 allocs/op
+BenchmarkNativeMalformed/logfmt/262144                 	    5994	    222726 ns/op	1177.02 MB/s	  271368 B/op	      21 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeMalformed/nginx-combined/262144         	    2640	    381655 ns/op	 687.05 MB/s	  271532 B/op	      25 allocs/op
+BenchmarkNativeMalformed/logfmt/262144                 	    5570	    230797 ns/op	1135.86 MB/s	  271368 B/op	      21 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeMalformed/nginx-combined/262144         	    3055	    383961 ns/op	 682.92 MB/s	  271531 B/op	      25 allocs/op
+BenchmarkNativeMalformed/logfmt/262144                 	    5671	    211010 ns/op	1242.37 MB/s	  271368 B/op	      21 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeMalformed/nginx-combined/262144         	    2602	    397179 ns/op	 660.19 MB/s	  271532 B/op	      25 allocs/op
+BenchmarkNativeMalformed/logfmt/262144                 	    5414	    211669 ns/op	1238.50 MB/s	  271368 B/op	      21 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeMalformed/nginx-combined/262144         	    3045	    379256 ns/op	 691.39 MB/s	  271531 B/op	      25 allocs/op
+BenchmarkNativeMalformed/logfmt/262144                 	    4885	    241851 ns/op	1083.95 MB/s	  271368 B/op	      21 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeMalformed/nginx-combined/262144         	    2830	    385680 ns/op	 679.88 MB/s	  271532 B/op	      25 allocs/op
+BenchmarkNativeMalformed/logfmt/262144                 	    5450	    212372 ns/op	1234.41 MB/s	  271368 B/op	      21 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeMalformed/nginx-combined/262144         	    3044	    384877 ns/op	 681.30 MB/s	  271531 B/op	      25 allocs/op
+BenchmarkNativeMalformed/logfmt/262144                 	    4826	    237760 ns/op	1102.60 MB/s	  271368 B/op	      21 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeMalformed/nginx-combined/262144         	    3099	    386434 ns/op	 678.55 MB/s	  271531 B/op	      25 allocs/op
+BenchmarkNativeMalformed/logfmt/262144                 	    4782	    226079 ns/op	1159.56 MB/s	  271368 B/op	      21 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeMalformed/nginx-combined/262144         	    3024	    383287 ns/op	 684.12 MB/s	  271531 B/op	      25 allocs/op
+BenchmarkNativeMalformed/logfmt/262144                 	    5816	    209997 ns/op	1248.36 MB/s	  271368 B/op	      21 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeMalformed/nginx-combined/262144         	    3114	    384923 ns/op	 681.21 MB/s	  271531 B/op	      25 allocs/op
+BenchmarkNativeMalformed/logfmt/262144                 	    4946	    242012 ns/op	1083.22 MB/s	  271368 B/op	      21 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeMalformed/nginx-combined/262144         	    3087	    379823 ns/op	 690.36 MB/s	  271531 B/op	      25 allocs/op
+BenchmarkNativeMalformed/logfmt/262144                 	    4887	    238244 ns/op	1100.36 MB/s	  271368 B/op	      21 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeMalformed/nginx-combined/262144         	    2701	    385508 ns/op	 680.18 MB/s	  271532 B/op	      25 allocs/op
+BenchmarkNativeMalformed/logfmt/262144                 	    5091	    216066 ns/op	1213.30 MB/s	  271368 B/op	      21 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeMalformed/nginx-combined/262144         	    3038	    390237 ns/op	 671.94 MB/s	  271531 B/op	      25 allocs/op
+BenchmarkNativeMalformed/logfmt/262144                 	    5530	    208691 ns/op	1256.18 MB/s	  271368 B/op	      21 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeMalformed/nginx-combined/262144         	    2821	    386427 ns/op	 678.56 MB/s	  271532 B/op	      25 allocs/op
+BenchmarkNativeMalformed/logfmt/262144                 	    5518	    204573 ns/op	1281.46 MB/s	  271368 B/op	      21 allocs/op
+PASS

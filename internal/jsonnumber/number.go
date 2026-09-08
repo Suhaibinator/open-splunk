@@ -107,7 +107,7 @@ func exactFloat64DecimalScale(value float64) int {
 // ParseDecimalRat parses the complete JSON decimal without routing through
 // Float64. Exponents are bounded before powers of ten are constructed.
 func ParseDecimalRat(text string) (*big.Rat, error) {
-	if !validJSONNumber(text) {
+	if !Valid(text) {
 		return nil, fmt.Errorf("invalid JSON number %q", text)
 	}
 
@@ -155,10 +155,10 @@ func ParseDecimalRat(text string) (*big.Rat, error) {
 	return new(big.Rat).SetFrac(numerator, denominator), nil
 }
 
-// validJSONNumber recognizes the complete JSON number grammar without regular
+// Valid recognizes the complete JSON number grammar without regular
 // expressions or numeric conversion. Callers apply their own representation
 // bounds after this single linear scan.
-func validJSONNumber(text string) bool {
+func Valid(text string) bool {
 	if text == "" {
 		return false
 	}
