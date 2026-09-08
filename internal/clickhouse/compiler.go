@@ -874,6 +874,31 @@ func validateCompiledExtractionBudgets(operators []plan.Operator) (authoredKnowl
 	return evidence, nil
 }
 
+func compileReplacePatternForBackend(
+	pattern string,
+	sourceRange spl.Range,
+) (splregex.ReplacePattern, error) {
+	compiled, err := splregex.CompileReplacePattern(pattern)
+	if err == nil {
+		return compiled, nil
+	}
+	if errors.Is(err, splregex.ErrReplacePatternTooLarge) {
+		return splregex.ReplacePattern{}, &plan.Diagnostic{
+			Code: "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf(
+				"replace regular expression exceeds the %d-byte or %d-work-unit limit",
+				splregex.MaximumMatchPatternBytes,
+				splregex.MaximumMatchProgramWorkUnits,
+			),
+			Range: sourceRange,
+		}
+	}
+	return splregex.ReplacePattern{}, fmt.Errorf(
+		"compile ClickHouse replace: regular expression is outside the supported RE2 subset: %w",
+		err,
+	)
+}
+
 func compileMatchPatternForBackend(
 	pattern string,
 	sourceRange spl.Range,

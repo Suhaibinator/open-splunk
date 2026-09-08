@@ -269,6 +269,7 @@ func FuzzValidateReplacePattern(f *testing.F) {
 		}
 		if firstErr != nil {
 			if !errors.Is(firstErr, ErrMayMatchEmpty) &&
+				!errors.Is(firstErr, ErrReplacePatternTooLarge) &&
 				!strings.HasPrefix(firstErr.Error(), "invalid RE2 regular expression: ") {
 				t.Fatalf("unclassified replace validation error: %v", firstErr)
 			}
