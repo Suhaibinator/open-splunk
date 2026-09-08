@@ -2084,6 +2084,13 @@ func TestOpenDeploymentRecoverySessionRejectsUnsafeTLSAndPasswordBeforeNetwork(t
 	if err := os.WriteFile(invalidCA, []byte("not a certificate"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	unsafeCA, err := testsupport.WriteServerTLSIdentity(t.TempDir(), "clickhouse")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(unsafeCA.CertificateFile, 0o666); err != nil {
+		t.Fatal(err)
+	}
 	for _, test := range []struct {
 		name         string
 		passwordFile string
@@ -2091,6 +2098,7 @@ func TestOpenDeploymentRecoverySessionRejectsUnsafeTLSAndPasswordBeforeNetwork(t
 	}{
 		{name: "group-writable password", passwordFile: writeClickHouseCredentialFixture(t, "secret", 0o660), caFile: identity.CertificateFile},
 		{name: "invalid CA", passwordFile: writeClickHouseCredentialFixture(t, "secret", 0o600), caFile: invalidCA},
+		{name: "writable CA", passwordFile: writeClickHouseCredentialFixture(t, "secret", 0o600), caFile: unsafeCA.CertificateFile},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			opened := false

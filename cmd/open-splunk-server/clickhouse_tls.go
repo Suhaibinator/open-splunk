@@ -66,7 +66,6 @@ func readBoundedClickHouseCABundle(path string) ([]byte, error) {
 		"configure ClickHouse TLS",
 		"CA file",
 		maximumClickHouseCABundleBytes,
-		sameClickHouseCredentialFileState,
 	)
 }
 

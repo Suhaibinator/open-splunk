@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"syscall"
 
+	"github.com/Suhaibinator/open-splunk/internal/privatefs"
 	"golang.org/x/sys/unix"
 )
 
@@ -41,17 +43,27 @@ type stablePathFileReadConfig struct {
 
 // readBoundedCABundleFile reads an operator-supplied CA bundle with the shared
 // stable-path mechanics. Callers supply the message prefix, the noun used in
-// every message, the size bound, and their own file-state comparison policy.
+// every message and the size bound. Both consumers enforce the same CA custody
+// policy, independently of the stricter confidentiality policy for secrets.
 func readBoundedCABundleFile(
 	path string,
 	prefix string,
 	noun string,
 	maximumBytes int64,
-	sameState func(os.FileInfo, os.FileInfo) bool,
+) ([]byte, error) {
+	return readBoundedCABundleFileWithHooks(path, prefix, noun, maximumBytes, stablePathFileReadHooks{})
+}
+
+func readBoundedCABundleFileWithHooks(
+	path string,
+	prefix string,
+	noun string,
+	maximumBytes int64,
+	hooks stablePathFileReadHooks,
 ) ([]byte, error) {
 	validate := func(info os.FileInfo) error {
-		if info == nil || !info.Mode().IsRegular() {
-			return fmt.Errorf("%s: %s must be a regular file", prefix, noun)
+		if err := validateCABundleFile(info, os.Geteuid()); err != nil {
+			return fmt.Errorf("%s: %s %w", prefix, noun, err)
 		}
 		if info.Size() > maximumBytes {
 			return fmt.Errorf("%s: %s exceeds %d bytes", prefix, noun, maximumBytes)
@@ -61,12 +73,19 @@ func readBoundedCABundleFile(
 	return readStablePathFile(stablePathFileReadConfig{
 		path:             path,
 		maximumReadBytes: maximumBytes,
+		hooks:            hooks,
 		validateBefore:   validate,
-		validateOpen: func(_ *os.File, info os.FileInfo) error {
-			return validate(info)
+		validateOpen: func(file *os.File, info os.FileInfo) error {
+			if err := validate(info); err != nil {
+				return err
+			}
+			if err := privatefs.ValidateNoExtendedACL(file); err != nil {
+				return fmt.Errorf("%s: %s has unsupported access-control metadata", prefix, noun)
+			}
+			return nil
 		},
 		validateAfterPath: validate,
-		sameState:         sameState,
+		sameState:         sameCABundleFileState,
 		messages: stablePathFileReadMessages{
 			inspectPath:         fmt.Sprintf("%s: inspect %s", prefix, noun),
 			openPath:            fmt.Sprintf("%s: open %s", prefix, noun),
@@ -81,6 +100,43 @@ func readBoundedCABundleFile(
 			close:               fmt.Sprintf("%s: close %s", prefix, noun),
 		},
 	})
+}
+
+func validateCABundleFile(info os.FileInfo, effectiveUID int) error {
+	if info == nil || !info.Mode().IsRegular() {
+		return errors.New("must be a regular file")
+	}
+	mode := info.Mode()
+	if mode.Perm()&0o400 == 0 || mode.Perm()&0o133 != 0 {
+		return errors.New("must be owner-readable without execute or group/other write permissions")
+	}
+	if mode&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
+		return errors.New("must not have special permission bits")
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat == nil {
+		return errors.New("ownership and link metadata are unavailable")
+	}
+	if effectiveUID < 0 || (stat.Uid != 0 && int64(stat.Uid) != int64(effectiveUID)) {
+		return errors.New("must be owned by root or the effective user")
+	}
+	if stat.Nlink != 1 {
+		return errors.New("must have exactly one hard link")
+	}
+	return nil
+}
+
+func sameCABundleFileState(left, right os.FileInfo) bool {
+	if left == nil || right == nil || !os.SameFile(left, right) ||
+		left.Mode() != right.Mode() || left.Size() != right.Size() ||
+		!left.ModTime().Equal(right.ModTime()) {
+		return false
+	}
+	leftStat, leftOK := left.Sys().(*syscall.Stat_t)
+	rightStat, rightOK := right.Sys().(*syscall.Stat_t)
+	return leftOK && rightOK && leftStat != nil && rightStat != nil &&
+		leftStat.Uid == rightStat.Uid && leftStat.Gid == rightStat.Gid &&
+		leftStat.Nlink == rightStat.Nlink
 }
 
 // readStablePathFile centralizes the race-resistant mechanics shared by

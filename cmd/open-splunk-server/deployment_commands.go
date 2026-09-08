@@ -290,7 +290,6 @@ func readBoundedDeploymentHealthCABundle(path string) ([]byte, error) {
 		"deployment healthcheck",
 		"CA certificate",
 		maximumDeploymentHealthCABundleBytes,
-		sameAdministratorTokenFileState,
 	)
 }
 

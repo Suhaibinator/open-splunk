@@ -69,7 +69,7 @@ options may subsequently apply a documented derived-default rule.
 | `OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD` | `-clickhouse-password` | None; required unless a password file is used | Configure the ClickHouse password. | Non-empty string. Mutually exclusive with the password-file setting at the same tier. The environment value is removed after parsing. |
 | `OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD_FILE` | `-clickhouse-password-file` | None; required unless a raw password is used | Read the ClickHouse password from a file. | Regular 1–4096-byte file, owner-readable, non-executable, without group/other write permission, special bits, ACL metadata, or additional hard links. One trailing LF is removed. |
 | `OPEN_SPLUNK_SERVER_CLICKHOUSE_TLS_ENABLED` | `-clickhouse-tls-enabled` | `false` | Enable verified TLS for every ClickHouse connection. | Boolean. Enabling it requires both an explicit CA certificate file and TLS server name. |
-| `OPEN_SPLUNK_SERVER_CLICKHOUSE_TLS_CA_CERTIFICATE_FILE` | `-clickhouse-tls-ca-certificate-file` | Empty | Select the trust bundle for ClickHouse TLS verification. | File path containing only valid certificate PEM blocks, at most 1 MiB. Requires ClickHouse TLS and is rejected when TLS is disabled. |
+| `OPEN_SPLUNK_SERVER_CLICKHOUSE_TLS_CA_CERTIFICATE_FILE` | `-clickhouse-tls-ca-certificate-file` | Empty | Select the trust bundle for ClickHouse TLS verification. | Regular file owned by root or the effective server user, owner-readable without execute, group/other write, special bits, ACL metadata, or additional hard links. Public-readable bundles such as `0444` and `0644` are supported, as are `0400` and `0600`. Contains only valid certificate PEM blocks, at most 1 MiB. Requires ClickHouse TLS and is rejected when TLS is disabled. |
 | `OPEN_SPLUNK_SERVER_CLICKHOUSE_TLS_SERVER_NAME` | `-clickhouse-tls-server-name` | Empty | Select the DNS name or IP SAN verified on the ClickHouse certificate. | Valid bounded DNS name or IP address without a port or wildcard. Requires ClickHouse TLS and is rejected when TLS is disabled. |
 | `OPEN_SPLUNK_SERVER_CLICKHOUSE_SKIP_MIGRATIONS` | `-clickhouse-skip-migrations` | `false` | Skip applying the embedded ClickHouse migrations at startup. | Boolean. Use only when an external process has already provisioned the exact embedded schema. |
 | `OPEN_SPLUNK_SERVER_COLLECTOR_GRPC_LISTEN_ADDRESS` | `-collector-grpc-listen-address` | Empty; listener disabled | Enable the native collector gRPC listener. | Empty or `host:port`. A configured listener requires either both collector TLS files or explicit loopback-only plaintext mode. |
@@ -406,6 +406,12 @@ Verified TLS remains available for non-Compose or customized deployments via
 `-http-tls-certificate-file`, `-http-tls-private-key-file`,
 `-clickhouse-tls-enabled`, `-clickhouse-tls-ca-certificate-file`, and
 `-clickhouse-tls-server-name`.
+
+The same CA-file custody checks apply to deployment HTTPS healthchecks and
+ClickHouse migration and recovery commands. For container mounts, ownership is
+checked as seen inside the container; the published server image runs as UID
+`65532`. Root-owned public-readable bundles are supported. Mount trust files
+read-only and protect their parent directories from untrusted replacement.
 
 ## Persistent state
 
