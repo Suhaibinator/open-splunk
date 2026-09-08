@@ -293,6 +293,7 @@ func TestResumeBatchReturnsRejectionAfterSafePendingAbandonment(t *testing.T) {
 		Outbox:            outbox,
 		StoredRowCount:    uint32(len(rows)),
 		DecodedEventBytes: decodedEventBytes(batch),
+		PrincipalSHA256:   ingestionPrincipalSHA256(batch.TenantID, ingest.NativeCollectorSource(batch.CollectorID)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -370,6 +371,7 @@ func TestResumeBatchAfterObservedPendingAbandonmentReturnsGoneWithoutRecreation(
 		Outbox:            outbox,
 		StoredRowCount:    uint32(len(rows)),
 		DecodedEventBytes: decodedEventBytes(batch),
+		PrincipalSHA256:   ingestionPrincipalSHA256(batch.TenantID, ingest.NativeCollectorSource(batch.CollectorID)),
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -486,6 +486,7 @@ func TestStoreRebuildsFreshReservationAfterObservedPendingIsAbandoned(t *testing
 		Outbox:            outbox,
 		StoredRowCount:    uint32(len(rows)),
 		DecodedEventBytes: decodedEventBytes(stale),
+		PrincipalSHA256:   ingestionPrincipalSHA256(stale.TenantID, ingest.NativeCollectorSource(stale.CollectorID)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -514,7 +515,8 @@ func TestStoreRebuildsFreshReservationAfterObservedPendingIsAbandoned(t *testing
 		t.Fatalf("first Reserve request = %+v, want identity-only existing acquisition", acquire)
 	}
 	if allocate.ExistingOnly || allocate.AttemptID != acquire.AttemptID ||
-		!allocate.IndexTime.Equal(fresh.ReceivedAt) || len(allocate.Metadata) == 0 || len(allocate.Outbox) == 0 {
+		!allocate.IndexTime.Equal(fresh.ReceivedAt) || len(allocate.Metadata) == 0 || len(allocate.Outbox) == 0 ||
+		allocate.PrincipalSHA256 != ingestionPrincipalSHA256(fresh.TenantID, ingest.NativeCollectorSource(fresh.CollectorID)) {
 		t.Fatalf("fallback Reserve request = %+v, want full fresh allocation with reused clean attempt", allocate)
 	}
 	replayed, err := decodeStoreOutbox(allocate.Outbox)

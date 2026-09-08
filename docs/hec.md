@@ -239,6 +239,7 @@ Principal hard ceilings are:
 | concurrent requests per token / process | 16 / 128 |
 | reserved concurrent health probes | 8 |
 | pending outbox requests / payload / metadata | 20,000 / 256 MiB / 256 MiB |
+| pending requests / payload / metadata per token | 10,000 / 128 MiB / 128 MiB |
 | retained requests per token | 100,000 |
 | channels per token | 256 |
 | ACK IDs per query / retained per token | 1,000 / 100,000 |
@@ -248,6 +249,14 @@ Principal hard ceilings are:
 The event-age ceiling is 365 days and future skew is 5 minutes; an index may
 tighten both. Native token/index schedules charge server-computed source event
 bytes, so gzip never discounts quotas.
+
+Pending budgets use the stable token record ID across channels, request IDs,
+indexes, and event metadata. They remain charged through lease release and
+restart until the accepted work reaches a terminal state. Capacity exhaustion
+uses the existing retryable queue response. These budgets reserve half of each
+global ceiling for other sources; several independently provisioned sources
+can still fill the global queue. See [Ingestion](ingestion.md) for upgrade debt
+and the shared native-collector policy.
 
 ## Enablement and deployment
 

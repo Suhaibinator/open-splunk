@@ -592,6 +592,7 @@ func (s *Store) stageAdmitted(ctx context.Context, batch ingest.StoreBatch) (ing
 		Outbox:            payload.outbox,
 		StoredRowCount:    payload.storedRowCount,
 		DecodedEventBytes: payload.decodedEventBytes,
+		PrincipalSHA256:   payload.principalSHA256,
 		QuotaAdmission:    batch.QuotaAdmission,
 		QuotaEvaluatedAt:  batch.QuotaEvaluatedAt,
 		HECAdmission:      visibilityHECAdmission(batch),
@@ -988,6 +989,7 @@ func applyFreshReservationPayload(request *visibility.ReserveRequest, payload fr
 	request.Outbox = payload.outbox
 	request.StoredRowCount = payload.storedRowCount
 	request.DecodedEventBytes = payload.decodedEventBytes
+	request.PrincipalSHA256 = payload.principalSHA256
 }
 
 func storeBatchIdentity(batch ingest.StoreBatch) ingest.StoreBatchIdentity {
@@ -1025,6 +1027,7 @@ func (s *Store) storeAdmitted(
 	indexTime := prior.IndexTime
 	storedRowCount := prior.StoredRowCount
 	decodedBytes := prior.DecodedEventBytes
+	var principalSHA256 [sha256.Size]byte
 	// Lookup intentionally does not acquire a lease. A pending row may become
 	// terminal or be safely abandoned before Reserve starts, so observed pending
 	// rows first use the atomic existing-only path and never recreate anything
@@ -1040,6 +1043,7 @@ func (s *Store) storeAdmitted(
 		}
 		metadata, outbox, indexTime = payload.metadata, payload.outbox, payload.indexTime
 		storedRowCount, decodedBytes = payload.storedRowCount, payload.decodedEventBytes
+		principalSHA256 = payload.principalSHA256
 	}
 	attemptID, err := s.attemptID()
 	if err != nil {
@@ -1056,6 +1060,7 @@ func (s *Store) storeAdmitted(
 		Outbox:            outbox,
 		StoredRowCount:    storedRowCount,
 		DecodedEventBytes: decodedBytes,
+		PrincipalSHA256:   principalSHA256,
 		QuotaAdmission:    batch.QuotaAdmission,
 		QuotaEvaluatedAt:  batch.QuotaEvaluatedAt,
 	}
@@ -1077,6 +1082,7 @@ func (s *Store) storeAdmitted(
 		request.Outbox = outbox
 		request.StoredRowCount = storedRowCount
 		request.DecodedEventBytes = decodedBytes
+		request.PrincipalSHA256 = payload.principalSHA256
 		found = false
 		reservation, err = s.visibility.Reserve(ctx, request)
 	}
@@ -1108,12 +1114,17 @@ type freshReservationPayload struct {
 	indexTime         time.Time
 	storedRowCount    uint32
 	decodedEventBytes uint64
+	principalSHA256   [sha256.Size]byte
 }
 
 func (s *Store) freshReservationPayload(
 	ctx context.Context,
 	batch ingest.StoreBatch,
 ) (freshReservationPayload, error) {
+	source, err := ingest.CanonicalIngestionSource(batch.Source, batch.CollectorID)
+	if err != nil {
+		return freshReservationPayload{}, fmt.Errorf("store ClickHouse batch source: %w", err)
+	}
 	if batch.OriginalEventCount == 0 && len(batch.RejectedEvents) == 0 && len(batch.Events) > 0 {
 		eventCount, conversionErr := safecast.Conv[uint32](len(batch.Events))
 		if conversionErr != nil {
@@ -1143,7 +1154,22 @@ func (s *Store) freshReservationPayload(
 		indexTime:         batch.ReceivedAt,
 		storedRowCount:    rowCount,
 		decodedEventBytes: decodedEventBytes(batch),
+		principalSHA256:   ingestionPrincipalSHA256(batch.TenantID, source),
 	}, nil
+}
+
+// ingestionPrincipalSHA256 uses stable server-owned source authority. Native
+// token replacement retains the collector's budget; HEC requests retain the
+// token-record budget across channels, indexes, hosts, and request identities.
+func ingestionPrincipalSHA256(tenantID string, source ingest.IngestionSource) [sha256.Size]byte {
+	hash := sha256.New()
+	writeTokenPart(hash, "open-splunk-ingestion-principal-v1")
+	writeTokenPart(hash, tenantID)
+	_, _ = hash.Write([]byte{byte(source.Kind)})
+	writeTokenPart(hash, source.ID)
+	var digest [sha256.Size]byte
+	copy(digest[:], hash.Sum(nil))
+	return digest
 }
 
 func decodedEventBytes(batch ingest.StoreBatch) uint64 {

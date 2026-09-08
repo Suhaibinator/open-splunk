@@ -68,6 +68,12 @@ const (
 	MaxPendingOutboxBytes = 256 << 20
 	// MaxPendingMetadataBytes bounds all unresolved compact response metadata.
 	MaxPendingMetadataBytes = 256 << 20
+	// MaxPrincipalPendingReservations leaves half the backlog for other sources.
+	MaxPrincipalPendingReservations = MaxPendingReservations / 2
+	// MaxPrincipalPendingOutboxBytes bounds one source's unresolved replay data.
+	MaxPrincipalPendingOutboxBytes = MaxPendingOutboxBytes / 2
+	// MaxPrincipalPendingMetadataBytes bounds one source's unresolved metadata.
+	MaxPrincipalPendingMetadataBytes = MaxPendingMetadataBytes / 2
 	// MaxReservationRows bounds one admitted logical batch.
 	MaxReservationRows = uint32(ingestquota.HardMaxAdmissionEvents)
 	// MaxReservationDecodedBytes bounds one admitted logical batch.
@@ -138,6 +144,10 @@ type ReserveRequest struct {
 	// transaction.
 	StoredRowCount    uint32
 	DecodedEventBytes uint64
+	// PrincipalSHA256 is the server-derived digest of the tenant and canonical
+	// ingestion source, independent of mutable rate quotas or request identity.
+	// It is required for fresh allocation and ignored for active durable replay.
+	PrincipalSHA256 [32]byte
 	// QuotaAdmission is present only for fresh normalized ingestion. It is
 	// ignored by existing-only and active durable replay paths. Nil preserves
 	// the legacy non-quota reservation contract.
