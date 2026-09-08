@@ -3,6 +3,7 @@ package input
 import (
 	"encoding/json"
 	"errors"
+	"maps"
 	"math"
 	"strings"
 	"sync"
@@ -85,9 +86,7 @@ func (s *fileCheckpointStore) ReservePending(checkpoints []Checkpoint) error {
 	if s.reserved == nil {
 		s.reserved = make(map[checkpointKey]checkpointReservation)
 	}
-	for key, reservation := range next {
-		s.reserved[key] = reservation
-	}
+	maps.Copy(s.reserved, next)
 	return nil
 }
 
