@@ -135,20 +135,23 @@ func TestSenderRepacksAggregateValueBudgetWithoutDroppingEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = queue.Close() })
-	// Nine individually valid maximum-node events fit the ordinary byte/count
-	// limits but require repeated bisection to meet the four-event node budget.
+	// Five individually valid large events exceed the aggregate node budget.
+	// Four lightweight predecessors keep the ordinary byte/count limits valid
+	// while forcing repeated fallback bisection: 9 -> 4/5 -> 2/3.
 	events := make([]*opensplunk.LogEvent, 9)
 	for i := range events {
 		event := validLogEvent(fmt.Sprintf("event-%d", i), "main")
-		values := make([]*opensplunk.TypedValue, ingest.HardMaxEventValueNodes-1)
-		for j := range values {
-			values[j] = &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_BoolValue{}}
+		if i >= 4 {
+			values := make([]*opensplunk.TypedValue, ingest.HardMaxBatchValueNodes/5)
+			for j := range values {
+				values[j] = &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_BoolValue{}}
+			}
+			event.Fields = &opensplunk.TypedObject{Fields: []*opensplunk.TypedObjectField{{
+				Name: "items", Value: &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_ListValue{
+					ListValue: &opensplunk.TypedValueList{Values: values},
+				}},
+			}}}
 		}
-		event.Fields = &opensplunk.TypedObject{Fields: []*opensplunk.TypedObjectField{{
-			Name: "items", Value: &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_ListValue{
-				ListValue: &opensplunk.TypedValueList{Values: values},
-			}},
-		}}}
 		events[i] = event
 	}
 	parent, err := queue.Append(events)
@@ -171,7 +174,11 @@ func TestSenderRepacksAggregateValueBudgetWithoutDroppingEvents(t *testing.T) {
 	sender := newTestSender(t, opts, queue, sink, nil, startServer(t, service))
 	cancel, done := runSender(t, sender)
 	defer func() { cancel(); <-done }()
-	waitFor(t, "aggregate repacking drained", func() bool { return queue.Stats().QueuedBatches == 0 })
+	// Race instrumentation makes the aggregate protobuf walk substantially
+	// slower, so keep its scheduling headroom local to this stress test.
+	waitForWithin(t, time.Minute, "aggregate repacking drained", func() bool {
+		return queue.Stats().QueuedBatches == 0
+	})
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if len(store.events) != len(events) || store.repackRejections != 2 {
