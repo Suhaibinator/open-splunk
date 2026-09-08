@@ -76,7 +76,16 @@ type Decoder struct {
 	constants     []*opensplunk.TypedObjectField
 	constantNames map[string]struct{}
 	parser        *parserconfig.Compiled
+	kind          decoderKind
 }
+
+type decoderKind uint8
+
+const (
+	decoderNDJSON decoderKind = iota
+	decoderRaw
+	decoderNative
+)
 
 // NewDecoder validates and takes an independent copy of cfg.
 func NewDecoder(cfg DecodeConfig) (*Decoder, error) {
@@ -126,7 +135,16 @@ func NewDecoder(cfg DecodeConfig) (*Decoder, error) {
 	}
 	cfg.ConstantFields = nil
 	cfg.Parser = nil
-	return &Decoder{cfg: cfg, constants: constants, constantNames: constantNames, parser: compiled}, nil
+	// Format validation and classification happen once. NDJSON enters its direct
+	// JSON path with one integer branch, without comparing format strings per event.
+	kind := decoderNative
+	switch cfg.Format {
+	case InputFormatNDJSON:
+		kind = decoderNDJSON
+	case InputFormatRaw:
+		kind = decoderRaw
+	}
+	return &Decoder{cfg: cfg, constants: constants, constantNames: constantNames, parser: compiled, kind: kind}, nil
 }
 
 // Decode converts raw to an independent event. raw must not contain the file
@@ -182,15 +200,14 @@ func (d *Decoder) Decode(raw []byte, position SourcePosition, collectedAt time.T
 		event.RawEncoding = opensplunk.RawEncoding_RAW_ENCODING_UTF8
 	}
 
-	if d.cfg.Format == InputFormatRaw {
-		if event.RawEncoding == opensplunk.RawEncoding_RAW_ENCODING_UTF8 {
-			event.Message = new(string(raw))
+	if d.kind != decoderNDJSON {
+		if d.kind == decoderRaw {
+			if event.RawEncoding == opensplunk.RawEncoding_RAW_ENCODING_UTF8 {
+				event.Message = new(string(raw))
+			}
+			event.Fields = d.mergeConstants(nil)
+			return event, nil
 		}
-		event.Fields = d.mergeConstants(nil)
-		return event, nil
-	}
-
-	if d.cfg.Format != InputFormatNDJSON {
 		return d.decodeNative(event, raw)
 	}
 
