@@ -204,7 +204,7 @@ import { SearchFailurePanel } from "./search-workspace/components/search-failure
 import { SearchSharingDialog } from "./search-workspace/components/search-sharing-dialog";
 import { ExamplesDialog, KeyboardShortcutsDialog, SplReferenceDialog } from "./search-workspace/components/search-help-dialogs";
 import { WorkspaceDialogs } from "./search-workspace/components/workspace-dialogs";
-import { serializeRowsAsJsonLinesForClipboard, serializeRowsForClipboard } from "./search-workspace/clipboard-export";
+import { serializeRowsAsCsv, serializeRowsAsJsonLinesForClipboard, serializeRowsForClipboard } from "./search-workspace/clipboard-export";
 import { extendsFragment, localCompletions, typeaheadOpens } from "./search-workspace/completion-candidates";
 import { completionKindFromSuggestion, orderCompletions } from "./search-workspace/completion-groups";
 import { isEditableTarget, useKeyboardPlatform } from "./search-workspace/keyboard-shortcuts";
@@ -482,10 +482,6 @@ function savedWorkspaceFingerprint(baseline: SavedWorkspaceBaseline): string {
     ...baseline,
     selectedFields: baseline.selectedFields.toSorted(),
   });
-}
-
-function exportCellString(value: unknown): string {
-  return value !== null && typeof value === "object" ? JSON.stringify(value) : String(value ?? "");
 }
 
 function padDatePart(part: number): string {
@@ -6511,14 +6507,7 @@ export function SearchWorkspace({
     const selectedRows = rows.map((row) => Object.fromEntries(exportFields.map((field) => [field, row[field] ?? null])));
     const content = exportFormat === "jsonl"
       ? selectedRows.map((row) => JSON.stringify(row)).join("\n")
-      : [
-        exportFields.map((field) => `"${(exportFieldLabels[field] ?? field).replaceAll('"', '""')}"`).join(","),
-        ...selectedRows.map((row) =>
-          exportFields
-            .map((field) => `"${exportCellString(row[field]).replaceAll('"', '""')}"`)
-            .join(","),
-        ),
-      ].join("\n");
+      : serializeRowsAsCsv(exportFields, exportFieldLabels, selectedRows);
     return {
       filename,
       blob: new Blob([content], { type: exportFormat === "csv" ? "text/csv" : "application/x-ndjson" }),
