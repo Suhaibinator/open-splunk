@@ -1,0 +1,12 @@
+--- FAIL: TestNativeFixedE2EFramingRejectionAndCheckpoint (0.00s)
+    --- FAIL: TestNativeFixedE2EFramingRejectionAndCheckpoint/nginx-combined (10.18s)
+        native_fixed_e2e_test.go:51: timed out waiting for two valid native events
+    --- FAIL: TestNativeFixedE2EFramingRejectionAndCheckpoint/apache-combined (10.18s)
+        native_fixed_e2e_test.go:51: timed out waiting for two valid native events
+    --- FAIL: TestNativeFixedE2EFramingRejectionAndCheckpoint/apache-common (10.18s)
+        native_fixed_e2e_test.go:51: timed out waiting for two valid native events
+    --- FAIL: TestNativeFixedE2EFramingRejectionAndCheckpoint/docker-json-file (10.18s)
+        native_fixed_e2e_test.go:51: timed out waiting for two valid native events
+FAIL
+FAIL	github.com/Suhaibinator/open-splunk/internal/collector	10.478s
+FAIL

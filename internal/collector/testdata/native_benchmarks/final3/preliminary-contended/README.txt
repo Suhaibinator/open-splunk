@@ -1,0 +1,1 @@
+Excluded entire initial final3 run: an unrelated storage.test process was observed during pairs 10-11. Results are retained, but are not isolated performance evidence. Exclusion was based only on observed workload, not benchmark results.

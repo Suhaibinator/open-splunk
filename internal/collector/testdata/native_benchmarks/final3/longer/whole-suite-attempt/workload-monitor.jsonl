@@ -1,0 +1,42 @@
+{"event": "accepted", "group": "ndjson", "attempt": 1, "sample": 1, "time": 1788854895.6059341}
+{"event": "accepted", "group": "ndjson", "attempt": 2, "sample": 2, "time": 1788854912.302492}
+{"event": "rejected", "group": "ndjson", "attempt": 3, "jobs": [{"pid": 11507, "comm": "go"}, {"pid": 11507, "comm": "go"}, {"pid": 11507, "comm": "go"}, {"pid": 11507, "comm": "go"}, {"pid": 11507, "comm": "go"}, {"pid": 11507, "comm": "go"}, {"pid": 11507, "comm": "go"}, {"pid": 11507, "comm": "go"}, {"pid": 11507, "comm": "go"}, {"pid": 11507, "comm": "go"}, {"pid": 11507, "comm": "go"}, {"pid": 11507, "comm": "go"}, {"pid": 11507, "comm": "go"}, {"pid": 11507, "comm": "go"}, {"pid": 11507, "comm": "go"}, {"pid": 11507, "comm": "go"}, {"pid": 11507, "comm": "go"}, {"pid": 11507, "comm": "go"}, {"pid": 11507, "comm": "go"}, {"pid": 11507, "comm": "go"}, {"pid": 11507, "comm": "go"}, {"pid": 11507, "comm": "go"}, {"pid": 11507, "comm": "go"}, {"pid": 11507, "comm": "go"}], "time": 1788854929.154042}
+{"event": "wait", "time": 1788854929.2092512, "jobs": [{"pid": 11507, "comm": "go"}]}
+{"event": "accepted", "group": "ndjson", "attempt": 4, "sample": 3, "time": 1788854949.5654552}
+{"event": "accepted", "group": "ndjson", "attempt": 5, "sample": 4, "time": 1788854966.30863}
+{"event": "accepted", "group": "ndjson", "attempt": 6, "sample": 5, "time": 1788854983.600765}
+{"event": "accepted", "group": "ndjson", "attempt": 7, "sample": 6, "time": 1788855000.340539}
+{"event": "rejected", "group": "ndjson", "attempt": 8, "jobs": [{"pid": 14872, "comm": "node"}, {"pid": 14872, "comm": "node"}], "time": 1788855017.131364}
+{"event": "rejected", "group": "ndjson", "attempt": 9, "jobs": [{"pid": 15255, "comm": "go"}, {"pid": 15255, "comm": "go"}, {"pid": 15460, "comm": "node"}], "time": 1788855033.889023}
+{"event": "rejected", "group": "ndjson", "attempt": 10, "jobs": [{"pid": 15967, "comm": "go"}, {"pid": 15967, "comm": "go"}, {"pid": 15967, "comm": "go"}, {"pid": 15967, "comm": "go"}, {"pid": 16267, "comm": "go"}, {"pid": 16267, "comm": "go"}, {"pid": 16267, "comm": "go"}], "time": 1788855051.2106082}
+{"event": "wait", "time": 1788855051.291565, "jobs": [{"pid": 16267, "comm": "go"}]}
+{"event": "wait", "time": 1788855054.3564842, "jobs": [{"pid": 16267, "comm": "go"}]}
+{"event": "wait", "time": 1788855057.424691, "jobs": [{"pid": 16267, "comm": "go"}]}
+{"event": "rejected", "group": "ndjson", "attempt": 11, "jobs": [{"pid": 16958, "comm": "go"}, {"pid": 16958, "comm": "go"}, {"pid": 16958, "comm": "go"}, {"pid": 16958, "comm": "go"}, {"pid": 16958, "comm": "go"}, {"pid": 16958, "comm": "go"}, {"pid": 16958, "comm": "go"}, {"pid": 16958, "comm": "go"}, {"pid": 16958, "comm": "go"}, {"pid": 16958, "comm": "go"}, {"pid": 16958, "comm": "go"}, {"pid": 16958, "comm": "go"}, {"pid": 16958, "comm": "go"}, {"pid": 16958, "comm": "go"}, {"pid": 16958, "comm": "go"}, {"pid": 16958, "comm": "go"}, {"pid": 16958, "comm": "go"}, {"pid": 16958, "comm": "go"}], "time": 1788855077.176182}
+{"event": "wait", "time": 1788855077.2298539, "jobs": [{"pid": 16958, "comm": "go"}]}
+{"event": "wait", "time": 1788855080.294889, "jobs": [{"pid": 16958, "comm": "go"}]}
+{"event": "wait", "time": 1788855083.3580952, "jobs": [{"pid": 16958, "comm": "go"}]}
+{"event": "wait", "time": 1788855086.4744442, "jobs": [{"pid": 16958, "comm": "go"}, {"pid": 25280, "comm": "go"}]}
+{"event": "wait", "time": 1788855089.533825, "jobs": [{"pid": 16958, "comm": "go"}, {"pid": 25280, "comm": "go"}]}
+{"event": "wait", "time": 1788855092.598909, "jobs": [{"pid": 16958, "comm": "go"}, {"pid": 25280, "comm": "go"}]}
+{"event": "wait", "time": 1788855095.665776, "jobs": [{"pid": 16958, "comm": "go"}, {"pid": 25280, "comm": "go"}]}
+{"event": "wait", "time": 1788855098.7320662, "jobs": [{"pid": 16958, "comm": "go"}, {"pid": 25280, "comm": "go"}]}
+{"event": "wait", "time": 1788855101.799011, "jobs": [{"pid": 16958, "comm": "go"}, {"pid": 25280, "comm": "go"}]}
+{"event": "wait", "time": 1788855104.856838, "jobs": [{"pid": 16958, "comm": "go"}, {"pid": 25280, "comm": "go"}]}
+{"event": "wait", "time": 1788855107.915037, "jobs": [{"pid": 16958, "comm": "go"}]}
+{"event": "wait", "time": 1788855110.972235, "jobs": [{"pid": 16958, "comm": "go"}]}
+{"event": "wait", "time": 1788855114.038253, "jobs": [{"pid": 16958, "comm": "go"}, {"pid": 36053, "comm": "go"}]}
+{"event": "wait", "time": 1788855117.095937, "jobs": [{"pid": 16958, "comm": "go"}, {"pid": 36053, "comm": "go"}]}
+{"event": "wait", "time": 1788855120.15095, "jobs": [{"pid": 16958, "comm": "go"}, {"pid": 36053, "comm": "go"}]}
+{"event": "wait", "time": 1788855123.220852, "jobs": [{"pid": 16958, "comm": "go"}, {"pid": 38810, "comm": "go"}]}
+{"event": "wait", "time": 1788855126.2879, "jobs": [{"pid": 16958, "comm": "go"}, {"pid": 38810, "comm": "go"}]}
+{"event": "wait", "time": 1788855129.348415, "jobs": [{"pid": 16958, "comm": "go"}, {"pid": 38810, "comm": "go"}]}
+{"event": "wait", "time": 1788855132.409709, "jobs": [{"pid": 16958, "comm": "go"}, {"pid": 38810, "comm": "go"}]}
+{"event": "wait", "time": 1788855135.466877, "jobs": [{"pid": 16958, "comm": "go"}, {"pid": 38810, "comm": "go"}, {"pid": 44083, "comm": "node"}]}
+{"event": "wait", "time": 1788855138.528843, "jobs": [{"pid": 16958, "comm": "go"}, {"pid": 38810, "comm": "go"}]}
+{"event": "wait", "time": 1788855141.585557, "jobs": [{"pid": 16958, "comm": "go"}, {"pid": 38810, "comm": "go"}]}
+{"event": "wait", "time": 1788855144.642758, "jobs": [{"pid": 16958, "comm": "go"}, {"pid": 38810, "comm": "go"}]}
+{"event": "wait", "time": 1788855147.7072902, "jobs": [{"pid": 16958, "comm": "go"}]}
+{"event": "wait", "time": 1788855150.771811, "jobs": [{"pid": 49671, "comm": "go"}]}
+{"event": "wait", "time": 1788855153.85658, "jobs": [{"pid": 49671, "comm": "go"}]}
+{"event": "wait", "time": 1788855156.925638, "jobs": [{"pid": 49671, "comm": "go"}]}

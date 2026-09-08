@@ -75,3 +75,9 @@ whitespace-delimiter cases extend through the full 1 MiB event ceiling.
 For the final comparison against updated main after the wave 1 configuration
 fix, use final/README.txt and final/comparison.txt. The earlier candidate and
 all its timing history remain intact above.
+
+Latest source validation uses final4/README.txt and final4/comparison.txt,
+against updated main fb9cef37 and source 16b3c3a7. That controlled identical
+benchmark registry comparison follows the retained noisy/inconclusive and
+failed full-test-binary measurements in final3/. The earlier final/ and root
+comparisons remain historical evidence, not substitutes for final4/.

@@ -68,3 +68,33 @@ policy and include body, while runtime source matching stays exact; protected
 metadata and cross-role reserved mappings still reject. Config/parserconfig
 race tests passed. Pinned lint required errors.AsType for the timestamp prefix
 parse error; corrected and timestamp regressions/fuzz seeds remained green.
+
+Additional root audit before wave 3: valid Go timestamp layouts containing
+literal decimal digit runs (for example a suffix .8888888888) were rejected
+as excessive fractional precision. Independent root parser/decoder regressions
+failed for logfmt and both Java formats. A separate test agent added 15 valid
+token-boundary fixtures and 24 precision-rejection cases, with pre-fix failure
+evidence obtained through a read-only overlay of the committed parser.
+The fix compiles an optional lexical spelling walk for layouts with decimal
+literals, while Go retains semantic parsing authority. Common layouts avoid
+allocating that walk; actual fractions beyond nine digits remain rejected.
+Renewed checks, timings and the full third review wave follow this correction.
+
+Performance remediation before wave 3: the completed two-second canonical
+follow-up detected a significant 1.31% slowdown on source e30af276 despite
+unchanged allocations. The first one-second set was noisy and was not used
+to declare success. A bounded Sol investigation identified the extra format
+string comparison in the NDJSON path. Format classification now happens once
+at construction; the direct JSON path has one integer branch. A controlled
+benchmark-only registry comparison also removes added test metadata as a
+measurement confound. All original samples and the failing gate remain retained.
+
+Additional signed-short-year regression: Go accepts +6 and -6 for layout 06;
+the optional precision walk now consumes the validated two-character spelling.
+All 20 signed single-digit spellings have independently specified expected
+times. Final source 16b3c3a7 passed complete Go/race, pinned Linux lint, all
+three compiled backend gates and the final4 controlled performance gate.
+The diagnostic triple does not establish the string comparison as the sole
+cause of the earlier full-test-binary slowdown; test metadata also changed.
+No statistically significant final production regression with identical test
+registration was measured. Full third review wave starts after these gates.

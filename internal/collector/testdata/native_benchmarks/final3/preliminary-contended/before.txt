@@ -1,0 +1,160 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical         	  663780	      1718 ns/op	  59.95 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested            	  337772	      3403 ns/op	  36.73 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields       	    4338	    268801 ns/op	  52.82 MB/s	  439696 B/op	    6369 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical         	  721180	      1616 ns/op	  63.75 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested            	  372913	      3175 ns/op	  39.36 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields       	    4536	    253803 ns/op	  55.94 MB/s	  439696 B/op	    6369 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical         	  719742	      1615 ns/op	  63.78 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested            	  378052	      3125 ns/op	  40.00 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields       	    4600	    253630 ns/op	  55.98 MB/s	  439696 B/op	    6369 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical         	  627993	      1837 ns/op	  56.07 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested            	  343579	      3361 ns/op	  37.20 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields       	    4380	    267485 ns/op	  53.08 MB/s	  439696 B/op	    6369 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical         	  684556	      1728 ns/op	  59.61 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested            	  364408	      3362 ns/op	  37.18 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields       	    4336	    267105 ns/op	  53.16 MB/s	  439696 B/op	    6369 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical         	  668329	      1728 ns/op	  59.61 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested            	  347715	      3451 ns/op	  36.22 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields       	    4237	    283733 ns/op	  50.04 MB/s	  439696 B/op	    6369 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical         	  657716	      1915 ns/op	  53.79 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested            	  328026	      3790 ns/op	  32.98 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields       	    3918	    311369 ns/op	  45.60 MB/s	  439696 B/op	    6369 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical         	  586236	      1955 ns/op	  52.69 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested            	  314281	      3941 ns/op	  31.72 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields       	    3720	    314440 ns/op	  45.15 MB/s	  439696 B/op	    6369 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical         	  594628	      2060 ns/op	  50.00 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested            	  293444	      3549 ns/op	  35.22 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields       	    4401	    285059 ns/op	  49.81 MB/s	  439696 B/op	    6369 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical         	  617176	      1826 ns/op	  56.40 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested            	  346833	      3530 ns/op	  35.42 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields       	    4189	    287512 ns/op	  49.38 MB/s	  439696 B/op	    6369 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical         	  640784	      1831 ns/op	  56.25 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested            	  338288	      3543 ns/op	  35.28 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields       	    4290	    285095 ns/op	  49.80 MB/s	  439696 B/op	    6369 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical         	  643693	      1784 ns/op	  57.73 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested            	  351940	      3488 ns/op	  35.84 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields       	    4207	    278431 ns/op	  50.99 MB/s	  439696 B/op	    6369 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical         	  670192	      1785 ns/op	  57.72 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested            	  343348	      3522 ns/op	  35.50 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields       	    4123	    280617 ns/op	  50.60 MB/s	  439696 B/op	    6369 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical         	  661428	      1770 ns/op	  58.20 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested            	  345487	      3545 ns/op	  35.26 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields       	    4293	    296419 ns/op	  47.90 MB/s	  439696 B/op	    6369 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical         	  619585	      1894 ns/op	  54.40 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested            	  328606	      3788 ns/op	  33.00 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields       	    3679	    308931 ns/op	  45.96 MB/s	  439696 B/op	    6369 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical         	  609682	      2039 ns/op	  50.50 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested            	  314160	      3668 ns/op	  34.08 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields       	    4195	    287706 ns/op	  49.35 MB/s	  439696 B/op	    6369 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical         	  644756	      1808 ns/op	  56.97 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested            	  331544	      3544 ns/op	  35.27 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields       	    4286	    282918 ns/op	  50.18 MB/s	  439696 B/op	    6369 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical         	  638590	      1771 ns/op	  58.15 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested            	  340242	      3438 ns/op	  36.36 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields       	    4252	    279298 ns/op	  50.83 MB/s	  439696 B/op	    6369 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical         	  665242	      1777 ns/op	  57.96 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested            	  345003	      3457 ns/op	  36.16 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields       	    4262	    282662 ns/op	  50.23 MB/s	  439696 B/op	    6369 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical         	  610232	      1833 ns/op	  56.19 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested            	  332377	      3545 ns/op	  35.26 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields       	    4120	    284089 ns/op	  49.98 MB/s	  439696 B/op	    6369 allocs/op
+PASS
