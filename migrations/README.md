@@ -35,6 +35,12 @@ rewritten migration is accepted. Pre-accounting pending reservations retain
 their original outbox and are replayed individually before new write groups are
 formed.
 
+The principal-backlog migration preserves every accepted reservation and adds
+an immutable server-derived source identity for new admission. Older rows keep
+an empty identity; their pending rows and bytes count conservatively against
+every principal until replay makes them terminal. Token retirement never
+deletes backlog accounting, and recovery does not reassign accepted work.
+
 An unrecognized ledger or unledgered legacy schema is not silently adopted,
 rewritten, or deleted. Provision a fresh database or volume and retain old state
 separately if forensic access is required.

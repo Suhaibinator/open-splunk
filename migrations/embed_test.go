@@ -25,6 +25,7 @@ var embeddedMigrationSHA256 = map[string]map[string]string{
 		"0009_ingest_reservation_accounting.sql":   "b3b8692b4ea9ad8972d74fc048b9d3cac8178863fe8b916f26ca5db4622026f2",
 		"0010_ingest_write_groups.sql":             "1f8fdb475bee28fab65a8487dd6e926287e34567beeb80b51568d2567ef1a80a",
 		"0011_server_appearance_settings.sql":      "a7c533e50a9493f8cc5a2e70e82ae3b80e6f962111e23b7eb95459f9fcfa9327",
+		"0012_ingest_principal_backlog.sql":        "a9390c94d35931f2c61e7a2db454197c6043883bb3f2815323ebb5397eb54957",
 	},
 	"ClickHouse": {
 		"0001_baseline.sql": "3f1d7104e6fbb1072c8353855d055a950b22135828ec9f23d0bd63c1fef601da",

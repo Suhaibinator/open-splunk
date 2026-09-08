@@ -1756,9 +1756,10 @@ func TestSQLiteSequencerEnforcesPendingCapacity(t *testing.T) {
 		INSERT INTO ingest_visibility_reservations
 			(sequence, batch_key, state, phase, attempt_id, index_time_unix_milli,
 			 metadata, outbox, outbox_sha256, stored_row_count, decoded_event_bytes,
-			 created_at_unix_micro, committed_at_unix_micro)
+			 principal_sha256, created_at_unix_micro, committed_at_unix_micro)
 		SELECT sequence, printf('batch-%d', sequence - 1), 'reserved', 'unsent', '',
-		       0, X'', X'78', ?, 1, 1, sequence, NULL
+		       0, X'', X'78', ?, 1, 1,
+		       CAST(printf('%032d', sequence % 2) AS BLOB), sequence, NULL
 		FROM sequences`, MaxPendingReservations, outboxDigest[:]); err != nil {
 		t.Fatal(err)
 	}
@@ -2585,6 +2586,7 @@ func reserveRequest(key, attemptID string) ReserveRequest {
 		Outbox:            []byte("clickhouse-block-for-" + key),
 		StoredRowCount:    1,
 		DecodedEventBytes: uint64(len(key)),
+		PrincipalSHA256:   sha256.Sum256([]byte("test-ingestion-principal")),
 	}
 }
 

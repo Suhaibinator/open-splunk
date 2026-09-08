@@ -622,7 +622,10 @@ func (sequencer *SQLiteSequencer) Reserve(ctx context.Context, request ReserveRe
 		// neither extend token authority nor backdate its durable quota charge.
 		request.QuotaEvaluatedAt = checkedAt
 	}
-	if capacityErr := ensurePendingCapacity(ctx, tx, len(request.Outbox), len(metadata)); capacityErr != nil {
+	if request.PrincipalSHA256 == ([sha256.Size]byte{}) {
+		return Reservation{}, fmt.Errorf("%w: fresh reservation requires an ingestion principal", ErrInvalidArgument)
+	}
+	if capacityErr := ensurePendingCapacity(ctx, tx, request.PrincipalSHA256, len(request.Outbox), len(metadata)); capacityErr != nil {
 		return Reservation{}, capacityErr
 	}
 	quotaPlan, err := planQuotaReservation(ctx, tx, request)
@@ -660,11 +663,11 @@ func (sequencer *SQLiteSequencer) Reserve(ctx context.Context, request ReserveRe
 		INSERT INTO ingest_visibility_reservations
 			(sequence, batch_key, state, phase, attempt_id, index_time_unix_milli,
 			 metadata, outbox, outbox_sha256, stored_row_count, decoded_event_bytes,
-			 created_at_unix_micro, committed_at_unix_micro)
-		VALUES (?, ?, 'reserved', 'unsent', ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+			 principal_sha256, created_at_unix_micro, committed_at_unix_micro)
+		VALUES (?, ?, 'reserved', 'unsent', ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
 		sequence, request.BatchKey, request.AttemptID, indexTimeMillis,
 		metadata, request.Outbox, outboxSHA256[:], request.StoredRowCount,
-		request.DecodedEventBytes, createdAt); err != nil {
+		request.DecodedEventBytes, request.PrincipalSHA256[:], createdAt); err != nil {
 		if sqliteConstraint(err) {
 			return Reservation{}, ErrConflict
 		}
@@ -1592,7 +1595,7 @@ func persistQuotaUpdates(
 	return nil
 }
 
-func ensurePendingCapacity(ctx context.Context, tx *sql.Tx, additionalOutboxBytes, additionalMetadataBytes int) error {
+func ensurePendingCapacity(ctx context.Context, tx *sql.Tx, principal [sha256.Size]byte, additionalOutboxBytes, additionalMetadataBytes int) error {
 	usage, err := readPendingUsage(ctx, tx)
 	if err != nil {
 		return fmt.Errorf("read pending visibility capacity: %w", err)
@@ -1609,7 +1612,29 @@ func ensurePendingCapacity(ctx context.Context, tx *sql.Tx, additionalOutboxByte
 	) {
 		return ErrPendingCapacity
 	}
+	// Old reservations have no attributable principal. Charge their debt to
+	// every fresh admission until replay drains it, without decoding or changing
+	// accepted payloads. All reserved phases and group members remain charged.
+	var count, outboxBytes, metadataBytes int64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT count(*), COALESCE(sum(length(outbox)), 0),
+		       COALESCE(sum(length(metadata)), 0)
+		FROM ingest_visibility_reservations
+		WHERE state = 'reserved' AND principal_sha256 IN (X'', ?)`, principal[:]).Scan(
+		&count, &outboxBytes, &metadataBytes,
+	); err != nil {
+		return fmt.Errorf("read principal pending visibility capacity: %w", err)
+	}
+	if principalPendingCapacityExceeded(count, outboxBytes, int64(additionalOutboxBytes), metadataBytes, int64(additionalMetadataBytes)) {
+		return ErrPendingCapacity
+	}
 	return nil
+}
+
+func principalPendingCapacityExceeded(count, totalBytes, additionalBytes, totalMetadataBytes, additionalMetadataBytes int64) bool {
+	return count >= MaxPrincipalPendingReservations ||
+		totalBytes > MaxPrincipalPendingOutboxBytes-additionalBytes ||
+		totalMetadataBytes > MaxPrincipalPendingMetadataBytes-additionalMetadataBytes
 }
 
 func pendingCapacityExceeded(count, totalBytes, additionalBytes, totalMetadataBytes, additionalMetadataBytes int64) bool {
