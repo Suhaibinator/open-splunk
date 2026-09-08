@@ -143,4 +143,6 @@ var nonPublicPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("2001:20::/28"),
 	netip.MustParsePrefix("2002::/16"),
 	netip.MustParsePrefix("3fff::/20"),
+	// RFC 9602 SRv6 SIDs are confined to routing domains, not globally reachable.
+	netip.MustParsePrefix("5f00::/16"),
 }

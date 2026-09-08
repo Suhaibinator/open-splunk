@@ -2,6 +2,7 @@ package alertwebhook
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"testing"
 )
@@ -100,6 +101,72 @@ func TestResolveDestinationRejectsIPv4TransitionAddresses(t *testing.T) {
 				t.Fatal("ResolveDestination() accepted an IPv4 transition address")
 			}
 		})
+	}
+}
+
+func TestPublicAddressSRv6AllocationBoundary(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		address string
+		public  bool
+	}{
+		{address: "5eff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", public: true},
+		{address: "5f00::"},
+		{address: "5f00::1"},
+		{address: "5F00:1234:5678:9ABC:DEF0:0000:0000:0001"},
+		{address: "5f00:ffff:ffff:ffff:ffff:ffff:ffff:ffff"},
+		{address: "5f01::", public: true},
+		{address: "2606:4700:4700::1111", public: true},
+	} {
+		t.Run(test.address, func(t *testing.T) {
+			t.Parallel()
+			if got := publicAddress(netip.MustParseAddr(test.address)); got != test.public {
+				t.Fatalf("publicAddress(%s) = %v; want %v", test.address, got, test.public)
+			}
+		})
+	}
+}
+
+func TestResolveDestinationSRv6Policy(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name      string
+		url       string
+		addresses []netip.Addr
+	}{
+		{
+			name: "DNS", url: "https://hooks.example.com/path",
+			addresses: []netip.Addr{netip.MustParseAddr("5f00::1")},
+		},
+		{
+			name: "literal", url: "https://[5f00::1]/path",
+			addresses: []netip.Addr{netip.MustParseAddr("5f00::1")},
+		},
+		{
+			name: "expanded literal", url: "https://[5F00:0000:0000:0000:0000:0000:0000:0001]/path",
+			addresses: []netip.Addr{netip.MustParseAddr("5F00:0000:0000:0000:0000:0000:0000:0001")},
+		},
+		{
+			name: "mixed DNS", url: "https://hooks.example.com/path",
+			addresses: []netip.Addr{netip.MustParseAddr("2606:4700:4700::1111"), netip.MustParseAddr("5f00::1")},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			resolver := staticResolver{addresses: test.addresses}
+			_, err := ResolveDestination(context.Background(), resolver, test.url, DestinationPolicy{})
+			var deliveryError *DeliveryError
+			if !errors.As(err, &deliveryError) || deliveryError.Category != DeliveryDestinationRejected {
+				t.Fatalf("ResolveDestination() error = %v; want destination rejected", err)
+			}
+		})
+	}
+	resolver := staticResolver{addresses: []netip.Addr{netip.MustParseAddr("5f00::1")}}
+	allowed, err := ResolveDestination(context.Background(), resolver, "https://hooks.example.com/path", DestinationPolicy{
+		PrivateHostAllowlist: []string{"HOOKS.EXAMPLE.COM."},
+	})
+	if err != nil || allowed.Address != resolver.addresses[0] {
+		t.Fatalf("ResolveDestination(allowlisted) = %#v, %v", allowed, err)
 	}
 }
 
