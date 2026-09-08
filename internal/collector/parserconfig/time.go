@@ -15,6 +15,7 @@ type timeParser struct {
 	zoneProbeLayout string
 	fixed           bool
 	fixedOffset     int
+	precisionSteps  []timeSpellingStep
 }
 
 func compileTime(layout, zone string) (timeParser, error) {
@@ -25,6 +26,11 @@ func compileTime(layout, zone string) (timeParser, error) {
 		}
 		p.layout = time.RFC3339Nano
 	}
+	precisionSteps, err := compilePrecisionLayout(p.layout)
+	if err != nil {
+		return p, err
+	}
+	p.precisionSteps = precisionSteps
 	if strings.Contains(p.layout, "MST") {
 		return p, errors.New("timezone abbreviations are unsupported; use a numeric offset")
 	}
@@ -103,12 +109,19 @@ func compileTime(layout, zone string) (timeParser, error) {
 // and repeated local times. Errors intentionally omit source payloads.
 func (c *Compiled) ParseTime(value string) (time.Time, error) {
 	p := c.clock
-	if len(value) > maxEventBytes || p.layout == "" || excessiveFraction(value) {
+	if len(value) > maxEventBytes || p.layout == "" {
 		return time.Time{}, errors.New("invalid timestamp")
+	}
+	excessive := excessiveFraction(value)
+	if excessive && p.precisionSteps == nil {
+		return time.Time{}, errors.New("timestamp exceeds nanosecond precision")
 	}
 	parsed, err := time.Parse(p.layout, value)
 	if err != nil {
 		return time.Time{}, errors.New("invalid timestamp")
+	}
+	if excessive && !validFractionSpelling(p.precisionSteps, value) {
+		return time.Time{}, errors.New("timestamp exceeds nanosecond precision")
 	}
 	if p.location == nil {
 		offset, valid := p.parseOffset(value)
@@ -234,23 +247,4 @@ func asciiDigits(value string) bool {
 		}
 	}
 	return true
-}
-
-// Go's parser silently truncates fractional seconds after nine digits. Reject
-// that lossy conversion even when all discarded digits happen to be zero.
-func excessiveFraction(value string) bool {
-	for i := 0; i < len(value); i++ {
-		if value[i] != '.' && value[i] != ',' {
-			continue
-		}
-		digits := 0
-		for i+1 < len(value) && value[i+1] >= '0' && value[i+1] <= '9' {
-			i++
-			digits++
-			if digits > 9 {
-				return true
-			}
-		}
-	}
-	return false
 }

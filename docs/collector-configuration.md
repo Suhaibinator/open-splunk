@@ -277,9 +277,11 @@ and a binary request does not become a text message.
 
 Unknown options and options irrelevant to the selected format are configuration
 errors. A timezone abbreviation such as `PST` or an `MST` layout token is
-unsupported. Layouts must include a complete date. Parsed instants must fall
-within years 1 through 9999 UTC; fractional seconds beyond nine digits are
-rejected instead of truncated. IANA timezone data is available in the binary.
+unsupported. Layouts must include a complete date and request at most nine
+fractional digits. Parsed instants must fall within years 1 through 9999 UTC.
+Input fractions beyond nine digits are rejected instead of truncated; digit
+sequences in the layout's literal text do not count as fractions. IANA timezone
+data is available in the binary.
 A local wall time must identify exactly one instant: both spring-forward gaps
 and repeated fall-back times are rejected. The machine's local timezone is
 never an implicit default. Prefer producer timestamps containing offsets when
