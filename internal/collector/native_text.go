@@ -62,7 +62,6 @@ func (d *Decoder) decodeLogfmt(event *opensplunk.LogEvent, raw []byte) error {
 			at++
 			closed := false
 			escaped := false
-			invalidControl := false
 			for at < len(raw) {
 				c := raw[at]
 				at++
@@ -73,9 +72,6 @@ func (d *Decoder) decodeLogfmt(event *opensplunk.LogEvent, raw []byte) error {
 					}
 					continue
 				}
-				if c < ' ' {
-					invalidControl = true
-				}
 				if c == '"' {
 					closed = true
 					break
@@ -83,9 +79,6 @@ func (d *Decoder) decodeLogfmt(event *opensplunk.LogEvent, raw []byte) error {
 			}
 			if !closed || (at < len(raw) && !nativeHorizontal(raw[at])) {
 				return errors.New("invalid quoted logfmt value")
-			}
-			if invalidControl {
-				return errors.New("invalid logfmt string escape")
 			}
 			var decoded string
 			if escaped {
@@ -96,6 +89,11 @@ func (d *Decoder) decodeLogfmt(event *opensplunk.LogEvent, raw []byte) error {
 					return errors.New("logfmt string contains an unpaired Unicode surrogate")
 				}
 			} else {
+				for _, c := range raw[start+1 : at-1] {
+					if c < ' ' {
+						return errors.New("invalid logfmt string escape")
+					}
+				}
 				decoded = string(raw[start+1 : at-1])
 			}
 			value = decoded

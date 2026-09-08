@@ -3,10 +3,33 @@ package collector
 import (
 	"bytes"
 	"testing"
+	"time"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"google.golang.org/protobuf/proto"
 )
+
+func TestAccessTimestampCanonicalSpellingRemainsStrict(t *testing.T) {
+	decoder := newTestDecoder(t, DecodeConfig{Format: "apache-common"})
+	for _, tc := range []struct {
+		stamp string
+		valid bool
+	}{
+		{"29/Feb/2024:12:34:56 +0000", true},
+		{"29/Feb/2000:12:34:56 -0730", true},
+		{"29/feb/2024:12:34:56 +0000", false},
+		{"29/FEB/2024:12:34:56 +0000", false},
+		{"28/Feb/+024:12:34:56 +0000", false},
+		{"28/Feb/-024:12:34:56 +0000", false},
+		{"29/Feb/2023:12:34:56 +0000", false},
+	} {
+		raw := []byte(`host - - [` + tc.stamp + `] "GET / HTTP/1.1" 200 1`)
+		_, err := decoder.Decode(raw, SourcePosition{}, time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC))
+		if (err == nil) != tc.valid {
+			t.Errorf("timestamp %q: error=%v, want valid=%v", tc.stamp, err, tc.valid)
+		}
+	}
+}
 
 func TestAccessRequestProjectionOwnsOneStableResult(t *testing.T) {
 	t.Parallel()

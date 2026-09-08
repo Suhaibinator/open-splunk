@@ -65,7 +65,7 @@ func (d *Decoder) decodeDocker(event *opensplunk.LogEvent, raw []byte) error {
 	event.Message = &message
 	event.EventTime = parsed
 	event.EventTimeSource = opensplunk.EventTimeSource_EVENT_TIME_SOURCE_PARSED
-	fields = append(fields, &opensplunk.TypedObjectField{Name: "docker_stream", Value: nativeFixedText([]byte(stream))})
+	fields = append(fields, &opensplunk.TypedObjectField{Name: "docker_stream", Value: nativeFixedString(stream)})
 	event.Fields = &opensplunk.TypedObject{Fields: fields}
 	return nil
 }
@@ -206,7 +206,8 @@ func (d *Decoder) decodeAccess(event *opensplunk.LogEvent, raw []byte) error {
 		return errors.New("invalid access timestamp offset")
 	}
 	parsed, err := time.Parse("02/Jan/2006:15:04:05 -0700", stamp)
-	if err != nil || parsed.Format("02/Jan/2006:15:04:05") != stamp[:20] {
+	var canonical [32]byte
+	if err != nil || !bytes.Equal(parsed.AppendFormat(canonical[:0], "02/Jan/2006:15:04:05"), raw[scanner.pos+1:scanner.pos+21]) {
 		return errors.New("invalid access timestamp")
 	}
 	eventTime := timestamppb.New(parsed.UTC())
