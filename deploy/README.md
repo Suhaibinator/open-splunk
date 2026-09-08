@@ -418,6 +418,12 @@ responses. The supplied container healthcheck invokes the server's restricted
 loopback-only `healthcheck` subcommand against `/readyz`; use readiness, not
 liveness, for rollout and traffic admission.
 
+Concurrent readiness requests share one unfinished ClickHouse probe, limiting
+readiness to one operation in the runtime connection pool. Each HTTP request
+waits at most one second; disconnecting a client does not cancel the shared
+probe. If the driver outlasts its deadline, later requests keep sharing that
+operation until it returns. Completed results are not cached.
+
 ## Startup errors
 
 `restart: unless-stopped` causes a configuration error to appear repeatedly as
