@@ -8,11 +8,15 @@ migration container.
 Open Splunk always owns a dedicated database named `open_splunk`. Existing
 databases such as `logs` are not read, migrated, or modified.
 
-The supplied service publishes its plaintext HTTP listener on every host
-interface. This is also the HEC transport when HEC is enabled. Use
-`127.0.0.1:${OPEN_SPLUNK_DEPLOY_HTTP_PORT:-8080}:8080` as the port mapping for
-host-local access, or configure direct HTTP TLS/a controlled TLS reverse proxy
-before exposing the service to another network.
+The supplied service publishes its plaintext HTTP listener only on host
+loopback (`127.0.0.1`). This is also the HEC transport when HEC is enabled.
+Workspace APIs and the search WebSocket trust the caller; the administrator
+sign-in token protects administrative routes only. Host and Origin checks do
+not authenticate clients, and TLS alone does not provide workspace access
+control. Remote workspace access requires an authenticated TLS reverse proxy
+that protects the complete browser/API listener, including WebSocket upgrades,
+and prevents clients from bypassing it. Keep the host and the shared Docker
+network trusted: containers on that network can reach the server directly.
 
 ## Requirements
 
@@ -102,7 +106,7 @@ not passed to `open-splunk-server` and therefore have no CLI equivalents.
 | Environment variable | Default | Purpose | Accepted values and constraints |
 | --- | --- | --- | --- |
 | `OPEN_SPLUNK_DEPLOY_SERVER_IMAGE` | None; required by the supplied server Compose service | Select the server image for Docker to pull and run. | Exact tagged or digest-pinned OCI image reference. Published deployments should not use `latest`. |
-| `OPEN_SPLUNK_DEPLOY_HTTP_PORT` | `8080` | Select the Docker host port published to container port `8080`; the development runner also uses it for its loopback listener. | Valid available TCP port on the host. |
+| `OPEN_SPLUNK_DEPLOY_HTTP_PORT` | `8080` | Select the loopback Docker host port published to container port `8080`; the development runner also uses it for its loopback listener. | Valid available TCP port on the host, without an address. It does not change the loopback binding. |
 | `OPEN_SPLUNK_DEPLOY_CLICKHOUSE_NATIVE_PORT` | `9000` | Select the loopback host port published by the development-only ClickHouse Compose service. | Valid available TCP port on the host. Server containers still connect to ClickHouse's container port `9000`. |
 
 ## Add Open Splunk to an existing Compose project
@@ -160,7 +164,10 @@ services:
       OPEN_SPLUNK_SERVER_CLICKHOUSE_USERNAME: clickhouse
       OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD: "${OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD:?set OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD}"
     ports:
-      - "8080:8080"
+      - target: 8080
+        published: "${OPEN_SPLUNK_DEPLOY_HTTP_PORT:-8080}"
+        host_ip: 127.0.0.1
+        protocol: tcp
     volumes:
       - open-splunk-state:/var/lib/open-splunk/state
       - open-splunk-lock:/var/lib/open-splunk/lock
@@ -191,8 +198,9 @@ volumes:
 
 If the existing project uses different service, account, network, or published
 port names, change `per-clickhouse`, `clickhouse`, `per-obs-network`, or the
-left side of `8080:8080` respectively. Keep ClickHouse's container-side native
-port at `9000` unless its listener itself was reconfigured.
+`published` port respectively. Keep the `host_ip: 127.0.0.1` binding and
+ClickHouse's container-side native port at `9000` unless its listener itself
+was reconfigured.
 
 ### Connect to the existing ClickHouse service
 
@@ -245,8 +253,9 @@ CLICKHOUSE_PASSWORD=replace-with-the-existing-clickhouse-password
 
 ### Configure browser access
 
-The supplied service listens on `0.0.0.0:8080` so Docker can publish its HTTP
-port. A wildcard listener requires an explicit allowlist of Host header names:
+The supplied service listens on `0.0.0.0:8080` inside the container so Docker
+can publish its HTTP port on host loopback. A wildcard container listener
+requires an explicit allowlist of Host header names:
 
 ```yaml
 environment:
@@ -259,6 +268,14 @@ Use exact comma-separated names without URL schemes, paths, or ports. The
 ClickHouse service name does not belong in this list unless browsers also use
 that name to reach Open Splunk.
 
+Keep `host_ip: 127.0.0.1` when a proxy runs on the Docker host. A remote proxy
+requires an explicit Compose change to a private host binding and firewall
+rules admitting only that proxy. Do not publish the workspace directly to
+untrusted clients. The proxy must authenticate every workspace HTTP request
+and WebSocket upgrade before forwarding it; Open Splunk continues to use one
+shared workspace identity behind that boundary. A proxy on the shared Docker
+network can use `server:8080` without broadening host publication.
+
 When a controlled reverse proxy terminates browser HTTPS and uses plaintext
 HTTP for its connection to Open Splunk, opt in to its scheme assertion:
 
@@ -266,11 +283,13 @@ HTTP for its connection to Open Splunk, opt in to its scheme assertion:
 OPEN_SPLUNK_SERVER_HTTP_TRUST_X_FORWARDED_PROTO=true
 ```
 
-The proxy must replace, rather than append to, `X-Forwarded-Proto`. For nginx:
+The proxy must replace, rather than append to, `X-Forwarded-Proto`. For nginx,
+the forwarding fragment below assumes authentication is already enforced for
+this location; it is not a complete access-control configuration:
 
 ```nginx
 location / {
-    proxy_pass http://192.168.2.13:3016;
+    proxy_pass http://127.0.0.1:8080;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -373,8 +392,8 @@ docker compose logs --follow server
 
 Plaintext HTTP and plaintext native ClickHouse are supported by default,
 including across a Docker bridge network. Do not expose either transport over
-an untrusted network. Terminate HTTPS at a reverse proxy when browser traffic
-leaves a trusted host or network.
+an untrusted network. Browser traffic leaving the trusted host requires an
+authenticated TLS reverse proxy with no direct route around its access control.
 
 The same ClickHouse username and password are used for schema migration,
 runtime reads and writes, inspection, and index deletion. The password and

@@ -9,11 +9,11 @@ acknowledgment, health, token-purpose, durable-staging, reconciliation,
 recovery, metrics, and shutdown family.
 
 > **Deployment warning:** HEC shares the server HTTP listener. The supplied
-> Compose service publishes that listener from `0.0.0.0:8080` without direct
-> TLS. If HEC is enabled unchanged, token-bearing HEC traffic is plaintext on
-> every network that can reach the published host port. Bind the published port
-> to `127.0.0.1` for host-local use, or put the complete listener behind a
-> controlled TLS boundary before enabling HEC.
+> Compose service publishes that listener only on host loopback (`127.0.0.1`),
+> without direct TLS. Keep token-bearing traffic within the trusted host and
+> Docker network, or configure HTTPS before enabling remote HEC. Workspace
+> APIs on the same listener trust the caller: a remote HEC proxy must expose
+> only HEC routes, or authenticate all workspace HTTP and WebSocket access.
 
 HEC uses the native ingestion authority described in [Ingestion](ingestion.md).
 It cannot select a tenant, grant an index, write directly to ClickHouse, or
@@ -260,18 +260,24 @@ OPEN_SPLUNK_SERVER_HEC_ENABLED=true
 
 The HTTP server accepts plaintext whenever its TLS certificate and key are
 absent; it does not restrict plaintext to loopback. The supplied Compose service
-listens on `0.0.0.0:8080` and publishes `${OPEN_SPLUNK_DEPLOY_HTTP_PORT:-8080}`
-on every host interface. For host-local use, change the port mapping to:
+listens on `0.0.0.0:8080` inside the container and publishes
+`${OPEN_SPLUNK_DEPLOY_HTTP_PORT:-8080}` only on host loopback:
 
 ```yaml
 ports:
-  - "127.0.0.1:${OPEN_SPLUNK_DEPLOY_HTTP_PORT:-8080}:8080"
+  - target: 8080
+    published: "${OPEN_SPLUNK_DEPLOY_HTTP_PORT:-8080}"
+    host_ip: 127.0.0.1
+    protocol: tcp
 ```
 
 Remote HEC requires direct server HTTPS or a controlled TLS reverse proxy that
 forwards `/services/collector` unchanged and preserves header/body limits and
 timeouts. The browser Host/Origin policy is not a transport boundary for HEC.
-Do not add plaintext 8088 or CORS.
+Expose only HEC routes to ingestion clients; any remotely reachable workspace
+HTTP routes and WebSocket upgrades need separate proxy authentication. Keep
+the server's direct listener inaccessible to untrusted clients. Do not add
+plaintext 8088 or CORS.
 
 Create an immutable HEC-purpose token in Administration, select allowed active
 indexes, optional defaults/constraints/rates, and choose ACK mode. Store the
