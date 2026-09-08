@@ -3350,12 +3350,19 @@ func compileReplaceScalar(expression *plan.ScalarCallExpression, state compileSt
 	if !ok {
 		return compiledScalar{}, errors.New("compile ClickHouse replace: replacement must be a string literal")
 	}
-	inputSQL, inputArgs := compiledStringScalar(input)
+	// Consuming global matches are disjoint. Each replacement byte can
+	// contribute at most one match's bytes (including capture references),
+	// and the extra factor retains every unmatched input byte.
 	replacementFactor := uint64(len(replacement)) + 1
+	outputBytes := saturatingStringByteProduct(compiledScalarStringByteBound(input), replacementFactor)
+	if err := reserveReplaceOutput(state.context, outputBytes, expression.Range); err != nil {
+		return compiledScalar{}, err
+	}
+	inputSQL, inputArgs := compiledStringScalar(input)
 	return compiledScalar{
 		valueSQL:                    "replaceRegexpAll(" + inputSQL + ", ?, ?)",
 		valueArgs:                   append(inputArgs, pattern, replacement),
-		maxStringBytes:              saturatingStringByteProduct(compiledScalarStringByteBound(input), replacementFactor),
+		maxStringBytes:              outputBytes,
 		existsSQL:                   "1",
 		textEligibleSQL:             input.textEligibleSQL,
 		semanticBytesSQL:            input.semanticBytesSQL,
@@ -3367,6 +3374,29 @@ func compileReplaceScalar(expression *plan.ScalarCallExpression, state compileSt
 		kind:                        fieldKindString,
 		materializeForPredicate:     input.materializeForPredicate,
 	}, nil
+}
+
+func reserveReplaceOutput(context *compileContext, outputBytes uint64, sourceRange spl.Range) error {
+	if outputBytes > MaximumReplaceOutputBytes {
+		return &plan.Diagnostic{
+			Code:    "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf("replace output may exceed %d bytes after scalar evaluation", MaximumReplaceOutputBytes),
+			Range:   sourceRange,
+		}
+	}
+	if context == nil {
+		return errors.New("compile ClickHouse replace: query context is required")
+	}
+	used := context.replaceOutputBytes
+	if used > MaximumReplaceQueryOutputBytes || outputBytes > MaximumReplaceQueryOutputBytes-used {
+		return &plan.Diagnostic{
+			Code:    "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf("replace outputs may exceed %d bytes per query row", MaximumReplaceQueryOutputBytes),
+			Range:   sourceRange,
+		}
+	}
+	context.replaceOutputBytes += outputBytes
+	return nil
 }
 
 func compileBinaryTextPredicateOperands(
