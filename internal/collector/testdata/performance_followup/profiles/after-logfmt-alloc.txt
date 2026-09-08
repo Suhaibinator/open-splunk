@@ -1,0 +1,45 @@
+File: after.test
+Type: alloc_objects
+Time: 2026-09-08 09:15:49 PDT
+Showing nodes accounting for 63024379, 99.89% of 63090662 total
+Dropped 24 nodes (cum <= 315453)
+      flat  flat%   sum%        cum   cum%
+  21357134 33.85% 33.85%   50720974 80.39%  github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt
+  14756954 23.39% 57.24%   14756954 23.39%  math/big.nat.make (inline)
+   5365970  8.51% 65.75%   22670756 35.93%  github.com/Suhaibinator/open-splunk/internal/collector.typedJSONNumber
+   4260040  6.75% 72.50%    4260040  6.75%  github.com/Suhaibinator/open-splunk/internal/collector.sourceOrigin
+   3719393  5.90% 78.39%    3719393  5.90%  google.golang.org/protobuf/types/known/timestamppb.New (inline)
+   2883627  4.57% 82.96%    4128887  6.54%  github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).nativeCanonical
+   2731048  4.33% 87.29%   63024379 99.89%  github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).Decode
+   2564197  4.06% 91.36%   25234953 40.00%  github.com/Suhaibinator/open-splunk/internal/collector.typedJSONValue
+   1502807  2.38% 93.74%    1502807  2.38%  bytes.Clone (inline)
+   1417302  2.25% 95.99%   10532499 16.69%  github.com/Suhaibinator/open-splunk/internal/jsonnumber.ParseDecimalRat
+   1335377  2.12% 98.10%    1335377  2.12%  github.com/Suhaibinator/open-splunk/internal/collector.stableEventID
+   1130530  1.79% 99.89%    1130530  1.79%  strings.NewReader (inline)
+         0     0% 99.89%   50720974 80.39%  github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeNative
+         0     0% 99.89%   63024379 99.89%  github.com/Suhaibinator/open-splunk/internal/collector.BenchmarkNativeDecoder.func1
+         0     0% 99.89%   17304786 27.43%  github.com/Suhaibinator/open-splunk/internal/jsonnumber.Classify
+         0     0% 99.89%    2326563  3.69%  math/big.(*Int).Abs (inline)
+         0     0% 99.89%    2577865  4.09%  math/big.(*Int).Exp (inline)
+         0     0% 99.89%    1551089  2.46%  math/big.(*Int).Lsh (inline)
+         0     0% 99.89%    4587589  7.27%  math/big.(*Int).Set (inline)
+         0     0% 99.89%    2834492  4.49%  math/big.(*Int).SetString
+         0     0% 99.89%    2577865  4.09%  math/big.(*Int).exp
+         0     0% 99.89%    3506229  5.56%  math/big.(*Int).lehmerGCD
+         0     0% 99.89%    2796330  4.43%  math/big.(*Int).scaleDenom
+         0     0% 99.89%    1703962  2.70%  math/big.(*Int).scan
+         0     0% 99.89%    1703962  2.70%  math/big.(*Int).setFromScanner
+         0     0% 99.89%    2796330  4.43%  math/big.(*Rat).Cmp
+         0     0% 99.89%    3975957  6.30%  math/big.(*Rat).SetFloat64
+         0     0% 99.89%    3702840  5.87%  math/big.(*Rat).SetFrac
+         0     0% 99.89%    3506229  5.56%  math/big.(*Rat).norm
+         0     0% 99.89%    2577865  4.09%  math/big.nat.expNN
+         0     0% 99.89%    1551089  2.46%  math/big.nat.lsh
+         0     0% 99.89%    4172648  6.61%  math/big.nat.mul
+         0     0% 99.89%    5876610  9.31%  math/big.nat.mulAddWW
+         0     0% 99.89%    1703962  2.70%  math/big.nat.scan
+         0     0% 99.89%    6127708  9.71%  math/big.nat.set (inline)
+         0     0% 99.89%    1703962  2.70%  math/big.nat.setWord (inline)
+         0     0% 99.89%    1201547  1.90%  math/big.nat.sqr
+         0     0% 99.89%   63024379 99.89%  testing.(*B).run1.func1
+         0     0% 99.89%   63024379 99.89%  testing.(*B).runN

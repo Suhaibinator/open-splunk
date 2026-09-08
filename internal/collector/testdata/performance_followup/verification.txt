@@ -1,0 +1,59 @@
+Final production revision: a64e0e7abf4585ed520afa0bf53098dd3a6f86a3
+Baseline origin/main: 6475068938f5699f9e93870d8ab5c7f85ff50aa0
+
+Executed and passed on final production revision:
+
+GOMAXPROCS=4 go build ./...
+GOMAXPROCS=4 go vet ./...
+GOMAXPROCS=4 go test ./...
+  Exit 0; verification/go-gates-final2.txt.
+
+GOMAXPROCS=4 go test -race ./internal/collector/... ./internal/jsonnumber/...
+  Exit 0; verification/race-final2.txt.
+
+GOMAXPROCS=2 go test ./internal/collector -run '^$' \
+  -fuzz '^FuzzNativeTextLogfmt$' -fuzztime=60s -parallel=2
+GOMAXPROCS=2 go test ./internal/collector -run '^$' \
+  -fuzz '^FuzzNativeFixedDecoders$' -fuzztime=60s -parallel=2
+  Exit 0; verification/fuzz-final2.txt.
+
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 OPEN_SPLUNK_BACKEND_LOAD=1 GOMAXPROCS=4 \
+  go test ./integration \
+  -run '^(TestBackendNativeFormats|TestBackendVertical|TestBackendSustainedLoad)$' \
+  -count=1 -timeout=20m -v
+  Exit 0, 140.365s; verification/backend-final2.txt. Includes real compiled
+  collector/server/ClickHouse format delivery, outage/WAL recovery, exact counts
+  and positions, 60,000-event mixed native load, and 30,000-event sustained load.
+  These are acceptance/load checks, not isolated before/after throughput claims.
+
+GOWORK=off GOMAXPROCS=2 GOOS=linux golangci-lint run --concurrency=2 \
+  --timeout=20m --max-issues-per-linter=0 --max-same-issues=0
+  Pinned v2.13.1, exit 0, zero issues; verification/lint-final2.txt.
+  Run in a full git archive of final source, including all tests, excluding
+  unrelated node_modules. The initial lint run found one range-loop style issue
+  in a new test; fixed in 9c4733a5 and subsequent full runs passed. Original
+  failing output and the passing rerun are retained.
+
+Earlier six 60-second fuzz runs passed on e6d04627 before the small final change:
+  FuzzValidMatchesEncodingJSONNumber: 5,834,519 executions.
+  FuzzCompileAndCapture: 2,418,267 executions.
+  FuzzNativeTextLogfmt: 118,635 executions.
+  FuzzNativeTextJava: 70,659 executions.
+  FuzzNativeFixedDecoders: 96,462 executions.
+  FuzzDecoderDoesNotPanic: 18,674 executions.
+  Run with -run '^$', -fuzz '^TARGET$', -fuzztime=60s, -parallel=2,
+  GOMAXPROCS=2 in the owning package. Logs are in verification/fuzz-*.txt.
+  The two parser families changed afterward were fuzzed again on final source.
+  No discovered failing corpus or known regression remains.
+
+Mandatory frontend gates passed before final Go-only changes; frontend and
+frontend tooling remained unchanged afterward:
+  npm run typecheck && npm run lint && npm run check:docs
+  npm run test:frontend
+  npx --no-install playwright install chromium
+  npm run test:contracts
+  npm run build && npm run test:workspace
+  Exit 0; 57 contracts and 33 workspace tests; verification/frontend-gates.txt.
+
+Review results: reviews.txt. Two Astra and one Sol adversarial reviewers gave
+clean results on final source after the first optimization review round.

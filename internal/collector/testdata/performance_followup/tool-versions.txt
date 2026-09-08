@@ -1,0 +1,35 @@
+go version go1.27.1 darwin/arm64
+arm64
+Apple M4 Max
+golangci-lint has version 2.13.1 built with go1.27.1 from (unknown, modified: ?, mod sum: "h1:RuM4OcluM4xFQcGuRE6R7jA33pqxK/W1EsBxpugdZjg=") on (unknown)
+/tmp/issue104-tools/benchstat: go1.27.1
+	path	golang.org/x/perf/cmd/benchstat
+	mod	golang.org/x/perf	v0.0.0-20260825160852-19be9d8e6c70	h1:M+kM03JKR23KkrutTue5KEQYDSbZTZTJ4FJ1v5zYrHM=
+	dep	github.com/aclements/go-moremath	v0.0.0-20210112150236-f10218a38794	h1:xlwdaKcTNVW4PtpQb8aKA4Pjy0CdJHEqvFbAnvR5m2g=
+	build	-buildmode=exe
+	build	-compiler=gc
+	build	DefaultGODEBUG=tracebacklabels=0,x509sslcertoverrideplatform=0
+	build	CGO_ENABLED=1
+	build	CGO_CFLAGS=
+	build	CGO_CPPFLAGS=
+	build	CGO_CXXFLAGS=
+	build	CGO_LDFLAGS=
+	build	GOARCH=arm64
+	build	GOOS=darwin
+	build	GOARM64=v8.0
+/tmp/issue104-tools/pprof: go1.27.1
+	path	github.com/google/pprof
+	mod	github.com/google/pprof	v0.0.0-20260906184651-6331bc6350fe	h1:QAinXoAFJdGQYztXn3VpFey7KCwpedbZ/EkzbplQ0cY=
+	dep	github.com/chzyer/readline	v1.5.1	h1:upd/6fQk4src78LMRzh5vItIt361/o4uq553V8B5sGI=
+	dep	github.com/ianlancetaylor/demangle	v0.0.0-20250417193237-f615e6bd150b	h1:ogbOPx86mIhFy764gGkqnkFC8m5PJA7sPzlk9ppLVQA=
+	build	-buildmode=exe
+	build	-compiler=gc
+	build	DefaultGODEBUG=cryptocustomrand=1,tlssecpmlkem=0,tracebacklabels=0,urlstrictcolons=0,x509sslcertoverrideplatform=0
+	build	CGO_ENABLED=1
+	build	CGO_CFLAGS=
+	build	CGO_CPPFLAGS=
+	build	CGO_CXXFLAGS=
+	build	CGO_LDFLAGS=
+	build	GOARCH=arm64
+	build	GOOS=darwin
+	build	GOARM64=v8.0

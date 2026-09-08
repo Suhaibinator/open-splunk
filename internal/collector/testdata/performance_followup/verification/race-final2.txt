@@ -1,0 +1,8 @@
+ok  	github.com/Suhaibinator/open-splunk/internal/collector	32.133s
+ok  	github.com/Suhaibinator/open-splunk/internal/collector/config	5.879s
+ok  	github.com/Suhaibinator/open-splunk/internal/collector/framing	(cached)
+ok  	github.com/Suhaibinator/open-splunk/internal/collector/input	(cached)
+ok  	github.com/Suhaibinator/open-splunk/internal/collector/parserconfig	4.785s
+ok  	github.com/Suhaibinator/open-splunk/internal/collector/sender	(cached)
+ok  	github.com/Suhaibinator/open-splunk/internal/collector/wal	(cached)
+ok  	github.com/Suhaibinator/open-splunk/internal/jsonnumber	4.868s

@@ -1,0 +1,560 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   90409	      2636 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   94213	      2564 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   79612	      3019 ns/op	 357.73 MB/s	    6776 B/op	      42 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	  106465	      2233 ns/op	 490.45 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	  114331	      2098 ns/op	 508.97 MB/s	    1892 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	  105985	      2220 ns/op	 493.35 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  167330	      1420 ns/op	 727.69 MB/s	    1904 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  163569	      1456 ns/op	 703.43 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  164049	      1458 ns/op	 702.38 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    8626	     26355 ns/op	 623.78 MB/s	   85498 B/op	      46 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	   10000	     25164 ns/op	 653.91 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	   10000	     24709 ns/op	 664.85 MB/s	   19172 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	    9751	     24753 ns/op	 664.76 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   17276	     13857 ns/op	1183.05 MB/s	   19184 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   14096	     17023 ns/op	 962.47 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   14144	     16903 ns/op	 969.32 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     780	    303919 ns/op	 862.73 MB/s	 1320463 B/op	      50 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     590	    373038 ns/op	 702.92 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     651	    366047 ns/op	 716.27 MB/s	  271076 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     654	    365687 ns/op	 717.05 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	    1146	    232232 ns/op	1128.84 MB/s	  271088 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	    1006	    229940 ns/op	1140.06 MB/s	  524964 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	    1123	    211115 ns/op	1241.71 MB/s	  524964 B/op	      12 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   92008	      2583 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   93574	      2566 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   77922	      3034 ns/op	 355.92 MB/s	    6776 B/op	      42 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	  108961	      2197 ns/op	 498.42 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	  114447	      2078 ns/op	 514.06 MB/s	    1892 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	  109629	      2207 ns/op	 496.23 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  166630	      1462 ns/op	 706.57 MB/s	    1904 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  166136	      1429 ns/op	 716.46 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  178326	      1342 ns/op	 763.23 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    8706	     25780 ns/op	 637.70 MB/s	   85498 B/op	      46 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	   10000	     25036 ns/op	 657.25 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	   10000	     25017 ns/op	 656.68 MB/s	   19172 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	   10000	     24747 ns/op	 664.93 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   14881	     16121 ns/op	1016.89 MB/s	   19184 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   15745	     15175 ns/op	1079.64 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   15363	     16002 ns/op	1023.88 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     747	    318565 ns/op	 823.07 MB/s	 1320463 B/op	      50 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     561	    415756 ns/op	 630.69 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     644	    384280 ns/op	 682.28 MB/s	  271076 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     639	    371609 ns/op	 705.62 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	    1009	    238654 ns/op	1098.47 MB/s	  271088 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	    1059	    224283 ns/op	1168.81 MB/s	  524964 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	    1134	    207895 ns/op	1260.94 MB/s	  524964 B/op	      12 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   90222	      2636 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   94276	      2550 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   81374	      2993 ns/op	 360.89 MB/s	    6776 B/op	      42 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	  104590	      2216 ns/op	 494.21 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	  114525	      2082 ns/op	 513.05 MB/s	    1892 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	  108861	      2204 ns/op	 496.75 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  186188	      1317 ns/op	 784.51 MB/s	    1904 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  165018	      1404 ns/op	 729.20 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  169471	      1375 ns/op	 744.81 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    8118	     26331 ns/op	 624.36 MB/s	   85498 B/op	      46 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	   10000	     24729 ns/op	 665.40 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	   10000	     24679 ns/op	 665.67 MB/s	   19172 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	   10000	     24672 ns/op	 666.94 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   17338	     13715 ns/op	1195.25 MB/s	   19184 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   14248	     16766 ns/op	 977.20 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   16021	     15726 ns/op	1041.84 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     764	    306647 ns/op	 855.05 MB/s	 1320463 B/op	      50 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     639	    368931 ns/op	 710.74 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     650	    369126 ns/op	 710.29 MB/s	  271076 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     649	    372585 ns/op	 703.77 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	     984	    224172 ns/op	1169.43 MB/s	  271088 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	     982	    221764 ns/op	1182.09 MB/s	  524964 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	    1146	    208265 ns/op	1258.70 MB/s	  524964 B/op	      12 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   90592	      2571 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   93210	      2560 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   79615	      3014 ns/op	 358.33 MB/s	    6776 B/op	      42 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	  106665	      2233 ns/op	 490.45 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	  114882	      2104 ns/op	 507.62 MB/s	    1892 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	  108112	      2237 ns/op	 489.45 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  165624	      1459 ns/op	 708.04 MB/s	    1904 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  163702	      1430 ns/op	 716.03 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  163303	      1462 ns/op	 700.50 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    8480	     26442 ns/op	 621.73 MB/s	   85498 B/op	      46 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	   10000	     24782 ns/op	 663.99 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	   10000	     24860 ns/op	 660.82 MB/s	   19172 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	   10000	     24760 ns/op	 664.57 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   16722	     14995 ns/op	1093.21 MB/s	   19184 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   14364	     16081 ns/op	1018.85 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   14446	     16591 ns/op	 987.50 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     775	    311996 ns/op	 840.40 MB/s	 1320464 B/op	      50 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     582	    377518 ns/op	 694.58 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     646	    367072 ns/op	 714.27 MB/s	  271076 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     651	    367190 ns/op	 714.11 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	    1009	    237001 ns/op	1106.13 MB/s	  271088 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	    1068	    235571 ns/op	1112.80 MB/s	  524964 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	    1003	    224345 ns/op	1168.49 MB/s	  524964 B/op	      12 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   76153	      2648 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   93070	      2581 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   78649	      3041 ns/op	 355.17 MB/s	    6776 B/op	      42 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	  106759	      2228 ns/op	 491.45 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	  114097	      2119 ns/op	 504.07 MB/s	    1892 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	  106934	      2245 ns/op	 487.68 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  164808	      1371 ns/op	 753.21 MB/s	    1904 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  173605	      1379 ns/op	 742.68 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  169304	      1381 ns/op	 741.45 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    8626	     27155 ns/op	 605.41 MB/s	   85498 B/op	      46 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	    9410	     26476 ns/op	 621.52 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	   10000	     26143 ns/op	 628.39 MB/s	   19172 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	   10000	     25057 ns/op	 656.69 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   14320	     15958 ns/op	1027.28 MB/s	   19184 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   15384	     15777 ns/op	1038.45 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   14947	     15872 ns/op	1032.26 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     734	    330443 ns/op	 793.48 MB/s	 1320465 B/op	      50 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     616	    388395 ns/op	 675.12 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     624	    385566 ns/op	 680.01 MB/s	  271076 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     632	    373584 ns/op	 701.89 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	     992	    237066 ns/op	1105.82 MB/s	  271088 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	    1114	    208246 ns/op	1258.82 MB/s	  524964 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	    1156	    208903 ns/op	1254.86 MB/s	  524964 B/op	      12 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   90704	      2565 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   93624	      2581 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   79881	      3002 ns/op	 359.81 MB/s	    6776 B/op	      42 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	  106041	      2230 ns/op	 491.04 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	  113833	      2097 ns/op	 509.26 MB/s	    1892 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	  108382	      2236 ns/op	 489.66 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  165676	      1378 ns/op	 749.89 MB/s	    1904 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  174350	      1355 ns/op	 755.60 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  175222	      1358 ns/op	 754.21 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    8704	     26245 ns/op	 626.41 MB/s	   85498 B/op	      46 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	   10000	     24621 ns/op	 668.34 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	   10000	     24446 ns/op	 672.01 MB/s	   19172 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	   10000	     24440 ns/op	 673.28 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   15012	     15960 ns/op	1027.10 MB/s	   19184 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   16130	     14816 ns/op	1105.82 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   15859	     15081 ns/op	1086.43 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     762	    310431 ns/op	 844.63 MB/s	 1320463 B/op	      50 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     648	    366483 ns/op	 715.49 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     652	    367766 ns/op	 712.92 MB/s	  271076 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     642	    368559 ns/op	 711.46 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	    1012	    229793 ns/op	1140.82 MB/s	  271088 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	     968	    229431 ns/op	1142.59 MB/s	  524964 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	    1056	    211572 ns/op	1239.03 MB/s	  524964 B/op	      12 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   82004	      2623 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   93512	      2555 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   77859	      3016 ns/op	 358.09 MB/s	    6776 B/op	      42 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	  108324	      2199 ns/op	 497.96 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	  113907	      2092 ns/op	 510.46 MB/s	    1892 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	  109657	      2206 ns/op	 496.36 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  164557	      1349 ns/op	 765.75 MB/s	    1904 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  167841	      1389 ns/op	 737.37 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  175426	      1360 ns/op	 753.03 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    7995	     26179 ns/op	 627.98 MB/s	   85498 B/op	      46 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	   10000	     24669 ns/op	 667.04 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	   10000	     24290 ns/op	 676.32 MB/s	   19172 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	   10000	     24440 ns/op	 673.27 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   17642	     13585 ns/op	1206.71 MB/s	   19184 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   14541	     16524 ns/op	 991.51 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   14493	     16621 ns/op	 985.74 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     759	    308984 ns/op	 848.59 MB/s	 1320463 B/op	      50 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     602	    395667 ns/op	 662.72 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     608	    386299 ns/op	 678.72 MB/s	  271076 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     656	    365189 ns/op	 718.03 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	    1160	    194701 ns/op	1346.44 MB/s	  271088 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	     984	    219172 ns/op	1196.06 MB/s	  524964 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	    1138	    208984 ns/op	1254.37 MB/s	  524964 B/op	      12 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   92079	      2544 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   93116	      2571 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   80791	      2980 ns/op	 362.36 MB/s	    6776 B/op	      42 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	  107965	      2202 ns/op	 497.20 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	  115134	      2128 ns/op	 501.97 MB/s	    1892 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	   96976	      2269 ns/op	 482.60 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  165190	      1476 ns/op	 699.67 MB/s	    1904 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  174991	      1408 ns/op	 727.09 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  161865	      1439 ns/op	 711.67 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    8397	     26450 ns/op	 621.55 MB/s	   85498 B/op	      46 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	   10000	     24480 ns/op	 672.18 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	   10000	     24363 ns/op	 674.31 MB/s	   19172 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	   10000	     24465 ns/op	 672.61 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   15606	     14713 ns/op	1114.21 MB/s	   19184 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   16142	     14889 ns/op	1100.42 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   16159	     15044 ns/op	1089.04 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     745	    315636 ns/op	 830.70 MB/s	 1320463 B/op	      50 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     631	    370903 ns/op	 706.96 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     658	    363290 ns/op	 721.70 MB/s	  271076 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     657	    363021 ns/op	 722.31 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	    1024	    199659 ns/op	1313.01 MB/s	  271088 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	    1112	    211602 ns/op	1238.86 MB/s	  524964 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	    1144	    215815 ns/op	1214.67 MB/s	  524964 B/op	      12 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   84595	      2599 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   93157	      2560 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   79860	      2989 ns/op	 361.34 MB/s	    6776 B/op	      42 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	  107908	      2207 ns/op	 496.25 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	  115134	      2085 ns/op	 512.33 MB/s	    1892 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	  109633	      2237 ns/op	 489.52 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  181076	      1341 ns/op	 770.45 MB/s	    1904 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  166489	      1361 ns/op	 752.13 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  177604	      1350 ns/op	 758.75 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    8485	     26066 ns/op	 630.71 MB/s	   85498 B/op	      46 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	    9300	     24437 ns/op	 673.38 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	   10000	     24517 ns/op	 670.08 MB/s	   19172 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	   10000	     24780 ns/op	 664.05 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   17360	     13737 ns/op	1193.33 MB/s	   19184 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   15763	     15070 ns/op	1087.22 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   16354	     14792 ns/op	1107.66 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     757	    311024 ns/op	 843.02 MB/s	 1320464 B/op	      50 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     627	    370326 ns/op	 708.07 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     654	    369621 ns/op	 709.34 MB/s	  271076 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     655	    362628 ns/op	 723.10 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	    1207	    193170 ns/op	1357.11 MB/s	  271088 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	    1110	    209943 ns/op	1248.64 MB/s	  524964 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	    1137	    209190 ns/op	1253.14 MB/s	  524964 B/op	      12 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   91754	      2564 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   93622	      2565 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   80350	      2989 ns/op	 361.38 MB/s	    6776 B/op	      42 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	  106780	      2204 ns/op	 496.87 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	  115359	      2076 ns/op	 514.40 MB/s	    1892 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	  110448	      2197 ns/op	 498.48 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  187534	      1353 ns/op	 763.44 MB/s	    1904 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  164400	      1387 ns/op	 738.55 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  173505	      1358 ns/op	 754.18 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    8008	     26427 ns/op	 622.10 MB/s	   85498 B/op	      46 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	   10000	     24886 ns/op	 661.21 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	   10000	     24750 ns/op	 663.75 MB/s	   19172 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	   10000	     24331 ns/op	 676.29 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   17629	     13534 ns/op	1211.22 MB/s	   19184 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   14312	     16667 ns/op	 983.03 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   15753	     15123 ns/op	1083.36 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     771	    304345 ns/op	 861.52 MB/s	 1320463 B/op	      50 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     619	    368373 ns/op	 711.82 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     651	    365670 ns/op	 717.01 MB/s	  271076 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     655	    369577 ns/op	 709.50 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	    1166	    195654 ns/op	1339.88 MB/s	  271088 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	     982	    227543 ns/op	1152.06 MB/s	  524964 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	    1176	    213711 ns/op	1226.63 MB/s	  524964 B/op	      12 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   75714	      2661 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   92786	      2573 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   80510	      2983 ns/op	 362.07 MB/s	    6776 B/op	      42 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	  106005	      2232 ns/op	 490.56 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	  113707	      2165 ns/op	 493.27 MB/s	    1892 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	  102024	      2246 ns/op	 487.58 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  181832	      1325 ns/op	 779.42 MB/s	    1904 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  176738	      1350 ns/op	 758.55 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  172125	      1355 ns/op	 755.93 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    7999	     26375 ns/op	 623.31 MB/s	   85498 B/op	      46 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	    9732	     25185 ns/op	 653.36 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	   10000	     24330 ns/op	 675.23 MB/s	   19172 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	   10000	     25148 ns/op	 654.31 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   14894	     16022 ns/op	1023.17 MB/s	   19184 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   16060	     15014 ns/op	1091.25 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   16035	     15032 ns/op	1089.96 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     741	    322735 ns/op	 812.43 MB/s	 1320463 B/op	      50 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     584	    376194 ns/op	 697.02 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     672	    363020 ns/op	 722.24 MB/s	  271076 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     657	    365644 ns/op	 717.13 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	    1184	    196133 ns/op	1336.61 MB/s	  271088 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	    1131	    208588 ns/op	1256.75 MB/s	  524964 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	    1129	    208321 ns/op	1258.36 MB/s	  524964 B/op	      12 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   90548	      2582 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   87646	      2600 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   79695	      3003 ns/op	 359.58 MB/s	    6776 B/op	      42 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	   96046	      2233 ns/op	 490.27 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	  113810	      2087 ns/op	 511.67 MB/s	    1892 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	  109179	      2208 ns/op	 495.95 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  167348	      1462 ns/op	 706.71 MB/s	    1904 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  176320	      1375 ns/op	 744.65 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  176306	      1349 ns/op	 759.01 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    8234	     26122 ns/op	 629.35 MB/s	   85498 B/op	      46 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	   10000	     24680 ns/op	 666.74 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	   10000	     24352 ns/op	 674.61 MB/s	   19172 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	   10000	     24616 ns/op	 668.46 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   15118	     15042 ns/op	1089.85 MB/s	   19184 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   16458	     14605 ns/op	1121.81 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   16376	     14663 ns/op	1117.37 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     778	    302498 ns/op	 866.78 MB/s	 1320463 B/op	      50 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     644	    376939 ns/op	 695.64 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     622	    371737 ns/op	 705.31 MB/s	  271076 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     652	    367488 ns/op	 713.53 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	    1015	    230054 ns/op	1139.53 MB/s	  271088 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	     982	    230802 ns/op	1135.79 MB/s	  524964 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	    1159	    208267 ns/op	1258.69 MB/s	  524964 B/op	      12 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   88812	      2687 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   92175	      2611 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   76188	      3033 ns/op	 356.03 MB/s	    6776 B/op	      42 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	  107990	      2199 ns/op	 497.95 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	  115726	      2078 ns/op	 514.06 MB/s	    1892 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	  108442	      2221 ns/op	 493.03 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  166988	      1368 ns/op	 755.36 MB/s	    1904 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  165649	      1430 ns/op	 715.85 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  164458	      1450 ns/op	 706.45 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    8084	     28577 ns/op	 575.29 MB/s	   85498 B/op	      46 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	   10000	     24722 ns/op	 665.61 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	   10000	     24462 ns/op	 671.57 MB/s	   19172 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	   10000	     24519 ns/op	 671.11 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   14883	     16079 ns/op	1019.53 MB/s	   19184 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   14421	     16600 ns/op	 986.98 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   16354	     14714 ns/op	1113.51 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     763	    318448 ns/op	 823.37 MB/s	 1320465 B/op	      50 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     561	    377373 ns/op	 694.84 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     660	    370198 ns/op	 708.24 MB/s	  271076 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     656	    365412 ns/op	 717.59 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	    1216	    213135 ns/op	1229.99 MB/s	  271088 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	    1107	    208256 ns/op	1258.76 MB/s	  524964 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	    1143	    208383 ns/op	1257.99 MB/s	  524964 B/op	      12 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   90855	      2558 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   94375	      2557 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   80478	      2976 ns/op	 362.92 MB/s	    6776 B/op	      42 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	  108103	      2210 ns/op	 495.46 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	  115554	      2084 ns/op	 512.55 MB/s	    1892 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	  109233	      2221 ns/op	 493.01 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  166970	      1391 ns/op	 742.52 MB/s	    1904 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  167064	      1374 ns/op	 745.26 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  172419	      1351 ns/op	 757.93 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    8767	     25990 ns/op	 632.56 MB/s	   85498 B/op	      46 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	   10000	     24373 ns/op	 675.14 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	   10000	     24175 ns/op	 679.54 MB/s	   19172 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	   10000	     24301 ns/op	 677.12 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   17863	     13351 ns/op	1227.86 MB/s	   19184 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   16244	     14686 ns/op	1115.60 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   16408	     14645 ns/op	1118.72 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     772	    307065 ns/op	 853.89 MB/s	 1320463 B/op	      50 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     630	    368575 ns/op	 711.43 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     646	    367353 ns/op	 713.72 MB/s	  271076 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     654	    364300 ns/op	 719.78 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	    1022	    234251 ns/op	1119.11 MB/s	  271088 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	     990	    228207 ns/op	1148.71 MB/s	  524964 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	    1140	    206924 ns/op	1266.86 MB/s	  524964 B/op	      12 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   83053	      2660 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   92743	      2548 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   80468	      2961 ns/op	 364.69 MB/s	    6776 B/op	      42 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	  110259	      2184 ns/op	 501.29 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	  117489	      2066 ns/op	 516.84 MB/s	    1892 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	  109905	      2209 ns/op	 495.64 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  168560	      1401 ns/op	 737.46 MB/s	    1904 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  177477	      1353 ns/op	 756.65 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  175431	      1361 ns/op	 752.29 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    7816	     26564 ns/op	 618.87 MB/s	   85498 B/op	      46 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	   10000	     25293 ns/op	 650.58 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	    9423	     24940 ns/op	 658.70 MB/s	   19172 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	   10000	     24382 ns/op	 674.88 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   17376	     13722 ns/op	1194.69 MB/s	   19184 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   16086	     14884 ns/op	1100.78 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   16098	     14946 ns/op	1096.21 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     770	    311231 ns/op	 842.46 MB/s	 1320464 B/op	      50 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     630	    370240 ns/op	 708.23 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     658	    366604 ns/op	 715.18 MB/s	  271076 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     654	    366312 ns/op	 715.82 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	    1069	    195928 ns/op	1338.01 MB/s	  271088 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	    1136	    208152 ns/op	1259.39 MB/s	  524964 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	    1147	    208827 ns/op	1255.32 MB/s	  524964 B/op	      12 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   90189	      2581 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   96847	      2509 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   80941	      2968 ns/op	 363.86 MB/s	    6776 B/op	      42 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	  107512	      2223 ns/op	 492.50 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	  114249	      2093 ns/op	 510.20 MB/s	    1892 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	  107823	      2214 ns/op	 494.64 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  167761	      1456 ns/op	 709.69 MB/s	    1904 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  169561	      1397 ns/op	 733.00 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  176349	      1375 ns/op	 744.63 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    8694	     26263 ns/op	 625.98 MB/s	   85498 B/op	      46 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	    9379	     25727 ns/op	 639.60 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	   10000	     25000 ns/op	 657.11 MB/s	   19172 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	   10000	     24621 ns/op	 668.33 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   14839	     16089 ns/op	1018.92 MB/s	   19184 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   13929	     16560 ns/op	 989.40 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   16300	     14717 ns/op	1113.27 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     762	    304563 ns/op	 860.90 MB/s	 1320463 B/op	      50 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     598	    385267 ns/op	 680.61 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     660	    368355 ns/op	 711.78 MB/s	  271076 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     654	    366329 ns/op	 715.79 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	    1076	    226962 ns/op	1155.05 MB/s	  271088 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	    1148	    204584 ns/op	1281.35 MB/s	  524964 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	    1148	    205442 ns/op	1276.00 MB/s	  524964 B/op	      12 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   90218	      2645 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   93512	      2601 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   78014	      3016 ns/op	 358.15 MB/s	    6776 B/op	      42 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	  108843	      2198 ns/op	 498.16 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	  114597	      2086 ns/op	 511.97 MB/s	    1892 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	  109576	      2225 ns/op	 492.10 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  183426	      1328 ns/op	 778.09 MB/s	    1904 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  176194	      1450 ns/op	 706.16 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  176260	      1355 ns/op	 755.80 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    8695	     26367 ns/op	 623.50 MB/s	   85498 B/op	      46 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	   10000	     24723 ns/op	 665.56 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	   10000	     24343 ns/op	 674.85 MB/s	   19172 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	   10000	     24467 ns/op	 672.54 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   15774	     14817 ns/op	1106.38 MB/s	   19184 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   15944	     15015 ns/op	1091.21 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   15704	     15100 ns/op	1085.05 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     789	    323054 ns/op	 811.63 MB/s	 1320462 B/op	      50 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     643	    368529 ns/op	 711.52 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     646	    365652 ns/op	 717.04 MB/s	  271076 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     648	    374174 ns/op	 700.78 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	    1018	    233293 ns/op	1123.71 MB/s	  271088 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	    1155	    206101 ns/op	1271.92 MB/s	  524964 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	    1136	    211948 ns/op	1236.83 MB/s	  524964 B/op	      12 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   88500	      2600 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   93770	      2555 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   80437	      2965 ns/op	 364.20 MB/s	    6776 B/op	      42 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	  109122	      2199 ns/op	 497.84 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	  115354	      2087 ns/op	 511.79 MB/s	    1892 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	  109767	      2209 ns/op	 495.59 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  182397	      1329 ns/op	 777.44 MB/s	    1904 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  174163	      1342 ns/op	 763.02 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  178728	      1342 ns/op	 763.04 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    8781	     25807 ns/op	 637.04 MB/s	   85498 B/op	      46 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	   10000	     24422 ns/op	 673.79 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	   10000	     24240 ns/op	 677.71 MB/s	   19172 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	   10000	     24646 ns/op	 667.64 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   14905	     16122 ns/op	1016.78 MB/s	   19184 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   15927	     14943 ns/op	1096.40 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   16144	     15017 ns/op	1091.03 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     776	    303752 ns/op	 863.20 MB/s	 1320463 B/op	      50 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     646	    363888 ns/op	 720.59 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     652	    365416 ns/op	 717.51 MB/s	  271076 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     656	    365526 ns/op	 717.36 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	    1023	    234418 ns/op	1118.31 MB/s	  271088 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	    1140	    215927 ns/op	1214.04 MB/s	  524964 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	    1126	    208169 ns/op	1259.28 MB/s	  524964 B/op	      12 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   89954	      2644 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   93668	      2545 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   81112	      2955 ns/op	 365.51 MB/s	    6776 B/op	      42 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	  109158	      2194 ns/op	 499.06 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	  115606	      2074 ns/op	 514.86 MB/s	    1892 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	  109786	      2241 ns/op	 488.56 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  165711	      1461 ns/op	 706.95 MB/s	    1904 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  174812	      1359 ns/op	 753.25 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  176037	      1374 ns/op	 745.54 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    7988	     28327 ns/op	 580.36 MB/s	   85498 B/op	      46 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	   10000	     24581 ns/op	 669.43 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	   10000	     24302 ns/op	 675.99 MB/s	   19172 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	   10000	     24511 ns/op	 671.32 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   15778	     15585 ns/op	1051.87 MB/s	   19184 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   15925	     14967 ns/op	1094.68 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   16246	     14876 ns/op	1101.39 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     685	    344454 ns/op	 761.20 MB/s	 1320463 B/op	      50 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     648	    364951 ns/op	 718.49 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     662	    365393 ns/op	 717.55 MB/s	  271076 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     652	    365224 ns/op	 717.96 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	    1017	    222917 ns/op	1176.01 MB/s	  271088 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	     999	    215025 ns/op	1219.13 MB/s	  524964 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	    1153	    209726 ns/op	1249.94 MB/s	  524964 B/op	      12 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   91910	      2547 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   93688	      2554 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeMalformed/docker-json-file/1024    	   81248	      2999 ns/op	 360.15 MB/s	    6776 B/op	      42 allocs/op
+BenchmarkNativeMalformed/nginx-combined/1024      	  109018	      2214 ns/op	 494.51 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/1024       	  114854	      2086 ns/op	 511.93 MB/s	    1892 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/1024     	  109555	      2206 ns/op	 496.31 MB/s	    2040 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/1024              	  184932	      1316 ns/op	 784.87 MB/s	    1904 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/1024      	  166496	      1428 ns/op	 717.15 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/1024     	  174667	      1345 ns/op	 761.40 MB/s	    2724 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/16384   	    8743	     25909 ns/op	 634.53 MB/s	   85498 B/op	      46 allocs/op
+BenchmarkNativeMalformed/nginx-combined/16384     	   10000	     24607 ns/op	 668.72 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/16384      	   10000	     24402 ns/op	 673.22 MB/s	   19172 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/16384    	   10000	     24485 ns/op	 672.05 MB/s	   19320 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/16384             	   17574	     13525 ns/op	1212.10 MB/s	   19184 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/16384     	   15931	     15015 ns/op	1091.14 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/16384    	   15985	     14966 ns/op	1094.74 MB/s	   33444 B/op	      12 allocs/op
+BenchmarkNativeMalformed/docker-json-file/262144  	     782	    303556 ns/op	 863.76 MB/s	 1320463 B/op	      50 allocs/op
+BenchmarkNativeMalformed/nginx-combined/262144    	     622	    366102 ns/op	 716.23 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/apache-common/262144     	     656	    364620 ns/op	 719.07 MB/s	  271076 B/op	      12 allocs/op
+BenchmarkNativeMalformed/apache-combined/262144   	     643	    368557 ns/op	 711.46 MB/s	  271224 B/op	      16 allocs/op
+BenchmarkNativeMalformed/logfmt/262144            	    1033	    223486 ns/op	1173.02 MB/s	  271088 B/op	      13 allocs/op
+BenchmarkNativeMalformed/log4j2-pattern/262144    	    1132	    206753 ns/op	1267.91 MB/s	  524964 B/op	      12 allocs/op
+BenchmarkNativeMalformed/logback-pattern/262144   	    1106	    210792 ns/op	1243.61 MB/s	  524964 B/op	      12 allocs/op
+PASS
