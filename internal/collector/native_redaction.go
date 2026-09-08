@@ -2,6 +2,7 @@ package collector
 
 import (
 	"bytes"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"google.golang.org/protobuf/proto"
