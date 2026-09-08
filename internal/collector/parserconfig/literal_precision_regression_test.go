@@ -1,6 +1,7 @@
 package parserconfig
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -73,6 +74,26 @@ func TestTimestampRejectsUnusableFixedPrecisionLayout(t *testing.T) {
 		_, err := Compile("logfmt", &Options{TimestampLayout: "2006-01-02T15:04:05" + separator + "0000000000Z07:00"})
 		if err == nil {
 			t.Errorf("accepted fixed ten-digit layout whose required precision exceeds timestamp capacity")
+		}
+	}
+}
+
+func TestTimestampLiteralKeepsSignedShortYearSemantics(t *testing.T) {
+	compiled, err := Compile("logfmt", &Options{TimestampLayout: ".8888888888 06-01-02T15:04:05Z07:00"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sign := range []int{-1, 1} {
+		for digit := range 10 {
+			year := fmt.Sprintf("+%d", digit)
+			if sign < 0 {
+				year = fmt.Sprintf("-%d", digit)
+			}
+			got, parseErr := compiled.ParseTime(".8888888888 " + year + "-09-08T12:34:56Z")
+			want := time.Date(2000+sign*digit, 9, 8, 12, 34, 56, 0, time.UTC)
+			if parseErr != nil || !got.Equal(want) {
+				t.Errorf("short year %q: got %v, %v; want %v", year, got, parseErr, want)
+			}
 		}
 	}
 }

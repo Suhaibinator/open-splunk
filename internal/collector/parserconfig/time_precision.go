@@ -65,7 +65,9 @@ var timeSpellingTokens = []timeSpellingStep{
 	{text: "002", kind: spellingNumber, width: 3},
 	{text: "01", kind: spellingNumber, width: 2}, {text: "02", kind: spellingNumber, width: 2},
 	{text: "03", kind: spellingNumber, width: 2}, {text: "04", kind: spellingNumber, width: 2},
-	{text: "05", kind: spellingSeconds, width: 2}, {text: "06", kind: spellingNumber, width: 2},
+	{text: "05", kind: spellingSeconds, width: 2},
+	// Go consumes exactly two characters for 06, accepting a signed single digit.
+	{text: "06", kind: spellingFixed, width: 2},
 	{text: "15", kind: spellingNumber, width: 2},
 	{text: "1", kind: spellingNumber, width: 2}, {text: "2", kind: spellingNumber, width: 2},
 	{text: "3", kind: spellingNumber, width: 2}, {text: "4", kind: spellingNumber, width: 2}, {text: "5", kind: spellingSeconds, width: 2},
