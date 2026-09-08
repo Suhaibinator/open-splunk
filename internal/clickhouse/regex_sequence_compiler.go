@@ -16,11 +16,11 @@ import (
 )
 
 // authoredRegexProgramBudget is the compiler-owned authored-suffix accounting
-// seam shared by rex/Extract, regex/RegexFilter, and scalar match(). Its
-// evidence is combined with the retained knowledge charges during preparation.
+// seam shared by rex/Extract, regex/RegexFilter, and scalar match, mvfind, and
+// replace. Its evidence is combined with retained knowledge during preparation.
 // The narrower match-style sub-budget deliberately counts only RegexFilter and
-// scalar match; retained and authored extraction programs retain their existing
-// independently larger shared profile.
+// scalar match/mvfind/replace; retained and authored extraction programs retain
+// their existing independently larger shared profile.
 type authoredRegexProgramBudget struct {
 	evidence            *authoredKnowledgeCompilation
 	matchStyleWorkUnits uint64
@@ -274,7 +274,25 @@ func (budget *authoredRegexProgramBudget) visitScalar(
 				return err
 			}
 		}
-		if expression.Function != plan.ScalarFunctionMatch || len(expression.Arguments) != 2 {
+		if expression.Function == plan.ScalarFunctionReplace && len(expression.Arguments) == 3 {
+			// Match the sink's literal contract, including unquoted literals in
+			// programmatically constructed plans.
+			pattern, ok := scalarStringLiteral(expression.Arguments[1])
+			if !ok {
+				return nil
+			}
+			patternRange := expression.Arguments[1].SourceRange()
+			if patternRange == (spl.Range{}) {
+				patternRange = expression.Range
+			}
+			compiled, err := compileReplacePatternForBackend(pattern, patternRange)
+			if err != nil {
+				return err
+			}
+			return budget.chargeMatchStyle(compiled.ProgramWorkUnits, patternRange)
+		}
+		if (expression.Function != plan.ScalarFunctionMatch && expression.Function != plan.ScalarFunctionMVFind) ||
+			len(expression.Arguments) != 2 {
 			return nil
 		}
 		pattern, ok := scalarQuotedStringLiteral(expression.Arguments[1])

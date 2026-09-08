@@ -14,17 +14,45 @@ import (
 // SPL's global PCRE replacement semantics.
 var ErrMayMatchEmpty = errors.New("regular expression may match an empty substring")
 
+// ErrReplacePatternTooLarge reports replacement patterns that exceed the shared
+// match-style byte or expanded-program limits.
+var ErrReplacePatternTooLarge = errors.New("replace regular expression is too large")
+
+// ReplacePattern retains the authored pattern and its bounded program cost.
+type ReplacePattern struct {
+	Pattern          string
+	ProgramWorkUnits int
+}
+
 // ValidateReplacePattern accepts the RE2-compatible, always-consuming subset
 // that has consistent global replacement behavior in SPL and ClickHouse.
 func ValidateReplacePattern(pattern string) error {
-	expression, err := syntax.Parse(pattern, syntax.Perl)
+	_, err := CompileReplacePattern(pattern)
+	return err
+}
+
+// CompileReplacePattern validates replacement patterns with the shared bounded
+// RE2 estimator. Keep the authored text: match's Boolean-only normalization can
+// consume a final newline at $, changing replacement output and captures.
+func CompileReplacePattern(pattern string) (ReplacePattern, error) {
+	compiled, err := compileBoundedRE2Pattern(
+		pattern,
+		MaximumMatchPatternBytes,
+		MaximumMatchProgramWorkUnits,
+	)
 	if err != nil {
-		return fmt.Errorf("invalid RE2 regular expression: %w", err)
+		if errors.Is(err, errBoundedRE2PatternTooComplex) {
+			return ReplacePattern{}, fmt.Errorf("%w: %w", ErrReplacePatternTooLarge, err)
+		}
+		return ReplacePattern{}, fmt.Errorf("invalid RE2 regular expression: %w", err)
 	}
-	if mayMatchEmptySubstring(expression) {
-		return ErrMayMatchEmpty
+	if mayMatchEmptySubstring(compiled.parsed) {
+		return ReplacePattern{}, ErrMayMatchEmpty
 	}
-	return nil
+	return ReplacePattern{
+		Pattern:          pattern,
+		ProgramWorkUnits: compiled.programWorkUnits,
+	}, nil
 }
 
 func mayMatchEmptySubstring(expression *syntax.Regexp) bool {

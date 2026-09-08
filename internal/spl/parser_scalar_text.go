@@ -1,6 +1,11 @@
 package spl
 
-import "github.com/Suhaibinator/open-splunk/internal/splregex"
+import (
+	"errors"
+	"fmt"
+
+	"github.com/Suhaibinator/open-splunk/internal/splregex"
+)
 
 func (p *parser) parseTextScalarCall(name token, functionName string, arguments []ScalarExpr) (ScalarExpr, error) {
 	var function ScalarFunction
@@ -39,6 +44,17 @@ func (p *parser) parseTextScalarCall(name token, functionName string, arguments 
 			}
 		}
 		if err := splregex.ValidateReplacePattern(pattern.Value.Text); err != nil {
+			if errors.Is(err, splregex.ErrReplacePatternTooLarge) {
+				return nil, &Diagnostic{
+					Code: "SPL_QUERY_TOO_COMPLEX",
+					Message: fmt.Sprintf(
+						"replace regular expression exceeds the %d-byte or %d-work-unit limit",
+						splregex.MaximumMatchPatternBytes,
+						splregex.MaximumMatchProgramWorkUnits,
+					),
+					Range: pattern.Range,
+				}
+			}
 			return nil, &Diagnostic{
 				Code:        "SPL_UNSUPPORTED_REGEX",
 				Message:     "replace regular expression is outside the supported always-consuming RE2-compatible subset",

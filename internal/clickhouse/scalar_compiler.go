@@ -3343,18 +3343,33 @@ func compileReplaceScalar(expression *plan.ScalarCallExpression, state compileSt
 	if pattern == "" {
 		return compiledScalar{}, errors.New("compile ClickHouse replace: empty regular expressions are not supported")
 	}
-	if err := splregex.ValidateReplacePattern(pattern); err != nil {
-		return compiledScalar{}, fmt.Errorf("compile ClickHouse replace: regular expression is outside the supported RE2 subset: %w", err)
+	compiledPattern, err := compileReplacePatternForBackend(pattern, expression.Arguments[1].SourceRange())
+	if err != nil {
+		return compiledScalar{}, err
 	}
 	replacement, ok := scalarStringLiteral(expression.Arguments[2])
 	if !ok {
 		return compiledScalar{}, errors.New("compile ClickHouse replace: replacement must be a string literal")
 	}
+	if state.context != nil {
+		if compiledPattern.ProgramWorkUnits >
+			splregex.MaximumMatchQueryProgramWorkUnits-state.context.patternBudgets.match.programWorkUnits {
+			return compiledScalar{}, &plan.Diagnostic{
+				Code: "SPL_QUERY_TOO_COMPLEX",
+				Message: fmt.Sprintf(
+					"search match programs including replace require more than %d work units",
+					splregex.MaximumMatchQueryProgramWorkUnits,
+				),
+				Range: expression.Range,
+			}
+		}
+		state.context.patternBudgets.match.programWorkUnits += compiledPattern.ProgramWorkUnits
+	}
 	inputSQL, inputArgs := compiledStringScalar(input)
 	replacementFactor := uint64(len(replacement)) + 1
 	return compiledScalar{
 		valueSQL:                    "replaceRegexpAll(" + inputSQL + ", ?, ?)",
-		valueArgs:                   append(inputArgs, pattern, replacement),
+		valueArgs:                   append(inputArgs, compiledPattern.Pattern, replacement),
 		maxStringBytes:              saturatingStringByteProduct(compiledScalarStringByteBound(input), replacementFactor),
 		existsSQL:                   "1",
 		textEligibleSQL:             input.textEligibleSQL,
