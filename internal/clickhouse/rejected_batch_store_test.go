@@ -17,6 +17,7 @@ import (
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
+	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
 )
 
@@ -31,6 +32,11 @@ func TestRejectBatchPersistsOnlyTerminalMetadata(t *testing.T) {
 	rejectedAt := time.Date(2026, 7, 31, 12, 13, 14, 987654321, time.UTC)
 	store.clock = func() time.Time { return rejectedAt }
 	input := validStoreBatchRejection()
+	input.RejectionAdmission = &ingestquota.RejectionAdmission{
+		Scope:       ingestquota.ScopeKey{Kind: ingestquota.ScopeKindToken, TenantID: "tenant-a", Identity: "token-a"},
+		TokenLimits: ingestquota.Limits{MaxEventsPerSecond: 1},
+	}
+	input.QuotaEvaluatedAt = rejectedAt
 
 	result, err := store.RejectBatch(context.Background(), input)
 	if err != nil {
@@ -46,6 +52,9 @@ func TestRejectBatchPersistsOnlyTerminalMetadata(t *testing.T) {
 		t.Fatalf("Reject calls = %d, want 1", len(sequencer.rejectRequests))
 	}
 	request := sequencer.rejectRequests[0]
+	if request.RejectionAdmission != input.RejectionAdmission || request.QuotaEvaluatedAt != input.QuotaEvaluatedAt {
+		t.Fatalf("store omitted rejection quota: %+v", request)
+	}
 	batch := storeBatchFromIdentity(input.Identity)
 	if request.BatchKey != deduplicationToken(batch) || request.SequenceKey != sequenceIdentityKey(batch) {
 		t.Fatalf("durable identity keys = %q / %q", request.BatchKey, request.SequenceKey)
@@ -74,6 +83,29 @@ func TestRejectBatchPersistsOnlyTerminalMetadata(t *testing.T) {
 	input.Rejection.Message = "mutated after persistence"
 	if result.BatchRejection.GetMessage() == input.Rejection.GetMessage() {
 		t.Fatal("RejectBatch result aliases caller-owned rejection")
+	}
+}
+
+func TestRejectBatchQuotaDenialDoesNotWakeMaintenance(t *testing.T) {
+	t.Parallel()
+	sequencer := &rejectingVisibilitySequencer{
+		fakeVisibilitySequencer: &fakeVisibilitySequencer{},
+		rejectErr: &ingestquota.ExceededError{
+			Scope:      ingestquota.ScopeKey{Kind: ingestquota.ScopeKindToken, TenantID: "tenant-a", Identity: "token-a"},
+			RetryAfter: time.Second,
+		},
+	}
+	connection := &fakeStoreConnection{}
+	store := mustTestStoreWithVisibility(t, connection, fixedRetention(time.Hour), sequencer)
+	store.reconcileWake = make(chan struct{}, 1)
+	_, err := store.RejectBatch(context.Background(), validStoreBatchRejection())
+	var transient *ingest.TransientStoreError
+	if !errors.As(err, &transient) || transient.Reason != opensplunk.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED ||
+		transient.ThrottleReason != opensplunk.ThrottleReason_THROTTLE_REASON_TOKEN_QUOTA || transient.RetryAfter != time.Second {
+		t.Fatalf("rejection quota mapping = %v", err)
+	}
+	if len(store.reconcileWake) != 0 || store.terminalCount.Load() != 0 || connection.prepareCalls != 0 {
+		t.Fatal("quota denial scheduled maintenance, accounted a terminal receipt, or reached ClickHouse")
 	}
 }
 

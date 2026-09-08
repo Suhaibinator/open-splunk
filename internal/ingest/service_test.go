@@ -1519,6 +1519,9 @@ func TestProcessBatchTerminallyRejectsExpandedDurableOutbox(t *testing.T) {
 	if store.storeCalls != 0 || store.rejectCalls != 1 {
 		t.Fatalf("store calls = %d, reject calls = %d, want 0/1", store.storeCalls, store.rejectCalls)
 	}
+	if store.rejection.RejectionAdmission == nil || store.rejection.QuotaEvaluatedAt != service.config.Clock().UTC() {
+		t.Fatalf("expanded outbox omitted rejection quota: %+v", store.rejection)
+	}
 }
 
 func TestProcessBatchTerminallyRejectsOversizedDurableOutcome(t *testing.T) {
@@ -1554,6 +1557,9 @@ func TestProcessBatchTerminallyRejectsOversizedDurableOutcome(t *testing.T) {
 	}
 	if store.storeCalls != 0 || store.rejectCalls != 1 {
 		t.Fatalf("store calls = %d, reject calls = %d, want 0/1", store.storeCalls, store.rejectCalls)
+	}
+	if store.rejection.RejectionAdmission == nil || store.rejection.QuotaEvaluatedAt != service.config.Clock().UTC() {
+		t.Fatalf("expanded outcome omitted rejection quota: %+v", store.rejection)
 	}
 }
 

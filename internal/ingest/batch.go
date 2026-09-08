@@ -181,7 +181,7 @@ func (s *Service) processBatchWithDeferredAuthority(
 			rejection.Message = "original batch is durably rejected; repack its events within the negotiated limits"
 		}
 		return s.rejectRecordedBatch(
-			ctx, batch, state, identity, durableIdentity, receivedAt, rejection,
+			ctx, batch, state, identity, durableIdentity, receivedAt, boundaryAt, rejection,
 		)
 	}
 
@@ -301,7 +301,7 @@ func (s *Service) processBatchWithDeferredAuthority(
 	}
 
 	if len(normalized) == 0 {
-		return s.rejectRecordedBatch(ctx, batch, state, identity, durableIdentity, receivedAt, &opensplunk.BatchReject{
+		return s.rejectRecordedBatch(ctx, batch, state, identity, durableIdentity, receivedAt, boundaryAt, &opensplunk.BatchReject{
 			BatchId:       batch.GetBatchId(),
 			BatchSequence: batch.GetBatchSequence(),
 			Code:          opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS,
@@ -317,6 +317,7 @@ func (s *Service) processBatchWithDeferredAuthority(
 			identity,
 			durableIdentity,
 			receivedAt,
+			boundaryAt,
 			batchRejection(
 				batch,
 				opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE,
@@ -385,6 +386,7 @@ func (s *Service) rejectRecordedBatch(
 	identity batchIdentity,
 	durableIdentity StoreBatchIdentity,
 	receivedAt time.Time,
+	boundaryAt time.Time,
 	rejection *opensplunk.BatchReject,
 ) (*opensplunk.CollectResponse, error) {
 	recoverable, ok := s.store.(RecoverableEventStore)
@@ -400,6 +402,14 @@ func (s *Service) rejectRecordedBatch(
 		Identity:   durableIdentity,
 		ReceivedAt: receivedAt,
 		Rejection:  durableRejection,
+		RejectionAdmission: &ingestquota.RejectionAdmission{
+			Scope: ingestquota.ScopeKey{
+				Kind: ingestquota.ScopeKindToken, TenantID: state.authorization.TenantID,
+				Identity: state.authorization.SubjectID,
+			},
+			TokenLimits: state.authorization.TokenRateLimits,
+		},
+		QuotaEvaluatedAt: boundaryAt.UTC(),
 	})
 	if err != nil {
 		if isDurableIdentityConflict(err) {
