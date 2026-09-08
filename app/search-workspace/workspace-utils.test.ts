@@ -3,7 +3,7 @@ import test from "node:test";
 import { createElement, Fragment, isValidElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { SPL_PIPELINE_COMMANDS } from "@/lib/search/spl-syntax";
+import { scanSplStructure, splitSplPipeline, SPL_PIPELINE_COMMANDS } from "@/lib/search/spl-syntax";
 import { SearchJobState } from "@/gen/ts/open_splunk/search";
 
 import {
@@ -13,9 +13,47 @@ import {
   eventFieldValueWhiteSpace,
   filteredDemoEvents,
   historyPhase,
+  queryForPattern,
   stateTone,
   syntaxTokens,
 } from "./workspace-utils";
+
+test("pattern drilldown preserves source clauses and wildcard normalization", () => {
+  assert.equal(
+    queryForPattern('index=main message="left|right" | stats count', "**Request***complete**"),
+    'index=main message="left|right"\n| search _raw="*Request*complete*"',
+  );
+  assert.equal(
+    queryForPattern("index=main", "Request complete"),
+    'index=main\n| search _raw="*Request complete*"',
+  );
+  for (const signature of ["", "*", "***"]) {
+    assert.equal(queryForPattern("   ", signature), 'index=gradethis\n| search _raw="**"');
+  }
+});
+
+test("pattern drilldown preserves log punctuation within one quoted value", () => {
+  const signatures = [
+    String.raw`C:\temp\request.log`,
+    "trailing backslash\\",
+    "first\nsecond\rthird\tfourth",
+    "Unicode 拒否 💥",
+    ...[0, 1, 2, 3, 4].map((count) => `${"\\".repeat(count)}"quoted|value"`),
+  ];
+  for (const signature of signatures) {
+    const query = queryForPattern("index=main | stats count", signature);
+    const structure = scanSplStructure(query);
+    const stages = splitSplPipeline(query);
+    assert.equal(structure.unclosedQuote, null);
+    assert.equal(structure.quotes.length, 1);
+    assert.equal(stages.length, 2);
+    assert.equal(stages[0]?.trim(), "index=main");
+    const comparison = stages[1]?.trim() ?? "";
+    assert.ok(comparison.startsWith("search _raw="));
+    // These SPL string escapes also decode as JSON, independently of the formatter.
+    assert.equal(JSON.parse(comparison.slice("search _raw=".length)), `*${signature}*`);
+  }
+});
 
 test("demo split-series detection is bounded to unquoted timechart by clauses", () => {
   assert.equal(

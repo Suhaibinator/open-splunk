@@ -175,6 +175,12 @@ fields. Supported scalar functions include `isnull`, `isnotnull`, `replace`,
 
 The scalar function pack follows these contracts:
 
+- `replace` rejects a call whose conservative output bound exceeds 16 MiB,
+  or a query whose replacement bounds total more than 64 MiB per row, with
+  `SPL_QUERY_TOO_COMPLEX` before SQL execution. The bound includes capture
+  substitutions and nested calls. It can reject a short runtime field, sparse
+  matches, or an unused result when the compiler cannot prove a smaller bound.
+  A later `substr`, filter, or projection does not waive replacement admission.
 - `abs`, `sqrt`, `exp`, `ln`, `log(x[, base])`, `pow`, and `pi()` share the
   arithmetic operand rules, so each call charges one arithmetic operator and
   accepts finite numeric values and bounded numeric strings but not

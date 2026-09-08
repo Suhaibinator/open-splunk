@@ -193,6 +193,14 @@ const (
 	// scanned by all LIKE occurrences for one result row. This admits sixteen
 	// worst-case durable fields or four maximum-size calculated inputs.
 	MaximumLikeQueryInputBytes uint64 = 16 << 20
+	// MaximumReplaceOutputBytes bounds one conservative replacement result.
+	// The wider allowance preserves ordinary literal and capture substitutions
+	// on durable scalars without permitting unbounded intermediate expansion.
+	MaximumReplaceOutputBytes uint64 = 16 << 20
+	// MaximumReplaceQueryOutputBytes bounds replacement outputs across every
+	// occurrence per query row, including nested calls and separate stages.
+	// It admits the parser's full command budget of non-expanding replacements.
+	MaximumReplaceQueryOutputBytes uint64 = 64 << 20
 	// MaximumConcatenationOutputBytes bounds the conservative String bytes
 	// produced by one concatenation occurrence for one result row.
 	MaximumConcatenationOutputBytes uint64 = 4 << 20

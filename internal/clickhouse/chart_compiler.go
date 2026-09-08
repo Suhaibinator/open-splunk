@@ -4289,6 +4289,7 @@ type compileContext struct {
 	relativeTimeBudget                     compiledRelativeTimeBudget
 	unixTimestampBudget                    compiledUnixTimestampBudget
 	concatenationBudget                    compiledConcatenationBudget
+	replaceOutputBytes                     uint64
 	stringConversionBudget                 compiledStringConversionBudget
 	arithmeticOperators                    int
 	membershipCandidates                   int
