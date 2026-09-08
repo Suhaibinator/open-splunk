@@ -126,6 +126,9 @@ func TestSQLiteRejectionQuotaBoundsConcurrentWritesAndPreservesReplayAcrossResta
 	if _, err := sequencer.Reject(ctx, other); err != nil {
 		t.Fatalf("rejections exhausted another token: %v", err)
 	}
+	if otherState := readRejectionQuota(t, database, "token-b"); otherState.NextEventAdmissionUnixNano != now.Add(time.Second).UnixNano() {
+		t.Fatalf("other token inherited rejection debt: %+v", otherState)
+	}
 	blocked.QuotaEvaluatedAt = now.Add(time.Second)
 	if _, err := sequencer.Reject(ctx, blocked); err != nil {
 		t.Fatalf("retry at exact boundary: %v", err)

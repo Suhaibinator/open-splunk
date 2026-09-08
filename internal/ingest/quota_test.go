@@ -182,11 +182,12 @@ func TestProcessBatchRejectionQuotaRetryUsesFreshTimeAndRetainsIdentity(t *testi
 			state.authorization.SubjectID = "token-a"
 			state.authorization.TokenRateLimits = ingestquota.Limits{MaxEventsPerSecond: 1}
 			events := []*opensplunk.LogEvent{validTestEvent("one", "main"), validTestEvent("two", "main")}
-			if kind == "invalid-event" {
+			switch kind {
+			case "invalid-event":
 				events = []*opensplunk.LogEvent{validTestEvent("one", "forbidden")}
-			} else if kind == "nil-event" {
+			case "nil-event":
 				events = []*opensplunk.LogEvent{nil}
-			} else if kind == "repack" {
+			case "repack":
 				state.supportsRepacking, state.repackRequest = true, true
 			}
 			batch := validTestBatch("collector-a", "budget-retry", 1, events...)
