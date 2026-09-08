@@ -5,6 +5,7 @@ import { DEMO_EVENTS, type DemoEvent, type DemoHistoryEntry, type DemoScalar } f
 import type { DiagnosticMarker } from "@/lib/search/spl-diagnostic-markers";
 import { searchResultViewForQuery } from "@/lib/search/result-view-navigation";
 import {
+  formatSplValue,
   isSplOffsetInQuotedValue,
   isSupportedSplPipelineCommand,
   scanSplStructure,
@@ -326,10 +327,10 @@ export function highlightedRaw(raw: string, query: string): ReactNode[] {
 }
 
 export function queryForPattern(baseQuery: string, signature: string): string {
-  const normalized = signature.replace(/\*+/g, "*").replaceAll('"', '\\"');
+  const normalized = signature.replace(/\*+/g, "*");
   const boundedPattern = normalized.replace(/^\*+|\*+$/g, "");
   const sourceClause = splitSplPipeline(baseQuery)[0]?.trim() || "index=gradethis";
-  return `${sourceClause}\n| search _raw="*${boundedPattern}*"`;
+  return `${sourceClause}\n| search _raw=${formatSplValue(`*${boundedPattern}*`)}`;
 }
 
 export function formatFieldValue(value: DemoScalar): string {
