@@ -1331,6 +1331,7 @@ func NewHandler(config Config) (*Handler, error) {
 	)
 
 	mux := http.NewServeMux()
+	readiness := &runtimeReadinessChecker{probe: runtimeReadiness}
 	mux.HandleFunc("GET /healthz", func(response http.ResponseWriter, _ *http.Request) {
 		response.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		response.Header().Set("Cache-Control", "no-store")
@@ -1340,14 +1341,9 @@ func NewHandler(config Config) (*Handler, error) {
 	mux.HandleFunc("GET /readyz", func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		response.Header().Set("Cache-Control", "no-store")
-		if runtimeReadiness == nil {
-			response.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = response.Write([]byte("not ready\n"))
-			return
-		}
 		ctx, cancel := context.WithTimeout(request.Context(), runtimeReadinessTimeout)
 		defer cancel()
-		if err := runtimeReadiness.Ping(ctx); err != nil {
+		if !readiness.ready(ctx) {
 			// Dependency errors can contain addresses and driver internals. The
 			// unauthenticated readiness surface exposes only a fixed marker.
 			response.WriteHeader(http.StatusServiceUnavailable)

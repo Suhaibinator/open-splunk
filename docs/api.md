@@ -122,6 +122,11 @@ while the HTTP process can serve requests. `GET /readyz` also checks runtime
 readiness, including ClickHouse reachability; it returns the same success body
 or `503` with `not ready\n`. Both responses are `Cache-Control: no-store`.
 
+Concurrent readiness requests share one unfinished ClickHouse probe per server
+handler, with independent one-second request deadlines. The shared probe keeps
+its admission until the driver returns, even if every caller disconnects or
+times out. Completed results are not cached.
+
 The `open-splunk-server healthcheck` subcommand accepts only a strict loopback
 IP URL whose path is exactly `/healthz` or `/readyz`; the supplied Compose
 healthcheck uses `/readyz`.
