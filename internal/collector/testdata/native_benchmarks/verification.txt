@@ -40,3 +40,18 @@ Expected fixture values were independently specified and source grounded.
 Benchmark commands, revisions, machine, all comparative samples and profiles
 are retained beside this file. Review outcomes and any renewed verification
 will be recorded after review; this file does not assert review completion.
+
+Renewed checks after configuration review fix and merge of main fb9cef37:
+PASS go build ./...; go vet ./...; go test ./...
+PASS go test -race ./internal/collector/...
+PASS npm run check:docs
+PASS compiled native format integration + 60,000 mixed records
+PASS backend vertical integration
+PASS sustained load twice on unchanged candidate (see load-investigation.txt
+     for the initial failed attempt and unmodified-main comparison).
+PASS Linux golangci-lint v2.13.1, uncapped issue counts: 0 issues, exit 0.
+     Initial rerun printed 0 issues but exceeded 10 minutes under competing
+     host workload (exit 4). Successful unchanged rerun used --timeout=20m,
+     --concurrency=2, GOMAXPROCS=2 and taskpolicy -a -l 0 -t 0.
+Frontend implementation is unchanged; the previously executed complete
+frontend gates remain applicable. No lint or test assertions were suppressed.

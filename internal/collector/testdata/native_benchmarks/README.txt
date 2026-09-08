@@ -71,3 +71,7 @@ pattern.txt separately measures the compiled pattern package using the same
 scheduled command, 200ms duration and 20 samples, with
 -test.bench='^BenchmarkPattern(Compile|Capture|AlmostMatching)$'. Its hostile
 whitespace-delimiter cases extend through the full 1 MiB event ceiling.
+
+For the final comparison against updated main after the wave 1 configuration
+fix, use final/README.txt and final/comparison.txt. The earlier candidate and
+all its timing history remain intact above.
