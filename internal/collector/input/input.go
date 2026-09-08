@@ -132,8 +132,10 @@ func (event RawEvent) AcknowledgeDurabilityBarrier() {
 
 // Checkpoint is the persisted read position for one input and file identity.
 type Checkpoint struct {
-	InputID        string
-	Identity       FileIdentity
+	InputID  string
+	Identity FileIdentity
+	// Path is diagnostic and a fallback for legacy WAL origins, not a resume
+	// key. At capacity it may retain an older admitted path after a rename.
 	Path           string
 	Offset         uint64
 	LineNumber     uint64

@@ -281,6 +281,12 @@ snapshot space for terminal position and rewrite-guard metadata. State exceeding
 the identity limit, the 128 MiB snapshot budget, or the 384 MiB journal recovery
 bound is rejected explicitly on restart.
 
+If a rename would exceed the snapshot budget, an existing checkpoint retains
+its previously admitted diagnostic path while its position, identity, and rewrite
+guard advance normally. The event's source path remains the current path. This
+also protects terminal delivery of pending WAL records after restart; checkpoint
+paths are not used as file identity or resume keys.
+
 Checkpoint advances append one checksummed transaction containing only changed
 source positions and sync it before terminal WAL reclamation. The collector
 periodically compacts `checkpoints/checkpoints.journal` into

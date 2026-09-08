@@ -17,6 +17,12 @@ const (
 
 var errSourceCapacity = errors.New("collector/input: live source capacity reached; new sources will be retried")
 var errCheckpointCapacity = errors.New("collector/input: retained source identity capacity reached; historical checkpoints must be preserved")
+var errCheckpointSnapshotCapacity = errors.New("collector/input: checkpoints exceed snapshot byte capacity")
+
+type checkpointReservation struct {
+	path  string
+	bytes int
+}
 
 // TryAcquireSource reserves one complete source lifecycle, including draining
 // and blocked publication. The caller releases it only after closing the file.
@@ -44,10 +50,10 @@ func (s *fileCheckpointStore) ReservePending(checkpoints []Checkpoint) error {
 	if _, _, err := s.checkSnapshotCapacity(nil); err != nil {
 		return err
 	}
-	next := make(map[checkpointKey]int)
+	next := make(map[checkpointKey]checkpointReservation)
 	bytes := s.entryBytes
-	for _, size := range s.reserved {
-		bytes += size
+	for _, reservation := range s.reserved {
+		bytes += reservation.bytes
 	}
 	for _, cp := range checkpoints {
 		if err := ValidateCheckpoint(cp); err != nil {
@@ -67,8 +73,8 @@ func (s *fileCheckpointStore) ReservePending(checkpoints []Checkpoint) error {
 		if err != nil {
 			return err
 		}
-		bytes += size - next[key]
-		next[key] = size
+		bytes += size - next[key].bytes
+		next[key] = checkpointReservation{path: cp.Path, bytes: size}
 		if len(s.entries)+len(s.reserved)+len(next) > s.entryLimit() {
 			return errCheckpointCapacity
 		}
@@ -77,10 +83,10 @@ func (s *fileCheckpointStore) ReservePending(checkpoints []Checkpoint) error {
 		}
 	}
 	if s.reserved == nil {
-		s.reserved = make(map[checkpointKey]int)
+		s.reserved = make(map[checkpointKey]checkpointReservation)
 	}
-	for key, size := range next {
-		s.reserved[key] = size
+	for key, reservation := range next {
+		s.reserved[key] = reservation
 	}
 	return nil
 }
@@ -116,6 +122,29 @@ func (s *fileCheckpointStore) checkNewEntries(next map[checkpointKey]Checkpoint)
 	return nil
 }
 
+// fitCheckpointPaths preserves terminal progress if a rename needs more
+// diagnostic-path space than admission reserved. Path is not a resume key;
+// identity, byte/line coordinates, guards, and the event's source_path remain
+// exact. Retain a previously admitted path only when the new paths do not fit.
+func (s *fileCheckpointStore) fitCheckpointPaths(next map[checkpointKey]Checkpoint) (map[checkpointKey]int, int, error) {
+	sizes, total, err := s.checkSnapshotCapacity(next)
+	if !errors.Is(err, errCheckpointSnapshotCapacity) {
+		return sizes, total, err
+	}
+	for key, cp := range next {
+		if current, exists := s.entries[key]; exists {
+			if sizes[key] > s.entrySizes[key] {
+				cp.Path = current.Path
+				next[key] = cp
+			}
+		} else if reservation, reserved := s.reserved[key]; reserved && sizes[key] > reservation.bytes {
+			cp.Path = reservation.path
+			next[key] = cp
+		}
+	}
+	return s.checkSnapshotCapacity(next)
+}
+
 // checkSnapshotCapacity fences mutations before their journal append so every
 // accepted state can still be compacted and reopened under the snapshot bound.
 // Cache entry footprints: ordinary terminal advances remain proportional to
@@ -145,13 +174,13 @@ func (s *fileCheckpointStore) checkSnapshotCapacity(next map[checkpointKey]Check
 	}
 	// Reserve the document wrapper and maximum-width sequence/version fields.
 	reservedBytes := 0
-	for key, size := range s.reserved {
+	for key, reservation := range s.reserved {
 		if _, committing := next[key]; !committing {
-			reservedBytes += size
+			reservedBytes += reservation.bytes
 		}
 	}
 	if total+reservedBytes > s.snapshotLimit()-1024 {
-		return nil, 0, errors.New("collector/input: checkpoints exceed snapshot byte capacity")
+		return sizes, total, errCheckpointSnapshotCapacity
 	}
 	return sizes, total, nil
 }

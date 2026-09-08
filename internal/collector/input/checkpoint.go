@@ -65,7 +65,7 @@ type fileCheckpointStore struct {
 	snapshotBytes   int64
 	journalErr      error
 	readOnly        bool
-	reserved        map[checkpointKey]int
+	reserved        map[checkpointKey]checkpointReservation
 	sourceSlots     chan struct{}
 	entrySizes      map[checkpointKey]int
 	entryBytes      int
@@ -358,7 +358,7 @@ func (s *fileCheckpointStore) SetMany(checkpoints []Checkpoint) error {
 	if err := s.checkNewEntries(next); err != nil {
 		return err
 	}
-	sizes, size, err := s.checkSnapshotCapacity(next)
+	sizes, size, err := s.fitCheckpointPaths(next)
 	if err != nil {
 		return err
 	}

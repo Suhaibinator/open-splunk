@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 )
@@ -139,6 +140,132 @@ func TestCheckpointByteCapacityReservesTerminalMetadataAndPendingIdentity(t *tes
 	reopened := openJournalTestStore(t, s.dir)
 	if list, err := reopened.List(); err != nil || len(list) != 2 {
 		t.Fatalf("bounded snapshot cannot reopen: %d, %v", len(list), err)
+	}
+}
+
+func TestCheckpointPathGrowthAtCapacityPreservesTerminalCoordinates(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []string{"existing", "existing after restart", "WAL-only", "repeated WAL reservation"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := t.TempDir()
+			s := openJournalTestStore(t, dir)
+			original := capacityCheckpoint(1)
+			size, err := checkpointSnapshotEntryBytes(original)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.maximumSnapshotBytes = 1024 + size
+			terminal := original
+			terminal.Path = "/logs/" + strings.Repeat("longer-", 20) + ".log"
+			terminal.Offset = 20
+			terminal.LineNumber, terminal.NextLineNumber = 2, 3
+			terminal.GuardFingerprint, terminal.GuardLength = terminal.Identity.Fingerprint, 2
+			if strings.HasPrefix(mode, "existing") {
+				if err := s.Set(original); err != nil {
+					t.Fatal(err)
+				}
+				if mode == "existing after restart" {
+					if err := s.Close(); err != nil {
+						t.Fatal(err)
+					}
+					s = openJournalTestStore(t, dir)
+					s.maximumSnapshotBytes = 1024 + size
+				}
+				// Existing WAL coordinates can name a longer path than the
+				// durable checkpoint without reserving a second identity.
+				if err := s.ReservePending([]Checkpoint{terminal}); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err := s.ReservePending([]Checkpoint{original}); err != nil {
+					t.Fatal(err)
+				}
+				if mode == "repeated WAL reservation" {
+					if err := s.ReservePending([]Checkpoint{terminal}); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if err := s.Set(terminal); err != nil {
+				t.Fatalf("renamed terminal checkpoint blocked: %v", err)
+			}
+			if terminal.Path == original.Path {
+				t.Fatal("checkpoint persistence changed the caller's event source path")
+			}
+			got, found, err := s.Get(terminal.InputID, terminal.Identity)
+			if err != nil || !found || got.Path != original.Path || got.Offset != terminal.Offset ||
+				got.Identity != terminal.Identity || got.LineNumber != terminal.LineNumber ||
+				got.NextLineNumber != terminal.NextLineNumber || got.GuardFingerprint != terminal.GuardFingerprint || got.GuardLength != terminal.GuardLength {
+				t.Fatalf("terminal checkpoint lost coordinates: %+v, %t, %v", got, found, err)
+			}
+			crashJournalTestStore(t, s)
+			reopened := openJournalTestStore(t, dir)
+			if resumed, found, err := reopened.Get(terminal.InputID, terminal.Identity); err != nil || !found || resumed != got {
+				t.Fatalf("terminal resume after journal replay = %+v, %t, %v; want %+v", resumed, found, err, got)
+			}
+		})
+	}
+}
+
+func TestManagerRenameAtCapacityKeepsEventPathAndTerminalProgress(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.log")
+	renamed := filepath.Join(dir, "a-much-longer-source-path.log")
+	writeFileT(t, path, "first\n")
+	s := openJournalTestStore(t, t.TempDir())
+	budget := capacityCheckpoint(1)
+	budget.InputID, budget.Path = "in", path
+	size, err := checkpointSnapshotEntryBytes(budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.maximumSnapshotBytes = 1024 + size
+	api, err := NewManager(Config{InputID: "in", Include: []string{filepath.Join(dir, "*.log")}, PollInterval: testPoll}, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := api.(*manager)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() { cancel(); m.wg.Wait() }()
+	m.pollOnce(ctx, true)
+	receive := func() RawEvent {
+		t.Helper()
+		select {
+		case event := <-m.Events():
+			return event
+		case <-time.After(3 * time.Second):
+			t.Fatal("timed out waiting for source event")
+			return RawEvent{}
+		}
+	}
+	commit := func(event RawEvent) {
+		t.Helper()
+		if err := s.Set(Checkpoint{
+			InputID: "in", Identity: event.Source.Identity, Path: event.Source.Path,
+			Offset: event.Source.EndOffset, LineNumber: event.Source.LineNumber, NextLineNumber: event.Source.NextLineNumber,
+			GuardFingerprint: event.Source.GuardFingerprint, GuardLength: event.Source.GuardLength,
+		}); err != nil {
+			t.Fatalf("terminal delivery blocked: %v", err)
+		}
+	}
+	first := receive()
+	commit(first)
+	if err := os.Rename(path, renamed); err != nil {
+		t.Fatal(err)
+	}
+	// Reconcile the rename before appending, so this event must carry its new
+	// source path even though diagnostic checkpoint space is exhausted.
+	m.pollOnce(ctx, false)
+	appendFileT(t, renamed, "second\n")
+	second := receive()
+	if string(second.Bytes) != "second" || second.Source.Path != renamed || second.Source.Identity != first.Source.Identity {
+		t.Fatalf("rename changed event coordinates: %+v", second)
+	}
+	commit(second)
+	got, found, err := s.Get("in", second.Source.Identity)
+	if err != nil || !found || got.Path != path || got.Offset != second.Source.EndOffset || got.NextLineNumber != second.Source.NextLineNumber {
+		t.Fatalf("rename did not advance the admitted checkpoint: %+v, %t, %v", got, found, err)
 	}
 }
 
