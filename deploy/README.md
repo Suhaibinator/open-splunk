@@ -420,3 +420,23 @@ singleton lock, retained-search artifacts, and export artifacts in named
 volumes. ClickHouse data remains owned by the existing ClickHouse service. The
 default Compose deployment does not configure backup or restore jobs; back up
 both systems using your normal infrastructure procedures.
+
+The `backup-control-plane`, `restore-control-plane`,
+`backup-deployment-recovery-set`, `restore-deployment-recovery-set`, and
+`reconcile-deployment-recovery-marker` commands require the server to be
+stopped. They use `OPEN_SPLUNK_SERVER_LOCK_FILE` to acquire the same singleton
+lock as the server before accessing recovery state. If startup overrides the
+lock with `-server-lock-file`, set that effective path in the recovery command's
+`OPEN_SPLUNK_SERVER_LOCK_FILE`; recovery commands do not accept the runtime
+flag. The obsolete `OPEN_SPLUNK_SERVER_SINGLETON_LOCK_PATH` is rejected by
+both startup and recovery, even when the current variable is also set.
+
+Recovery jobs must mount the same persistent lock volume and reach the same
+lock inode as the server, with the same effective UID. Matching path strings
+in separate container filesystems do not coordinate locks. In Compose, share
+the `server-lock` volume and its configured private lock path; each container's
+`/tmp` is independent. With no lock setting, native startup and recovery use
+`/tmp/open-splunk-server-open_splunk.server.lock`; explicitly selecting that
+default has the same directory-validation behavior. Custom paths must be
+exact absolute paths inside an existing owner-private directory. Recovery
+rejects explicitly empty or whitespace-padded values.

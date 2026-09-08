@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	hostSingletonLockPath      = "/tmp/open-splunk-server-open_splunk.server.lock"
-	serverSingletonLockPathEnv = "OPEN_SPLUNK_SERVER_SINGLETON_LOCK_PATH"
+	hostSingletonLockPath            = "/tmp/open-splunk-server-open_splunk.server.lock"
+	serverSingletonLockPathEnv       = "OPEN_SPLUNK_SERVER_LOCK_FILE"
+	legacyServerSingletonLockPathEnv = "OPEN_SPLUNK_SERVER_SINGLETON_LOCK_PATH"
 )
 
 var errServerAlreadyRunning = errors.New("another open-splunk server is already running")
@@ -45,10 +46,7 @@ func acquireServerLock(databasePath string) (*serverLock, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := validateConfiguredServerSingletonLockDirectory(singletonPath); err != nil {
-		return nil, err
-	}
-	return acquireServerLockAt(databasePath, singletonPath)
+	return acquireConfiguredServerLock(databasePath, singletonPath)
 }
 
 func acquireHostServerLock() (*serverLock, error) {
@@ -56,13 +54,18 @@ func acquireHostServerLock() (*serverLock, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := validateConfiguredServerSingletonLockDirectory(singletonPath); err != nil {
+	if err := validateServerSingletonLockDirectory(singletonPath); err != nil {
 		return nil, err
 	}
 	return acquireHostServerLockAt(singletonPath)
 }
 
 func configuredServerSingletonLockPath() (string, error) {
+	// Recovery dispatch precedes runtime option parsing. Enforce the same
+	// rename here so a stale setting can never select a recovery-only lock.
+	if _, configured := os.LookupEnv(legacyServerSingletonLockPathEnv); configured {
+		return "", fmt.Errorf("%s was renamed to %s", legacyServerSingletonLockPathEnv, serverSingletonLockPathEnv)
+	}
 	value, configured := os.LookupEnv(serverSingletonLockPathEnv)
 	if !configured {
 		return hostSingletonLockPath, nil
@@ -75,13 +78,6 @@ func configuredServerSingletonLockPath() (string, error) {
 		)
 	}
 	return value, nil
-}
-
-func validateConfiguredServerSingletonLockDirectory(singletonPath string) (returnedErr error) {
-	if _, configured := os.LookupEnv(serverSingletonLockPathEnv); !configured {
-		return nil
-	}
-	return validatePrivateServerSingletonLockDirectory(singletonPath)
 }
 
 func validateServerSingletonLockDirectory(singletonPath string) (returnedErr error) {
