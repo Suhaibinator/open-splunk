@@ -60,9 +60,11 @@ func readClickHouseCredentialFileWithHooks(
 		path:             absolutePath,
 		maximumReadBytes: maximumClickHouseCredentialBytes + 1,
 		hooks:            hooks,
-		validateBefore:   validateClickHouseCredentialFile,
+		validateBefore: func(info os.FileInfo) error {
+			return validateClickHouseCredentialFile(info, os.Geteuid())
+		},
 		validateOpen: func(file *os.File, info os.FileInfo) error {
-			if err := validateClickHouseCredentialFile(info); err != nil {
+			if err := validateClickHouseCredentialFile(info, os.Geteuid()); err != nil {
 				return err
 			}
 			if err := privatefs.ValidateNoExtendedACL(file); err != nil {
@@ -76,8 +78,10 @@ func readClickHouseCredentialFileWithHooks(
 			}
 			return nil
 		},
-		validateAfterPath: validateClickHouseCredentialFile,
-		sameState:         sameClickHouseCredentialFileState,
+		validateAfterPath: func(info os.FileInfo) error {
+			return validateClickHouseCredentialFile(info, os.Geteuid())
+		},
+		sameState: sameClickHouseCredentialFileState,
 		messages: stablePathFileReadMessages{
 			inspectPath:         "inspect credential file",
 			openPath:            "open credential file",
@@ -122,15 +126,14 @@ func resolveClickHouseCredentialPath(path string) (string, error) {
 	return absolutePath, nil
 }
 
-func validateClickHouseCredentialFile(info os.FileInfo) error {
+func validateClickHouseCredentialFile(info os.FileInfo, effectiveUID int) error {
 	if info == nil || !info.Mode().IsRegular() {
 		return errors.New("credential file must be a regular file")
 	}
 	mode := info.Mode()
-	permissions := mode.Perm()
-	if permissions&0o400 == 0 || permissions&0o133 != 0 {
+	if mode.Perm() != 0o400 && mode.Perm() != 0o600 {
 		return errors.New(
-			"credential file must be owner-readable without execute or group/other write permissions",
+			"credential file permissions must be exactly 0400 or 0600",
 		)
 	}
 	if mode&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
@@ -139,6 +142,9 @@ func validateClickHouseCredentialFile(info os.FileInfo) error {
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok || stat == nil {
 		return errors.New("credential file metadata is unavailable")
+	}
+	if effectiveUID < 0 || int64(stat.Uid) != int64(effectiveUID) {
+		return errors.New("credential file must be owned by the server user")
 	}
 	if stat.Nlink != 1 {
 		return errors.New("credential file must have exactly one hard link")

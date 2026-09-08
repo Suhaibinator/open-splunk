@@ -8,16 +8,21 @@ import (
 )
 
 func TestLoadClickHouseCredentialUsesFileOrInlineValue(t *testing.T) {
-	t.Run("file", func(t *testing.T) {
-		path := writeClickHouseCredentialFixture(t, "file-secret\n", 0o600)
-		credential, err := loadClickHouseCredential(path, "")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if credential != "file-secret" {
-			t.Fatalf("loaded credential = %q, want file-secret", credential)
-		}
-	})
+	for name, mode := range map[string]os.FileMode{
+		"owner read only":  0o400,
+		"owner read write": 0o600,
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := writeClickHouseCredentialFixture(t, "file-secret\n", mode)
+			credential, err := loadClickHouseCredential(path, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if credential != "file-secret" {
+				t.Fatalf("loaded credential = %q, want file-secret", credential)
+			}
+		})
+	}
 
 	t.Run("inline", func(t *testing.T) {
 		credential, err := loadClickHouseCredential("", "inline-secret")
@@ -113,9 +118,15 @@ func TestReadClickHouseCredentialFileRejectsUnsafeMetadata(t *testing.T) {
 	})
 
 	for name, mode := range map[string]os.FileMode{
-		"owner execute": 0o700,
-		"group write":   0o620,
-		"other write":   0o602,
+		"owner execute":        0o700,
+		"group write":          0o620,
+		"other write":          0o602,
+		"group read":           0o640,
+		"other read":           0o604,
+		"group and other read": 0o644,
+		"read-only shared":     0o444,
+		"owner write only":     0o200,
+		"inaccessible":         0o000,
 	} {
 		t.Run(name, func(t *testing.T) {
 			path := writeClickHouseCredentialFixture(t, "secret", mode)
@@ -152,6 +163,61 @@ func TestReadClickHouseCredentialFileRejectsReplacement(t *testing.T) {
 	)
 	if err == nil || credential != nil {
 		t.Fatalf("replaced credential = (%q, %v), want failure", credential, err)
+	}
+}
+
+func TestValidateClickHouseCredentialFileRequiresCurrentOwner(t *testing.T) {
+	path := writeClickHouseCredentialFixture(t, "secret", 0o600)
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, effectiveUID := range []int{os.Geteuid() ^ 1, -1} {
+		if err := validateClickHouseCredentialFile(info, effectiveUID); err == nil ||
+			!strings.Contains(err.Error(), "owned by the server user") {
+			t.Fatalf("credential ownership error = %v, want owner rejection", err)
+		}
+	}
+	if err := validateClickHouseCredentialFile(info, os.Geteuid()); err != nil {
+		t.Fatalf("server-owned credential rejected: %v", err)
+	}
+}
+
+func TestReadClickHouseCredentialFileRejectsPermissionChanges(t *testing.T) {
+	for _, stage := range []string{"after open", "after read"} {
+		t.Run(stage, func(t *testing.T) {
+			path := writeClickHouseCredentialFixture(t, "secret", 0o600)
+			share := func() {
+				if err := os.Chmod(path, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			hooks := clickHouseCredentialReadHooks{afterOpen: share}
+			if stage == "after read" {
+				hooks = clickHouseCredentialReadHooks{afterRead: share}
+			}
+			credential, err := readClickHouseCredentialFileWithHooks(path, hooks)
+			if err == nil || credential != nil {
+				t.Fatalf("changed permissions returned (%q, %v), want failure", credential, err)
+			}
+		})
+	}
+}
+
+func TestNewClickHouseConnectionOptionsRejectsSharedCredentialFiles(t *testing.T) {
+	for _, skipMigrations := range []bool{false, true} {
+		passwordFile := writeClickHouseCredentialFixture(t, "secret", 0o644)
+		results, err := newClickHouseConnectionOptions(options{
+			clickhouseAddress:        "per-clickhouse:9000",
+			clickhouseDatabase:       "open_splunk",
+			clickhouseUsername:       "clickhouse",
+			clickhousePasswordFile:   passwordFile,
+			clickhouseSkipMigrations: skipMigrations,
+		}, nil)
+		if err == nil || results.runtime != nil || results.deletion != nil ||
+			results.migration != nil {
+			t.Fatalf("shared credential populated connection options: %v", err)
+		}
 	}
 }
 

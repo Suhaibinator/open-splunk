@@ -2090,6 +2090,8 @@ func TestOpenDeploymentRecoverySessionRejectsUnsafeTLSAndPasswordBeforeNetwork(t
 		caFile       string
 	}{
 		{name: "group-writable password", passwordFile: writeClickHouseCredentialFixture(t, "secret", 0o660), caFile: identity.CertificateFile},
+		{name: "group-readable password", passwordFile: writeClickHouseCredentialFixture(t, "secret", 0o640), caFile: identity.CertificateFile},
+		{name: "world-readable password", passwordFile: writeClickHouseCredentialFixture(t, "secret", 0o444), caFile: identity.CertificateFile},
 		{name: "invalid CA", passwordFile: writeClickHouseCredentialFixture(t, "secret", 0o600), caFile: invalidCA},
 	} {
 		t.Run(test.name, func(t *testing.T) {

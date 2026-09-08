@@ -63,7 +63,7 @@ options may subsequently apply a documented derived-default rule.
 | `OPEN_SPLUNK_SERVER_CLICKHOUSE_DATABASE` | `-clickhouse-database` | `open_splunk` | Select the application database used after migrations. | Must be exactly `open_splunk`; the embedded schema does not support another database name. |
 | `OPEN_SPLUNK_SERVER_CLICKHOUSE_USERNAME` | `-clickhouse-username` | `default` | Configure the ClickHouse account used for migrations and runtime operations. | Non-empty string. The account must have the privileges described under Requirements. |
 | `OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD` | `-clickhouse-password` | None; required unless a password file is used | Configure the ClickHouse password. | Non-empty string. Mutually exclusive with the password-file setting at the same tier. The environment value is removed after parsing. |
-| `OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD_FILE` | `-clickhouse-password-file` | None; required unless a raw password is used | Read the ClickHouse password from a file. | Regular 1–4096-byte file, owner-readable, non-executable, without group/other write permission, special bits, ACL metadata, or additional hard links. One trailing LF is removed. |
+| `OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD_FILE` | `-clickhouse-password-file` | None; required unless a raw password is used | Read the ClickHouse password from a file. | Regular 1–4096-byte file owned by the server user, exactly mode `0400` or `0600`, without special bits, ACL metadata, or additional hard links. One trailing LF is removed. |
 | `OPEN_SPLUNK_SERVER_CLICKHOUSE_TLS_ENABLED` | `-clickhouse-tls-enabled` | `false` | Enable verified TLS for every ClickHouse connection. | Boolean. Enabling it requires both an explicit CA certificate file and TLS server name. |
 | `OPEN_SPLUNK_SERVER_CLICKHOUSE_TLS_CA_CERTIFICATE_FILE` | `-clickhouse-tls-ca-certificate-file` | Empty | Select the trust bundle for ClickHouse TLS verification. | File path containing only valid certificate PEM blocks, at most 1 MiB. Requires ClickHouse TLS and is rejected when TLS is disabled. |
 | `OPEN_SPLUNK_SERVER_CLICKHOUSE_TLS_SERVER_NAME` | `-clickhouse-tls-server-name` | Empty | Select the DNS name or IP SAN verified on the ClickHouse certificate. | Valid bounded DNS name or IP address without a port or wildcard. Requires ClickHouse TLS and is rejected when TLS is disabled. |
@@ -89,6 +89,14 @@ an error. An explicit CLI credential form overrides both environment forms.
 File flags are safer than raw CLI flags because command-line arguments may be
 visible in process listings and shell history. Sensitive environment values
 are removed from the server process environment immediately after parsing.
+
+ClickHouse password files used by startup, migration, backup, restore, and
+recovery marker reconciliation must belong to the effective user running the
+command and use mode `0400` or `0600`. For container mounts, ownership is checked
+as seen inside the container; the supplied server image runs as UID `65532`.
+A read-only mount does not replace these ownership and permission requirements.
+Change an existing file's owner and mode before upgrading if it does not meet
+this contract. If other users could read the old file, rotate its password too.
 
 This table applies to normal server startup. Recovery and provisioning
 subcommands retain their purpose-specific interfaces, and collector YAML
