@@ -1,0 +1,8 @@
+--- FAIL: TestTimestampLiteralDecimalPrecision (0.00s)
+    --- FAIL: TestTimestampLiteralDecimalPrecision/.8888888888 (0.00s)
+        literal_precision_regression_test.go:17: literal digits are not fractional seconds: invalid timestamp
+    --- FAIL: TestTimestampLiteralDecimalPrecision/,8888888888 (0.00s)
+        literal_precision_regression_test.go:17: literal digits are not fractional seconds: invalid timestamp
+FAIL
+FAIL	github.com/Suhaibinator/open-splunk/internal/collector/parserconfig	0.426s
+FAIL

@@ -1,0 +1,32 @@
+--- FAIL: TestParserPresenceProgrammaticRoundTrip (0.01s)
+    --- FAIL: TestParserPresenceProgrammaticRoundTrip/ndjson/input (0.00s)
+        parser_presence_test.go:114: programmatic input does not round-trip: input parser must be a mapping; omit it when unused
+    --- FAIL: TestParserPresenceProgrammaticRoundTrip/ndjson/config (0.00s)
+        parser_presence_test.go:128: programmatic config does not round-trip: parse config "/var/folders/c1/bq3rcd9d3y54bw8n_fp4x0sr0000gn/T/TestParserPresenceProgrammaticRoundTripndjsonconfig3911449831/001/collector.yaml": input parser must be a mapping; omit it when unused
+    --- FAIL: TestParserPresenceProgrammaticRoundTrip/raw/input (0.00s)
+        parser_presence_test.go:114: programmatic input does not round-trip: input parser must be a mapping; omit it when unused
+    --- FAIL: TestParserPresenceProgrammaticRoundTrip/raw/config (0.00s)
+        parser_presence_test.go:128: programmatic config does not round-trip: parse config "/var/folders/c1/bq3rcd9d3y54bw8n_fp4x0sr0000gn/T/TestParserPresenceProgrammaticRoundTriprawconfig1057254070/001/collector.yaml": input parser must be a mapping; omit it when unused
+    --- FAIL: TestParserPresenceProgrammaticRoundTrip/docker-json-file/input (0.00s)
+        parser_presence_test.go:114: programmatic input does not round-trip: input parser must be a mapping; omit it when unused
+    --- FAIL: TestParserPresenceProgrammaticRoundTrip/docker-json-file/config (0.00s)
+        parser_presence_test.go:128: programmatic config does not round-trip: parse config "/var/folders/c1/bq3rcd9d3y54bw8n_fp4x0sr0000gn/T/TestParserPresenceProgrammaticRoundTripdocker-json-fileconfig2410089220/001/collector.yaml": input parser must be a mapping; omit it when unused
+    --- FAIL: TestParserPresenceProgrammaticRoundTrip/nginx-combined/input (0.00s)
+        parser_presence_test.go:114: programmatic input does not round-trip: input parser must be a mapping; omit it when unused
+    --- FAIL: TestParserPresenceProgrammaticRoundTrip/nginx-combined/config (0.00s)
+        parser_presence_test.go:128: programmatic config does not round-trip: parse config "/var/folders/c1/bq3rcd9d3y54bw8n_fp4x0sr0000gn/T/TestParserPresenceProgrammaticRoundTripnginx-combinedconfig1641785531/001/collector.yaml": input parser must be a mapping; omit it when unused
+    --- FAIL: TestParserPresenceProgrammaticRoundTrip/apache-common/input (0.00s)
+        parser_presence_test.go:114: programmatic input does not round-trip: input parser must be a mapping; omit it when unused
+    --- FAIL: TestParserPresenceProgrammaticRoundTrip/apache-common/config (0.00s)
+        parser_presence_test.go:128: programmatic config does not round-trip: parse config "/var/folders/c1/bq3rcd9d3y54bw8n_fp4x0sr0000gn/T/TestParserPresenceProgrammaticRoundTripapache-commonconfig3166356033/001/collector.yaml": input parser must be a mapping; omit it when unused
+    --- FAIL: TestParserPresenceProgrammaticRoundTrip/apache-combined/input (0.00s)
+        parser_presence_test.go:114: programmatic input does not round-trip: input parser must be a mapping; omit it when unused
+    --- FAIL: TestParserPresenceProgrammaticRoundTrip/apache-combined/config (0.00s)
+        parser_presence_test.go:128: programmatic config does not round-trip: parse config "/var/folders/c1/bq3rcd9d3y54bw8n_fp4x0sr0000gn/T/TestParserPresenceProgrammaticRoundTripapache-combinedconfig3593388116/001/collector.yaml": input parser must be a mapping; omit it when unused
+    --- FAIL: TestParserPresenceProgrammaticRoundTrip/logfmt/input (0.00s)
+        parser_presence_test.go:114: programmatic input does not round-trip: input parser must be a mapping; omit it when unused
+    --- FAIL: TestParserPresenceProgrammaticRoundTrip/logfmt/config (0.00s)
+        parser_presence_test.go:128: programmatic config does not round-trip: parse config "/var/folders/c1/bq3rcd9d3y54bw8n_fp4x0sr0000gn/T/TestParserPresenceProgrammaticRoundTriplogfmtconfig3079296657/001/collector.yaml": input parser must be a mapping; omit it when unused
+FAIL
+FAIL	github.com/Suhaibinator/open-splunk/internal/collector/config	5.343s
+FAIL

@@ -1,0 +1,10 @@
+--- FAIL: TestNativeTimestampLiteralPrecision (0.00s)
+    --- FAIL: TestNativeTimestampLiteralPrecision/logfmt (0.00s)
+        native_time_precision_test.go:37: rejected literal digits: invalid timestamp
+    --- FAIL: TestNativeTimestampLiteralPrecision/log4j2-pattern (0.00s)
+        native_time_precision_test.go:37: rejected literal digits: invalid timestamp
+    --- FAIL: TestNativeTimestampLiteralPrecision/logback-pattern (0.00s)
+        native_time_precision_test.go:37: rejected literal digits: invalid timestamp
+FAIL
+FAIL	github.com/Suhaibinator/open-splunk/internal/collector	0.554s
+FAIL

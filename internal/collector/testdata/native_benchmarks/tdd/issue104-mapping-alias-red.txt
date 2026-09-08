@@ -1,0 +1,32 @@
+--- FAIL: TestExplicitMappingsAcceptSameRoleCollectorAliases (0.00s)
+    --- FAIL: TestExplicitMappingsAcceptSameRoleCollectorAliases/timestamp/Timestamp (0.00s)
+        mapping_alias_regression_test.go:26: invalid source field mapping
+    --- FAIL: TestExplicitMappingsAcceptSameRoleCollectorAliases/timestamp/TIME (0.00s)
+        mapping_alias_regression_test.go:26: invalid source field mapping
+    --- FAIL: TestExplicitMappingsAcceptSameRoleCollectorAliases/message/body (0.00s)
+        mapping_alias_regression_test.go:26: invalid source field mapping
+    --- FAIL: TestExplicitMappingsAcceptSameRoleCollectorAliases/message/Message (0.00s)
+        mapping_alias_regression_test.go:26: invalid source field mapping
+    --- FAIL: TestExplicitMappingsAcceptSameRoleCollectorAliases/message/BODY (0.00s)
+        mapping_alias_regression_test.go:26: invalid source field mapping
+    --- FAIL: TestExplicitMappingsAcceptSameRoleCollectorAliases/level/Level (0.00s)
+        mapping_alias_regression_test.go:26: invalid source field mapping
+    --- FAIL: TestExplicitMappingsAcceptSameRoleCollectorAliases/level/LEVEL (0.00s)
+        mapping_alias_regression_test.go:26: invalid source field mapping
+    --- FAIL: TestExplicitMappingsAcceptSameRoleCollectorAliases/level/Severity_Text (0.00s)
+        mapping_alias_regression_test.go:26: invalid source field mapping
+    --- FAIL: TestExplicitMappingsAcceptSameRoleCollectorAliases/trace_id/traceId (0.00s)
+        mapping_alias_regression_test.go:26: invalid source field mapping
+    --- FAIL: TestExplicitMappingsAcceptSameRoleCollectorAliases/trace_id/TRACE_ID (0.00s)
+        mapping_alias_regression_test.go:26: invalid source field mapping
+    --- FAIL: TestExplicitMappingsAcceptSameRoleCollectorAliases/trace_id/TraceId (0.00s)
+        mapping_alias_regression_test.go:26: invalid source field mapping
+    --- FAIL: TestExplicitMappingsAcceptSameRoleCollectorAliases/span_id/spanId (0.00s)
+        mapping_alias_regression_test.go:26: invalid source field mapping
+    --- FAIL: TestExplicitMappingsAcceptSameRoleCollectorAliases/span_id/SPAN_ID (0.00s)
+        mapping_alias_regression_test.go:26: invalid source field mapping
+    --- FAIL: TestExplicitMappingsAcceptSameRoleCollectorAliases/span_id/SpanId (0.00s)
+        mapping_alias_regression_test.go:26: invalid source field mapping
+FAIL
+FAIL	github.com/Suhaibinator/open-splunk/internal/collector/parserconfig	0.234s
+FAIL

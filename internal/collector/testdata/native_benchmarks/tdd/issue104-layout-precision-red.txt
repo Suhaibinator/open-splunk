@@ -1,0 +1,18 @@
+--- FAIL: TestPrecisionWalkPreservesGoTokenSpelling (0.00s)
+    --- FAIL: TestPrecisionWalkPreservesGoTokenSpelling/0 (0.00s)
+        time_precision_walk_test.go:37: invalid timestamp
+    --- FAIL: TestPrecisionWalkPreservesGoTokenSpelling/1 (0.00s)
+        time_precision_walk_test.go:37: invalid timestamp
+    --- FAIL: TestPrecisionWalkPreservesGoTokenSpelling/2 (0.00s)
+        time_precision_walk_test.go:37: invalid timestamp
+    --- FAIL: TestPrecisionWalkPreservesGoTokenSpelling/3 (0.00s)
+        time_precision_walk_test.go:37: invalid timestamp
+    --- FAIL: TestPrecisionWalkPreservesGoTokenSpelling/4 (0.00s)
+        time_precision_walk_test.go:37: invalid timestamp
+    --- FAIL: TestPrecisionWalkPreservesGoTokenSpelling/5 (0.00s)
+        time_precision_walk_test.go:37: invalid timestamp
+--- FAIL: TestPrecisionLayoutRejectsUnsupportedFractionWidths (0.00s)
+    time_precision_walk_test.go:73: accepted unsupported ten-9 fractional layout
+FAIL
+FAIL	github.com/Suhaibinator/open-splunk/internal/collector/parserconfig	0.233s
+FAIL
