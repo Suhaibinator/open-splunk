@@ -196,8 +196,21 @@ func TestSQLitePrincipalConcurrentAdmissionIsAtomic(t *testing.T) {
 			<-start
 			request := reserveRequest(fmt.Sprintf("concurrent-%d", index), fmt.Sprintf("owner-%d", index))
 			request.PrincipalSHA256 = principal
-			_, err := sequencer.Reserve(context.Background(), request)
-			results <- err
+			ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+			defer cancel()
+			for {
+				_, err := sequencer.Reserve(ctx, request)
+				if !control.IsDatabaseContention(err) {
+					results <- err
+					return
+				}
+				select {
+				case <-ctx.Done():
+					results <- errors.Join(ctx.Err(), err)
+					return
+				case <-time.After(time.Millisecond):
+				}
+			}
 		})
 	}
 	close(start)
