@@ -41,10 +41,12 @@ type Config struct {
 	DefaultRetryAfter     time.Duration
 	SessionCleanupTimeout time.Duration
 	Clock                 func() time.Time
-	NewStreamID           func() string
-	SessionManager        CollectorSessionManager
-	StreamRegistry        CollectorStreamRegistry
-	SessionErrorHandler   func(error)
+	// MonotonicNow measures heartbeat cadence independently of wall timestamps.
+	MonotonicNow        func() time.Time
+	NewStreamID         func() string
+	SessionManager      CollectorSessionManager
+	StreamRegistry      CollectorStreamRegistry
+	SessionErrorHandler func(error)
 }
 
 // DefaultIndexRetention is the shared deployment default used by the native
@@ -68,6 +70,7 @@ func DefaultConfig() Config {
 		DefaultRetryAfter:     time.Second,
 		SessionCleanupTimeout: defaultCollectorSessionCleanupTimeout,
 		Clock:                 time.Now,
+		MonotonicNow:          time.Now,
 		NewStreamID:           randomID,
 	}
 }
@@ -124,6 +127,9 @@ func NewService(config Config, authorizer Authorizer, store EventStore) (*Servic
 	}
 	if config.Clock == nil {
 		config.Clock = defaults.Clock
+	}
+	if config.MonotonicNow == nil {
+		config.MonotonicNow = defaults.MonotonicNow
 	}
 	if config.NewStreamID == nil {
 		config.NewStreamID = defaults.NewStreamID
@@ -391,6 +397,9 @@ func (s *Service) Collect(stream opensplunk.CollectorIngestService_CollectServer
 	}
 
 	expectedRequestSequence := uint64(2)
+	// Permit arrival jitter while bounding expensive heartbeat work. Rounding
+	// up keeps even a configured one-nanosecond interval strictly positive.
+	minimumHeartbeatInterval := s.config.HeartbeatInterval - s.config.HeartbeatInterval/2
 	pipeline := newCollectBatchPipeline(s, stream)
 	defer pipeline.close()
 	for {
@@ -440,6 +449,23 @@ func (s *Service) Collect(stream opensplunk.CollectorIngestService_CollectServer
 		case *opensplunk.CollectRequest_Heartbeat:
 			if err := s.validateHeartbeat(payload.Heartbeat, &state, boundaryAt); err != nil {
 				return err
+			}
+			allowed, err := s.streamRegistry.AdmitHeartbeat(
+				lease,
+				s.config.MonotonicNow(),
+				minimumHeartbeatInterval,
+			)
+			if errors.Is(err, ErrCollectorLeaseNotCurrent) {
+				return supersededStreamRPCError()
+			}
+			if err != nil {
+				return status.Error(codes.Unavailable, "collector heartbeat admission is unavailable")
+			}
+			if !allowed {
+				// The wire frame was consumed, but no telemetry, liveness, or
+				// authorization state is refreshed by an early heartbeat.
+				expectedRequestSequence++
+				continue
 			}
 			snapshot, err := collectorHeartbeatSnapshot(
 				payload.Heartbeat,
