@@ -145,7 +145,7 @@ func TestConnectionLimitedListenerReleasesSlotOnClose(t *testing.T) {
 	serverConnection, clientConnection := net.Pipe()
 	t.Cleanup(func() { _ = clientConnection.Close() })
 	underlying := &singleConnectionListener{connection: serverConnection}
-	limited := newConnectionLimitedListener(underlying, 1).(*connectionLimitedListener)
+	limited := newConnectionLimitedListener(underlying, 1)
 	accepted, err := limited.Accept()
 	if err != nil {
 		t.Fatal(err)
