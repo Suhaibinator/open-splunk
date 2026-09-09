@@ -458,7 +458,7 @@ func TestGradeThisInspectionServiceAgainstClickHouse(t *testing.T) {
 				result.PhysicalPlan,
 			)
 			if err != nil {
-				t.Fatal(err)
+				t.Fatalf("%v: physical plan = %#v", err, result.PhysicalPlan)
 			}
 			if err := gradeThisValidateInspectionSummary(
 				search.ID,
@@ -696,7 +696,8 @@ func gradeThisSummarizeInspectionPlan(
 			summary.primaryKey = gradeThisInspectionCounts(index)
 		case "Skip":
 			if (index.Name != "idx_visibility_seq" &&
-				index.Name != "idx_field_names") ||
+				index.Name != "idx_field_names" &&
+				index.Name != "idx_trace_id_ci") ||
 				len(index.Keys) != 0 ||
 				index.InitialParts != 1 ||
 				index.SelectedParts != 1 ||
@@ -774,6 +775,14 @@ func gradeThisValidateInspectionSummary(
 
 	expectedSkips := []gradeThisInspectionSkipEvidence{
 		gradeThisInspectionSkip("idx_visibility_seq"),
+	}
+	if searchID == gradethiscorpus.SearchFollowTrace {
+		expectedSkips = append(
+			[]gradeThisInspectionSkipEvidence{
+				gradeThisInspectionSkip("idx_trace_id_ci"),
+			},
+			expectedSkips...,
+		)
 	}
 	if searchID == gradethiscorpus.SearchServerErrors {
 		expectedSkips = append(
