@@ -156,7 +156,7 @@ func TestClickHousePhysicalSchemaDefinitionsMatchPinnedDigests(
 		{
 			name:       "events",
 			definition: clickHouseEventsPhysicalSchemaDefinition,
-			want:       "9595c526e7c382d38a8ddb7a77e9f2d84c312e3c6703108b5627d5c604247850",
+			want:       "28bd791e9f81cf37c0a19255f6e0f698ed9af065567790205dee21a876813c70",
 		},
 		{
 			name:       "recovery sets",
@@ -257,6 +257,28 @@ func TestValidateClickHousePhysicalSchemaRejectsTableSetOrDefinitionDrift(
 					connection.eventsDefinition,
 					"CONSTRAINT visibility_seq_is_positive CHECK visibility_seq > 0, ",
 					"",
+					1,
+				)
+			},
+		},
+		{
+			name: "normalized ID index removed",
+			mutate: func(connection *fakeClickHousePhysicalSchemaConnection) {
+				connection.eventsDefinition = strings.Replace(
+					connection.eventsDefinition,
+					"INDEX idx_event_id_ci lowerUTF8(ifNull(event_id, '')) TYPE bloom_filter(0.001) GRANULARITY 1, ",
+					"",
+					1,
+				)
+			},
+		},
+		{
+			name: "normalized ID index expression changed",
+			mutate: func(connection *fakeClickHousePhysicalSchemaConnection) {
+				connection.eventsDefinition = strings.Replace(
+					connection.eventsDefinition,
+					"INDEX idx_trace_id_ci lowerUTF8(ifNull(trace_id, ''))",
+					"INDEX idx_trace_id_ci ifNull(trace_id, '')",
 					1,
 				)
 			},

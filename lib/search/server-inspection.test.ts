@@ -263,6 +263,31 @@ test("inspection adaptation binds the exact job and detaches the complete legacy
   assertInvalid(foreign);
 });
 
+test("inspection adaptation preserves legacy and normalized ID index evidence", () => {
+  const indexes = [
+    ["idx_event_id", "event_id"],
+    ["idx_event_id_ci", "lowerUTF8(ifNull(event_id, ''))"],
+    ["idx_trace_id", "ifNull(trace_id, '')"],
+    ["idx_trace_id_ci", "lowerUTF8(ifNull(trace_id, ''))"],
+    ["idx_span_id", "ifNull(span_id, '')"],
+    ["idx_span_id_ci", "lowerUTF8(ifNull(span_id, ''))"],
+  ];
+  for (const [name, key] of indexes) {
+    const response = baseResponse();
+    const index = response.physicalPlan!.reads[0]!.indexes[0]!;
+    index.type = "Skip";
+    index.name = name;
+    index.keys = [key];
+    const view = adaptSearchJobInspection(response, jobId, true);
+    assert.deepEqual(view.physicalPlan.reads[0]!.indexes[0], index);
+    index.keys[0] = "changed";
+    assert.deepEqual(view.physicalPlan.reads[0]!.indexes[0]!.keys, [key]);
+
+    index.name = "private_index_7f2c";
+    assertInvalid(response);
+  }
+});
+
 test("logical fields mirror canonical SPL path spelling and segment bounds", () => {
   const valid = baseResponse();
   const canonicalFields = ["labels.kubernetes\\.io/app", "路径.字段"];

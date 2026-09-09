@@ -383,8 +383,11 @@ func projectExplainIndexName(indexType, value string) string {
 	}
 	switch value {
 	case "idx_event_id",
+		"idx_event_id_ci",
 		"idx_trace_id",
+		"idx_trace_id_ci",
 		"idx_span_id",
+		"idx_span_id_ci",
 		"idx_field_names",
 		"idx_raw_text",
 		"idx_visibility_seq":
@@ -414,10 +417,16 @@ func safeExplainIndexKey(indexType, indexName, key string) bool {
 		switch indexName {
 		case "idx_event_id":
 			return key == "event_id"
+		case "idx_event_id_ci":
+			return key == "lowerUTF8(ifNull(event_id, ''))"
 		case "idx_trace_id":
 			return key == "ifNull(trace_id, '')"
+		case "idx_trace_id_ci":
+			return key == "lowerUTF8(ifNull(trace_id, ''))"
 		case "idx_span_id":
 			return key == "ifNull(span_id, '')"
+		case "idx_span_id_ci":
+			return key == "lowerUTF8(ifNull(span_id, ''))"
 		case "idx_field_names":
 			return key == "field_names"
 		case "idx_raw_text":

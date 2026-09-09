@@ -517,6 +517,9 @@ type CompiledQuery struct {
 	// the transactional staging boundary that makes those subsequent sink calls
 	// publicly atomic.
 	atomicResult bool
+	// eventResultLimit is a separately authenticated execution optimization.
+	// The canonical query remains unlimited for exports and derived analyses.
+	eventResultLimit eventResultLimitProof
 
 	// relationalDepth is compiler evidence, not part of the execution
 	// contract. Keeping it private prevents callers from treating the guard as
@@ -1019,6 +1022,7 @@ func finalizeOrdinaryQuery(
 	return withCompiledRelationalDepth(
 		CompiledQuery{
 			SQL:                       relation.sql,
+			eventResultLimit:          eventResultLimitProof{ordinaryEventRows: state.eventRows},
 			Args:                      args,
 			OutputFields:              outputFields,
 			OutputPresentations:       outputPresentations,
@@ -3306,6 +3310,7 @@ type fieldState struct {
 	maxStringBytes            uint64
 	textEligibleSQL           string
 	rawTextIndexEligible      bool
+	normalizedIDIndexEligible bool
 	dynamicDomain             dynamicScalarDomain
 	numericIntegral           bool
 	mvCountOneOrNull          bool
@@ -3499,6 +3504,7 @@ func canonicalState(field string) fieldState {
 	// nullable. This preserves explicit-null comparisons; field=* separately
 	// requires a non-null value.
 	state := fieldState{valueSQL: value, existsSQL: "1", kind: kind, caseSensitive: field == "index"}
+	state.normalizedIDIndexEligible = field == "event_id" || field == "trace_id" || field == "span_id"
 	if field == "severity" {
 		state.numberType = "UInt8"
 	}
@@ -3526,8 +3532,8 @@ func compileExpression(expression plan.Expression, state compileState) (string, 
 	return compileExpressionWithRawTextIndex(expression, state, false)
 }
 
-// compileFilterExpression permits a native text-index candidate only for a
-// positive filter over the canonical physical _raw lineage. Other expression
+// compileFilterExpression permits index candidates only for a positive filter
+// over canonical physical _raw or ID lineage. Other expression
 // consumers (for example eval conditions and aggregate predicates) retain the
 // exact scan predicate because an index candidate there cannot prune the
 // physical event read. A NOT boundary disables candidates for its complete
@@ -3605,7 +3611,13 @@ func compileExpressionWithRawTextIndex(
 		if !ok {
 			return "0", nil, nil
 		}
-		return compileComparison(expression, field)
+		residual, args, err := compileComparison(expression, field)
+		if err != nil || !allowRawTextIndex || !normalizedIDIndexCandidateEligible(expression, field) {
+			return residual, args, err
+		}
+		candidate := normalizedIDIndexExpressionSQL(field.valueSQL) + " = lowerUTF8(?)"
+		return "(" + candidate + " AND " + residual + ")",
+			append([]any{comparisonSourceText(expression.Value)}, args...), nil
 	case *plan.EvalComparisonExpression:
 		return compileEvalComparison(expression, state)
 	case *plan.MembershipExpression:
@@ -5865,6 +5877,7 @@ func projectedRenameField(source fieldState, destination string) fieldState {
 		statsSparkline:               source.statsSparkline,
 		textEligibleSQL:              textEligibleSQL,
 		rawTextIndexEligible:         source.rawTextIndexEligible,
+		normalizedIDIndexEligible:    source.normalizedIDIndexEligible,
 		dynamicDomain:                source.dynamicDomain,
 		numericIntegral:              source.numericIntegral,
 		mvSortedLexicographic:        source.mvSortedLexicographic,
@@ -7473,6 +7486,7 @@ func compileProjection(operator *plan.Project, state compileState, relationAlias
 			statsSparkline:               compiled.statsSparkline,
 			textEligibleSQL:              textEligibleSQL,
 			rawTextIndexEligible:         compiled.rawTextIndexEligible,
+			normalizedIDIndexEligible:    compiled.normalizedIDIndexEligible,
 			dynamicDomain:                compiled.dynamicDomain,
 			numericIntegral:              compiled.numericIntegral,
 			mvCountOneOrNull:             compiled.mvCountOneOrNull,

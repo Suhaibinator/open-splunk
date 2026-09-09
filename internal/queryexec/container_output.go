@@ -3,12 +3,14 @@ package queryexec
 import (
 	"errors"
 	"fmt"
+	"hash/maphash"
 	"math"
 	"reflect"
 	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
+	"unsafe"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/chcol"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -23,6 +25,7 @@ type resultContainerTransport struct {
 	namesColumn           int
 	typesColumn           int
 	metadataVersionColumn int
+	metadataCache         *resultMetadataCache
 }
 
 type resultOptionalMultivalueTransport struct {
@@ -94,6 +97,7 @@ func validateOrdinaryResultColumns(
 			namesColumn:           base,
 			typesColumn:           base + 1,
 			metadataVersionColumn: base + 2,
+			metadataCache:         new(resultMetadataCache),
 		}
 	}
 	for _, output := range optionalOutputs {
@@ -474,10 +478,171 @@ func scannedContainerMetadata(
 }
 
 type resultContainerNode struct {
+	name       string
 	leaf       bool
 	storedType eventfields.StoredValueType
 	typed      bool
-	children   map[string]*resultContainerNode
+	children   []resultContainerNode
+}
+
+// A query may encounter a different shape on every row. Retain at most one
+// reused shape per output, with one shared budget for all outputs.
+// Cache entries own their keys and trees; driver buffers are never retained.
+const (
+	maximumResultMetadataCacheBytes = uint64(1 << 20)
+	maximumMetadataPromotionMisses  = uint8(8)
+	metadataPromotionCooldownRows   = uint8(64)
+)
+
+type resultMetadataCacheBudget struct {
+	bytes uint64
+}
+
+type resultMetadataCache struct {
+	names            []string
+	types            []uint8
+	version          uint8
+	root             *resultContainerNode
+	paths            [][]string
+	bytes            uint64
+	seed             maphash.Seed
+	candidate        uint64
+	candidatePresent bool
+	promotionMisses  uint8
+	cooldownRows     uint8
+}
+
+func (cache *resultMetadataCache) matches(names []string, types []uint8, version uint8) bool {
+	return cache != nil && cache.bytes != 0 && cache.version == version &&
+		slices.Equal(cache.names, names) && slices.Equal(cache.types, types)
+}
+
+func (cache *resultMetadataCache) recordHit() {
+	cache.candidatePresent = false
+	cache.promotionMisses, cache.cooldownRows = 0, 0
+}
+
+func (cache *resultMetadataCache) recordPromotionMiss() {
+	cache.promotionMisses++
+	if cache.promotionMisses == maximumMetadataPromotionMisses {
+		cache.promotionMisses = 0
+		cache.cooldownRows = metadataPromotionCooldownRows
+		cache.candidatePresent = false
+	}
+}
+
+func (cache *resultMetadataCache) retain(
+	budget *resultMetadataCacheBudget,
+	names []string,
+	types []uint8,
+	version uint8,
+	root *resultContainerNode,
+	paths [][]string,
+) {
+	if cache == nil || budget == nil {
+		return
+	}
+	// Diverse streams should not pay for hashing every row indefinitely. During
+	// this bounded pause, callers still check exact cache keys and fully parse
+	// and validate every miss. A successful exact hit resets the pause.
+	if cache.cooldownRows != 0 {
+		cache.cooldownRows--
+		return
+	}
+	// Promote only a shape seen on two successive successful misses. A fixed
+	// fingerprint avoids cloning keys for streams whose metadata changes every
+	// row. A collision can only admit an unhelpful cache entry: the current row
+	// was parsed and validated in full, and every future hit compares exact keys.
+	if cache.seed == (maphash.Seed{}) {
+		cache.seed = maphash.MakeSeed()
+	}
+	var fingerprint maphash.Hash
+	fingerprint.SetSeed(cache.seed)
+	for _, name := range names {
+		_, _ = fingerprint.WriteString(name)
+		_ = fingerprint.WriteByte(0)
+	}
+	_, _ = fingerprint.Write(types)
+	_ = fingerprint.WriteByte(version)
+	candidate := fingerprint.Sum64()
+	if !cache.candidatePresent || cache.candidate != candidate {
+		cache.candidate, cache.candidatePresent = candidate, true
+		cache.recordPromotionMiss()
+		return
+	}
+	// Sizes come only from successfully parsed, bounded metadata. Exact-sized
+	// slices and owned text make this accounting independent of driver
+	// capacities, parser buffers, and Go's map allocation strategy.
+	size := uint64(unsafe.Sizeof(resultMetadataCache{})) +
+		uint64(len(names))*uint64(unsafe.Sizeof("")) + uint64(len(types))
+	textBytes, textSlots := 0, len(names)
+	for _, name := range names {
+		size += uint64(len(name))
+		textBytes += len(name)
+	}
+	if root != nil {
+		size += retainedContainerNodeBytes(root)
+	}
+	size += uint64(len(paths)) * uint64(unsafe.Sizeof([]string{}))
+	for _, path := range paths {
+		size += uint64(len(path)) * uint64(unsafe.Sizeof(""))
+		textSlots += len(path)
+		for _, segment := range path {
+			size += uint64(len(segment))
+			textBytes += len(segment)
+		}
+	}
+	budget.bytes -= cache.bytes
+	*cache = resultMetadataCache{seed: cache.seed, promotionMisses: cache.promotionMisses}
+	if size > maximumResultMetadataCacheBytes-budget.bytes {
+		cache.recordPromotionMiss()
+		return
+	}
+	cache.recordHit()
+	// Pack detached text and path headers instead of allocating one string per
+	// segment on every cache miss. The completed backing string is immutable;
+	// replacing an entry never rewrites storage used by another entry.
+	var text strings.Builder
+	text.Grow(textBytes)
+	for _, name := range names {
+		text.WriteString(name)
+	}
+	for _, path := range paths {
+		for _, segment := range path {
+			text.WriteString(segment)
+		}
+	}
+	packed := text.String()
+	stringsByPath := make([]string, textSlots)
+	cache.names = stringsByPath[:len(names):len(names)]
+	offset := 0
+	for index, name := range names {
+		cache.names[index] = packed[offset : offset+len(name)]
+		offset += len(name)
+	}
+	cache.types = make([]uint8, len(types))
+	copy(cache.types, types)
+	cache.paths = make([][]string, len(paths))
+	first := len(names)
+	for index, path := range paths {
+		end := first + len(path)
+		cache.paths[index] = stringsByPath[first:end:end]
+		for segmentIndex, segment := range path {
+			cache.paths[index][segmentIndex] = packed[offset : offset+len(segment)]
+			offset += len(segment)
+		}
+		first = end
+	}
+	cache.version, cache.root, cache.bytes = version, root, size
+	budget.bytes += size
+}
+
+func retainedContainerNodeBytes(node *resultContainerNode) uint64 {
+	size := uint64(unsafe.Sizeof(resultContainerNode{})) + uint64(len(node.name))
+	for index := range node.children {
+		size += retainedContainerNodeBytes(&node.children[index])
+	}
+	return size
 }
 
 func convertContainerOutput(
@@ -486,12 +651,30 @@ func convertContainerOutput(
 	types []uint8,
 	metadataVersion uint8,
 ) (searchjobs.Value, error) {
+	return convertContainerOutputWithCache(value, names, types, metadataVersion, nil, nil)
+}
+
+func convertContainerOutputWithCache(
+	value any,
+	names []string,
+	types []uint8,
+	metadataVersion uint8,
+	cache *resultMetadataCache,
+	budget *resultMetadataCacheBudget,
+) (searchjobs.Value, error) {
 	// Container-capable outputs can be overwritten by a scalar on an individual
 	// row. The compiler seals that case as version zero with both relative
 	// metadata arrays empty; no container reconstruction is required. A version
 	// zero row carrying either sidecar remains invalid and is rejected below.
 	if metadataVersion == 0 && len(names) == 0 && len(types) == 0 {
 		return convertValue(value)
+	}
+	if cache.matches(names, types, metadataVersion) {
+		converted, err := convertParsedContainerOutput(cache.root, value)
+		if err == nil {
+			cache.recordHit()
+		}
+		return converted, err
 	}
 	metadata, err := eventfields.ParseStoredContainerMetadata(
 		names,
@@ -501,28 +684,64 @@ func convertContainerOutput(
 	if err != nil {
 		return searchjobs.Value{}, err
 	}
-	if len(metadata.Paths) == 0 {
-		return convertValue(value)
-	}
-	root := &resultContainerNode{children: make(map[string]*resultContainerNode)}
+	leaves := make([]resultContainerLeaf, len(metadata.Paths))
 	for index, path := range metadata.Paths {
-		current := root
-		for _, segment := range path {
-			if current.children == nil {
-				current.children = make(map[string]*resultContainerNode)
-			}
-			next := current.children[segment]
-			if next == nil {
-				next = &resultContainerNode{}
-				current.children[segment] = next
-			}
-			current = next
-		}
-		current.leaf = true
+		leaves[index].path = path
 		if metadata.Types != nil {
-			current.typed = true
-			current.storedType = metadata.Types[index]
+			leaves[index].typed = true
+			leaves[index].storedType = metadata.Types[index]
 		}
+	}
+	// Stored names sort by escaped spelling. Public object keys sort by their
+	// decoded spelling, so establish that order once when constructing a tree.
+	slices.SortFunc(leaves, func(left, right resultContainerLeaf) int {
+		return slices.Compare(left.path, right.path)
+	})
+	var root *resultContainerNode
+	if len(leaves) != 0 {
+		built := buildResultContainerNode(leaves, 0)
+		root = &built
+	}
+	converted, err := convertParsedContainerOutput(root, value)
+	if err == nil {
+		cache.retain(budget, names, types, metadataVersion, root, nil)
+	}
+	return converted, err
+}
+
+type resultContainerLeaf struct {
+	path       []string
+	storedType eventfields.StoredValueType
+	typed      bool
+}
+
+func buildResultContainerNode(leaves []resultContainerLeaf, depth int) resultContainerNode {
+	if len(leaves[0].path) == depth {
+		return resultContainerNode{leaf: true, typed: leaves[0].typed, storedType: leaves[0].storedType}
+	}
+	groups := 1
+	for index := 1; index < len(leaves); index++ {
+		if leaves[index-1].path[depth] != leaves[index].path[depth] {
+			groups++
+		}
+	}
+	node := resultContainerNode{children: make([]resultContainerNode, groups)}
+	for first, group := 0, 0; first < len(leaves); group++ {
+		name := leaves[first].path[depth]
+		end := first + 1
+		for end < len(leaves) && leaves[end].path[depth] == name {
+			end++
+		}
+		node.children[group] = buildResultContainerNode(leaves[first:end], depth+1)
+		node.children[group].name = strings.Clone(name)
+		first = end
+	}
+	return node
+}
+
+func convertParsedContainerOutput(root *resultContainerNode, value any) (searchjobs.Value, error) {
+	if root == nil {
+		return convertValue(value)
 	}
 	return convertContainerNode(root, value, true)
 }
@@ -559,16 +778,13 @@ func convertContainerNode(
 	if err != nil {
 		return searchjobs.Value{}, err
 	}
-	names := make([]string, 0, len(node.children))
-	for name := range node.children {
-		names = append(names, name)
-	}
-	slices.Sort(names)
-	fields := make([]searchjobs.ObjectField, 0, len(names))
-	for _, name := range names {
+	fields := make([]searchjobs.ObjectField, 0, len(node.children))
+	for index := range node.children {
+		childNode := &node.children[index]
+		name := childNode.name
 		childRaw, childPresent := rawFields[name]
 		child, convertErr := convertContainerNode(
-			node.children[name],
+			childNode,
 			childRaw,
 			childPresent,
 		)

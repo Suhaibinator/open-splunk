@@ -89,6 +89,23 @@ Canonical SPL aliases hide physical names: `index` maps to `index_name`,
 `message` to `body`. Raw bytes use the native byte-safe insertion path; they
 must not be UTF-8-repaired or base64-replaced.
 
+Case-insensitive exact searches on `event_id`, `trace_id`, and `span_id` use
+normalized bloom indexes that match the compiler's search expressions. The
+forward migration adds index metadata without rewriting existing event parts
+or changing their results. New parts build the indexes automatically. To
+accelerate older parts immediately, a ClickHouse administrator can schedule
+the following maintenance separately from server startup:
+
+```sql
+ALTER TABLE open_splunk.events MATERIALIZE INDEX idx_event_id_ci;
+ALTER TABLE open_splunk.events MATERIALIZE INDEX idx_trace_id_ci;
+ALTER TABLE open_splunk.events MATERIALIZE INDEX idx_span_id_ci;
+```
+
+Materialization reads existing parts and runs asynchronously; its cost depends
+on retained data volume. The application does not require materialization
+privileges, and searches remain correct before it finishes.
+
 ## Visibility, retries, and recovery
 
 SQLite reserves a stable positive visibility sequence, index time, and
