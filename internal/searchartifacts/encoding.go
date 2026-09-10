@@ -831,30 +831,90 @@ func storeValue(value searchjobs.Value) (storedValue, error) {
 		stored.Duration = int64(duration)
 	case searchjobs.ValueKindDecimal:
 		stored.Decimal, _ = value.Decimal()
-	case searchjobs.ValueKindList:
-		items, _ := value.List()
-		stored.List = make([]storedValue, len(items))
-		for index, item := range items {
-			encoded, err := storeValue(item)
-			if err != nil {
-				return storedValue{}, err
-			}
-			stored.List[index] = encoded
-		}
-	case searchjobs.ValueKindObject:
-		fields, _ := value.Object()
-		stored.Object = make([]storedObjectField, len(fields))
-		for index, field := range fields {
-			encoded, err := storeValue(field.Value)
-			if err != nil {
-				return storedValue{}, err
-			}
-			stored.Object[index] = storedObjectField{Name: field.Name, Value: encoded}
-		}
+	case searchjobs.ValueKindList, searchjobs.ValueKindObject:
+		return storeCompositeValue(value)
 	default:
 		return storedValue{}, errors.New("unsupported search result value kind")
 	}
 	return stored, nil
+}
+
+type storedValueFrame struct {
+	kind   searchjobs.ValueKind
+	list   []storedValue
+	object []storedObjectField
+	next   int
+}
+
+// Walk immutable composites once. List and Object accessors detach every
+// descendant, so calling them recursively copies deep payloads repeatedly.
+// The visitor exposes no backing slices and detaches each byte payload once.
+func storeCompositeValue(value searchjobs.Value) (storedValue, error) {
+	var root storedValue
+	var initial [8]storedValueFrame
+	frames := initial[:0]
+	attach := func(stored storedValue) {
+		if len(frames) == 0 {
+			root = stored
+			return
+		}
+		frame := &frames[len(frames)-1]
+		if frame.kind == searchjobs.ValueKindList {
+			frame.list[frame.next] = stored
+		} else {
+			frame.object[frame.next].Value = stored
+		}
+		frame.next++
+	}
+	err := value.VisitDetached(func(token searchjobs.ValueVisitToken) error {
+		var stored storedValue
+		switch token.Kind {
+		case searchjobs.ValueVisitNull:
+			stored.Kind = searchjobs.ValueKindNull
+		case searchjobs.ValueVisitMissing:
+			stored.Kind = searchjobs.ValueKindMissing
+		case searchjobs.ValueVisitString:
+			stored = storedValue{Kind: searchjobs.ValueKindString, String: token.StringValue}
+		case searchjobs.ValueVisitSigned:
+			stored = storedValue{Kind: searchjobs.ValueKindSigned, Signed: token.SignedValue}
+		case searchjobs.ValueVisitUnsigned:
+			stored = storedValue{Kind: searchjobs.ValueKindUnsigned, Unsigned: token.UnsignedValue}
+		case searchjobs.ValueVisitDouble:
+			stored = storedValue{Kind: searchjobs.ValueKindDouble, FloatBits: math.Float64bits(token.DoubleValue)}
+		case searchjobs.ValueVisitBool:
+			stored = storedValue{Kind: searchjobs.ValueKindBool, Bool: token.BoolValue}
+		case searchjobs.ValueVisitBytes:
+			stored = storedValue{Kind: searchjobs.ValueKindBytes, Bytes: token.BytesValue}
+		case searchjobs.ValueVisitTime:
+			stored = storedValue{Kind: searchjobs.ValueKindTime, UnixNano: token.TimeValue.UnixNano()}
+		case searchjobs.ValueVisitDuration:
+			stored = storedValue{Kind: searchjobs.ValueKindDuration, Duration: int64(token.DurationValue)}
+		case searchjobs.ValueVisitDecimal:
+			stored = storedValue{Kind: searchjobs.ValueKindDecimal, Decimal: token.StringValue}
+		case searchjobs.ValueVisitListBegin:
+			frames = append(frames, storedValueFrame{kind: searchjobs.ValueKindList, list: make([]storedValue, token.Length)})
+			return nil
+		case searchjobs.ValueVisitObjectBegin:
+			frames = append(frames, storedValueFrame{kind: searchjobs.ValueKindObject, object: make([]storedObjectField, token.Length)})
+			return nil
+		case searchjobs.ValueVisitObjectField:
+			frame := &frames[len(frames)-1]
+			frame.object[frame.next].Name = token.StringValue
+			return nil
+		case searchjobs.ValueVisitListEnd, searchjobs.ValueVisitObjectEnd:
+			frame := frames[len(frames)-1]
+			frames = frames[:len(frames)-1]
+			stored = storedValue{Kind: frame.kind, List: frame.list, Object: frame.object}
+		default:
+			return errors.New("unsupported search result value token")
+		}
+		attach(stored)
+		return nil
+	})
+	if err != nil {
+		return storedValue{}, err
+	}
+	return root, nil
 }
 
 func restoreValue(stored storedValue) (searchjobs.Value, error) {

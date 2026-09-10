@@ -100,6 +100,7 @@ func writeKnowledgeFieldStateAuthority(writer hash.Hash, field fieldState) bool 
 	writeUint64(writer, field.maxStringBytes)
 	writeTokenPart(writer, field.textEligibleSQL)
 	writeBool(writer, field.rawTextIndexEligible)
+	writeBool(writer, field.normalizedIDIndexEligible)
 	writeUint64(writer, uint64(field.dynamicDomain))
 	writeBool(writer, field.numericIntegral)
 	writeBool(writer, field.mvCountOneOrNull)

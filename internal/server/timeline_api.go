@@ -37,6 +37,16 @@ func (handler *apiHandler) getSearchTimeline(request *http.Request, input *opens
 		analysisRequest.PreferredBucketWidthSeconds = new(preferred.GetSeconds())
 	}
 
+	result, err := handler.searchTimelines.Get(request.Context(), handler.accessScope(), analysisRequest)
+	if err := mapSearchTimelineCallError(request.Context(), err); err != nil {
+		return nil, err
+	}
+	if err := searchTimelineRequestContextError(request.Context()); err != nil {
+		return nil, err
+	}
+	// Timeline analysis may scan and aggregate the completed event relation.
+	// Hold the shared response permit only while converting, marshaling, and
+	// writing the already-bounded result.
 	release, acquired := handler.acquireSerialization()
 	if !acquired {
 		return nil, unavailableError("search timeline response capacity is exhausted")
@@ -47,13 +57,6 @@ func (handler *apiHandler) getSearchTimeline(request *http.Request, input *opens
 			release()
 		}
 	}()
-	result, err := handler.searchTimelines.Get(request.Context(), handler.accessScope(), analysisRequest)
-	if err := mapSearchTimelineCallError(request.Context(), err); err != nil {
-		return nil, err
-	}
-	if err := searchTimelineRequestContextError(request.Context()); err != nil {
-		return nil, err
-	}
 	response, err := searchTimelineResultToProto(result, maximumResponseBuckets)
 	if err != nil {
 		return nil, internalError()

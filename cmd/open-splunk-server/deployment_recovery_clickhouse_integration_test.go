@@ -1255,7 +1255,7 @@ func nativeRecoveryIntegrationVerification(
 		Manifest: recoveryset.Manifest{
 			RecoverySetID: recoverySetID,
 			ClickHouseMigrations: controlbackup.MigrationIdentity{
-				LatestVersion: 1,
+				LatestVersion: 2,
 			},
 			ClickHouse: recoveryset.ClickHouseIdentity{
 				ServerVersion:                   identity.ServerVersion,

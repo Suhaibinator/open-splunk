@@ -586,6 +586,10 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 	if settingsErr != nil {
 		return settingsErr
 	}
+	executionSQL, executionArgs, executionErr := executor.eventExecutionSurfaceContext(executionContext, query)
+	if executionErr != nil {
+		return executionErr
+	}
 	queryOptions := []clickhousedriver.QueryOption{
 		clickhousedriver.WithQueryID(queryID),
 		clickhousedriver.WithSettings(executionSettings),
@@ -595,7 +599,7 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 	}
 	queryOptions = appendExternalTableOption(queryOptions, externalTables)
 	queryContext := clickhousedriver.Context(executionContext, queryOptions...)
-	rows, err := executor.connection.Query(queryContext, query.SQL, query.Args...)
+	rows, err := executor.connection.Query(queryContext, executionSQL, executionArgs...)
 	if err != nil {
 		return classifyQueryError(executionContext, fmt.Errorf("query ClickHouse: %w", err))
 	}
@@ -772,6 +776,8 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 		}
 	}
 	var atomicRows atomicResultBuffer
+	var metadataCacheBudget resultMetadataCacheBudget
+	var sparseMetadataCache resultMetadataCache
 	destinations, err := scanDestinations(columnTypes)
 	if err != nil {
 		return fmt.Errorf("%w: prepare ClickHouse row scan: %w", searchjobs.ErrInvalidResult, err)
@@ -825,15 +831,18 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 						metadataErr,
 					)
 				}
-				value, err = convertContainerOutput(
+				value, err = convertContainerOutputWithCache(
 					scannedValue(destination),
 					names,
 					types,
 					version,
+					containerTransports[index].metadataCache,
+					&metadataCacheBudget,
 				)
 			} else if index == sparseFieldIndex {
-				value, err = convertSparseEventFields(
+				value, err = convertSparseEventFieldsWithCache(
 					scannedValue(destination), fieldNames, query.SparseFieldsSubset,
+					&sparseMetadataCache, &metadataCacheBudget,
 				)
 			} else if stringOrBytesTransports[index].valid {
 				value, err = convertStringOrBytesOutput(
@@ -3133,6 +3142,16 @@ func convertJSON(document *chcol.JSON) (searchjobs.Value, error) {
 }
 
 func convertSparseEventFields(value any, fieldNames []string, allowSubset bool) (searchjobs.Value, error) {
+	return convertSparseEventFieldsWithCache(value, fieldNames, allowSubset, nil, nil)
+}
+
+func convertSparseEventFieldsWithCache(
+	value any,
+	fieldNames []string,
+	allowSubset bool,
+	cache *resultMetadataCache,
+	budget *resultMetadataCacheBudget,
+) (searchjobs.Value, error) {
 	var document *chcol.JSON
 	switch value := value.(type) {
 	case chcol.JSON:
@@ -3149,9 +3168,15 @@ func convertSparseEventFields(value any, fieldNames []string, allowSubset bool) 
 	if err != nil {
 		return searchjobs.Value{}, errors.New("sparse event fields JSON paths are invalid")
 	}
-	parsedPaths, err := eventfields.ParseStoredFieldNames(fieldNames)
-	if err != nil {
-		return searchjobs.Value{}, errors.New("sparse event fields metadata is invalid")
+	cacheHit := cache.matches(fieldNames, nil, 0)
+	var parsedPaths [][]string
+	if cacheHit {
+		parsedPaths = cache.paths
+	} else {
+		parsedPaths, err = eventfields.ParseStoredFieldNames(fieldNames)
+		if err != nil {
+			return searchjobs.Value{}, errors.New("sparse event fields metadata is invalid")
+		}
 	}
 	root := make(map[string]any)
 	for index, name := range fieldNames {
@@ -3169,7 +3194,15 @@ func convertSparseEventFields(value any, fieldNames []string, allowSubset bool) 
 			return searchjobs.Value{}, errors.New("sparse event fields metadata does not match its JSON value")
 		}
 	}
-	return convertValue(root)
+	converted, err := convertValue(root)
+	if err == nil {
+		if cacheHit {
+			cache.recordHit()
+		} else {
+			cache.retain(budget, fieldNames, nil, 0, nil, parsedPaths)
+		}
+	}
+	return converted, err
 }
 
 func normalizedJSONValues(document *chcol.JSON) (map[string]any, error) {

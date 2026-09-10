@@ -535,8 +535,11 @@ func validInspectionIndexName(indexType, name string) bool {
 	switch name {
 	case "",
 		"idx_event_id",
+		"idx_event_id_ci",
 		"idx_trace_id",
+		"idx_trace_id_ci",
 		"idx_span_id",
+		"idx_span_id_ci",
 		"idx_field_names",
 		"idx_raw_text",
 		"idx_visibility_seq":

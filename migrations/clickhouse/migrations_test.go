@@ -2,6 +2,8 @@ package clickhouse_test
 
 import (
 	"context"
+	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
@@ -66,6 +69,29 @@ func TestBaselineSchemaContract(t *testing.T) {
 		if !strings.Contains(sql, fragment) {
 			t.Errorf("baseline is missing schema contract fragment %q", fragment)
 		}
+	}
+}
+
+func TestNormalizedIDIndexesMigrationIsAdditiveAndMetadataOnly(t *testing.T) {
+	sql := readFile(t, "0002_normalized_id_indexes.sql")
+	for _, column := range []string{"event_id", "trace_id", "span_id"} {
+		fragment := "ADD INDEX IF NOT EXISTS idx_" + column + "_ci lowerUTF8(ifNull(`" + column + "`, ''))"
+		if !strings.Contains(sql, fragment) {
+			t.Errorf("normalized ID index migration is missing %q", fragment)
+		}
+	}
+	if count := strings.Count(sql, "TYPE bloom_filter(0.001) GRANULARITY 1"); count != 3 {
+		t.Errorf("normalized bloom index count = %d, want 3", count)
+	}
+	for _, forbidden := range []string{"MATERIALIZE", "DROP", "MODIFY", "UPDATE", "DELETE"} {
+		if regexp.MustCompile(`(?im)^\s*`+forbidden+`\b`).MatchString(sql) ||
+			strings.Contains(sql, " "+forbidden+" ") {
+			t.Errorf("normalized ID index migration contains %q", forbidden)
+		}
+	}
+	if !strings.Contains(sql, "SELECT 2, 'normalized_id_indexes', now64(3)") ||
+		!strings.Contains(sql, "WHERE `version` = 2") {
+		t.Error("normalized ID index migration has no retry-safe ledger entry")
 	}
 }
 
@@ -167,8 +193,8 @@ func TestGenerateDevelopmentEnvironmentUsesSinglePlaintextCredential(t *testing.
 }
 
 // TestMigrationsAgainstClickHouse is opt-in because it starts the pinned
-// ClickHouse image. It proves one plaintext account can apply the embedded
-// migrations idempotently and then use the application database.
+// ClickHouse image. It proves one plaintext account can upgrade a populated
+// baseline idempotently and retain the exact current physical schema.
 func TestMigrationsAgainstClickHouse(t *testing.T) {
 	if os.Getenv("OPEN_SPLUNK_CLICKHOUSE_INTEGRATION") != "1" {
 		t.Skip("set OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 to run the Docker integration test")
@@ -209,11 +235,51 @@ func TestMigrationsAgainstClickHouse(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = connection.Close() }()
+	baseline, err := fs.ReadFile(migrations.ClickHouse(), "0001_baseline.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.ApplyClickHouseMigrations(ctx, connection, fstest.MapFS{
+		"0001_baseline.sql": &fstest.MapFile{Data: baseline},
+	}); err != nil {
+		t.Fatalf("apply released baseline: %v", err)
+	}
+	if err := server.ValidateClickHousePhysicalSchema(ctx, connection); !errors.Is(err, server.ErrClickHousePhysicalSchemaDrift) {
+		t.Fatalf("baseline-only physical schema error = %v, want pending index schema drift", err)
+	}
+	if err := connection.Exec(ctx, `
+		INSERT INTO open_splunk.events
+			(event_id, tenant_id, index_name, event_time, index_time,
+			 trace_id, span_id, visibility_seq, expires_at,
+			 field_metadata_version, collector_id, ingest_source_kind, ingest_source_id)
+		VALUES
+			('Upgrade-Existing-Event', 'upgrade-tenant', 'main', now64(9), now64(3),
+			 'Upgrade-Trace', NULL, 1, now64(3) + INTERVAL 1 DAY,
+			 1, 'upgrade-collector', 1, 'upgrade-collector')`); err != nil {
+		t.Fatalf("insert baseline event before index upgrade: %v", err)
+	}
 	if err := server.ApplyClickHouseMigrations(ctx, connection, migrations.ClickHouse()); err != nil {
 		t.Fatal(err)
 	}
 	if err := server.ApplyClickHouseMigrations(ctx, connection, migrations.ClickHouse()); err != nil {
 		t.Fatalf("repeat migrations: %v", err)
+	}
+	if err := server.ValidateClickHousePhysicalSchema(ctx, connection); err != nil {
+		t.Fatalf("validate upgraded physical schema: %v", err)
+	}
+	var preserved uint64
+	if err := connection.QueryRow(ctx, `
+		SELECT count()
+		FROM open_splunk.events
+		WHERE event_id = 'Upgrade-Existing-Event'
+			AND trace_id = 'Upgrade-Trace'
+			AND isNull(span_id)
+			AND visibility_seq = 1`,
+	).Scan(&preserved); err != nil {
+		t.Fatalf("read baseline event after index upgrade: %v", err)
+	}
+	if preserved != 1 {
+		t.Fatalf("preserved baseline events = %d, want 1", preserved)
 	}
 	var count uint64
 	if err := connection.QueryRow(ctx,

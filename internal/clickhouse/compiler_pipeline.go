@@ -131,7 +131,7 @@ func (c Compiler) compileWithFinalizerContext(
 				Range:   complexityRange,
 			}
 		}
-		return sealFinalCompiledQueryContext(
+		sealed, sealErr := sealFinalCompiledQueryContext(
 			ctx,
 			compiled,
 			query,
@@ -140,6 +140,10 @@ func (c Compiler) compileWithFinalizerContext(
 			knowledge.prelude,
 			lookupPreparation,
 		)
+		if sealErr != nil {
+			return CompiledQuery{}, sealErr
+		}
+		return sealEventResultLimitContext(ctx, sealed, query, state)
 	}
 	remainingStart := 1 + preparation.prefixLength
 	if lookupPreparation.automatic != nil {

@@ -146,6 +146,70 @@ OPEN_SPLUNK_HEC_QUALIFIED_LOAD=1 \
     -count=1 -timeout=15m -v
 ```
 
+## Search performance and parity
+
+Search optimizations must preserve exact values, types, ordering, truncation,
+visibility, and whole-result failure behavior. Compare the same immutable
+fixture and query authority with and without the optimization. Keep data
+generation and warmup outside timed samples, and report allocations, bytes and
+rows read alongside timing. Use an otherwise idle machine for latency claims.
+
+The Go benchmarks isolate repeated field-metadata decoding and durable result
+encoding, including stable and changing event schemas and nested values:
+
+```sh
+go test ./internal/queryexec -run '^$' \
+  -bench '^BenchmarkResultMetadataConversion$' -benchmem -count=3
+go test ./internal/searchartifacts -run '^$' \
+  -bench '^BenchmarkStoredRowJSON$' -benchmem -count=3
+```
+
+The bounded event-sort benchmark defaults to 1,048,576 rows and compares the
+same canonical query with its search-only limit, including the overflow row:
+
+```sh
+OPEN_SPLUNK_CLICKHOUSE_BENCHMARK=1 \
+  go test ./internal/clickhouse -run '^$' \
+    -bench '^BenchmarkEventResultLimit$' -benchtime=7x -count=3 -benchmem -v
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  go test ./internal/clickhouse -run '^TestEventResultLimitAgainstClickHouse$' \
+    -count=1 -timeout=8m -v
+```
+
+The normalized-ID integration gate loads 524,288 rows into the production
+schema and compares indexed and unindexed results. It checks actual granule
+pruning as well as case, Unicode, nulls, Boolean filters, and field lineage:
+
+```sh
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  go test ./internal/clickhouse -run '^TestNormalizedIDIndexesAgainstClickHouse$' \
+    -count=1 -timeout=8m -v
+```
+
+Run the SPL corpus and cross-command semantic comparisons against the pinned
+database, then the backend vertical above to verify exports beyond the
+interactive retained-row ceiling:
+
+```sh
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  go test ./internal/clickhouse ./internal/queryexec \
+    -run '^(TestSPLSemanticInvariantsAgainstClickHouse|TestGradeThisCorpusAgainstClickHouse|TestPipelineCommandsPreserveUntouchedSemanticBytesThroughManagerAgainstClickHouse)$' \
+    -count=1 -timeout=15m -v
+```
+
+For arithmetic and membership aggregation baselines, the existing
+`BenchmarkAuthoredExpressionExecution` uses 100,000 ingested events by default:
+
+```sh
+OPEN_SPLUNK_CLICKHOUSE_BENCHMARK=1 \
+  go test ./internal/queryexec -run '^$' \
+    -bench '^BenchmarkAuthoredExpressionExecution$' -benchtime=7x -count=3 -benchmem -v
+```
+
+Its hand-written SQL controls assume known fixture types and are not alternate
+SPL implementations. A timing gap does not justify dropping dynamic-type,
+precision, null, or atomic-validation semantics.
+
 ## Browser stream recovery and cancellation
 
 Five deterministic shipped-browser gates exercise expired retained sequences,

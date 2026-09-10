@@ -445,9 +445,21 @@ func TestSearchTimelineCodecRetainsPermitAndChecksContext(t *testing.T) {
 	if err == nil || released != 1 || response.Body.Len() != 0 {
 		t.Fatalf("canceled encode error/release/body = %v/%d/%q", err, released, response.Body.String())
 	}
+
+	released = 0
+	writeErr := errors.New("response write failed")
+	writer = &timelineObservingWriter{header: make(http.Header), released: &released, err: writeErr}
+	err = codec.Encode(writer, &serializedSearchTimelineResponse{
+		message: &opensplunk.GetSearchTimelineResponse{Complete: true},
+		ctx:     context.Background(),
+		release: func() { released++ },
+	})
+	if !errors.Is(err, writeErr) || writer.releasedAtWrite != 0 || released != 1 {
+		t.Fatalf("failed encode error/write release/final release = %v/%d/%d", err, writer.releasedAtWrite, released)
+	}
 }
 
-func TestSearchTimelineRetainsSharedSerializationPermitUntilEncode(t *testing.T) {
+func TestSearchTimelineAcquiresSerializationAfterAnalysisAndRetainsPermitUntilEncode(t *testing.T) {
 	service := &fakeSearchTimelines{maximum: 10, getFn: func(context.Context, searchjobs.AccessScope, searchanalysis.Request) (searchanalysis.Result, error) {
 		return validTimelineResult(testNow), nil
 	}}
@@ -460,15 +472,142 @@ func TestSearchTimelineRetainsSharedSerializationPermitUntilEncode(t *testing.T)
 	if err != nil || first == nil || len(handler.serializationGate) != 1 {
 		t.Fatalf("first response/error/gate = %+v/%v/%d", first, err, len(handler.serializationGate))
 	}
-	_, err = handler.getSearchTimeline(request, &opensplunk.GetSearchTimelineRequest{SearchJobId: "job"})
+	second, err := handler.getSearchTimeline(request, &opensplunk.GetSearchTimelineRequest{SearchJobId: "job"})
 	var httpErr *router.HTTPError
-	if !errors.As(err, &httpErr) || httpErr.StatusCode != http.StatusServiceUnavailable ||
-		len(handler.serializationGate) != 1 || service.callCount() != 1 {
-		t.Fatalf("second error/gate/service calls = %v/%d/%d", err, len(handler.serializationGate), service.callCount())
+	if second != nil || !errors.As(err, &httpErr) || httpErr.StatusCode != http.StatusServiceUnavailable ||
+		len(handler.serializationGate) != 1 || service.callCount() != 2 {
+		t.Fatalf("second response/error/gate/service calls = %+v/%v/%d/%d", second, err, len(handler.serializationGate), service.callCount())
 	}
-	first.release()
+	if err := newSerializedSearchTimelineCodec().Encode(httptest.NewRecorder(), first); err != nil {
+		t.Fatal(err)
+	}
 	if len(handler.serializationGate) != 0 {
 		t.Fatalf("serialization permit was not released: %d", len(handler.serializationGate))
+	}
+}
+
+func TestSearchTimelineAnalysisDoesNotBlockSearchResultResponses(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	started := make(chan struct{})
+	finish := make(chan struct{})
+	service := &fakeSearchTimelines{maximum: 10, getFn: func(ctx context.Context, _ searchjobs.AccessScope, _ searchanalysis.Request) (searchanalysis.Result, error) {
+		close(started)
+		select {
+		case <-finish:
+			return validTimelineResult(testNow), nil
+		case <-ctx.Done():
+			return searchanalysis.Result{}, ctx.Err()
+		}
+	}}
+	job := completeJob("job")
+	job.SPL = "index=main | table message"
+	handler := &apiHandler{
+		jobs: &fakeSearchJobs{getJob: job, resultsPage: searchjobs.ResultPage{
+			Schema: searchjobs.Schema{Columns: []searchjobs.Column{{Name: "message", Kind: searchjobs.ValueKindString}}},
+			Rows:   []searchjobs.ResultRow{{Values: []searchjobs.Value{searchjobs.StringValue("hello")}}},
+		}},
+		searchTimelines: service, maximumTimelineBuckets: 10,
+		ownerID: "owner", tenantID: "tenant", serializationGate: make(chan struct{}, 1),
+	}
+	request := httptest.NewRequestWithContext(ctx, http.MethodPost, searchTimelinePath, nil)
+	type timelineResponse struct {
+		response *serializedSearchTimelineResponse
+		err      error
+	}
+	completed := make(chan timelineResponse, 1)
+	go func() {
+		response, err := handler.getSearchTimeline(request, &opensplunk.GetSearchTimelineRequest{SearchJobId: "job"})
+		completed <- timelineResponse{response: response, err: err}
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeline analysis did not start")
+	}
+	if len(handler.serializationGate) != 0 {
+		t.Fatal("timeline analysis holds a shared serialization permit")
+	}
+	results, err := handler.getSearchResults(request, &opensplunk.GetSearchResultsRequest{SearchJobId: "job"})
+	if err != nil || results == nil || len(handler.serializationGate) != 1 {
+		t.Fatalf("search results response/error/gate = %+v/%v/%d", results, err, len(handler.serializationGate))
+	}
+	if err := newSerializedSearchResultsCodec().Encode(httptest.NewRecorder(), results); err != nil {
+		t.Fatal(err)
+	}
+	if len(handler.serializationGate) != 0 {
+		t.Fatal("search results encode did not release its serialization permit")
+	}
+	close(finish)
+	select {
+	case result := <-completed:
+		if result.err != nil || result.response == nil || len(handler.serializationGate) != 1 {
+			t.Fatalf("timeline response/error/gate = %+v/%v/%d", result.response, result.err, len(handler.serializationGate))
+		}
+		if err := newSerializedSearchTimelineCodec().Encode(httptest.NewRecorder(), result.response); err != nil {
+			t.Fatal(err)
+		}
+		if len(handler.serializationGate) != 0 {
+			t.Fatal("timeline encode did not release its serialization permit")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeline analysis did not complete")
+	}
+}
+
+func TestSearchTimelineAnalysisErrorsPrecedeSerializationCapacity(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		err    error
+		cancel bool
+		status int
+	}{
+		{name: "service error", err: searchjobs.ErrResultsNotReady, status: http.StatusConflict},
+		{name: "canceled successful analysis", cancel: true, status: http.StatusRequestTimeout},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			service := &fakeSearchTimelines{maximum: 10, getFn: func(context.Context, searchjobs.AccessScope, searchanalysis.Request) (searchanalysis.Result, error) {
+				if test.cancel {
+					cancel()
+				}
+				return validTimelineResult(testNow), test.err
+			}}
+			handler := &apiHandler{
+				searchTimelines: service, maximumTimelineBuckets: 10,
+				ownerID: "owner", tenantID: "tenant", serializationGate: make(chan struct{}, 1),
+			}
+			release, acquired := handler.acquireSerialization()
+			if !acquired {
+				t.Fatal("could not acquire initial serialization permit")
+			}
+			defer release()
+			request := httptest.NewRequestWithContext(ctx, http.MethodPost, searchTimelinePath, nil)
+			response, err := handler.getSearchTimeline(request, &opensplunk.GetSearchTimelineRequest{SearchJobId: "job"})
+			var httpErr *router.HTTPError
+			if response != nil || !errors.As(err, &httpErr) || httpErr.StatusCode != test.status ||
+				service.callCount() != 1 || len(handler.serializationGate) != 1 {
+				t.Fatalf("response/error/calls/gate = %+v/%v/%d/%d", response, err, service.callCount(), len(handler.serializationGate))
+			}
+		})
+	}
+}
+
+func TestSearchTimelineInvalidResultReleasesSerializationPermit(t *testing.T) {
+	service := &fakeSearchTimelines{maximum: 10, getFn: func(context.Context, searchjobs.AccessScope, searchanalysis.Request) (searchanalysis.Result, error) {
+		return searchanalysis.Result{}, nil
+	}}
+	handler := &apiHandler{
+		searchTimelines: service, maximumTimelineBuckets: 10,
+		ownerID: "owner", tenantID: "tenant", serializationGate: make(chan struct{}, 1),
+	}
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, searchTimelinePath, nil)
+	response, err := handler.getSearchTimeline(request, &opensplunk.GetSearchTimelineRequest{SearchJobId: "job"})
+	var httpErr *router.HTTPError
+	if response != nil || !errors.As(err, &httpErr) || httpErr.StatusCode != http.StatusInternalServerError ||
+		len(handler.serializationGate) != 0 {
+		t.Fatalf("response/error/gate = %+v/%v/%d", response, err, len(handler.serializationGate))
 	}
 }
 
@@ -519,12 +658,16 @@ type timelineObservingWriter struct {
 	header          http.Header
 	released        *int
 	releasedAtWrite int
+	err             error
 }
 
 func (writer *timelineObservingWriter) Header() http.Header { return writer.header }
 
 func (writer *timelineObservingWriter) Write(payload []byte) (int, error) {
 	writer.releasedAtWrite = *writer.released
+	if writer.err != nil {
+		return 0, writer.err
+	}
 	return len(payload), nil
 }
 

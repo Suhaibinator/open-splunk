@@ -29,6 +29,7 @@ const (
 	derivedExecutionFieldCatalog     derivedExecutionKind = "field-catalog"
 	derivedExecutionFieldSummary     derivedExecutionKind = "field-summary"
 	derivedExecutionFieldSuggestions derivedExecutionKind = "field-suggestions"
+	derivedExecutionEventResultLimit derivedExecutionKind = "event-result-limit"
 )
 
 type derivedExecutionSeal [sha256.Size]byte

@@ -66,6 +66,19 @@ rewrite the limits already attached to a running or retained job. The API
 validates the current supported ranges, so clients should use the returned
 settings rather than assuming these defaults are permanent.
 
+For eligible event searches, the executor passes the retained-row ceiling plus
+one overflow row to ClickHouse after the complete pipeline and final ordering.
+The overflow row is still validated before reporting truncation. Queries with
+aggregation or complete-result validation keep their full execution contract.
+The retained query remains unlimited so exports and field or timeline analysis
+use their own independent bounds.
+
+Exact case-insensitive ID searches retain their full SPL predicate alongside
+an index candidate. Indexes may skip only storage blocks that cannot match;
+their availability never changes the result. See [migration maintenance](../migrations/README.md)
+for indexing historical event parts and [search performance checks](../integration/README.md#search-performance-and-parity)
+for reproducible comparisons.
+
 The same Server settings section carries the Appearance card, which sets the
 instance-wide UI palette every browser session paints, the sign-in page
 included; light and dark stay each user's own choice. Selecting a palette
