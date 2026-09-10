@@ -1,4 +1,7 @@
 import type { ResultRow } from "@/gen/ts/open_splunk/result";
+import type { TimelinePoint } from "@/lib/demo/search-data";
+
+import { strictRfc3339Nanoseconds } from "./time-range";
 
 /**
  * Upper bound on timechart buckets the visualization walks from the retained
@@ -41,6 +44,48 @@ export interface LoadTimechartBucketsOptions {
   maximumBuckets?: number;
   onProgress?: (load: TimechartBucketLoad) => void;
   signal?: AbortSignal;
+}
+
+export interface TimechartRowSort {
+  direction: "asc" | "desc";
+  key: "count" | "time";
+}
+
+function timechartSortCoordinateNanoseconds(point: TimelinePoint): bigint | null {
+  if (point.timeCoordinateNanoseconds !== undefined) return point.timeCoordinateNanoseconds;
+  if (point.timeValue === undefined) return null;
+  const precise = strictRfc3339Nanoseconds(point.timeValue);
+  if (precise !== null) return precise;
+  const milliseconds = Date.parse(point.timeValue);
+  return Number.isFinite(milliseconds) ? BigInt(milliseconds) * 1_000_000n : null;
+}
+
+/** Sort table buckets by their exact interval start rather than server row order. */
+export function sortTimechartRows(
+  points: readonly TimelinePoint[],
+  sort: TimechartRowSort,
+): TimelinePoint[] {
+  return points
+    .map((point, index) => ({
+      index,
+      point,
+      time: sort.key === "time" ? timechartSortCoordinateNanoseconds(point) : null,
+    }))
+    .toSorted((left, right) => {
+      let comparison: number;
+      if (sort.key === "count") {
+        comparison = left.point.count - right.point.count;
+      } else {
+        const leftTime = left.time;
+        const rightTime = right.time;
+        if (leftTime === null) return rightTime === null ? left.index - right.index : 1;
+        if (rightTime === null) return -1;
+        comparison = leftTime < rightTime ? -1 : leftTime > rightTime ? 1 : 0;
+      }
+      if (comparison === 0) return left.index - right.index;
+      return sort.direction === "desc" ? -comparison : comparison;
+    })
+    .map(({ point }) => point);
 }
 
 function coverageFor(

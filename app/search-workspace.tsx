@@ -226,6 +226,7 @@ import {
   completeTimechartCoverage,
   describeTimechartStatisticsPage,
   loadTimechartBuckets,
+  sortTimechartRows,
   type TimechartCoverage,
 } from "./search-workspace/timechart-series";
 import {
@@ -1813,11 +1814,10 @@ export function SearchWorkspace({
         update: { status: "idle" },
       },
     };
-  const sortedTimechartRows = useMemo(() => {
-    const rows = [...timelinePoints];
-    if (timechartSort.key === "count") rows.sort((left, right) => left.count - right.count);
-    return timechartSort.direction === "desc" ? rows.toReversed() : rows;
-  }, [timelinePoints, timechartSort]);
+  const sortedTimechartRows = useMemo(
+    () => sortTimechartRows(timelinePoints, timechartSort),
+    [timelinePoints, timechartSort],
+  );
   const patternRows = useMemo(() => {
     if (backendEnabled) return patternsFromEvents(resultEvents, baseEventCount, patternSensitivity);
     if (patternSensitivity === "Precise") {

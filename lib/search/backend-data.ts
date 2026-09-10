@@ -647,12 +647,23 @@ export function timeBucketBoundaryNanoseconds(value: string): bigint | null {
   return seconds * 1_000_000_000n + BigInt((match[7] ?? "").padEnd(9, "0"));
 }
 
+function timechartTimeColumnIndex(schema: ResultSchema): number {
+  const canonical = schema.columns.findIndex((column) =>
+    column.fieldName === "_time" && column.valueType === ValueType.VALUE_TYPE_TIMESTAMP,
+  );
+  if (canonical >= 0) return canonical;
+  if (schema.columns.some((column) => column.fieldName === "_time")) return -1;
+  return schema.columns.findIndex((column) =>
+    /^_?time$/i.test(column.fieldName) && column.valueType === ValueType.VALUE_TYPE_TIMESTAMP,
+  );
+}
+
 function timelineFromRows(
   schema: ResultSchema,
   rows: ResultRow[],
   formatters: ResultDateTimeFormatters,
 ): TimelinePoint[] {
-  const timeIndex = schema.columns.findIndex((column) => /^_?time$/i.test(column.fieldName));
+  const timeIndex = timechartTimeColumnIndex(schema);
   if (timeIndex < 0) return [];
   // Timechart columns after _time are independent runtime series. A split value
   // can itself be named "count", so preferring that spelling would discard all
@@ -733,7 +744,7 @@ export function timechartValueFields(
 ): string[] {
   if (schema !== undefined) {
     if (schema.resultKind !== ResultSetKind.RESULT_SET_KIND_TIME_SERIES) return [];
-    const timeIndex = schema.columns.findIndex((column) => /^_?time$/i.test(column.fieldName));
+    const timeIndex = timechartTimeColumnIndex(schema);
     if (timeIndex < 0) return [];
     return schema.columns.flatMap((column, index) =>
       index !== timeIndex && column.fieldName.length > 0 ? [column.fieldName] : []

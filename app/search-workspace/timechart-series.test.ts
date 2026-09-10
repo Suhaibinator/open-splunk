@@ -2,15 +2,51 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { ResultRow } from "../../gen/ts/open_splunk/result";
+import type { TimelinePoint } from "../../lib/demo/search-data";
 import {
   MAXIMUM_CHART_BUCKETS,
   completeTimechartCoverage,
   describeTimechartCoverage,
   describeTimechartStatisticsPage,
   loadTimechartBuckets,
+  sortTimechartRows,
   type TimechartCoverage,
   type TimechartPage,
 } from "./timechart-series";
+
+test("timechart row sorting compares exact nanosecond starts instead of input order", () => {
+  const origin = 1_788_220_800_000_000_000n;
+  const points: TimelinePoint[] = [
+    { id: "02", label: "02", count: 1, timeCoordinateNanoseconds: origin + 2n },
+    { id: "00", label: "00", count: 3, timeCoordinateNanoseconds: origin },
+    { id: "01", label: "01", count: 2, timeCoordinateNanoseconds: origin + 1n },
+  ];
+
+  assert.deepEqual(
+    sortTimechartRows(points, { key: "time", direction: "asc" }).map((point) => point.id),
+    ["00", "01", "02"],
+  );
+  assert.deepEqual(
+    sortTimechartRows(points, { key: "time", direction: "desc" }).map((point) => point.id),
+    ["02", "01", "00"],
+  );
+  assert.deepEqual(
+    sortTimechartRows(points, { key: "count", direction: "asc" }).map((point) => point.id),
+    ["02", "01", "00"],
+  );
+});
+
+test("timechart row sorting retains nanoseconds from timeValue-only rows", () => {
+  const points: TimelinePoint[] = [
+    { id: "later", label: "later", count: 1, timeValue: "2026-09-01T00:00:00.000000002+00:00" },
+    { id: "earlier", label: "earlier", count: 1, timeValue: "2026-09-01T00:00:00.000000001Z" },
+  ];
+
+  assert.deepEqual(
+    sortTimechartRows(points, { key: "time", direction: "asc" }).map((point) => point.id),
+    ["earlier", "later"],
+  );
+});
 
 function rows(start: number, count: number): ResultRow[] {
   return Array.from({ length: count }, (_, index) => ({

@@ -1138,6 +1138,78 @@ test("timechart keeps siblings when a runtime series is named count", () => {
   }]);
 });
 
+test("timechart prefers a typed canonical _time over an earlier numeric time metric", () => {
+  const schema: ResultSchema = {
+    schemaId: "timechart-canonical-time-v1",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_TIME_SERIES,
+    columns: [
+      column("time", ValueType.VALUE_TYPE_UINT64, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_METRIC),
+      column("_time", ValueType.VALUE_TYPE_TIMESTAMP, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_EVENT_TIME),
+    ],
+  };
+  const adapted = adaptSearchResults(schema, [row("canonical", 0n, [
+    uint64Value(7n),
+    timestampValue("2026-09-01T00:00:00Z"),
+  ], {
+    earliest: "2026-09-01T00:00:00.000000001Z",
+    latest: "2026-09-01T00:00:00.000000002Z",
+  })]);
+
+  assert.equal(adapted.timeline.length, 1);
+  assert.deepEqual(adapted.timeline[0]?.series, { time: 7 });
+  assert.equal(adapted.timeline[0]?.timeCoordinateNanoseconds, 1_788_220_800_000_000_001n);
+  assert.deepEqual(timechartValueFields(adapted.timeline, schema), ["time"]);
+});
+
+test("timechart legacy time-name fallback requires a timestamp column", () => {
+  const legacySchema: ResultSchema = {
+    schemaId: "timechart-legacy-time-v1",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_TIME_SERIES,
+    columns: [
+      column("Time", ValueType.VALUE_TYPE_TIMESTAMP),
+      column("count", ValueType.VALUE_TYPE_UINT64),
+    ],
+  };
+  const legacy = adaptSearchResults(legacySchema, [row("legacy", 0n, [
+    timestampValue("2026-09-01T00:00:00Z"),
+    uint64Value(2n),
+  ])]);
+  assert.equal(legacy.timeline.length, 1);
+  assert.deepEqual(timechartValueFields(legacy.timeline, legacySchema), ["count"]);
+
+  const numericTimeSchema: ResultSchema = {
+    ...legacySchema,
+    schemaId: "timechart-numeric-time-v1",
+    columns: [
+      column("time", ValueType.VALUE_TYPE_UINT64),
+      column("count", ValueType.VALUE_TYPE_UINT64),
+    ],
+  };
+  assert.deepEqual(adaptSearchResults(numericTimeSchema, [row("numeric", 0n, [
+    uint64Value(1n),
+    uint64Value(2n),
+  ])]).timeline, []);
+  assert.deepEqual(timechartValueFields([], numericTimeSchema), []);
+
+  const wrongCanonicalSchema: ResultSchema = {
+    ...legacySchema,
+    schemaId: "timechart-wrong-canonical-time-v1",
+    columns: [
+      column("time", ValueType.VALUE_TYPE_TIMESTAMP),
+      column("_time", ValueType.VALUE_TYPE_UINT64),
+      column("count", ValueType.VALUE_TYPE_UINT64),
+    ],
+  };
+  assert.deepEqual(adaptSearchResults(wrongCanonicalSchema, [row("wrong-canonical", 0n, [
+    timestampValue("2026-09-01T00:00:00Z"),
+    uint64Value(1n),
+    uint64Value(2n),
+  ])]).timeline, []);
+  assert.deepEqual(timechartValueFields([], wrongCanonicalSchema), []);
+});
+
 test("timechart preserves nanosecond bounds as metadata and leaves legacy rows without drilldown bounds", () => {
   const schema: ResultSchema = {
     schemaId: "exact-timechart-v1",
