@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"reflect"
 	"strings"
 	"testing"
 	"unsafe"
@@ -106,6 +107,128 @@ func TestMaterializeRelationInputUsesExactNativeRepresentationBudget(t *testing.
 	if err != nil || table == nil || table.Block().Rows() != 1 {
 		t.Fatalf("exact-boundary materializeRelationInput() = (%#v, %v)", table, err)
 	}
+}
+
+func TestNativeRelationNullableNilCellsIncludeBaseColumnAndCapacityFloor(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		kind      string
+		cellBytes uint64
+	}{
+		{kind: "Nullable(UInt64)", cellBytes: 18},
+		{kind: "Nullable(Int64)", cellBytes: 18},
+		{kind: "Nullable(Float64)", cellBytes: 18},
+		{kind: "Nullable(DateTime64(9, 'UTC'))", cellBytes: 18},
+		{kind: "Nullable(String)", cellBytes: 34},
+		{kind: "Nullable(Bool)", cellBytes: 4},
+		{kind: "Nullable(Dynamic)", cellBytes: 34},
+	}
+	for _, test := range tests {
+		got, ok := nativeRelationCellBytes(test.kind, nil)
+		if !ok || got != test.cellBytes {
+			t.Errorf("nativeRelationCellBytes(%q, nil) = (%d, %t), want (%d, true)", test.kind, got, ok, test.cellBytes)
+		}
+		if minimum := nativeColumnInitialCapacityBytes(test.kind, 1); minimum < 16 {
+			t.Errorf("nativeColumnInitialCapacityBytes(%q, 1) = %d, want at least 16", test.kind, minimum)
+		}
+	}
+	if minimum := nativeColumnInitialCapacityBytes("Bool", 1); minimum != 8 {
+		t.Fatalf("non-nullable bool minimum backing = %d, want 8", minimum)
+	}
+}
+
+func TestNativeRelationAllNullEstimateCoversActualDriverSliceCapacities(t *testing.T) {
+	t.Parallel()
+
+	columns := []RelationColumn{
+		{Name: "unsigned", Type: "Nullable(UInt64)"},
+		{Name: "signed", Type: "Nullable(Int64)"},
+		{Name: "double", Type: "Nullable(Float64)"},
+		{Name: "timestamp", Type: "Nullable(DateTime64(9, 'UTC'))"},
+		{Name: "text", Type: "Nullable(String)"},
+		{Name: "flag", Type: "Nullable(Bool)"},
+		{Name: "dynamic", Type: "Nullable(Dynamic)"},
+	}
+	const rowCount = 1_025
+	rows := make([][]any, rowCount)
+	for index := range rows {
+		rows[index] = make([]any, len(columns))
+	}
+	input, err := newRelationInput(context.Background(), columns, rows, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nativeBytes, ok, err := relationInputNativeMaterializationBytes(context.Background(), input)
+	if err != nil || !ok {
+		t.Fatalf("native estimate = (%d, %t, %v)", nativeBytes, ok, err)
+	}
+	table, err := materializeRelationInput(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if table.Block().Rows() != rowCount {
+		t.Fatalf("driver rows = %d, want %d", table.Block().Rows(), rowCount)
+	}
+	actualSliceBytes := uint64(0)
+	for index, nativeColumn := range table.Block().Columns {
+		actualColumnBytes := driverColumnSliceCapacityBytes(reflect.ValueOf(nativeColumn))
+		actualSliceBytes += actualColumnBytes
+		cellBytes, ok := nativeRelationCellBytes(columns[index].Type, nil)
+		if !ok {
+			t.Fatalf("nil cell estimate rejected %s", columns[index].Type)
+		}
+		estimatedColumnBytes := rowCount*cellBytes +
+			nativeColumnInitialCapacityBytes(columns[index].Type, rowCount)
+		if estimatedColumnBytes < actualColumnBytes {
+			t.Errorf(
+				"%s native estimate %d does not cover actual driver slice capacities %d",
+				columns[index].Type,
+				estimatedColumnBytes,
+				actualColumnBytes,
+			)
+		}
+	}
+	if actualSliceBytes == 0 || nativeBytes < actualSliceBytes {
+		t.Fatalf("native estimate %d does not cover actual driver slice capacities %d", nativeBytes, actualSliceBytes)
+	}
+}
+
+func driverColumnSliceCapacityBytes(value reflect.Value) uint64 {
+	if !value.IsValid() {
+		return 0
+	}
+	switch value.Kind() {
+	case reflect.Interface:
+		if value.IsNil() {
+			return 0
+		}
+		return driverColumnSliceCapacityBytes(value.Elem())
+	case reflect.Pointer:
+		if value.IsNil() || !driverResourceType(value.Type().Elem()) {
+			return 0
+		}
+		return driverColumnSliceCapacityBytes(value.Elem())
+	case reflect.Struct:
+		if !driverResourceType(value.Type()) {
+			return 0
+		}
+		var total uint64
+		for _, field := range value.Fields() {
+			total += driverColumnSliceCapacityBytes(field)
+		}
+		return total
+	case reflect.Slice:
+		return uint64(value.Cap()) * uint64(value.Type().Elem().Size())
+	default:
+		return 0
+	}
+}
+
+func driverResourceType(value reflect.Type) bool {
+	path := value.PkgPath()
+	return strings.Contains(path, "/clickhouse-go/v2/lib/column") ||
+		strings.Contains(path, "/ch-go/proto")
 }
 
 func TestNewRelationInputRejectsOversizedNestedPayloadBeforeDeepCopy(t *testing.T) {

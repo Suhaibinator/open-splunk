@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 	"unsafe"
 
+	chproto "github.com/ClickHouse/ch-go/proto"
 	"github.com/ClickHouse/clickhouse-go/v2/ext"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/chcol"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/column"
@@ -77,12 +78,15 @@ func relationInputRetainedBytes(
 		if err := ctx.Err(); err != nil {
 			return 0, err
 		}
-		if len(row) != len(columns) ||
-			!chargeProduct(uint64(len(row)), uint64(unsafe.Sizeof(any(nil))), charge) {
+		if len(row) != len(columns) {
+			return 0, errors.New("materialize timechart: row width is invalid")
+		}
+		if !chargeProduct(uint64(len(row)), uint64(unsafe.Sizeof(any(nil))), charge) {
 			return 0, fmt.Errorf("%w: materialize timechart cell capacity exceeds byte limit", ErrTimechartResourceLimit)
 		}
-		for index, value := range row {
-			if !relationValueValid(columns[index].Type, value) {
+		for index, column := range columns {
+			value := row[index]
+			if !relationValueValid(column.Type, value) {
 				return 0, errors.New("materialize timechart: cell type is invalid")
 			}
 			size, ok := retainedRelationValue(value, 0)
@@ -149,25 +153,8 @@ func relationInputNativeMaterializationBytes(
 	)) {
 		return 0, false, nil
 	}
-	rowWidth := uint64(len(input.columns))
-	rowScratch := uint64(0)
-	rowScratchOK := chargeProduct(rowWidth, uint64(unsafe.Sizeof(any(nil))), func(value uint64) bool {
-		rowScratch = value
-		return true
-	})
-	if input.bucketEnds != nil {
-		// materializeRelationInput currently clones the row, then clones it a
-		// second time while appending the private bucket end.
-		if rowWidth == math.MaxUint64 || !rowScratchOK {
-			return 0, false, nil
-		}
-		rowScratchOK = chargeProduct(rowWidth+1, uint64(unsafe.Sizeof(any(nil))), func(value uint64) bool {
-			var ok bool
-			rowScratch, ok = retainedAdd(rowScratch, value)
-			return ok
-		})
-	}
-	if !rowScratchOK || !add(rowScratch) {
+	// One reusable-width row conversion is live while native cells append.
+	if !chargeProduct(uint64(columnCount), uint64(unsafe.Sizeof(any(nil))), add) {
 		return 0, false, nil
 	}
 	for _, row := range input.rows {
@@ -187,7 +174,37 @@ func relationInputNativeMaterializationBytes(
 			return 0, false, nil
 		}
 	}
+	for _, descriptor := range input.columns {
+		if !add(nativeColumnInitialCapacityBytes(descriptor.Type, len(input.rows))) {
+			return 0, false, nil
+		}
+	}
 	return total, true, nil
+}
+
+func nativeColumnInitialCapacityBytes(kind string, rows int) uint64 {
+	if rows == 0 {
+		return 0
+	}
+	var minimum uint64
+	switch relationBaseType(kind) {
+	case "Bool":
+		// The first append to byte/bool storage reserves at least eight bytes.
+		minimum = 8
+	case "String":
+		// Even an empty string appends one start/end position.
+		minimum = uint64(unsafe.Sizeof(chproto.Position{}))
+	}
+	if strings.HasPrefix(kind, "Nullable(") {
+		// Nullable always appends one byte to its null map and one value to its
+		// base column, including nil rows. Both first appends need a backing.
+		minimum += 8
+		switch relationBaseType(kind) {
+		case "UInt64", "Int64", "Float64", "DateTime64(9, 'UTC')", "Dynamic":
+			minimum += 8
+		}
+	}
+	return minimum
 }
 
 func nativeColumnDescriptorBytes(descriptor RelationColumn) uint64 {
@@ -215,13 +232,30 @@ func nativeColumnDescriptorBytes(descriptor RelationColumn) uint64 {
 func nativeRelationCellBytes(kind string, value any) (uint64, bool) {
 	nullable := strings.HasPrefix(kind, "Nullable(")
 	if value == nil {
-		if nullable {
-			return 2, true
-		}
 		if relationBaseType(kind) == "Dynamic" {
+			if nullable {
+				// Nullable records the null bit, then Dynamic appends its null
+				// discriminator. No temporary chcol.Dynamic wrapper is built.
+				return 4*uint64(unsafe.Sizeof(int(0))) + 2, true
+			}
 			return uint64(unsafe.Sizeof(chcol.Dynamic{})) + 4*uint64(unsafe.Sizeof(int(0))), true
 		}
-		return 0, false
+		if !nullable {
+			return 0, false
+		}
+		// clickhouse-go's Nullable.AppendRow always appends nil to the base
+		// column after recording the null bit. Model that zero value with the
+		// same append-capacity charge as a present scalar.
+		switch relationBaseType(kind) {
+		case "UInt64", "Int64", "Float64", "DateTime64(9, 'UTC')":
+			return 2*uint64(unsafe.Sizeof(uint64(0))) + 2, true
+		case "String":
+			return 2*uint64(unsafe.Sizeof(chproto.Position{})) + 2, true
+		case "Bool":
+			return 4, true
+		default:
+			return 0, false
+		}
 	}
 	var bytes uint64
 	switch relationBaseType(kind) {
@@ -233,10 +267,11 @@ func nativeRelationCellBytes(kind string, value any) (uint64, bool) {
 		bytes = 2 * uint64(unsafe.Sizeof(int64(0)))
 	case "String":
 		text, ok := value.(string)
-		if !ok || uint64(len(text)) > math.MaxUint64/2-2*uint64(unsafe.Sizeof(uint64(0))) {
+		positionBytes := 2 * uint64(unsafe.Sizeof(chproto.Position{}))
+		if !ok || uint64(len(text)) > (math.MaxUint64-positionBytes)/2 {
 			return 0, false
 		}
-		bytes = 2*uint64(len(text)) + 2*uint64(unsafe.Sizeof(uint64(0)))
+		bytes = 2*uint64(len(text)) + positionBytes
 	case "Dynamic":
 		return nativeRelationDynamicBytes(value, true)
 	default:

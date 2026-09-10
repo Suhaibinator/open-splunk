@@ -576,6 +576,9 @@ func (executor *Executor) executeSingle(ctx context.Context, query clickhouse.Co
 	}
 	externalTables, err := query.ExternalTablesForExecution(ctx)
 	if err != nil {
+		if errors.Is(err, clickhouse.ErrTimechartResourceLimit) {
+			return fmt.Errorf("%w: %w", searchjobs.ErrExecutionLimit, err)
+		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return preserveReadCancellationCause(ctx, ctxErr)
 		}
@@ -653,6 +656,12 @@ func (executor *Executor) executeSingle(ctx context.Context, query clickhouse.Co
 	columnTypes := rows.ColumnTypes()
 	columns := rows.Columns()
 	if query.Timechart != nil {
+		if remaining, constrained := searchlimits.RemainingExecutionBytes(executionContext); constrained && query.Timechart.ExactGrid {
+			structural := uint64(unsafe.Sizeof(timechartGridRows{}))
+			if remaining <= structural || query.Timechart.BucketCount > remaining-structural {
+				return searchjobs.ErrExecutionLimit
+			}
+		}
 		var gridRows *timechartGridRows
 		rows, columns, columnTypes, gridRows, err = prepareTimechartGridTransport(rows, columns, columnTypes, *query.Timechart)
 		if err != nil {
@@ -824,7 +833,13 @@ func (executor *Executor) executeSingle(ctx context.Context, query clickhouse.Co
 			}
 		}
 	}
-	var atomicRows atomicResultBuffer
+	atomicRows := atomicResultBuffer{maximumBytes: maximumAtomicResultBytes}
+	if policy, admitted := searchlimits.FromContext(executionContext); admitted {
+		atomicRows.maximumBytes = min(atomicRows.maximumBytes, policy.MaxResultBytes, policy.MaxMemoryBytes)
+	}
+	if remaining, constrained := searchlimits.RemainingExecutionBytes(executionContext); constrained {
+		atomicRows.maximumBytes = min(atomicRows.maximumBytes, remaining)
+	}
 	var metadataCacheBudget resultMetadataCacheBudget
 	var sparseMetadataCache resultMetadataCache
 	destinations, err := scanDestinations(columnTypes)
@@ -856,6 +871,14 @@ func (executor *Executor) executeSingle(ctx context.Context, query clickhouse.Co
 					}
 					return false
 				})
+			}
+		}
+		if _, constrained := searchlimits.RemainingExecutionBytes(executionContext); constrained {
+			if atomicRows.bytes >= atomicRows.maximumBytes {
+				return searchjobs.ErrExecutionLimit
+			}
+			if err := preflightDecodedRow(executionContext, destinations, atomicRows.maximumBytes-atomicRows.bytes); err != nil {
+				return err
 			}
 		}
 		values := make([]searchjobs.Value, len(query.OutputFields))
@@ -985,9 +1008,10 @@ type atomicBufferedRowBlock struct {
 }
 
 type atomicResultBuffer struct {
-	first *atomicBufferedRowBlock
-	last  *atomicBufferedRowBlock
-	bytes uint64
+	maximumBytes uint64
+	first        *atomicBufferedRowBlock
+	last         *atomicBufferedRowBlock
+	bytes        uint64
 }
 
 func (buffer *atomicResultBuffer) append(values []searchjobs.Value) error {
@@ -999,6 +1023,9 @@ func (buffer *atomicResultBuffer) append(values []searchjobs.Value) error {
 	nextBytes, err := chargeAtomicResultRow(buffer.bytes, structural, values)
 	if err != nil {
 		return err
+	}
+	if buffer.maximumBytes != 0 && nextBytes > buffer.maximumBytes {
+		return searchjobs.ErrByteLimit
 	}
 	if newBlock {
 		block := new(atomicBufferedRowBlock)
@@ -1089,8 +1116,24 @@ func (executor *Executor) settingsForContext(
 	}
 	settings := groupLimitSettingsFor(base, expand, query)
 	if query.RequiresTimechartInputDiscovery() {
+		settings = maps.Clone(settings)
 		settings["max_result_rows"] = base.limit("max_rows_to_read")
 		settings["max_result_bytes"] = base.limit("max_memory_usage") / 4
+	}
+	if remaining, constrained := searchlimits.RemainingExecutionBytes(ctx); constrained {
+		if remaining == 0 {
+			return nil, searchjobs.ErrExecutionLimit
+		}
+		settings = maps.Clone(settings)
+		memory := remaining
+		if workingMemory, constrainedMemory := searchlimits.RemainingExecutionMemoryBytes(ctx); constrainedMemory {
+			memory = workingMemory
+		}
+		if memory == 0 {
+			return nil, searchjobs.ErrExecutionLimit
+		}
+		settings["max_memory_usage"] = min(settings["max_memory_usage"].(uint64), memory)
+		settings["max_result_bytes"] = min(settings["max_result_bytes"].(uint64), remaining)
 	}
 	hint, ok, err := query.StatsPartitionsMaxThreadsHintContext(ctx)
 	if err != nil {
@@ -1170,6 +1213,15 @@ func timechartResourceLimitsForContext(
 	query clickhouse.CompiledQuery,
 ) (timechartResourceLimits, error) {
 	policy, admitted := searchlimits.FromContext(ctx)
+	if remaining, constrained := searchlimits.RemainingExecutionBytes(ctx); constrained {
+		if remaining == 0 {
+			return timechartResourceLimits{}, searchjobs.ErrExecutionLimit
+		}
+		if admitted {
+			policy.MaxResultBytes = min(policy.MaxResultBytes, remaining)
+			policy.MaxMemoryBytes = min(policy.MaxMemoryBytes, remaining)
+		}
+	}
 	return deriveTimechartResourceLimits(settings, query, policy, admitted)
 }
 
@@ -1597,6 +1649,9 @@ func readFixedTimechartRows(
 		return bufferedFixedTimechart{}, err
 	}
 
+	if err := validateFixedTimechartAllocation(ctx, output, uint64(unsafe.Sizeof(bufferedFixedTimechart{})), uint64(unsafe.Sizeof(uint64(0)))); err != nil {
+		return bufferedFixedTimechart{}, err
+	}
 	bucketCapacity := safecast.MustConv[int](output.BucketCount)
 	buffered := bufferedFixedTimechart{
 		first:      output.FirstBucket,
@@ -1765,6 +1820,9 @@ func readFixedValueTimechartRows(
 		return bufferedFixedValueTimechart{}, err
 	}
 
+	if err := validateFixedTimechartAllocation(ctx, output, uint64(unsafe.Sizeof(bufferedFixedValueTimechart{})), uint64(unsafe.Sizeof(nullableFloat64{}))); err != nil {
+		return bufferedFixedValueTimechart{}, err
+	}
 	bucketCapacity := safecast.MustConv[int](output.BucketCount)
 	buffered := bufferedFixedValueTimechart{
 		first:      output.FirstBucket,
@@ -3300,19 +3358,13 @@ func convertValue(value any) (searchjobs.Value, error) {
 			reflect.Copy(reflect.ValueOf(bytes), reflected)
 			return searchjobs.BytesValue(bytes), nil
 		}
-		items := make([]searchjobs.Value, reflected.Len())
-		for index := range reflected.Len() {
+		return searchjobs.ListValueFromItems(reflected.Len(), func(index int) (searchjobs.Value, error) {
 			item, err := convertValue(reflected.Index(index).Interface())
 			if err != nil {
 				return searchjobs.Value{}, fmt.Errorf("list item %d: %w", index, err)
 			}
-			items[index] = item
-		}
-		list := searchjobs.ListValue(items...)
-		if list.Kind() == searchjobs.ValueKindInvalid {
-			return searchjobs.Value{}, errors.New("list result exceeds value limits")
-		}
-		return list, nil
+			return item, nil
+		})
 	case reflect.Map:
 		if reflected.Type().Key().Kind() != reflect.String {
 			return searchjobs.Value{}, fmt.Errorf("map key type %s is not a string", reflected.Type().Key())

@@ -2,6 +2,7 @@ package queryexec
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"sync"
@@ -20,6 +21,7 @@ type stageBudget struct {
 	sink                           searchjobs.ResultSink
 	rows, bytes, retained          uint64
 	maxRows, maxBytes, maxRetained uint64
+	maxMemory                      uint64
 }
 
 func (budget *stageBudget) ReportProgress(delta searchjobs.ExecutionProgressDelta) error {
@@ -193,7 +195,7 @@ func (executor *Executor) executeTimechartStages(ctx context.Context, query clic
 		policy = admittedPolicy
 	}
 	maximumRetained := min(policy.MaxResultBytes, policy.MaxMemoryBytes, settings["max_memory_usage"].(uint64), settings["max_result_bytes"].(uint64))
-	budget := &stageBudget{sink: sink, maxRows: settings["max_rows_to_read"].(uint64), maxBytes: settings["max_bytes_to_read"].(uint64), maxRetained: maximumRetained}
+	budget := &stageBudget{sink: sink, maxRows: settings["max_rows_to_read"].(uint64), maxBytes: settings["max_bytes_to_read"].(uint64), maxRetained: maximumRetained, maxMemory: settings["max_memory_usage"].(uint64)}
 	// The retained descriptor coexists with its clone and native lookup transport.
 	if err := budget.charge(authorityBytes); err != nil {
 		return err
@@ -208,14 +210,31 @@ func (executor *Executor) executeTimechartStages(ctx context.Context, query clic
 			rowLimit = settings["max_rows_to_read"].(uint64)
 		}
 		stage := &timechartStageSink{stageBudget: budget, maxResultRows: rowLimit}
-		if err := frozen.executeSingle(ctx, query, stage); err != nil {
+		if err := frozen.executeSingle(budget.allocationContext(ctx), query, stage); err != nil {
 			return err
 		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		query, err = query.ContinueWithTimeBucketsContext(ctx, stage.columns, stage.rows, stage.bucketEnds)
+		query, err = query.ContinueWithTimeBucketsContext(budget.allocationContext(ctx), stage.columns, stage.rows, stage.bucketEnds)
 		if err != nil {
+			if errors.Is(err, clickhouse.ErrTimechartResourceLimit) {
+				return fmt.Errorf("%w: %w", searchjobs.ErrExecutionLimit, err)
+			}
+			return err
+		}
+		// The decoder and native transport have returned, and the next
+		// compiler owns a detached input. Drop the stage copy before replacing
+		// its temporary reservation with the next query's measured residency.
+		stage.rows, stage.columns, stage.bucketEnds = nil, nil, nil
+		residentBytes, valid, err := query.RetainedBytesContext(ctx)
+		if err != nil {
+			return err
+		}
+		if !valid {
+			return searchjobs.ErrInvalidResult
+		}
+		if err := budget.replaceResident(authorityBytes, residentBytes); err != nil {
 			return err
 		}
 	}
@@ -224,7 +243,7 @@ func (executor *Executor) executeTimechartStages(ctx context.Context, query clic
 			return err
 		}
 	}
-	return frozen.executeSingle(ctx, query, stagedFinalSink{ResultSink: sink, stageBudget: budget})
+	return frozen.executeSingle(budget.allocationContext(ctx), query, stagedFinalSink{ResultSink: sink, stageBudget: budget})
 }
 
 func (sink *timechartStageSink) AddRowWithTimeBucket(values []searchjobs.Value, bounds searchjobs.TimeBucketBounds) error {
@@ -260,41 +279,114 @@ func (sink stagedFinalSink) AddRowWithTimeBucket(values []searchjobs.Value, boun
 }
 
 func stageDynamicValue(value searchjobs.Value) (any, error) {
-	switch value.Kind() {
-	case searchjobs.ValueKindMissing, searchjobs.ValueKindNull:
-		return nil, nil
-	case searchjobs.ValueKindString:
-		v, _ := value.String()
-		return v, nil
-	case searchjobs.ValueKindSigned:
-		v, _ := value.Signed()
-		return v, nil
-	case searchjobs.ValueKindUnsigned:
-		v, _ := value.Unsigned()
-		return v, nil
-	case searchjobs.ValueKindDouble:
-		v, _ := value.Double()
-		return v, nil
-	case searchjobs.ValueKindBool:
-		v, _ := value.Bool()
-		return v, nil
-	case searchjobs.ValueKindTime:
-		v, _ := value.Time()
-		return v, nil
-	case searchjobs.ValueKindList:
-		items, _ := value.List()
-		result := make([]any, len(items))
-		for i, item := range items {
-			v, err := stageDynamicValue(item)
-			if err != nil {
-				return nil, err
-			}
-			result[i] = v
-		}
-		return result, nil
-	default:
-		return nil, searchjobs.ErrInvalidResult
+	type frame struct {
+		values []any
+		next   int
 	}
+	var stack [18]frame
+	depth := 0
+	var result any
+	appendValue := func(value any) error {
+		if depth == 0 {
+			result = value
+			return nil
+		}
+		parent := &stack[depth-1]
+		if parent.next >= len(parent.values) {
+			return searchjobs.ErrInvalidResult
+		}
+		parent.values[parent.next] = value
+		parent.next++
+		return nil
+	}
+	err := value.VisitDetached(func(token searchjobs.ValueVisitToken) error {
+		var scalar any
+		switch token.Kind {
+		case searchjobs.ValueVisitListBegin:
+			if depth >= len(stack) {
+				return searchjobs.ErrInvalidResult
+			}
+			values := make([]any, token.Length)
+			if err := appendValue(values); err != nil {
+				return err
+			}
+			stack[depth] = frame{values: values}
+			depth++
+			return nil
+		case searchjobs.ValueVisitListEnd:
+			if depth == 0 || stack[depth-1].next != len(stack[depth-1].values) {
+				return searchjobs.ErrInvalidResult
+			}
+			depth--
+			return nil
+		case searchjobs.ValueVisitMissing, searchjobs.ValueVisitNull:
+		case searchjobs.ValueVisitString:
+			scalar = token.StringValue
+		case searchjobs.ValueVisitSigned:
+			scalar = token.SignedValue
+		case searchjobs.ValueVisitUnsigned:
+			scalar = token.UnsignedValue
+		case searchjobs.ValueVisitDouble:
+			scalar = token.DoubleValue
+		case searchjobs.ValueVisitBool:
+			scalar = token.BoolValue
+		case searchjobs.ValueVisitTime:
+			scalar = token.TimeValue
+		default:
+			return searchjobs.ErrInvalidResult
+		}
+		return appendValue(scalar)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// Four disjoint shares cover native input, server transport, decoder, and
+// detached stage output while the prior retained stages stay charged.
+// replaceResident releases completed intermediate ownership; only scan work
+// is cumulative. The original admitted descriptor remains pinned by the job.
+func (budget *stageBudget) replaceResident(original, current uint64) error {
+	if original > budget.maxRetained || current > budget.maxRetained-original {
+		return searchjobs.ErrExecutionLimit
+	}
+	budget.retained = original + current
+	return nil
+}
+
+func (budget *stageBudget) allocationContext(ctx context.Context) context.Context {
+	share := (budget.maxRetained - budget.retained) / 4
+	ctx = searchlimits.WithRemainingExecutionBytes(ctx, share)
+	memory := budget.maxMemory
+	if memory == 0 {
+		memory = budget.maxRetained
+	}
+	// Result retention has its own smaller ceiling. Leave the server its
+	// admitted working memory after reserving the three live client shares.
+	client := budget.retained + 3*share
+	if client >= memory {
+		return searchlimits.WithRemainingExecutionMemoryBytes(ctx, 0)
+	}
+	return searchlimits.WithRemainingExecutionMemoryBytes(ctx, memory-client)
+}
+
+func validateFixedTimechartAllocation(ctx context.Context, output clickhouse.TimechartOutput, descriptorBytes, cellBytes uint64) error {
+	remaining, constrained := searchlimits.RemainingExecutionBytes(ctx)
+	if !constrained {
+		return nil
+	}
+	if output.Calendar {
+		cellBytes += uint64(unsafe.Sizeof(time.Time{}))
+	}
+	if output.ExactGrid {
+		cellBytes++
+		descriptorBytes += uint64(unsafe.Sizeof(timechartGridRows{}))
+	}
+	if descriptorBytes > remaining || output.BucketCount > (remaining-descriptorBytes)/cellBytes {
+		return searchjobs.ErrExecutionLimit
+	}
+	return nil
 }
 
 func publishEmptyObservedTimechart(sink searchjobs.ResultSink, query clickhouse.CompiledQuery) error {

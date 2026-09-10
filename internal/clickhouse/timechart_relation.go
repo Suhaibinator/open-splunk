@@ -167,12 +167,6 @@ func newRelationInput(ctx context.Context, columns []RelationColumn, rows [][]an
 		}
 		input.rows[i] = make([]any, len(row))
 		for j, value := range row {
-			if !relationValueValid(columns[j].Type, value) {
-				return nil, errors.New("materialize timechart: cell type is invalid")
-			}
-			if text, ok := value.(string); ok {
-				value = strings.Clone(text)
-			}
 			cloned, ok := cloneRelationValue(value, 0)
 			if !ok {
 				return nil, errors.New("materialize timechart: cell cannot be cloned")
@@ -352,14 +346,20 @@ func materializeRelationInput(ctx context.Context, input *compiledRelationInput)
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		row = slices.Clone(row)
+		width := len(row)
+		if input.bucketEnds != nil {
+			width++
+		}
+		copied := make([]any, len(row), width)
+		copy(copied, row)
+		row = copied
 		for i, column := range input.columns {
 			if column.Type == "Dynamic" {
 				row[i] = nativeRelationDynamic(row[i])
 			}
 		}
 		if input.bucketEnds != nil {
-			row = append(slices.Clone(row), input.bucketEnds[rowIndex])
+			row = append(row, input.bucketEnds[rowIndex])
 		}
 		if err := table.Append(row...); err != nil {
 			return nil, err
