@@ -699,10 +699,8 @@ func compiledExecutionDigestContext(
 			return compiledExecutionSeal{}, false, nil
 		}
 		writeUint64(digest, uint64(len(compiled.Timechart.Boundaries)))
-		for _, boundary := range compiled.Timechart.Boundaries {
-			if !writeTime(digest, boundary) {
-				return compiledExecutionSeal{}, false, nil
-			}
+		if !writeTimechartBoundaries(digest, compiled.Timechart.Boundaries) {
+			return compiledExecutionSeal{}, false, nil
 		}
 
 		if compiled.Timechart.Calendar {
@@ -843,6 +841,30 @@ func writePosition(writer hash.Hash, position spl.Position) {
 	writeInt64(writer, int64(position.Offset))
 	writeInt64(writer, int64(position.Line))
 	writeInt64(writer, int64(position.Column))
+}
+
+// UTC boundaries use a fixed-width time encoding. Batch them in one buffer so
+// sealing a 10,000-bucket grid does not allocate per timestamp or hash write.
+func writeTimechartBoundaries(writer hash.Hash, boundaries []time.Time) bool {
+	if len(boundaries) == 0 {
+		return true
+	}
+	if len(boundaries) > 10001 {
+		return false
+	}
+	encoded := make([]byte, 0, len(boundaries)*15)
+	for _, boundary := range boundaries {
+		if boundary.Location() != time.UTC {
+			return false
+		}
+		var err error
+		encoded, err = boundary.AppendBinary(encoded)
+		if err != nil {
+			return false
+		}
+	}
+	_, _ = writer.Write(encoded)
+	return true
 }
 
 func writeTime(writer hash.Hash, value time.Time) bool {
