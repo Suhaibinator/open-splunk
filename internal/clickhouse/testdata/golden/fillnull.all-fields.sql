@@ -5,7 +5,7 @@
 -- sparse_fields: false subset=false
 -- atomic_result: false
 -- stats_partitions_max_threads: 1
--- execution_authority_digest: 478315f7b312a609398643711f4189044605c490fb3c2c969f34c71de0bcc087
+-- execution_authority_digest: e7919490eb8c2f810facc63a196d006d3a3815dad2f59042c4d396fc25996fdf
 -- args[0]: "NA"
 -- args[1]: "NA"
 -- args[2]: "tenant-1"

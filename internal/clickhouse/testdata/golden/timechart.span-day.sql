@@ -3,9 +3,9 @@
 -- query: index=main | timechart span=1d count
 -- output_fields: _time, count
 -- sparse_fields: false subset=false
--- timechart: clickhouse.TimechartOutput{Mode:0x1, FirstBucket:time.Date(2026, time.July, 21, 0, 0, 0, 0, time.UTC), Span:0, Calendar:true, BucketCount:0x1, MaxSeries:0x1, MaxLabelBytes:0x0, ValueField:"", ValueKind:0x0}
--- atomic_result: false
--- execution_authority_digest: 103c714ee7b31b92ce4ea328a314ae32335e49de1c9dcc2de2345e17549be157
+-- timechart: clickhouse.TimechartOutput{ExactGrid:false, Boundaries:[]time.Time{time.Date(2026, time.July, 21, 0, 0, 0, 0, time.UTC), time.Date(2026, time.July, 22, 0, 0, 0, 0, time.UTC)}, Continuous:true, IncludePartial:true, SearchEarliest:time.Date(2026, time.July, 21, 0, 0, 0, 0, time.UTC), SearchLatest:time.Date(2026, time.July, 22, 0, 0, 0, 0, time.UTC), Mode:0x1, FirstBucket:time.Date(2026, time.July, 21, 0, 0, 0, 0, time.UTC), Span:0, Calendar:true, BucketCount:0x1, SeriesLimit:0x0, MaxSeries:0x1, MaxLabelBytes:0x0, IncludeNull:false, IncludeOther:false, ValueField:"", ValueKind:0x0}
+-- atomic_result: true
+-- execution_authority_digest: a5c6122fd61e622ff9de7592a0bd16bb906b324cafa3758c37a8ac17173c1e54
 -- args[0]: "tenant-1"
 -- args[1]: "main"
 -- args[2]: "2026-07-21 00:00:00.000000000"
