@@ -410,6 +410,9 @@ func TestExplainerAcceptsBoundedCompilerArrayArguments(t *testing.T) {
 		[]uint8(nil),
 		[]uint8{},
 		[]uint8{0, 1, 255},
+		[]int64(nil),
+		[]int64{},
+		[]int64{-9223372036854775808, 0, 9223372036854775807},
 	} {
 		query := sealedExplainQuery(t)
 		query.Args[0] = argument
@@ -450,7 +453,7 @@ func TestExplainerRejectsDriverUnsafeArgumentsBeforeQuery(t *testing.T) {
 		{name: "typed nil", argument: typedNil},
 		{name: "pointer", argument: &value},
 		{name: "map", argument: map[string]string{"secret": "value"}},
-		{name: "other slice", argument: []int64{7}},
+		{name: "other slice", argument: []int32{7}},
 		{name: "named scalar", argument: explainNamedString("secret")},
 		{name: "panic formatter", argument: panicExplainFormatter{}},
 		{name: "panic stringer", argument: panicExplainStringer{}},
@@ -2057,5 +2060,28 @@ func TestExplainTestFixturesImplementDriverContracts(t *testing.T) {
 	var _ queryConnection = (*closeWaitingExplainConnection)(nil)
 	if !slices.Equal(explainFakeRows("x").columns, []string{"explain"}) {
 		t.Fatal("invalid EXPLAIN fixture")
+	}
+}
+
+func TestExplainExactGridArgumentsAreDetachedAndBounded(t *testing.T) {
+	t.Parallel()
+	ticks := make([]int64, maximumExplainGridElements)
+	ticks[0] = -9223372036854775808
+	ticks[len(ticks)-1] = 9223372036854775807
+	const sqlBytes = uint64(64)
+	renderedBytes := uint64(len(ticks))*21 + 2
+	detached, err := detachExplainArguments([]any{ticks}, 1, sqlBytes, sqlBytes+renderedBytes)
+	if err != nil {
+		t.Fatalf("detach maximum grid: %v", err)
+	}
+	ticks[0] = 1
+	if detached[0].([]int64)[0] != -9223372036854775808 {
+		t.Fatal("detached grid aliases caller timestamps")
+	}
+	if _, err := detachExplainArguments([]any{ticks}, 1, sqlBytes, sqlBytes+renderedBytes-1); !errors.Is(err, searchjobs.ErrExecutionLimit) {
+		t.Fatalf("undersized rendered budget: %v", err)
+	}
+	if _, err := detachExplainArguments([]any{make([]int64, maximumExplainGridElements+1)}, 1, 0, maximumExplainQueryBytes); !errors.Is(err, searchjobs.ErrExecutionLimit) {
+		t.Fatalf("oversized grid: %v", err)
 	}
 }
