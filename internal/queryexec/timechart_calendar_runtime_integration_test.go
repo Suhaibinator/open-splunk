@@ -9,8 +9,10 @@ import (
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
+	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
+	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
 type queryIntegrationCalendarRuntimeCase struct {
@@ -39,18 +41,23 @@ func queryIntegrationTestCalendarBoundaryRuntime(
 	indexTime, cases := queryIntegrationInsertCalendarRuntimeEvents(t, ctx, connection)
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
+			source := fmt.Sprintf(
+				`index=main source="%s" | search host="calendar-runtime" | timechart span=%s %s count | sort 0 +_time`,
+				test.source,
+				test.span,
+				test.controls,
+			)
+			if test.name == "sao-paulo-midnight-gap" {
+				compiled := queryIntegrationCompileCalendarSearch(t, source, indexTime, test.earliest, test.latest, test.timezone)
+				assertTimechartWorkOneRead(t, ctx, executor, compiled)
+			}
 			job, page := queryIntegrationRunCalendarSearch(
 				t,
 				ctx,
 				executor,
 				indexTime,
 				"queryexec-calendar-runtime-"+test.name,
-				fmt.Sprintf(
-					`index=main source="%s" | search host="calendar-runtime" | timechart span=%s %s count | sort 0 +_time`,
-					test.source,
-					test.span,
-					test.controls,
-				),
+				source,
 				test.earliest,
 				test.latest,
 				test.timezone,
@@ -101,6 +108,39 @@ func queryIntegrationTestCalendarBoundaryRuntime(
 		}
 		queryIntegrationAssertCalendarBounds(t, page)
 	})
+}
+
+func queryIntegrationCompileCalendarSearch(
+	t *testing.T,
+	source string,
+	indexTime, earliest, latest time.Time,
+	timezone string,
+) clickhouse.CompiledQuery {
+	t.Helper()
+	parsed, err := spl.Parse(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	visibility := uint64(1)
+	logical, err := plan.Build(parsed, plan.Scope{
+		TenantID:          "tenant",
+		AuthorizedIndexes: []string{"main"},
+		RequestedIndexes:  []string{"main"},
+		Earliest:          earliest,
+		Latest:            latest,
+		SearchStart:       indexTime,
+		SearchTimezone:    timezone,
+		IndexTimeCutoff:   indexTime.Add(500 * time.Microsecond),
+		VisibilityCutoff:  &visibility,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := (clickhouse.Compiler{}).Compile(logical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return compiled
 }
 
 func queryIntegrationAssertCalendarEventConservation(
