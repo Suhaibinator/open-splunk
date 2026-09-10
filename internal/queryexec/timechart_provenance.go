@@ -19,11 +19,14 @@ func ordinaryTimeBucketColumns(query clickhouse.CompiledQuery, columns []string,
 	}
 	return columns[:len(columns)-1], types[:len(types)-1], nil
 }
-func publishOrdinaryTimeBucketRow(sink searchjobs.ResultSink, query clickhouse.CompiledQuery, values []searchjobs.Value) error {
+
+// validateOrdinaryTimeBucketRow is called while decoding the atomic result,
+// so even a late invalid interval fails before schema or row publication.
+func validateOrdinaryTimeBucketRow(query clickhouse.CompiledQuery, values []searchjobs.Value) error {
 	if query.TimeBucket == nil {
-		return sink.AddRow(values)
+		return nil
 	}
-	if len(values) != len(query.OutputFields)+1 {
+	if len(values) != len(query.OutputFields)+1 || query.TimeBucket.TimeIndex < 0 || query.TimeBucket.TimeIndex >= len(query.OutputFields) {
 		return searchjobs.ErrInvalidResult
 	}
 	start, ok := values[query.TimeBucket.TimeIndex].Time()
@@ -31,8 +34,21 @@ func publishOrdinaryTimeBucketRow(sink searchjobs.ResultSink, query clickhouse.C
 	if !ok || !endOK || !start.Before(end) {
 		return fmt.Errorf("%w: invalid result bucket interval", searchjobs.ErrInvalidResult)
 	}
+	return nil
+}
+
+func publishOrdinaryTimeBucketRow(sink searchjobs.ResultSink, query clickhouse.CompiledQuery, values []searchjobs.Value) error {
+	if query.TimeBucket == nil {
+		return sink.AddRow(values)
+	}
+	if err := validateOrdinaryTimeBucketRow(query, values); err != nil {
+		return err
+	}
+	start, _ := values[query.TimeBucket.TimeIndex].Time()
+	end, _ := values[len(values)-1].Time()
 	return publishWithTimeBucket(sink, values[:len(values)-1], searchjobs.TimeBucketBounds{Earliest: start.UTC().Format(time.RFC3339Nano), Latest: end.UTC().Format(time.RFC3339Nano)})
 }
+
 func publishWithTimeBucket(sink searchjobs.ResultSink, values []searchjobs.Value, bounds searchjobs.TimeBucketBounds) error {
 	if recipient, ok := sink.(searchjobs.TimeBucketResultSink); ok {
 		return recipient.AddRowWithTimeBucket(values, bounds)

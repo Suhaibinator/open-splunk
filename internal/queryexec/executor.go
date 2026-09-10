@@ -824,7 +824,7 @@ func (executor *Executor) executeSingle(ctx context.Context, query clickhouse.Co
 	}
 
 	schemaPublished := false
-	atomicResult := query.RequiresAtomicResult()
+	atomicResult := query.RequiresAtomicResult() || query.TimeBucket != nil
 	sparseTopLevelFields := make(map[string]struct{})
 	if query.SparseFieldsSubset {
 		for _, name := range query.OutputFields {
@@ -936,6 +936,9 @@ func (executor *Executor) executeSingle(ctx context.Context, query clickhouse.Co
 				return err
 			}
 			values = append(values, end)
+			if err := validateOrdinaryTimeBucketRow(query, values); err != nil {
+				return err
+			}
 		}
 		if atomicResult {
 			if err := atomicRows.append(values); err != nil {
@@ -1740,6 +1743,13 @@ func readFixedTimechartRows(
 			upstreamPresent = rowUpstreamPresent
 			haveUpstreamPresence = true
 		}
+		inputPresent := count > 0
+		if fieldOccurrenceCount {
+			inputPresent = rowUpstreamPresent != 0
+		}
+		if err := validateTimechartGridAggregate(rows, count > 0, inputPresent); err != nil {
+			return bufferedFixedTimechart{}, err
+		}
 		sawPositiveCount = sawPositiveCount || count > 0
 		buffered.counts = append(buffered.counts, count)
 	}
@@ -1895,6 +1905,9 @@ func readFixedValueTimechartRows(
 		if output.Calendar {
 			buffered.buckets = append(buffered.buckets, bucket)
 		}
+		if err := validateTimechartGridAggregate(rows, value != nil, rowUpstreamPresent != 0); err != nil {
+			return bufferedFixedValueTimechart{}, err
+		}
 		bufferedValue := nullableFloat64{}
 		if value != nil {
 			if output.ValueKind == clickhouse.TimechartValueKindPercentile &&
@@ -2042,6 +2055,10 @@ func readTimechartRows(
 		if invalid != 0 {
 			return bufferedTimechart{}, searchjobs.ErrUnsupportedValue
 		}
+		aggregatePresent := slices.ContainsFunc(counts, func(count uint64) bool { return count != 0 })
+		if err := validateTimechartGridAggregate(rows, aggregatePresent, true); err != nil {
+			return bufferedTimechart{}, err
+		}
 		cells := make([]uint64, len(counts))
 		copy(cells, counts)
 		buffered.rows = append(buffered.rows, timechartRow{bucket: bucket, cells: cells})
@@ -2184,6 +2201,10 @@ func readValueTimechartRows(
 			seriesCount = len(values)
 		}
 		if err := budget.charge(uint64(len(values)), timechartValueCellBytes); err != nil {
+			return bufferedValueTimechart{}, err
+		}
+		aggregatePresent := slices.Contains(present, uint8(1))
+		if err := validateTimechartGridAggregate(rows, aggregatePresent, true); err != nil {
 			return bufferedValueTimechart{}, err
 		}
 		rowValues := make([]nullableFloat64, len(values))

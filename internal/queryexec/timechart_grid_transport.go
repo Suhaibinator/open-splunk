@@ -58,6 +58,19 @@ func prepareTimechartGridTransport(rows driver.Rows, columns []string, types []d
 	return wrapped, slices.Delete(slices.Clone(columns), 2, 3), slices.Delete(slices.Clone(types), 2, 3), wrapped, nil
 }
 
+// validateTimechartGridAggregate runs inside the aggregate readers' complete
+// validation barrier, before any presentation filter or sink can observe rows.
+func validateTimechartGridAggregate(rows driver.Rows, aggregatePresent, inputPresent bool) error {
+	grid, ok := rows.(*timechartGridRows)
+	if !ok {
+		return nil
+	}
+	if (grid.rowPresent == 0 && aggregatePresent) || (grid.rowPresent != 0 && !inputPresent) {
+		return fmt.Errorf("%w: timechart occupancy disagrees with aggregate or input presence", searchjobs.ErrInvalidResult)
+	}
+	return nil
+}
+
 // timechartGridSink applies presentation controls only after the complete
 // upstream transport has been decoded, and attaches exact interval metadata.
 type timechartGridSink struct {
@@ -85,14 +98,6 @@ func (sink *timechartGridSink) AddRow(values []searchjobs.Value) error {
 	if sink.output.ExactGrid {
 		if sink.occupancy == nil || uint64(len(sink.occupancy.present)) != sink.output.BucketCount {
 			return fmt.Errorf("%w: timechart presence sequence is incomplete", searchjobs.ErrInvalidResult)
-		}
-		if sink.occupancy.present[ordinal] == 0 {
-			for _, value := range values[1:] {
-				count, isCount := value.Unsigned()
-				if (isCount && count > 0) || (!isCount && !value.IsNull() && !value.IsMissing()) {
-					return fmt.Errorf("%w: absent timechart bucket carries an aggregate value", searchjobs.ErrInvalidResult)
-				}
-			}
 		}
 		if !sink.output.Continuous && sink.occupancy.present[ordinal] == 0 {
 			return nil

@@ -1,9 +1,15 @@
 package queryexec
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"reflect"
+	"slices"
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 )
@@ -134,5 +140,89 @@ func TestTimechartGridScanAcceptsWidestNumericTransport(t *testing.T) {
 	}
 	if ordinal != 0 || !bucket.Equal(first) || len(names) != 1 || names[0] != "0:api" || len(values) != 1 || values[0] != 3.5 || len(present) != 1 || present[0] != 1 || invalid != 0 || len(wrapped.present) != 1 || wrapped.present[0] != 1 {
 		t.Fatal("numeric transport fields changed while extracting occupancy")
+	}
+}
+
+func TestExactGridAggregateValidationPrecedesEveryPresentationMode(t *testing.T) {
+	first := time.Unix(0, 0).UTC()
+	type fixture struct {
+		name  string
+		query clickhouse.CompiledQuery
+		rows  func(bool) *fakeRows
+	}
+	countRows := func(empty bool) []uint64 {
+		if empty {
+			return []uint64{1, 0}
+		}
+		return []uint64{1, 1}
+	}
+	cases := []fixture{
+		{"count", fixedTimechartQuery(first, 2), func(empty bool) *fakeRows { return fixedTimechartOrdinalRows(countRows(empty)) }},
+		{"field count", fixedCountFieldTimechartQuery(first, 2, "count(value)"), func(empty bool) *fakeRows { return fixedCountFieldTimechartRows(countRows(empty), []uint8{1, 1}) }},
+		{"split count", timechartQuery(first, 2), func(empty bool) *fakeRows {
+			counts := countRows(empty)
+			return timechartOrdinalRows([]string{"0:api"}, [][]uint64{{counts[0]}, {counts[1]}})
+		}},
+	}
+	for _, kind := range []clickhouse.TimechartValueKind{clickhouse.TimechartValueKindSum, clickhouse.TimechartValueKindAverage, clickhouse.TimechartValueKindPercentile} {
+		cases = append(cases, fixture{fmt.Sprintf("fixed value %d", kind), fixedValueTimechartQuery(first, 2, "value", kind), func(empty bool) *fakeRows {
+			var second any = float64(0)
+			if empty {
+				second = nil
+			}
+			return fixedValueTimechartRows([]any{float64(1), second}, []uint8{1, 1})
+		}}, fixture{fmt.Sprintf("split value %d", kind), splitValueTimechartQuery(first, 2, kind), func(empty bool) *fakeRows {
+			presence := uint8(1)
+			if empty {
+				presence = 0
+			}
+			return splitValueTimechartRows([]string{"0:api"}, [][]float64{{1}, {0}}, [][]uint8{{1}, {presence}})
+		}})
+	}
+	for _, testCase := range cases {
+		for _, continuous := range []bool{false, true} {
+			for _, partial := range []bool{false, true} {
+				for _, valid := range []bool{false, true} {
+					t.Run(fmt.Sprintf("%s/cont=%t/partial=%t/valid=%t", testCase.name, continuous, partial, valid), func(t *testing.T) {
+						query := testCase.query
+						output := *query.Timechart
+						query.Timechart = &output
+						output.Calendar, output.ExactGrid = true, true
+						output.Span = time.Millisecond
+						output.Boundaries = []time.Time{first, first.Add(time.Millisecond), first.Add(2 * time.Millisecond)}
+						output.Continuous, output.IncludePartial = continuous, partial
+						output.SearchEarliest, output.SearchLatest = first, output.Boundaries[1]
+						rows := testCase.rows(valid)
+						calendarTimechartRows(rows, output.Boundaries[:2])
+						rows.columns = slices.Insert(rows.columns, 2, clickhouse.TimechartBucketPresentColumn)
+						rows.types = slices.Insert(rows.types, 2, driver.ColumnType(fakeColumnType{name: clickhouse.TimechartBucketPresentColumn, databaseType: "UInt8", scanType: reflect.TypeFor[uint8]()}))
+						rows.data[0] = slices.Insert(rows.data[0], 2, any(uint8(1)))
+						rows.data[1] = slices.Insert(rows.data[1], 2, any(uint8(0)))
+						sink := &fakeSink{}
+						err := mustExecutor(t, &fakeQueryConnection{rows: rows}).Execute(context.Background(), query, sink)
+						if valid {
+							if err != nil || sink.setCalls != 1 {
+								t.Fatalf("valid empty bucket: err=%v schema=%d", err, sink.setCalls)
+							}
+						} else if !errors.Is(err, searchjobs.ErrInvalidResult) || sink.setCalls != 0 || len(sink.rows) != 0 {
+							t.Fatalf("invalid occupancy leaked: err=%v schema=%d rows=%d", err, sink.setCalls, len(sink.rows))
+						}
+						if !rows.closed {
+							t.Fatal("transport remained open")
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
+func TestTimechartGridRejectsOccupancyWithoutInput(t *testing.T) {
+	rows := &timechartGridRows{rowPresent: 1}
+	if err := validateTimechartGridAggregate(rows, false, false); !errors.Is(err, searchjobs.ErrInvalidResult) {
+		t.Fatalf("occupancy contradicting empty input accepted: %v", err)
+	}
+	if err := validateTimechartGridAggregate(rows, false, true); err != nil {
+		t.Fatalf("input with missing measures rejected: %v", err)
 	}
 }
