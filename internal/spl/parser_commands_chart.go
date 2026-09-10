@@ -664,6 +664,13 @@ func parseFixedTimeSpan(tok token, config fixedTimeSpanParserConfig) (TimeSpan, 
 			return TimeSpan{}, invalidFixedTimeSpan(tok, config)
 		}
 	}
+	if config.commandName != "timechart" {
+		switch strings.ToLower(unitText) {
+		case "s", "m", "h", "d", "w", "mon", "month":
+		default:
+			return TimeSpan{}, unsupportedFixedTimeSpanUnit(tok, config)
+		}
+	}
 	var unit TimeSpanUnit
 	var unitNanoseconds uint64
 	calendar := false

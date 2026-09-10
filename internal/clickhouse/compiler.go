@@ -658,7 +658,7 @@ type TimechartOutput struct {
 
 func validTimechartOutputSpanContract(output *TimechartOutput) bool {
 	return output != nil &&
-		((output.ExactGrid && len(output.Boundaries) == int(output.BucketCount)+1) || (output.Calendar && output.Span == 0) ||
+		((output.ExactGrid && uint64(len(output.Boundaries)) == output.BucketCount+1) || (output.Calendar && output.Span == 0) ||
 			(!output.Calendar && output.Span > 0))
 }
 

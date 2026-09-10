@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"fortio.org/safecast"
+
 	"github.com/Suhaibinator/open-splunk/internal/ianatimezone"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"github.com/Suhaibinator/open-splunk/internal/splrelativetime"
@@ -53,11 +55,11 @@ func ResolveTimechartGrid(op *Timechart, earliest, latest time.Time, timezone st
 			}
 			return &Diagnostic{Code: "SPL_QUERY_TOO_COMPLEX", Message: gridErr.Error(), Range: op.Range}
 		}
-		if op.AuthoredSpan == (spl.TimeSpan{}) && uint64(len(boundaries)-1) > bins {
+		if op.AuthoredSpan == (spl.TimeSpan{}) && safecast.MustConv[uint64](len(boundaries)-1) > bins {
 			continue
 		}
 		op.Span, op.Calendar, op.CalendarMagnitude = span, calendar, magnitude
-		op.GridBoundaries, op.FirstBucket, op.BucketCount = boundaries, boundaries[0], uint64(len(boundaries)-1)
+		op.GridBoundaries, op.FirstBucket, op.BucketCount = boundaries, boundaries[0], safecast.MustConv[uint64](len(boundaries)-1)
 		return nil
 	}
 	return &Diagnostic{Code: "SPL_UNSUPPORTED_TIMECHART_SPAN", Message: "timechart cannot select an automatic span for the input extent", Range: op.Range}
@@ -107,7 +109,7 @@ func enhancedTimechartSpan(authored spl.TimeSpan) (time.Duration, CalendarUnit, 
 	if magnitude > uint64(math.MaxInt64)/uint64(unit) {
 		return 0, CalendarNone, 0, fmt.Errorf("timechart span overflows")
 	}
-	span := time.Duration(magnitude) * unit
+	span := time.Duration(safecast.MustConv[int64](magnitude)) * unit
 	if unit < time.Second && (span >= time.Second || time.Second%span != 0) {
 		return 0, CalendarNone, 0, fmt.Errorf("timechart subsecond span must be below and divide one second")
 	}
@@ -136,7 +138,7 @@ func timechartBoundarySequence(earliest, latest time.Time, span time.Duration, c
 	} else {
 		local := earliest.In(location)
 		origin := time.Date(1970, 1, 1, 0, 0, 0, 0, location)
-		step := int64(magnitude)
+		step := safecast.MustConv[int64](magnitude)
 		if calendar == CalendarWeek {
 			origin = time.Date(1969, 12, 28, 0, 0, 0, 0, location)
 			step *= 7
@@ -146,13 +148,21 @@ func timechartBoundarySequence(earliest, latest time.Time, span time.Duration, c
 		}
 		if calendar == CalendarMonth {
 			months := int64(local.Year()-1970)*12 + int64(local.Month()-1)
+			endLocal := latest.In(location)
+			extentMonths := int64(endLocal.Year()-local.Year())*12 + int64(endLocal.Month()) - int64(local.Month())
+			if extentMonths/step > maxTimechartBuckets {
+				return nil, fmt.Errorf("timechart produces more than %d buckets", maxTimechartBuckets)
+			}
 			first = origin.AddDate(0, int(floorInt64(months, step)*step), 0)
-			advance = func(value time.Time) time.Time { return value.AddDate(0, int(magnitude), 0) }
+			advance = func(value time.Time) time.Time { return value.AddDate(0, safecast.MustConv[int](magnitude), 0) }
 		} else {
 			civil := func(value time.Time) int64 {
 				return time.Date(value.Year(), value.Month(), value.Day(), 0, 0, 0, 0, time.UTC).Unix() / 86400
 			}
 			days := civil(local) - civil(origin)
+			if (civil(latest.In(location))-civil(local))/step > maxTimechartBuckets {
+				return nil, fmt.Errorf("timechart produces more than %d buckets", maxTimechartBuckets)
+			}
 			first = origin.AddDate(0, 0, int(floorInt64(days, step)*step))
 			if first.After(local) {
 				first = first.AddDate(0, 0, -int(step))
@@ -261,7 +271,7 @@ func resolveTimechartAlignment(axis spl.TimechartAxisOptions, earliest, latest, 
 				if operation.Magnitude > uint64(math.MaxInt64)/uint64(unit) {
 					return time.Time{}, fmt.Errorf("alignment offset exceeds duration range")
 				}
-				value = value.Add(time.Duration(magnitude) * unit)
+				value = value.Add(time.Duration(safecast.MustConv[int64](magnitude)) * unit)
 			case splrelativetime.UnitDay:
 				value = value.AddDate(0, 0, magnitude)
 			case splrelativetime.UnitWeek:

@@ -83,3 +83,21 @@ func TestTimechartRelativeAlignmentUsesSearchStart(t *testing.T) {
 		t.Fatalf("alignment=%v want=%v", op.Alignment, want)
 	}
 }
+
+func TestTimechartGridRejectsUnrepresentableAlignmentAndExtent(t *testing.T) {
+	location := time.UTC
+	anchor := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	sourceRange := spl.Range{Start: spl.Position{Line: 1, Column: 1}, End: spl.Position{Line: 1, Column: 10}}
+	for _, source := range []string{"+3000000h", "+200000000m", "+2000000000s"} {
+		_, err := resolveTimechartAlignment(spl.TimechartAxisOptions{AlignTime: source, AlignTimeSpecified: true, AlignTimeRange: sourceRange}, anchor, anchor.Add(time.Hour), anchor, location)
+		if source != "+2000000000s" && err == nil {
+			t.Errorf("overflow alignment %s accepted", source)
+		}
+	}
+	if _, err := timechartBoundarySequence(time.Date(1600, 1, 1, 0, 0, 0, 0, time.UTC), anchor, time.Second, CalendarNone, 0, time.Time{}, location); err == nil {
+		t.Fatal("out-of-domain earliest accepted")
+	}
+	if _, err := timechartBoundarySequence(anchor, anchor.Add(time.Hour), time.Second, CalendarNone, 0, time.Date(2400, 1, 1, 0, 0, 0, 0, time.UTC), location); err == nil {
+		t.Fatal("out-of-domain alignment accepted")
+	}
+}

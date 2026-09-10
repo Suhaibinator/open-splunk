@@ -1,7 +1,6 @@
 package plan
 
 import (
-	"errors"
 	"fmt"
 	"math"
 	"math/big"
@@ -309,90 +308,23 @@ func buildTimechartFieldMeasure(
 	}, nil
 }
 
-func fixedTimechartSpan(span spl.TimeSpan) (time.Duration, error) {
-	duration, err := fixedDurationSpan(
-		span,
-		"SPL_UNSUPPORTED_TIMECHART_SYNTAX",
-		"timechart",
-	)
-	if err != nil {
-		return 0, err
-	}
-	if duration > maxTimechartSpan {
-		return 0, &Diagnostic{
-			Code:        "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
-			Message:     "timechart spans greater than 24 hours are not supported",
-			Range:       span.Range,
-			Suggestions: []string{"use a fixed span from 1s through 24h"},
-		}
-	}
-	return duration, nil
-}
-
-func timechartSpan(span spl.TimeSpan) (time.Duration, CalendarUnit, error) {
-	if calendar, ok := calendarUnit(span.Unit); ok {
-		if err := validateCalendarMagnitude(span.Magnitude, "timechart", span.Range); err != nil {
-			return 0, CalendarNone, err
-		}
-		return 0, calendar, nil
-	}
-	duration, err := fixedTimechartSpan(span)
-	if err != nil {
-		return 0, CalendarNone, err
-	}
-	return duration, CalendarNone, nil
-}
-
-func automaticTimechartSpan(
-	axis spl.TimechartAxisOptions,
-	earliest time.Time,
-	latest time.Time,
-	location *time.Location,
-	sourceRange spl.Range,
-) (time.Duration, CalendarUnit, time.Time, uint64, error) {
-	bins, err := validateTimechartAxisOptions(axis, sourceRange)
-	if err != nil {
-		return 0, CalendarNone, time.Time{}, 0, err
-	}
-
-	for _, candidate := range AutomaticTimeSpanSteps() {
-		candidateSpan := automaticTimeSpanAsSPL(candidate, sourceRange)
-		if axis.MinSpanSpecified && !automaticTimeSpanAtLeast(candidateSpan, axis.MinSpan) {
-			continue
-		}
-		span, calendar, err := timechartSpan(candidateSpan)
-		if err != nil {
-			return 0, CalendarNone, time.Time{}, 0, err
-		}
-		firstBucket, bucketCount, err := timechartBuckets(
-			earliest, latest, span, calendar, location, sourceRange,
-		)
-		if err != nil {
-			if diagnostic, ok := errors.AsType[*Diagnostic](err); ok &&
-				diagnostic.Code == "SPL_QUERY_TOO_COMPLEX" {
-				continue
-			}
-			return 0, CalendarNone, time.Time{}, 0, err
-		}
-		if bucketCount <= bins {
-			return span, calendar, firstBucket, bucketCount, nil
-		}
-	}
-	return 0, CalendarNone, time.Time{}, 0, &Diagnostic{
-		Code:    "SPL_UNSUPPORTED_TIMECHART_SPAN",
-		Message: "timechart cannot select an automatic span for the requested bounds and options",
-		Range:   sourceRange,
-		Suggestions: []string{
-			"remove minspan or choose a smaller value",
-			"use an explicit supported span",
-		},
-	}
-}
-
 func validateTimechartAxisOptions(
 	axis spl.TimechartAxisOptions,
 	sourceRange spl.Range,
 ) (uint64, error) {
+	for _, option := range []struct {
+		name             string
+		value, specified bool
+		location         spl.Range
+	}{
+		{"cont", axis.Cont, axis.ContSpecified, axis.ContRange},
+		{"partial", axis.Partial, axis.PartialSpecified, axis.PartialRange},
+		{"fixedrange", axis.FixedRange, axis.FixedRangeSpecified, axis.FixedRangeRange},
+	} {
+		if (option.specified && option.location == (spl.Range{})) || (!option.specified && (option.value || option.location != (spl.Range{}))) {
+			return 0, &Diagnostic{Code: "SPL_UNSUPPORTED_TIMECHART_SYNTAX", Message: "timechart " + option.name + " option metadata is invalid", Range: sourceRange}
+		}
+	}
 	bins := uint64(spl.DefaultTimechartBins)
 	if axis.BinsSpecified {
 		if axis.Bins == 0 || axis.Bins > spl.MaximumTimechartBins ||
@@ -654,116 +586,6 @@ func fixedDurationSpan(span spl.TimeSpan, syntaxCode, commandName string) (time.
 	}
 
 	return time.Duration(safecast.MustConv[int64](span.Magnitude)) * unit, nil
-}
-
-func fixedTimechartBuckets(earliest, latest time.Time, span time.Duration, sourceRange spl.Range) (time.Time, uint64, error) {
-	spanSeconds := int64(span / time.Second)
-	if spanSeconds <= 0 {
-		return time.Time{}, 0, &Diagnostic{
-			Code:    "SPL_INVALID_ARGUMENT",
-			Message: "timechart span must be at least one second",
-			Range:   sourceRange,
-		}
-	}
-	firstSeconds := floorInt64(earliest.Unix(), spanSeconds) * spanSeconds
-	deltaSeconds := latest.Unix() - firstSeconds
-	if deltaSeconds < 0 {
-		return time.Time{}, 0, &Diagnostic{
-			Code:    "SPL_INVALID_TIME_RANGE",
-			Message: "timechart range cannot be represented",
-			Range:   sourceRange,
-		}
-	}
-
-	bucketCount := safecast.MustConv[uint64](deltaSeconds / spanSeconds)
-	if deltaSeconds%spanSeconds != 0 || latest.Nanosecond() != 0 {
-		bucketCount++
-	}
-	if bucketCount == 0 {
-		// Build has already established a non-empty search interval; retain a
-		// defensive check so malformed plans cannot generate numbers(0).
-		return time.Time{}, 0, &Diagnostic{
-			Code:    "SPL_INVALID_TIME_RANGE",
-			Message: "timechart requires a non-empty bucket range",
-			Range:   sourceRange,
-		}
-	}
-	if bucketCount > maxTimechartBuckets {
-		return time.Time{}, 0, &Diagnostic{
-			Code:    "SPL_QUERY_TOO_COMPLEX",
-			Message: fmt.Sprintf("timechart produces more than %d fixed-range buckets", maxTimechartBuckets),
-			Range:   sourceRange,
-		}
-	}
-	return time.Unix(firstSeconds, 0).UTC(), bucketCount, nil
-}
-
-func timechartBuckets(
-	earliest, latest time.Time,
-	span time.Duration,
-	calendar CalendarUnit,
-	location *time.Location,
-	sourceRange spl.Range,
-) (time.Time, uint64, error) {
-	if calendar == CalendarNone {
-		return fixedTimechartBuckets(earliest, latest, span, sourceRange)
-	}
-	if span != 0 ||
-		(calendar != CalendarDay && calendar != CalendarWeek && calendar != CalendarMonth) ||
-		location == nil {
-		return time.Time{}, 0, &Diagnostic{
-			Code:    "SPL_INVALID_ARGUMENT",
-			Message: "timechart calendar span metadata is invalid",
-			Range:   sourceRange,
-		}
-	}
-
-	localEarliest := earliest.In(location)
-	firstBucket := time.Date(
-		localEarliest.Year(),
-		localEarliest.Month(),
-		localEarliest.Day(),
-		0,
-		0,
-		0,
-		0,
-		location,
-	)
-	daysPerBucket := 1
-	switch calendar {
-	case CalendarWeek:
-		firstBucket = firstBucket.AddDate(0, 0, -int(firstBucket.Weekday()))
-		daysPerBucket = 7
-	case CalendarMonth:
-		firstBucket = time.Date(
-			localEarliest.Year(), localEarliest.Month(), 1, 0, 0, 0, 0, location,
-		)
-	}
-
-	var bucketCount uint64
-	for bucket := firstBucket; bucket.Before(latest); {
-		bucketCount++
-		if bucketCount > maxTimechartBuckets {
-			return time.Time{}, 0, &Diagnostic{
-				Code:    "SPL_QUERY_TOO_COMPLEX",
-				Message: fmt.Sprintf("timechart produces more than %d fixed-range buckets", maxTimechartBuckets),
-				Range:   sourceRange,
-			}
-		}
-		if calendar == CalendarMonth {
-			bucket = bucket.AddDate(0, 1, 0)
-		} else {
-			bucket = bucket.AddDate(0, 0, daysPerBucket)
-		}
-	}
-	if bucketCount == 0 {
-		return time.Time{}, 0, &Diagnostic{
-			Code:    "SPL_INVALID_TIME_RANGE",
-			Message: "timechart requires a non-empty bucket range",
-			Range:   sourceRange,
-		}
-	}
-	return firstBucket.UTC(), bucketCount, nil
 }
 
 func floorInt64(value, divisor int64) int64 {

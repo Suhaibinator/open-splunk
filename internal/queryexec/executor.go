@@ -1300,7 +1300,7 @@ func validateTimechartRowBucket(
 		)
 	}
 	if len(output.Boundaries) > 0 {
-		if ordinal >= uint64(len(output.Boundaries)-1) || !calendarBucket.Equal(output.Boundaries[ordinal]) {
+		if ordinal >= safecast.MustConv[uint64](len(output.Boundaries)-1) || !calendarBucket.Equal(output.Boundaries[ordinal]) {
 			return time.Time{}, fmt.Errorf("%w: timechart boundary differs from exact grid", searchjobs.ErrInvalidResult)
 		}
 		return output.Boundaries[ordinal], nil

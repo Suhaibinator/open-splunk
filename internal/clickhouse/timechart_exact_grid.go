@@ -12,8 +12,8 @@ import (
 )
 
 // exactTimechartGridSpec validates the planner's sealed boundary descriptor.
-func exactTimechartGridSpec(operator *plan.Timechart, timezone string) (timechartGridSpec, error) {
-	if len(operator.GridBoundaries) != int(operator.BucketCount)+1 || operator.BucketCount == 0 || operator.BucketCount > 10000 {
+func exactTimechartGridSpec(operator *plan.Timechart, scan *plan.Scan, timezone string) (timechartGridSpec, error) {
+	if uint64(len(operator.GridBoundaries)) != operator.BucketCount+1 || operator.BucketCount == 0 || operator.BucketCount > 10000 {
 		return timechartGridSpec{}, errors.New("compile timechart: exact boundary count is invalid")
 	}
 	for index, boundary := range operator.GridBoundaries {
@@ -24,10 +24,14 @@ func exactTimechartGridSpec(operator *plan.Timechart, timezone string) (timechar
 	if !operator.FirstBucket.Equal(operator.GridBoundaries[0]) {
 		return timechartGridSpec{}, errors.New("compile timechart: exact origin is invalid")
 	}
-	// Rebuild from the same descriptor extent, preserving authored span and origin.
+	// Rebuild from immutable search bounds, or the materialized input extent.
 	copyOperator := *operator
 	copyOperator.AuthoredSpan = operator.AuthoredSpan
-	if err := plan.ResolveTimechartGrid(&copyOperator, operator.GridBoundaries[0], operator.GridBoundaries[len(operator.GridBoundaries)-1], timezone); err != nil {
+	earliest, latest := operator.GridBoundaries[0], operator.GridBoundaries[len(operator.GridBoundaries)-1]
+	if operator.FixedRange {
+		earliest, latest = scan.Earliest, scan.Latest
+	}
+	if err := plan.ResolveTimechartGrid(&copyOperator, earliest, latest, timezone); err != nil {
 		return timechartGridSpec{}, err
 	}
 	if !slices.Equal(copyOperator.GridBoundaries, operator.GridBoundaries) || copyOperator.Span != operator.Span || copyOperator.Calendar != operator.Calendar || copyOperator.CalendarMagnitude != operator.CalendarMagnitude {

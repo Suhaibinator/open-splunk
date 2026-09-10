@@ -36,7 +36,7 @@ func compileTimechart(
 	var err error
 	enhanced := operator.Span < time.Second && operator.Calendar == plan.CalendarNone || operator.Span > 24*time.Hour || operator.CalendarMagnitude > 1 || !operator.Alignment.IsZero() || !operator.Continuous || !operator.IncludePartial || !operator.FixedRange
 	if enhanced {
-		gridSpec, err = exactTimechartGridSpec(operator, state.context.searchTimezone)
+		gridSpec, err = exactTimechartGridSpec(operator, scan, state.context.searchTimezone)
 	} else {
 		switch operator.Calendar {
 		case plan.CalendarNone:
@@ -49,6 +49,11 @@ func compileTimechart(
 	}
 	if err != nil {
 		return CompiledQuery{}, err
+	}
+	if !enhanced && len(operator.GridBoundaries) > 0 {
+		if _, validationErr := exactTimechartGridSpec(operator, scan, state.context.searchTimezone); validationErr != nil {
+			return CompiledQuery{}, validationErr
+		}
 	}
 	if err := validateCanonicalFieldRef("timechart", "time", operator.Time); err != nil {
 		return CompiledQuery{}, err

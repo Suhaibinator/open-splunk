@@ -7,6 +7,8 @@ import (
 	"sort"
 	"time"
 
+	"fortio.org/safecast"
+
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -42,7 +44,7 @@ func prepareTimechartGridTransport(rows driver.Rows, columns []string, types []d
 	if len(columns) < 3 || len(types) < 3 || columns[2] != clickhouse.TimechartBucketPresentColumn || types[2].DatabaseTypeName() != "UInt8" || types[2].ScanType() != reflect.TypeFor[uint8]() {
 		return rows, columns, types, nil, fmt.Errorf("%w: timechart bucket presence column is invalid", searchjobs.ErrInvalidResult)
 	}
-	wrapped := &timechartGridRows{Rows: rows, present: make([]uint8, 0, int(output.BucketCount))}
+	wrapped := &timechartGridRows{Rows: rows, present: make([]uint8, 0, safecast.MustConv[int](output.BucketCount))}
 	return wrapped, slices.Delete(slices.Clone(columns), 2, 3), slices.Delete(slices.Clone(types), 2, 3), wrapped, nil
 }
 
@@ -71,8 +73,16 @@ func (sink *timechartGridSink) AddRow(values []searchjobs.Value) error {
 		return fmt.Errorf("%w: timechart row is outside its grid", searchjobs.ErrInvalidResult)
 	}
 	if sink.output.ExactGrid {
-		if sink.occupancy == nil || len(sink.occupancy.present) != int(sink.output.BucketCount) {
+		if sink.occupancy == nil || uint64(len(sink.occupancy.present)) != sink.output.BucketCount {
 			return fmt.Errorf("%w: timechart presence sequence is incomplete", searchjobs.ErrInvalidResult)
+		}
+		if sink.occupancy.present[ordinal] == 0 {
+			for _, value := range values[1:] {
+				count, isCount := value.Unsigned()
+				if (isCount && count > 0) || (!isCount && !value.IsNull() && !value.IsMissing()) {
+					return fmt.Errorf("%w: absent timechart bucket carries an aggregate value", searchjobs.ErrInvalidResult)
+				}
+			}
 		}
 		if !sink.output.Continuous && sink.occupancy.present[ordinal] == 0 {
 			return nil
