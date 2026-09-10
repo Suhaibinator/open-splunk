@@ -363,7 +363,7 @@ func TestProjectSearchSchemaMatchesHTTPResultClassification(t *testing.T) {
 			job.SPL = test.spl
 			job.Schema = &searchjobs.Schema{Columns: []searchjobs.Column{
 				{Name: "_time", Kind: searchjobs.ValueKindTime},
-				{Name: "count", Kind: searchjobs.ValueKindUnsigned, Nullable: true, Multivalue: true},
+				{Name: "count", Kind: searchjobs.ValueKindUnsigned, Nullable: true, Multivalue: test.want != opensplunk.ResultSetKind_RESULT_SET_KIND_TIME_SERIES},
 			}}
 
 			projection, err := projectSearch(job, job.CreatedAt)
@@ -387,7 +387,7 @@ func TestProjectSearchSchemaMatchesHTTPResultClassification(t *testing.T) {
 				wantSecondSemantic = opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_METRIC
 			}
 			second := schema.Columns[1]
-			if second.GetValueType() != opensplunk.ValueType_VALUE_TYPE_UINT64 || second.GetSemanticType() != wantSecondSemantic || !second.GetNullable() || !second.GetMultivalue() {
+			if second.GetValueType() != opensplunk.ValueType_VALUE_TYPE_UINT64 || second.GetSemanticType() != wantSecondSemantic || !second.GetNullable() || second.GetMultivalue() != (test.want != opensplunk.ResultSetKind_RESULT_SET_KIND_TIME_SERIES) {
 				t.Fatalf("second column = %+v", second)
 			}
 		})

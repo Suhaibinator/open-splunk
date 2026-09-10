@@ -139,7 +139,7 @@ func TestSchemaPreservesOrderKindsAndSemantics(t *testing.T) {
 		t.Fatal(err)
 	}
 	if converted.GetSchemaId() != "schema-1" || converted.GetRevision() != 1 ||
-		converted.GetResultKind() != opensplunk.ResultSetKind_RESULT_SET_KIND_TIME_SERIES ||
+		converted.GetResultKind() != opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS ||
 		len(converted.GetColumns()) != len(schema.Columns) {
 		t.Fatalf("schema = %+v", converted)
 	}
@@ -147,10 +147,8 @@ func TestSchemaPreservesOrderKindsAndSemantics(t *testing.T) {
 		converted.GetColumns()[0].GetSemanticType() != opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_EVENT_TIME {
 		t.Fatalf("time column = %+v", converted.GetColumns()[0])
 	}
-	for index := 1; index < len(converted.GetColumns()); index++ {
-		if converted.GetColumns()[index].GetSemanticType() != opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_METRIC {
-			t.Fatalf("wide time-series column %d = %+v", index, converted.GetColumns()[index])
-		}
+	if converted.GetColumns()[1].GetSemanticType() != opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_UNSPECIFIED || converted.GetColumns()[2].GetSemanticType() != opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_MESSAGE {
+		t.Fatalf("statistics suffix semantics=%v", converted.GetColumns())
 	}
 	if !converted.GetColumns()[1].GetNullable() ||
 		converted.GetColumns()[2].GetValueType() != opensplunk.ValueType_VALUE_TYPE_MIXED ||
@@ -333,6 +331,7 @@ func TestTimechartFinalSchemaDeterminesPresentation(t *testing.T) {
 		columns []searchjobs.Column
 		want    opensplunk.ResultSetKind
 	}{
+		{"nullable time", []searchjobs.Column{{Name: "_time", Kind: searchjobs.ValueKindTime, Nullable: true}, {Name: "count", Kind: searchjobs.ValueKindUnsigned}}, opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS},
 		{"removed time", []searchjobs.Column{{Name: "count", Kind: searchjobs.ValueKindUnsigned}}, opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS},
 		{"renamed time", []searchjobs.Column{{Name: "bucket", Kind: searchjobs.ValueKindTime}, {Name: "count", Kind: searchjobs.ValueKindUnsigned}}, opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS},
 		{"replaced time", []searchjobs.Column{{Name: "_time", Kind: searchjobs.ValueKindString}, {Name: "count", Kind: searchjobs.ValueKindUnsigned}}, opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS},
@@ -349,6 +348,27 @@ func TestTimechartFinalSchemaDeterminesPresentation(t *testing.T) {
 			}
 			if test.name == "reordered axis" && schema.Columns[1].SemanticType != opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_EVENT_TIME {
 				t.Fatal("reordered time axis was mislabeled as metric")
+			}
+		})
+	}
+}
+
+func TestTimechartMixedSuffixPreservesEveryColumnAsStatistics(t *testing.T) {
+	for _, extra := range []searchjobs.Column{
+		{Name: "note", Kind: searchjobs.ValueKindString},
+		{Name: "flag", Kind: searchjobs.ValueKindBool},
+		{Name: "items", Kind: searchjobs.ValueKindList, Multivalue: true},
+		{Name: "mixed", Kind: searchjobs.ValueKindMixed},
+		{Name: "numbers", Kind: searchjobs.ValueKindUnsigned, Multivalue: true},
+	} {
+		t.Run(extra.Name, func(t *testing.T) {
+			columns := []searchjobs.Column{{Name: "_time", Kind: searchjobs.ValueKindTime}, {Name: "count", Kind: searchjobs.ValueKindUnsigned}, extra}
+			converted, err := Schema("final", searchjobs.Schema{Columns: columns}, ResultShape{Kind: opensplunk.ResultSetKind_RESULT_SET_KIND_TIME_SERIES, RuntimeNamedColumns: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if converted.ResultKind != opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS || len(converted.Columns) != 3 || converted.Columns[2].FieldName != extra.Name {
+				t.Fatalf("suffix column hidden: %v", converted)
 			}
 		})
 	}

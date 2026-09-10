@@ -389,12 +389,17 @@ func ResultShapeForSchema(schema searchjobs.Schema, shape ResultShape) ResultSha
 	timestamp, metric := false, false
 	for _, column := range schema.Columns {
 		if column.Name == "_time" {
-			timestamp = column.Kind == searchjobs.ValueKindTime && !column.Multivalue
+			timestamp = column.Kind == searchjobs.ValueKindTime && !column.Multivalue && !column.Nullable
 			continue
 		}
+		if column.Multivalue {
+			return ResultShape{Kind: opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS}
+		}
 		switch column.Kind {
-		case searchjobs.ValueKindUnsigned, searchjobs.ValueKindSigned, searchjobs.ValueKindDouble:
+		case searchjobs.ValueKindUnsigned, searchjobs.ValueKindSigned, searchjobs.ValueKindDouble, searchjobs.ValueKindDecimal:
 			metric = true
+		default:
+			return ResultShape{Kind: opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS}
 		}
 	}
 	if !timestamp || !metric {
