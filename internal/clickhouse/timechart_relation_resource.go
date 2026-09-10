@@ -45,6 +45,10 @@ func relationInputRetainedBytes(
 	if ctx == nil {
 		return 0, errors.New("materialize timechart: context is nil")
 	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	walk := relationTraversal{ctx: ctx}
 	if len(columns) == 0 {
 		return 0, errors.New("materialize timechart: empty schema")
 	}
@@ -64,6 +68,9 @@ func relationInputRetainedBytes(
 		return 0, fmt.Errorf("%w: materialize timechart schema capacity exceeds byte limit", ErrTimechartResourceLimit)
 	}
 	for _, column := range columns {
+		if !walk.step() {
+			return 0, walk.err
+		}
 		if column.Name == "" || !utf8.ValidString(column.Name) {
 			return 0, errors.New("materialize timechart: invalid schema name")
 		}
@@ -86,10 +93,16 @@ func relationInputRetainedBytes(
 		}
 		for index, column := range columns {
 			value := row[index]
-			if !relationValueValid(column.Type, value) {
+			if !walk.valueValid(column.Type, value) {
+				if walk.err != nil {
+					return 0, walk.err
+				}
 				return 0, errors.New("materialize timechart: cell type is invalid")
 			}
-			size, ok := retainedRelationValue(value, 0)
+			size, ok := walk.retainedValue(value, 0)
+			if walk.err != nil {
+				return 0, walk.err
+			}
 			if !ok || !charge(size) {
 				return 0, fmt.Errorf("%w: materialize timechart cells exceed byte limit", ErrTimechartResourceLimit)
 			}
@@ -97,6 +110,9 @@ func relationInputRetainedBytes(
 	}
 	names := make([]string, len(columns))
 	for index, column := range columns {
+		if !walk.step() {
+			return 0, walk.err
+		}
 		names[index] = column.Name
 	}
 	slices.Sort(names)
@@ -104,6 +120,9 @@ func relationInputRetainedBytes(
 		if names[index] == names[index-1] {
 			return 0, errors.New("materialize timechart: invalid schema name")
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
 	}
 	return retained, nil
 }
@@ -120,6 +139,10 @@ func relationInputNativeMaterializationBytes(
 	if ctx == nil || input == nil || len(input.columns) == 0 {
 		return 0, false, nil
 	}
+	if err := ctx.Err(); err != nil {
+		return 0, false, err
+	}
+	walk := relationTraversal{ctx: ctx}
 	columnCount := len(input.columns)
 	if input.bucketEnds != nil {
 		if len(input.bucketEnds) != len(input.rows) {
@@ -143,6 +166,9 @@ func relationInputNativeMaterializationBytes(
 		return 0, false, nil
 	}
 	for _, descriptor := range input.columns {
+		if !walk.step() {
+			return 0, false, walk.err
+		}
 		if !relationColumnTypeSupported(descriptor.Type) ||
 			!add(nativeColumnDescriptorBytes(descriptor)) {
 			return 0, false, nil
@@ -165,7 +191,10 @@ func relationInputNativeMaterializationBytes(
 			return 0, false, nil
 		}
 		for columnIndex, value := range row {
-			bytes, ok := nativeRelationCellBytes(input.columns[columnIndex].Type, value)
+			bytes, ok := walk.nativeCellBytes(input.columns[columnIndex].Type, value)
+			if walk.err != nil {
+				return 0, false, walk.err
+			}
 			if !ok || !add(bytes) {
 				return 0, false, nil
 			}
@@ -175,9 +204,15 @@ func relationInputNativeMaterializationBytes(
 		}
 	}
 	for _, descriptor := range input.columns {
+		if !walk.step() {
+			return 0, false, walk.err
+		}
 		if !add(nativeColumnInitialCapacityBytes(descriptor.Type, len(input.rows))) {
 			return 0, false, nil
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, false, err
 	}
 	return total, true, nil
 }
@@ -230,6 +265,14 @@ func nativeColumnDescriptorBytes(descriptor RelationColumn) uint64 {
 }
 
 func nativeRelationCellBytes(kind string, value any) (uint64, bool) {
+	walk := relationTraversal{ctx: context.Background()}
+	return walk.nativeCellBytes(kind, value)
+}
+
+func (walk *relationTraversal) nativeCellBytes(kind string, value any) (uint64, bool) {
+	if !walk.step() {
+		return 0, false
+	}
 	nullable := strings.HasPrefix(kind, "Nullable(")
 	if value == nil {
 		if relationBaseType(kind) == "Dynamic" {
@@ -273,7 +316,7 @@ func nativeRelationCellBytes(kind string, value any) (uint64, bool) {
 		}
 		bytes = 2*uint64(len(text)) + positionBytes
 	case "Dynamic":
-		return nativeRelationDynamicBytes(value, true)
+		return walk.nativeDynamicBytes(value, true)
 	default:
 		return 0, false
 	}
@@ -283,7 +326,10 @@ func nativeRelationCellBytes(kind string, value any) (uint64, bool) {
 	return bytes, true
 }
 
-func nativeRelationDynamicBytes(value any, root bool) (uint64, bool) {
+func (walk *relationTraversal) nativeDynamicBytes(value any, root bool) (uint64, bool) {
+	if !walk.step() {
+		return 0, false
+	}
 	var total uint64
 	if root {
 		total = uint64(unsafe.Sizeof(chcol.Dynamic{}))
@@ -310,7 +356,7 @@ func nativeRelationDynamicBytes(value any, root bool) (uint64, bool) {
 			return 0, false
 		}
 		for _, item := range items {
-			child, childOK := nativeRelationDynamicBytes(item, false)
+			child, childOK := walk.nativeDynamicBytes(item, false)
 			if !childOK {
 				return 0, false
 			}

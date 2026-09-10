@@ -95,6 +95,11 @@ func (compiled CompiledQuery) ContinueWithTimeBucketsAndWorkContext(ctx context.
 			return CompiledQuery{}, errors.New("continue timechart: invalid bucket bounds")
 		}
 		for i, row := range rows {
+			if i&255 == 0 {
+				if err := ctx.Err(); err != nil {
+					return CompiledQuery{}, err
+				}
+			}
 			if len(row) == 0 {
 				return CompiledQuery{}, errors.New("continue timechart: invalid bucket row")
 			}
@@ -112,7 +117,12 @@ func (compiled CompiledQuery) ContinueWithTimeBucketsAndWorkContext(ctx context.
 		input.retainedBytes += uint64(len(ends)) * uint64(unsafe.Sizeof(time.Time{}))
 		digest := sha256.New()
 		_, _ = digest.Write(input.commitment[:])
-		for _, end := range ends {
+		for i, end := range ends {
+			if i&255 == 0 {
+				if err := ctx.Err(); err != nil {
+					return CompiledQuery{}, err
+				}
+			}
 			writeCompiledArgument(digest, end, 0)
 		}
 		copy(input.commitment[:], digest.Sum(nil))
@@ -168,11 +178,15 @@ func newRelationInput(ctx context.Context, columns []RelationColumn, rows [][]an
 	if err != nil {
 		return nil, err
 	}
+	walk := relationTraversal{ctx: ctx}
 	input := &compiledRelationInput{columns: slices.Clone(columns), rows: make([][]any, len(rows))}
 	digest := sha256.New()
 	writeTokenPart(digest, "timechart-external-relation-v1")
 	input.retainedBytes = retained
 	for i, column := range columns {
+		if !walk.step() {
+			return nil, walk.err
+		}
 		input.columns[i].Name = strings.Clone(column.Name)
 		input.columns[i].Type = strings.Clone(column.Type)
 		writeTokenPart(digest, column.Name)
@@ -187,23 +201,36 @@ func newRelationInput(ctx context.Context, columns []RelationColumn, rows [][]an
 		}
 		input.rows[i] = make([]any, len(row))
 		for j, value := range row {
-			cloned, ok := cloneRelationValue(value, 0)
+			cloned, ok := walk.cloneValue(value, 0)
 			if !ok {
+				if walk.err != nil {
+					return nil, walk.err
+				}
 				return nil, errors.New("materialize timechart: cell cannot be cloned")
 			}
 			input.rows[i][j] = cloned
-			if !writeRelationValue(digest, value, 0) {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			if !walk.writeValue(digest, value, 0) {
+				if walk.err != nil {
+					return nil, walk.err
+				}
 				return nil, errors.New("materialize timechart: unsupported cell")
 			}
 		}
 	}
 	copy(input.commitment[:], digest.Sum(nil))
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return input, nil
 }
 
-func relationValueValid(kind string, value any) bool {
+func (walk *relationTraversal) valueValid(kind string, value any) bool {
 	if kind == "Dynamic" {
-		return validRelationDynamicValue(value)
+		_, ok := walk.retainedValue(value, 0)
+		return ok
 	}
 	if value == nil {
 		return strings.HasPrefix(kind, "Nullable(")
@@ -380,8 +407,15 @@ func materializeValidatedRelationInput(
 	ctx context.Context,
 	input *compiledRelationInput,
 ) (*ext.Table, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	walk := relationTraversal{ctx: ctx}
 	definitions := make([]func(*ext.Table) error, len(input.columns))
 	for i, fieldColumn := range input.columns {
+		if !walk.step() {
+			return nil, walk.err
+		}
 		_, physical, err := relationField(fieldColumn, i)
 		if err != nil {
 			return nil, err
@@ -395,29 +429,43 @@ func materializeValidatedRelationInput(
 	if err != nil {
 		return nil, err
 	}
-	for rowIndex, row := range input.rows {
+	width := len(input.columns)
+	if input.bucketEnds != nil {
+		width++
+	}
+	row := make([]any, width)
+	defer clear(row)
+	for rowIndex, source := range input.rows {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		width := len(row)
-		if input.bucketEnds != nil {
-			width++
-		}
-		copied := make([]any, len(row), width)
-		copy(copied, row)
-		row = copied
-		for i, column := range input.columns {
-			if column.Type == "Dynamic" {
-				row[i] = nativeRelationDynamic(row[i])
+		copy(row, source)
+		for i, descriptor := range input.columns {
+			if !walk.step() {
+				return nil, walk.err
+			}
+			if descriptor.Type == "Dynamic" {
+				row[i] = walk.nativeDynamic(row[i])
+				if walk.err != nil {
+					return nil, walk.err
+				}
 			}
 		}
 		if input.bucketEnds != nil {
-			row = append(row, input.bucketEnds[rowIndex])
+			row[len(input.columns)] = input.bucketEnds[rowIndex]
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 		if err := table.Append(row...); err != nil {
 			return nil, err
 		}
+		clear(row)
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	return table, nil
 }
 
@@ -436,15 +484,17 @@ func (compiled CompiledQuery) IsContinuationOf(source CompiledQuery) bool {
 		*compiled.continuationRoot == *source.executionSeal
 }
 
-func validRelationDynamicValue(value any) bool { _, ok := retainedRelationValue(value, 0); return ok }
-func retainedRelationValue(value any, depth int) (uint64, bool) {
+func (walk *relationTraversal) retainedValue(value any, depth int) (uint64, bool) {
+	if !walk.step() {
+		return 0, false
+	}
 	if depth > 17 {
 		return 0, false
 	}
 	if items, ok := value.([]any); ok {
 		total := uint64(unsafe.Sizeof([]any{})) + uint64(len(items))*uint64(unsafe.Sizeof(any(nil)))
 		for _, item := range items {
-			size, ok := retainedRelationValue(item, depth+1)
+			size, ok := walk.retainedValue(item, depth+1)
 			if !ok {
 				return 0, false
 			}
@@ -462,14 +512,17 @@ func retainedRelationValue(value any, depth int) (uint64, bool) {
 		return 0, false
 	}
 }
-func cloneRelationValue(value any, depth int) (any, bool) {
+func (walk *relationTraversal) cloneValue(value any, depth int) (any, bool) {
+	if !walk.step() {
+		return nil, false
+	}
 	if depth > 17 {
 		return nil, false
 	}
 	if items, ok := value.([]any); ok {
 		result := make([]any, len(items))
 		for i, item := range items {
-			cloned, ok := cloneRelationValue(item, depth+1)
+			cloned, ok := walk.cloneValue(item, depth+1)
 			if !ok {
 				return nil, false
 			}
@@ -479,7 +532,10 @@ func cloneRelationValue(value any, depth int) (any, bool) {
 	}
 	return cloneCompiledArgument(value)
 }
-func writeRelationValue(digest hash.Hash, value any, depth int) bool {
+func (walk *relationTraversal) writeValue(digest hash.Hash, value any, depth int) bool {
+	if !walk.step() {
+		return false
+	}
 	if depth > 17 {
 		return false
 	}
@@ -488,7 +544,7 @@ func writeRelationValue(digest hash.Hash, value any, depth int) bool {
 		writeBool(digest, items == nil)
 		writeUint64(digest, uint64(len(items)))
 		for _, item := range items {
-			if !writeRelationValue(digest, item, depth+1) {
+			if !walk.writeValue(digest, item, depth+1) {
 				return false
 			}
 		}
@@ -496,11 +552,17 @@ func writeRelationValue(digest hash.Hash, value any, depth int) bool {
 	}
 	return writeCompiledArgument(digest, value, 0)
 }
-func nativeRelationDynamic(value any) chcol.Dynamic {
+func (walk *relationTraversal) nativeDynamic(value any) chcol.Dynamic {
+	if !walk.step() {
+		return chcol.Dynamic{}
+	}
 	if items, ok := value.([]any); ok {
 		result := make([]chcol.Dynamic, len(items))
 		for i, item := range items {
-			result[i] = nativeRelationDynamic(item)
+			result[i] = walk.nativeDynamic(item)
+			if walk.err != nil {
+				return chcol.Dynamic{}
+			}
 		}
 		return chcol.NewDynamicWithType(result, "Array(Dynamic)")
 	}

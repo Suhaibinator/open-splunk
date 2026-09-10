@@ -1057,7 +1057,8 @@ func validateValue(value Value, depth int) error {
 // temporarily buffer values use this same accounting as the durable result
 // sink so recursive containers cannot evade a private memory ceiling.
 func (value Value) RetainedSizeBytes() (uint64, error) {
-	return value.RetainedSizeBytesContext(context.Background())
+	_, retained, err := (*valueMeasurement)(nil).measure(value, 0)
+	return retained, err
 }
 
 // RetainedSizeBytesContext applies the same modeled heap accounting while
@@ -1077,23 +1078,26 @@ func (value Value) RetainedSizeBytesContext(ctx context.Context) (uint64, error)
 	return retained, nil
 }
 
+// A nil measurement retains the shared accounting without context polling for
+// legacy callers. Context-aware measurements carry their own bounded counter.
 type valueMeasurement struct {
 	ctx   context.Context
 	nodes uint64
 }
 
 func measureValue(value Value, depth int) (uint64, uint64, error) {
-	measurement := valueMeasurement{ctx: context.Background()}
-	return measurement.measure(value, depth)
+	return (*valueMeasurement)(nil).measure(value, depth)
 }
 
 func (measurement *valueMeasurement) measure(value Value, depth int) (uint64, uint64, error) {
-	if measurement.nodes&255 == 0 {
-		if err := measurement.ctx.Err(); err != nil {
-			return 0, 0, err
+	if measurement != nil {
+		if measurement.nodes&255 == 0 {
+			if err := measurement.ctx.Err(); err != nil {
+				return 0, 0, err
+			}
 		}
+		measurement.nodes++
 	}
-	measurement.nodes++
 	if depth > 32 {
 		return 0, 0, errors.New("search result value exceeds maximum nesting depth")
 	}
