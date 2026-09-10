@@ -26,7 +26,11 @@ const (
 )
 
 func timechartResourceParameter(name string) string {
-	return "{" + name + ":UInt64}"
+	// Read the immutable execution setting directly so the query can continue
+	// using its ordinary positional bind arguments. Mixing ClickHouse's native
+	// {name:Type} parameter syntax with those arguments makes clickhouse-go
+	// reinterpret every positional argument as a named parameter.
+	return "toUInt64(getSetting('param_" + name + "'))"
 }
 
 func timechartResourceGuardPredicate(
