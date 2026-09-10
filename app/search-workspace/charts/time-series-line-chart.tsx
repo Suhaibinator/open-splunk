@@ -256,6 +256,20 @@ export function timelineSeriesDomain(
         positiveTotal: hasFinite && value >= 0 ? value : 0,
       };
     });
+  } else if (names.has(fallbackLabel)) {
+    rows = rows.map((row, index) => {
+      const point = points[index];
+      const explicit: number | null | undefined = point?.series?.[fallbackLabel];
+      if ((explicit !== undefined && explicit !== null) || !Number.isFinite(point?.count)) return row;
+      const value = point.count;
+      return {
+        hasFinite: true,
+        maximum: Math.max(row.maximum, value),
+        minimum: Math.min(row.minimum, value),
+        negativeTotal: row.negativeTotal + (value < 0 ? Math.abs(value) : 0),
+        positiveTotal: row.positiveTotal + (value >= 0 ? value : 0),
+      };
+    });
   }
   const domains: Record<StackMode, number[]> = { none: [], stacked: [], stacked100: [] };
   const extendDomain = (mode: StackMode, minimum: number, maximum: number) => {

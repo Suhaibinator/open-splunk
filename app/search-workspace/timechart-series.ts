@@ -61,10 +61,11 @@ export interface TimechartRowSort {
 
 function timechartSortCoordinateNanoseconds(point: TimelinePoint): bigint | null {
   if (point.timeCoordinateNanoseconds !== undefined) return point.timeCoordinateNanoseconds;
-  if (point.timeValue === undefined) return null;
-  const precise = strictRfc3339Nanoseconds(point.timeValue);
+  const timestamp = point.timeValue ?? point.earliest;
+  if (timestamp === undefined) return null;
+  const precise = strictRfc3339Nanoseconds(timestamp);
   if (precise !== null) return precise;
-  const milliseconds = Date.parse(point.timeValue);
+  const milliseconds = Date.parse(timestamp);
   return Number.isFinite(milliseconds) ? BigInt(milliseconds) * 1_000_000n : null;
 }
 

@@ -317,6 +317,30 @@ test("chart model scans the full domain once and unstacked windows read only vis
   assert.equal((markup.match(/class="time-series-chart__line time-series-chart__series"/gu) ?? []).length, 12);
 });
 
+test("mixed Events series include missing-entry count fallbacks in cached domains", () => {
+  const points: TimelinePoint[] = [
+    { id: "explicit", label: "explicit", count: 2, series: { Events: 2, other: 5 } },
+    { id: "fallback", label: "fallback", count: 100, series: { other: 1 } },
+  ];
+  const model = timelineChartModel(points);
+  const window = timelineVisibleStackWindow(model.points, model.series, "Events", 0, 2, "none");
+
+  assert.deepEqual(model.series.domains.none, [0, 100]);
+  assert.deepEqual(window.rows[1], [
+    { end: 100, raw: 100, start: 0 },
+    { end: 1, raw: 1, start: 0 },
+  ]);
+});
+
+test("bounds-only chart points retain exact nanosecond chronology", () => {
+  const points: TimelinePoint[] = [
+    { id: "later", label: "later", count: 1, earliest: "2026-09-01T12:00:00.000000002Z" },
+    { id: "earlier", label: "earlier", count: 1, earliest: "2026-09-01T12:00:00.000000001Z" },
+  ];
+
+  assert.deepEqual(timelineChartModel(points).points.map((point) => point.id), ["earlier", "later"]);
+});
+
 test("wide stacked windows retain global baselines while bounding rendered series", () => {
   const series = Object.fromEntries(Array.from({ length: 30 }, (_, index) => [`series-${index + 1}`, 1]));
   const markup = renderToStaticMarkup(
