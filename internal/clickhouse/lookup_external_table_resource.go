@@ -6,6 +6,7 @@ import (
 	"math"
 	"unsafe"
 
+	"fortio.org/safecast"
 	chproto "github.com/ClickHouse/ch-go/proto"
 	"github.com/ClickHouse/clickhouse-go/v2/ext"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/column"
@@ -84,7 +85,7 @@ func measureCompiledLookupExternalTable(
 		!chargeProduct(columnCount, uint64(unsafe.Sizeof(any(nil))), add) {
 		return 0, false
 	}
-	rows := uint64(table.backing.rowCount)
+	rows := safecast.MustConv[uint64](table.backing.rowCount)
 	if rows > 0 {
 		// The matched marker is one append-grown byte per row. Eight bytes covers
 		// the allocator's first backing when only a few rows are present.
