@@ -5,8 +5,9 @@ import { strictRfc3339Nanoseconds } from "./time-range";
 
 /**
  * Upper bound on timechart buckets the visualization walks from the retained
- * result. Server pages are capped at 1,000 rows, so this is at most ten
- * sequential cursor follows; beyond it the chart is marked as truncated.
+ * result. Requests use the server's maximum page size, but its byte limit may
+ * shorten pages. The cursor walk remains row-bounded and cancellable; reaching
+ * this limit with more rows available marks the chart as capped.
  */
 export const MAXIMUM_CHART_BUCKETS = 10_000;
 export const TIMECHART_PROGRESS_BATCH_SIZE = 1_000;
