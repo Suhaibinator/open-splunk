@@ -5,6 +5,7 @@ import type { ResultRow } from "../../gen/ts/open_splunk/result";
 import type { TimelinePoint } from "../../lib/demo/search-data";
 import {
   MAXIMUM_CHART_BUCKETS,
+  TIMECHART_PROGRESS_BATCH_SIZE,
   completeTimechartCoverage,
   describeTimechartCoverage,
   describeTimechartStatisticsPage,
@@ -80,7 +81,7 @@ function firstPage(pages: Map<string, TimechartPage>, totalRows: number, totalSi
 test("time-series pages concatenate in cursor order until the cursor ends", async () => {
   const pages = pagedResult(1_000, 2_017);
   const fetched: string[] = [];
-  const progress: TimechartCoverage[] = [];
+  const progress: Array<{ coverage: TimechartCoverage; rows: ResultRow[] }> = [];
 
   const load = await loadTimechartBuckets({
     firstPage: firstPage(pages, 2_017),
@@ -90,7 +91,7 @@ test("time-series pages concatenate in cursor order until the cursor ends", asyn
       assert.ok(page !== undefined, `unexpected cursor ${token}`);
       return page;
     },
-    onProgress: (partial) => progress.push(partial.coverage),
+    onProgress: (partial) => progress.push(partial),
   });
 
   assert.deepEqual(fetched, ["page-1000", "page-2000"]);
@@ -103,9 +104,36 @@ test("time-series pages concatenate in cursor order until the cursor ends", asyn
     totalBuckets: 2_017,
     totalExact: true,
   });
-  assert.deepEqual(progress.map((coverage) => [coverage.status, coverage.plottedBuckets]), [
-    ["loading", 1_000],
-    ["loading", 2_000],
+  assert.deepEqual(progress.map(({ coverage, rows: batch }) => [coverage.status, coverage.plottedBuckets, batch.length]), [
+    ["loading", 2_000, 1_000],
+    ["complete", 2_017, 17],
+  ]);
+});
+
+test("short server pages publish bounded append-only batches", async () => {
+  const pages = pagedResult(20, 2_017);
+  const fetched: string[] = [];
+  const batches: Array<{ first: bigint | undefined; last: bigint | undefined; length: number; status: string }> = [];
+  const load = await loadTimechartBuckets({
+    firstPage: firstPage(pages, 2_017),
+    fetchPage: async (token) => {
+      fetched.push(token);
+      return pages.get(token) as TimechartPage;
+    },
+    onProgress: ({ coverage, rows: batch }) => batches.push({
+      first: batch[0]?.ordinal,
+      last: batch.at(-1)?.ordinal,
+      length: batch.length,
+      status: coverage.status,
+    }),
+  });
+
+  assert.equal(fetched.length, 100);
+  assert.equal(load.rows.length, 2_017);
+  assert.equal(TIMECHART_PROGRESS_BATCH_SIZE, 1_000);
+  assert.deepEqual(batches, [
+    { first: 20n, last: 1_019n, length: 1_000, status: "loading" },
+    { first: 1_020n, last: 2_016n, length: 997, status: "complete" },
   ]);
 });
 

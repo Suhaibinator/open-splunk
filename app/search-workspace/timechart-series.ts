@@ -9,6 +9,7 @@ import { strictRfc3339Nanoseconds } from "./time-range";
  * sequential cursor follows; beyond it the chart is marked as truncated.
  */
 export const MAXIMUM_CHART_BUCKETS = 10_000;
+export const TIMECHART_PROGRESS_BATCH_SIZE = 1_000;
 
 export type TimechartCoverageStatus = "complete" | "loading" | "capped" | "failed";
 
@@ -38,11 +39,18 @@ export interface TimechartBucketLoad {
   error?: unknown;
 }
 
+export interface TimechartBucketBatch {
+  /** Rows appended since the preceding publication. */
+  rows: ResultRow[];
+  coverage: TimechartCoverage;
+}
+
 export interface LoadTimechartBucketsOptions {
   firstPage: TimechartFirstPage;
   fetchPage: (pageToken: string) => Promise<TimechartPage>;
   maximumBuckets?: number;
-  onProgress?: (load: TimechartBucketLoad) => void;
+  onProgress?: (batch: TimechartBucketBatch) => void;
+  progressBatchSize?: number;
   signal?: AbortSignal;
 }
 
@@ -109,51 +117,71 @@ function abortError(): DOMException {
  * Follows the retained result cursor from the first time-series page until the
  * buckets are complete, the cap is reached, or a page fails. Every page of a
  * time-series result is one chronological slice of the same snapshot, so the
- * rows concatenate directly; the caller adapts them in one pass so bucket
- * widths are inferred across page edges rather than reset at each one.
+ * rows concatenate directly. Progress delivers only newly appended rows in
+ * bounded batches so callers can adapt each row once and avoid publishing a
+ * new copy of every preceding bucket after each cursor response.
  */
 export async function loadTimechartBuckets({
   firstPage,
   fetchPage,
   maximumBuckets = MAXIMUM_CHART_BUCKETS,
   onProgress,
+  progressBatchSize = TIMECHART_PROGRESS_BATCH_SIZE,
   signal,
 }: LoadTimechartBucketsOptions): Promise<TimechartBucketLoad> {
   if (!Number.isSafeInteger(maximumBuckets) || maximumBuckets <= 0) {
     throw new RangeError("Timechart bucket limit must be a positive safe integer.");
   }
+  if (!Number.isSafeInteger(progressBatchSize) || progressBatchSize <= 0) {
+    throw new RangeError("Timechart progress batch size must be a positive safe integer.");
+  }
   const rows = [...firstPage.rows];
+  let pendingRows: ResultRow[] = [];
   const seenTokens = new Set<string>();
-  const failed = (message: string): TimechartBucketLoad => ({
-    rows,
-    coverage: coverageFor("failed", rows, firstPage),
-    error: new Error(message),
-  });
-  const collectPage = async (nextPageToken: string | null): Promise<TimechartBucketLoad> => {
+  const publish = (coverage: TimechartCoverage) => {
+    if (onProgress === undefined) return;
+    const batch = pendingRows;
+    pendingRows = [];
+    onProgress({ rows: batch, coverage });
+  };
+  const completed = (status: Exclude<TimechartCoverageStatus, "loading">, error?: unknown): TimechartBucketLoad => {
+    const coverage = coverageFor(status, rows, firstPage);
+    publish(coverage);
+    return error === undefined ? { rows, coverage } : { rows, coverage, error };
+  };
+  const failed = (message: string): TimechartBucketLoad => completed("failed", new Error(message));
+  let nextPageToken = firstPage.nextPageToken?.trim() || null;
+  while (true) {
     if (signal?.aborted) throw abortError();
-    if (nextPageToken === null) return { rows, coverage: coverageFor("complete", rows, firstPage) };
-    if (rows.length >= maximumBuckets) return { rows, coverage: coverageFor("capped", rows, firstPage) };
+    if (nextPageToken === null) return completed("complete");
+    if (rows.length >= maximumBuckets) return completed("capped");
     if (seenTokens.has(nextPageToken)) {
       return failed("Search results repeated a page cursor while loading timechart buckets.");
     }
     seenTokens.add(nextPageToken);
-    onProgress?.({ rows: [...rows], coverage: coverageFor("loading", rows, firstPage) });
     let page: TimechartPage;
     try {
       page = await fetchPage(nextPageToken);
     } catch (error) {
       if (signal?.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
-      return { rows, coverage: coverageFor("failed", rows, firstPage), error };
+      return completed("failed", error);
     }
     if (signal?.aborted) throw abortError();
-    rows.push(...page.rows);
+    const remaining = maximumBuckets - rows.length;
+    const appended = page.rows.slice(0, remaining);
+    rows.push(...appended);
+    pendingRows.push(...appended);
     const followingToken = page.nextPageToken?.trim() || null;
     if (followingToken !== null && page.rows.length === 0) {
       return failed("Search results returned an empty page with a further cursor.");
     }
-    return collectPage(followingToken);
-  };
-  return collectPage(firstPage.nextPageToken?.trim() || null);
+    nextPageToken = followingToken;
+    if (nextPageToken === null) return completed("complete");
+    if (rows.length >= maximumBuckets) return completed("capped");
+    if (pendingRows.length >= progressBatchSize) {
+      publish(coverageFor("loading", rows, firstPage));
+    }
+  }
 }
 
 /** Coverage of a time-series result that fit on its first page. */

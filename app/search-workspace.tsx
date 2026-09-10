@@ -3333,7 +3333,7 @@ export function SearchWorkspace({
   function startBackendChartSeries(
     job: SearchJob,
     firstPage: BackendResultPage,
-    pageSize: number,
+    bootstrap: BackendBootstrapState,
     generation: number,
   ) {
     backendChartSeriesAbortRef.current?.abort();
@@ -3347,14 +3347,25 @@ export function SearchWorkspace({
     backendChartSeriesAbortRef.current = controller;
     const isCurrent = () => !controller.signal.aborted
       && runningSearch.isCurrent(generation, job.searchJobId);
-    const publish = (rows: ResultRow[], coverage: TimechartCoverage) => {
+    const points = adaptSearchResults(firstPage.schema, firstPage.rows).timeline;
+    const publish = (coverage: TimechartCoverage) => {
       if (!isCurrent()) return;
       setBackendChartSeries({
         searchJobId: job.searchJobId,
-        points: adaptSearchResults(firstPage.schema, rows).timeline,
+        points: [...points],
         coverage,
       });
     };
+    publish({
+      status: "loading",
+      plottedBuckets: firstPage.rows.length,
+      totalBuckets: firstPage.totalSize ?? null,
+      totalExact: firstPage.totalSize !== undefined && firstPage.totalSizeExact,
+    });
+    const continuationPageSize = normalizedBackendPageSize(
+      backendMaximumPageSize(bootstrap),
+      bootstrap,
+    );
     void loadTimechartBuckets({
       firstPage: {
         rows: firstPage.rows,
@@ -3364,7 +3375,7 @@ export function SearchWorkspace({
       },
       fetchPage: async (pageToken) => {
         const page = await requestBackendResultPage(job, {
-          pageSize,
+          pageSize: continuationPageSize,
           pageToken,
           includeTotalSize: false,
           signal: controller.signal,
@@ -3372,10 +3383,14 @@ export function SearchWorkspace({
         });
         return { rows: page.rows, nextPageToken: page.rawNextPageToken };
       },
-      onProgress: (load) => publish(load.rows, load.coverage),
+      onProgress: (batch) => {
+        if (batch.rows.length > 0) {
+          points.push(...adaptSearchResults(firstPage.schema, batch.rows).timeline);
+        }
+        publish(batch.coverage);
+      },
       signal: controller.signal,
     }).then((load) => {
-      publish(load.rows, load.coverage);
       if (load.error !== undefined && isCurrent()) {
         setBackendNotices((current) => appendUniqueMessage(
           current,
@@ -3438,7 +3453,7 @@ export function SearchWorkspace({
     backendResultPages.prepareFirstPage(pageSize);
     setBackendResultPageSize(pageSize);
     const firstPage = await fetchBackendResultPage(job, 1, pageSize, bootstrap, signal, generation);
-    startBackendChartSeries(job, firstPage, pageSize, generation);
+    startBackendChartSeries(job, firstPage, bootstrap, generation);
   }
 
   async function fetchAuthoritativeBackendMetadata(
