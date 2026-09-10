@@ -422,12 +422,18 @@ const (
 	// TimechartRetainedBytesLimitMarker classifies a runtime-wide timechart whose
 	// labels and dense cells exceed its admitted retained-result byte budget.
 	TimechartRetainedBytesLimitMarker = "open-splunk: timechart retained bytes exceed the admitted limit"
-	// These named query parameters are supplied from the immutable policy
-	// snapshot attached to the execution context. They intentionally remain
-	// separate from authored selection and from chart's fixed limits.
+	// These stable placeholder names are replaced only on the private execution
+	// SQL copy using the immutable policy snapshot attached to its context. They
+	// intentionally remain separate from authored selection and chart limits.
 	TimechartDomainLimitParameter        = "open_splunk_timechart_domain_limit"
 	TimechartCellLimitParameter          = "open_splunk_timechart_cell_limit"
 	TimechartRetainedBytesLimitParameter = "open_splunk_timechart_retained_bytes_limit"
+	// The three distinct near-MaxUint64 literals keep raw compiler SQL valid for
+	// diagnostic EXPLAIN while remaining unambiguous replacement sentinels on
+	// the private execution SQL copy.
+	TimechartDomainLimitSQLPlaceholder        = "toUInt64(/*open_splunk_timechart_domain_limit*/18446744073709551613)"
+	TimechartCellLimitSQLPlaceholder          = "toUInt64(/*open_splunk_timechart_cell_limit*/18446744073709551612)"
+	TimechartRetainedBytesLimitSQLPlaceholder = "toUInt64(/*open_splunk_timechart_retained_bytes_limit*/18446744073709551611)"
 )
 
 // ChartRowKind is the backend-neutral public value kind of a chart's row

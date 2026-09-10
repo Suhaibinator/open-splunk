@@ -1794,28 +1794,71 @@ func TestConfigFromPolicyDerivesCheckedResultGuards(t *testing.T) {
 	}
 }
 
-func TestTimechartResourceSettingsUseAdmittedPolicySnapshot(t *testing.T) {
+func TestTimechartResourceLimitsUseAdmittedPolicySnapshot(t *testing.T) {
 	t.Parallel()
 
 	policy := searchlimits.Default()
 	policy.MaxGroupedRows = 777
 	query := timechartQuery(time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC), 2)
+	ctx := searchlimits.WithPolicy(context.Background(), policy)
 	settings, err := mustExecutor(t, &fakeQueryConnection{}).settingsForContext(
-		searchlimits.WithPolicy(context.Background(), policy),
+		ctx,
 		query,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]uint64{
-		"param_" + clickhouse.TimechartDomainLimitParameter:        policy.MaxGroupedRows,
-		"param_" + clickhouse.TimechartCellLimitParameter:          policy.MaxResultBytes / timechartCountCellBytes,
-		"param_" + clickhouse.TimechartRetainedBytesLimitParameter: policy.MaxResultBytes,
+	limits, err := timechartResourceLimitsForContext(ctx, settings, query)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for name, value := range want {
-		if settings[name] != value {
-			t.Fatalf("setting %q = %#v, want %d", name, settings[name], value)
+	want := timechartResourceLimits{
+		domain:        policy.MaxGroupedRows,
+		cells:         policy.MaxResultBytes / timechartCountCellBytes,
+		retainedBytes: policy.MaxResultBytes,
+	}
+	if limits != want {
+		t.Fatalf("timechart limits = %#v, want %#v", limits, want)
+	}
+}
+
+func TestBindTimechartResourceLimitsSQLReplacesOnlyCompleteGuard(t *testing.T) {
+	t.Parallel()
+
+	query := timechartQuery(time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC), 2)
+	guarded := strings.Join([]string{
+		clickhouse.TimechartDomainLimitSQLPlaceholder,
+		clickhouse.TimechartCellLimitSQLPlaceholder,
+		clickhouse.TimechartRetainedBytesLimitSQLPlaceholder,
+		clickhouse.TimechartDomainLimitSQLPlaceholder,
+		clickhouse.TimechartCellLimitSQLPlaceholder,
+		clickhouse.TimechartRetainedBytesLimitSQLPlaceholder,
+	}, " + ")
+	limits := timechartResourceLimits{domain: 7, cells: 11, retainedBytes: 13}
+	bound, err := bindTimechartResourceLimitsSQL(guarded, query, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, placeholder := range []string{
+		clickhouse.TimechartDomainLimitSQLPlaceholder,
+		clickhouse.TimechartCellLimitSQLPlaceholder,
+		clickhouse.TimechartRetainedBytesLimitSQLPlaceholder,
+	} {
+		if strings.Contains(bound, placeholder) {
+			t.Fatalf("bound SQL retains %q: %s", placeholder, bound)
 		}
+	}
+	for _, value := range []string{"toUInt64(7)", "toUInt64(11)", "toUInt64(13)"} {
+		if strings.Count(bound, value) != 2 {
+			t.Fatalf("bound SQL value %q count != 2: %s", value, bound)
+		}
+	}
+	if _, err := bindTimechartResourceLimitsSQL(
+		clickhouse.TimechartDomainLimitSQLPlaceholder,
+		query,
+		limits,
+	); !errors.Is(err, searchjobs.ErrInvalidResult) {
+		t.Fatalf("partial guard error = %v, want ErrInvalidResult", err)
 	}
 }
 

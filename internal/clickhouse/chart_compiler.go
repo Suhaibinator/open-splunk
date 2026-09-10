@@ -26,11 +26,16 @@ const (
 )
 
 func timechartResourceParameter(name string) string {
-	// Read the immutable execution setting directly so the query can continue
-	// using its ordinary positional bind arguments. Mixing ClickHouse's native
-	// {name:Type} parameter syntax with those arguments makes clickhouse-go
-	// reinterpret every positional argument as a named parameter.
-	return "toUInt64(getSetting('param_" + name + "'))"
+	switch name {
+	case TimechartDomainLimitParameter:
+		return TimechartDomainLimitSQLPlaceholder
+	case TimechartCellLimitParameter:
+		return TimechartCellLimitSQLPlaceholder
+	case TimechartRetainedBytesLimitParameter:
+		return TimechartRetainedBytesLimitSQLPlaceholder
+	default:
+		panic("unknown timechart resource placeholder")
+	}
 }
 
 func timechartResourceGuardPredicate(

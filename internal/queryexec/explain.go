@@ -19,6 +19,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"github.com/Suhaibinator/open-splunk/internal/searchlimits"
 )
 
 const (
@@ -248,12 +249,30 @@ func (explainer *Explainer) Explain(
 		return ExplainResult{}, err
 	}
 
-	querySQL := explainQueryPrefix + query.SQL +
+	explainSQL := query.SQL
+	if query.Timechart != nil &&
+		(query.Timechart.Mode == clickhouse.TimechartModeRuntimeWide ||
+			query.Timechart.Mode == clickhouse.TimechartModeRuntimeWideValue) {
+		limits, limitsErr := deriveTimechartResourceLimits(
+			explainer.settings,
+			query,
+			searchlimits.Policy{},
+			false,
+		)
+		if limitsErr != nil {
+			return ExplainResult{}, invalidExplainResult("timechart resource policy is invalid")
+		}
+		explainSQL, limitsErr = bindTimechartResourceLimitsSQL(explainSQL, query, limits)
+		if limitsErr != nil {
+			return ExplainResult{}, invalidExplainResult("timechart resource guard is invalid")
+		}
+	}
+	querySQL := explainQueryPrefix + explainSQL +
 		explainQuerySettingsPrefix + strconv.FormatUint(timeoutSeconds, 10) +
 		explainQuerySettingsSuffix
 	detachedArgs, err := detachExplainArguments(
 		query.Args,
-		compilerPlaceholderCount(query.SQL),
+		compilerPlaceholderCount(explainSQL),
 		uint64(len(querySQL)),
 		maximumBoundQueryBytes,
 	)

@@ -603,12 +603,24 @@ func (executor *Executor) executeSingle(ctx context.Context, query clickhouse.Co
 	if query.Timechart != nil &&
 		(query.Timechart.Mode == clickhouse.TimechartModeRuntimeWide ||
 			query.Timechart.Mode == clickhouse.TimechartModeRuntimeWideValue) {
-		timechartLimits, settingsErr = timechartResourceLimitsFromSettings(executionSettings)
+		timechartLimits, settingsErr = timechartResourceLimitsForContext(
+			executionContext,
+			executionSettings,
+			query,
+		)
 		if settingsErr != nil {
 			return settingsErr
 		}
 	}
 	executionSQL, executionArgs, executionErr := executor.eventExecutionSurfaceContext(executionContext, query)
+	if executionErr != nil {
+		return executionErr
+	}
+	executionSQL, executionErr = bindTimechartResourceLimitsSQL(
+		executionSQL,
+		query,
+		timechartLimits,
+	)
 	if executionErr != nil {
 		return executionErr
 	}
@@ -1088,7 +1100,7 @@ func (executor *Executor) settingsForContext(
 			settings["max_threads"] = uint64(hint)
 		}
 	}
-	return withTimechartResourceSettings(settings, query, policy, admitted)
+	return settings, nil
 }
 
 type timechartResourceLimits struct {
@@ -1097,16 +1109,16 @@ type timechartResourceLimits struct {
 	retainedBytes uint64
 }
 
-func withTimechartResourceSettings(
+func deriveTimechartResourceLimits(
 	settings clickhousedriver.Settings,
 	query clickhouse.CompiledQuery,
 	policy searchlimits.Policy,
 	admitted bool,
-) (clickhousedriver.Settings, error) {
+) (timechartResourceLimits, error) {
 	if query.Timechart == nil ||
 		(query.Timechart.Mode != clickhouse.TimechartModeRuntimeWide &&
 			query.Timechart.Mode != clickhouse.TimechartModeRuntimeWideValue) {
-		return settings, nil
+		return timechartResourceLimits{}, nil
 	}
 	domain, domainOK := settings["max_rows_to_group_by"].(uint64)
 	retainedBytes, bytesOK := settings["max_result_bytes"].(uint64)
@@ -1120,7 +1132,7 @@ func withTimechartResourceSettings(
 		memoryOK = memoryBytes != 0
 	}
 	if !domainOK || !bytesOK || !memoryOK || domain == 0 || retainedBytes == 0 || memoryBytes == 0 {
-		return nil, errors.New("execute ClickHouse timechart: resource policy is invalid")
+		return timechartResourceLimits{}, errors.New("execute ClickHouse timechart: resource policy is invalid")
 	}
 	retainedBytes = min(retainedBytes, memoryBytes)
 	if query.Timechart.ExactGrid {
@@ -1130,7 +1142,7 @@ func withTimechartResourceSettings(
 		wrapperBytes := uint64(unsafe.Sizeof(timechartGridRows{}))
 		if query.Timechart.BucketCount > math.MaxUint64-wrapperBytes ||
 			query.Timechart.BucketCount+wrapperBytes >= retainedBytes {
-			return nil, fmt.Errorf("%w: timechart bucket presence exceeds its budget", searchjobs.ErrExecutionLimit)
+			return timechartResourceLimits{}, fmt.Errorf("%w: timechart bucket presence exceeds its budget", searchjobs.ErrExecutionLimit)
 		}
 		retainedBytes -= query.Timechart.BucketCount + wrapperBytes
 	}
@@ -1144,29 +1156,65 @@ func withTimechartResourceSettings(
 		retainedBytes: retainedBytes,
 	}
 	if limits.cells == 0 {
-		return nil, errors.New("execute ClickHouse timechart: resource policy cannot retain one cell")
+		return timechartResourceLimits{}, errors.New("execute ClickHouse timechart: resource policy cannot retain one cell")
 	}
-	bounded := maps.Clone(settings)
-	bounded["param_"+clickhouse.TimechartDomainLimitParameter] = limits.domain
-	bounded["param_"+clickhouse.TimechartCellLimitParameter] = limits.cells
-	bounded["param_"+clickhouse.TimechartRetainedBytesLimitParameter] = limits.retainedBytes
-	return bounded, nil
+	return limits, nil
 }
 
-func timechartResourceLimitsFromSettings(
+func timechartResourceLimitsForContext(
+	ctx context.Context,
 	settings clickhousedriver.Settings,
+	query clickhouse.CompiledQuery,
 ) (timechartResourceLimits, error) {
-	read := func(name string) (uint64, bool) {
-		value, ok := settings["param_"+name].(uint64)
-		return value, ok && value != 0
+	policy, admitted := searchlimits.FromContext(ctx)
+	return deriveTimechartResourceLimits(settings, query, policy, admitted)
+}
+
+func bindTimechartResourceLimitsSQL(
+	sql string,
+	query clickhouse.CompiledQuery,
+	limits timechartResourceLimits,
+) (string, error) {
+	if query.Timechart == nil ||
+		(query.Timechart.Mode != clickhouse.TimechartModeRuntimeWide &&
+			query.Timechart.Mode != clickhouse.TimechartModeRuntimeWideValue) {
+		return sql, nil
 	}
-	domain, domainOK := read(clickhouse.TimechartDomainLimitParameter)
-	cells, cellsOK := read(clickhouse.TimechartCellLimitParameter)
-	retainedBytes, bytesOK := read(clickhouse.TimechartRetainedBytesLimitParameter)
-	if !domainOK || !cellsOK || !bytesOK {
-		return timechartResourceLimits{}, errors.New("execute ClickHouse timechart: resource settings are incomplete")
+	placeholders := []struct {
+		text  string
+		value uint64
+	}{
+		{clickhouse.TimechartDomainLimitSQLPlaceholder, limits.domain},
+		{clickhouse.TimechartCellLimitSQLPlaceholder, limits.cells},
+		{clickhouse.TimechartRetainedBytesLimitSQLPlaceholder, limits.retainedBytes},
 	}
-	return timechartResourceLimits{domain: domain, cells: cells, retainedBytes: retainedBytes}, nil
+	missing := 0
+	for _, placeholder := range placeholders {
+		count := strings.Count(sql, placeholder.text)
+		if count == 0 {
+			missing++
+			continue
+		}
+		if count != 2 || placeholder.value == 0 {
+			return "", fmt.Errorf("%w: compiled timechart resource guard is invalid", searchjobs.ErrInvalidResult)
+		}
+	}
+	if missing == len(placeholders) {
+		// Hand-authored diagnostic fixtures can exercise the decoder without the
+		// compiler's SQL guard. Production execution requires an intact seal.
+		return sql, nil
+	}
+	if missing != 0 {
+		return "", fmt.Errorf("%w: compiled timechart resource guard is incomplete", searchjobs.ErrInvalidResult)
+	}
+	for _, placeholder := range placeholders {
+		sql = strings.ReplaceAll(
+			sql,
+			placeholder.text,
+			"toUInt64("+strconv.FormatUint(placeholder.value, 10)+")",
+		)
+	}
+	return sql, nil
 }
 
 func groupLimitSettingsFor(

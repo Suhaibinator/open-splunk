@@ -20,17 +20,13 @@ func TestTimechartGridReservationHonorsMemoryAndResultBudgets(t *testing.T) {
 		policy := searchlimits.Default()
 		policy.MaxResultBytes = 2048
 		policy.MaxMemoryBytes = memoryBudget
-		settings, err := withTimechartResourceSettings(clickhousedriver.Settings{}, query, policy, true)
+		limits, err := deriveTimechartResourceLimits(clickhousedriver.Settings{}, query, policy, true)
 		if memoryBudget == reservation {
 			if !errors.Is(err, searchjobs.ErrExecutionLimit) {
 				t.Fatalf("exhausted grid budget error = %v", err)
 			}
 			continue
 		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		limits, err := timechartResourceLimitsFromSettings(settings)
 		if err != nil {
 			t.Fatal(err)
 		}
