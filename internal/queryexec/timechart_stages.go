@@ -196,7 +196,9 @@ func (executor *Executor) executeTimechartStages(ctx context.Context, query clic
 	}
 	maximumRetained := min(policy.MaxResultBytes, policy.MaxMemoryBytes, settings["max_memory_usage"].(uint64), settings["max_result_bytes"].(uint64))
 	budget := &stageBudget{sink: sink, maxRows: settings["max_rows_to_read"].(uint64), maxBytes: settings["max_bytes_to_read"].(uint64), maxRetained: maximumRetained, maxMemory: settings["max_memory_usage"].(uint64)}
-	// The retained descriptor coexists with its clone and native lookup transport.
+	// The manager-pinned descriptor coexists with this detached execution clone.
+	// Transient native external tables are bounded separately by the allocation
+	// context supplied to each physical stage.
 	if err := budget.charge(authorityBytes); err != nil {
 		return err
 	}

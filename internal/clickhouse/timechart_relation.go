@@ -338,6 +338,13 @@ func materializeRelationInput(ctx context.Context, input *compiledRelationInput)
 	if nativeBytes > relationInputMaximumBytes(ctx) {
 		return nil, fmt.Errorf("%w: materialize timechart native relation exceeds byte limit", ErrTimechartResourceLimit)
 	}
+	return materializeValidatedRelationInput(ctx, input)
+}
+
+func materializeValidatedRelationInput(
+	ctx context.Context,
+	input *compiledRelationInput,
+) (*ext.Table, error) {
 	definitions := make([]func(*ext.Table) error, len(input.columns))
 	for i, fieldColumn := range input.columns {
 		_, physical, err := relationField(fieldColumn, i)
