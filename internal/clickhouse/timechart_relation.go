@@ -288,7 +288,7 @@ func relationField(column RelationColumn, index int) (fieldState, string, error)
 		field.kind = fieldKindBool
 	case "DateTime64(9, 'UTC')":
 		field.kind = fieldKindTime
-		field.canonicalTime = column.Name == "_time"
+		field.canonicalTime = column.Name == "_time" && !strings.HasPrefix(column.Type, "Nullable(")
 	default:
 		return fieldState{}, "", fmt.Errorf("materialize timechart: unsupported scalar type %q", column.Type)
 	}

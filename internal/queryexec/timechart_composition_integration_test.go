@@ -164,6 +164,12 @@ func TestTimechartCompositionAgainstClickHouse(t *testing.T) {
 		})
 	}
 	for _, source := range []string{
+		`search host=absent | stats min(_time) AS _time | timechart span=1s count BY missing | head 1`,
+		`search host=absent | stats min(_time) AS _time | timechart span=1s count | where count<0`,
+		`search host=absent | stats min(_time) AS _time | timechart span=1s count(missing) | head 1`,
+		`search host=absent | stats min(_time) AS _time | timechart span=1s avg(missing) BY absent | head 1`,
+		`search host=absent | stats min(_time) AS _time | timechart span=1s sum(missing) | head 1`,
+		`search host=absent | stats min(_time) AS _time | timechart span=1s p95(missing) BY absent | head 1`,
 		`eval metric=1e308 | timechart span=1s sum(metric) AS total | where total<0 | head 1`,
 		`eval metric=1e308 | timechart span=1s sum(metric) AS total BY source | head 1`,
 		fmt.Sprintf(`eval host="%s" | timechart span=1s count BY host | head 1`, strings.Repeat("x", 257)),

@@ -326,3 +326,30 @@ func TestResultPagePreservesHTTPPagingAndCompleteness(t *testing.T) {
 		t.Fatalf("page = %+v", page)
 	}
 }
+
+func TestTimechartFinalSchemaDeterminesPresentation(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		columns []searchjobs.Column
+		want    opensplunk.ResultSetKind
+	}{
+		{"removed time", []searchjobs.Column{{Name: "count", Kind: searchjobs.ValueKindUnsigned}}, opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS},
+		{"renamed time", []searchjobs.Column{{Name: "bucket", Kind: searchjobs.ValueKindTime}, {Name: "count", Kind: searchjobs.ValueKindUnsigned}}, opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS},
+		{"replaced time", []searchjobs.Column{{Name: "_time", Kind: searchjobs.ValueKindString}, {Name: "count", Kind: searchjobs.ValueKindUnsigned}}, opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS},
+		{"no numeric series", []searchjobs.Column{{Name: "_time", Kind: searchjobs.ValueKindTime}}, opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS},
+		{"reordered axis", []searchjobs.Column{{Name: "east", Kind: searchjobs.ValueKindUnsigned}, {Name: "_time", Kind: searchjobs.ValueKindTime}}, opensplunk.ResultSetKind_RESULT_SET_KIND_TIME_SERIES},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			schema, err := Schema("retained", searchjobs.Schema{Columns: test.columns}, ResultShape{Kind: opensplunk.ResultSetKind_RESULT_SET_KIND_TIME_SERIES, RuntimeNamedColumns: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if schema.ResultKind != test.want {
+				t.Fatalf("kind=%v want=%v", schema.ResultKind, test.want)
+			}
+			if test.name == "reordered axis" && schema.Columns[1].SemanticType != opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_EVENT_TIME {
+				t.Fatal("reordered time axis was mislabeled as metric")
+			}
+		})
+	}
+}

@@ -18,6 +18,7 @@ import (
 // representation. Column order is preserved because result cells are
 // positional.
 func Schema(schemaID string, schema searchjobs.Schema, shape ResultShape) (*opensplunk.ResultSchema, error) {
+	shape = ResultShapeForSchema(schema, shape)
 	columns := make([]*opensplunk.ResultColumn, len(schema.Columns))
 	seen := make(map[string]struct{}, len(schema.Columns))
 	for index, column := range schema.Columns {
@@ -36,9 +37,8 @@ func Schema(schemaID string, schema searchjobs.Schema, shape ResultShape) (*open
 			return nil, err
 		}
 		semantic := semanticType(column.Name)
-		if index > 0 &&
-			(shape.RuntimeNamedColumns ||
-				shape.Kind == opensplunk.ResultSetKind_RESULT_SET_KIND_TIME_SERIES) {
+		if (shape.RuntimeNamedColumns && index > 0 && shape.Kind != opensplunk.ResultSetKind_RESULT_SET_KIND_TIME_SERIES) ||
+			(shape.Kind == opensplunk.ResultSetKind_RESULT_SET_KIND_TIME_SERIES && column.Name != "_time") {
 			semantic = opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_METRIC
 		}
 		var flatMultivalueDelimiter *string
@@ -378,4 +378,27 @@ func timestampToProto(input time.Time) (*timestamppb.Timestamp, error) {
 		return nil, errors.New("timestamp is outside protobuf range")
 	}
 	return result, nil
+}
+
+// ResultShapeForSchema preserves the authored rendering preference only when the
+// final typed relation still has a usable time axis and numeric series.
+func ResultShapeForSchema(schema searchjobs.Schema, shape ResultShape) ResultShape {
+	if shape.Kind != opensplunk.ResultSetKind_RESULT_SET_KIND_TIME_SERIES {
+		return shape
+	}
+	timestamp, metric := false, false
+	for _, column := range schema.Columns {
+		if column.Name == "_time" {
+			timestamp = column.Kind == searchjobs.ValueKindTime && !column.Multivalue
+			continue
+		}
+		switch column.Kind {
+		case searchjobs.ValueKindUnsigned, searchjobs.ValueKindSigned, searchjobs.ValueKindDouble:
+			metric = true
+		}
+	}
+	if !timestamp || !metric {
+		return ResultShape{Kind: opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS}
+	}
+	return shape
 }

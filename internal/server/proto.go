@@ -19,6 +19,9 @@ func searchJobToProto(job searchjobs.Job, now time.Time) (*opensplunk.SearchJob,
 		return nil, err
 	}
 	resultShape := searchjobproto.ResultShapeForSPL(job.SPL)
+	if job.Schema != nil {
+		resultShape = searchjobproto.ResultShapeForSchema(*job.Schema, resultShape)
+	}
 	earliest, err := validTimestamp(job.Earliest)
 	if err != nil {
 		return nil, err

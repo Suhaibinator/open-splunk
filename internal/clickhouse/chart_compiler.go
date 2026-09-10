@@ -155,6 +155,14 @@ func compileTimechart(
 		}
 	}
 
+	// Timestamp validation is part of the source bucket expression, before
+	// sparse grid joins or suffix filters can discard null-key groups. The
+	// non-null return type prevents join null elimination from bypassing it.
+	if !timeField.canonicalTime {
+		invalidTime := "isNull(" + timeField.valueSQL + ") OR NOT ifNull(" + timeField.existsSQL + ", 0)"
+		timeField.valueSQL = "addNanoseconds(assumeNotNull(" + timeField.valueSQL + "), toInt64(throwIf(toUInt8(" + invalidTime + "), 'open-splunk: timechart input timestamp is missing or null')))"
+	}
+
 	if valueKind, fixedValue := fixedTimechartValueKind(operator.Measure.Function); fixedValue && operator.Split == nil {
 		if len(outputFields) != 2 || outputFields[0] != "_time" ||
 			outputFields[1] != operator.Measure.Output || outputFields[1] == "_time" ||
