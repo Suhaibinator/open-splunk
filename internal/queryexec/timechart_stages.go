@@ -1,0 +1,187 @@
+package queryexec
+
+import (
+	"context"
+	"fmt"
+	"math"
+	"sync"
+	"time"
+	"unsafe"
+
+	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
+	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+)
+
+// stageBudget is shared across physical stages. Progress callbacks may run on
+// the driver goroutine, so totals and downstream progress share one mutex.
+type stageBudget struct {
+	mu                             sync.Mutex
+	sink                           searchjobs.ResultSink
+	rows, bytes, retained          uint64
+	maxRows, maxBytes, maxRetained uint64
+}
+
+func (budget *stageBudget) ReportProgress(delta searchjobs.ExecutionProgressDelta) error {
+	budget.mu.Lock()
+	defer budget.mu.Unlock()
+	if delta.ScannedRows > budget.maxRows-budget.rows || delta.ScannedBytes > budget.maxBytes-budget.bytes {
+		return searchjobs.ErrExecutionLimit
+	}
+	budget.rows += delta.ScannedRows
+	budget.bytes += delta.ScannedBytes
+	if sink, ok := budget.sink.(searchjobs.ProgressSink); ok {
+		return sink.ReportProgress(delta)
+	}
+	return nil
+}
+func (budget *stageBudget) charge(bytes uint64) error {
+	if bytes > budget.maxRetained-budget.retained {
+		return searchjobs.ErrExecutionLimit
+	}
+	budget.retained += bytes
+	return nil
+}
+
+type timechartStageSink struct {
+	*stageBudget
+	columns       []clickhouse.RelationColumn
+	rows          [][]any
+	maxResultRows uint64
+}
+
+func (sink *timechartStageSink) SetSchema(schema searchjobs.Schema) error {
+	if sink.columns != nil {
+		return searchjobs.ErrInvalidResult
+	}
+	if err := sink.charge(uint64(len(schema.Columns)) * uint64(unsafe.Sizeof(clickhouse.RelationColumn{}))); err != nil {
+		return err
+	}
+	sink.columns = make([]clickhouse.RelationColumn, len(schema.Columns))
+	for i, column := range schema.Columns {
+		kind := ""
+		switch column.Kind {
+		case searchjobs.ValueKindTime:
+			kind = "DateTime64(9, 'UTC')"
+		case searchjobs.ValueKindUnsigned:
+			kind = "UInt64"
+		case searchjobs.ValueKindSigned:
+			kind = "Int64"
+		case searchjobs.ValueKindDouble:
+			kind = "Float64"
+		case searchjobs.ValueKindString:
+			kind = "String"
+		case searchjobs.ValueKindBool:
+			kind = "Bool"
+		default:
+			return fmt.Errorf("%w: timechart continuation has unsupported column type", searchjobs.ErrInvalidResult)
+		}
+		if column.Nullable {
+			kind = "Nullable(" + kind + ")"
+		}
+		if err := sink.charge(uint64(len(column.Name) + len(kind))); err != nil {
+			return err
+		}
+		sink.columns[i] = clickhouse.RelationColumn{Name: column.Name, Type: kind}
+	}
+	return nil
+}
+func (sink *timechartStageSink) AddRow(values []searchjobs.Value) error {
+	if sink.columns == nil || len(values) != len(sink.columns) {
+		return searchjobs.ErrInvalidResult
+	}
+	if uint64(len(sink.rows)) >= sink.maxResultRows {
+		return searchjobs.ErrExecutionLimit
+	}
+	// Charge both row-slice capacity and the detached compiler/native transports.
+	bytes := 4 * (uint64(unsafe.Sizeof([]any{})) + uint64(len(values))*uint64(unsafe.Sizeof(any(nil))))
+	for _, value := range values {
+		retained, err := value.RetainedSizeBytes()
+		if err != nil || retained > math.MaxUint64-bytes {
+			return searchjobs.ErrExecutionLimit
+		}
+		bytes += retained
+	}
+	if err := sink.charge(bytes); err != nil {
+		return err
+	}
+	row := make([]any, len(values))
+	for i, value := range values {
+		switch value.Kind() {
+		case searchjobs.ValueKindNull, searchjobs.ValueKindMissing:
+			row[i] = nil
+		case searchjobs.ValueKindTime:
+			row[i], _ = value.Time()
+		case searchjobs.ValueKindUnsigned:
+			row[i], _ = value.Unsigned()
+		case searchjobs.ValueKindSigned:
+			row[i], _ = value.Signed()
+		case searchjobs.ValueKindDouble:
+			row[i], _ = value.Double()
+		case searchjobs.ValueKindString:
+			row[i], _ = value.String()
+		case searchjobs.ValueKindBool:
+			row[i], _ = value.Bool()
+		default:
+			return searchjobs.ErrInvalidResult
+		}
+	}
+	sink.rows = append(sink.rows, row)
+	return nil
+}
+
+type stagedFinalSink struct {
+	searchjobs.ResultSink
+	*stageBudget
+}
+
+func (sink stagedFinalSink) ReportProgress(delta searchjobs.ExecutionProgressDelta) error {
+	return sink.stageBudget.ReportProgress(delta)
+}
+
+func (executor *Executor) executeTimechartStages(ctx context.Context, query clickhouse.CompiledQuery, sink searchjobs.ResultSink) error {
+	if ctx == nil || sink == nil {
+		return searchjobs.ErrInvalidResult
+	}
+	detached, ok, err := query.CloneForExecutionContext(ctx)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return searchjobs.ErrInvalidResult
+	}
+	query = detached
+	admitted, release, err := executor.acquireRead(ctx, query, "execute staged timechart")
+	if err != nil {
+		return err
+	}
+	defer release()
+	settings, err := executor.settingsForContext(admitted, query)
+	if err != nil {
+		return err
+	}
+	seconds, _ := settings["max_execution_time"].(uint64)
+	ctx, cancel := context.WithTimeout(admitted, time.Duration(min(seconds, uint64(math.MaxInt64/int64(time.Second))))*time.Second)
+	defer cancel()
+	base, expand := executor.settingsSnapshot()
+	frozen := &Executor{connection: executor.connection, settings: base, expandTimechartGroupLimit: expand, newQueryID: executor.newQueryID, withProgress: executor.withProgress, readAdmission: executor.readAdmission}
+	budget := &stageBudget{sink: sink, maxRows: settings["max_rows_to_read"].(uint64), maxBytes: settings["max_bytes_to_read"].(uint64), maxRetained: min(settings["max_result_bytes"].(uint64), settings["max_memory_usage"].(uint64))}
+	for query.HasContinuation() {
+		stage := &timechartStageSink{stageBudget: budget, maxResultRows: settings["max_result_rows"].(uint64)}
+		if err := frozen.executeSingle(ctx, query, stage); err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		query, err = query.ContinueContext(ctx, stage.columns, stage.rows)
+		if err != nil {
+			return err
+		}
+	}
+	if recipient, ok := sink.(searchjobs.CompiledResultSink); ok {
+		if err := recipient.SetCompiledQuery(query); err != nil {
+			return err
+		}
+	}
+	return frozen.executeSingle(ctx, query, stagedFinalSink{ResultSink: sink, stageBudget: budget})
+}

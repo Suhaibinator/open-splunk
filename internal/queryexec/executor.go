@@ -496,7 +496,14 @@ func classifyIndexReadError(err error) error {
 
 // Execute sends schema once and then streams rows in server order. It never
 // retains sink or calls it after returning.
-func (executor *Executor) Execute(ctx context.Context, query clickhouse.CompiledQuery, sink searchjobs.ResultSink) (resultErr error) {
+func (executor *Executor) Execute(ctx context.Context, query clickhouse.CompiledQuery, sink searchjobs.ResultSink) error {
+	if query.HasContinuation() {
+		return executor.executeTimechartStages(ctx, query, sink)
+	}
+	return executor.executeSingle(ctx, query, sink)
+}
+
+func (executor *Executor) executeSingle(ctx context.Context, query clickhouse.CompiledQuery, sink searchjobs.ResultSink) (resultErr error) {
 	if ctx == nil {
 		return errors.New("execute ClickHouse search: context is nil")
 	}

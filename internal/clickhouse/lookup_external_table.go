@@ -596,7 +596,7 @@ func (compiled CompiledQuery) ExternalTablesForExecution(
 	if ctx == nil {
 		return nil, errors.New("materialize ClickHouse lookup tables: context is nil")
 	}
-	if len(compiled.lookupTables) == 0 {
+	if len(compiled.lookupTables) == 0 && compiled.relationInput == nil {
 		return nil, ctx.Err()
 	}
 	valid, err := compiled.hasValidExecutionSealContext(ctx)
@@ -608,7 +608,18 @@ func (compiled CompiledQuery) ExternalTablesForExecution(
 			"materialize ClickHouse lookup tables: execution authority is invalid",
 		)
 	}
-	return materializeCompiledLookupExternalTables(ctx, compiled.lookupTables)
+	tables, err := materializeCompiledLookupExternalTables(ctx, compiled.lookupTables)
+	if err != nil {
+		return nil, err
+	}
+	if compiled.relationInput != nil {
+		table, err := materializeRelationInput(ctx, compiled.relationInput)
+		if err != nil {
+			return nil, err
+		}
+		tables = append(tables, table)
+	}
+	return tables, nil
 }
 
 func materializeDerivedLookupExternalTables(

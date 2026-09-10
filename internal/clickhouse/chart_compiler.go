@@ -66,13 +66,6 @@ func compileTimechart(
 	if err != nil {
 		return CompiledQuery{}, err
 	}
-	if !state.eventRows {
-		return CompiledQuery{}, &plan.Diagnostic{
-			Code:    "SPL_UNSUPPORTED_TIMECHART_INPUT",
-			Message: "timechart requires event rows with the canonical _time field",
-			Range:   operator.Range,
-		}
-	}
 	if err := validateCanonicalFieldRef("timechart", "time", operator.Time); err != nil {
 		return CompiledQuery{}, err
 	}

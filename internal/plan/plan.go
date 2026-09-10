@@ -19,10 +19,11 @@ const MaximumNumericBinSpan = uint64(1<<53 - 1)
 
 // Query is an ordered logical operator pipeline.
 type Query struct {
-	Operators        []Operator
-	EffectiveIndexes []string
-	OutputFields     []string
-	DynamicOutput    *DynamicSeriesOutput
+	timechartContinuations map[int]TimechartContinuation
+	Operators              []Operator
+	EffectiveIndexes       []string
+	OutputFields           []string
+	DynamicOutput          *DynamicSeriesOutput
 	// SearchStart is the immutable server-resolved admission timestamp used by
 	// search-scoped scalar functions such as now(). It is deliberately
 	// independent from Scan.IndexTimeCutoff, which controls storage visibility.

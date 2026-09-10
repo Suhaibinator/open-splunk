@@ -69,6 +69,12 @@ func (c Compiler) compileWithFinalizerContext(
 	if err != nil {
 		return CompiledQuery{}, err
 	}
+	if c.relationInput != nil {
+		fragment, state, args, err = compileRelationInput(c.relationInput, query)
+		if err != nil {
+			return CompiledQuery{}, err
+		}
+	}
 	if state.context == nil {
 		return CompiledQuery{}, errors.New("compile ClickHouse query: compile context is unavailable")
 	}
@@ -95,7 +101,8 @@ func (c Compiler) compileWithFinalizerContext(
 		compiled CompiledQuery,
 		complexityRange spl.Range,
 	) (CompiledQuery, error) {
-		compiled.atomicResult = state.context != nil && state.context.atomicResult
+		compiled.relationInput = c.relationInput
+		compiled.atomicResult = compiled.continuation != nil || (state.context != nil && state.context.atomicResult)
 		terminalWide := compiled.Chart != nil || compiled.Timechart != nil
 		if terminalWide && len(state.chronologicalBarriers) > 0 {
 			var wrapErr error
@@ -974,21 +981,33 @@ func (c Compiler) compileWithFinalizerContext(
 			if !permitTerminalWideOperators {
 				return CompiledQuery{}, errors.New("compile ClickHouse query: timechart is unavailable for event analysis")
 			}
-			if operatorIndex+1 != len(remainingOperators) {
-				return CompiledQuery{}, errors.New("compile ClickHouse timechart: operator must be terminal")
+			continuation, hasContinuation := query.TimechartContinuationAt(remainingStart + operatorIndex)
+			outputFields, dynamic := query.OutputFields, query.DynamicOutput
+			if hasContinuation {
+				outputFields, dynamic = timechartStageOutput(operator)
+			} else if operatorIndex+1 != len(remainingOperators) {
+				return CompiledQuery{}, errors.New("compile ClickHouse timechart: missing continuation authority")
 			}
 			compiled, compileErr := compileTimechart(
 				relation,
 				state,
 				args,
 				operator,
-				query.OutputFields,
-				query.DynamicOutput,
+				outputFields,
+				dynamic,
 				scan,
 				alias,
 			)
 			if compileErr != nil {
 				return CompiledQuery{}, compileErr
+			}
+			if hasContinuation && operator.Split == nil {
+				relation, state, args = lowerStaticTimechartRelation(compiled, state, operator, aliasSequence)
+				continue
+			}
+			if hasContinuation {
+				compiled.continuation = &compiledTimechartContinuation{plan: continuation, compiler: c}
+				compiled.continuation.compiler.relationInput = nil
 			}
 			return finishCompiled(compiled, operator.Range)
 		case *plan.Chart:

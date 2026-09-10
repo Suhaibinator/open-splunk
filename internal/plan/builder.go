@@ -81,6 +81,10 @@ type Scope struct {
 
 // Build performs semantic analysis and emits a security-constrained plan.
 func Build(query *spl.Query, scope Scope) (*Query, error) {
+	return buildWithRelation(query, scope, nil)
+}
+
+func buildWithRelation(query *spl.Query, scope Scope, inputFields []string) (*Query, error) {
 	if query == nil {
 		return nil, &Diagnostic{Code: "SPL_INVALID_QUERY", Message: "query is nil"}
 	}
@@ -134,7 +138,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 		VisibilityCutoff: *scope.VisibilityCutoff,
 		Range:            query.Range,
 	})
-	if query.Search != nil {
+	if query.Search != nil && inputFields == nil {
 		expression, convertErr := convertExpression(query.Search)
 		if convertErr != nil {
 			return nil, convertErr
@@ -142,7 +146,10 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 		result.Operators = append(result.Operators, &Filter{Expression: expression, Range: query.Search.SourceRange()})
 	}
 
-	outputSchemaKnown := false
+	outputSchemaKnown := inputFields != nil
+	if outputSchemaKnown {
+		result.OutputFields = slices.Clone(inputFields)
+	}
 	canonicalTimeAvailable := true
 	extractionOutputCount := 0
 	spathEvaluationWorkUnits := 0
@@ -163,6 +170,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			canonicalTimeAvailable = false
 		}
 	}
+commands:
 	for commandIndex, command := range query.Commands {
 		switch command := command.(type) {
 		case *spl.SearchCommand:
@@ -804,6 +812,21 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				searchLocation,
 			); buildErr != nil {
 				return nil, buildErr
+			}
+			outputSchemaKnown = command.SplitBy == nil
+			canonicalTimeAvailable = true
+			if commandIndex+1 < len(query.Commands) {
+				continuation, err := newTimechartContinuation(query, scope, commandIndex+1)
+				if err != nil {
+					return nil, err
+				}
+				if result.timechartContinuations == nil {
+					result.timechartContinuations = make(map[int]TimechartContinuation)
+				}
+				result.timechartContinuations[len(result.Operators)-1] = continuation
+				if command.SplitBy != nil {
+					break commands
+				}
 			}
 		case *spl.ChartCommand:
 			if buildErr := buildChartCommand(

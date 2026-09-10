@@ -9,8 +9,8 @@ import (
 
 func buildTimechartCommand(
 	result *Query,
-	query *spl.Query,
-	commandIndex int,
+	_ *spl.Query,
+	_ int,
 	command *spl.TimechartCommand,
 	outputSchemaKnown bool,
 	canonicalTimeAvailable bool,
@@ -22,15 +22,6 @@ func buildTimechartCommand(
 		return &Diagnostic{
 			Code:    "SPL_INVALID_QUERY",
 			Message: "timechart command is nil",
-		}
-	}
-	if commandIndex+1 != len(query.Commands) {
-		next := query.Commands[commandIndex+1]
-		return &Diagnostic{
-			Code:        "SPL_UNSUPPORTED_TIMECHART_PIPELINE",
-			Message:     "timechart must be the final pipeline command",
-			Range:       next.SourceRange(),
-			Suggestions: []string{"move timechart to the final pipeline stage"},
 		}
 	}
 	measure, measureErr := buildTimechartMeasure(command, outputSchemaKnown)

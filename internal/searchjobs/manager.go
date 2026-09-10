@@ -162,6 +162,11 @@ type TimeBucketResultSink interface {
 	AddRowWithTimeBucket([]Value, TimeBucketBounds) error
 }
 
+// CompiledResultSink accepts an authenticated final descriptor before schema publication.
+type CompiledResultSink interface {
+	SetCompiledQuery(clickhouse.CompiledQuery) error
+}
+
 // ExecutionProgressDelta is one non-cumulative storage progress packet.
 // ScannedRows and ScannedBytes are exact values reported by the executor; the
 // manager never derives either counter from retained result rows.

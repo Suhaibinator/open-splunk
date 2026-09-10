@@ -618,6 +618,7 @@ func compiledExecutionDigestContext(
 	}
 	digest := sha256.New()
 	writeTokenPart(digest, compiledExecutionSealDomain)
+	writeTimechartContinuation(digest, compiled)
 	writeTokenPart(digest, compiled.SQL)
 	writeStringSlice(digest, compiled.OutputFields)
 	writeBool(digest, compiled.OutputPresentations == nil)
@@ -1070,6 +1071,18 @@ func (compiled CompiledQuery) RetainedBytesContext(
 			return 0, false, nil
 		}
 		total, ok = retainedAdd(total, charge)
+		if !ok {
+			return 0, false, nil
+		}
+	}
+	if compiled.relationInput != nil {
+		total, ok = retainedAdd(total, compiled.relationInput.retainedBytes)
+		if !ok {
+			return 0, false, nil
+		}
+	}
+	if compiled.continuation != nil {
+		total, ok = retainedAdd(total, uint64(len(compiled.continuation.plan.Source()))+uint64(unsafe.Sizeof(*compiled.continuation)))
 		if !ok {
 			return 0, false, nil
 		}
