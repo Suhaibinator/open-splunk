@@ -92,7 +92,9 @@ reduces an authored limit or publishes a partial pivot.
 The browser accepts every column in that bounded server result. It does not add
 a separate 64-column ceiling: line and area charts page visible series, and the
 Statistics table pages columns, so every series remains inspectable without
-creating an unbounded DOM tree.
+creating an unbounded DOM tree. Export authenticates the complete retained
+runtime schema before applying the selected-column bound, so a result wider
+than the export limit can still export a permitted subset.
 
 ## Pipeline composition
 
@@ -127,9 +129,11 @@ snapshots, paging, WebSocket and HTTP delivery, artifact replay, and export.
 
 Clients must treat these strings as exact instants. Browser chart coordinates
 derive differences with integer nanosecond arithmetic instead of passing the
-precision-bearing metadata through JavaScript `Date`. Legacy result rows that
-do not contain `time_bucket` continue to render without an invented bucket end
-or drilldown range.
+precision-bearing metadata through JavaScript `Date`. Line and area geometry,
+domains, and point inspection use a chronological copy keyed by those exact
+nanoseconds; the Statistics table preserves the suffix or server result order.
+Legacy result rows that do not contain `time_bucket` continue to render without
+an invented bucket end or drilldown range.
 
 ## Verification
 
@@ -149,6 +153,7 @@ results:
 | Coordinator implementation | 17 | Resolved before independent review; focused compiler, executor, protocol, browser, and ClickHouse fixtures retain the regressions | Findings came from integration of the enhanced feature set |
 | Independent review 1 and fix audits | 12 (4 P1, 6 P2, 2 P3) | All fixes are implemented in `4915ba82`; focused owner checks cover wide rendering, exact grids, staged budgets and cancellation, final result shape, observed field presence, and the editor focus race | Complete final gates run after the documentation commit |
 | Independent review 2 and fix audits | 6 (1 P1, 5 P2) | All fixes are implemented in `88e2a643`; focused checks cover precise sorting and typed-axis selection, cumulative compile and runtime quotas, complete-result validation, and combined native external-table admission | Complete final gates run after the documentation commit |
+| Independent review 3 and fix audits | 7 (6 P2, 1 P3) | All fixes are implemented in `1c418dbe`; focused checks cover chronological chart geometry, bounded selected-column export, transactional staged publication, incremental paging and domain reuse, recursive cancellation, and native relation scratch reuse | Complete final gates run after this documentation commit |
 
 Subsequent independent review and final gate outcomes are recorded on
 [pull request #113](https://github.com/Suhaibinator/open-splunk/pull/113).
@@ -168,17 +173,17 @@ region.
 
 The following paired result uses Darwin arm64 on an Apple M4 Max. Each value is
 the median of five fixed 100-iteration samples from baseline `ebcf1554` and the
-final implementation candidate `88e2a643`:
+final implementation candidate `1c418dbe`:
 
 | Case | Baseline ns/op | Final ns/op | Baseline B/op | Final B/op | Baseline allocs/op | Final allocs/op | SQL bytes, baseline → final |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Compile, fixed count | 48,415 | 58,445 | 85,273 | 103,218 | 521 | 545 | 2,147 → 2,147 |
-| Compile, automatic count | 47,463 | 50,979 | 85,265 | 92,164 | 520 | 544 | 2,147 → 2,147 |
-| Compile, calendar count | 48,894 | 50,200 | 86,460 | 91,379 | 527 | 551 | 2,411 → 2,411 |
-| Compile, split count | 52,110 | 69,953 | 100,569 | 138,042 | 555 | 601 | 5,989 → 8,879 |
-| Compile, split average | 64,546 | 79,742 | 133,850 | 175,414 | 638 | 684 | 10,029 → 12,921 |
-| Publish 100 buckets × 10 series | 57,997 | 52,663 | 229,018 | 229,257 | 629 | 630 | n/a |
-| Publish 1,000 buckets × 10 series | 470,752 | 476,955 | 2,246,120 | 2,246,357 | 6,029 | 6,030 | n/a |
+| Compile, fixed count | 48,415 | 70,102 | 85,273 | 103,230 | 521 | 545 | 2,147 → 2,147 |
+| Compile, automatic count | 47,463 | 60,150 | 85,265 | 92,160 | 520 | 544 | 2,147 → 2,147 |
+| Compile, calendar count | 48,894 | 84,605 | 86,460 | 91,378 | 527 | 551 | 2,411 → 2,411 |
+| Compile, split count | 52,110 | 163,501 | 100,569 | 138,036 | 555 | 601 | 5,989 → 8,879 |
+| Compile, split average | 64,546 | 131,626 | 133,850 | 175,415 | 638 | 684 | 10,029 → 12,921 |
+| Publish 100 buckets × 10 series | 57,997 | 127,930 | 229,018 | 229,258 | 629 | 630 | n/a |
+| Publish 1,000 buckets × 10 series | 470,752 | 1,161,648 | 2,246,120 | 2,246,377 | 6,029 | 6,030 | n/a |
 
 Every compiler sample reported one textual event-source reference at both
 commits. The opt-in ClickHouse integration test separately requires exactly one
@@ -189,7 +194,7 @@ The exact-grid harness compares the pre-allocation-fix transport at `d5fe39c6`
 with the final candidate. At 10,000 buckets, transport allocation fell from
 20,001 allocations and 660,244 B/op to 2 allocations and 10,400 B/op. Complete
 publication fell from 120,035 allocations and 24,339,074 B/op to 100,035
-allocations and 23,379,192 B/op. Run that five-sample harness with:
+allocations and 23,379,260 B/op. Run that five-sample harness with:
 
 ```sh
 go test ./internal/queryexec -run '^$' \
@@ -206,6 +211,22 @@ capacity calculation, not native table construction. Run it with:
 go test ./internal/clickhouse -run '^$' \
   -bench '^BenchmarkExternalTablesNativeMaterializationPreflight$' \
   -benchtime=100x -count=5 -benchmem
+```
+
+The native continuation-relation benchmark measures construction of 10,000
+rows. From pre-fix candidate `53269afc` to `1c418dbe`, its median allocation
+fell from 1,879,217 B/op and 10,077 allocations/op to 1,559,228 B/op and 77
+allocations/op. The retained-value sizing primitive remained allocation-free:
+the final scalar and 1,024-element nested cases reported zero B/op and zero
+allocations/op. Run those harnesses with:
+
+```sh
+go test ./internal/clickhouse -run '^$' \
+  -bench '^BenchmarkTimechartRelationNativeRows10000$' \
+  -benchtime=10x -count=5 -benchmem
+go test ./internal/searchjobs -run '^$' \
+  -bench '^BenchmarkValueRetainedSizeBytes$' \
+  -benchtime=100ms -count=5 -benchmem
 ```
 
 Both publication harnesses use the production buffering and publication paths
