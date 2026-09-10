@@ -2260,7 +2260,8 @@ func TestBuildTimechartBoundsFixedSpan(t *testing.T) {
 func TestBuildTimechartRetainsDynamicContinuationAndScope(t *testing.T) {
 	t.Parallel()
 
-	query := mustParse(t, `index=gradethis | timechart span=5m count by level | search index=secret`)
+	source := `index=gradethis | timechart span=5m count by level | search index=secret`
+	query := mustParse(t, source)
 	logical, err := Build(query, testScope([]string{"gradethis"}, nil))
 	if err != nil {
 		t.Fatalf("Build: %v", err)
@@ -2273,8 +2274,12 @@ func TestBuildTimechartRetainsDynamicContinuationAndScope(t *testing.T) {
 		t.Fatalf("last initial operator = %T, want *Timechart", logical.Operators[operatorIndex])
 	}
 	continuation, ok := logical.TimechartContinuationAt(operatorIndex)
-	if !ok || continuation.Source() != `search index=secret` {
-		t.Fatalf("continuation = %q/%t, want exact suffix", continuation.Source(), ok)
+	if !ok || continuation.Source() != source || continuation.StartCommand() != 1 {
+		t.Fatalf("continuation = %q command %d/%t, want full source at command 1", continuation.Source(), continuation.StartCommand(), ok)
+	}
+	rangeStart := query.Commands[continuation.StartCommand()].SourceRange().Start.Offset
+	if suffix := source[rangeStart:]; suffix != `search index=secret` {
+		t.Fatalf("continuation range suffix = %q, want exact authored search", suffix)
 	}
 }
 
@@ -2436,8 +2441,10 @@ func TestBuildRejectsChartCombinedWithOtherWideCommands(t *testing.T) {
 		})
 	}
 
+	source := `index=gradethis | timechart span=5m count by level | chart count over _time by level`
+	parsed := mustParse(t, source)
 	logical, err := Build(
-		mustParse(t, `index=gradethis | timechart span=5m count by level | chart count over _time by level`),
+		parsed,
 		testScope([]string{"gradethis"}, nil),
 	)
 	if err != nil {
@@ -2445,8 +2452,12 @@ func TestBuildRejectsChartCombinedWithOtherWideCommands(t *testing.T) {
 	}
 	operatorIndex := len(logical.Operators) - 1
 	continuation, ok := logical.TimechartContinuationAt(operatorIndex)
-	if !ok || continuation.Source() != `chart count over _time by level` {
-		t.Fatalf("continuation = %q/%t, want exact chart suffix", continuation.Source(), ok)
+	if !ok || continuation.Source() != source || continuation.StartCommand() != 1 {
+		t.Fatalf("continuation = %q command %d/%t, want full source at command 1", continuation.Source(), continuation.StartCommand(), ok)
+	}
+	rangeStart := parsed.Commands[continuation.StartCommand()].SourceRange().Start.Offset
+	if suffix := source[rangeStart:]; suffix != `chart count over _time by level` {
+		t.Fatalf("continuation range suffix = %q, want exact authored chart", suffix)
 	}
 }
 

@@ -224,14 +224,19 @@ func TestChartBreakPipelineTerminalRuleOutranksLaterCommandErrors(t *testing.T) 
 	// A dynamic timechart retains a later chart for validation against the
 	// materialized runtime schema.
 	source := `index=gradethis | timechart span=5m count BY level | chart count OVER _time BY level`
-	logical, err := Build(mustParse(t, source), testScope([]string{"gradethis"}, nil))
+	parsed := mustParse(t, source)
+	logical, err := Build(parsed, testScope([]string{"gradethis"}, nil))
 	if err != nil {
 		t.Fatalf("Build(%q): %v", source, err)
 	}
 	operatorIndex := len(logical.Operators) - 1
 	continuation, ok := logical.TimechartContinuationAt(operatorIndex)
-	if !ok || continuation.Source() != `chart count OVER _time BY level` {
-		t.Fatalf("continuation = %q/%t, want exact chart suffix", continuation.Source(), ok)
+	if !ok || continuation.Source() != source || continuation.StartCommand() != 1 {
+		t.Fatalf("continuation = %q command %d/%t, want full source at command 1", continuation.Source(), continuation.StartCommand(), ok)
+	}
+	rangeStart := parsed.Commands[continuation.StartCommand()].SourceRange().Start.Offset
+	if suffix := source[rangeStart:]; suffix != `chart count OVER _time BY level` {
+		t.Fatalf("continuation range suffix = %q, want exact authored chart", suffix)
 	}
 }
 
