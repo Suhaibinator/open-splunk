@@ -9,9 +9,11 @@ import {
   TimeSeriesLineChart,
   formatTimelineSeriesValue,
   nearestTimelineCoordinateIndex,
+  timelineChartModel,
   timelineColumnCoordinates,
   timelineCoordinateIndex,
   timelinePointInspectionLabel,
+  timelineVisibleStackWindow,
   timelineXCoordinates,
 } from "./time-series-line-chart";
 
@@ -226,6 +228,93 @@ test("reordered exact points anchor axis labels by coordinate edge", () => {
   assert.match(markup, /data-edge="end" style="left:100%">1</u);
   assert.match(markup, /data-edge="start" style="left:0%">2</u);
   assert.doesNotMatch(markup, /data-edge="start" style="left:50%">0</u);
+});
+
+test("line and area geometry follow exact chronology without mutating server order", () => {
+  const origin = 1_789_027_750_123_456_789n;
+  const points: TimelinePoint[] = [2n, 0n, 1n].map((offset) => ({
+    id: `point-${offset}`,
+    label: `${offset}`,
+    count: Number(offset) + 1,
+    timeCoordinateNanoseconds: origin + offset,
+  }));
+  const model = timelineChartModel(points);
+
+  assert.deepEqual(points.map((point) => point.id), ["point-2", "point-0", "point-1"]);
+  assert.deepEqual(model.points.map((point) => point.id), ["point-0", "point-1", "point-2"]);
+  assert.equal(model.points[0], points[1], "chart sorting must preserve source point identity");
+  for (const chartStyle of ["line", "area"] as const) {
+    const markup = renderToStaticMarkup(<TimeSeriesLineChart chartStyle={chartStyle} points={points} />);
+    assert.match(markup, /<polyline[^>]+points="0\.00,[\d.]+ 500\.00,[\d.]+ 1000\.00,[\d.]+"/u);
+    assert.ok(
+      markup.indexOf("left:0%\">0") < markup.indexOf("left:50%\">1")
+      && markup.indexOf("left:50%\">1") < markup.indexOf("left:100%\">2"),
+      `${chartStyle} inspection labels must follow chronological point indices`,
+    );
+  }
+});
+
+test("chronological plotting keeps a reordered null bucket as a path gap", () => {
+  const points: TimelinePoint[] = [
+    { id: "late", label: "late", count: 3, series: { east: 3 }, timeCoordinateNanoseconds: 2n },
+    { id: "early", label: "early", count: 1, series: { east: 1 }, timeCoordinateNanoseconds: 0n },
+    { id: "gap", label: "gap", count: 0, series: {}, timeCoordinateNanoseconds: 1n },
+  ];
+  const model = timelineChartModel(points);
+  const markup = renderToStaticMarkup(<TimeSeriesLineChart chartStyle="area" model={model} points={points} />);
+
+  assert.deepEqual(model.points.map((point) => point.id), ["early", "gap", "late"]);
+  assert.equal((markup.match(/class="time-series-chart__area time-series-chart__series"/gu) ?? []).length, 2);
+  assert.equal((markup.match(/class="time-series-chart__line time-series-chart__series"/gu) ?? []).length, 2);
+});
+
+test("chart model scans the full domain once and unstacked windows read only visible series", () => {
+  const seriesCount = 80;
+  const pointCount = 5;
+  let seriesReads = 0;
+  let seriesKeyScans = 0;
+  const points: TimelinePoint[] = Array.from({ length: pointCount }, (_, pointIndex) => {
+    const values = Object.fromEntries(Array.from(
+      { length: seriesCount },
+      (_value, seriesIndex) => [`series-${seriesIndex}`, pointIndex + seriesIndex],
+    ));
+    return {
+      id: `point-${pointIndex}`,
+      label: `${pointIndex}`,
+      count: 0,
+      series: new Proxy(values, {
+        get(target, property, receiver) {
+          if (String(property).startsWith("series-")) seriesReads += 1;
+          return Reflect.get(target, property, receiver);
+        },
+        ownKeys(target) {
+          seriesKeyScans += 1;
+          return Reflect.ownKeys(target);
+        },
+      }),
+      timeCoordinateNanoseconds: BigInt(pointIndex),
+    };
+  });
+  const model = timelineChartModel(points);
+  assert.equal(seriesKeyScans, pointCount);
+  assert.equal(seriesReads, pointCount * seriesCount);
+  assert.equal(model.series.names.length, seriesCount);
+
+  seriesReads = 0;
+  const window = timelineVisibleStackWindow(model.points, model.series, "Events", 24, 36, "none");
+  assert.equal(seriesReads, pointCount * 12);
+  assert.equal(window.rows.length, pointCount);
+  assert.ok(window.rows.every((row) => row.length === 12));
+  assert.deepEqual(window.domain, model.series.domains.none);
+
+  seriesKeyScans = 0;
+  seriesReads = 0;
+  const markup = renderToStaticMarkup(
+    <TimeSeriesLineChart model={model} points={points} seriesStart={24} seriesEnd={36} />,
+  );
+  assert.equal(seriesKeyScans, 0, "the chart must reuse the supplied series domain");
+  assert.equal(seriesReads, pointCount * 12);
+  assert.equal((markup.match(/class="time-series-chart__line time-series-chart__series"/gu) ?? []).length, 12);
 });
 
 test("wide stacked windows retain global baselines while bounding rendered series", () => {

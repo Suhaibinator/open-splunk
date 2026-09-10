@@ -22,8 +22,8 @@ import { AppIcon } from "../../_components/app-icon";
 import {
   TIME_SERIES_COLORS,
   TimeSeriesLineChart,
+  timelineChartModel,
   timelineSeriesDisplayName,
-  timelineSeriesNames,
 } from "../charts/time-series-line-chart";
 import { categoricalActivation } from "../categorical-interaction";
 import { COMPACT_NUMBER_FORMAT, NUMBER_FORMAT } from "../constants";
@@ -626,7 +626,8 @@ export function VisualizationPanel({
       .map(({ row }) => row)
     : statisticsRows;
   const categoricalSeries = categoricalSeriesDefinitions(displayedStatisticsRows);
-  const timelineSeries = timelineSeriesNames(timelinePoints);
+  const timechartModel = useMemo(() => timelineChartModel(timelinePoints), [timelinePoints]);
+  const timelineSeries = timechartModel.series.names;
   const [timelineSeriesOffset, setTimelineSeriesOffset] = useState(0);
   const maximumTimelineSeriesOffset = Math.floor(
     Math.max(0, timelineSeries.length - 1) / TIMELINE_SERIES_WINDOW_SIZE,
@@ -642,7 +643,7 @@ export function VisualizationPanel({
   const visibleTimelineSeries = timelineSeries.slice(boundedTimelineSeriesOffset, timelineSeriesEnd);
   const timelineSeriesWindowed = timelineSeries.length > TIMELINE_SERIES_WINDOW_SIZE;
   const hasApproximateCoordinates = isTimechartResult
-    ? timelinePoints.some((point) => point.coordinateApproximate === true)
+    ? timechartModel.hasApproximateCoordinates
     : statisticsRows.some((row) =>
       row.coordinateApproximate === true || row.series?.some((series) => series.coordinateApproximate) === true,
   );
@@ -711,7 +712,7 @@ export function VisualizationPanel({
             : isTimechartResult
               ? `${timechartCoverage === null
                 ? "Timechart across the submitted search range."
-                : describeTimechartCoverage(timechartCoverage, timelinePoints.at(-1)?.label ?? null)}${hasApproximateCoordinates ? " The plotted scale is approximate for values beyond the browser’s exact integer range; hover or focus a point for its exact server value." : ""}`
+                : describeTimechartCoverage(timechartCoverage, timechartModel.points.at(-1)?.label ?? null)}${hasApproximateCoordinates ? " The plotted scale is approximate for values beyond the browser’s exact integer range; hover or focus a point for its exact server value." : ""}`
               : hasCategoricalChart
                 ? backendCategoricalResult
                   ? `${categoricalSeries.length === 1 ? categoricalSeries[0].label : `${categoricalSeries.length} complete series`} grouped by ${statisticsDimension}.${statisticsRows.length > displayedStatisticsRows.length ? ` Showing the top ${displayedStatisticsRows.length} of ${statisticsRows.length} categories.` : ""}${hasApproximateCoordinates ? " The plotted scale is approximate for values beyond the browser’s exact integer range; exact server values appear on hover or focus." : ""}`
@@ -746,6 +747,7 @@ export function VisualizationPanel({
               : effectiveChartStyle === "column"
                 ? "column"
                 : "line"}
+            model={timechartModel}
             points={timelinePoints}
             seriesEnd={timelineSeriesEnd}
             seriesStart={boundedTimelineSeriesOffset}
