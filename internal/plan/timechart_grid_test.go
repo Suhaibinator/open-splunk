@@ -94,10 +94,10 @@ func TestTimechartGridRejectsUnrepresentableAlignmentAndExtent(t *testing.T) {
 			t.Errorf("overflow alignment %s accepted", source)
 		}
 	}
-	if _, err := timechartBoundarySequence(time.Date(1600, 1, 1, 0, 0, 0, 0, time.UTC), anchor, time.Second, CalendarNone, 0, time.Time{}, location); err == nil {
+	if _, err := timechartBoundarySequence(time.Date(1600, 1, 1, 0, 0, 0, 0, time.UTC), anchor, time.Second, CalendarNone, 0, time.Time{}, location, maxTimechartBuckets); err == nil {
 		t.Fatal("out-of-domain earliest accepted")
 	}
-	if _, err := timechartBoundarySequence(anchor, anchor.Add(time.Hour), time.Second, CalendarNone, 0, time.Date(2400, 1, 1, 0, 0, 0, 0, time.UTC), location); err == nil {
+	if _, err := timechartBoundarySequence(anchor, anchor.Add(time.Hour), time.Second, CalendarNone, 0, time.Date(2400, 1, 1, 0, 0, 0, 0, time.UTC), location, maxTimechartBuckets); err == nil {
 		t.Fatal("out-of-domain alignment accepted")
 	}
 }

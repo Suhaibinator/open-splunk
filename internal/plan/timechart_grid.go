@@ -48,7 +48,11 @@ func ResolveTimechartGrid(op *Timechart, earliest, latest time.Time, timezone st
 		if spanErr != nil {
 			return spanErr
 		}
-		boundaries, gridErr := timechartBoundarySequence(earliest, latest, span, calendar, magnitude, op.Alignment, location)
+		bucketLimit := uint64(maxTimechartBuckets)
+		if op.AuthoredSpan == (spl.TimeSpan{}) {
+			bucketLimit = bins
+		}
+		boundaries, gridErr := timechartBoundarySequence(earliest, latest, span, calendar, magnitude, op.Alignment, location, bucketLimit)
 		if gridErr != nil {
 			if op.AuthoredSpan == (spl.TimeSpan{}) {
 				continue
@@ -116,7 +120,7 @@ func enhancedTimechartSpan(authored spl.TimeSpan) (time.Duration, CalendarUnit, 
 	return span, CalendarNone, 0, nil
 }
 
-func timechartBoundarySequence(earliest, latest time.Time, span time.Duration, calendar CalendarUnit, magnitude uint64, alignment time.Time, location *time.Location) ([]time.Time, error) {
+func timechartBoundarySequence(earliest, latest time.Time, span time.Duration, calendar CalendarUnit, magnitude uint64, alignment time.Time, location *time.Location, bucketLimit uint64) ([]time.Time, error) {
 	if !time.Unix(0, earliest.UnixNano()).Equal(earliest) || !time.Unix(0, latest.UnixNano()).Equal(latest) || (!alignment.IsZero() && !time.Unix(0, alignment.UnixNano()).Equal(alignment)) {
 		return nil, fmt.Errorf("timechart range exceeds exact timestamp domain")
 	}
@@ -150,8 +154,8 @@ func timechartBoundarySequence(earliest, latest time.Time, span time.Duration, c
 			months := int64(local.Year()-1970)*12 + int64(local.Month()-1)
 			endLocal := latest.In(location)
 			extentMonths := int64(endLocal.Year()-local.Year())*12 + int64(endLocal.Month()) - int64(local.Month())
-			if extentMonths/step > maxTimechartBuckets {
-				return nil, fmt.Errorf("timechart produces more than %d buckets", maxTimechartBuckets)
+			if extentMonths/step > safecast.MustConv[int64](bucketLimit) {
+				return nil, fmt.Errorf("timechart produces more than %d buckets", bucketLimit)
 			}
 			first = origin.AddDate(0, int(floorInt64(months, step)*step), 0)
 			advance = func(value time.Time) time.Time { return value.AddDate(0, safecast.MustConv[int](magnitude), 0) }
@@ -160,8 +164,8 @@ func timechartBoundarySequence(earliest, latest time.Time, span time.Duration, c
 				return time.Date(value.Year(), value.Month(), value.Day(), 0, 0, 0, 0, time.UTC).Unix() / 86400
 			}
 			days := civil(local) - civil(origin)
-			if (civil(latest.In(location))-civil(local))/step > maxTimechartBuckets {
-				return nil, fmt.Errorf("timechart produces more than %d buckets", maxTimechartBuckets)
+			if (civil(latest.In(location))-civil(local))/step > safecast.MustConv[int64](bucketLimit) {
+				return nil, fmt.Errorf("timechart produces more than %d buckets", bucketLimit)
 			}
 			first = origin.AddDate(0, 0, int(floorInt64(days, step)*step))
 			if first.After(local) {
@@ -178,16 +182,16 @@ func timechartBoundarySequence(earliest, latest time.Time, span time.Duration, c
 	if calendar == CalendarNone {
 		distance := new(big.Int).Sub(big.NewInt(latest.UnixNano()), big.NewInt(first.UnixNano()))
 		count := distance.Add(distance, big.NewInt(int64(span)-1)).Div(distance, big.NewInt(int64(span)))
-		if !count.IsInt64() || count.Int64() > maxTimechartBuckets {
-			return nil, fmt.Errorf("timechart produces more than %d buckets", maxTimechartBuckets)
+		if !count.IsInt64() || count.Int64() > safecast.MustConv[int64](bucketLimit) {
+			return nil, fmt.Errorf("timechart produces more than %d buckets", bucketLimit)
 		}
 		capacity = int(count.Int64()) + 1
 	}
 	boundaries := make([]time.Time, 1, capacity)
 	boundaries[0] = first
 	for boundaries[len(boundaries)-1].Before(latest) {
-		if len(boundaries) > maxTimechartBuckets {
-			return nil, fmt.Errorf("timechart produces more than %d buckets", maxTimechartBuckets)
+		if uint64(len(boundaries)) > bucketLimit {
+			return nil, fmt.Errorf("timechart produces more than %d buckets", bucketLimit)
 		}
 		current := boundaries[len(boundaries)-1]
 		next := advance(current.In(location)).UTC()
