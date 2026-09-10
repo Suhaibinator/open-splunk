@@ -148,7 +148,10 @@ results:
 | --- | ---: | --- | --- |
 | Coordinator implementation | 17 | Resolved before independent review; focused compiler, executor, protocol, browser, and ClickHouse fixtures retain the regressions | Findings came from integration of the enhanced feature set |
 | Independent review 1 and fix audits | 12 (4 P1, 6 P2, 2 P3) | All fixes are implemented in `4915ba82`; focused owner checks cover wide rendering, exact grids, staged budgets and cancellation, final result shape, observed field presence, and the editor focus race | Complete final gates run after the documentation commit |
-| Independent review 2 | Pending | Correctness, efficiency, and code-quality reviewers are inspecting `4915ba82` | No clean-review claim is made before their reports arrive |
+| Independent review 2 and fix audits | 6 (1 P1, 5 P2) | All fixes are implemented in `88e2a643`; focused checks cover precise sorting and typed-axis selection, cumulative compile and runtime quotas, complete-result validation, and combined native external-table admission | Complete final gates run after the documentation commit |
+
+Subsequent independent review and final gate outcomes are recorded on
+[pull request #113](https://github.com/Suhaibinator/open-splunk/pull/113).
 
 Run the deterministic paired compiler and publication benchmark with:
 
@@ -165,17 +168,17 @@ region.
 
 The following paired result uses Darwin arm64 on an Apple M4 Max. Each value is
 the median of five fixed 100-iteration samples from baseline `ebcf1554` and the
-final implementation candidate `4915ba82`:
+final implementation candidate `88e2a643`:
 
 | Case | Baseline ns/op | Final ns/op | Baseline B/op | Final B/op | Baseline allocs/op | Final allocs/op | SQL bytes, baseline → final |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Compile, fixed count | 48,415 | 62,432 | 85,273 | 102,602 | 521 | 541 | 2,147 → 2,147 |
-| Compile, automatic count | 47,463 | 45,680 | 85,265 | 91,588 | 520 | 540 | 2,147 → 2,147 |
-| Compile, calendar count | 48,894 | 42,151 | 86,460 | 90,804 | 527 | 547 | 2,411 → 2,411 |
-| Compile, split count | 52,110 | 57,058 | 100,569 | 137,474 | 555 | 597 | 5,989 → 8,879 |
-| Compile, split average | 64,546 | 67,943 | 133,850 | 174,838 | 638 | 680 | 10,029 → 12,921 |
-| Publish 100 buckets × 10 series | 57,997 | 56,052 | 229,018 | 229,195 | 629 | 630 | n/a |
-| Publish 1,000 buckets × 10 series | 470,752 | 445,752 | 2,246,120 | 2,246,293 | 6,029 | 6,030 | n/a |
+| Compile, fixed count | 48,415 | 58,445 | 85,273 | 103,218 | 521 | 545 | 2,147 → 2,147 |
+| Compile, automatic count | 47,463 | 50,979 | 85,265 | 92,164 | 520 | 544 | 2,147 → 2,147 |
+| Compile, calendar count | 48,894 | 50,200 | 86,460 | 91,379 | 527 | 551 | 2,411 → 2,411 |
+| Compile, split count | 52,110 | 69,953 | 100,569 | 138,042 | 555 | 601 | 5,989 → 8,879 |
+| Compile, split average | 64,546 | 79,742 | 133,850 | 175,414 | 638 | 684 | 10,029 → 12,921 |
+| Publish 100 buckets × 10 series | 57,997 | 52,663 | 229,018 | 229,257 | 629 | 630 | n/a |
+| Publish 1,000 buckets × 10 series | 470,752 | 476,955 | 2,246,120 | 2,246,357 | 6,029 | 6,030 | n/a |
 
 Every compiler sample reported one textual event-source reference at both
 commits. The opt-in ClickHouse integration test separately requires exactly one
@@ -186,11 +189,22 @@ The exact-grid harness compares the pre-allocation-fix transport at `d5fe39c6`
 with the final candidate. At 10,000 buckets, transport allocation fell from
 20,001 allocations and 660,244 B/op to 2 allocations and 10,400 B/op. Complete
 publication fell from 120,035 allocations and 24,339,074 B/op to 100,035
-allocations and 23,379,125 B/op. Run that five-sample harness with:
+allocations and 23,379,192 B/op. Run that five-sample harness with:
 
 ```sh
 go test ./internal/queryexec -run '^$' \
   -bench '^BenchmarkExactTimechart(Transport|Publication)$' \
+  -benchtime=100x -count=5 -benchmem
+```
+
+The final native external-table preflight benchmark scans the capacity of a
+10,000-row, two-string-column lookup and a 10,000-row continuation relation in
+84,051 ns/op with 24 B/op and zero allocations/op. It measures the bounded
+capacity calculation, not native table construction. Run it with:
+
+```sh
+go test ./internal/clickhouse -run '^$' \
+  -bench '^BenchmarkExternalTablesNativeMaterializationPreflight$' \
   -benchtime=100x -count=5 -benchmem
 ```
 
