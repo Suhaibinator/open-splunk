@@ -166,7 +166,11 @@ func compilerForPlanLookups(
 			return clickhouse.Compiler{}, ErrKnowledgeUnavailable
 		}
 	}
-	return base.WithLookupResolutionsContext(ctx, all[:len(names)])
+	compiler, err := base.WithLookupResolutionsContext(ctx, all[:len(names)])
+	if err != nil || !query.HasTimechartContinuation() {
+		return compiler, err
+	}
+	return compiler.WithDeferredLookupResolutionsContext(ctx, all[len(names):])
 }
 
 func configureResolvedPlanLookups(
@@ -193,10 +197,15 @@ func configureResolvedPlanLookups(
 			return nil, clickhouse.Compiler{}, ErrKnowledgeUnavailable
 		}
 	}
-	return base.WithAutomaticLookupBindingsContext(
+	resolved, compiler, err := base.WithAutomaticLookupBindingsContext(
 		ctx,
 		query,
 		automatic,
 		explicit[:len(names)],
 	)
+	if err != nil || !query.HasTimechartContinuation() {
+		return resolved, compiler, err
+	}
+	compiler, err = compiler.WithDeferredLookupResolutionsContext(ctx, explicit[len(names):])
+	return resolved, compiler, err
 }
