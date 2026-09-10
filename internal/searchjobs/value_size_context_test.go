@@ -37,7 +37,8 @@ func TestValueRetainedSizeContextChecksCompletion(t *testing.T) {
 	if size, err := UnsignedValue(1).RetainedSizeBytesContext(ctx); !errors.Is(err, context.Canceled) || size != 0 {
 		t.Fatalf("completed measurement ignored cancellation: size=%d err=%v", size, err)
 	}
-	if _, err := NullValue().RetainedSizeBytesContext(nil); err == nil {
+	var missingContext context.Context
+	if _, err := NullValue().RetainedSizeBytesContext(missingContext); err == nil {
 		t.Fatal("nil context accepted")
 	}
 }
