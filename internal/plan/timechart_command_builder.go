@@ -28,7 +28,7 @@ func buildTimechartCommand(
 	if measureErr != nil {
 		return measureErr
 	}
-	if !canonicalTimeAvailable {
+	if !canonicalTimeAvailable && !outputSchemaKnown {
 		return &Diagnostic{
 			Code:        "SPL_UNSUPPORTED_TIMECHART_TIME_FIELD",
 			Message:     "timechart requires the unmodified canonical _time field",

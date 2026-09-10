@@ -625,6 +625,13 @@ func compiledExecutionDigestContext(
 	writeBool(digest, compiled.emptyTimechartInput)
 	writeBool(digest, compiled.hasTimechartStage)
 	writeTimechartContinuation(digest, compiled)
+	deferredValid, deferredErr := writeCompiledLookupExternalTablesContext(ctx, digest, compiled.deferredLookupTables())
+	if deferredErr != nil {
+		return compiledExecutionSeal{}, false, deferredErr
+	}
+	if !deferredValid {
+		return compiledExecutionSeal{}, false, nil
+	}
 	writeTokenPart(digest, compiled.SQL)
 	writeStringSlice(digest, compiled.OutputFields)
 	writeBool(digest, compiled.OutputPresentations == nil)
@@ -932,6 +939,12 @@ func (compiled CompiledQuery) CloneForExecutionContext(
 	cloned.OptionalMultivalueOutputs = slices.Clone(compiled.OptionalMultivalueOutputs)
 	cloned.StringOrBytesOutputs = slices.Clone(compiled.StringOrBytesOutputs)
 	cloned.lookupTables = cloneCompiledLookupExternalTables(compiled.lookupTables)
+	cloned.continuation = cloneTimechartContinuation(compiled.continuation)
+	if compiled.rangeDiscovery != nil {
+		discovery := *compiled.rangeDiscovery
+		discovery.continuation = cloneTimechartContinuation(discovery.continuation)
+		cloned.rangeDiscovery = &discovery
+	}
 	cloned.automaticLookupReplay = cloneRetainedAutomaticLookups(
 		compiled.automaticLookupReplay,
 	)
@@ -1135,6 +1148,10 @@ func (compiled CompiledQuery) RetainedBytesContext(
 		if !ok {
 			return 0, false, nil
 		}
+	}
+	total, ok, err = retainedCompiledLookupExternalTablesContext(ctx, total, compiled.deferredLookupTables())
+	if err != nil || !ok {
+		return 0, ok, err
 	}
 	total, ok, err = retainedCompiledLookupExternalTablesContext(
 		ctx,

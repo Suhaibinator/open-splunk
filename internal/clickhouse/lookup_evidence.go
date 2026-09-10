@@ -74,8 +74,9 @@ func (query CompiledQuery) LookupAssetVersions() ([]LookupAssetVersionEvidence, 
 		validateCompiledLookupExternalTables(query.lookupTables) != nil {
 		return nil, false
 	}
-	byVersion := make(map[string]LookupAssetVersionEvidence, len(query.lookupTables))
-	for _, table := range query.lookupTables {
+	tables := append(slices.Clone(query.lookupTables), query.deferredLookupTables()...)
+	byVersion := make(map[string]LookupAssetVersionEvidence, len(tables))
+	for _, table := range tables {
 		key := table.tenantID + "\x00" + table.logicalID + "\x00" +
 			string(binary.BigEndian.AppendUint64(nil, table.logicalVersion))
 		candidate := LookupAssetVersionEvidence{

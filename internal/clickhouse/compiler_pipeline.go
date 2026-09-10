@@ -998,11 +998,14 @@ func (c Compiler) compileWithFinalizerContext(
 				}
 				var suffix *compiledTimechartContinuation
 				if hasContinuation {
-					suffix = &compiledTimechartContinuation{plan: continuation, compiler: c}
-					suffix.compiler.relationInput = nil
-					suffix.compiler.continuationBudget = timechartContinuationBudget(state.context)
+					suffix, err = c.prepareTimechartContinuation(ctx, continuation, scan, lookupPreparation, lookupStageIndex, state.context)
+					if err != nil {
+						return CompiledQuery{}, err
+					}
 				}
 				discoveryCompiler := c
+				discoveryCompiler.lookupResolutions = nil
+				discoveryCompiler.deferredLookupResolutions = nil
 				discoveryCompiler.continuationBudget = timechartContinuationBudget(state.context)
 				compiled.rangeDiscovery = newTimechartRangeDiscovery(operator, scan, query, discoveryCompiler, suffix)
 				return finishCompiled(compiled, operator.Range)
@@ -1029,9 +1032,10 @@ func (c Compiler) compileWithFinalizerContext(
 				continue
 			}
 			if hasContinuation {
-				compiled.continuation = &compiledTimechartContinuation{plan: continuation, compiler: c}
-				compiled.continuation.compiler.relationInput = nil
-				compiled.continuation.compiler.continuationBudget = timechartContinuationBudget(state.context)
+				compiled.continuation, compileErr = c.prepareTimechartContinuation(ctx, continuation, scan, lookupPreparation, lookupStageIndex, state.context)
+				if compileErr != nil {
+					return CompiledQuery{}, compileErr
+				}
 			}
 			return finishCompiled(compiled, operator.Range)
 		case *plan.Chart:

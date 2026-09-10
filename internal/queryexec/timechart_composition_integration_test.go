@@ -2,6 +2,7 @@ package queryexec
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"strings"
@@ -42,6 +43,12 @@ func TestTimechartCompositionAgainstClickHouse(t *testing.T) {
 		rows         int
 		bounds       bool
 	}{
+		{"deferred lookup", `timechart span=1s count BY host | eval service="api" | lookup catalog service_id AS service OUTPUT owner | where owner="platform" | head 1`, 1, true},
+		{"observed lookup", `timechart span=250ms fixedrange=false count | eval service="api" | lookup catalog service_id AS service OUTPUT owner | where owner="platform" | head 1`, 1, true},
+		{"renamed timestamp", `timechart span=1s count | eval saved=_time | fields - _time | rename saved AS _time | timechart span=5s count | head 1`, 1, true},
+		{"minimum timestamp", `timechart span=1s count | stats min(_time) AS _time | timechart span=5s count | head 1`, 1, true},
+		{"rex rename dedup", `timechart span=1s count BY host | eval label="api-123" | rex field=label "(?<service>[a-z]+)-" | rename service AS kind | dedup kind | table kind`, 1, false},
+		{"eventstats suffix", `timechart span=1s count BY host | eventstats sum(east) AS total | where total>0 | head 1`, 1, true},
 		{"static count", `timechart span=1s count | where count>0 | head 1`, 1, true},
 		{"static value", `eval metric=2 | timechart span=1s sum(metric) AS total | where total>0 | head 1`, 1, true},
 		{"dynamic literal", `timechart span=1s count BY host | where 'west coast'>0 | table _time 'west coast'`, 2, true},
@@ -64,7 +71,43 @@ func TestTimechartCompositionAgainstClickHouse(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			compiled, err := (clickhouse.Compiler{}).Compile(logical)
+			compiler := clickhouse.Compiler{}
+			if strings.Contains(test.source, "lookup catalog") {
+				var contract plan.Lookup
+				for i, operator := range logical.Operators {
+					if lookup, ok := operator.(*plan.Lookup); ok {
+						contract = *lookup
+						break
+					}
+					if continuation, ok := logical.TimechartContinuationAt(i); ok {
+						contracts, contractErr := continuation.LookupContracts()
+						if contractErr != nil {
+							t.Fatal(contractErr)
+						}
+						if len(contracts) != 0 {
+							contract = contracts[0]
+							break
+						}
+					}
+				}
+				resolution, resolutionErr := clickhouse.NewLookupResolution("tenant", "catalog", "catalog-asset", 1, 40, sha256.Sum256([]byte("catalog-1")), []string{"service_id", "owner"}, [][]string{{"api", "platform"}})
+				if resolutionErr != nil {
+					t.Fatal(resolutionErr)
+				}
+				resolution, resolutionErr = resolution.WithLogicalContract(contract, "catalog-logical", 1)
+				if resolutionErr != nil {
+					t.Fatal(resolutionErr)
+				}
+				if strings.Contains(test.source, "BY host") {
+					compiler, err = compiler.WithDeferredLookupResolutionsContext(ctx, []clickhouse.LookupResolution{resolution})
+				} else {
+					compiler, err = compiler.WithLookupResolutionsContext(ctx, []clickhouse.LookupResolution{resolution})
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			compiled, err := compiler.Compile(logical)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -63,3 +63,42 @@ func (query *Query) TimechartContinuationAt(index int) (TimechartContinuation, b
 
 // StartCommand identifies the suffix boundary within the original source.
 func (continuation TimechartContinuation) StartCommand() int { return continuation.nextCommand }
+
+// HasTimechartContinuation reports retained parser-owned chart suffix authority.
+func (query *Query) HasTimechartContinuation() bool {
+	return query != nil && len(query.timechartContinuations) != 0
+}
+
+// LookupContracts returns ordered authored lookup contracts in the suffix.
+// Their event fields are literal names in the closed timechart relation.
+func (continuation TimechartContinuation) LookupContracts() ([]Lookup, error) {
+	query, err := spl.Parse(continuation.source)
+	if err != nil {
+		return nil, err
+	}
+	var contracts []Lookup
+	for _, command := range query.Commands[continuation.nextCommand:] {
+		if lookup, ok := command.(*spl.LookupCommand); ok {
+			contract, err := buildLookupCommand(lookup, true)
+			if err != nil {
+				return nil, err
+			}
+			contracts = append(contracts, *contract)
+		}
+	}
+	return contracts, nil
+}
+
+func shiftedTimechartContinuations(source map[int]TimechartContinuation, at, count int) map[int]TimechartContinuation {
+	if source == nil {
+		return nil
+	}
+	result := make(map[int]TimechartContinuation, len(source))
+	for index, continuation := range source {
+		if index >= at {
+			index += count
+		}
+		result[index] = continuation
+	}
+	return result
+}

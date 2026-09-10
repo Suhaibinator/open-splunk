@@ -29,6 +29,7 @@ type RelationColumn struct{ Name, Type string }
 type compiledTimechartContinuation struct {
 	plan     plan.TimechartContinuation
 	compiler Compiler
+	lookups  []compiledLookupExternalTable
 }
 type compiledRelationInput struct {
 	columns       []RelationColumn
@@ -120,7 +121,10 @@ func (compiled CompiledQuery) ContinueWithTimeBucketsContext(ctx context.Context
 	if err != nil {
 		return CompiledQuery{}, err
 	}
-	compiler := compiled.continuation.compiler
+	compiler, err := compiled.continuation.compilerForQuery(ctx, query)
+	if err != nil {
+		return CompiledQuery{}, err
+	}
 	compiler.relationInput = input
 	result, err := compiler.CompileContext(ctx, query)
 	if err != nil {
@@ -266,7 +270,7 @@ func relationValueValid(kind string, value any) bool {
 
 func relationField(column RelationColumn, index int) (fieldState, string, error) {
 	physical := fmt.Sprintf("__os_relation_%d", index)
-	field := fieldState{valueSQL: quoteIdentifier(physical), existsSQL: "1"}
+	field := fieldState{valueSQL: quoteIdentifier(column.Name), existsSQL: "1"}
 	kind := relationBaseType(column.Type)
 	switch kind {
 	case "UInt64", "Int64", "Float64":
@@ -307,7 +311,7 @@ func compileRelationInput(input *compiledRelationInput, query *plan.Query) (stri
 		}
 		state.visible[column.Name] = field
 		state.publicOrder = append(state.publicOrder, column.Name)
-		projection[i] = quoteIdentifier(physical)
+		projection[i] = quoteIdentifier(physical) + " AS " + quoteIdentifier(column.Name)
 	}
 	if input.bucketEnds != nil {
 		column := quoteIdentifier(ResultTimeBucketEndColumn)

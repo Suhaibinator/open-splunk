@@ -147,10 +147,10 @@ func compileTimechart(
 	if err != nil {
 		return CompiledQuery{}, err
 	}
-	if !ok || operator.Time.Name != "_time" || timeField.kind != fieldKindTime || !timeField.canonicalTime {
+	if !ok || operator.Time.Name != "_time" || timeField.kind != fieldKindTime {
 		return CompiledQuery{}, &plan.Diagnostic{
 			Code:    "SPL_UNSUPPORTED_TIMECHART_TIME_FIELD",
-			Message: "timechart requires the unmodified canonical _time field",
+			Message: "timechart requires a timestamp _time field",
 			Range:   operator.Range,
 		}
 	}

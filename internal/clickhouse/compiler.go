@@ -496,7 +496,8 @@ type Compiler struct {
 	// lookupResolutions is an ordered, detached control-plane authority. It is
 	// populated only through WithLookupResolutions; ordinary struct literals
 	// cannot attach asset rows to authored definition names.
-	lookupResolutions []LookupResolution
+	lookupResolutions         []LookupResolution
+	deferredLookupResolutions []LookupResolution
 }
 
 // CompiledQuery is executable SQL plus ordered bind arguments and public
