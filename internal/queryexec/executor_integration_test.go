@@ -233,6 +233,7 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 		timechartBase,
 		timechartIndexTime,
 	)
+	queryIntegrationTestCalendarBoundaryRuntime(t, ctx, connection, executor)
 	countFieldBase, countFieldIndexTime := queryIntegrationInsertTimechartCountFieldEvents(t, ctx, connection)
 	t.Run("eventstats production resource envelope", func(t *testing.T) {
 		queryIntegrationTestEventStatsProductionEnvelope(
