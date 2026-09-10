@@ -3173,7 +3173,8 @@ export function SearchWorkspace({
       else if (event.key === "Escape") {
         event.preventDefault();
         setMenu(null);
-        window.requestAnimationFrame(() => menuReturnFocusRef.current?.focus());
+        // Restore the mounted trigger before deferred work can override a later intentional focus.
+        menuReturnFocusRef.current?.focus();
         return;
       } else return;
       event.preventDefault();
