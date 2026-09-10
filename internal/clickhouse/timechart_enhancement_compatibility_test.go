@@ -3,6 +3,7 @@ package clickhouse
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestTimechartEnhancementCrossFeatureCompileMatrix keeps combinations that
@@ -54,7 +55,13 @@ func TestTimechartEnhancementCrossFeatureCompileMatrix(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			compiled := compileSPL(t, test.source)
+			scope := testChartScope()
+			scope.Earliest = time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+			scope.Latest = scope.Earliest.Add(48 * time.Hour)
+			if test.name == "subsecond sparse static suffix" {
+				scope.Latest = scope.Earliest.Add(time.Second)
+			}
+			compiled := compileSPLWithScope(t, test.source, scope)
 			if compiled.SQL == "" || !compiled.HasValidExecutionSeal() {
 				t.Fatalf("compiled query is incomplete or unsealed: %#v", compiled)
 			}

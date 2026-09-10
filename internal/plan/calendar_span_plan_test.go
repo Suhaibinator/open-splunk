@@ -153,33 +153,29 @@ func TestBuildCalendarTimechartBoundsBucketCount(t *testing.T) {
 	assertDiagnosticCode(t, err, "SPL_QUERY_TOO_COMPLEX")
 }
 
-func TestBuildRejectsForgedMultiUnitCalendarSpan(t *testing.T) {
+func TestBuildCalendarSpanMagnitudeContracts(t *testing.T) {
 	t.Parallel()
 
-	for _, source := range []string{
-		`index=gradethis | bin _time span=1d`,
-		`index=gradethis | timechart span=1w count`,
-	} {
-		t.Run(source, func(t *testing.T) {
-			t.Parallel()
+	parsedBin := mustParse(t, `index=gradethis | bin _time span=1d`)
+	parsedBin.Commands[0].(*spl.BinCommand).Span.Magnitude = 2
+	_, err := Build(parsedBin, testScope([]string{"gradethis"}, nil))
+	var diagnostic *Diagnostic
+	if !errors.As(err, &diagnostic) ||
+		diagnostic.Code != "SPL_UNSUPPORTED_CALENDAR_SPAN" ||
+		!slices.Equal(diagnostic.Suggestions, []string{"span=1d"}) {
+		t.Fatalf("Build forged bin error = %#v, want calendar-span diagnostic", err)
+	}
 
-			parsed := mustParse(t, source)
-			switch command := parsed.Commands[0].(type) {
-			case *spl.BinCommand:
-				command.Span.Magnitude = 2
-			case *spl.TimechartCommand:
-				command.Span.Magnitude = 2
-			default:
-				t.Fatalf("command = %T", command)
-			}
-			_, err := Build(parsed, testScope([]string{"gradethis"}, nil))
-			var diagnostic *Diagnostic
-			if !errors.As(err, &diagnostic) ||
-				diagnostic.Code != "SPL_UNSUPPORTED_CALENDAR_SPAN" ||
-				!slices.Equal(diagnostic.Suggestions, []string{"span=1d"}) {
-				t.Fatalf("Build error = %#v, want calendar-span diagnostic", err)
-			}
-		})
+	logical, err := Build(
+		mustParse(t, `index=gradethis | timechart span=2w count`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build multi-week timechart: %v", err)
+	}
+	operator := logical.Operators[len(logical.Operators)-1].(*Timechart)
+	if operator.Calendar != CalendarWeek || operator.CalendarMagnitude != 2 {
+		t.Fatalf("timechart calendar = %v magnitude=%d, want 2 weeks", operator.Calendar, operator.CalendarMagnitude)
 	}
 }
 

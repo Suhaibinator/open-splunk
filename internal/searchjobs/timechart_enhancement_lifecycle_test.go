@@ -53,6 +53,7 @@ func TestComposedTimechartBoundsSurvivePagingAndPinnedSnapshot(t *testing.T) {
 	})
 	request := validRequest()
 	request.SPL = `index=main | timechart span=250ms count | where count > 0 | sort 0 +_time`
+	request.TimeRange = mustAbsoluteTimeRange(base.Truncate(time.Second), base.Truncate(time.Second).Add(time.Second))
 	created, err := manager.Create(context.Background(), request)
 	if err != nil {
 		t.Fatalf("Create composed timechart: %v", err)
@@ -139,6 +140,10 @@ func TestCanceledComposedTimechartPublishesNoBoundedPrefix(t *testing.T) {
 	})
 	request := validRequest()
 	request.SPL = `index=main | timechart span=250ms count | head 1`
+	request.TimeRange = mustAbsoluteTimeRange(
+		time.Date(2026, time.September, 10, 12, 0, 0, 0, time.UTC),
+		time.Date(2026, time.September, 10, 12, 0, 1, 0, time.UTC),
+	)
 	created, err := manager.Create(context.Background(), request)
 	if err != nil {
 		t.Fatalf("Create composed timechart: %v", err)

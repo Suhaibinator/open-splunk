@@ -181,14 +181,19 @@ func TestBuildTimechartCountFieldRetainsCanonicalTimeAndTerminalInvariants(t *te
 		assertDiagnosticCode(t, err, "SPL_UNSUPPORTED_TIMECHART_TIME_FIELD")
 	}
 
-	_, err := Build(
+	logical, err := Build(
 		mustParse(
 			t,
 			`index=gradethis | timechart span=5m count(status) | table _time`,
 		),
 		testScope([]string{"gradethis"}, nil),
 	)
-	assertDiagnosticCode(t, err, "SPL_UNSUPPORTED_TIMECHART_PIPELINE")
+	if err != nil {
+		t.Fatalf("Build static timechart suffix: %v", err)
+	}
+	if !slices.Equal(logical.OutputFields, []string{"_time"}) || logical.DynamicOutput != nil {
+		t.Fatalf("static suffix output = %v dynamic=%#v, want [_time]", logical.OutputFields, logical.DynamicOutput)
+	}
 }
 
 func TestBuildRejectsForgedTimechartCountFieldContracts(t *testing.T) {

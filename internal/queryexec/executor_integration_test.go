@@ -225,6 +225,14 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 	eventIndexTime := queryIntegrationInsertEvent(t, ctx, connection)
 	binaryIndexTime := queryIntegrationInsertBinaryEvent(t, ctx, connection)
 	timechartBase, timechartIndexTime := queryIntegrationInsertTimechartEvents(t, ctx, connection)
+	queryIntegrationTestTimechartEnhancementSeams(
+		t,
+		ctx,
+		executor,
+		explainer,
+		timechartBase,
+		timechartIndexTime,
+	)
 	countFieldBase, countFieldIndexTime := queryIntegrationInsertTimechartCountFieldEvents(t, ctx, connection)
 	t.Run("eventstats production resource envelope", func(t *testing.T) {
 		queryIntegrationTestEventStatsProductionEnvelope(

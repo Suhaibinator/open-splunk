@@ -3657,7 +3657,8 @@
           "name": "subsecond exact divisor",
           "source": "index=main | timechart span=250ms count",
           "expect": {
-            "parse": "accept"
+            "parse": "accept",
+            "search_range": "one-second"
           }
         },
         {

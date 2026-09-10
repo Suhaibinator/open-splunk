@@ -2228,44 +2228,46 @@ func TestBuildTimechartBoundsFixedRangeBucketCount(t *testing.T) {
 func TestBuildTimechartBoundsFixedSpan(t *testing.T) {
 	t.Parallel()
 
-	logical, err := Build(
-		mustParse(t, `index=gradethis | timechart span=24h count by level`),
-		testScope([]string{"gradethis"}, nil),
-	)
-	if err != nil {
-		t.Fatalf("Build(24h fixed timechart): %v", err)
-	}
-	operator := logical.Operators[len(logical.Operators)-1].(*Timechart)
-	if operator.Calendar != CalendarNone || operator.Span != 24*time.Hour {
-		t.Fatalf("24h timechart = %#v, want fixed-duration plan", operator)
-	}
-
-	for _, source := range []string{
-		`index=gradethis | timechart span=86401s count by level`,
-		`index=gradethis | timechart span=25h count by level`,
+	for _, test := range []struct {
+		source string
+		span   time.Duration
+	}{
+		{source: `index=gradethis | timechart span=24h count by level`, span: 24 * time.Hour},
+		{source: `index=gradethis | timechart span=86401s count by level`, span: 86_401 * time.Second},
+		{source: `index=gradethis | timechart span=25h count by level`, span: 25 * time.Hour},
 	} {
-		_, err := Build(mustParse(t, source), testScope([]string{"gradethis"}, nil))
-		diagnostic := &Diagnostic{}
-		ok := errors.As(err, &diagnostic)
-		if !ok || diagnostic.Code != "SPL_UNSUPPORTED_TIMECHART_SYNTAX" {
-			t.Errorf("Build(%q) error = %#v, want bounded-span diagnostic", source, err)
+		logical, err := Build(
+			mustParse(t, test.source),
+			testScope([]string{"gradethis"}, nil),
+		)
+		if err != nil {
+			t.Fatalf("Build(%q): %v", test.source, err)
+		}
+		operator := logical.Operators[len(logical.Operators)-1].(*Timechart)
+		if operator.Calendar != CalendarNone || operator.Span != test.span {
+			t.Fatalf("Build(%q) timechart = %#v, want fixed span %s", test.source, operator, test.span)
 		}
 	}
 }
 
-func TestBuildRequiresTimechartToBeTerminal(t *testing.T) {
+func TestBuildTimechartRetainsDynamicContinuationAndScope(t *testing.T) {
 	t.Parallel()
 
 	query := mustParse(t, `index=gradethis | timechart span=5m count by level | search index=secret`)
-	_, err := Build(query, testScope([]string{"gradethis"}, nil))
-	assertDiagnosticCode(t, err, "SPL_UNSUPPORTED_TIMECHART_PIPELINE")
-	diagnostic := func() *Diagnostic {
-		target := &Diagnostic{}
-		_ = errors.As(err, &target)
-		return target
-	}()
-	if got := query.Commands[1].SourceRange(); diagnostic.Range != got {
-		t.Fatalf("diagnostic range = %#v, want next command %#v", diagnostic.Range, got)
+	logical, err := Build(query, testScope([]string{"gradethis"}, nil))
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if !slices.Equal(logical.EffectiveIndexes, []string{"gradethis"}) {
+		t.Fatalf("effective indexes = %v, want authorized prefix scope", logical.EffectiveIndexes)
+	}
+	operatorIndex := len(logical.Operators) - 1
+	if _, ok := logical.Operators[operatorIndex].(*Timechart); !ok {
+		t.Fatalf("last initial operator = %T, want *Timechart", logical.Operators[operatorIndex])
+	}
+	continuation, ok := logical.TimechartContinuationAt(operatorIndex)
+	if !ok || continuation.Source() != `search index=secret` {
+		t.Fatalf("continuation = %q/%t, want exact suffix", continuation.Source(), ok)
 	}
 }
 
@@ -2418,7 +2420,6 @@ func TestBuildRejectsChartCombinedWithOtherWideCommands(t *testing.T) {
 		{`index=gradethis | chart count over path by level | chart count over path by level`, "SPL_UNSUPPORTED_CHART_PIPELINE"},
 		{`index=gradethis | chart count over path by level | timechart span=5m count by level`, "SPL_UNSUPPORTED_CHART_PIPELINE"},
 		{`index=gradethis | chart count over path by level | stats count`, "SPL_UNSUPPORTED_CHART_PIPELINE"},
-		{`index=gradethis | timechart span=5m count by level | chart count over path by level`, "SPL_UNSUPPORTED_TIMECHART_PIPELINE"},
 	}
 	for _, test := range tests {
 		t.Run(test.source, func(t *testing.T) {
@@ -2426,6 +2427,19 @@ func TestBuildRejectsChartCombinedWithOtherWideCommands(t *testing.T) {
 			_, err := Build(mustParse(t, test.source), testScope([]string{"gradethis"}, nil))
 			assertDiagnosticCode(t, err, test.code)
 		})
+	}
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | timechart span=5m count by level | chart count over _time by level`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build deferred wide suffix: %v", err)
+	}
+	operatorIndex := len(logical.Operators) - 1
+	continuation, ok := logical.TimechartContinuationAt(operatorIndex)
+	if !ok || continuation.Source() != `chart count over _time by level` {
+		t.Fatalf("continuation = %q/%t, want exact chart suffix", continuation.Source(), ok)
 	}
 }
 

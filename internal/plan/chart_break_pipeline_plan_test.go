@@ -221,11 +221,17 @@ func TestChartBreakPipelineTerminalRuleOutranksLaterCommandErrors(t *testing.T) 
 		}
 	}
 
-	// A timechart before a chart is rejected by timechart's own terminal rule,
-	// so neither wide operator can hide behind the other.
+	// A dynamic timechart retains a later chart for validation against the
+	// materialized runtime schema.
 	source := `index=gradethis | timechart span=5m count BY level | chart count OVER _time BY level`
-	if diagnostic := chartBreakPipelineBuildError(t, source); diagnostic.Code != "SPL_UNSUPPORTED_TIMECHART_PIPELINE" {
-		t.Fatalf("Build(%q) code = %q, want SPL_UNSUPPORTED_TIMECHART_PIPELINE", source, diagnostic.Code)
+	logical, err := Build(mustParse(t, source), testScope([]string{"gradethis"}, nil))
+	if err != nil {
+		t.Fatalf("Build(%q): %v", source, err)
+	}
+	operatorIndex := len(logical.Operators) - 1
+	continuation, ok := logical.TimechartContinuationAt(operatorIndex)
+	if !ok || continuation.Source() != `chart count OVER _time BY level` {
+		t.Fatalf("continuation = %q/%t, want exact chart suffix", continuation.Source(), ok)
 	}
 }
 
