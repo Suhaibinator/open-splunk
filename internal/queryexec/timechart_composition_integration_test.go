@@ -3,6 +3,7 @@ package queryexec
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -192,11 +194,108 @@ func TestTimechartCompositionAgainstClickHouse(t *testing.T) {
 }
 
 func TestTimechartContinuationCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if err := (&Executor{}).executeTimechartStages(ctx, clickhouse.CompiledQuery{}, &fakeSink{}); err == nil {
-		t.Fatal("canceled stage accepted")
+	for _, test := range []struct {
+		name          string
+		rows          func(*testing.T, context.CancelFunc) (*fakeRows, driver.Rows)
+		wantNextCalls int
+	}{
+		{
+			name: "during first stage",
+			rows: func(t *testing.T, cancel context.CancelFunc) (*fakeRows, driver.Rows) {
+				t.Helper()
+				rows := timechartOrdinalRows([]string{"0:api"}, [][]uint64{{1}, {2}})
+				rows.afterScan = func() {
+					if rows.nextCalls == 1 {
+						cancel()
+					}
+				}
+				return rows, rows
+			},
+			wantNextCalls: 2,
+		},
+		{
+			name: "between stages",
+			rows: func(t *testing.T, cancel context.CancelFunc) (*fakeRows, driver.Rows) {
+				t.Helper()
+				rows := timechartOrdinalRows([]string{"0:api"}, [][]uint64{{1}, {2}})
+				return rows, &cancelOnCloseTimechartRows{fakeRows: rows, cancel: cancel}
+			},
+			wantNextCalls: 2,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			query := stagedTimechartCancellationQuery(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			rows, returned := test.rows(t, cancel)
+			connection := &singleStageTimechartConnection{rows: returned}
+			sink := &fakeSink{}
+
+			err := mustExecutor(t, connection).Execute(ctx, query, sink)
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("Execute error = %v, want context.Canceled", err)
+			}
+			if connection.queries != 1 {
+				t.Fatalf("physical stage queries = %d, want prefix only", connection.queries)
+			}
+			if rows.nextCalls != test.wantNextCalls || !rows.closed {
+				t.Fatalf("prefix rows read = %d closed=%t, want %d/true", rows.nextCalls, rows.closed, test.wantNextCalls)
+			}
+			if sink.setCalls != 0 || len(sink.rows) != 0 {
+				t.Fatalf("canceled staged timechart published schema=%d rows=%d", sink.setCalls, len(sink.rows))
+			}
+		})
 	}
+}
+
+type singleStageTimechartConnection struct {
+	rows    driver.Rows
+	queries int
+}
+
+func (connection *singleStageTimechartConnection) Query(
+	context.Context,
+	string,
+	...any,
+) (driver.Rows, error) {
+	connection.queries++
+	if connection.queries != 1 {
+		return nil, errors.New("timechart suffix executed after cancellation")
+	}
+	return connection.rows, nil
+}
+
+func stagedTimechartCancellationQuery(t *testing.T) clickhouse.CompiledQuery {
+	t.Helper()
+	earliest := time.Date(2026, time.September, 10, 12, 0, 0, 0, time.UTC)
+	latest := earliest.Add(2 * time.Second)
+	parsed, err := spl.Parse(`index=gradethis | timechart span=1s count BY host | head 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	visibility := uint64(1)
+	logical, err := plan.Build(parsed, plan.Scope{
+		TenantID:          "tenant",
+		AuthorizedIndexes: []string{"gradethis"},
+		Earliest:          earliest,
+		Latest:            latest,
+		SearchStart:       latest,
+		IndexTimeCutoff:   latest,
+		VisibilityCutoff:  &visibility,
+		SearchTimezone:    "UTC",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := (clickhouse.Compiler{}).Compile(logical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !compiled.HasContinuation() || !compiled.HasValidExecutionSeal() ||
+		!compiled.RequiresAtomicResult() {
+		t.Fatalf("staged cancellation fixture lacks sealed atomic continuation: %#v", compiled)
+	}
+	return compiled
 }
 
 func TestObservedTimechartInputExceedsPreviewRowsAgainstClickHouse(t *testing.T) {
