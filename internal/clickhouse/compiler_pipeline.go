@@ -71,6 +71,7 @@ func (c Compiler) compileWithFinalizerContext(
 	}
 	if c.relationInput != nil {
 		fragment, state, args, err = compileRelationInput(c.relationInput, query)
+		c.continuationBudget.apply(state.context)
 		if err != nil {
 			return CompiledQuery{}, err
 		}
@@ -999,8 +1000,11 @@ func (c Compiler) compileWithFinalizerContext(
 				if hasContinuation {
 					suffix = &compiledTimechartContinuation{plan: continuation, compiler: c}
 					suffix.compiler.relationInput = nil
+					suffix.compiler.continuationBudget = timechartContinuationBudget(state.context)
 				}
-				compiled.rangeDiscovery = newTimechartRangeDiscovery(operator, scan, query, c, suffix)
+				discoveryCompiler := c
+				discoveryCompiler.continuationBudget = timechartContinuationBudget(state.context)
+				compiled.rangeDiscovery = newTimechartRangeDiscovery(operator, scan, query, discoveryCompiler, suffix)
 				return finishCompiled(compiled, operator.Range)
 			}
 			compiled, compileErr := compileTimechart(
@@ -1027,6 +1031,7 @@ func (c Compiler) compileWithFinalizerContext(
 			if hasContinuation {
 				compiled.continuation = &compiledTimechartContinuation{plan: continuation, compiler: c}
 				compiled.continuation.compiler.relationInput = nil
+				compiled.continuation.compiler.continuationBudget = timechartContinuationBudget(state.context)
 			}
 			return finishCompiled(compiled, operator.Range)
 		case *plan.Chart:

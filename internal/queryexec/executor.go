@@ -555,6 +555,9 @@ func (executor *Executor) executeSingle(ctx context.Context, query clickhouse.Co
 			return err
 		}
 	}
+	if query.HasEmptyTimechartInput() {
+		return publishEmptyObservedTimechart(sink, query)
+	}
 	sparseFieldIndex, err := validateSparseFieldsOutput(query)
 	if err != nil {
 		return err

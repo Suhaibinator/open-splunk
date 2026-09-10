@@ -83,6 +83,10 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 }
 
 func buildWithRelation(query *spl.Query, scope Scope, inputFields []string) (*Query, error) {
+	return buildWithRelationStart(query, scope, inputFields, 0)
+}
+
+func buildWithRelationStart(query *spl.Query, scope Scope, inputFields []string, commandStart int) (*Query, error) {
 	if query == nil {
 		return nil, &Diagnostic{Code: "SPL_INVALID_QUERY", Message: "query is nil"}
 	}
@@ -170,6 +174,9 @@ func buildWithRelation(query *spl.Query, scope Scope, inputFields []string) (*Qu
 	}
 commands:
 	for commandIndex, command := range query.Commands {
+		if commandIndex < commandStart {
+			continue
+		}
 		switch command := command.(type) {
 		case *spl.SearchCommand:
 			expression, convertErr := convertExpression(command.Expression)

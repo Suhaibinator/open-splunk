@@ -622,6 +622,7 @@ func compiledExecutionDigestContext(
 	if compiled.TimeBucket != nil {
 		writeInt64(digest, int64(compiled.TimeBucket.TimeIndex))
 	}
+	writeBool(digest, compiled.emptyTimechartInput)
 	writeBool(digest, compiled.hasTimechartStage)
 	writeTimechartContinuation(digest, compiled)
 	writeTokenPart(digest, compiled.SQL)

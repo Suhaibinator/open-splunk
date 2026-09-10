@@ -10,6 +10,7 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"github.com/Suhaibinator/open-splunk/internal/searchlimits"
 )
 
 // stageBudget is shared across physical stages. Progress callbacks may run on
@@ -173,7 +174,12 @@ func (executor *Executor) executeTimechartStages(ctx context.Context, query clic
 	defer cancel()
 	base, expand := executor.settingsSnapshot()
 	frozen := &Executor{connection: executor.connection, settings: base, expandTimechartGroupLimit: expand, newQueryID: executor.newQueryID, withProgress: executor.withProgress, readAdmission: executor.readAdmission}
-	budget := &stageBudget{sink: sink, maxRows: settings["max_rows_to_read"].(uint64), maxBytes: settings["max_bytes_to_read"].(uint64), maxRetained: settings["max_memory_usage"].(uint64)}
+	policy := searchlimits.Default()
+	if admittedPolicy, ok := searchlimits.FromContext(ctx); ok {
+		policy = admittedPolicy
+	}
+	maximumRetained := min(policy.MaxResultBytes, policy.MaxMemoryBytes, settings["max_memory_usage"].(uint64), settings["max_result_bytes"].(uint64))
+	budget := &stageBudget{sink: sink, maxRows: settings["max_rows_to_read"].(uint64), maxBytes: settings["max_bytes_to_read"].(uint64), maxRetained: maximumRetained}
 	for query.HasContinuation() {
 		rowLimit := base.limit("max_result_rows")
 		if query.RequiresTimechartInputDiscovery() {
@@ -222,6 +228,12 @@ func (sink *timechartStageSink) AddRowWithTimeBucket(values []searchjobs.Value, 
 	return nil
 }
 func (sink stagedFinalSink) AddRowWithTimeBucket(values []searchjobs.Value, bounds searchjobs.TimeBucketBounds) error {
+	if err := sink.charge(uint64(unsafe.Sizeof(bounds)) + uint64(len(bounds.Earliest)+len(bounds.Latest))); err != nil {
+		return err
+	}
+	if err := sink.chargeValues(values); err != nil {
+		return err
+	}
 	return publishWithTimeBucket(sink.ResultSink, values, bounds)
 }
 
@@ -261,4 +273,56 @@ func stageDynamicValue(value searchjobs.Value) (any, error) {
 	default:
 		return nil, searchjobs.ErrInvalidResult
 	}
+}
+
+func publishEmptyObservedTimechart(sink searchjobs.ResultSink, query clickhouse.CompiledQuery) error {
+	if query.Timechart == nil {
+		return searchjobs.ErrInvalidResult
+	}
+	schema := searchjobs.Schema{Columns: []searchjobs.Column{{Name: "_time", Kind: searchjobs.ValueKindTime}}}
+	switch query.Timechart.Mode {
+	case clickhouse.TimechartModeFixedCount, clickhouse.TimechartModeFixedFieldCount:
+		if len(query.OutputFields) != 2 {
+			return searchjobs.ErrInvalidResult
+		}
+		schema.Columns = append(schema.Columns, searchjobs.Column{Name: query.OutputFields[1], Kind: searchjobs.ValueKindUnsigned})
+	case clickhouse.TimechartModeFixedValue:
+		if len(query.OutputFields) != 2 {
+			return searchjobs.ErrInvalidResult
+		}
+		schema.Columns = append(schema.Columns, searchjobs.Column{Name: query.OutputFields[1], Kind: searchjobs.ValueKindDouble, Nullable: true})
+	case clickhouse.TimechartModeRuntimeWide, clickhouse.TimechartModeRuntimeWideValue:
+	default:
+		return searchjobs.ErrInvalidResult
+	}
+	return sink.SetSchema(schema)
+}
+
+func (sink stagedFinalSink) SetSchema(schema searchjobs.Schema) error {
+	if err := sink.charge(uint64(len(schema.Columns)) * uint64(unsafe.Sizeof(searchjobs.Column{}))); err != nil {
+		return err
+	}
+	for _, column := range schema.Columns {
+		if err := sink.charge(uint64(len(column.Name) + len(column.FlatMultivalueDelimiter))); err != nil {
+			return err
+		}
+	}
+	return sink.ResultSink.SetSchema(schema)
+}
+func (sink stagedFinalSink) chargeValues(values []searchjobs.Value) error {
+	bytes := uint64(unsafe.Sizeof([]searchjobs.Value{})) + uint64(len(values))*uint64(unsafe.Sizeof(searchjobs.Value{}))
+	for _, value := range values {
+		size, err := value.RetainedSizeBytes()
+		if err != nil || size > math.MaxUint64-bytes {
+			return searchjobs.ErrExecutionLimit
+		}
+		bytes += size
+	}
+	return sink.charge(bytes)
+}
+func (sink stagedFinalSink) AddRow(values []searchjobs.Value) error {
+	if err := sink.chargeValues(values); err != nil {
+		return err
+	}
+	return sink.ResultSink.AddRow(values)
 }

@@ -20,6 +20,9 @@ type compiledTimechartRangeDiscovery struct {
 }
 
 func compileTimechartRangeSource(relation compiledRelation, state compileState, args []any, operator *plan.Timechart, scan *plan.Scan, stage int) (CompiledQuery, error) {
+	if err := validateTimechartMeasure(operator, state); err != nil {
+		return CompiledQuery{}, err
+	}
 	fields := []plan.FieldRef{operator.Time}
 	if operator.Measure.Input.Name != "" {
 		fields = append(fields, operator.Measure.Input)
@@ -38,9 +41,12 @@ func compileTimechartRangeSource(relation compiledRelation, state compileState, 
 
 func newTimechartRangeDiscovery(operator *plan.Timechart, scan *plan.Scan, query *plan.Query, compiler Compiler, continuation *compiledTimechartContinuation) *compiledTimechartRangeDiscovery {
 	copied := *operator
+	copied.Time.Path = slices.Clone(operator.Time.Path)
+	copied.Measure.Input.Path = slices.Clone(operator.Measure.Input.Path)
 	copied.GridBoundaries = slices.Clone(operator.GridBoundaries)
 	if operator.Split != nil {
 		split := *operator.Split
+		split.Field.Path = slices.Clone(operator.Split.Field.Path)
 		copied.Split = &split
 	}
 	copiedScan := *scan
@@ -81,6 +87,7 @@ func (compiled CompiledQuery) continueObservedTimechart(ctx context.Context, inp
 	if err != nil {
 		return CompiledQuery{}, err
 	}
+	result.emptyTimechartInput = len(input.rows) == 0
 	result.continuation = discovery.continuation
 	result.atomicResult = true
 	return result, nil
@@ -90,3 +97,6 @@ func (compiled CompiledQuery) continueObservedTimechart(ctx context.Context, inp
 func (compiled CompiledQuery) RequiresTimechartInputDiscovery() bool {
 	return compiled.rangeDiscovery != nil
 }
+
+// HasEmptyTimechartInput is sealed evidence that observed-range input was empty.
+func (compiled CompiledQuery) HasEmptyTimechartInput() bool { return compiled.emptyTimechartInput }

@@ -12,8 +12,9 @@ import (
 // admission scope. The exact runtime pivot schema is supplied only after the
 // complete upstream transport has passed validation.
 type TimechartContinuation struct {
-	source string
-	scope  Scope
+	source      string
+	nextCommand int
+	scope       Scope
 }
 
 func newTimechartContinuation(query *spl.Query, scope Scope, next int) (TimechartContinuation, error) {
@@ -31,7 +32,7 @@ func newTimechartContinuation(query *spl.Query, scope Scope, next int) (Timechar
 		value := *scope.VisibilityCutoff
 		scope.VisibilityCutoff = &value
 	}
-	return TimechartContinuation{source: strings.Clone(source[start:]), scope: scope}, nil
+	return TimechartContinuation{source: strings.Clone(source), nextCommand: next, scope: scope}, nil
 }
 
 // Source identifies the exact suffix for compiler execution authentication.
@@ -42,12 +43,12 @@ func (continuation TimechartContinuation) Build(fields []string) (*Query, error)
 	if continuation.source == "" || fields == nil {
 		return nil, errors.New("plan timechart continuation: source and schema are required")
 	}
-	query, err := spl.Parse("search * | " + continuation.source)
+	query, err := spl.Parse(continuation.source)
 	if err != nil {
 		return nil, err
 	}
 	// The synthetic base search is identity over the external relation.
-	return buildWithRelation(query, continuation.scope, fields)
+	return buildWithRelationStart(query, continuation.scope, fields, continuation.nextCommand)
 }
 
 // TimechartContinuationAt returns immutable continuation authority for a chart
@@ -59,3 +60,6 @@ func (query *Query) TimechartContinuationAt(index int) (TimechartContinuation, b
 	continuation, ok := query.timechartContinuations[index]
 	return continuation, ok
 }
+
+// StartCommand identifies the suffix boundary within the original source.
+func (continuation TimechartContinuation) StartCommand() int { return continuation.nextCommand }

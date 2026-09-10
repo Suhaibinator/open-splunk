@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
+	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -47,6 +49,8 @@ func TestTimechartCompositionAgainstClickHouse(t *testing.T) {
 		{"dynamic repeated", `timechart span=1s count BY host | timechart span=5s sum('west coast') AS total | head 1`, 1, true},
 		{"static observed", `timechart span=250ms fixedrange=false cont=false count | head 1`, 1, true},
 		{"split observed", `eval metric=2 | timechart span=250ms fixedrange=false cont=false sum(metric) BY host | where 'west coast'>0`, 2, true},
+		{"observed empty count", `search host=absent | timechart span=250ms fixedrange=false count`, 0, false},
+		{"observed empty avg", `search host=absent | timechart span=250ms fixedrange=false avg(missing_metric)`, 0, false},
 		{"observed auto", `timechart fixedrange=false cont=false count | head 1`, 1, true},
 		{"removed time", `timechart span=1s count BY host | table east`, 3600, false},
 	} {
@@ -64,8 +68,43 @@ func TestTimechartCompositionAgainstClickHouse(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if !compiled.RequiresTimechartInputDiscovery() {
+				settings, err := executor.settingsForContext(ctx, compiled)
+				if err != nil {
+					t.Fatal(err)
+				}
+				rows, err := executor.connection.Query(clickhousedriver.Context(ctx, clickhousedriver.WithSettings(settings)), "EXPLAIN PLAN json=1,description=0,indexes=1,actions=0,header=1 "+compiled.SQL, compiled.Args...)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var parts []string
+				for rows.Next() {
+					var line string
+					if err := rows.Scan(&line); err != nil {
+						_ = rows.Close()
+						t.Fatal(err)
+					}
+					parts = append(parts, line)
+				}
+				if err := rows.Err(); err != nil {
+					_ = rows.Close()
+					t.Fatal(err)
+				}
+				if err := rows.Close(); err != nil {
+					t.Fatal(err)
+				}
+				physical, err := parseExplainPlanText(ctx, strings.Join(parts, "\n"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(physical.Reads) != 1 {
+					t.Fatalf("physical MergeTree reads=%d want=1", len(physical.Reads))
+				}
+			}
 			sink := &compositionSink{}
-			if err := executor.Execute(ctx, compiled, sink); err != nil {
+			operationContext, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			if err := executor.Execute(operationContext, compiled, sink); err != nil {
 				t.Fatal(err)
 			}
 			if len(sink.rows) != test.rows {
@@ -79,6 +118,34 @@ func TestTimechartCompositionAgainstClickHouse(t *testing.T) {
 			}
 		})
 	}
+	for _, source := range []string{
+		`eval metric=1e308 | timechart span=1s sum(metric) AS total | where total<0 | head 1`,
+		`eval metric=1e308 | timechart span=1s sum(metric) AS total BY source | head 1`,
+		fmt.Sprintf(`eval host="%s" | timechart span=1s count BY host | head 1`, strings.Repeat("x", 257)),
+	} {
+		t.Run("validation "+source, func(t *testing.T) {
+			query, err := spl.Parse(fmt.Sprintf("index=%s | %s", semanticBytesLineageIndex, source))
+			if err != nil {
+				t.Fatal(err)
+			}
+			visibility := uint64(1)
+			logical, err := plan.Build(query, plan.Scope{TenantID: "tenant", AuthorizedIndexes: []string{semanticBytesLineageIndex}, Earliest: earliest, Latest: latest, SearchStart: indexTime, IndexTimeCutoff: indexTime, VisibilityCutoff: &visibility, SearchTimezone: "UTC"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			compiled, err := (clickhouse.Compiler{}).Compile(logical)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sink := &compositionSink{}
+			if err := executor.Execute(ctx, compiled, sink); err == nil {
+				t.Fatal("invalid upstream accepted")
+			}
+			if sink.setCalls != 0 || len(sink.rows) != 0 {
+				t.Fatal("invalid upstream published partial results")
+			}
+		})
+	}
 }
 
 func TestTimechartContinuationCancellation(t *testing.T) {
@@ -86,5 +153,43 @@ func TestTimechartContinuationCancellation(t *testing.T) {
 	cancel()
 	if err := (&Executor{}).executeTimechartStages(ctx, clickhouse.CompiledQuery{}, &fakeSink{}); err == nil {
 		t.Fatal("canceled stage accepted")
+	}
+}
+
+func TestObservedTimechartInputExceedsPreviewRowsAgainstClickHouse(t *testing.T) {
+	if os.Getenv("OPEN_SPLUNK_CLICKHOUSE_INTEGRATION") != "1" {
+		t.Skip("set OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1")
+	}
+	earliest := time.Date(2026, 8, 12, 20, 0, 0, 0, time.UTC)
+	latest := earliest.Add(time.Hour)
+	indexTime := latest.Add(time.Hour)
+	events := make([]semanticBytesLineageEvent, 10005)
+	for i := range events {
+		events[i] = semanticBytesLineageEvent{id: fmt.Sprintf("bulk-%d", i), at: earliest.Add(time.Millisecond), host: "bulk", raw: []byte("bulk")}
+	}
+	ctx, executor := semanticBytesLineageStartClickHouse(t, indexTime, events)
+	parsed, err := spl.Parse(fmt.Sprintf("index=%s | timechart span=1s fixedrange=false count", semanticBytesLineageIndex))
+	if err != nil {
+		t.Fatal(err)
+	}
+	visibility := uint64(1)
+	logical, err := plan.Build(parsed, plan.Scope{TenantID: "tenant", AuthorizedIndexes: []string{semanticBytesLineageIndex}, Earliest: earliest, Latest: latest, SearchStart: indexTime, IndexTimeCutoff: indexTime, VisibilityCutoff: &visibility, SearchTimezone: "UTC"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := (clickhouse.Compiler{}).Compile(logical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := &compositionSink{}
+	if err := executor.Execute(ctx, compiled, sink); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.rows) != 1 {
+		t.Fatalf("rows=%d", len(sink.rows))
+	}
+	count, ok := sink.rows[0][1].Unsigned()
+	if !ok || count != 10005 {
+		t.Fatalf("count=%d", count)
 	}
 }

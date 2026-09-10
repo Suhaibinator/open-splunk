@@ -488,9 +488,10 @@ var physicalIdentifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // SQL. Database and table are trusted configuration and still pass a strict
 // identifier allowlist; all user-authored values are query parameters.
 type Compiler struct {
-	relationInput *compiledRelationInput
-	Database      string
-	Table         string
+	continuationBudget continuationBudget
+	relationInput      *compiledRelationInput
+	Database           string
+	Table              string
 
 	// lookupResolutions is an ordered, detached control-plane authority. It is
 	// populated only through WithLookupResolutions; ordinary struct literals
@@ -501,15 +502,16 @@ type Compiler struct {
 // CompiledQuery is executable SQL plus ordered bind arguments and public
 // result fields. Internal helper columns never appear in OutputFields.
 type CompiledQuery struct {
-	rangeDiscovery    *compiledTimechartRangeDiscovery
-	hasTimechartStage bool
-	TimeBucket        *ResultTimeBucketOutput
-	continuationRoot  *compiledExecutionSeal
-	continuation      *compiledTimechartContinuation
-	relationInput     *compiledRelationInput
-	SQL               string
-	Args              []any
-	OutputFields      []string
+	emptyTimechartInput bool
+	rangeDiscovery      *compiledTimechartRangeDiscovery
+	hasTimechartStage   bool
+	TimeBucket          *ResultTimeBucketOutput
+	continuationRoot    *compiledExecutionSeal
+	continuation        *compiledTimechartContinuation
+	relationInput       *compiledRelationInput
+	SQL                 string
+	Args                []any
+	OutputFields        []string
 	// OutputPresentations, when nonempty, is aligned exactly by ordinal with
 	// OutputFields. Zero entries carry no presentation metadata. The compiler
 	// attaches a display-only flat multivalue delimiter to stats list/values and

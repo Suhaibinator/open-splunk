@@ -83,6 +83,14 @@ func (compiled CompiledQuery) ContinueWithTimeBucketsContext(ctx context.Context
 				return CompiledQuery{}, errors.New("continue timechart: invalid bucket interval")
 			}
 		}
+		policy := searchlimits.Default()
+		if admitted, ok := searchlimits.FromContext(ctx); ok {
+			policy = admitted
+		}
+		maximum := min(policy.MaxResultBytes, policy.MaxMemoryBytes)
+		if input.retainedBytes > maximum || uint64(len(ends)) > (maximum-input.retainedBytes)/uint64(unsafe.Sizeof(time.Time{})) {
+			return CompiledQuery{}, errors.New("continue timechart: bucket bounds exceed byte limit")
+		}
 		input.bucketEnds = slices.Clone(ends)
 		input.retainedBytes += uint64(len(ends)) * uint64(unsafe.Sizeof(time.Time{}))
 		digest := sha256.New()
@@ -137,7 +145,6 @@ func newRelationInput(ctx context.Context, columns []RelationColumn, rows [][]an
 	maximum := min(policy.MaxResultBytes, policy.MaxMemoryBytes)
 	maxRows := policy.MaxResultRows
 	if discovery {
-		maximum = policy.MaxMemoryBytes
 		maxRows = policy.MaxRowsToRead
 	}
 	if uint64(len(rows)) > maxRows {
@@ -326,11 +333,20 @@ func compileRelationInput(input *compiledRelationInput, query *plan.Query) (stri
 func writeTimechartContinuation(digest hash.Hash, compiled CompiledQuery) {
 	writeBool(digest, compiled.rangeDiscovery != nil)
 	if compiled.rangeDiscovery != nil {
+		compiled.rangeDiscovery.compiler.continuationBudget.write(digest)
 		writeTokenPart(digest, compiled.rangeDiscovery.timezone)
 		writeCompiledArgument(digest, compiled.rangeDiscovery.searchStart, 0)
-		writeTokenPart(digest, fmt.Sprintf("%#v", compiled.rangeDiscovery.operator))
+		operator := compiled.rangeDiscovery.operator
+		split := operator.Split
+		operator.Split = nil
+		writeTokenPart(digest, fmt.Sprintf("%#v", operator))
+		writeBool(digest, split != nil)
+		if split != nil {
+			writeTokenPart(digest, fmt.Sprintf("%#v", *split))
+		}
 		if compiled.rangeDiscovery.continuation != nil {
 			writeTokenPart(digest, compiled.rangeDiscovery.continuation.plan.Source())
+			writeInt64(digest, int64(compiled.rangeDiscovery.continuation.plan.StartCommand()))
 		}
 	}
 	writeBool(digest, compiled.continuationRoot != nil)
@@ -340,6 +356,8 @@ func writeTimechartContinuation(digest hash.Hash, compiled CompiledQuery) {
 	writeBool(digest, compiled.continuation != nil)
 	if compiled.continuation != nil {
 		writeTokenPart(digest, compiled.continuation.plan.Source())
+		writeInt64(digest, int64(compiled.continuation.plan.StartCommand()))
+		compiled.continuation.compiler.continuationBudget.write(digest)
 		writeTokenPart(digest, compiled.continuation.compiler.Database)
 		writeTokenPart(digest, compiled.continuation.compiler.Table)
 	}
@@ -386,8 +404,8 @@ func materializeRelationInput(ctx context.Context, input *compiledRelationInput)
 }
 
 func relationBaseType(kind string) string {
-	if strings.HasPrefix(kind, "Nullable(") {
-		return strings.TrimSuffix(strings.TrimPrefix(kind, "Nullable("), ")")
+	if base, ok := strings.CutPrefix(kind, "Nullable("); ok {
+		return strings.TrimSuffix(base, ")")
 	}
 	return kind
 }

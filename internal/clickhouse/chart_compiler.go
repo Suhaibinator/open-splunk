@@ -137,6 +137,9 @@ func compileTimechart(
 			return CompiledQuery{}, validationErr
 		}
 	}
+	if operator.Split != nil || gridSpec.exact {
+		state.context.requiresMaterializedValidationSettings = true
+	}
 	if err := validateCanonicalFieldRef("timechart", "time", operator.Time); err != nil {
 		return CompiledQuery{}, err
 	}
@@ -386,7 +389,7 @@ func compileTimechart(
 	sql.Grow(len(relation.sql) + 8_192)
 	sql.WriteString("WITH ")
 	sql.WriteString(source)
-	sql.WriteString(" AS (SELECT ")
+	sql.WriteString(" AS MATERIALIZED (SELECT ")
 	sql.WriteString(timeField.valueSQL)
 	sql.WriteString(" AS ")
 	sql.WriteString(eventTime)
@@ -962,7 +965,7 @@ func compileSplitValueTimechart(
 	sql.Grow(len(relation.sql) + len(measureInputSQL) + 12_288)
 	sql.WriteString("WITH ")
 	sql.WriteString(source)
-	sql.WriteString(" AS (SELECT ")
+	sql.WriteString(" AS MATERIALIZED (SELECT ")
 	sql.WriteString(timeField.valueSQL)
 	sql.WriteString(" AS ")
 	sql.WriteString(eventTime)
@@ -1656,7 +1659,11 @@ func compileFixedCountTimechart(
 	sql.WriteString("WITH ")
 	sql.WriteString(source)
 	if gridSpec.isCalendar() {
-		sql.WriteString(" AS (SELECT ")
+		if gridSpec.exact {
+			sql.WriteString(" AS MATERIALIZED (SELECT ")
+		} else {
+			sql.WriteString(" AS (SELECT ")
+		}
 		sql.WriteString(timeField.valueSQL)
 		sql.WriteString(" AS ")
 		sql.WriteString(eventTime)
@@ -1744,7 +1751,11 @@ func compileFixedCountValueTimechart(
 	sql.WriteString("WITH ")
 	sql.WriteString(source)
 	if gridSpec.isCalendar() {
-		sql.WriteString(" AS (SELECT ")
+		if gridSpec.exact {
+			sql.WriteString(" AS MATERIALIZED (SELECT ")
+		} else {
+			sql.WriteString(" AS (SELECT ")
+		}
 		sql.WriteString(timeField.valueSQL)
 		sql.WriteString(" AS ")
 		sql.WriteString(eventTime)
@@ -1922,7 +1933,11 @@ func compileFixedValueTimechart(
 	sql.WriteString("WITH ")
 	sql.WriteString(source)
 	if gridSpec.isCalendar() {
-		sql.WriteString(" AS (SELECT ")
+		if gridSpec.exact {
+			sql.WriteString(" AS MATERIALIZED (SELECT ")
+		} else {
+			sql.WriteString(" AS (SELECT ")
+		}
 		sql.WriteString(timeField.valueSQL)
 		sql.WriteString(" AS ")
 		sql.WriteString(eventTime)
