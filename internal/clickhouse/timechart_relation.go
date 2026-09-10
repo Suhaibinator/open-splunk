@@ -84,13 +84,9 @@ func (compiled CompiledQuery) ContinueWithTimeBucketsContext(ctx context.Context
 				return CompiledQuery{}, errors.New("continue timechart: invalid bucket interval")
 			}
 		}
-		policy := searchlimits.Default()
-		if admitted, ok := searchlimits.FromContext(ctx); ok {
-			policy = admitted
-		}
-		maximum := min(policy.MaxResultBytes, policy.MaxMemoryBytes)
+		maximum := relationInputMaximumBytes(ctx)
 		if input.retainedBytes > maximum || uint64(len(ends)) > (maximum-input.retainedBytes)/uint64(unsafe.Sizeof(time.Time{})) {
-			return CompiledQuery{}, errors.New("continue timechart: bucket bounds exceed byte limit")
+			return CompiledQuery{}, fmt.Errorf("%w: continue timechart bucket bounds exceed byte limit", ErrTimechartResourceLimit)
 		}
 		input.bucketEnds = slices.Clone(ends)
 		input.retainedBytes += uint64(len(ends)) * uint64(unsafe.Sizeof(time.Time{}))
@@ -139,69 +135,24 @@ func (compiled CompiledQuery) ContinueWithTimeBucketsContext(ctx context.Context
 }
 
 func newRelationInput(ctx context.Context, columns []RelationColumn, rows [][]any, discovery bool) (*compiledRelationInput, error) {
-	if len(columns) == 0 {
-		return nil, errors.New("materialize timechart: empty schema")
-	}
 	policy := searchlimits.Default()
 	if admitted, ok := searchlimits.FromContext(ctx); ok {
 		policy = admitted
 	}
-	maximum := min(policy.MaxResultBytes, policy.MaxMemoryBytes)
+	maximum := relationInputMaximumBytes(ctx)
 	maxRows := policy.MaxResultRows
 	if discovery {
 		maxRows = policy.MaxRowsToRead
 	}
-	if uint64(len(rows)) > maxRows {
-		return nil, errors.New("materialize timechart: row limit exceeded")
-	}
-	retained := uint64(unsafe.Sizeof(compiledRelationInput{}))
-	charge := func(value uint64) bool {
-		if value > maximum-retained {
-			return false
-		}
-		retained += value
-		return true
-	}
-	if retained > maximum || uint64(len(columns)) > maximum/uint64(unsafe.Sizeof(RelationColumn{})) ||
-		!charge(uint64(len(columns))*uint64(unsafe.Sizeof(RelationColumn{}))) ||
-		uint64(len(rows)) > maximum/uint64(unsafe.Sizeof([]any{})) || !charge(uint64(len(rows))*uint64(unsafe.Sizeof([]any{}))) {
-		return nil, errors.New("materialize timechart: schema capacity exceeds byte limit")
-	}
-	for _, column := range columns {
-		if !charge(uint64(len(column.Name))) || !charge(uint64(len(column.Type))) {
-			return nil, errors.New("materialize timechart: schema exceeds byte limit")
-		}
-	}
-	for _, row := range rows {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		if len(row) != len(columns) || uint64(len(row)) > maximum/uint64(unsafe.Sizeof(any(nil))) || !charge(uint64(len(row))*uint64(unsafe.Sizeof(any(nil)))) {
-			return nil, errors.New("materialize timechart: cell capacity exceeds byte limit")
-		}
-		for j, value := range row {
-			if !relationValueValid(columns[j].Type, value) {
-				return nil, errors.New("materialize timechart: cell type is invalid")
-			}
-			size, ok := retainedRelationValue(value, 0)
-			if !ok || !charge(size) {
-				return nil, errors.New("materialize timechart: cells exceed byte limit")
-			}
-		}
+	retained, err := relationInputRetainedBytes(ctx, columns, rows, maxRows, maximum)
+	if err != nil {
+		return nil, err
 	}
 	input := &compiledRelationInput{columns: slices.Clone(columns), rows: make([][]any, len(rows))}
 	digest := sha256.New()
 	writeTokenPart(digest, "timechart-external-relation-v1")
 	input.retainedBytes = retained
-	names := make(map[string]bool, len(columns))
 	for i, column := range columns {
-		if column.Name == "" || !utf8.ValidString(column.Name) || names[column.Name] {
-			return nil, errors.New("materialize timechart: invalid schema name")
-		}
-		names[column.Name] = true
-		if _, _, err := relationField(column, i); err != nil {
-			return nil, err
-		}
 		input.columns[i].Name = strings.Clone(column.Name)
 		input.columns[i].Type = strings.Clone(column.Type)
 		writeTokenPart(digest, column.Name)
@@ -372,6 +323,16 @@ func writeTimechartContinuation(digest hash.Hash, compiled CompiledQuery) {
 }
 
 func materializeRelationInput(ctx context.Context, input *compiledRelationInput) (*ext.Table, error) {
+	nativeBytes, ok, err := relationInputNativeMaterializationBytes(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, errors.New("materialize timechart: native relation is invalid")
+	}
+	if nativeBytes > relationInputMaximumBytes(ctx) {
+		return nil, fmt.Errorf("%w: materialize timechart native relation exceeds byte limit", ErrTimechartResourceLimit)
+	}
 	definitions := make([]func(*ext.Table) error, len(input.columns))
 	for i, fieldColumn := range input.columns {
 		_, physical, err := relationField(fieldColumn, i)
