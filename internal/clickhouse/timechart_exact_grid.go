@@ -2,7 +2,6 @@ package clickhouse
 
 import (
 	"errors"
-	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -47,16 +46,24 @@ func (spec timechartGridSpec) exactBucketKeySQL(eventTime string) string {
 		delta := "(toInt128(toUnixTimestamp64Nano(" + eventTime + ")) - toInt128(" + origin + "))"
 		return "toInt64((intDiv(" + delta + ", " + span + ") - if(" + delta + " < 0 AND modulo(" + delta + ", " + span + ") != 0, 1, 0)) * " + span + " + toInt128(" + origin + "))"
 	}
-	unit := "DAY"
+
 	magnitude := spec.magnitude
 	if spec.calendar == plan.CalendarWeek {
 		magnitude *= 7
 	}
+	unit, add := "day", "addDays"
 	if spec.calendar == plan.CalendarMonth {
-		unit = "MONTH"
+		unit, add = "month", "addMonths"
 	}
 	timezone := "'" + strings.ReplaceAll(spec.searchTimezone, "'", "''") + "'"
-	return fmt.Sprintf("toUnixTimestamp64Nano(toStartOfInterval(%s, INTERVAL %d %s, fromUnixTimestamp64Nano(%s, 'UTC'), %s))", eventTime, magnitude, unit, origin, timezone)
+	localOrigin := "toTimeZone(fromUnixTimestamp64Nano(" + origin + ", 'UTC'), " + timezone + ")"
+	localEvent := "toTimeZone(" + eventTime + ", " + timezone + ")"
+	difference := "dateDiff('" + unit + "', " + localOrigin + ", " + localEvent + ", " + timezone + ")"
+	step := strconv.FormatUint(magnitude, 10)
+	offset := "((intDiv(" + difference + ", " + step + ") - if(" + difference + " < 0 AND modulo(" + difference + ", " + step + ") != 0, 1, 0)) * " + step + ")"
+	candidate := add + "(" + localOrigin + ", " + offset + ")"
+	return "toUnixTimestamp64Nano(if(" + candidate + " > " + localEvent + ", " + add + "(" + candidate + ", -" + step + "), " + candidate + "))"
+
 }
 
 func (spec timechartGridSpec) exactGridSQL(ordinal, bucketKey string) string {

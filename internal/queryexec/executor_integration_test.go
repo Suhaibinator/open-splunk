@@ -3378,6 +3378,14 @@ func queryIntegrationInsertTimechartEvents(t *testing.T, ctx context.Context, co
 		visibility uint64
 	}
 	events := []fixtureEvent{
+		{id: "exact-pre-epoch", source: "timechart-exact-pre-epoch", at: time.Unix(0, -1).UTC(), level: &errorLevel},
+		{id: "exact-epoch", source: "timechart-exact-pre-epoch", at: time.Unix(0, 0).UTC(), level: &errorLevel},
+		{id: "exact-ceiling", source: "timechart-exact-ceiling", at: time.Unix(0, 250_000_000).UTC(), level: &errorLevel},
+		{id: "exact-spring-first", source: "timechart-exact-spring", at: time.Date(2026, 3, 7, 12, 0, 0, 0, time.UTC), level: &errorLevel},
+		{id: "exact-spring-second", source: "timechart-exact-spring", at: time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC), level: &errorLevel},
+		{id: "exact-fall-first", source: "timechart-exact-fall", at: time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC), level: &errorLevel},
+		{id: "exact-fall-second", source: "timechart-exact-fall", at: time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC), level: &errorLevel},
+		{id: "exact-leap", source: "timechart-exact-leap", at: time.Date(2024, 2, 29, 12, 0, 0, 0, time.UTC), level: &errorLevel},
 		{
 			id:     "storage-floor",
 			source: "timechart-storage-floor",
