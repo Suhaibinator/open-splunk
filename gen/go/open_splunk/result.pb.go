@@ -460,8 +460,7 @@ func (x *ResultSchema) GetColumns() []*ResultColumn {
 	return nil
 }
 
-// ResultRow cells correspond positionally to ResultSchema.columns. row_id is an
-// opaque stable identifier within one search snapshot.
+// TimeBucketBounds is exact UTC RFC3339Nano metadata for one timechart row.
 type TimeBucketBounds struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Earliest      string                 `protobuf:"bytes,1,opt,name=earliest,proto3" json:"earliest,omitempty"`
@@ -514,6 +513,8 @@ func (x *TimeBucketBounds) GetLatest() string {
 	return ""
 }
 
+// ResultRow cells correspond positionally to ResultSchema.columns. row_id is an
+// opaque stable identifier within one search snapshot.
 type ResultRow struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	RowId         string                 `protobuf:"bytes,1,opt,name=row_id,json=rowId,proto3" json:"row_id,omitempty"`

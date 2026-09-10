@@ -315,15 +315,16 @@ export interface ResultSchema {
   columns: ResultColumn[];
 }
 
-/**
- * ResultRow cells correspond positionally to ResultSchema.columns. row_id is an
- * opaque stable identifier within one search snapshot.
- */
+/** TimeBucketBounds is exact UTC RFC3339Nano metadata for one timechart row. */
 export interface TimeBucketBounds {
   earliest: string;
   latest: string;
 }
 
+/**
+ * ResultRow cells correspond positionally to ResultSchema.columns. row_id is an
+ * opaque stable identifier within one search snapshot.
+ */
 export interface ResultRow {
   rowId: string;
   ordinal: bigint;
