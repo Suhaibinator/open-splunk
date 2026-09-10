@@ -31,13 +31,14 @@ import { formatGroupedNumericText } from "../formatters";
 import type { MenuName, StatsDensity } from "../model";
 import {
   createColumnLayout,
-  reconcileColumnLayout,
+  createColumnLayoutDomain,
   resizeColumn,
+  selectColumnLayoutWindow,
   type StatisticsColumnDefinition,
   type StatisticsColumnLayout,
+  type StatisticsColumnLayoutItem,
   type StatisticsColumnLayoutStore,
   toggleColumn,
-  visibleColumns,
   visibleColumnWidth,
 } from "./statistics-column-layout";
 import {
@@ -156,19 +157,18 @@ function readStatisticsColumnScale(): StatisticsColumnScale | null {
 interface StatisticsColumnResizeHandleProps {
   column: StatisticsPanelColumn;
   keyboardStep: number | null;
-  layout: StatisticsColumnLayout;
+  layoutItem: StatisticsColumnLayoutItem | undefined;
   onResize: (id: string, deltaPx: number) => void;
 }
 
 function StatisticsColumnResizeHandle({
   column,
   keyboardStep,
-  layout,
+  layoutItem,
   onResize,
 }: StatisticsColumnResizeHandleProps) {
   const lastClientX = useRef<number | null>(null);
-  const width = layout.find((item) => item.id === column.id)?.width
-    ?? column.defaultWidth;
+  const width = layoutItem?.width ?? column.defaultWidth;
 
   function endPointerResize(event: PointerEvent<HTMLSpanElement>): void {
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
@@ -290,16 +290,15 @@ interface TimechartSeriesCell {
 function timechartSeriesCell(
   point: TimelinePoint,
   seriesName: string,
-  hasExplicitSeries: boolean,
 ): TimechartSeriesCell | null {
-  if (!hasExplicitSeries) {
+  if (point.series === undefined) {
     return {
       displayValue: point.exactCount ?? point.count,
       coordinateApproximate: point.coordinateApproximate === true,
     };
   }
-  const coordinate = point.series?.[seriesName];
-  if (coordinate === undefined) return null;
+  const coordinate = point.series[seriesName];
+  if (typeof coordinate !== "number" || !Number.isFinite(coordinate)) return null;
   const exact = point.exactSeries?.[seriesName];
   return {
     displayValue: exact ?? coordinate,
@@ -381,8 +380,9 @@ export function StatisticsPanel({
     members: string[];
   } | null>(null);
   const tableShellRef = useRef<HTMLDivElement>(null);
-  const hasExplicitTimechartSeries = timelinePoints.some(
-    (point) => Object.keys(point.series ?? {}).length > 0,
+  const hasExplicitTimechartSeries = useMemo(
+    () => timelinePoints.some((point) => point.series !== undefined),
+    [timelinePoints],
   );
   const timechartSeries = timechartValueColumns;
   const [columnScale, setColumnScale] = useState<StatisticsColumnScale | null>(null);
@@ -460,22 +460,15 @@ export function StatisticsPanel({
       ? legacyColumns
       : genericColumns;
   const layoutQueryKey = submittedQuery;
-  const [columnLayoutState, setColumnLayoutState] = useState(() => {
-    const stored = columnLayoutStore.get(layoutQueryKey);
-    return {
-      query: layoutQueryKey,
-      layout: stored === undefined
-        ? createColumnLayout(panelColumns)
-        : [...stored],
-    };
-  });
-  const columnLayout = columnLayoutState.query === layoutQueryKey
-    ? reconcileColumnLayout(columnLayoutState.layout, panelColumns)
-    : reconcileColumnLayout(
-        columnLayoutStore.get(layoutQueryKey) ?? createColumnLayout(panelColumns),
-        panelColumns,
-      );
-  const visibleColumnLayout = visibleColumns(columnLayout);
+  const [columnLayoutState, setColumnLayoutState] = useState<StatisticsColumnLayout>(
+    () => columnLayoutStore.get(layoutQueryKey, panelColumns) ?? createColumnLayout(panelColumns),
+  );
+  const columnLayoutDomain = useMemo(
+    () => createColumnLayoutDomain(columnLayoutState, panelColumns),
+    [columnLayoutState, panelColumns],
+  );
+  const columnLayout = columnLayoutDomain.layout;
+  const visibleColumnLayout = columnLayoutDomain.visible;
   const maximumColumnWindowOffset = Math.floor(
     Math.max(0, panelColumns.length - 1) / STATISTICS_COLUMN_WINDOW_SIZE,
   ) * STATISTICS_COLUMN_WINDOW_SIZE;
@@ -484,37 +477,44 @@ export function StatisticsPanel({
     panelColumns.length,
     boundedColumnWindowOffset + STATISTICS_COLUMN_WINDOW_SIZE,
   );
-  const panelColumnWindow = panelColumns.slice(boundedColumnWindowOffset, columnWindowEnd);
-  const columnWindowIds = new Set(panelColumnWindow.map((column) => column.id));
-  const renderedColumnLayout = visibleColumnLayout.filter((column) => columnWindowIds.has(column.id));
-  const visibleColumnIds = new Set(visibleColumnLayout.map((column) => column.id));
-  const visiblePanelColumns = panelColumnWindow.filter((column) => visibleColumnIds.has(column.id));
-  const visibleGenericColumns = genericStatisticsTable?.columns.filter(
-    (column) => columnWindowIds.has(column.key) && visibleColumnIds.has(column.key),
-  ) ?? [];
+  const panelColumnWindow = useMemo(
+    () => panelColumns.slice(boundedColumnWindowOffset, columnWindowEnd),
+    [boundedColumnWindowOffset, columnWindowEnd, panelColumns],
+  );
+  const visibleColumnWindow = useMemo(() => selectColumnLayoutWindow(
+    panelColumns,
+    columnLayoutDomain.byId,
+    boundedColumnWindowOffset,
+    STATISTICS_COLUMN_WINDOW_SIZE,
+  ), [boundedColumnWindowOffset, columnLayoutDomain, panelColumns]);
+  const renderedColumnLayout = visibleColumnWindow.layout;
+  const visiblePanelColumns = visibleColumnWindow.columns;
+  const genericColumnById = useMemo(() => new Map(
+    (genericStatisticsTable?.columns ?? []).map((column) => [column.key, column]),
+  ), [genericStatisticsTable?.columns]);
+  const visibleGenericColumns = useMemo(() => visiblePanelColumns.flatMap(
+    (column) => {
+      const genericColumn = genericColumnById.get(column.id);
+      return genericColumn === undefined ? [] : [genericColumn];
+    },
+  ), [genericColumnById, visiblePanelColumns]);
   const tableMinimumWidth = visibleColumnWidth(renderedColumnLayout);
   const columnWindowed = panelColumns.length > STATISTICS_COLUMN_WINDOW_SIZE;
 
   useEffect(() => {
-    if (columnScale !== null) columnLayoutStore.set(layoutQueryKey, columnLayout);
-  }, [columnLayout, columnLayoutStore, columnScale, layoutQueryKey]);
+    if (columnScale !== null) {
+      columnLayoutStore.set(layoutQueryKey, columnLayout, panelColumns);
+    }
+  }, [columnLayout, columnLayoutStore, columnScale, layoutQueryKey, panelColumns]);
 
   function updateColumnLayout(
     transform: (layout: StatisticsColumnLayout) => StatisticsColumnLayout,
   ): void {
     setColumnLayoutState((current) => {
-      const currentLayout = current.query === layoutQueryKey
-        ? reconcileColumnLayout(current.layout, panelColumns)
-        : reconcileColumnLayout(
-          columnLayoutStore.get(layoutQueryKey) ?? [],
-          panelColumns,
-        );
+      const currentLayout = createColumnLayoutDomain(current, panelColumns).layout;
       const layout = [...transform(currentLayout)];
-      columnLayoutStore.set(layoutQueryKey, layout);
-      return {
-        query: layoutQueryKey,
-        layout,
-      };
+      columnLayoutStore.set(layoutQueryKey, layout, panelColumns);
+      return layout;
     });
   }
 
@@ -530,8 +530,8 @@ export function StatisticsPanel({
     ? timechartSort.key === "time"
       ? sortedTimechartRows
       : timelinePoints.toSorted((left, right) => {
-        const leftValue = timechartSeriesCell(left, "count", false);
-        const rightValue = timechartSeriesCell(right, "count", false);
+        const leftValue = timechartSeriesCell(left, "count");
+        const rightValue = timechartSeriesCell(right, "count");
         if (leftValue === null) return rightValue === null ? 0 : 1;
         if (rightValue === null) return -1;
         const comparison = compareWorkspaceNumericValues(
@@ -541,8 +541,8 @@ export function StatisticsPanel({
         return timechartSort.direction === "desc" ? -comparison : comparison;
       })
     : timelinePoints.toSorted((left, right) => {
-      const leftValue = timechartSeriesCell(left, activeTimechartSeriesSort.key, true);
-      const rightValue = timechartSeriesCell(right, activeTimechartSeriesSort.key, true);
+      const leftValue = timechartSeriesCell(left, activeTimechartSeriesSort.key);
+      const rightValue = timechartSeriesCell(right, activeTimechartSeriesSort.key);
       if (leftValue === null) return rightValue === null ? 0 : 1;
       if (rightValue === null) return -1;
       const comparison = compareWorkspaceNumericValues(
@@ -685,7 +685,7 @@ export function StatisticsPanel({
             {menu === "statistics-columns" ? (
               <div className="floating-menu result-control-menu statistics-columns-menu" role="menu" aria-label="Statistics table columns">
                 {panelColumnWindow.map((column) => {
-                  const visible = columnLayout.find((item) => item.id === column.id)?.visible ?? true;
+                  const visible = columnLayoutDomain.byId.get(column.id)?.visible ?? true;
                   const finalVisibleColumn = visible && visibleColumnLayout.length === 1;
                   return (
                     <button
@@ -802,7 +802,7 @@ export function StatisticsPanel({
                             <span>_time</span>
                             <i className={sorted ? "sort-active" : ""} aria-hidden="true">{sorted ? (timechartSort.direction === "desc" ? "↓" : "↑") : "↕"}</i>
                           </button>
-                          <StatisticsColumnResizeHandle column={column} keyboardStep={columnScale?.step ?? null} layout={columnLayout} onResize={resizeStatisticsColumn} />
+                          <StatisticsColumnResizeHandle column={column} keyboardStep={columnScale?.step ?? null} layoutItem={columnLayoutDomain.byId.get(column.id)} onResize={resizeStatisticsColumn} />
                         </th>
                       );
                     }
@@ -832,7 +832,7 @@ export function StatisticsPanel({
                           <span>{seriesName}</span>
                           <i className={sorted ? "sort-active" : ""} aria-hidden="true">{sorted ? (direction === "desc" ? "↓" : "↑") : "↕"}</i>
                         </button>
-                        <StatisticsColumnResizeHandle column={column} keyboardStep={columnScale?.step ?? null} layout={columnLayout} onResize={resizeStatisticsColumn} />
+                        <StatisticsColumnResizeHandle column={column} keyboardStep={columnScale?.step ?? null} layoutItem={columnLayoutDomain.byId.get(column.id)} onResize={resizeStatisticsColumn} />
                       </th>
                     );
                   })}
@@ -855,7 +855,7 @@ export function StatisticsPanel({
                         return <td key={column.id}><time dateTime={row.earliest}>{row.label}</time></td>;
                       }
                       const seriesName = column.id;
-                      const cell = timechartSeriesCell(row, seriesName, hasExplicitTimechartSeries);
+                      const cell = timechartSeriesCell(row, seriesName);
                       return (
                         <td
                           className="numeric-cell"
@@ -913,7 +913,7 @@ export function StatisticsPanel({
                           <span>{column.label}</span>
                           <i className={sorted ? "sort-active" : ""} aria-hidden="true">{sorted ? (genericStatsSort.direction === "desc" ? "↓" : "↑") : "↕"}</i>
                         </button>
-                        <StatisticsColumnResizeHandle column={panelColumn} keyboardStep={columnScale?.step ?? null} layout={columnLayout} onResize={resizeStatisticsColumn} />
+                        <StatisticsColumnResizeHandle column={panelColumn} keyboardStep={columnScale?.step ?? null} layoutItem={columnLayoutDomain.byId.get(panelColumn.id)} onResize={resizeStatisticsColumn} />
                       </th>
                     );
                   })}
@@ -1024,7 +1024,7 @@ export function StatisticsPanel({
                     return (
                       <th scope="col" key={key} className={column.numeric ? "numeric-cell" : undefined} aria-sort={sorted ? (statsSort.direction === "desc" ? "descending" : "ascending") : "none"}>
                         <button type="button" aria-label={`Sort by ${column.label}, ${nextDirection}`} onClick={() => onStatsSortChange(key)}><span>{column.label}</span><i className={sorted ? "sort-active" : ""} aria-hidden="true">{sorted ? (statsSort.direction === "desc" ? "↓" : "↑") : "↕"}</i></button>
-                        <StatisticsColumnResizeHandle column={column} keyboardStep={columnScale?.step ?? null} layout={columnLayout} onResize={resizeStatisticsColumn} />
+                        <StatisticsColumnResizeHandle column={column} keyboardStep={columnScale?.step ?? null} layoutItem={columnLayoutDomain.byId.get(column.id)} onResize={resizeStatisticsColumn} />
                       </th>
                     );
                   })}

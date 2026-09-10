@@ -279,7 +279,7 @@ import { summarizeByteQuantity } from "@/lib/byte-quantity";
 import { EventsPanel } from "./search-workspace/panels/events-panel";
 import { PatternsPanel } from "./search-workspace/panels/patterns-panel";
 import { StatisticsPanel } from "./search-workspace/panels/statistics-panel";
-import type { StatisticsColumnLayoutStore } from "./search-workspace/panels/statistics-column-layout";
+import { StatisticsColumnLayoutStore } from "./search-workspace/panels/statistics-column-layout";
 import { VisualizationPanel } from "./search-workspace/panels/visualization-panel";
 import {
   authoritativeTimelineRange,
@@ -880,7 +880,7 @@ export function SearchWorkspace({
   const [retainedJobRecovery, setRetainedJobRecovery] = useState<RetainedJobRecovery | null>(null);
   const [backendExpiresAt, setBackendExpiresAt] = useState<Date | null>(null);
   const [backendNotices, setBackendNotices] = useState<string[]>([]);
-  const statisticsColumnLayoutStoreRef = useRef<StatisticsColumnLayoutStore>(new Map());
+  const statisticsColumnLayoutStoreRef = useRef(new StatisticsColumnLayoutStore());
   const [searchFailure, setSearchFailure] = useState<ActiveSearchFailure | null>(null);
   const [backendInspection, setBackendInspection] = useState<ServerSearchJobInspectionState>({
     status: "idle",
@@ -7943,6 +7943,7 @@ export function SearchWorkspace({
 
       {!resultViewUnavailable && searchFailure === null && hasResultData && activeTab === "statistics" ? (
         <StatisticsPanel
+          key={submittedQuery}
           columnLayoutStore={statisticsColumnLayoutStoreRef.current}
           elapsed={elapsed}
           genericStatisticsTable={genericStatisticsTable}

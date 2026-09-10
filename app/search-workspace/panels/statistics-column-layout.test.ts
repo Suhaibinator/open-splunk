@@ -3,8 +3,11 @@ import test from "node:test";
 
 import {
   createColumnLayout,
+  createColumnLayoutDomain,
   reconcileColumnLayout,
   resizeColumn,
+  selectColumnLayoutWindow,
+  StatisticsColumnLayoutStore,
   toggleColumn,
   visibleColumns,
   visibleColumnWidth,
@@ -61,4 +64,85 @@ test("statistics layout reconciliation keeps a column visible after schema remov
   ]);
 
   assert.deepEqual(visibleColumns(reconciled).map((column) => column.id), ["host"]);
+});
+
+test("wide column windows use one indexed lookup per candidate", () => {
+  const columns = Array.from({ length: 4_096 }, (_, index) => ({
+    id: `field-${index}`,
+    defaultWidth: 140,
+    minimumWidth: 96,
+    maximumWidth: 480,
+  }));
+  const domain = createColumnLayoutDomain(createColumnLayout(columns), columns);
+  let lookupCount = 0;
+  const countingIndex: ReadonlyMap<string, (typeof domain.layout)[number]> = {
+    get size() {
+      return domain.byId.size;
+    },
+    entries: () => domain.byId.entries(),
+    forEach: (callback, thisArgument) => domain.byId.forEach(callback, thisArgument),
+    get: (id) => {
+      lookupCount += 1;
+      return domain.byId.get(id);
+    },
+    has: (id) => domain.byId.has(id),
+    keys: () => domain.byId.keys(),
+    values: () => domain.byId.values(),
+    [Symbol.iterator]: () => domain.byId[Symbol.iterator](),
+  };
+
+  const window = selectColumnLayoutWindow(columns, countingIndex, 2_040, 24);
+
+  assert.equal(lookupCount, 24);
+  assert.equal(window.columns.length, 24);
+  assert.equal(window.layout.length, 24);
+  assert.equal(window.columns[0]?.id, "field-2040");
+  assert.equal(window.columns.at(-1)?.id, "field-2063");
+});
+
+test("layout store retains sparse overrides with bounded whole-query LRU eviction", () => {
+  const store = new StatisticsColumnLayoutStore({ maximumBytes: 4_096, maximumEntries: 2 });
+  const columns = [
+    { id: "host", defaultWidth: 180, minimumWidth: 96, maximumWidth: 480 },
+    { id: "count", defaultWidth: 140, minimumWidth: 96, maximumWidth: 480 },
+  ];
+  const defaultLayout = createColumnLayout(columns);
+  const customized = resizeColumn(toggleColumn(defaultLayout, "count"), "host", 20);
+
+  store.set("query-one", customized, columns);
+  store.set("query-two", resizeColumn(defaultLayout, "count", 10), columns);
+  assert.deepEqual(store.get("query-one", columns), customized);
+
+  store.set("query-three", resizeColumn(defaultLayout, "host", -10), columns);
+
+  assert.equal(store.size, 2);
+  assert.equal(store.get("query-two", columns), undefined);
+  assert.deepEqual(store.get("query-one", columns), customized);
+  assert.ok(store.retainedBytes <= 4_096);
+});
+
+test("layout store does not retain default schemas or partial oversized overrides", () => {
+  const columns = Array.from({ length: 1_024 }, (_, index) => ({
+    id: `field-${index}`,
+    defaultWidth: 140,
+    minimumWidth: 96,
+    maximumWidth: 480,
+  }));
+  const store = new StatisticsColumnLayoutStore({ maximumBytes: 128, maximumEntries: 2 });
+  const defaultLayout = createColumnLayout(columns);
+
+  store.set("default-wide-query", defaultLayout, columns);
+  assert.equal(store.size, 0);
+  assert.equal(store.retainedBytes, 0);
+
+  const customized = defaultLayout.map((column) => ({
+    id: column.id,
+    maximumWidth: column.maximumWidth,
+    minimumWidth: column.minimumWidth,
+    visible: column.visible,
+    width: 160,
+  }));
+  store.set("oversized-query", customized, columns);
+  assert.equal(store.get("oversized-query", columns), undefined);
+  assert.equal(store.size, 0);
 });

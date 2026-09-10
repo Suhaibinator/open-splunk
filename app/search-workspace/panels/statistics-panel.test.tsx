@@ -6,8 +6,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { ColumnSemanticType } from "@/gen/ts/open_splunk/result";
 import { ValueType } from "@/gen/ts/open_splunk/value";
+import type { TimelinePoint } from "@/lib/demo/search-data";
 import type { WorkspaceStatistic, WorkspaceStatisticsTable } from "@/lib/search/backend-data";
 
+import { StatisticsColumnLayoutStore } from "./statistics-column-layout";
 import { StatisticsPanel } from "./statistics-panel";
 
 const statistics: WorkspaceStatistic[] = [{
@@ -23,7 +25,7 @@ function renderStatisticsPanel(
 ): string {
   return renderToStaticMarkup(
     <StatisticsPanel
-      columnLayoutStore={new Map()}
+      columnLayoutStore={new StatisticsColumnLayoutStore()}
       elapsed="0.2 seconds"
       genericStatisticsTable={null}
       genericStatsSort={null}
@@ -110,4 +112,45 @@ test("wide statistics tables page columns and bound rendered cells", () => {
   assert.equal((markup.match(/<th(?:\s|>)/gu) ?? []).length, 24);
   assert.equal((markup.match(/<td(?:\s|>)/gu) ?? []).length, 24);
   assert.doesNotMatch(markup, /Field 25/u);
+});
+
+test("timechart statistics preserve all-null rows and only legacy rows fall back to count", () => {
+  const points: TimelinePoint[] = [
+    {
+      id: "owned-null",
+      label: "12:00 AM",
+      count: 0,
+      series: { average: null } as unknown as Record<string, number>,
+      earliest: "2026-01-01T00:00:00Z",
+      latest: "2026-01-01T01:00:00Z",
+    },
+    {
+      id: "owned-missing",
+      label: "1:00 AM",
+      count: 11,
+      series: {},
+      earliest: "2026-01-01T01:00:00Z",
+      latest: "2026-01-01T02:00:00Z",
+    },
+    {
+      id: "legacy",
+      label: "2:00 AM",
+      count: 7,
+      earliest: "2026-01-01T02:00:00Z",
+      latest: "2026-01-01T03:00:00Z",
+    },
+  ];
+  const markup = renderStatisticsPanel(null, {
+    isTimechartResult: true,
+    pageStart: 1,
+    resultTotalRows: 3,
+    sortedTimechartRows: points,
+    timechartValueColumns: ["average"],
+    timelinePoints: points,
+  });
+
+  assert.match(markup, /<time dateTime="2026-01-01T00:00:00Z">12:00 AM<\/time><\/td><td class="numeric-cell">—<\/td>/u);
+  assert.match(markup, /<time dateTime="2026-01-01T01:00:00Z">1:00 AM<\/time><\/td><td class="numeric-cell">—<\/td>/u);
+  assert.match(markup, /<time dateTime="2026-01-01T02:00:00Z">2:00 AM<\/time><\/td><td class="numeric-cell">7<\/td>/u);
+  assert.equal((markup.match(/<tr/gu) ?? []).length, 4);
 });
