@@ -198,24 +198,26 @@ the comparison.
 
 The following result uses Darwin arm64 on an Apple M4 Max. Each value is the
 median of seven paired samples from baseline `ebcf1554` and final candidate
-`a1c434a7`:
+`a5701858`:
 
 | Case | Baseline ns/op | Final ns/op | Baseline B/op | Final B/op | Baseline allocs/op | Final allocs/op | SQL bytes, baseline → final |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Compile, fixed count | 46,560 | 52,760 | 85,260 | 103,181 | 521 | 545 | 2,147 → 2,147 |
-| Compile, automatic count | 44,944 | 47,842 | 85,239 | 92,149 | 520 | 544 | 2,147 → 2,147 |
-| Compile, calendar count | 46,108 | 51,452 | 86,440 | 109,460 | 527 | 566 | 2,411 → 3,776 |
-| Compile, split count | 52,254 | 64,182 | 100,571 | 138,038 | 555 | 601 | 5,989 → 8,879 |
-| Compile, split average | 63,127 | 74,968 | 133,846 | 175,398 | 638 | 684 | 10,029 → 12,921 |
-| Publish 100 buckets × 10 series | 51,551 | 51,487 | 229,039 | 229,279 | 629 | 630 | n/a |
-| Publish 1,000 buckets × 10 series | 472,098 | 475,848 | 2,246,137 | 2,246,367 | 6,029 | 6,030 | n/a |
+| Compile, fixed count | 42,325 | 49,550 | 85,256 | 103,191 | 521 | 545 | 2,147 → 2,147 |
+| Compile, automatic count | 41,208 | 44,650 | 85,246 | 92,154 | 520 | 544 | 2,147 → 2,147 |
+| Compile, calendar count | 42,334 | 47,785 | 86,439 | 109,464 | 527 | 566 | 2,411 → 3,776 |
+| Compile, split count | 47,584 | 59,546 | 100,571 | 138,069 | 555 | 602 | 5,989 → 8,927 |
+| Compile, split average | 56,323 | 68,419 | 133,841 | 175,402 | 638 | 684 | 10,029 → 12,921 |
+| Publish 100 buckets × 10 series | 48,795 | 49,556 | 229,029 | 229,279 | 629 | 630 | n/a |
+| Publish 1,000 buckets × 10 series | 447,548 | 456,647 | 2,246,127 | 2,246,365 | 6,029 | 6,030 | n/a |
 
 Every compiler sample reported one textual event-source reference at both
 commits. The opt-in ClickHouse integration test separately requires exactly one
 physical `ReadFromMergeTree` node. Split SQL grows because it carries the
-domain, dense-cell, and retained-byte guards. Across these paired samples,
-publication medians differ by less than 1%; compiler medians rise by 6% to 23%
-depending on the path, alongside the additional grid and series validation.
+domain, dense-cell, and retained-byte guards and validates invalid labels and
+normalization collisions across the complete source, independent of the
+visible grid. Across these paired samples, publication medians rise by 1.6%
+and 2.0%; compiler medians rise by 8.4% to 25.1% depending on the path,
+alongside the additional grid and series validation.
 
 The exact-grid harness compares the pre-allocation-fix transport at `d5fe39c6`
 with the final candidate. At 10,000 buckets, transport allocation fell from
