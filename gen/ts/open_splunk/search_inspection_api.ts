@@ -102,7 +102,7 @@ export interface SearchInspectionOutputProvenance {
 export interface SearchInspectionOutputShape {
   kind: SearchInspectionOutputKind;
   fields: string[];
-  maxDynamicFields: number;
+  maxDynamicFields: bigint;
 }
 
 export interface SearchInspectionLogicalPlan {
@@ -523,7 +523,7 @@ export const SearchInspectionOutputProvenance: MessageFns<SearchInspectionOutput
 };
 
 function createBaseSearchInspectionOutputShape(): SearchInspectionOutputShape {
-  return { kind: 0, fields: [], maxDynamicFields: 0 };
+  return { kind: 0, fields: [], maxDynamicFields: 0n };
 }
 
 export const SearchInspectionOutputShape: MessageFns<SearchInspectionOutputShape> = {
@@ -534,8 +534,11 @@ export const SearchInspectionOutputShape: MessageFns<SearchInspectionOutputShape
     for (const v of message.fields) {
       writer.uint32(18).string(v!);
     }
-    if (message.maxDynamicFields !== 0) {
-      writer.uint32(24).uint32(message.maxDynamicFields);
+    if (message.maxDynamicFields !== 0n) {
+      if (BigInt.asUintN(64, message.maxDynamicFields) !== message.maxDynamicFields) {
+        throw new globalThis.Error("value provided for field message.maxDynamicFields of type uint64 too large");
+      }
+      writer.uint32(24).uint64(message.maxDynamicFields);
     }
     return writer;
   },
@@ -574,7 +577,7 @@ export const SearchInspectionOutputShape: MessageFns<SearchInspectionOutputShape
               break;
             }
 
-            message.maxDynamicFields = reader.uint32();
+            message.maxDynamicFields = reader.uint64() as bigint;
             continue;
           }
         }
@@ -594,10 +597,10 @@ export const SearchInspectionOutputShape: MessageFns<SearchInspectionOutputShape
       kind: isSet(object.kind) ? searchInspectionOutputKindFromJSON(object.kind) : 0,
       fields: globalThis.Array.isArray(object?.fields) ? object.fields.map((e: any) => globalThis.String(e)) : [],
       maxDynamicFields: isSet(object.maxDynamicFields)
-        ? globalThis.Number(object.maxDynamicFields)
+        ? BigInt(object.maxDynamicFields)
         : isSet(object.max_dynamic_fields)
-        ? globalThis.Number(object.max_dynamic_fields)
-        : 0,
+        ? BigInt(object.max_dynamic_fields)
+        : 0n,
     };
   },
 
@@ -609,8 +612,8 @@ export const SearchInspectionOutputShape: MessageFns<SearchInspectionOutputShape
     if (message.fields?.length) {
       obj.fields = message.fields;
     }
-    if (message.maxDynamicFields !== 0) {
-      obj.maxDynamicFields = Math.round(message.maxDynamicFields);
+    if (message.maxDynamicFields !== 0n) {
+      obj.maxDynamicFields = message.maxDynamicFields.toString();
     }
     return obj;
   },
@@ -622,7 +625,9 @@ export const SearchInspectionOutputShape: MessageFns<SearchInspectionOutputShape
     const message = createBaseSearchInspectionOutputShape();
     message.kind = object.kind ?? 0;
     message.fields = object.fields?.map((e) => e) || [];
-    message.maxDynamicFields = object.maxDynamicFields ?? 0;
+    message.maxDynamicFields = (object.maxDynamicFields !== undefined && object.maxDynamicFields !== null)
+      ? BigInt(object.maxDynamicFields)
+      : 0n;
     return message;
   },
 };

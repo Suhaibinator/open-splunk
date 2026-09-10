@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   InspectSearchJobResponse,
   SearchInspectionOutputKind,
+  SearchInspectionOutputShape,
   type SearchInspectionLogicalStage,
   type SearchInspectionOutputProvenance,
 } from "@/gen/ts/open_splunk/search_inspection_api";
@@ -24,6 +25,7 @@ const aliasStage = KnowledgeSearchStage.KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS;
 const calculatedType = KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD;
 const calculatedStage = KnowledgeSearchStage.KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD;
 const maximumCatalogRevision = 9_223_372_036_854_775_806n;
+const maximumUint64 = 18_446_744_073_709_551_615n;
 
 function sourceRange() {
   return {
@@ -50,7 +52,7 @@ function baseResponse(): InspectSearchJobResponse {
       output: {
         kind: SearchInspectionOutputKind.SEARCH_INSPECTION_OUTPUT_KIND_STATIC,
         fields: ["message"],
-        maxDynamicFields: 0,
+        maxDynamicFields: 0n,
       },
     },
     physicalPlan: {
@@ -261,6 +263,43 @@ test("inspection adaptation binds the exact job and detaches the complete legacy
     get() { throw new Error("response traversed before identity rejection"); },
   });
   assertInvalid(foreign);
+});
+
+test("dynamic timechart output preserves bounded and unlimited uint64 series limits", () => {
+  const response = baseResponse();
+  response.logicalPlan!.stages.push({
+    stageIndex: 1,
+    operator: "Timechart",
+    inputFields: ["_time", "level"],
+    outputFields: ["_time"],
+    sourceRange: sourceRange(),
+    operatorProvenance: [],
+    outputProvenance: [],
+  });
+  response.logicalPlan!.output = {
+    kind: SearchInspectionOutputKind.SEARCH_INSPECTION_OUTPUT_KIND_DYNAMIC,
+    fields: ["_time"],
+    maxDynamicFields: maximumUint64,
+  };
+
+  const bounded = adaptSearchJobInspection(response, jobId, true);
+  assert.equal(bounded.logicalPlan.output.maxDynamicFields, maximumUint64);
+
+  response.logicalPlan!.output.maxDynamicFields = 0n;
+  const unlimited = adaptSearchJobInspection(response, jobId, true);
+  assert.equal(unlimited.logicalPlan.output.maxDynamicFields, 0n);
+});
+
+test("inspection output protobuf round-trips the complete uint64 range", () => {
+  const output = SearchInspectionOutputShape.fromPartial({
+    kind: SearchInspectionOutputKind.SEARCH_INSPECTION_OUTPUT_KIND_DYNAMIC,
+    fields: ["_time"],
+    maxDynamicFields: maximumUint64,
+  });
+  const decoded = SearchInspectionOutputShape.decode(
+    SearchInspectionOutputShape.encode(output).finish(),
+  );
+  assert.equal(decoded.maxDynamicFields, maximumUint64);
 });
 
 test("inspection adaptation preserves legacy and normalized ID index evidence", () => {
@@ -842,13 +881,13 @@ test("output-shape, physical, SQL, and EXPLAIN representative bounds fail closed
   const invalidResponses: InspectSearchJobResponse[] = [];
 
   const staticDynamic = baseResponse();
-  staticDynamic.logicalPlan!.output!.maxDynamicFields = 1;
+  staticDynamic.logicalPlan!.output!.maxDynamicFields = 1n;
   invalidResponses.push(staticDynamic);
 
   const dynamicZero = baseResponse();
   dynamicZero.logicalPlan!.output!.kind =
     SearchInspectionOutputKind.SEARCH_INSPECTION_OUTPUT_KIND_DYNAMIC;
-  dynamicZero.logicalPlan!.output!.maxDynamicFields = 0;
+  dynamicZero.logicalPlan!.output!.maxDynamicFields = 0n;
   invalidResponses.push(dynamicZero);
 
   const outputOverflow = baseResponse();
