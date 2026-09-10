@@ -1136,6 +1136,7 @@ export function SearchWorkspace({
   const cancelSearchRef = useRef<() => void>(() => undefined);
   const timelineZoomParentRef = useRef<TimeRange | null>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
+  const pendingEditorFocusRef = useRef<{ offset: number; query: string } | null>(null);
   const highlightRef = useRef<HTMLPreElement>(null);
   const gutterLinesRef = useRef<HTMLDivElement>(null);
   const timePickerRef = useRef<HTMLDivElement>(null);
@@ -2395,15 +2396,20 @@ export function SearchWorkspace({
     setBackendVerdict(null);
   }
 
-  function focusEditor(offset: number) {
-    window.requestAnimationFrame(() => {
-      const editor = editorRef.current;
-      if (editor === null) return;
-      const safeOffset = Math.max(0, Math.min(offset, editor.value.length));
-      editor.focus();
-      editor.setSelectionRange(safeOffset, safeOffset);
-      setEditorCaret(safeOffset);
-    });
+  function applyPendingEditorFocus() {
+    const request = pendingEditorFocusRef.current;
+    const editor = editorRef.current;
+    if (request === null || editor === null || editor.value !== request.query) return;
+    pendingEditorFocusRef.current = null;
+    const safeOffset = Math.max(0, Math.min(request.offset, editor.value.length));
+    editor.focus();
+    editor.setSelectionRange(safeOffset, safeOffset);
+    setEditorCaret(safeOffset);
+  }
+
+  function focusEditor(offset: number, expectedQuery = query) {
+    pendingEditorFocusRef.current = { offset, query: expectedQuery };
+    applyPendingEditorFocus();
   }
 
   async function copyText(text: string, successMessage: string) {
@@ -3109,6 +3115,13 @@ export function SearchWorkspace({
     const safeOffset = Math.min(caret, query.length);
     editor.focus();
     editor.setSelectionRange(safeOffset, safeOffset);
+  }, [query]);
+
+  // A controlled-value edit commits before the next browser input. Apply its
+  // requested caret in that commit instead of a later animation frame, which
+  // could otherwise interrupt the next typing sequence.
+  useLayoutEffect(() => {
+    applyPendingEditorFocus();
   }, [query]);
 
   // Escape closes the topmost transient surface; with nothing open it
@@ -4870,7 +4883,10 @@ export function SearchWorkspace({
         source: nextQuery,
         timeRange: rangeOverride,
       });
-      focusEditor(problem.diagnostic.range?.start ?? (nextQuery.trim().length === 0 ? 0 : nextQuery.length));
+      focusEditor(
+        problem.diagnostic.range?.start ?? (nextQuery.trim().length === 0 ? 0 : nextQuery.length),
+        preserveDraft ? query : nextQuery,
+      );
       return;
     }
     if (
@@ -5196,7 +5212,7 @@ export function SearchWorkspace({
     backendHistoryRerunRef.current = null;
     setEditorCaret(edited.caret);
     setCompletionOpen(false);
-    focusEditor(edited.caret);
+    focusEditor(edited.caret, edited.query);
   }
 
   // Commands from the reference pane go on the end of the pipeline; functions
@@ -5221,10 +5237,11 @@ export function SearchWorkspace({
     setEditorCaret(nextQuery.length);
     setCompletionOpen(false);
     showToast(`Loaded “${example.title}” into the editor. Run it when ready.`, "info");
-    focusEditor(nextQuery.length);
+    focusEditor(nextQuery.length, nextQuery);
   }
 
   function handleEditorChange(event: ChangeEvent<HTMLTextAreaElement>) {
+    pendingEditorFocusRef.current = null;
     const nextQuery = event.target.value;
     const caret = event.target.selectionStart;
     const context = completionContextAt(nextQuery, caret);
@@ -5254,7 +5271,7 @@ export function SearchWorkspace({
     setQuery(nextQuery);
     backendHistoryRerunRef.current = null;
     setCompletionOpen(false);
-    focusEditor(nextQuery.length);
+    focusEditor(nextQuery.length, nextQuery);
   }
 
   function applyPivot(field: string, value: DemoScalar, mode: PivotMode, runImmediately = false) {
@@ -5289,7 +5306,7 @@ export function SearchWorkspace({
       runSearch(nextQuery);
     }
     else showToast(mode === "exclude" ? `Excluded ${field}=${formatFieldValue(value)} from the draft.` : `Added ${field} to the draft.`, "success");
-    focusEditor(nextQuery.length);
+    focusEditor(nextQuery.length, nextQuery);
   }
 
   function toggleField(fieldName: string) {
@@ -6006,7 +6023,7 @@ export function SearchWorkspace({
           : `Opened “${saved.name}” with the current workspace time range.`,
       presentationNotice ? "warning" : "info",
     );
-    if (!preserveDraft) focusEditor(saved.query.length);
+    if (!preserveDraft) focusEditor(saved.query.length, saved.query);
   }
 
   function openHistoryEntry(
@@ -6046,7 +6063,7 @@ export function SearchWorkspace({
     setModal(null);
     if (rerun) runSearch(entry.query, restoredRange, "keep", preserveDraft);
     else showToast("Search restored without running.", "info");
-    if (focusSearchEditor && !preserveDraft) focusEditor(entry.query.length);
+    if (focusSearchEditor && !preserveDraft) focusEditor(entry.query.length, entry.query);
     return true;
   }
 
@@ -6929,7 +6946,7 @@ export function SearchWorkspace({
       if (controller.signal.aborted || appSwitchEpochRef.current !== switchEpoch) return;
       const selected = response.apps.find((app) => app.appId === response.selectedAppId);
       showToast(`Switched to ${selected?.displayName || "the selected app"}.`, "success");
-      focusEditor(nextQuery.length);
+      focusEditor(nextQuery.length, nextQuery);
     } catch (error) {
       if (controller.signal.aborted || appSwitchEpochRef.current !== switchEpoch) return;
       if (!commitLocation) {
