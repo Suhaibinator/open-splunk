@@ -709,12 +709,12 @@ func parseFixedTimeSpan(tok token, config fixedTimeSpanParserConfig) (TimeSpan, 
 			return TimeSpan{}, unsupportedFixedTimeSpanUnit(tok, config)
 		}
 		unit, unitNanoseconds = TimeSpanUnitMillisecond, 1_000_000
-	case "cs", "csec", "centisecond", "centiseconds":
+	case "cs", "csec", "csecs", "centisecond", "centiseconds":
 		if config.commandName != "timechart" {
 			return TimeSpan{}, unsupportedFixedTimeSpanUnit(tok, config)
 		}
 		unit, unitNanoseconds = TimeSpanUnitCentisecond, 10_000_000
-	case "ds", "dsec", "decisecond", "deciseconds":
+	case "ds", "dsec", "dsecs", "decisecond", "deciseconds":
 		if config.commandName != "timechart" {
 			return TimeSpan{}, unsupportedFixedTimeSpanUnit(tok, config)
 		}

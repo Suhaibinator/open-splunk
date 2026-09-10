@@ -157,12 +157,14 @@ metadata behavior is defined in the [timechart contract](timechart.md).
 
 When `timechart` omits `span`, it uses `bins=100` and chooses the first aligned
 step that produces no more than that many buckets: `1s`, `5s`, `10s`, `30s`,
-`1m`, `5m`, `10m`, `30m`, `1h`, `1d`, or `1month`. `bins=N` changes the maximum
-rather than requesting exactly N buckets, and is bounded from 1 through
-10,000. `minspan=` skips smaller ladder steps; for example, `minspan=15m`
-selects at least `30m`, while `minspan=2d` selects `1month`. An explicit
-`span=` takes precedence over `bins=` and `minspan=`. These time-axis options
-must precede the aggregate. Time-axis controls also include `aligntime`,
+`1m`, `5m`, `10m`, `30m`, `1h`, `1d`, `1month`, then `2`, `3`, `6`, `12`, `24`,
+`60`, `120`, `240`, `600`, `1200`, `2400`, and `6000` months. `bins=N` changes
+the maximum rather than requesting exactly N buckets, and is bounded from 1
+through 10,000. `minspan=` skips smaller ladder steps; for example,
+`minspan=15m` selects at least `30m`, while `minspan=2d` selects at least
+`1month`. An explicit `span=` takes precedence over `bins=` and `minspan=`.
+These time-axis options must precede the aggregate. Time-axis controls also
+include `aligntime`,
 `cont`, `partial`, and `fixedrange`; series options retain their placement
 before the aggregate or after the `BY` field. Calendar and fixed timechart
 grids remain bounded to 10,000 buckets. The command fails when no supported
