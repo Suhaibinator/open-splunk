@@ -25,6 +25,21 @@ state, constraints, and rate policy. A request may use only its captured
 snapshot. A committed batch is not reinterpreted after policy changes; the next
 fresh boundary observes them.
 
+Heartbeat processing is limited per authenticated tenant and collector to one
+accepted heartbeat per half of the server-advertised interval (normally 7.5
+seconds for the 15-second interval). The tolerance accommodates arrival jitter.
+The first heartbeat for a collector in a server process can be immediate;
+reconnecting or changing its token, instance, or stream does not reset an
+existing cooldown. Cadence uses the server's monotonic clock, independently of
+collector timestamps and wall-clock changes.
+
+Early heartbeats still undergo envelope, sequence, and basic identity checks,
+then are dropped before telemetry copying or database authorization reads.
+They consume their wire sequence but do not refresh liveness or extend the
+cooldown. Every accepted heartbeat and every batch still refreshes authority,
+so early telemetry cannot defer revocation checks at the next accepted
+boundary. The supported collector sends at the full advertised interval.
+
 The server retains at most 256 durable collector identities per tenant and 16
 live collectors per process. A previously unseen identity at catalog capacity
 fails without recording token use or partial fleet state. Existing enabled

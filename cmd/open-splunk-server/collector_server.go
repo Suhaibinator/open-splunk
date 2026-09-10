@@ -17,6 +17,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	_ "google.golang.org/grpc/encoding/gzip" // Register the negotiated collector compressor.
 	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/stats"
 	"google.golang.org/grpc/status"
 )
 
@@ -26,6 +27,7 @@ const (
 	collectorMaxActiveStreams     = collectorfleet.MaximumActiveCollectors
 	collectorMaxHeaderBytes       = 16 << 10
 	collectorConnectionTimeout    = 10 * time.Second
+	collectorReadyTimeout         = 30 * time.Second
 )
 
 type collectorServerConfig struct {
@@ -63,6 +65,7 @@ func openCollectorServer(
 		return nil, nil, fmt.Errorf("listen for collector gRPC: %w", err)
 	}
 	listener := newConnectionLimitedListener(rawListener, collectorMaxConnections)
+	serverOptions = append(serverOptions, grpc.StatsHandler(listener))
 	server := grpc.NewServer(serverOptions...)
 	opensplunk.RegisterCollectorIngestServiceServer(server, service)
 	return server, listener, nil
@@ -177,11 +180,17 @@ func concurrentStreamLimit(limit int) grpc.StreamServerInterceptor {
 
 type connectionLimitedListener struct {
 	net.Listener
-	slots chan struct{}
+	slots        chan struct{}
+	readyTimeout time.Duration
+	mu           sync.Mutex
+	connections  map[net.Addr]*limitedConnection
 }
 
-func newConnectionLimitedListener(listener net.Listener, limit int) net.Listener {
-	return &connectionLimitedListener{Listener: listener, slots: make(chan struct{}, limit)}
+func newConnectionLimitedListener(listener net.Listener, limit int) *connectionLimitedListener {
+	return &connectionLimitedListener{
+		Listener: listener, slots: make(chan struct{}, limit),
+		readyTimeout: collectorReadyTimeout, connections: make(map[net.Addr]*limitedConnection),
+	}
 }
 
 func (listener *connectionLimitedListener) Accept() (net.Conn, error) {
@@ -192,7 +201,28 @@ func (listener *connectionLimitedListener) Accept() (net.Conn, error) {
 		}
 		select {
 		case listener.slots <- struct{}{}:
-			return &limitedConnection{Conn: connection, release: func() { <-listener.slots }}, nil
+			// TCP connections return a stable *net.TCPAddr, which TLS preserves.
+			// Keep its identity, not its string: a later connection can reuse the
+			// same endpoint without inheriting an earlier connection's Ready.
+			address := connection.RemoteAddr()
+			limited := &limitedConnection{Conn: connection}
+			limited.release = func() {
+				listener.mu.Lock()
+				if listener.connections[address] == limited {
+					delete(listener.connections, address)
+				}
+				listener.mu.Unlock()
+				<-listener.slots
+			}
+			listener.mu.Lock()
+			listener.connections[address] = limited
+			listener.mu.Unlock()
+			limited.mu.Lock()
+			// gRPC clears socket deadlines after transport setup. This separate
+			// timer also bounds idle HTTP/2 and unsuccessful RPC activity.
+			limited.timer = time.AfterFunc(listener.readyTimeout, limited.expireBeforeReady)
+			limited.mu.Unlock()
+			return limited, nil
 		default:
 			_ = connection.Close()
 		}
@@ -203,12 +233,75 @@ type limitedConnection struct {
 	net.Conn
 	releaseOnce sync.Once
 	release     func()
+	mu          sync.Mutex
+	timer       *time.Timer
+	ready       bool
+	closed      bool
+}
+
+func (connection *limitedConnection) expireBeforeReady() {
+	connection.mu.Lock()
+	if connection.ready || connection.closed {
+		connection.mu.Unlock()
+		return
+	}
+	connection.closed = true
+	connection.mu.Unlock()
+	_ = connection.Close()
+}
+
+func (connection *limitedConnection) markReady() {
+	connection.mu.Lock()
+	defer connection.mu.Unlock()
+	if !connection.closed {
+		connection.ready = true
+		connection.timer.Stop()
+	}
 }
 
 func (connection *limitedConnection) Close() error {
+	connection.mu.Lock()
+	connection.closed = true
+	connection.timer.Stop()
+	connection.mu.Unlock()
 	err := connection.Conn.Close()
 	connection.releaseOnce.Do(connection.release)
 	return err
+}
+
+type collectorConnectionContextKey struct{}
+
+func (listener *connectionLimitedListener) TagConn(ctx context.Context, info *stats.ConnTagInfo) context.Context {
+	listener.mu.Lock()
+	connection := listener.connections[info.RemoteAddr]
+	listener.mu.Unlock()
+	return context.WithValue(ctx, collectorConnectionContextKey{}, connection)
+}
+
+func (*connectionLimitedListener) HandleConn(context.Context, stats.ConnStats) {}
+
+func (*connectionLimitedListener) TagRPC(ctx context.Context, info *stats.RPCTagInfo) context.Context {
+	if info.FullMethodName != opensplunk.CollectorIngestService_Collect_FullMethodName {
+		return context.WithValue(ctx, collectorConnectionContextKey{}, (*limitedConnection)(nil))
+	}
+	return ctx
+}
+
+func (*connectionLimitedListener) HandleRPC(ctx context.Context, event stats.RPCStats) {
+	payload, ok := event.(*stats.OutPayload)
+	if !ok || payload.Client {
+		return
+	}
+	response, ok := payload.Payload.(*opensplunk.CollectResponse)
+	if !ok || response.GetReady() == nil {
+		return
+	}
+	// Only the server's successful Ready proves bearer authentication and
+	// collector session admission. Incoming traffic cannot extend this budget.
+	connection, _ := ctx.Value(collectorConnectionContextKey{}).(*limitedConnection)
+	if connection != nil {
+		connection.markReady()
+	}
 }
 
 type gracefulGRPCServer interface {

@@ -3034,7 +3034,10 @@ func TestManagerMatchPathsSortsAndDeduplicatesIncludeGlobs(t *testing.T) {
 		},
 		Exclude: []string{"skip.*"},
 	}}
-	got := manager.matchPaths()
+	got, err := manager.matchPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := []string{first, second}
 	if len(got) != len(want) {
 		t.Fatalf("matched paths = %v, want %v", got, want)

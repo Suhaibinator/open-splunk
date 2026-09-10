@@ -30,23 +30,34 @@ const (
 var testReceivedAt = time.Date(2026, time.August, 10, 18, 19, 20, 987654321, time.UTC)
 
 type fakeAuthenticator struct {
-	mu    sync.Mutex
-	calls []string
-	fn    func(context.Context, string) (auth.Authentication, error)
+	mu             sync.Mutex
+	calls          []string
+	fn             func(context.Context, string) (auth.Authentication, error)
+	afterAdmission func(context.Context) error
 }
 
-func (fake *fakeAuthenticator) AuthenticateHEC(
+func (fake *fakeAuthenticator) AuthenticateHECWithAdmission(
 	ctx context.Context,
 	credential string,
+	admit auth.HECRequestAdmission,
 ) (auth.Authentication, error) {
 	fake.mu.Lock()
 	fake.calls = append(fake.calls, credential)
 	function := fake.fn
+	afterAdmission := fake.afterAdmission
 	fake.mu.Unlock()
-	if function == nil {
-		return testAuthentication("token-record-id", false), nil
+	authentication := testAuthentication("token-record-id", false)
+	var err error
+	if function != nil {
+		authentication, err = function(ctx, credential)
 	}
-	return function(ctx, credential)
+	if err == nil {
+		ctx, err = admit(authentication)
+	}
+	if err == nil && afterAdmission != nil {
+		err = afterAdmission(ctx)
+	}
+	return authentication, err
 }
 
 func (fake *fakeAuthenticator) callCount() int {
@@ -998,7 +1009,7 @@ func TestHandlerConcurrencyGatesGloballyAndPerToken(t *testing.T) {
 			perTokenLimit: 1,
 			firstSecret:   "token-a",
 			secondSecret:  "token-b",
-			wantAuthCalls: 1,
+			wantAuthCalls: 2,
 		},
 		{
 			name:          "per token",

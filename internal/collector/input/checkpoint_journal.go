@@ -17,6 +17,7 @@ import (
 const checkpointJournalName = "checkpoints.journal"
 const maximumCheckpointTransactionBytes = 256 << 20
 const checkpointJournalHeaderBytes = 12
+const maximumCheckpointJournalBytes = maximumCheckpointSnapshotBytes + maximumCheckpointTransactionBytes + checkpointJournalHeaderBytes
 
 var checkpointCRC = crc32.MakeTable(crc32.Castagnoli)
 
@@ -72,6 +73,9 @@ func (s *fileCheckpointStore) loadCheckpointJournal() error {
 	}
 	if !before.Mode().IsRegular() || before.Mode().Perm() != 0o600 {
 		return errors.New("collector/input: checkpoint journal must be a regular mode-0600 file")
+	}
+	if before.Size() > maximumCheckpointJournalBytes {
+		return errors.New("collector/input: checkpoint journal exceeds recovery byte capacity")
 	}
 	flags := os.O_RDWR
 	if s.readOnly {
@@ -155,6 +159,9 @@ func (s *fileCheckpointStore) replayCheckpointJournal() error {
 				key, err := checkpointKeyFor(cp.InputID, cp.Identity)
 				if err != nil {
 					return err
+				}
+				if _, exists := s.entries[key]; !exists && len(s.entries) >= s.entryLimit() {
+					return errCheckpointCapacity
 				}
 				s.entries[key] = cp
 			}

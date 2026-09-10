@@ -286,7 +286,10 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 	if err != nil {
 		return fail(fmt.Errorf("collector: reconstruct pending WAL source coordinates: %w", err))
 	}
-	inputCheckpoints, resumeView := newCheckpointResumeView(checkpoints, pendingResumeCheckpoints)
+	inputCheckpoints, resumeView, err := newCheckpointResumeView(checkpoints, pendingResumeCheckpoints)
+	if err != nil {
+		return fail(fmt.Errorf("collector: reserve pending WAL source identities: %w", err))
+	}
 
 	hostname, herr := os.Hostname()
 	if herr != nil || strings.TrimSpace(hostname) == "" ||

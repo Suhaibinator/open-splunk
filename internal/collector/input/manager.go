@@ -7,7 +7,6 @@ import (
 	"io"
 	"math"
 	"os"
-	"path/filepath"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -232,7 +231,14 @@ func (m *manager) pollOnce(ctx context.Context, initial bool) {
 	if ctx.Err() != nil {
 		return
 	}
-	paths := m.matchPaths()
+	paths, err := m.matchPaths()
+	if err != nil {
+		// An incomplete snapshot cannot establish that a retained source is
+		// missing. Existing lifecycles keep reading while discovery retries.
+		m.lastErrorNs.Store(time.Now().UnixNano())
+		m.updateState(1, err.Error())
+		return
+	}
 	if observer := m.afterMatchPathsObserver; observer != nil {
 		observer()
 	}
@@ -323,11 +329,19 @@ func (m *manager) pollOnce(ctx context.Context, initial bool) {
 			return
 		}
 
+		releaseSource, acquired := m.checkpoints.TryAcquireSource()
+		if !acquired {
+			_ = f.Close()
+			openErr = errSourceCapacity.Error()
+			m.lastErrorNs.Store(time.Now().UnixNano())
+			continue
+		}
 		start, err := m.resolveStart(
 			id, p, safecast.MustConv[uint64](fi2.Size()), initial, f,
 		)
 		if err != nil {
 			_ = f.Close()
+			releaseSource()
 			openErr = fmt.Sprintf("checkpoint %s: %v", p, err)
 			m.lastErrorNs.Store(time.Now().UnixNano())
 			continue
@@ -337,6 +351,7 @@ func (m *manager) pollOnce(ctx context.Context, initial bool) {
 		}
 		if ctx.Err() != nil {
 			_ = f.Close()
+			releaseSource()
 			return
 		}
 		t, err := m.startTailer(
@@ -350,9 +365,11 @@ func (m *manager) pollOnce(ctx context.Context, initial bool) {
 			start.lineCursorKnown,
 			start.guardFingerprint,
 			start.guardLength,
+			releaseSource,
 		)
 		if err != nil {
 			_ = f.Close()
+			releaseSource()
 			openErr = fmt.Sprintf("frame %s: %v", p, err)
 			m.lastErrorNs.Store(time.Now().UnixNano())
 			continue
@@ -721,43 +738,8 @@ func (m *manager) clearReadError(key string) {
 
 // matchPaths returns the sorted, de-duplicated set of paths matched by the
 // include globs and not removed by the exclude globs.
-func (m *manager) matchPaths() []string {
-	set := make(map[string]struct{})
-	for _, inc := range m.cfg.Include {
-		matches, err := filepath.Glob(inc)
-		if err != nil {
-			continue // malformed pattern: treated as matching nothing
-		}
-		for _, p := range matches {
-			set[p] = struct{}{}
-		}
-	}
-	for p := range set {
-		if m.excluded(p) {
-			delete(set, p)
-		}
-	}
-	out := make([]string, 0, len(set))
-	for p := range set {
-		out = append(out, p)
-	}
-	slices.Sort(out)
-	return out
-}
-
-// excluded reports whether path matches any exclude glob, tested against both
-// the full path and the base name so patterns like "*.tmp" work as expected.
-func (m *manager) excluded(path string) bool {
-	base := filepath.Base(path)
-	for _, exc := range m.cfg.Exclude {
-		if ok, _ := filepath.Match(exc, path); ok {
-			return true
-		}
-		if ok, _ := filepath.Match(exc, base); ok {
-			return true
-		}
-	}
-	return false
+func (m *manager) matchPaths() ([]string, error) {
+	return MatchPaths(m.cfg.Include, m.cfg.Exclude)
 }
 
 // startTailer launches the tailer goroutine for a newly discovered file. The
@@ -772,6 +754,7 @@ func (m *manager) startTailer(
 	lineCursorKnown bool,
 	checkpointGuardFingerprint string,
 	checkpointGuardLength uint32,
+	releaseSource func(),
 ) (*tailer, error) {
 	t := &tailer{
 		m:               m,
@@ -820,7 +803,10 @@ func (m *manager) startTailer(
 	t.installGuard(initialGuard)
 	t.path.Store(&path)
 	m.wg.Add(1)
-	go t.run(ctx)
+	go func() {
+		defer releaseSource()
+		t.run(ctx)
+	}()
 	return t, nil
 }
 

@@ -74,7 +74,7 @@ func TestHandlerLiveHTTP2Backpressure(t *testing.T) {
 			perTokenLimit:    1,
 			firstCredential:  "transport-a",
 			secondCredential: "transport-b",
-			wantAuthCalls:    1,
+			wantAuthCalls:    2,
 		},
 		{
 			name:             "per-token gate",
@@ -531,9 +531,10 @@ func newLiveHandler(t *testing.T, config liveHandlerConfig) *Handler {
 
 type liveAuthenticator struct{ calls atomic.Uint64 }
 
-func (authenticator *liveAuthenticator) AuthenticateHEC(
+func (authenticator *liveAuthenticator) AuthenticateHECWithAdmission(
 	_ context.Context,
 	credential string,
+	admit auth.HECRequestAdmission,
 ) (auth.Authentication, error) {
 	authenticator.calls.Add(1)
 	profile, exists := liveCredentials[credential]
@@ -541,7 +542,8 @@ func (authenticator *liveAuthenticator) AuthenticateHEC(
 		return auth.Authentication{}, auth.ErrUnauthorized
 	}
 	result := testAuthentication(profile.tokenID, profile.acknowledgment)
-	return result, nil
+	_, err := admit(result)
+	return result, err
 }
 
 type liveAdmissionStager struct {

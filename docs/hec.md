@@ -69,8 +69,11 @@ Only an active, unexpired, unrevoked HEC-purpose token with at least one active
 ingestion-enabled allowed index may authenticate. Native tokens cannot call
 HEC, and HEC tokens cannot open the native stream. Unknown, expired, revoked,
 wrong-purpose, and unusable credentials are indistinguishable. Disabled tokens
-use their fixed disabled response only after constant-shape lookup. Plaintext
-is discarded before body decode, admission, logs, or metrics.
+use their fixed disabled response only after constant-shape lookup. The
+authorization header is removed before lookup; plaintext never reaches body
+decoding, durable staging, logs, or metrics. Credential identification uses a
+bounded read-only snapshot. Protected request and token admission precede the
+short transaction that revalidates authority and records successful use.
 
 A HEC profile may define index, host, source, and sourcetype defaults. Index
 scope, token constraints, and rate limits still apply. Index must come from the
@@ -236,7 +239,8 @@ Principal hard ceilings are:
 | normalized event | 1 MiB |
 | JSON nesting / values / members | 16 / 16,384 / 4,096 |
 | exact number token | 128 bytes; exponent magnitude 1,024 |
-| concurrent requests per token / process | 16 / 128 |
+| protected POST requests per token / process | 16 / 128 |
+| concurrent credential checks, including authenticated health | 128 |
 | reserved concurrent health probes | 8 |
 | pending outbox requests / payload / metadata | 20,000 / 256 MiB / 256 MiB |
 | retained requests per token | 100,000 |
@@ -244,6 +248,14 @@ Principal hard ceilings are:
 | ACK IDs per query / retained per token | 1,000 / 100,000 |
 | terminal ACK retention | 24 hours |
 | response | 1 MiB |
+
+Credential checks have their own process-wide capacity so an unverified
+request cannot occupy a protected body/staging slot. Up to 128 credential
+checks and 128 protected requests may overlap; these are separate ceilings.
+Authenticated health also shares the per-token admission bound, while its
+eight reserved health slots remain independent of protected POST capacity.
+Authentication or token admission saturation returns unhealthy code 18 for
+authenticated health rather than identifying the credential as invalid.
 
 The event-age ceiling is 365 days and future skew is 5 minutes; an index may
 tighten both. Native token/index schedules charge server-computed source event

@@ -934,12 +934,51 @@ func (store *Store) Authenticate(
 func (store *Store) AuthenticateHEC(
 	ctx context.Context,
 	plaintext string,
+) (Authentication, error) {
+	return store.authenticateHECWithAdmission(ctx, plaintext, nil)
+}
+
+// HECRequestAdmission reserves request capacity for a verified token before
+// authentication may record successful use. The returned context controls the
+// final authentication transaction. The caller owns releasing its reservation.
+type HECRequestAdmission func(Authentication) (context.Context, error)
+
+// AuthenticateHECWithAdmission identifies a credential in a read-only snapshot,
+// reserves caller-owned capacity, then revalidates and records use atomically.
+func (store *Store) AuthenticateHECWithAdmission(
+	ctx context.Context,
+	plaintext string,
+	admit HECRequestAdmission,
+) (Authentication, error) {
+	if admit == nil {
+		return Authentication{}, fmt.Errorf("%w: HEC request admission is required", control.ErrInvalidArgument)
+	}
+	return store.authenticateHECWithAdmission(ctx, plaintext, admit)
+}
+
+func (store *Store) authenticateHECWithAdmission(
+	ctx context.Context,
+	plaintext string,
+	admit HECRequestAdmission,
 ) (
 	authentication Authentication,
 	returnedErr error,
 ) {
 	if ctx == nil {
 		return Authentication{}, fmt.Errorf("%w: nil context", control.ErrInvalidArgument)
+	}
+	identified, err := store.preflightHECAuthentication(ctx, plaintext)
+	if err != nil {
+		return Authentication{}, classifyHECAuthenticationError(err)
+	}
+	if admit != nil {
+		ctx, err = admit(identified)
+		if err != nil {
+			return Authentication{}, err
+		}
+		if ctx == nil {
+			return Authentication{}, fmt.Errorf("%w: HEC admission context is required", control.ErrInvalidArgument)
+		}
 	}
 	checkedAt := databaseTime(store.now())
 	tx := store.orm.WithContext(ctx).Begin()
@@ -955,9 +994,12 @@ func (store *Store) AuthenticateHEC(
 		returnedErr = classifyHECAuthenticationError(returnedErr)
 	}()
 
-	authentication, err := store.authenticateHEC(tx, plaintext, checkedAt)
+	authentication, err = store.authenticateHEC(tx, plaintext, checkedAt)
 	if err != nil {
 		return Authentication{}, err
+	}
+	if authentication.TokenID != identified.TokenID {
+		return Authentication{}, ErrUnauthorized
 	}
 	if err := recordIngestionTokenUse(
 		tx,
@@ -972,6 +1014,31 @@ func (store *Store) AuthenticateHEC(
 			"commit HEC token authentication: %w",
 			err,
 		)
+	}
+	finished = true
+	return authentication, nil
+}
+
+// preflightHECAuthentication rejects unusable credentials without reserving
+// SQLite's writer. The read-only transaction keeps allocation guards and
+// authority hydration in one snapshot. Its result identifies the admission
+// owner; the write transaction must authenticate again before recording use.
+func (store *Store) preflightHECAuthentication(
+	ctx context.Context,
+	plaintext string,
+) (authentication Authentication, returnedErr error) {
+	tx := store.orm.WithContext(ctx).Begin(&sql.TxOptions{ReadOnly: true})
+	if tx.Error != nil {
+		return Authentication{}, fmt.Errorf("begin HEC credential preflight: %w", tx.Error)
+	}
+	finished := false
+	defer finishTokenTransaction(tx, &finished, &returnedErr)
+	authentication, err := store.authenticateHEC(tx, plaintext, databaseTime(store.now()))
+	if err != nil {
+		return Authentication{}, err
+	}
+	if err := tx.Commit().Error; err != nil {
+		return Authentication{}, fmt.Errorf("commit HEC credential preflight: %w", err)
 	}
 	finished = true
 	return authentication, nil
