@@ -88,6 +88,84 @@ func TestLookupAdmissionResolvesAndSealsBeforeExecution(t *testing.T) {
 	_ = waitForState(t, manager, created.ID, StateFailed)
 }
 
+func TestLookupAdmissionSealsDeferredTimechartSuffixOnce(t *testing.T) {
+	knowledgeResolver, appID := newEmptyKnowledgeResolver(t)
+	request := validRequest()
+	request.AppID = appID
+	request.SPL = "index=main | timechart span=5m count BY level | lookup service_catalog service_id AS service OUTPUT owner | table owner"
+	resolution := testLookupResolution(t, request.TenantID, "service_catalog")
+
+	var calls atomic.Int32
+	lookupResolver := lookupResolverFunc(func(
+		ctx context.Context,
+		scope LookupAdmissionResolutionScope,
+	) ([]clickhouse.LookupResolution, error) {
+		if calls.Add(1) != 1 {
+			return nil, errors.New("lookup catalog changed after admission")
+		}
+		if len(scope.Names) != 1 || scope.Names[0] != "service_catalog" {
+			return nil, errors.New("deferred lookup omitted from admission scope")
+		}
+		return []clickhouse.LookupResolution{resolution}, ctx.Err()
+	})
+	manager := newTestManager(t, Config{
+		Executor: executorFunc(func(ctx context.Context, compiled clickhouse.CompiledQuery, sink ResultSink) error {
+			if calls.Load() != 1 {
+				return errors.New("lookup resolver was consulted again before execution")
+			}
+			final, err := compiled.ContinueContext(ctx, []clickhouse.RelationColumn{
+				{Name: "_time", Type: "DateTime64(9, 'UTC')"},
+				{Name: "service", Type: "UInt64"},
+			}, [][]any{{time.Date(2026, time.July, 20, 0, 0, 0, 0, time.UTC), uint64(1)}})
+			if err != nil {
+				return err
+			}
+			if !final.HasValidExecutionSeal() || !final.IsContinuationOf(compiled) ||
+				!final.HasLookupAuthority() {
+				return errors.New("deferred lookup continuation lacks sealed authority")
+			}
+			if err := sink.(CompiledResultSink).SetCompiledQuery(final); err != nil {
+				return err
+			}
+			if err := sink.SetSchema(Schema{Columns: []Column{{Name: "owner", Kind: ValueKindString}}}); err != nil {
+				return err
+			}
+			return sink.AddRow([]Value{StringValue("alice")})
+		}),
+		Snapshotter:       snapshotterFunc(func(context.Context) (uint64, error) { return 9, nil }),
+		KnowledgeResolver: knowledgeResolver,
+		LookupResolver:    lookupResolver,
+		MaxConcurrent:     1,
+		CleanupInterval:   -1,
+		NewID:             sequenceIDs("deferred-lookup"),
+	})
+
+	created, err := manager.Create(t.Context(), request)
+	if err != nil {
+		t.Fatalf("Create(timechart with deferred lookup): %v", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("lookup resolution calls after admission = %d, want 1", calls.Load())
+	}
+	if created.KnowledgeSnapshot.GetRef().GetLookupAssetCount() != 1 ||
+		len(created.KnowledgeSnapshot.GetLookupAssets()) != 1 {
+		t.Fatalf("deferred lookup snapshot inventory = %#v", created.KnowledgeSnapshot)
+	}
+	asset := created.KnowledgeSnapshot.GetLookupAssets()[0]
+	if asset.GetLookupId() != resolution.LogicalID() ||
+		asset.GetLookupVersion() != resolution.LogicalVersion() ||
+		asset.GetAsset().GetLookupAssetId() != resolution.ObjectID() ||
+		asset.GetAsset().GetVersion() != resolution.Version() {
+		t.Fatalf("deferred lookup snapshot asset = %#v", asset)
+	}
+
+	completed := waitForState(t, manager, created.ID, StateCompleted)
+	if calls.Load() != 1 || completed.RowCount != 1 || completed.Schema == nil ||
+		len(completed.Schema.Columns) != 1 || completed.Schema.Columns[0].Name != "owner" {
+		t.Fatalf("completed deferred lookup = calls %d, job %#v", calls.Load(), completed)
+	}
+}
+
 func TestConfiguredLookupResolverIsConsultedWithoutAuthoredLookup(t *testing.T) {
 	knowledgeResolver, appID := newEmptyKnowledgeResolver(t)
 	request := validRequest()
