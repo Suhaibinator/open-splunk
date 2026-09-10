@@ -1286,8 +1286,13 @@ func TestCompileTimeBinRejectsForgedPlans(t *testing.T) {
 	bucketed.Operators = append(bucketed.Operators, timechart.Operators[len(timechart.Operators)-1])
 	bucketed.DynamicOutput = timechart.DynamicOutput
 	bucketed.OutputFields = nil
-	if _, err := (Compiler{}).Compile(bucketed); err == nil {
-		t.Fatal("Compile() accepted timechart after binned canonical time")
+	compiled, err := (Compiler{}).Compile(bucketed)
+	if err != nil {
+		t.Fatalf("Compile(timechart after typed time bin): %v", err)
+	}
+	if compiled.Timechart == nil || compiled.Timechart.Mode != TimechartModeRuntimeWide ||
+		strings.Count(compiled.SQL, `FROM "open_splunk"."events"`) != 1 {
+		t.Fatalf("typed-time timechart contract = %#v SQL %q", compiled.Timechart, compiled.SQL)
 	}
 }
 
@@ -5121,7 +5126,7 @@ func TestCompileWideOperatorsDeclareMaterializedCTEs(t *testing.T) {
 		if !strings.Contains(compiled.SQL, " AS MATERIALIZED (") {
 			t.Fatalf("Compile(%q) has no materialized aggregate:\n%s", source, compiled.SQL)
 		}
-		if !strings.HasSuffix(compiled.SQL, " SETTINGS enable_materialized_cte = 1") {
+		if strings.Count(compiled.SQL, " SETTINGS enable_materialized_cte = 1") != 1 {
 			t.Fatalf("Compile(%q) does not declare the materialized-CTE requirement:\n%s", source, compiled.SQL)
 		}
 	}

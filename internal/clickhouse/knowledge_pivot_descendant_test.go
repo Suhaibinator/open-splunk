@@ -223,6 +223,10 @@ func pivotSourceProjectionForTest(t *testing.T, sql, cte string) string {
 	marker := quoteIdentifier(cte) + " AS (SELECT "
 	start := strings.Index(sql, marker)
 	if start < 0 {
+		marker = quoteIdentifier(cte) + " AS MATERIALIZED (SELECT "
+		start = strings.Index(sql, marker)
+	}
+	if start < 0 {
 		t.Fatalf("compiled SQL contains no %s source CTE:\n%s", cte, sql)
 	}
 	remainder := sql[start+len(marker):]
