@@ -125,7 +125,10 @@ Each surviving timechart row may carry an exact half-open bucket interval as
 `time_bucket.earliest` and `time_bucket.latest`. Both values are canonical UTC
 RFC 3339 strings with nanosecond precision, and earliest is strictly before
 latest. The metadata is separate from SPL columns and survives retained
-snapshots, paging, WebSocket and HTTP delivery, artifact replay, and export.
+snapshots, paging, WebSocket and HTTP delivery, and artifact replay. Export
+authenticates that retained snapshot and its full runtime schema before
+applying the selected-column bound. Downloaded CSV and JSON Lines contain the
+selected SPL column values; they do not add time-bucket sidecar fields.
 
 Clients must treat these strings as exact instants. Browser chart coordinates
 derive differences with integer nanosecond arithmetic instead of passing the
