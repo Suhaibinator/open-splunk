@@ -27,7 +27,7 @@ func TestTimechartTerminalStagePublicationIsAtomic(t *testing.T) {
 			timechartOrdinalRows([]string{"0:api"}, [][]uint64{{1}}),
 			fixedTimechartOrdinalRows(counts),
 		}}
-		sink := &compositionSink{}
+		sink := &terminalTimechartSink{}
 		policy := searchlimits.Default()
 		policy.MaxResultBytes = 1 << 20
 
@@ -42,10 +42,11 @@ func TestTimechartTerminalStagePublicationIsAtomic(t *testing.T) {
 		if connection.calls != 2 {
 			t.Fatalf("terminal staged query calls = %d, want 2", connection.calls)
 		}
-		if sink.setCalls != 0 || len(sink.schema.Columns) != 0 ||
+		if sink.compiledCalls != 0 || sink.setCalls != 0 || len(sink.schema.Columns) != 0 ||
 			len(sink.rows) != 0 || len(sink.bounds) != 0 {
 			t.Fatalf(
-				"terminal staged failure published a prefix: schema calls=%d schema=%#v rows=%d bounds=%d",
+				"terminal staged failure published a prefix: descriptor calls=%d schema calls=%d schema=%#v rows=%d bounds=%d",
+				sink.compiledCalls,
 				sink.setCalls,
 				sink.schema,
 				len(sink.rows),
@@ -61,20 +62,25 @@ func TestTimechartTerminalStagePublicationIsAtomic(t *testing.T) {
 			timechartOrdinalRows([]string{"0:api"}, [][]uint64{{1}}),
 			fixedTimechartOrdinalRows([]uint64{1, 0, 0}),
 		}}
-		sink := &compositionSink{}
+		sink := &terminalTimechartSink{}
 
 		if err := mustExecutor(t, connection).Execute(context.Background(), compiled, sink); err != nil {
 			t.Fatal(err)
 		}
-		if connection.calls != 2 || sink.setCalls != 1 || len(sink.rows) != bucketCount ||
+		if connection.calls != 2 || sink.compiledCalls != 1 || sink.setCalls != 1 ||
+			len(sink.rows) != bucketCount ||
 			len(sink.bounds) != bucketCount {
 			t.Fatalf(
-				"small terminal staged result: queries=%d schema calls=%d rows=%d bounds=%d",
+				"small terminal staged result: queries=%d descriptor calls=%d schema calls=%d rows=%d bounds=%d",
 				connection.calls,
+				sink.compiledCalls,
 				sink.setCalls,
 				len(sink.rows),
 				len(sink.bounds),
 			)
+		}
+		if !sink.compiled.HasValidExecutionSeal() || !sink.compiled.IsContinuationOf(compiled) {
+			t.Fatal("small terminal staged result published an invalid final descriptor")
 		}
 		for index, bounds := range sink.bounds {
 			wantEarliest := first.Add(time.Duration(index) * time.Second).Format(time.RFC3339Nano)
@@ -84,6 +90,18 @@ func TestTimechartTerminalStagePublicationIsAtomic(t *testing.T) {
 			}
 		}
 	})
+}
+
+type terminalTimechartSink struct {
+	compositionSink
+	compiled      clickhouse.CompiledQuery
+	compiledCalls int
+}
+
+func (sink *terminalTimechartSink) SetCompiledQuery(compiled clickhouse.CompiledQuery) error {
+	sink.compiledCalls++
+	sink.compiled = compiled
+	return nil
 }
 
 func compileTerminalTimechartFixture(
