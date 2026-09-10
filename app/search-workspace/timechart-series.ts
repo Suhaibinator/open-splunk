@@ -151,8 +151,7 @@ export async function loadTimechartBuckets({
     return error === undefined ? { rows, coverage } : { rows, coverage, error };
   };
   const failed = (message: string): TimechartBucketLoad => completed("failed", new Error(message));
-  let nextPageToken = firstPage.nextPageToken?.trim() || null;
-  while (true) {
+  const collectPage = async (nextPageToken: string | null): Promise<TimechartBucketLoad> => {
     if (signal?.aborted) throw abortError();
     if (nextPageToken === null) return completed(omittedRows ? "capped" : "complete");
     if (rows.length >= maximumBuckets) return completed("capped");
@@ -177,15 +176,16 @@ export async function loadTimechartBuckets({
     if (followingToken !== null && page.rows.length === 0) {
       return failed("Search results returned an empty page with a further cursor.");
     }
-    nextPageToken = followingToken;
-    if (omittedRows || (rows.length >= maximumBuckets && nextPageToken !== null)) {
+    if (omittedRows || (rows.length >= maximumBuckets && followingToken !== null)) {
       return completed("capped");
     }
-    if (nextPageToken === null) return completed("complete");
+    if (followingToken === null) return completed("complete");
     if (pendingRows.length >= progressBatchSize) {
       publish(coverageFor("loading", rows, firstPage));
     }
-  }
+    return collectPage(followingToken);
+  };
+  return collectPage(firstPage.nextPageToken?.trim() || null);
 }
 
 /** Coverage of a time-series result that fit on its first page. */

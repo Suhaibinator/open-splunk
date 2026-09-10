@@ -46,7 +46,6 @@ import {
   ResultSetKind,
   VisualizationStackMode,
   VisualizationType,
-  type ResultRow,
   type ResultSchema,
   type VisualizationSpec,
 } from "@/gen/ts/open_splunk/result";
