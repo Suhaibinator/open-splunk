@@ -4,7 +4,6 @@ import (
 	"errors"
 	"slices"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/ianatimezone"
@@ -20,6 +19,9 @@ func exactTimechartGridSpec(operator *plan.Timechart, scan *plan.Scan, timezone 
 		if boundary.Location() != time.UTC || !time.Unix(0, boundary.UnixNano()).Equal(boundary) || (index > 0 && !boundary.After(operator.GridBoundaries[index-1])) {
 			return timechartGridSpec{}, errors.New("compile timechart: exact boundaries are invalid")
 		}
+	}
+	if operator.Calendar != plan.CalendarNone && operator.FirstBucket.Before(MinimumSearchTime()) {
+		return timechartGridSpec{}, &plan.Diagnostic{Code: "SPL_UNSUPPORTED_TIMECHART_TIME_RANGE", Message: "the first calendar bucket falls before the supported timestamp range", Range: operator.Range}
 	}
 	if !operator.FirstBucket.Equal(operator.GridBoundaries[0]) {
 		return timechartGridSpec{}, errors.New("compile timechart: exact origin is invalid")
@@ -48,22 +50,9 @@ func (spec timechartGridSpec) exactBucketKeySQL(eventTime string) string {
 		return "toInt64((intDiv(" + delta + ", " + span + ") - if(" + delta + " < 0 AND modulo(" + delta + ", " + span + ") != 0, 1, 0)) * " + span + " + toInt128(" + origin + "))"
 	}
 
-	magnitude := spec.magnitude
-	if spec.calendar == plan.CalendarWeek {
-		magnitude *= 7
-	}
-	unit, add := "day", "addDays"
-	if spec.calendar == plan.CalendarMonth {
-		unit, add = "month", "addMonths"
-	}
-	timezone := "'" + strings.ReplaceAll(spec.searchTimezone, "'", "''") + "'"
-	localOrigin := "toTimeZone(fromUnixTimestamp64Nano(" + origin + ", 'UTC'), " + timezone + ")"
-	localEvent := "toTimeZone(" + eventTime + ", " + timezone + ")"
-	difference := "dateDiff('" + unit + "', " + localOrigin + ", " + localEvent + ", " + timezone + ")"
-	step := strconv.FormatUint(magnitude, 10)
-	offset := "((intDiv(" + difference + ", " + step + ") - if(" + difference + " < 0 AND modulo(" + difference + ", " + step + ") != 0, 1, 0)) * " + step + ")"
-	candidate := add + "(" + localOrigin + ", " + offset + ")"
-	return "toUnixTimestamp64Nano(if(" + candidate + " > " + localEvent + ", " + add + "(" + candidate + ", -" + step + "), " + candidate + "))"
+	// Calendar source clocks have already been assigned by the authoritative
+	// ASOF grid lookup. Do not reconstruct civil boundaries in ClickHouse.
+	return "toUnixTimestamp64Nano(" + eventTime + ")"
 
 }
 

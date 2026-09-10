@@ -27,6 +27,7 @@ func TestCalendarSpansAgainstClickHouse(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 	connection, store := chartEdgeStartClickHouse(t, ctx)
+	testCalendarSourceClipping(t, ctx, connection)
 
 	const index = "calendar-span"
 	indexTime := time.Date(2027, time.January, 12, 0, 0, 0, 0, time.UTC)
@@ -237,10 +238,11 @@ func TestCalendarSpansAgainstClickHouse(t *testing.T) {
 				t.Fatalf("execute calendar timechart: %v\nSQL: %s\nargs: %#v", queryErr, compiled.SQL, compiled.Args)
 			}
 			defer rows.Close()
-			if types := rows.ColumnTypes(); len(types) != 3 ||
+			if types := rows.ColumnTypes(); len(types) != 4 ||
 				types[0].DatabaseTypeName() != "UInt64" ||
 				types[1].DatabaseTypeName() != "DateTime64(9, 'UTC')" ||
-				types[2].DatabaseTypeName() != "UInt64" {
+				types[2].DatabaseTypeName() != "UInt8" ||
+				types[3].DatabaseTypeName() != "UInt64" {
 				t.Fatalf("calendar timechart column types = %#v", types)
 			}
 			var boundaries []time.Time
@@ -248,10 +250,14 @@ func TestCalendarSpansAgainstClickHouse(t *testing.T) {
 			ordinal := uint64(0)
 			for rows.Next() {
 				var gotOrdinal uint64
+				var present uint8
 				var boundary time.Time
 				var count uint64
-				if scanErr := rows.Scan(&gotOrdinal, &boundary, &count); scanErr != nil {
+				if scanErr := rows.Scan(&gotOrdinal, &boundary, &present, &count); scanErr != nil {
 					t.Fatalf("scan calendar timechart: %v", scanErr)
+				}
+				if (present == 1) != (count > 0) {
+					t.Fatalf("presence %d disagrees with count %d", present, count)
 				}
 				if gotOrdinal != ordinal {
 					t.Fatalf("calendar timechart ordinal = %d, want %d", gotOrdinal, ordinal)
@@ -297,7 +303,8 @@ func TestCalendarSpansAgainstClickHouse(t *testing.T) {
 			var names []string
 			var counts []uint64
 			var invalid uint8
-			if scanErr := rows.Scan(&ordinal, &boundary, &names, &counts, &invalid); scanErr != nil {
+			var present uint8
+			if scanErr := rows.Scan(&ordinal, &boundary, &present, &names, &counts, &invalid); scanErr != nil {
 				t.Fatalf("scan split month timechart: %v", scanErr)
 			}
 			namesValid := rowCount == 0 && reflect.DeepEqual(names, wantNames)
@@ -307,6 +314,13 @@ func TestCalendarSpansAgainstClickHouse(t *testing.T) {
 			if ordinal != uint64(rowCount) || boundary != monthBoundaries[rowCount] ||
 				!namesValid || len(counts) != len(totals) || invalid != 0 {
 				t.Fatalf("split month row %d = ordinal %d boundary %v names %v counts %v invalid %d", rowCount, ordinal, boundary, names, counts, invalid)
+			}
+			var occupied bool
+			for _, count := range counts {
+				occupied = occupied || count > 0
+			}
+			if (present == 1) != occupied {
+				t.Fatalf("split presence %d disagrees with counts %v", present, counts)
 			}
 			for index, count := range counts {
 				totals[index] += count

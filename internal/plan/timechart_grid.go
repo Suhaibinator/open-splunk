@@ -140,40 +140,7 @@ func timechartBoundarySequence(earliest, latest time.Time, span time.Duration, c
 		first = time.Unix(0, ticks.Int64()).UTC()
 		advance = func(value time.Time) time.Time { return value.Add(span) }
 	} else {
-		local := earliest.In(location)
-		origin := time.Date(1970, 1, 1, 0, 0, 0, 0, location)
-		step := safecast.MustConv[int64](magnitude)
-		if calendar == CalendarWeek {
-			origin = time.Date(1969, 12, 28, 0, 0, 0, 0, location)
-			step *= 7
-			if !alignment.IsZero() {
-				origin = alignment.In(location)
-			}
-		}
-		if calendar == CalendarMonth {
-			months := int64(local.Year()-1970)*12 + int64(local.Month()-1)
-			endLocal := latest.In(location)
-			extentMonths := int64(endLocal.Year()-local.Year())*12 + int64(endLocal.Month()) - int64(local.Month())
-			if extentMonths/step > safecast.MustConv[int64](bucketLimit) {
-				return nil, fmt.Errorf("timechart produces more than %d buckets", bucketLimit)
-			}
-			first = origin.AddDate(0, int(floorInt64(months, step)*step), 0)
-			advance = func(value time.Time) time.Time { return value.AddDate(0, safecast.MustConv[int](magnitude), 0) }
-		} else {
-			civil := func(value time.Time) int64 {
-				return time.Date(value.Year(), value.Month(), value.Day(), 0, 0, 0, 0, time.UTC).Unix() / 86400
-			}
-			days := civil(local) - civil(origin)
-			if (civil(latest.In(location))-civil(local))/step > safecast.MustConv[int64](bucketLimit) {
-				return nil, fmt.Errorf("timechart produces more than %d buckets", bucketLimit)
-			}
-			first = origin.AddDate(0, 0, int(floorInt64(days, step)*step))
-			if first.After(local) {
-				first = first.AddDate(0, 0, -int(step))
-			}
-			advance = func(value time.Time) time.Time { return value.AddDate(0, 0, int(step)) }
-		}
-		first = first.UTC()
+		return timechartCivilBoundaries(earliest, latest, calendar, magnitude, alignment, location, bucketLimit)
 	}
 	if !time.Unix(0, first.UnixNano()).Equal(first) {
 		return nil, fmt.Errorf("timechart boundary exceeds timestamp range")

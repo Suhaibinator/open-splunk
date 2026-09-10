@@ -782,6 +782,13 @@ func writeCompiledArgument(writer hash.Hash, argument any, depth int) bool {
 		writeTokenPart(writer, "<nil>")
 		return true
 	}
+	if values, ok := argument.([]int64); ok {
+		if depth != 0 {
+			return false
+		}
+		writeCompiledInt64Slice(writer, values)
+		return true
+	}
 	value := reflect.ValueOf(argument)
 	valueType := value.Type()
 	writeTokenPart(writer, valueType.PkgPath())
@@ -818,6 +825,34 @@ func writeCompiledArgument(writer hash.Hash, argument any, depth int) bool {
 		return false
 	}
 	return true
+}
+
+// Preserve the generic argument encoding byte for byte, including each
+// element's type identity. A fixed batch avoids interface boxing and small
+// escaping buffers for every boundary in a 10,000-element lookup argument.
+func writeCompiledInt64Slice(writer hash.Hash, values []int64) {
+	writeTokenPart(writer, "")
+	writeTokenPart(writer, "[]int64")
+	writeBool(writer, values == nil)
+	writeUint64(writer, uint64(len(values)))
+	const elementBytes = 8 + 8 + len("int64") + 8
+	var batch [128 * elementBytes]byte
+	used := 0
+	for _, value := range values {
+		element := batch[used : used+elementBytes]
+		binary.BigEndian.PutUint64(element[:8], 0)
+		binary.BigEndian.PutUint64(element[8:16], uint64(len("int64")))
+		copy(element[16:21], "int64")
+		_, _ = binary.Encode(element[21:], binary.BigEndian, value)
+		used += elementBytes
+		if used == len(batch) {
+			_, _ = writer.Write(batch[:used])
+			used = 0
+		}
+	}
+	if used > 0 {
+		_, _ = writer.Write(batch[:used])
+	}
 }
 
 func supportedCompiledSliceElement(element reflect.Type) bool {
@@ -1008,6 +1043,9 @@ func cloneStrings(values []string) []string {
 func cloneCompiledArgument(argument any) (any, bool) {
 	if argument == nil {
 		return nil, true
+	}
+	if values, ok := argument.([]int64); ok {
+		return slices.Clone(values), true
 	}
 	value := reflect.ValueOf(argument)
 	cloned, ok := cloneCompiledValue(value, 0)

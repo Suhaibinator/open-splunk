@@ -116,7 +116,7 @@ func compileTimechart(
 	}
 	var gridSpec timechartGridSpec
 	var err error
-	enhanced := operator.Span < time.Second && operator.Calendar == plan.CalendarNone || operator.Span > 24*time.Hour || operator.CalendarMagnitude > 1 || !operator.Alignment.IsZero() || !operator.Continuous || !operator.IncludePartial || !operator.FixedRange
+	enhanced := operator.Calendar != plan.CalendarNone || operator.Span < time.Second && operator.Calendar == plan.CalendarNone || operator.Span > 24*time.Hour || operator.CalendarMagnitude > 1 || !operator.Alignment.IsZero() || !operator.Continuous || !operator.IncludePartial || !operator.FixedRange
 	if enhanced {
 		gridSpec, err = exactTimechartGridSpec(operator, scan, state.context.searchTimezone)
 	} else {
@@ -161,6 +161,10 @@ func compileTimechart(
 	if !timeField.canonicalTime {
 		invalidTime := "isNull(" + timeField.valueSQL + ") OR NOT ifNull(" + timeField.existsSQL + ", 0)"
 		timeField.valueSQL = "addNanoseconds(assumeNotNull(" + timeField.valueSQL + "), toInt64(throwIf(toUInt8(" + invalidTime + "), 'open-splunk: timechart input timestamp is missing or null')))"
+	}
+
+	if gridSpec.calendar != plan.CalendarNone {
+		relation, args, timeField.valueSQL = gridSpec.assignCalendarSource(relation, args, timeField.valueSQL)
 	}
 
 	if valueKind, fixedValue := fixedTimechartValueKind(operator.Measure.Function); fixedValue && operator.Split == nil {
