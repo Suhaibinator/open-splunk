@@ -1311,7 +1311,7 @@ func TestCompileTimechartUsesOneScopedScanAndPrivateWideTransport(t *testing.T) 
 		t.Fatalf("compiled timechart metadata = %#v", compiled.Timechart)
 	}
 	for _, required := range []string{
-		`"__os_timechart_source" AS (`,
+		`"__os_timechart_source" AS MATERIALIZED (`,
 		`"__os_timechart_prepared" AS (SELECT *, toUInt8(if("__os_tc_present" != 0, 0, arrayExists(`,
 		`"__os_timechart_classified" AS (`,
 		`"__os_timechart_canonicalized" AS (`,
@@ -1322,6 +1322,8 @@ func TestCompileTimechartUsesOneScopedScanAndPrivateWideTransport(t *testing.T) 
 		`"__os_timechart_ranked" AS (`,
 		`dense_rank() OVER (PARTITION BY "__os_tc_kind" ORDER BY "__os_tc_series_score" DESC, "__os_tc_label" ASC) AS "__os_tc_series_rank"`,
 		`"__os_timechart_collapsed" AS MATERIALIZED (`,
+		`"__os_timechart_resource_usage" AS MATERIALIZED (`,
+		`"__os_timechart_guarded_domain_rows" AS MATERIALIZED (`,
 		`"__os_tc_series_rank" <= 10`,
 		`sumIf("__os_tc_count", "__os_tc_kind" = 3)`,
 		`maxIf("__os_tc_collision_cardinality", "__os_tc_kind" = 0) > 1`,
@@ -1364,9 +1366,6 @@ func TestCompileTimechartUsesOneScopedScanAndPrivateWideTransport(t *testing.T) 
 		if strings.Contains(compiled.SQL, removed) {
 			t.Fatalf("timechart SQL retains removed graph node %q:\n%s", removed, compiled.SQL)
 		}
-	}
-	if got := strings.Count(compiled.SQL, ` AS MATERIALIZED (`); got != 3 {
-		t.Fatalf("timechart materialized CTE count = %d, want collapse plus resource usage and guard:\n%s", got, compiled.SQL)
 	}
 	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
 		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)

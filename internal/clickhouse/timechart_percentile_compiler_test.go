@@ -97,7 +97,7 @@ func TestCompileSplitTimechartPercentileUsesMergeableGKStates(t *testing.T) {
 	}
 
 	for _, required := range []string{
-		`"__os_timechart_source" AS (`,
+		`"__os_timechart_source" AS MATERIALIZED (`,
 		`AS "__os_tc_measure_values"`,
 		`"__os_timechart_numeric_groups" AS MATERIALIZED (`,
 		`quantilesGKOrNullArrayState(100, 0.95)(if("__os_tc_kind" IN (0, 1), "__os_tc_measure_values", CAST([], 'Array(Float64)'))) AS "__os_tc_percentile_state"`,

@@ -141,7 +141,7 @@ func TestCompileSplitTimechartSumAndAverageUseBoundedMergeableStates(t *testing.
 				t.Fatalf("compiled split numeric timechart = fields %v metadata %#v", compiled.OutputFields, compiled.Timechart)
 			}
 			for _, required := range []string{
-				`"__os_timechart_source" AS (`,
+				`"__os_timechart_source" AS MATERIALIZED (`,
 				`AS "__os_tc_measure_values"`,
 				`"__os_timechart_numeric_groups" AS MATERIALIZED (`,
 				`sumCountArray("__os_tc_measure_values")`,

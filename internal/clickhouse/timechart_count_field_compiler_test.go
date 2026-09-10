@@ -105,6 +105,7 @@ func TestCompileSplitTimechartCountFieldRanksOccurrencesButKeepsRowDomain(t *tes
 	}
 
 	for _, required := range []string{
+		`"__os_timechart_source" AS MATERIALIZED (`,
 		`AS ` + timechartCountValueAlias,
 		`count() AS ` + timechartCountRowAlias,
 		`toUInt64(sum(toUInt128(` + timechartCountValueAlias + `))) AS ` + timechartOccurrenceCountAlias,
@@ -119,6 +120,9 @@ func TestCompileSplitTimechartCountFieldRanksOccurrencesButKeepsRowDomain(t *tes
 		`FROM "__os_timechart_collapsed" WHERE "__os_tc_encoded" != '' AND ` + timechartCollapsedRowAlias + ` > 0`,
 		`arrayPushBack(groupArrayIf("__os_tc_encoded", "__os_tc_encoded" != ''), CAST('' AS String))`,
 		`toUInt64(max("__os_tc_invalid" != 0 OR "__os_tc_collision" != 0))`,
+		`"__os_timechart_collapsed" AS MATERIALIZED (`,
+		`"__os_timechart_resource_usage" AS MATERIALIZED (`,
+		`"__os_timechart_guarded_domain_rows" AS MATERIALIZED (`,
 		`mapFromArrays(`,
 		`AS "` + TimechartCountsColumn + `"`,
 	} {
@@ -136,10 +140,6 @@ func TestCompileSplitTimechartCountFieldRanksOccurrencesButKeepsRowDomain(t *tes
 			t.Fatalf("split count(field) relation %q occurs %d times, want %d:\n%s", relation, got, want, compiled.SQL)
 		}
 	}
-	if got := strings.Count(compiled.SQL, ` AS MATERIALIZED (`); got != 3 {
-		t.Fatalf("split count(field) materialized CTE count = %d, want collapse plus resource usage and guard:\n%s", got, compiled.SQL)
-	}
-
 	scored := timechartCTESection(
 		t,
 		compiled.SQL,
