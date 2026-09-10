@@ -14,7 +14,7 @@ import { COMPACT_NUMBER_FORMAT, NUMBER_FORMAT } from "../constants";
 import { formatExactNumericText } from "../formatters";
 import type { StackMode } from "../model";
 import { linearTickScale } from "./chart-scale";
-import { stackChartRows, stackedChartDomain } from "./chart-stacking";
+import type { StackedChartRow } from "./chart-stacking";
 
 const VIEWBOX_WIDTH = 1000;
 const VIEWBOX_HEIGHT = 300;
@@ -102,6 +102,96 @@ function pointSeriesCoordinate(
   return value !== null && Number.isFinite(value) ? value : null;
 }
 
+interface TimelineStackWindow {
+  domain: number[];
+  rows: StackedChartRow[];
+}
+
+export function timelinePointInspectionLabel(point: TimelinePoint): string {
+  return point.earliest === undefined || point.latest === undefined
+    ? point.label
+    : `${point.label}, exact bucket ${point.earliest} to ${point.latest}`;
+}
+
+function normalizedStackValue(value: number, positiveTotal: number, negativeTotal: number): number {
+  if (value > 0) return positiveTotal === 0 ? 0 : (value / positiveTotal) * 100;
+  if (value < 0) return negativeTotal === 0 ? 0 : (value / negativeTotal) * 100;
+  return 0;
+}
+
+/**
+ * Scan all values to keep global axes and stack baselines stable, while only
+ * allocating coordinate objects for the visible series window.
+ */
+function timelineStackWindow(
+  points: readonly TimelinePoint[],
+  seriesNames: readonly string[],
+  seriesLabel: string,
+  seriesStart: number,
+  seriesEnd: number,
+  stackMode: StackMode,
+): TimelineStackWindow {
+  const domain: number[] = [];
+  const rows = points.map((point) => {
+    let hasFinite = false;
+    let minimum = 0;
+    let maximum = 0;
+    let negativeTotal = 0;
+    let positiveTotal = 0;
+    for (const name of seriesNames) {
+      const raw = pointSeriesCoordinate(point, name, seriesLabel);
+      if (raw === null) continue;
+      hasFinite = true;
+      minimum = Math.min(minimum, raw);
+      maximum = Math.max(maximum, raw);
+      if (raw < 0) negativeTotal += Math.abs(raw);
+      else positiveTotal += raw;
+    }
+    if (hasFinite) {
+      if (stackMode === "none") domain.push(minimum, maximum);
+      else if (stackMode === "stacked100") {
+        domain.push(negativeTotal === 0 ? 0 : -100, positiveTotal === 0 ? 0 : 100);
+      } else {
+        domain.push(-negativeTotal, positiveTotal);
+      }
+    }
+
+    let negative = 0;
+    let positive = 0;
+    const visible: StackedChartRow = [];
+    seriesNames.forEach((name, seriesIndex) => {
+      const raw = pointSeriesCoordinate(point, name, seriesLabel);
+      if (raw === null) {
+        if (seriesIndex >= seriesStart && seriesIndex < seriesEnd) {
+          visible.push({ end: 0, raw: null, start: 0 });
+        }
+        return;
+      }
+      const value = stackMode === "stacked100"
+        ? normalizedStackValue(raw, positiveTotal, negativeTotal)
+        : raw;
+      let start = 0;
+      let end = value;
+      if (stackMode !== "none") {
+        if (value >= 0) {
+          start = positive;
+          positive += value;
+          end = positive;
+        } else {
+          start = negative;
+          negative += value;
+          end = negative;
+        }
+      }
+      if (seriesIndex >= seriesStart && seriesIndex < seriesEnd) {
+        visible.push({ end, raw, start });
+      }
+    });
+    return visible;
+  });
+  return { domain, rows };
+}
+
 export function formatTimelineSeriesValue(
   point: TimelinePoint,
   name: string,
@@ -168,14 +258,24 @@ export function TimeSeriesLineChart({
     seriesNames.length,
     Math.max(boundedSeriesStart + 1, seriesEnd ?? seriesNames.length),
   );
-  const renderedSeriesNames = seriesNames.slice(boundedSeriesStart, boundedSeriesEnd);
-  const stackedRows = useMemo(() => stackChartRows(
-    points.map((point) => seriesNames.map((name) => pointSeriesCoordinate(point, name, seriesLabel))),
-    stackMode,
-  ), [points, seriesLabel, seriesNames, stackMode]);
+  const renderedSeriesNames = useMemo(
+    () => seriesNames.slice(boundedSeriesStart, boundedSeriesEnd),
+    [boundedSeriesEnd, boundedSeriesStart, seriesNames],
+  );
+  const stackWindow = useMemo(
+    () => timelineStackWindow(
+      points,
+      seriesNames,
+      seriesLabel,
+      boundedSeriesStart,
+      boundedSeriesEnd,
+      stackMode,
+    ),
+    [boundedSeriesEnd, boundedSeriesStart, points, seriesLabel, seriesNames, stackMode],
+  );
   const { minimum, maximum, ticks } = useMemo(
-    () => linearTickScale(stackedChartDomain(stackedRows)),
-    [stackedRows],
+    () => linearTickScale(stackWindow.domain),
+    [stackWindow.domain],
   );
   const axisRange = maximum - minimum;
   const hasApproximateCoordinates = points.some((point) => point.coordinateApproximate === true);
@@ -205,7 +305,7 @@ export function TimeSeriesLineChart({
       name,
       seriesIndex,
       points: points.map((_point, index) => {
-        const value = stackedRows[index]?.[seriesIndex];
+        const value = stackWindow.rows[index]?.[renderedSeriesIndex];
         if (value === undefined || value.raw === null) return null;
         const projectedEnd = Math.min(maximum, Math.max(minimum, value.end));
         const projectedStart = Math.min(maximum, Math.max(minimum, value.start));
@@ -216,7 +316,7 @@ export function TimeSeriesLineChart({
         };
       }),
     };
-  }), [axisRange, boundedSeriesStart, maximum, minimum, points, renderedSeriesNames, stackedRows, xCoordinates]);
+  }), [axisRange, boundedSeriesStart, maximum, minimum, points, renderedSeriesNames, stackWindow.rows, xCoordinates]);
   const xTicks = tickIndices(points.length, plotWidth < 520 ? 3 : plotWidth < 820 ? 4 : 5);
   const activePoint = activeIndex === null ? null : points[activeIndex] ?? null;
   const activeCoordinates = activeIndex === null ? [] : seriesCoordinates.flatMap((series) => {
@@ -265,9 +365,10 @@ export function TimeSeriesLineChart({
 
   const tooltipHorizontal = activeXPercent < 18 ? "start" : activeXPercent > 82 ? "end" : "center";
   const tooltipVertical = activeYPercent < 28 ? "below" : "above";
+  const activePointLabel = activePoint === null ? "" : timelinePointInspectionLabel(activePoint);
   const activeDescription = activePoint === null
     ? `Inspect ${seriesLabel.toLowerCase()} over time. Use Left and Right arrow keys to move between time buckets.`
-    : `${activePoint.label}, ${renderedSeriesNames.map((name) => `${timelineSeriesDisplayName(name)} ${formatTimelineSeriesValue(activePoint, name, seriesLabel)}`).join(", ")}${activePoint.coordinateApproximate ? ". Chart position is approximate; displayed values are exact." : ""}`;
+    : `${activePointLabel}, ${renderedSeriesNames.map((name) => `${timelineSeriesDisplayName(name)} ${formatTimelineSeriesValue(activePoint, name, seriesLabel)}`).join(", ")}${activePoint.coordinateApproximate ? ". Chart position is approximate; displayed values are exact." : ""}`;
 
   return (
     <div
@@ -362,7 +463,7 @@ export function TimeSeriesLineChart({
               role="tooltip"
               style={{ left: `${activeXPercent}%`, top: `${activeYPercent}%` }}
             >
-              <strong>{activePoint.label}</strong>
+              <strong>{activePointLabel}</strong>
               {renderedSeriesNames.map((name, renderedSeriesIndex) => (
                 <span key={name}>
                   <i
@@ -380,10 +481,14 @@ export function TimeSeriesLineChart({
       </div>
       <div className="time-series-chart__axis-spacer" aria-hidden="true" />
       <div className="time-series-chart__x-axis" aria-hidden="true">
-        {xTicks.map((index, tickIndex) => (
+        {xTicks.map((index) => (
           <span
             key={points[index].id}
-            data-edge={tickIndex === 0 ? "start" : tickIndex === xTicks.length - 1 ? "end" : undefined}
+            data-edge={xCoordinates[index] <= 0
+              ? "start"
+              : xCoordinates[index] >= VIEWBOX_WIDTH
+                ? "end"
+                : undefined}
             style={{ left: `${(xCoordinates[index] / VIEWBOX_WIDTH) * 100}%` }}
           >
             {points[index].label}

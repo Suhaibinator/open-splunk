@@ -1,7 +1,8 @@
 import type { PointerEvent, ReactNode } from "react";
 
 import { SearchJobState } from "@/gen/ts/open_splunk/search";
-import { DEMO_EVENTS, type DemoEvent, type DemoHistoryEntry, type DemoScalar } from "@/lib/demo/search-data";
+import { DEMO_EVENTS, type DemoEvent, type DemoHistoryEntry, type DemoScalar, type TimelinePoint } from "@/lib/demo/search-data";
+import { timeBucketBoundaryNanoseconds } from "@/lib/search/backend-data";
 import type { DiagnosticMarker } from "@/lib/search/spl-diagnostic-markers";
 import { searchResultViewForQuery } from "@/lib/search/result-view-navigation";
 import {
@@ -419,7 +420,38 @@ export function timelineIndexFromPointer(event: PointerEvent<HTMLElement>, bucke
   return Math.min(bucketCount - 1, Math.floor(ratio * bucketCount));
 }
 
-export function timelineBoundaryLabel(bucketIndex: number): string {
-  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
-    .format(new Date(Date.UTC(2026, 6, 21, 0, bucketIndex * 20)));
+export interface AuthoritativeTimelineRange {
+  earliest: string;
+  latest: string;
+}
+
+/** Return the exact union of selected server buckets, independent of row order. */
+export function authoritativeTimelineRange(
+  points: readonly TimelinePoint[],
+  selection: readonly [number, number] | null,
+): AuthoritativeTimelineRange | null {
+  if (selection === null) return null;
+  const start = Math.min(selection[0], selection[1]);
+  const end = Math.max(selection[0], selection[1]);
+  if (start < 0 || end >= points.length) return null;
+  let earliest: AuthoritativeTimelineRange["earliest"] | null = null;
+  let earliestNanoseconds: bigint | null = null;
+  let latest: AuthoritativeTimelineRange["latest"] | null = null;
+  let latestNanoseconds: bigint | null = null;
+  for (let index = start; index <= end; index += 1) {
+    const point = points[index];
+    if (point?.earliest === undefined || point.latest === undefined) return null;
+    const pointEarliest = timeBucketBoundaryNanoseconds(point.earliest);
+    const pointLatest = timeBucketBoundaryNanoseconds(point.latest);
+    if (pointEarliest === null || pointLatest === null || pointEarliest >= pointLatest) return null;
+    if (earliestNanoseconds === null || pointEarliest < earliestNanoseconds) {
+      earliest = point.earliest;
+      earliestNanoseconds = pointEarliest;
+    }
+    if (latestNanoseconds === null || pointLatest > latestNanoseconds) {
+      latest = point.latest;
+      latestNanoseconds = pointLatest;
+    }
+  }
+  return earliest === null || latest === null ? null : { earliest, latest };
 }

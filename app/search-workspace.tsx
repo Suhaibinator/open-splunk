@@ -282,6 +282,7 @@ import { StatisticsPanel } from "./search-workspace/panels/statistics-panel";
 import type { StatisticsColumnLayoutStore } from "./search-workspace/panels/statistics-column-layout";
 import { VisualizationPanel } from "./search-workspace/panels/visualization-panel";
 import {
+  authoritativeTimelineRange,
   backendJobPhase,
   demoTimechartSplitField,
   eventCountForQuery,
@@ -293,7 +294,6 @@ import {
   queryForPattern,
   resultTabForQuery,
   stateTone,
-  timelineBoundaryLabel,
   timelineIndexFromPointer,
 } from "./search-workspace/workspace-utils";
 import { useSearchSharing } from "./search-workspace/use-search-sharing";
@@ -1430,14 +1430,11 @@ export function SearchWorkspace({
     if (timelineStart === null || timelineEnd === null) return null;
     return [Math.min(timelineStart, timelineEnd), Math.max(timelineStart, timelineEnd)] as const;
   }, [timelineEnd, timelineStart]);
-  const timelineSelectionZoomable = useMemo(() => {
-    if (timelineSelection === null) return false;
-    const first = timelinePoints[timelineSelection[0]];
-    const last = timelinePoints[timelineSelection[1]];
-    const next = timelinePoints[timelineSelection[1] + 1];
-    return first?.earliest !== undefined
-      && (last?.latest !== undefined || next?.earliest !== undefined);
-  }, [timelinePoints, timelineSelection]);
+  const timelineSelectionRange = useMemo(
+    () => authoritativeTimelineRange(timelinePoints, timelineSelection),
+    [timelinePoints, timelineSelection],
+  );
+  const timelineSelectionZoomable = timelineSelectionRange !== null;
   const selectedTimelineCount = useMemo(() => {
     if (timelineSelection === null) return null;
     const points = timelinePoints.slice(timelineSelection[0], timelineSelection[1] + 1);
@@ -5471,16 +5468,11 @@ export function SearchWorkspace({
       }
       return;
     }
-    const first = timelinePoints[timelineSelection[0]];
-    const last = timelinePoints[timelineSelection[1]];
-    if (first === undefined || last === undefined) return;
-    const intervalEndLabel = timelinePoints[timelineSelection[1] + 1]?.label ?? last.latest ?? timelineBoundaryLabel(timelineSelection[1] + 1);
-    const latest = last.latest ?? timelinePoints[timelineSelection[1] + 1]?.earliest;
-    if (first.earliest === undefined || latest === undefined) return;
+    if (timelineSelectionRange === null) return;
     const narrowedRange = {
-      label: `${first.label} – ${intervalEndLabel}`,
-      earliest: first.earliest,
-      latest,
+      label: `${timelineSelectionRange.earliest} – ${timelineSelectionRange.latest}`,
+      earliest: timelineSelectionRange.earliest,
+      latest: timelineSelectionRange.latest,
       timezone: submittedTimeRange.timezone,
     };
     timelineZoomParentRef.current = submittedTimeRange;

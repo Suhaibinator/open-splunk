@@ -5,8 +5,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { scanSplStructure, splitSplPipeline, SPL_PIPELINE_COMMANDS } from "@/lib/search/spl-syntax";
 import { SearchJobState } from "@/gen/ts/open_splunk/search";
+import type { TimelinePoint } from "@/lib/demo/search-data";
 
 import {
+  authoritativeTimelineRange,
   backendJobPhase,
   demoTimechartSplitField,
   eventCountForQuery,
@@ -17,6 +19,54 @@ import {
   stateTone,
   syntaxTokens,
 } from "./workspace-utils";
+
+test("timeline zoom unions authoritative bounds without relying on row order", () => {
+  const points: TimelinePoint[] = [
+    {
+      id: "later",
+      label: "later",
+      count: 1,
+      earliest: "2026-09-10T00:00:00.1Z",
+      latest: "2026-09-10T00:00:00.2Z",
+    },
+    {
+      id: "earlier",
+      label: "earlier",
+      count: 1,
+      earliest: "2026-09-10T00:00:00Z",
+      latest: "2026-09-10T00:00:00.05Z",
+    },
+  ];
+
+  assert.deepEqual(authoritativeTimelineRange(points, [0, 1]), {
+    earliest: "2026-09-10T00:00:00Z",
+    latest: "2026-09-10T00:00:00.2Z",
+  });
+  assert.deepEqual(authoritativeTimelineRange(points, [1, 0]), {
+    earliest: "2026-09-10T00:00:00Z",
+    latest: "2026-09-10T00:00:00.2Z",
+  });
+});
+
+test("timeline zoom rejects missing or malformed authoritative bounds", () => {
+  const legacy: TimelinePoint = { id: "legacy", label: "legacy", count: 1 };
+  const malformed: TimelinePoint = {
+    ...legacy,
+    id: "malformed",
+    earliest: "2026-09-10T00:00:00.100000000Z",
+    latest: "2026-09-10T00:00:01Z",
+  };
+  const inverted: TimelinePoint = {
+    ...legacy,
+    id: "inverted",
+    earliest: "2026-09-10T00:00:01Z",
+    latest: "2026-09-10T00:00:00Z",
+  };
+
+  assert.equal(authoritativeTimelineRange([legacy], [0, 0]), null);
+  assert.equal(authoritativeTimelineRange([malformed], [0, 0]), null);
+  assert.equal(authoritativeTimelineRange([inverted], [0, 0]), null);
+});
 
 test("pattern drilldown preserves source clauses and wildcard normalization", () => {
   assert.equal(
