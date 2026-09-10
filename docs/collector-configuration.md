@@ -161,6 +161,14 @@ connection to an Open Splunk server. The server-side listener settings are
 `OPEN_SPLUNK_SERVER_COLLECTOR_GRPC_TLS_PRIVATE_KEY_FILE`; see the
 [server configuration reference](../deploy/README.md#server-configuration).
 
+The server allows 10 seconds for transport setup and 30 seconds from accepting
+the connection to sending `CollectorReady`, including bearer authentication and
+collector session admission. Connections that do not reach Ready within that
+budget close and release their listener slot; HTTP/2 activity and unsuccessful
+RPCs do not extend it. Established collector streams retain their normal
+heartbeat and connection lifetime policies. The shipped collector already
+limits each complete connection attempt to 10 seconds and retries with backoff.
+
 ## `state` reference
 
 | Field | Type | Default | Requirements and behavior |
@@ -256,6 +264,36 @@ empty processor list stores event content as received. Configure every field
 that must be redacted before the collector writes its local WAL.
 
 ## Fixed runtime behavior
+
+File discovery admits at most 1,024 live source lifecycles across all inputs,
+including files still draining after rotation. Additional sources are retried
+and report an input health error; existing sources keep reading. A deferred new
+file starts at the beginning when capacity becomes available, including when
+`start_at: end` skipped other files during the initial scan.
+
+Each discovery pass is limited to 4,096 distinct included paths, 65,536 directory
+entries or literal-path lookups across all patterns (including excluded and
+unmatched entries), and 128 nested glob expansions. An incomplete pass reports
+a health error and does not retire existing sources. Narrow include globs or
+reduce directory entries to restore discovery. `validate` uses the same limits.
+
+The shared checkpoint store retains at most 131,072 input/file identities over
+its lifetime, including historical rotations and identities owned by pending
+WAL records. New identities are refused at capacity; existing identities can
+still advance or change generation. Historical checkpoints are never evicted
+automatically, because forgetting them could replay returning files or lose
+pending delivery coordinates. Plan collector state and input partitioning for
+this lifetime budget. Preserve existing state when capacity is reached; deleting
+checkpoint files is not a safe recovery operation. Admission also reserves
+snapshot space for terminal position and rewrite-guard metadata. State exceeding
+the identity limit, the 128 MiB snapshot budget, or the 384 MiB journal recovery
+bound is rejected explicitly on restart.
+
+If a rename would exceed the snapshot budget, an existing checkpoint retains
+its previously admitted diagnostic path while its position, identity, and rewrite
+guard advance normally. The event's source path remains the current path. This
+also protects terminal delivery of pending WAL records after restart; checkpoint
+paths are not used as file identity or resume keys.
 
 Checkpoint advances append one checksummed transaction containing only changed
 source positions and sync it before terminal WAL reclamation. The collector

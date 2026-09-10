@@ -4,6 +4,7 @@ import (
 	"errors"
 	"math"
 	"sync"
+	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 )
@@ -31,14 +32,17 @@ type CollectorStreamLease struct {
 // cleanup cannot remove a successor.
 type CollectorStreamRegistry interface {
 	Activate(collectorfleet.Lease) (CollectorStreamLease, error)
+	AdmitHeartbeat(CollectorStreamLease, time.Time, time.Duration) (bool, error)
 	IsCurrent(CollectorStreamLease) bool
 	Release(CollectorStreamLease)
 }
 
 type collectorStreamEntry struct {
-	lease      CollectorStreamLease
-	superseded chan struct{}
-	active     bool
+	lease           CollectorStreamLease
+	superseded      chan struct{}
+	active          bool
+	hasHeartbeat    bool
+	lastHeartbeatAt time.Time
 }
 
 // InMemoryCollectorStreamRegistry is a concurrency-safe process-local
@@ -109,11 +113,41 @@ func (r *InMemoryCollectorStreamRegistry) Activate(
 		close(previous.superseded)
 	}
 	r.entries[key] = collectorStreamEntry{
-		lease:      lease,
-		superseded: superseded,
-		active:     true,
+		lease:           lease,
+		superseded:      superseded,
+		active:          true,
+		hasHeartbeat:    previous.hasHeartbeat,
+		lastHeartbeatAt: previous.lastHeartbeatAt,
 	}
 	return lease, nil
+}
+
+// AdmitHeartbeat atomically fences the exact current lease and reserves one
+// heartbeat processing slot on a monotonic clock. Cadence belongs to the trusted
+// tenant/collector key and survives stream replacement and Release. Early
+// frames do not move the deadline or refresh telemetry and liveness.
+func (r *InMemoryCollectorStreamRegistry) AdmitHeartbeat(
+	lease CollectorStreamLease,
+	now time.Time,
+	minimumInterval time.Duration,
+) (bool, error) {
+	if minimumInterval <= 0 {
+		return false, errors.New("collector heartbeat minimum interval must be positive")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := streamKey(lease.Lease)
+	current, ok := r.entries[key]
+	if !ok || !current.active || !sameCollectorStreamLease(current.lease, lease) {
+		return false, ErrCollectorLeaseNotCurrent
+	}
+	if current.hasHeartbeat && now.Sub(current.lastHeartbeatAt) < minimumInterval {
+		return false, nil
+	}
+	current.hasHeartbeat = true
+	current.lastHeartbeatAt = now
+	r.entries[key] = current
+	return true, nil
 }
 
 // IsCurrent reports whether lease is still the authoritative active

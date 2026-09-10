@@ -1,6 +1,7 @@
 package collector
 
 import (
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -9,6 +10,82 @@ import (
 )
 
 const resumeTestInputID = "input"
+
+type reservationCheckpointStore struct {
+	input.CheckpointStore
+	reserved []input.Checkpoint
+	err      error
+}
+
+func (s *reservationCheckpointStore) ReservePending(pending []input.Checkpoint) error {
+	s.reserved = append(s.reserved, pending...)
+	if s.err != nil {
+		return s.err
+	}
+	return s.CheckpointStore.ReservePending(pending)
+}
+
+func TestCheckpointResumeViewReservesWALOnlyIdentityAndSharesLiveAdmission(t *testing.T) {
+	t.Parallel()
+	durable, err := input.NewCheckpointStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = durable.Close() })
+	pending := input.Checkpoint{
+		InputID: "input", Path: "/logs/pending.log", Offset: 10,
+		Identity: input.FileIdentity{Device: 1, Inode: 2, Generation: 1, Fingerprint: strings.Repeat("ab", 32), FingerprintLength: 2},
+	}
+	store := &reservationCheckpointStore{CheckpointStore: durable}
+	manager, view, err := newCheckpointResumeView(store, []input.Checkpoint{pending})
+	if err != nil || len(store.reserved) != 1 {
+		t.Fatalf("WAL-only reservation = %+v, %v", store.reserved, err)
+	}
+	if list, err := durable.List(); err != nil || len(list) != 0 {
+		t.Fatalf("reservation persisted nonterminal data: %v, %v", list, err)
+	}
+	if cp, found, err := manager.Get(pending.InputID, pending.Identity); err != nil || !found || cp.Offset != pending.Offset {
+		t.Fatalf("WAL-only resume = %+v, %t, %v", cp, found, err)
+	}
+	var releases []func()
+	for range 2048 {
+		release, acquired := durable.TryAcquireSource()
+		if !acquired {
+			break
+		}
+		releases = append(releases, release)
+	}
+	t.Cleanup(func() {
+		for _, release := range releases {
+			release()
+		}
+	})
+	if len(releases) == 0 || len(releases) == 2048 {
+		t.Fatalf("live admission did not saturate: %d", len(releases))
+	}
+	if release, acquired := manager.TryAcquireSource(); acquired {
+		release()
+		t.Fatal("resume view bypassed the shared live budget")
+	}
+	releases[0]()
+	if release, acquired := manager.TryAcquireSource(); !acquired {
+		t.Fatal("resume view could not use released capacity")
+	} else {
+		release()
+	}
+	if err := durable.Set(pending); err != nil {
+		t.Fatal(err)
+	}
+	view.pruneCovered([]input.Checkpoint{pending})
+	if cp, found, err := manager.Get(pending.InputID, pending.Identity); err != nil || !found || cp.Offset != pending.Offset {
+		t.Fatalf("terminal resume = %+v, %t, %v", cp, found, err)
+	}
+	store.err = errors.New("reservation full")
+	manager, view, err = newCheckpointResumeView(store, []input.Checkpoint{pending})
+	if !errors.Is(err, store.err) || manager != nil || view != nil {
+		t.Fatalf("failed reservation exposed a resume view: %v, %v, %v", manager, view, err)
+	}
+}
 
 func TestCheckpointResumeViewIsEphemeralAndYieldsToTerminalProgress(t *testing.T) {
 	t.Parallel()
@@ -35,7 +112,10 @@ func TestCheckpointResumeViewIsEphemeralAndYieldsToTerminalProgress(t *testing.T
 	// that cursor, but the resulting enrichment must remain ephemeral until the
 	// pending byte position receives a terminal disposition.
 	pending := checkpoint(identity, 20, 2, 0)
-	view, resumeView := newCheckpointResumeView(durable, []input.Checkpoint{pending})
+	view, resumeView, err := newCheckpointResumeView(durable, []input.Checkpoint{pending})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if resumeView == nil {
 		t.Fatal("newCheckpointResumeView returned no overlay for a pending checkpoint")
 	}
@@ -129,7 +209,10 @@ func TestCheckpointResumeViewLookupIsAtomicWithTerminalPrune(t *testing.T) {
 		getStarted:      make(chan struct{}),
 		releaseGet:      make(chan struct{}),
 	}
-	manager, resumeView := newCheckpointResumeView(blocking, []input.Checkpoint{pending})
+	manager, resumeView, err := newCheckpointResumeView(blocking, []input.Checkpoint{pending})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	type getResult struct {
 		checkpoint input.Checkpoint
@@ -204,10 +287,13 @@ func TestCheckpointResumeViewScopesRecoveryAndSuppressionByInput(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	manager, resumeView := newCheckpointResumeView(durable, []input.Checkpoint{
+	manager, resumeView, err := newCheckpointResumeView(durable, []input.Checkpoint{
 		checkpoint("input-a", 20),
 		checkpoint("input-b", 30),
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if resumeView == nil {
 		t.Fatal("newCheckpointResumeView returned no overlay")
 	}

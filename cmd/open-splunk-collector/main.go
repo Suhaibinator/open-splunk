@@ -34,12 +34,12 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 
 	"github.com/Suhaibinator/open-splunk/internal/buildinfo"
 	"github.com/Suhaibinator/open-splunk/internal/collector"
 	"github.com/Suhaibinator/open-splunk/internal/collector/config"
+	"github.com/Suhaibinator/open-splunk/internal/collector/input"
 	"github.com/Suhaibinator/open-splunk/internal/logging"
 	"go.uber.org/zap"
 )
@@ -226,7 +226,11 @@ func validateConfig(args []string) int {
 	fmt.Print(cfg.String())
 	fmt.Println("\ninput glob matches:")
 	for _, in := range cfg.Inputs {
-		matched := countMatches(in.Include, in.Exclude)
+		matched, err := countMatches(in.Include, in.Exclude)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "input %s: %v\n", in.ID, err)
+			return 1
+		}
 		fmt.Printf("  - %s: %d file(s)\n", in.ID, matched)
 	}
 	return 0
@@ -234,31 +238,9 @@ func validateConfig(args []string) int {
 
 // countMatches returns the number of distinct files matched by include globs and
 // not removed by exclude globs, mirroring the input manager's discovery rules.
-func countMatches(include, exclude []string) int {
-	set := make(map[string]struct{})
-	for _, inc := range include {
-		matches, err := filepath.Glob(inc)
-		if err != nil {
-			continue
-		}
-		for _, p := range matches {
-			set[p] = struct{}{}
-		}
-	}
-	for p := range set {
-		base := filepath.Base(p)
-		for _, exc := range exclude {
-			if ok, _ := filepath.Match(exc, p); ok {
-				delete(set, p)
-				break
-			}
-			if ok, _ := filepath.Match(exc, base); ok {
-				delete(set, p)
-				break
-			}
-		}
-	}
-	return len(set)
+func countMatches(include, exclude []string) (int, error) {
+	paths, err := input.MatchPaths(include, exclude)
+	return len(paths), err
 }
 
 // usage prints the command summary.

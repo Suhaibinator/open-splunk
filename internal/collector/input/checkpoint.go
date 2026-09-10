@@ -30,6 +30,8 @@ const checkpointFormatVersion = 2
 
 const maximumCheckpointInputIDBytes = int(protocolid.MaximumBytes)
 
+const maximumCheckpointSnapshotBytes = 128 << 20
+
 // checkpointDoc is the on-disk shape of the checkpoint store.
 type checkpointDoc struct {
 	Version         int          `json:"version"`
@@ -63,6 +65,13 @@ type fileCheckpointStore struct {
 	snapshotBytes   int64
 	journalErr      error
 	readOnly        bool
+	reserved        map[checkpointKey]checkpointReservation
+	sourceSlots     chan struct{}
+	entrySizes      map[checkpointKey]int
+	entryBytes      int
+	// maximumEntries is an internal seam for exact small-capacity tests.
+	maximumEntries       int
+	maximumSnapshotBytes int
 }
 
 // NewCheckpointStore opens or creates the checkpoint store rooted at dir. A
@@ -103,6 +112,12 @@ func newCheckpointStoreWithDirectorySync(
 		return nil, err
 	}
 	if err := s.loadCheckpointJournal(); err != nil {
+		return nil, err
+	}
+	if _, _, err := s.checkSnapshotCapacity(nil); err != nil {
+		if s.journal != nil {
+			_ = s.journal.Close()
+		}
 		return nil, err
 	}
 	return s, nil
@@ -170,12 +185,27 @@ func mkdirCheckpointDirDurable(
 
 // load reads the store file into memory. A missing file yields an empty store.
 func (s *fileCheckpointStore) load() error {
-	data, err := os.ReadFile(s.path)
+	f, err := os.Open(s.path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
 		return fmt.Errorf("collector/input: read checkpoint file %s: %w", s.path, err)
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if info.Size() > int64(s.snapshotLimit()) {
+		return fmt.Errorf("collector/input: checkpoint file %s exceeds snapshot byte capacity", s.path)
+	}
+	data, err := io.ReadAll(io.LimitReader(f, int64(s.snapshotLimit())+1))
+	if err != nil {
+		return fmt.Errorf("collector/input: read checkpoint file %s: %w", s.path, err)
+	}
+	if len(data) > s.snapshotLimit() {
+		return fmt.Errorf("collector/input: checkpoint file %s exceeds snapshot byte capacity", s.path)
 	}
 	var doc checkpointDoc
 	if err := json.Unmarshal(data, &doc); err != nil {
@@ -187,6 +217,9 @@ func (s *fileCheckpointStore) load() error {
 			s.path,
 			doc.Version,
 		)
+	}
+	if len(doc.Checkpoints) > s.entryLimit() {
+		return fmt.Errorf("collector/input: checkpoint file %s: %w", s.path, errCheckpointCapacity)
 	}
 	s.journalRequired = doc.Version == checkpointFormatVersion
 	s.journalSequence = doc.JournalSequence
@@ -322,10 +355,22 @@ func (s *fileCheckpointStore) SetMany(checkpoints []Checkpoint) error {
 	if !changed {
 		return nil
 	}
+	if err := s.checkNewEntries(next); err != nil {
+		return err
+	}
+	sizes, size, err := s.fitCheckpointPaths(next)
+	if err != nil {
+		return err
+	}
 	if err := s.persistUpdates(checkpointSnapshot(next)); err != nil {
 		return err
 	}
 	maps.Copy(s.entries, next)
+	maps.Copy(s.entrySizes, sizes)
+	s.entryBytes = size
+	for key := range next {
+		delete(s.reserved, key)
+	}
 	return nil
 }
 
@@ -356,6 +401,8 @@ func (s *fileCheckpointStore) Delete(inputID string, id FileIdentity) error {
 		return err
 	}
 	s.entries = next
+	s.entrySizes = nil
+	s.entryBytes = 0
 	return nil
 }
 
@@ -504,6 +551,9 @@ func (s *fileCheckpointStore) writeSnapshot(checkpoints []Checkpoint) error {
 	data, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		return fmt.Errorf("collector/input: marshal checkpoints: %w", err)
+	}
+	if len(data) > s.snapshotLimit() {
+		return errors.New("collector/input: checkpoints exceed snapshot byte capacity")
 	}
 
 	tmp, err := os.CreateTemp(s.dir, checkpointFileName+".tmp-*")

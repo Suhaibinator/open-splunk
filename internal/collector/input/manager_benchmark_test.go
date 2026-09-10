@@ -135,13 +135,17 @@ func BenchmarkMatchPathsHighSourceCount(b *testing.B) {
 	manager := &manager{
 		cfg: Config{Include: []string{filepath.Join(dir, "*.log")}},
 	}
-	if paths := manager.matchPaths(); len(paths) != sourceCount {
-		b.Fatalf("matched %d sources, want %d", len(paths), sourceCount)
+	if paths, err := manager.matchPaths(); err != nil || len(paths) != sourceCount {
+		b.Fatalf("matched %d sources, want %d: %v", len(paths), sourceCount, err)
 	}
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		benchmarkPaths = manager.matchPaths()
+		paths, err := manager.matchPaths()
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchmarkPaths = paths
 	}
 }
