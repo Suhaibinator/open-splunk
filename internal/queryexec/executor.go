@@ -3902,6 +3902,14 @@ func classifyQueryError(ctx context.Context, err error) error {
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}
+	if networkErr, ok := errors.AsType[net.Error](err); ok && networkErr.Timeout() {
+		if deadline, hasDeadline := ctx.Deadline(); hasDeadline && !time.Now().Before(deadline) {
+			// The driver gives the socket the context deadline. Its timer can
+			// fire before the context timer publishes Err. Recheck cancellation
+			// and any visible custom cause before returning the deadline error.
+			return classifyQueryError(ctx, context.DeadlineExceeded)
+		}
+	}
 	if exception, ok := errors.AsType[*clickhousedriver.Exception](err); ok {
 		if exception.Code == 395 {
 			for _, classified := range executionLimitMarkers {
