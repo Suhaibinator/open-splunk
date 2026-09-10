@@ -51,7 +51,12 @@ months and years normalize to twelve months. Civil day, month, quarter, and
 year grids start from 1970-01-01 in the effective search timezone. Week grids
 start from the preceding Sunday, 1969-12-28. Civil boundaries remain aligned in
 the search timezone, so adjacent UTC bucket widths can differ across daylight
-saving transitions.
+saving transitions. A boundary in a civil-time gap resolves to the first valid
+instant after the gap, and a boundary in a fold uses the earlier occurrence; an
+explicit weekly alignment retains its resolved instant. Vanished dates that
+resolve to a duplicate instant do not create zero-width buckets. Every later
+boundary derives from the immutable civil origin, so one transition cannot
+shift the remainder of the grid.
 
 When `span` is omitted, `bins=100` chooses the first supported aligned span
 that does not exceed the requested bucket count. `minspan` excludes smaller
@@ -90,11 +95,14 @@ rows, and result bytes. Crossing one fails the whole search; it never silently
 reduces an authored limit or publishes a partial pivot.
 
 The browser accepts every column in that bounded server result. It does not add
-a separate 64-column ceiling: line and area charts page visible series, and the
-Statistics table pages columns, so every series remains inspectable without
-creating an unbounded DOM tree. Export authenticates the complete retained
-runtime schema before applying the selected-column bound, so a result wider
-than the export limit can still export a permitted subset.
+a separate 64-column ceiling: line, area, and categorical charts page visible
+series, and the Statistics table pages columns, so every series remains
+inspectable without creating an unbounded DOM tree. Chart domains use the
+complete finite series domain while geometry is limited to the visible page.
+Statistics column overrides are retained in a bounded recent-query cache.
+Export authenticates the complete retained runtime schema before applying the
+selected-column bound, so a result wider than the export limit can still export
+a permitted subset.
 
 ## Pipeline composition
 
@@ -135,6 +143,11 @@ derive differences with integer nanosecond arithmetic instead of passing the
 precision-bearing metadata through JavaScript `Date`. Line and area geometry,
 domains, and point inspection use a chronological copy keyed by those exact
 nanoseconds; the Statistics table preserves the suffix or server result order.
+Rows with explicit null or missing metric values remain present: line and area
+charts show a gap, while Statistics displays the value as unavailable instead
+of inventing zero. Finite values at representable numeric extremes remain in
+the chart domain, and coordinate projection bounds intermediate arithmetic
+that would overflow.
 Legacy result rows that do not contain `time_bucket` continue to render without
 an invented bucket end or drilldown range.
 
@@ -157,6 +170,7 @@ results:
 | Independent review 1 and fix audits | 12 (4 P1, 6 P2, 2 P3) | All fixes are implemented in `4915ba82`; focused owner checks cover wide rendering, exact grids, staged budgets and cancellation, final result shape, observed field presence, and the editor focus race | Complete final gates run after the documentation commit |
 | Independent review 2 and fix audits | 6 (1 P1, 5 P2) | All fixes are implemented in `88e2a643`; focused checks cover precise sorting and typed-axis selection, cumulative compile and runtime quotas, complete-result validation, and combined native external-table admission | Complete final gates run after the documentation commit |
 | Independent review 3 and fix audits | 7 (6 P2, 1 P3) | All fixes are implemented in `1c418dbe`; focused checks cover chronological chart geometry, bounded selected-column export, transactional staged publication, incremental paging and domain reuse, recursive cancellation, and native relation scratch reuse | Complete final gates run after this documentation commit |
+| Independent review 4 and fix audits | 6 (5 P2, 1 P3) | All fixes are implemented in `a1c434a7`; focused checks cover gap/fold/vanished-date grids and one physical read, null gaps, nested decoder cancellation, bounded Statistics layouts, categorical series windows, and the export metadata contract | Complete final gates run after this documentation commit |
 
 Subsequent independent review and final gate outcomes are recorded on
 [pull request #113](https://github.com/Suhaibinator/open-splunk/pull/113).
@@ -183,30 +197,30 @@ the comparison.
 
 The following result uses Darwin arm64 on an Apple M4 Max. Each value is the
 median of seven paired samples from baseline `ebcf1554` and final candidate
-`1c418dbe`:
+`a1c434a7`:
 
 | Case | Baseline ns/op | Final ns/op | Baseline B/op | Final B/op | Baseline allocs/op | Final allocs/op | SQL bytes, baseline → final |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Compile, fixed count | 45,487 | 52,690 | 85,265 | 103,194 | 521 | 545 | 2,147 → 2,147 |
-| Compile, automatic count | 45,017 | 47,434 | 85,245 | 92,144 | 520 | 544 | 2,147 → 2,147 |
-| Compile, calendar count | 45,137 | 46,599 | 86,439 | 91,361 | 527 | 551 | 2,411 → 2,411 |
-| Compile, split count | 51,038 | 62,856 | 100,562 | 138,038 | 555 | 601 | 5,989 → 8,879 |
-| Compile, split average | 62,682 | 73,803 | 133,845 | 175,400 | 638 | 684 | 10,029 → 12,921 |
-| Publish 100 buckets × 10 series | 50,973 | 51,312 | 229,029 | 229,268 | 629 | 630 | n/a |
-| Publish 1,000 buckets × 10 series | 466,496 | 470,775 | 2,246,137 | 2,246,376 | 6,029 | 6,030 | n/a |
+| Compile, fixed count | 46,560 | 52,760 | 85,260 | 103,181 | 521 | 545 | 2,147 → 2,147 |
+| Compile, automatic count | 44,944 | 47,842 | 85,239 | 92,149 | 520 | 544 | 2,147 → 2,147 |
+| Compile, calendar count | 46,108 | 51,452 | 86,440 | 109,460 | 527 | 566 | 2,411 → 3,776 |
+| Compile, split count | 52,254 | 64,182 | 100,571 | 138,038 | 555 | 601 | 5,989 → 8,879 |
+| Compile, split average | 63,127 | 74,968 | 133,846 | 175,398 | 638 | 684 | 10,029 → 12,921 |
+| Publish 100 buckets × 10 series | 51,551 | 51,487 | 229,039 | 229,279 | 629 | 630 | n/a |
+| Publish 1,000 buckets × 10 series | 472,098 | 475,848 | 2,246,137 | 2,246,367 | 6,029 | 6,030 | n/a |
 
 Every compiler sample reported one textual event-source reference at both
 commits. The opt-in ClickHouse integration test separately requires exactly one
 physical `ReadFromMergeTree` node. Split SQL grows because it carries the
 domain, dense-cell, and retained-byte guards. Across these paired samples,
-publication medians differ by less than 1%; compiler medians rise by 3% to 23%
+publication medians differ by less than 1%; compiler medians rise by 6% to 23%
 depending on the path, alongside the additional grid and series validation.
 
 The exact-grid harness compares the pre-allocation-fix transport at `d5fe39c6`
 with the final candidate. At 10,000 buckets, transport allocation fell from
 20,001 allocations and 660,244 B/op to 2 allocations and 10,400 B/op. Complete
 publication fell from 120,035 allocations and 24,339,074 B/op to 100,035
-allocations and 23,379,260 B/op. Run that five-sample harness with:
+allocations and 23,379,188 B/op. Run that five-sample harness with:
 
 ```sh
 go test ./internal/queryexec -run '^$' \
@@ -239,6 +253,35 @@ go test ./internal/clickhouse -run '^$' \
 go test ./internal/searchjobs -run '^$' \
   -bench '^BenchmarkValueRetainedSizeBytes$' \
   -benchtime=100ms -count=5 -benchmem
+```
+
+The transition-safe calendar implementation builds 10,000 civil boundaries in
+one allocation. The final calendar compile harness reports 568 allocations and
+1,167,144 B/op for 10,000 sealed boundaries; the initial fix used 100,586
+allocations and 2,691,772 B/op. Its SQL is 3,775 bytes and retains the compiler
+benchmark's one event-source assertion. Run the focused harness with:
+
+```sh
+go test ./internal/plan ./internal/clickhouse -run '^$' \
+  -bench '^(BenchmarkTimechartCivilGrid|BenchmarkTimechartCalendarCompileGrid)$' \
+  -benchtime=100x -count=3 -benchmem
+```
+
+The cancellable production decoding-loop harness includes row allocation, a
+shared decoder, and per-column context phases; it excludes driver scanning,
+native preflight, and later atomic accounting. Across five alternating paired
+samples, one scalar column rose from 46.01 to 47.62 ns/op and sixteen scalar
+columns rose from 526.2 to 547.7 ns/op; bytes and allocations remained
+unchanged.
+
+The 1,024-element nested case fell from 687,999 to 526,782 ns/op, from
+1,368,244 to 811,184 B/op, and from 10,242 to 7,170 allocations/op. Run it
+with:
+
+```sh
+go test ./internal/queryexec -run '^$' \
+  -bench '^BenchmarkNativeValueDecodingLoop$' \
+  -benchtime=500ms -count=5 -benchmem
 ```
 
 Both publication harnesses use the production buffering and publication paths
