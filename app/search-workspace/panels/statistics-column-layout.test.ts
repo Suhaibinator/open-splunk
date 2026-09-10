@@ -66,6 +66,24 @@ test("statistics layout reconciliation keeps a column visible after schema remov
   assert.deepEqual(visibleColumns(reconciled).map((column) => column.id), ["host"]);
 });
 
+test("stored widths survive the pre-scale render and clamp after CSS resolves", () => {
+  const resized = resizeColumn(layout, "host", 56);
+  const beforeScale = reconcileColumnLayout(resized, [
+    { id: "host", defaultWidth: null, minimumWidth: null, maximumWidth: null },
+    { id: "count", defaultWidth: null, minimumWidth: null, maximumWidth: null },
+  ]);
+
+  assert.equal(beforeScale[0]?.width, 236);
+  assert.equal(beforeScale[1]?.width, 140);
+
+  const afterScale = reconcileColumnLayout(beforeScale, [
+    { id: "host", defaultWidth: 220, minimumWidth: 96, maximumWidth: 224 },
+    { id: "count", defaultWidth: 140, minimumWidth: 96, maximumWidth: 480 },
+  ]);
+  assert.equal(afterScale[0]?.width, 224);
+  assert.equal(afterScale[1]?.width, 140);
+});
+
 test("wide column windows use one indexed lookup per candidate", () => {
   const columns = Array.from({ length: 4_096 }, (_, index) => ({
     id: `field-${index}`,

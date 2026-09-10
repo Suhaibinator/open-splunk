@@ -52,15 +52,14 @@ function normalizedWidth(
   minimumWidth: number | null,
   maximumWidth: number | null,
 ): number | null {
-  if (
-    width === null
-    || minimumWidth === null
-    || maximumWidth === null
-    || !Number.isFinite(width)
-    || !Number.isFinite(minimumWidth)
-    || !Number.isFinite(maximumWidth)
-  ) return null;
-  return Math.min(maximumWidth, Math.max(minimumWidth, Math.round(width)));
+  if (width === null || !Number.isFinite(width)) return null;
+  const roundedWidth = Math.round(width);
+  // CSS supplies both bounds after mount. Keep a stored finite width through
+  // the initial unbounded render so the scale pass can clamp rather than reset it.
+  if (minimumWidth === null && maximumWidth === null) return roundedWidth;
+  if (minimumWidth === null || maximumWidth === null) return null;
+  if (!Number.isFinite(minimumWidth) || !Number.isFinite(maximumWidth)) return null;
+  return Math.min(maximumWidth, Math.max(minimumWidth, roundedWidth));
 }
 
 export function createColumnLayout(
