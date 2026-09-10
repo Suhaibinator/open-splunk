@@ -50,6 +50,10 @@ func (c Compiler) compileWithFinalizerContext(
 	if err != nil {
 		return CompiledQuery{}, err
 	}
+	extractionBudget, err := accumulatedTimechartExtractionBudget(query.Operators[1+preparation.prefixLength:], c.continuationBudget.extraction, preparation.programCharges)
+	if err != nil {
+		return CompiledQuery{}, err
+	}
 	lookupPreparation, err := prepareLookupCompilationContext(
 		ctx,
 		query,
@@ -80,6 +84,7 @@ func (c Compiler) compileWithFinalizerContext(
 		return CompiledQuery{}, errors.New("compile ClickHouse query: compile context is unavailable")
 	}
 	state.context.operationContext = ctx
+	state.context.extractionBudget = extractionBudget
 	relation := newScanRelation(fragment, scan.Range)
 	knowledge, err := compileDeferredKnowledgeRelation(
 		relation,
@@ -103,6 +108,7 @@ func (c Compiler) compileWithFinalizerContext(
 		complexityRange spl.Range,
 	) (CompiledQuery, error) {
 		compiled.hasTimechartStage = state.context.hasTimechartStage
+		compiled.logicalExtractionBudget = state.context.extractionBudget
 		compiled.relationInput = c.relationInput
 		compiled.atomicResult = compiled.rangeDiscovery != nil || compiled.continuation != nil || (state.context != nil && state.context.atomicResult)
 		terminalWide := compiled.Chart != nil || compiled.Timechart != nil
@@ -980,6 +986,10 @@ func (c Compiler) compileWithFinalizerContext(
 			nextState, args = bindChronologicalBarrier(nextState, barrier, args)
 			state = nextState
 		case *plan.Timechart:
+			state.context.extractionBudget, err = accumulatedTimechartExtractionBudget(query.Operators[1+preparation.prefixLength:remainingStart+operatorIndex+1], c.continuationBudget.extraction, preparation.programCharges)
+			if err != nil {
+				return CompiledQuery{}, err
+			}
 			state.context.hasTimechartStage = true
 			if !permitTerminalWideOperators {
 				return CompiledQuery{}, errors.New("compile ClickHouse query: timechart is unavailable for event analysis")
@@ -1158,6 +1168,7 @@ func (c Compiler) compileWithFinalizerContext(
 		)
 	}
 
+	state.context.extractionBudget = extractionBudget
 	compiled, err := finalize(relation, state, args, scan, aliasSequence)
 	if err != nil {
 		return CompiledQuery{}, err
@@ -1166,8 +1177,9 @@ func (c Compiler) compileWithFinalizerContext(
 }
 
 type authoredKnowledgeCompilation struct {
-	regexPrograms      uint32
-	regexWorkUnits     uint64
-	extractionOutputs  uint32
-	jsonEvaluationWork uint32
+	matchStyleWorkUnits uint64
+	regexPrograms       uint32
+	regexWorkUnits      uint64
+	extractionOutputs   uint32
+	jsonEvaluationWork  uint32
 }

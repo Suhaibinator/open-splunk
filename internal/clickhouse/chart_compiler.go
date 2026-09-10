@@ -4461,6 +4461,7 @@ type compiledStatsSparklineMeasure struct {
 // copying each search-scoped constant into newly constructed compileState
 // values.
 type compileContext struct {
+	extractionBudget                       authoredKnowledgeCompilation
 	hasTimechartStage                      bool
 	operationContext                       context.Context
 	patternBudgets                         compiledPatternBudgets

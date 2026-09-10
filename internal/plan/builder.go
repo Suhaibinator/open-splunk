@@ -87,6 +87,10 @@ func buildWithRelation(query *spl.Query, scope Scope, inputFields []string) (*Qu
 }
 
 func buildWithRelationStart(query *spl.Query, scope Scope, inputFields []string, commandStart int) (*Query, error) {
+	return buildWithRelationBudget(query, scope, inputFields, commandStart, timechartPlanBudget{})
+}
+
+func buildWithRelationBudget(query *spl.Query, scope Scope, inputFields []string, commandStart int, previous timechartPlanBudget) (*Query, error) {
 	if query == nil {
 		return nil, &Diagnostic{Code: "SPL_INVALID_QUERY", Message: "query is nil"}
 	}
@@ -153,10 +157,10 @@ func buildWithRelationStart(query *spl.Query, scope Scope, inputFields []string,
 		result.OutputFields = slices.Clone(inputFields)
 	}
 	canonicalTimeAvailable := !outputSchemaKnown || slices.Contains(inputFields, "_time")
-	extractionOutputCount := 0
-	spathEvaluationWorkUnits := 0
-	mvExpandOrdinal := 0
-	expressionBudget := splExpressionResourceBudget{}
+	extractionOutputCount := previous.extractionOutputs
+	spathEvaluationWorkUnits := previous.jsonWork
+	mvExpandOrdinal := previous.mvExpandOrdinal
+	expressionBudget := previous.expressions
 	// publishOutputField records one command output in the exact output schema
 	// when that schema is still known.
 	publishOutputField := func(name string) {
@@ -821,7 +825,7 @@ commands:
 			outputSchemaKnown = command.SplitBy == nil
 			canonicalTimeAvailable = true
 			if commandIndex+1 < len(query.Commands) {
-				continuation, err := newTimechartContinuation(query, scope, commandIndex+1)
+				continuation, err := newTimechartContinuation(query, scope, commandIndex+1, timechartPlanBudget{extractionOutputs: extractionOutputCount, jsonWork: spathEvaluationWorkUnits, mvExpandOrdinal: mvExpandOrdinal, expressions: expressionBudget})
 				if err != nil {
 					return nil, err
 				}

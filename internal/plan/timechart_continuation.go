@@ -1,6 +1,8 @@
 package plan
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"math"
 	"slices"
@@ -17,9 +19,10 @@ type TimechartContinuation struct {
 	source      string
 	nextCommand int
 	scope       Scope
+	budget      timechartPlanBudget
 }
 
-func newTimechartContinuation(query *spl.Query, scope Scope, next int) (TimechartContinuation, error) {
+func newTimechartContinuation(query *spl.Query, scope Scope, next int, budget timechartPlanBudget) (TimechartContinuation, error) {
 	source, ok := query.ParsedSource()
 	if !ok || next < 0 || next >= len(query.Commands) {
 		return TimechartContinuation{}, errors.New("plan timechart continuation: parser-owned source is required")
@@ -34,7 +37,7 @@ func newTimechartContinuation(query *spl.Query, scope Scope, next int) (Timechar
 		value := *scope.VisibilityCutoff
 		scope.VisibilityCutoff = &value
 	}
-	return TimechartContinuation{source: strings.Clone(source), nextCommand: next, scope: scope}, nil
+	return TimechartContinuation{source: strings.Clone(source), nextCommand: next, scope: scope, budget: budget}, nil
 }
 
 // Source identifies the exact suffix for compiler execution authentication.
@@ -50,7 +53,7 @@ func (continuation TimechartContinuation) Build(fields []string) (*Query, error)
 		return nil, err
 	}
 	// The synthetic base search is identity over the external relation.
-	return buildWithRelationStart(query, continuation.scope, fields, continuation.nextCommand)
+	return buildWithRelationBudget(query, continuation.scope, fields, continuation.nextCommand, continuation.budget)
 }
 
 // TimechartContinuationAt returns immutable continuation authority for a chart
@@ -134,4 +137,27 @@ func (continuation TimechartContinuation) RetainedBytes() (uint64, bool) {
 		return 0, false
 	}
 	return total, true
+}
+
+// timechartPlanBudget counts logical command work, independent of physical SQL
+// stages. Parser-wide tokens and predicates are rechecked against the complete
+// source; expression-tree shape and SQL nesting remain per physical stage.
+type timechartPlanBudget struct {
+	extractionOutputs, jsonWork, mvExpandOrdinal int
+	expressions                                  splExpressionResourceBudget
+}
+
+// BudgetCommitment binds the private cumulative planner charges into a backend
+// execution seal without exposing a mutable budget or accepting caller SQL.
+func (continuation TimechartContinuation) BudgetCommitment() [sha256.Size]byte {
+	digest := sha256.New()
+	var buffer [binary.MaxVarintLen64]byte
+	budget := continuation.budget
+	for _, value := range []int{budget.extractionOutputs, budget.jsonWork, budget.mvExpandOrdinal, budget.expressions.arithmeticOperators, budget.expressions.membershipCandidates, budget.expressions.concatenationOperands} {
+		length := binary.PutVarint(buffer[:], int64(value))
+		_, _ = digest.Write(buffer[:length])
+	}
+	var result [sha256.Size]byte
+	copy(result[:], digest.Sum(nil))
+	return result
 }

@@ -282,6 +282,10 @@ func compileRelationInput(input *compiledRelationInput, query *plan.Query) (stri
 }
 
 func writeTimechartContinuation(digest hash.Hash, compiled CompiledQuery) {
+	if compiled.hasTimechartStage && compiled.logicalExtractionBudget != (authoredKnowledgeCompilation{}) {
+		writeTokenPart(digest, "timechart-logical-extraction-v1")
+		compiled.logicalExtractionBudget.write(digest)
+	}
 	writeBool(digest, compiled.rangeDiscovery != nil)
 	if compiled.rangeDiscovery != nil {
 		compiled.rangeDiscovery.compiler.continuationBudget.write(digest)
@@ -297,6 +301,8 @@ func writeTimechartContinuation(digest hash.Hash, compiled CompiledQuery) {
 		}
 		if compiled.rangeDiscovery.continuation != nil {
 			writeTokenPart(digest, compiled.rangeDiscovery.continuation.plan.Source())
+			budget := compiled.rangeDiscovery.continuation.plan.BudgetCommitment()
+			_, _ = digest.Write(budget[:])
 			writeInt64(digest, int64(compiled.rangeDiscovery.continuation.plan.StartCommand()))
 		}
 	}
@@ -307,6 +313,8 @@ func writeTimechartContinuation(digest hash.Hash, compiled CompiledQuery) {
 	writeBool(digest, compiled.continuation != nil)
 	if compiled.continuation != nil {
 		writeTokenPart(digest, compiled.continuation.plan.Source())
+		budget := compiled.continuation.plan.BudgetCommitment()
+		_, _ = digest.Write(budget[:])
 		writeInt64(digest, int64(compiled.continuation.plan.StartCommand()))
 		compiled.continuation.compiler.continuationBudget.write(digest)
 		writeTokenPart(digest, compiled.continuation.compiler.Database)

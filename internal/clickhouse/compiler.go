@@ -503,16 +503,17 @@ type Compiler struct {
 // CompiledQuery is executable SQL plus ordered bind arguments and public
 // result fields. Internal helper columns never appear in OutputFields.
 type CompiledQuery struct {
-	emptyTimechartInput bool
-	rangeDiscovery      *compiledTimechartRangeDiscovery
-	hasTimechartStage   bool
-	TimeBucket          *ResultTimeBucketOutput
-	continuationRoot    *compiledExecutionSeal
-	continuation        *compiledTimechartContinuation
-	relationInput       *compiledRelationInput
-	SQL                 string
-	Args                []any
-	OutputFields        []string
+	logicalExtractionBudget authoredKnowledgeCompilation
+	emptyTimechartInput     bool
+	rangeDiscovery          *compiledTimechartRangeDiscovery
+	hasTimechartStage       bool
+	TimeBucket              *ResultTimeBucketOutput
+	continuationRoot        *compiledExecutionSeal
+	continuation            *compiledTimechartContinuation
+	relationInput           *compiledRelationInput
+	SQL                     string
+	Args                    []any
+	OutputFields            []string
 	// OutputPresentations, when nonempty, is aligned exactly by ordinal with
 	// OutputFields. Zero entries carry no presentation metadata. The compiler
 	// attaches a display-only flat multivalue delimiter to stats list/values and
@@ -854,12 +855,16 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 }
 
 func validateCompiledExtractionBudgets(operators []plan.Operator) (authoredKnowledgeCompilation, error) {
-	var evidence authoredKnowledgeCompilation
+	return validateCompiledExtractionBudgetsWithPrior(operators, authoredKnowledgeCompilation{})
+}
+
+func validateCompiledExtractionBudgetsWithPrior(operators []plan.Operator, evidence authoredKnowledgeCompilation) (authoredKnowledgeCompilation, error) {
 	regexBudget := authoredRegexProgramBudget{
-		evidence: &evidence,
+		evidence:            &evidence,
+		matchStyleWorkUnits: evidence.matchStyleWorkUnits,
 	}
-	outputs := 0
-	spathWorkUnits := 0
+	outputs := int(evidence.extractionOutputs)
+	spathWorkUnits := int(evidence.jsonEvaluationWork)
 	for _, operator := range operators {
 		if err := regexBudget.visitOperator(operator); err != nil {
 			return authoredKnowledgeCompilation{}, err
@@ -932,8 +937,9 @@ func validateCompiledExtractionBudgets(operators []plan.Operator) (authoredKnowl
 			}
 		}
 	}
-	evidence.extractionOutputs = uint32(outputs)
-	evidence.jsonEvaluationWork = uint32(spathWorkUnits)
+	evidence.matchStyleWorkUnits = regexBudget.matchStyleWorkUnits
+	evidence.extractionOutputs = safecast.MustConv[uint32](outputs)
+	evidence.jsonEvaluationWork = safecast.MustConv[uint32](spathWorkUnits)
 	return evidence, nil
 }
 
