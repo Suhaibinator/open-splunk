@@ -134,10 +134,15 @@ func (source *ReexecutionSource) AcquireResultsFor(ctx context.Context, access s
 		return nil, fmt.Errorf("%w: completed search execution authority is invalid", searchjobs.ErrResultsUnavailable)
 	}
 	schema := resultMetadata.Schema
-	// Reject hostile or corrupted cardinalities before schema projection or
-	// cloning can allocate in proportion to source-controlled metadata.
-	if !validSourceSchemaCardinality(schema) {
-		return nil, fmt.Errorf("%w: completed search schema cardinality is invalid", searchjobs.ErrResultsUnavailable)
+	// The private result attestation makes this immutable source schema eligible
+	// for bounded wide-column selection. Measure it before any projection or
+	// index can allocate in proportion to the runtime series domain.
+	schemaBytes, validSchema, err := measureTrustedSourceSchema(ctx, schema)
+	if err != nil {
+		return nil, err
+	}
+	if !validSchema {
+		return nil, fmt.Errorf("%w: completed search schema exceeds the source metadata limit", searchjobs.ErrResultsUnavailable)
 	}
 	compiled, summary, err := source.executionAuthority(execution)
 	if err != nil {
@@ -154,7 +159,15 @@ func (source *ReexecutionSource) AcquireResultsFor(ctx context.Context, access s
 			return nil, fmt.Errorf("%w: timechart snapshot is incomplete", searchjobs.ErrResultsUnavailable)
 		}
 		pinReleased = true
-		return &continuationResultLease{ResultLease: pin, knowledgeSnapshot: summary}, nil
+		return &continuationResultLease{
+			ResultLease:       pin,
+			knowledgeSnapshot: summary,
+			schema:            schema,
+			schemaBytes:       schemaBytes,
+		}, nil
+	}
+	if !validSourceSchemaCardinality(schema) {
+		return nil, fmt.Errorf("%w: completed search schema cardinality is invalid", searchjobs.ErrResultsUnavailable)
 	}
 	if !schemaMatchesCompiledQuery(schema, compiled) {
 		return nil, fmt.Errorf("%w: completed search schema changed", searchjobs.ErrResultsUnavailable)
@@ -186,6 +199,19 @@ func (source *ReexecutionSource) AcquireResultsFor(ctx context.Context, access s
 type continuationResultLease struct {
 	searchjobs.ResultLease
 	knowledgeSnapshot *opensplunk.KnowledgeSnapshotSummary
+	schema            searchjobs.Schema
+	schemaBytes       uint64
+}
+
+func (lease *continuationResultLease) trustedResolvedSchema() (
+	searchjobs.Schema,
+	uint64,
+	bool,
+) {
+	if lease == nil || lease.schemaBytes == 0 || len(lease.schema.Columns) == 0 {
+		return searchjobs.Schema{}, 0, false
+	}
+	return lease.schema, lease.schemaBytes, true
 }
 
 func (lease *continuationResultLease) knowledgeSnapshotSummary() (*opensplunk.KnowledgeSnapshotSummary, error) {
@@ -732,7 +758,9 @@ func schemaColumnNames(schema searchjobs.Schema) []string {
 }
 
 func schemaMatchesCompiledQuery(schema searchjobs.Schema, compiled clickhouse.CompiledQuery) bool {
-	if !validSourceSchemaCardinality(schema) {
+	wideTimechart := compiled.Timechart != nil || compiled.HasTimechartStage()
+	if (!wideTimechart && !validSourceSchemaCardinality(schema)) ||
+		(wideTimechart && !validTrustedSourceSchema(schema)) {
 		return false
 	}
 	if compiled.Timechart != nil && compiled.Chart != nil {

@@ -36,7 +36,13 @@ func selectColumns(schema searchjobs.Schema, requested []string) (columnSelectio
 		return columnSelection{}, fmt.Errorf("%w: source schema is empty", ErrSourceUnavailable)
 	}
 	if len(schema.Columns) > maximumColumns {
-		return columnSelection{}, fmt.Errorf("%w: source exposes too many columns", ErrInvalidColumns)
+		if len(requested) == 0 {
+			return columnSelection{}, fmt.Errorf("%w: source exposes too many columns", ErrInvalidColumns)
+		}
+		if len(requested) > maximumColumns || !validTrustedSourceSchema(schema) {
+			return columnSelection{}, fmt.Errorf("%w: source schema exceeds the selection limit", ErrInvalidColumns)
+		}
+		return selectWideSourceColumns(schema, requested)
 	}
 	available := make(map[string]int, len(schema.Columns))
 	for index, column := range schema.Columns {
@@ -74,6 +80,56 @@ func selectColumns(schema searchjobs.Schema, requested []string) (columnSelectio
 		seen[name] = struct{}{}
 		selection.columns = append(selection.columns, schema.Columns[index])
 		selection.indexes = append(selection.indexes, index)
+	}
+	return selection, nil
+}
+
+// selectWideSourceColumns indexes only the bounded requested subset. Its
+// production caller admits this path solely for a privately attested completed
+// result, whose full schema was validated before retention. The scan still
+// rejects malformed names and duplicate occurrences of selected columns.
+func selectWideSourceColumns(
+	schema searchjobs.Schema,
+	requested []string,
+) (columnSelection, error) {
+	selection := columnSelection{
+		columns: make([]searchjobs.Column, len(requested)),
+		indexes: make([]int, len(requested)),
+	}
+	requestedIndexes := make(map[string]int, len(requested))
+	found := make([]bool, len(requested))
+	for index, name := range requested {
+		if name == "" || !utf8.ValidString(name) {
+			return columnSelection{}, fmt.Errorf("%w: selected column %q is unknown", ErrInvalidColumns, name)
+		}
+		if _, duplicate := requestedIndexes[name]; duplicate {
+			return columnSelection{}, fmt.Errorf("%w: selected column %q is duplicated", ErrInvalidColumns, name)
+		}
+		requestedIndexes[name] = index
+	}
+	for sourceIndex, column := range schema.Columns {
+		if column.Name == "" || !utf8.ValidString(column.Name) {
+			return columnSelection{}, fmt.Errorf("%w: source schema is invalid", ErrSourceUnavailable)
+		}
+		selectionIndex, selected := requestedIndexes[column.Name]
+		if !selected {
+			continue
+		}
+		if found[selectionIndex] {
+			return columnSelection{}, fmt.Errorf("%w: source schema is invalid", ErrSourceUnavailable)
+		}
+		found[selectionIndex] = true
+		selection.columns[selectionIndex] = column
+		selection.indexes[selectionIndex] = sourceIndex
+	}
+	for index, present := range found {
+		if !present {
+			return columnSelection{}, fmt.Errorf(
+				"%w: selected column %q is unknown",
+				ErrInvalidColumns,
+				requested[index],
+			)
+		}
 	}
 	return selection, nil
 }

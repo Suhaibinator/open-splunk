@@ -813,8 +813,8 @@ func (manager *Manager) Create(ctx context.Context, access searchjobs.AccessScop
 	if lease.ResultsTruncated() {
 		return Job{}, abortLifecycle(ErrSourceTruncated)
 	}
-	schema := lease.Schema()
-	if !validSourceSchemaCardinality(schema) {
+	schema, trustedWideSchema := trustedSchemaForSelection(lease)
+	if !trustedWideSchema && !validSourceSchemaCardinality(schema) {
 		if len(schema.Columns) == 0 {
 			return Job{}, abort(ErrSourceUnavailable)
 		}
