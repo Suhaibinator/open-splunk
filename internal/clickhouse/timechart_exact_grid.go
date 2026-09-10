@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/ianatimezone"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 )
 
@@ -76,4 +77,36 @@ func (spec timechartGridSpec) exactGridArgs(args []any) []any {
 		ticks[index] = spec.boundaries[index].UnixNano()
 	}
 	return append(args, ticks, spec.bucketCount)
+}
+
+// The legacy compiler has already checked origin, span, count, and search
+// coverage. Validate the attached descriptor in place without replanning or
+// allocating a second full grid for each compilation.
+func validateLegacyTimechartBoundaries(operator *plan.Timechart, timezone string) error {
+	if len(operator.GridBoundaries) == 0 {
+		return nil
+	}
+	if uint64(len(operator.GridBoundaries)) != operator.BucketCount+1 {
+		return errors.New("compile timechart: boundary count is invalid")
+	}
+	location := time.UTC
+	if operator.Calendar != plan.CalendarNone {
+		var err error
+		location, err = ianatimezone.Load(timezone)
+		if err != nil {
+			return err
+		}
+	}
+	expected := operator.FirstBucket
+	for _, boundary := range operator.GridBoundaries {
+		if boundary.Location() != time.UTC || !boundary.Equal(expected) {
+			return errors.New("compile timechart: boundary descriptor disagrees with span")
+		}
+		if operator.Calendar == plan.CalendarNone {
+			expected = expected.Add(operator.Span)
+		} else {
+			expected = addCalendarUnit(expected.In(location), operator.Calendar).UTC()
+		}
+	}
+	return nil
 }

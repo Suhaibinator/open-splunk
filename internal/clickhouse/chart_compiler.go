@@ -128,7 +128,7 @@ func compileTimechart(
 		return CompiledQuery{}, err
 	}
 	if !enhanced && len(operator.GridBoundaries) > 0 {
-		if _, validationErr := exactTimechartGridSpec(operator, scan, state.context.searchTimezone); validationErr != nil {
+		if validationErr := validateLegacyTimechartBoundaries(operator, state.context.searchTimezone); validationErr != nil {
 			return CompiledQuery{}, validationErr
 		}
 	}
