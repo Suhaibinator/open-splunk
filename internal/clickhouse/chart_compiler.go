@@ -26,42 +26,26 @@ func compileTimechart(
 	if err := validateTimechartMeasure(operator, state); err != nil {
 		return CompiledQuery{}, err
 	}
-	if operator.FirstBucket.Nanosecond() != 0 || operator.FirstBucket.IsZero() ||
-		operator.BucketCount == 0 || operator.BucketCount > 10_000 || !operator.FixedRange ||
-		!operator.Continuous || !operator.IncludePartial {
-		return CompiledQuery{}, errors.New("compile ClickHouse timechart: bounded defaults are invalid")
+	if scan == nil || state.context == nil {
+		return CompiledQuery{}, errors.New("compile timechart: scan and context are required")
 	}
-	if scan == nil {
-		return CompiledQuery{}, errors.New("compile ClickHouse timechart: Scan snapshot is required")
+	if operator.BucketCount == 0 || operator.BucketCount > 10000 {
+		return CompiledQuery{}, errors.New("compile timechart: bucket count is invalid")
 	}
 	var gridSpec timechartGridSpec
 	var err error
-	switch operator.Calendar {
-	case plan.CalendarNone:
-		if operator.Span < time.Second || operator.Span > 24*time.Hour ||
-			operator.Span%time.Second != 0 {
-			return CompiledQuery{}, errors.New(
-				"compile ClickHouse timechart: fixed span is invalid",
-			)
+	enhanced := operator.Span < time.Second && operator.Calendar == plan.CalendarNone || operator.Span > 24*time.Hour || operator.CalendarMagnitude > 1 || !operator.Alignment.IsZero() || !operator.Continuous || !operator.IncludePartial || !operator.FixedRange
+	if enhanced {
+		gridSpec, err = exactTimechartGridSpec(operator, state.context.searchTimezone)
+	} else {
+		switch operator.Calendar {
+		case plan.CalendarNone:
+			gridSpec, err = fixedTimechartGridSpec(operator, scan)
+		case plan.CalendarDay, plan.CalendarWeek, plan.CalendarMonth:
+			gridSpec, err = calendarTimechartGridSpec(operator, scan, state.context.searchTimezone)
+		default:
+			err = errors.New("compile timechart: calendar unit is invalid")
 		}
-		gridSpec, err = fixedTimechartGridSpec(operator, scan)
-	case plan.CalendarDay, plan.CalendarWeek, plan.CalendarMonth:
-		if operator.Span != 0 || state.context == nil {
-			return CompiledQuery{}, errors.New(
-				"compile ClickHouse timechart: calendar span is invalid",
-			)
-		}
-		if err = validateCompileContextSearchTimezone(state.context); err == nil {
-			gridSpec, err = calendarTimechartGridSpec(
-				operator,
-				scan,
-				state.context.searchTimezone,
-			)
-		}
-	default:
-		return CompiledQuery{}, errors.New(
-			"compile ClickHouse timechart: calendar unit is invalid",
-		)
 	}
 	if err != nil {
 		return CompiledQuery{}, err
@@ -739,14 +723,20 @@ func compileTimechart(
 		Args:         args,
 		OutputFields: slices.Clone(dynamic.FixedFields),
 		Timechart: &TimechartOutput{
-			Mode:          TimechartModeRuntimeWide,
-			FirstBucket:   operator.FirstBucket.UTC(),
-			Span:          operator.Span,
-			Calendar:      gridSpec.isCalendar(),
-			BucketCount:   operator.BucketCount,
-			MaxSeries:     dynamic.MaxSeries,
-			MaxLabelBytes: maxTimechartLabelBytes,
-			ValueKind:     TimechartValueKindInvalid,
+			Mode:           TimechartModeRuntimeWide,
+			FirstBucket:    operator.FirstBucket.UTC(),
+			Span:           operator.Span,
+			Calendar:       gridSpec.isCalendar(),
+			ExactGrid:      gridSpec.exact,
+			Boundaries:     slices.Clone(operator.GridBoundaries),
+			Continuous:     operator.Continuous,
+			IncludePartial: operator.IncludePartial,
+			SearchEarliest: operator.SearchEarliest,
+			SearchLatest:   operator.SearchLatest,
+			BucketCount:    operator.BucketCount,
+			MaxSeries:      dynamic.MaxSeries,
+			MaxLabelBytes:  maxTimechartLabelBytes,
+			ValueKind:      TimechartValueKindInvalid,
 		},
 	}
 	return withCompiledRelationalDepth(compiled, resultDepth, operator.Range), nil
@@ -1361,14 +1351,20 @@ func compileSplitValueTimechart(
 		Args:         args,
 		OutputFields: slices.Clone(dynamic.FixedFields),
 		Timechart: &TimechartOutput{
-			Mode:          TimechartModeRuntimeWideValue,
-			FirstBucket:   operator.FirstBucket.UTC(),
-			Span:          operator.Span,
-			Calendar:      gridSpec.isCalendar(),
-			BucketCount:   operator.BucketCount,
-			MaxSeries:     dynamic.MaxSeries,
-			MaxLabelBytes: maxTimechartLabelBytes,
-			ValueKind:     valueKind,
+			Mode:           TimechartModeRuntimeWideValue,
+			FirstBucket:    operator.FirstBucket.UTC(),
+			Span:           operator.Span,
+			Calendar:       gridSpec.isCalendar(),
+			ExactGrid:      gridSpec.exact,
+			Boundaries:     slices.Clone(operator.GridBoundaries),
+			Continuous:     operator.Continuous,
+			IncludePartial: operator.IncludePartial,
+			SearchEarliest: operator.SearchEarliest,
+			SearchLatest:   operator.SearchLatest,
+			BucketCount:    operator.BucketCount,
+			MaxSeries:      dynamic.MaxSeries,
+			MaxLabelBytes:  maxTimechartLabelBytes,
+			ValueKind:      valueKind,
 		},
 	}
 	return withCompiledRelationalDepth(compiled, resultDepth, operator.Range), nil
@@ -1552,13 +1548,19 @@ func compileFixedCountTimechart(
 		Args:         args,
 		OutputFields: slices.Clone(outputFields),
 		Timechart: &TimechartOutput{
-			Mode:          TimechartModeFixedCount,
-			FirstBucket:   operator.FirstBucket.UTC(),
-			Span:          operator.Span,
-			Calendar:      gridSpec.isCalendar(),
-			BucketCount:   operator.BucketCount,
-			MaxSeries:     1,
-			MaxLabelBytes: 0,
+			Mode:           TimechartModeFixedCount,
+			FirstBucket:    operator.FirstBucket.UTC(),
+			Span:           operator.Span,
+			Calendar:       gridSpec.isCalendar(),
+			ExactGrid:      gridSpec.exact,
+			Boundaries:     slices.Clone(operator.GridBoundaries),
+			Continuous:     operator.Continuous,
+			IncludePartial: operator.IncludePartial,
+			SearchEarliest: operator.SearchEarliest,
+			SearchLatest:   operator.SearchLatest,
+			BucketCount:    operator.BucketCount,
+			MaxSeries:      1,
+			MaxLabelBytes:  0,
 		},
 	}
 	return withCompiledRelationalDepth(compiled, resultDepth, operator.Range), nil
@@ -1697,15 +1699,21 @@ func compileFixedCountValueTimechart(
 		Args:         args,
 		OutputFields: slices.Clone(outputFields),
 		Timechart: &TimechartOutput{
-			Mode:          TimechartModeFixedFieldCount,
-			FirstBucket:   operator.FirstBucket.UTC(),
-			Span:          operator.Span,
-			Calendar:      gridSpec.isCalendar(),
-			BucketCount:   operator.BucketCount,
-			MaxSeries:     1,
-			MaxLabelBytes: 0,
-			ValueField:    operator.Measure.Output,
-			ValueKind:     TimechartValueKindInvalid,
+			Mode:           TimechartModeFixedFieldCount,
+			FirstBucket:    operator.FirstBucket.UTC(),
+			Span:           operator.Span,
+			Calendar:       gridSpec.isCalendar(),
+			ExactGrid:      gridSpec.exact,
+			Boundaries:     slices.Clone(operator.GridBoundaries),
+			Continuous:     operator.Continuous,
+			IncludePartial: operator.IncludePartial,
+			SearchEarliest: operator.SearchEarliest,
+			SearchLatest:   operator.SearchLatest,
+			BucketCount:    operator.BucketCount,
+			MaxSeries:      1,
+			MaxLabelBytes:  0,
+			ValueField:     operator.Measure.Output,
+			ValueKind:      TimechartValueKindInvalid,
 		},
 	}
 	return withCompiledRelationalDepth(compiled, resultDepth, operator.Range), nil
@@ -1866,15 +1874,21 @@ func compileFixedValueTimechart(
 		Args:         args,
 		OutputFields: slices.Clone(outputFields),
 		Timechart: &TimechartOutput{
-			Mode:          TimechartModeFixedValue,
-			FirstBucket:   operator.FirstBucket.UTC(),
-			Span:          operator.Span,
-			Calendar:      gridSpec.isCalendar(),
-			BucketCount:   operator.BucketCount,
-			MaxSeries:     1,
-			MaxLabelBytes: 0,
-			ValueField:    operator.Measure.Output,
-			ValueKind:     valueKind,
+			Mode:           TimechartModeFixedValue,
+			FirstBucket:    operator.FirstBucket.UTC(),
+			Span:           operator.Span,
+			Calendar:       gridSpec.isCalendar(),
+			ExactGrid:      gridSpec.exact,
+			Boundaries:     slices.Clone(operator.GridBoundaries),
+			Continuous:     operator.Continuous,
+			IncludePartial: operator.IncludePartial,
+			SearchEarliest: operator.SearchEarliest,
+			SearchLatest:   operator.SearchLatest,
+			BucketCount:    operator.BucketCount,
+			MaxSeries:      1,
+			MaxLabelBytes:  0,
+			ValueField:     operator.Measure.Output,
+			ValueKind:      valueKind,
 		},
 	}
 	return withCompiledRelationalDepth(compiled, resultDepth, operator.Range), nil

@@ -13,6 +13,9 @@ import (
 // timechartGridSpec keeps the existing fixed ordinal grid byte-for-byte while
 // carrying the civil-time inputs needed by the calendar-only branch.
 type timechartGridSpec struct {
+	exact             bool
+	magnitude         uint64
+	boundaries        []time.Time
 	calendar          plan.CalendarUnit
 	spanNanoseconds   int64
 	firstBucketNumber int64
@@ -22,7 +25,7 @@ type timechartGridSpec struct {
 }
 
 func (spec timechartGridSpec) isCalendar() bool {
-	return spec.calendar != plan.CalendarNone
+	return spec.exact || spec.calendar != plan.CalendarNone
 }
 
 func (spec timechartGridSpec) relationalDepth() int {
@@ -36,6 +39,9 @@ func (spec timechartGridSpec) relationalDepth() int {
 }
 
 func (spec timechartGridSpec) bucketKeySQL(eventTime, ticks string) string {
+	if spec.exact {
+		return spec.exactBucketKeySQL(eventTime)
+	}
 	if !spec.isCalendar() {
 		return epochFloorBucketNumberSQL(ticks)
 	}
@@ -77,6 +83,9 @@ func appendCalendarBucketKeyArgs(
 }
 
 func (spec timechartGridSpec) gridSQL(ordinal, bucketKey string) string {
+	if spec.exact {
+		return spec.exactGridSQL(ordinal, bucketKey)
+	}
 	if !spec.isCalendar() {
 		return ordinalGridSQL(ordinal, bucketKey)
 	}
@@ -96,6 +105,9 @@ func (spec timechartGridSpec) gridSQL(ordinal, bucketKey string) string {
 }
 
 func (spec timechartGridSpec) appendArgs(args []any) []any {
+	if spec.exact {
+		return spec.exactGridArgs(args)
+	}
 	if !spec.isCalendar() {
 		return appendOrdinalGridArgs(
 			args,
@@ -119,6 +131,11 @@ func (spec timechartGridSpec) writeBucketProjection(
 	bucketKey string,
 ) {
 	if !spec.isCalendar() {
+		return
+	}
+	if spec.exact {
+		sql.WriteString(", fromUnixTimestamp64Nano(" + grid + "." + bucketKey + ", 'UTC') AS " + quoteIdentifier(TimechartBucketColumn))
+		sql.WriteString(", toUInt8(" + grid + "." + bucketKey + " IN (SELECT " + spec.exactBucketKeySQL(quoteIdentifier("__os_tc_event_time")) + " FROM " + quoteIdentifier("__os_timechart_source") + ")) AS " + quoteIdentifier(TimechartBucketPresentColumn))
 		return
 	}
 	sql.WriteString(", ")

@@ -242,6 +242,9 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 			eventIndexTime,
 		)
 	})
+	t.Run("exact timechart grid", func(t *testing.T) {
+		queryIntegrationTestExactTimechartGrid(t, ctx, executor, timechartBase, timechartIndexTime)
+	})
 	t.Run("timechart field occurrence count", func(t *testing.T) {
 		queryIntegrationTestTimechartCountField(
 			t,

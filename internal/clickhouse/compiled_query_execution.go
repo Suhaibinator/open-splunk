@@ -687,6 +687,19 @@ func compiledExecutionDigestContext(
 			return compiledExecutionSeal{}, false, nil
 		}
 		writeInt64(digest, int64(compiled.Timechart.Span))
+		writeBool(digest, compiled.Timechart.ExactGrid)
+		writeBool(digest, compiled.Timechart.Continuous)
+		writeBool(digest, compiled.Timechart.IncludePartial)
+		if !writeTime(digest, compiled.Timechart.SearchEarliest) || !writeTime(digest, compiled.Timechart.SearchLatest) {
+			return compiledExecutionSeal{}, false, nil
+		}
+		writeUint64(digest, uint64(len(compiled.Timechart.Boundaries)))
+		for _, boundary := range compiled.Timechart.Boundaries {
+			if !writeTime(digest, boundary) {
+				return compiledExecutionSeal{}, false, nil
+			}
+		}
+
 		if compiled.Timechart.Calendar {
 			// False keeps the established fixed-grid digest byte-for-byte. The
 			// calendar-only marker still seals both transitions because adding or
@@ -905,6 +918,7 @@ func (compiled CompiledQuery) CloneForExecutionContext(
 	if compiled.Timechart != nil {
 		output := *compiled.Timechart
 		output.ValueField = strings.Clone(output.ValueField)
+		output.Boundaries = slices.Clone(output.Boundaries)
 		cloned.Timechart = &output
 	}
 	if compiled.Chart != nil {
@@ -1107,7 +1121,7 @@ func (compiled CompiledQuery) RetainedBytesContext(
 		return 0, false, nil
 	}
 	if compiled.Timechart != nil {
-		total, ok = retainedAdd(total, uint64(unsafe.Sizeof(*compiled.Timechart))+uint64(len(compiled.Timechart.ValueField)))
+		total, ok = retainedAdd(total, uint64(unsafe.Sizeof(*compiled.Timechart))+uint64(len(compiled.Timechart.ValueField))+uint64(cap(compiled.Timechart.Boundaries))*uint64(unsafe.Sizeof(time.Time{})))
 		if !ok {
 			return 0, false, nil
 		}

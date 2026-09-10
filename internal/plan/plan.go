@@ -442,13 +442,19 @@ type TimechartSplit struct {
 // describe the complete fixed range, including partial boundary buckets and
 // continuous gaps.
 type Timechart struct {
-	Time        FieldRef
-	Split       *TimechartSplit
-	Measure     AggregateMeasure
-	Span        time.Duration
-	Calendar    CalendarUnit
-	FirstBucket time.Time
-	BucketCount uint64
+	AuthoredSpan                 spl.TimeSpan
+	Axis                         spl.TimechartAxisOptions
+	CalendarMagnitude            uint64
+	Alignment                    time.Time
+	GridBoundaries               []time.Time
+	SearchEarliest, SearchLatest time.Time
+	Time                         FieldRef
+	Split                        *TimechartSplit
+	Measure                      AggregateMeasure
+	Span                         time.Duration
+	Calendar                     CalendarUnit
+	FirstBucket                  time.Time
+	BucketCount                  uint64
 
 	FixedRange     bool
 	Continuous     bool

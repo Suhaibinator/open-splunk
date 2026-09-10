@@ -1175,11 +1175,29 @@ const (
 	TimeSpanUnitDay
 	TimeSpanUnitWeek
 	TimeSpanUnitMonth
+	TimeSpanUnitMicrosecond
+	TimeSpanUnitMillisecond
+	TimeSpanUnitCentisecond
+	TimeSpanUnitDecisecond
+	TimeSpanUnitQuarter
+	TimeSpanUnitYear
 )
 
 // String returns the canonical SPL suffix for unit.
 func (unit TimeSpanUnit) String() string {
 	switch unit {
+	case TimeSpanUnitMicrosecond:
+		return "us"
+	case TimeSpanUnitMillisecond:
+		return "ms"
+	case TimeSpanUnitCentisecond:
+		return "cs"
+	case TimeSpanUnitDecisecond:
+		return "ds"
+	case TimeSpanUnitQuarter:
+		return "q"
+	case TimeSpanUnitYear:
+		return "y"
 	case TimeSpanUnitSecond:
 		return "s"
 	case TimeSpanUnitMinute:
@@ -1270,11 +1288,17 @@ const (
 // on TimechartCommand for compatibility with explicit spans; a zero Span
 // selects the automatic ladder. Bins is a maximum rather than a target.
 type TimechartAxisOptions struct {
-	Bins             uint64
-	BinsSpecified    bool
-	BinsRange        Range
-	MinSpan          TimeSpan
-	MinSpanSpecified bool
+	Cont, Partial, FixedRange                            bool
+	ContSpecified, PartialSpecified, FixedRangeSpecified bool
+	ContRange, PartialRange, FixedRangeRange             Range
+	AlignTime                                            string
+	AlignTimeSpecified                                   bool
+	AlignTimeRange                                       Range
+	Bins                                                 uint64
+	BinsSpecified                                        bool
+	BinsRange                                            Range
+	MinSpan                                              TimeSpan
+	MinSpanSpecified                                     bool
 }
 
 // MaximumTimechartSeriesLimit bounds timechart limit=N: the ordinary split

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/big"
 	"strconv"
 	"time"
 
@@ -418,7 +419,7 @@ func validateTimechartAxisOptions(
 				Range:   sourceRange,
 			}
 		}
-		if _, ok := nominalTimeSpanSeconds(axis.MinSpan); !ok {
+		if _, ok := nominalTimeSpanNanoseconds(axis.MinSpan); !ok {
 			return 0, &Diagnostic{
 				Code:    "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
 				Message: "timechart minspan is outside the automatic span range",
@@ -454,9 +455,34 @@ func automaticTimeSpanAsSPL(span AutomaticTimeSpan, sourceRange spl.Range) spl.T
 }
 
 func automaticTimeSpanAtLeast(candidate, minimum spl.TimeSpan) bool {
-	candidateSeconds, candidateOK := nominalTimeSpanSeconds(candidate)
-	minimumSeconds, minimumOK := nominalTimeSpanSeconds(minimum)
-	return candidateOK && minimumOK && candidateSeconds >= minimumSeconds
+	candidateUnits, candidateOK := nominalTimeSpanNanoseconds(candidate)
+	minimumUnits, minimumOK := nominalTimeSpanNanoseconds(minimum)
+	return candidateOK && minimumOK && candidateUnits.Cmp(minimumUnits) >= 0
+}
+
+func nominalTimeSpanNanoseconds(span spl.TimeSpan) (*big.Int, bool) {
+	var unit uint64
+	switch span.Unit {
+	case spl.TimeSpanUnitMicrosecond:
+		unit = 1000
+	case spl.TimeSpanUnitMillisecond:
+		unit = 1_000_000
+	case spl.TimeSpanUnitCentisecond:
+		unit = 10_000_000
+	case spl.TimeSpanUnitDecisecond:
+		unit = 100_000_000
+	case spl.TimeSpanUnitQuarter:
+		unit = 90 * 86400 * 1_000_000_000
+	case spl.TimeSpanUnitYear:
+		unit = 365 * 86400 * 1_000_000_000
+	default:
+		seconds, ok := nominalTimeSpanSeconds(spl.TimeSpan{Magnitude: 1, Unit: span.Unit})
+		if !ok {
+			return nil, false
+		}
+		unit = seconds * 1_000_000_000
+	}
+	return new(big.Int).Mul(new(big.Int).SetUint64(span.Magnitude), new(big.Int).SetUint64(unit)), span.Magnitude > 0
 }
 
 func nominalTimeSpanSeconds(span spl.TimeSpan) (uint64, bool) {

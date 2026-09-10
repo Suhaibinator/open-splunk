@@ -36,28 +36,35 @@ func buildTimechartCommand(
 			Suggestions: []string{"run timechart before removing, replacing, or transforming _time"},
 		}
 	}
-	var span time.Duration
-	var calendar CalendarUnit
-	var firstBucket time.Time
-	var bucketCount uint64
-	var bucketErr error
-	if _, axisErr := validateTimechartAxisOptions(command.Axis, command.Range); axisErr != nil {
-		return axisErr
+	op := &Timechart{AuthoredSpan: command.Span, Axis: command.Axis, SearchEarliest: earliest, SearchLatest: latest, FixedRange: true, Continuous: true, IncludePartial: true, Range: command.Range}
+	if command.Axis.ContSpecified {
+		op.Continuous = command.Axis.Cont
 	}
-	if command.Span != (spl.TimeSpan{}) {
-		span, calendar, bucketErr = timechartSpan(command.Span)
-		if bucketErr == nil {
-			firstBucket, bucketCount, bucketErr = timechartBuckets(
-				earliest, latest, span, calendar, searchLocation, command.Span.Range,
-			)
+	if command.Axis.PartialSpecified {
+		op.IncludePartial = command.Axis.Partial
+	}
+	if command.Axis.FixedRangeSpecified {
+		op.FixedRange = command.Axis.FixedRange
+	}
+	alignment, alignmentErr := resolveTimechartAlignment(command.Axis, earliest, latest, result.SearchStart, searchLocation)
+	if alignmentErr != nil {
+		return &Diagnostic{Code: "SPL_UNSUPPORTED_TIMECHART_SYNTAX", Message: alignmentErr.Error(), Range: command.Axis.AlignTimeRange}
+	}
+	op.Alignment = alignment
+	if op.FixedRange {
+		if err := ResolveTimechartGrid(op, earliest, latest, result.SearchTimezone); err != nil {
+			return err
 		}
 	} else {
-		span, calendar, firstBucket, bucketCount, bucketErr = automaticTimechartSpan(
-			command.Axis, earliest, latest, searchLocation, command.Range,
-		)
-	}
-	if bucketErr != nil {
-		return bucketErr
+		// Span selection is deferred until the post-filter source is materialized.
+		if _, err := validateTimechartAxisOptions(command.Axis, command.Range); err != nil {
+			return err
+		}
+		if command.Span != (spl.TimeSpan{}) {
+			if _, _, _, err := enhancedTimechartSpan(command.Span); err != nil {
+				return err
+			}
+		}
 	}
 	timeField, timeErr := ResolveField("_time", command.Range)
 	if timeErr != nil {
@@ -108,18 +115,7 @@ func buildTimechartCommand(
 		result.OutputFields = []string{"_time", measure.Output}
 		result.DynamicOutput = nil
 	}
-	result.Operators = append(result.Operators, &Timechart{
-		Time:           timeField,
-		Split:          split,
-		Measure:        measure,
-		Span:           span,
-		Calendar:       calendar,
-		FirstBucket:    firstBucket,
-		BucketCount:    bucketCount,
-		FixedRange:     true,
-		Continuous:     true,
-		IncludePartial: true,
-		Range:          command.Range,
-	})
+	op.Time, op.Split, op.Measure = timeField, split, measure
+	result.Operators = append(result.Operators, op)
 	return nil
 }

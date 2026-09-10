@@ -255,6 +255,14 @@ func (p *parser) parseTimechartOptions(
 			return nil
 		}
 		switch lower {
+		case "cont", "partial", "fixedrange", "aligntime":
+			if !allowAxis {
+				return p.unsupportedTimechartSyntax(option, "timechart axis options must precede the aggregate")
+			}
+			if err := p.parseTimechartGridOption(axis, lower, option); err != nil {
+				return err
+			}
+
 		case "span":
 			if !allowAxis {
 				return p.unsupportedTimechartSyntax(option, "timechart span must precede the aggregate")
@@ -627,6 +635,7 @@ var (
 		suggestion:      timechartSyntaxSuggestion,
 		calendarAllowed: true,
 		monthAllowed:    true,
+		multiCalendar:   true,
 	}
 	timechartMinSpanConfig = fixedTimeSpanParserConfig{
 		commandName:     "timechart",
@@ -659,33 +668,64 @@ func parseFixedTimeSpan(tok token, config fixedTimeSpanParserConfig) (TimeSpan, 
 	var unitNanoseconds uint64
 	calendar := false
 	switch strings.ToLower(unitText) {
-	case "s":
+	case "s", "sec", "secs", "second", "seconds":
 		unit = TimeSpanUnitSecond
 		unitNanoseconds = 1_000_000_000
-	case "m":
+	case "m", "min", "mins", "minute", "minutes":
 		unit = TimeSpanUnitMinute
 		unitNanoseconds = 60 * 1_000_000_000
-	case "h":
+	case "h", "hr", "hrs", "hour", "hours":
 		unit = TimeSpanUnitHour
 		unitNanoseconds = 60 * 60 * 1_000_000_000
-	case "d":
+	case "d", "day", "days":
 		if !config.calendarAllowed {
 			return TimeSpan{}, unsupportedFixedTimeSpanUnit(tok, config)
 		}
 		unit = TimeSpanUnitDay
 		calendar = true
-	case "w":
+	case "w", "week", "weeks":
 		if !config.calendarAllowed {
 			return TimeSpan{}, unsupportedFixedTimeSpanUnit(tok, config)
 		}
 		unit = TimeSpanUnitWeek
 		calendar = true
-	case "mon", "month":
+	case "mon", "month", "months":
 		if !config.monthAllowed {
 			return TimeSpan{}, unsupportedFixedTimeSpanUnit(tok, config)
 		}
 		unit = TimeSpanUnitMonth
 		calendar = true
+	case "us", "usec", "usecs", "microsecond", "microseconds":
+		if config.commandName != "timechart" {
+			return TimeSpan{}, unsupportedFixedTimeSpanUnit(tok, config)
+		}
+		unit, unitNanoseconds = TimeSpanUnitMicrosecond, 1_000
+	case "ms", "msec", "msecs", "millisecond", "milliseconds":
+		if config.commandName != "timechart" {
+			return TimeSpan{}, unsupportedFixedTimeSpanUnit(tok, config)
+		}
+		unit, unitNanoseconds = TimeSpanUnitMillisecond, 1_000_000
+	case "cs", "csec", "centisecond", "centiseconds":
+		if config.commandName != "timechart" {
+			return TimeSpan{}, unsupportedFixedTimeSpanUnit(tok, config)
+		}
+		unit, unitNanoseconds = TimeSpanUnitCentisecond, 10_000_000
+	case "ds", "dsec", "decisecond", "deciseconds":
+		if config.commandName != "timechart" {
+			return TimeSpan{}, unsupportedFixedTimeSpanUnit(tok, config)
+		}
+		unit, unitNanoseconds = TimeSpanUnitDecisecond, 100_000_000
+	case "q", "qtr", "qtrs", "quarter", "quarters":
+		if config.commandName != "timechart" {
+			return TimeSpan{}, unsupportedFixedTimeSpanUnit(tok, config)
+		}
+		unit, calendar = TimeSpanUnitQuarter, true
+	case "y", "yr", "yrs", "year", "years":
+		if config.commandName != "timechart" {
+			return TimeSpan{}, unsupportedFixedTimeSpanUnit(tok, config)
+		}
+		unit, calendar = TimeSpanUnitYear, true
+
 	default:
 		return TimeSpan{}, unsupportedFixedTimeSpanUnit(tok, config)
 	}
@@ -713,6 +753,9 @@ func parseFixedTimeSpan(tok token, config fixedTimeSpanParserConfig) (TimeSpan, 
 			Message: config.commandName + " span is outside the supported duration range",
 			Range:   tok.sourceRange,
 		}
+	}
+	if unitNanoseconds < 1_000_000_000 && (magnitude*unitNanoseconds >= 1_000_000_000 || 1_000_000_000%(magnitude*unitNanoseconds) != 0) {
+		return TimeSpan{}, invalidFixedTimeSpan(tok, config)
 	}
 	return TimeSpan{Magnitude: magnitude, Unit: unit, Range: tok.sourceRange}, nil
 }

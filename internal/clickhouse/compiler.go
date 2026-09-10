@@ -55,8 +55,9 @@ const (
 	// TimechartBucketColumn is present only for a calendar timechart. Fixed
 	// grids keep their established ordinal-only transport, while calendar grids
 	// carry the exact UTC boundary produced by ClickHouse's timezone database.
-	TimechartBucketColumn = "__os_timechart_bucket"
-	TimechartCountColumn  = "__os_timechart_count"
+	TimechartBucketPresentColumn = "__os_timechart_bucket_present"
+	TimechartBucketColumn        = "__os_timechart_bucket"
+	TimechartCountColumn         = "__os_timechart_count"
 	// The fixed-value transport is deliberately distinct from the count
 	// transport. Its nullable value and repeated upstream-presence proof let the
 	// executor distinguish a real all-ineligible input (publish a null grid)
@@ -633,9 +634,13 @@ func (kind TimechartValueKind) Valid() bool {
 // results because their public fields are predetermined or selected by split
 // values.
 type TimechartOutput struct {
-	Mode        TimechartMode
-	FirstBucket time.Time
-	Span        time.Duration
+	ExactGrid                    bool
+	Boundaries                   []time.Time
+	Continuous, IncludePartial   bool
+	SearchEarliest, SearchLatest time.Time
+	Mode                         TimechartMode
+	FirstBucket                  time.Time
+	Span                         time.Duration
 	// Calendar selects the private exact-boundary transport. It is mutually
 	// exclusive with a positive fixed Span and is covered by the execution seal.
 	Calendar      bool
@@ -651,7 +656,7 @@ type TimechartOutput struct {
 
 func validTimechartOutputSpanContract(output *TimechartOutput) bool {
 	return output != nil &&
-		((output.Calendar && output.Span == 0) ||
+		((output.ExactGrid && len(output.Boundaries) == int(output.BucketCount)+1) || (output.Calendar && output.Span == 0) ||
 			(!output.Calendar && output.Span > 0))
 }
 
@@ -1317,6 +1322,9 @@ func wrapCompiledChronologicalValidation(
 			return CompiledQuery{}, errors.New(
 				"compile ClickHouse query: timechart output mode is invalid",
 			)
+		}
+		if compiled.Timechart.ExactGrid {
+			resultColumns = slices.Insert(resultColumns, 1, TimechartBucketPresentColumn)
 		}
 		if compiled.Timechart.Calendar {
 			resultColumns = slices.Insert(

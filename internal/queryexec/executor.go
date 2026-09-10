@@ -623,6 +623,12 @@ func (executor *Executor) executeSingle(ctx context.Context, query clickhouse.Co
 	columnTypes := rows.ColumnTypes()
 	columns := rows.Columns()
 	if query.Timechart != nil {
+		var gridRows *timechartGridRows
+		rows, columns, columnTypes, gridRows, err = prepareTimechartGridTransport(rows, columns, columnTypes, *query.Timechart)
+		if err != nil {
+			return err
+		}
+		sink = &timechartGridSink{ResultSink: sink, output: *query.Timechart, occupancy: gridRows}
 		switch query.Timechart.Mode {
 		case clickhouse.TimechartModeFixedCount,
 			clickhouse.TimechartModeFixedFieldCount:
@@ -1147,8 +1153,8 @@ func validateTimechartOutput(query clickhouse.CompiledQuery) error {
 		return nil
 	}
 	calendar := output.Calendar
-	if (!calendar && (output.Span < time.Second || output.Span%time.Second != 0 ||
-		output.Span > 24*time.Hour)) || (calendar && output.Span != 0) ||
+	if !output.ExactGrid && ((!calendar && (output.Span < time.Second || output.Span%time.Second != 0 ||
+		output.Span > 24*time.Hour)) || (calendar && output.Span != 0)) ||
 		output.BucketCount == 0 ||
 		output.BucketCount > maximumTimechartBuckets {
 		return fmt.Errorf("%w: compiled timechart output contract is invalid", searchjobs.ErrInvalidResult)
@@ -1201,8 +1207,18 @@ func validateTimechartOutput(query clickhouse.CompiledQuery) error {
 		return fmt.Errorf("%w: compiled timechart output mode is invalid", searchjobs.ErrInvalidResult)
 	}
 	first := output.FirstBucket
-	if first.IsZero() || first.Location() != time.UTC || first.Nanosecond() != 0 {
+	if first.IsZero() || first.Location() != time.UTC || (!output.ExactGrid && first.Nanosecond() != 0) {
 		return fmt.Errorf("%w: compiled timechart bucket origin is invalid", searchjobs.ErrInvalidResult)
+	}
+	if output.ExactGrid {
+		if len(output.Boundaries) != int(output.BucketCount)+1 {
+			return fmt.Errorf("%w: exact timechart grid length is invalid", searchjobs.ErrInvalidResult)
+		}
+		for index, boundary := range output.Boundaries {
+			if boundary.Location() != time.UTC || (index > 0 && !boundary.After(output.Boundaries[index-1])) {
+				return fmt.Errorf("%w: exact timechart grid boundaries are invalid", searchjobs.ErrInvalidResult)
+			}
+		}
 	}
 	if !calendar {
 		spanSeconds := int64(output.Span / time.Second)
@@ -1271,6 +1287,12 @@ func validateTimechartRowBucket(
 			"%w: calendar timechart boundary is missing",
 			searchjobs.ErrInvalidResult,
 		)
+	}
+	if len(output.Boundaries) > 0 {
+		if ordinal >= uint64(len(output.Boundaries)-1) || !calendarBucket.Equal(output.Boundaries[ordinal]) {
+			return time.Time{}, fmt.Errorf("%w: timechart boundary differs from exact grid", searchjobs.ErrInvalidResult)
+		}
+		return output.Boundaries[ordinal], nil
 	}
 	bucket := calendarBucket.Round(0)
 	if bucket.Location() != time.UTC || bucket.Nanosecond() != 0 ||
