@@ -84,8 +84,8 @@ export interface TimelinePoint {
    * `coordinateApproximate` is true, use the exact text fields for labels.
    */
   count: number;
-  /** Transforming searches can return one numeric value per split-by series. */
-  series?: Record<string, number>;
+  /** Transforming searches can return one numeric or explicitly null value per split-by series. */
+  series?: Record<string, number | null>;
   /** Exact server value retained when `count` cannot represent it losslessly. */
   exactCount?: string;
   /** Exact server values retained for split-by coordinates that are approximate. */

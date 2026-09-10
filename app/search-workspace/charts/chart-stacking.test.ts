@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { stackChartRows, stackedChartDomain } from "./chart-stacking";
+import { normalizeStackValue, stackChartRows, stackedChartDomain } from "./chart-stacking";
+
+test("shared stack normalization handles positive, negative, and zero coordinates", () => {
+  assert.equal(normalizeStackValue(1, 4, 8), 25);
+  assert.equal(normalizeStackValue(-2, 4, 8), -25);
+  assert.equal(normalizeStackValue(0, 0, 0), 0);
+});
 
 test("stacking uses independent positive and negative baselines", () => {
   const [row] = stackChartRows([[4, -2, 3, -5]], "stacked");

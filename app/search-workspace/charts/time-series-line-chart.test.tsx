@@ -67,6 +67,22 @@ test("missing series values split both area fills and line strokes", () => {
   assert.equal((markup.match(/class="time-series-chart__line time-series-chart__series"/gu) ?? []).length, 2);
 });
 
+test("explicit null Events values stay gaps instead of using the legacy count fallback", () => {
+  const points: TimelinePoint[] = [
+    { id: "first", label: "00:00", count: 1, series: { Events: 1 } },
+    { id: "gap", label: "01:00", count: 99, series: { Events: null } },
+    { id: "last", label: "02:00", count: 2, series: { Events: 2 } },
+  ];
+  const model = timelineChartModel(points);
+  const window = timelineVisibleStackWindow(model.points, model.series, "Events", 0, 1, "none");
+  const markup = renderToStaticMarkup(<TimeSeriesLineChart model={model} points={points} />);
+
+  assert.deepEqual(model.series.domains.none, [0, 2]);
+  assert.deepEqual(window.rows[1], [{ end: 0, raw: null, start: 0 }]);
+  assert.equal(formatTimelineSeriesValue(points[1], "Events"), "No value");
+  assert.equal((markup.match(/class="time-series-chart__line time-series-chart__series"/gu) ?? []).length, 2);
+});
+
 test("time-series value formatting keeps exact raw server values", () => {
   const point: TimelinePoint = {
     id: "exact",

@@ -9,6 +9,7 @@ import {
   type ResultSchema,
 } from "../../gen/ts/open_splunk/result";
 import {
+  MissingValue,
   NullValue,
   ValueType,
   type TypedValue,
@@ -47,6 +48,14 @@ function uint64Value(value: bigint): TypedValue {
 
 function doubleValue(value: number): TypedValue {
   return { kind: { $case: "doubleValue", value } };
+}
+
+function nullValue(): TypedValue {
+  return { kind: { $case: "nullValue", value: NullValue.NULL_VALUE_NULL } };
+}
+
+function missingValue(): TypedValue {
+  return { kind: { $case: "missingValue", value: MissingValue.MISSING_VALUE_MISSING } };
 }
 
 function timestampValue(value: string): TypedValue {
@@ -1239,6 +1248,67 @@ test("timechart preserves nanosecond bounds as metadata and leaves legacy rows w
   assert.equal(legacy?.latest, undefined);
   assert.equal(legacy?.timeValue, "2026-09-10T08:09:10.123Z");
   assert.deepEqual(timechartRowsForExport([legacy!]), [{ _time: "2026-09-10T08:09:10.123Z", count: 1 }]);
+});
+
+test("timechart retains timestamped null measures as exact chart gaps", () => {
+  const schema: ResultSchema = {
+    schemaId: "nullable-timechart-v1",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_TIME_SERIES,
+    columns: [
+      column("_time", ValueType.VALUE_TYPE_TIMESTAMP, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_EVENT_TIME),
+      { ...column("avg(metric)", ValueType.VALUE_TYPE_DOUBLE, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_METRIC), nullable: true },
+    ],
+  };
+  const timestamps = ["2026-09-10T00:00:00Z", "2026-09-10T01:00:00Z", "2026-09-10T02:00:00Z"];
+  const values = [doubleValue(1), nullValue(), doubleValue(2)];
+  const rows = timestamps.map((timestamp, index) => row(
+    `bucket-${index}`,
+    BigInt(index),
+    [timestampValue(timestamp), values[index]],
+    { earliest: timestamp, latest: `2026-09-10T0${index + 1}:00:00Z` },
+  ));
+
+  const timeline = adaptSearchResults(schema, rows).timeline;
+  assert.equal(timeline.length, 3);
+  assert.deepEqual(timeline.map((point) => point.id), ["bucket-0", "bucket-1", "bucket-2"]);
+  assert.deepEqual(timeline.map((point) => point.series), [
+    { "avg(metric)": 1 },
+    { "avg(metric)": null },
+    { "avg(metric)": 2 },
+  ]);
+  assert.equal(timeline[1].earliest, "2026-09-10T01:00:00Z");
+  assert.equal(timeline[1].latest, "2026-09-10T02:00:00Z");
+  assert.equal(timeline[1].timeCoordinateNanoseconds, 1_789_002_000_000_000_000n);
+  assert.deepEqual(timechartRowsForExport(timeline), [
+    { _time: "2026-09-10T00:00:00Z", "avg(metric)": 1 },
+    { _time: "2026-09-10T01:00:00Z", "avg(metric)": null },
+    { _time: "2026-09-10T02:00:00Z", "avg(metric)": 2 },
+  ]);
+});
+
+test("all-null and missing timechart measures retain their schema series", () => {
+  const schema: ResultSchema = {
+    schemaId: "empty-measures-timechart-v1",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_TIME_SERIES,
+    columns: [
+      column("_time", ValueType.VALUE_TYPE_TIMESTAMP, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_EVENT_TIME),
+      { ...column("Events", ValueType.VALUE_TYPE_DOUBLE, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_METRIC), nullable: true },
+    ],
+  };
+  const timeline = adaptSearchResults(schema, [
+    row("null", 0n, [timestampValue("2026-09-10T00:00:00Z"), nullValue()]),
+    row("missing", 1n, [timestampValue("2026-09-10T01:00:00Z"), missingValue()]),
+  ]).timeline;
+
+  assert.equal(timeline.length, 2);
+  assert.deepEqual(timeline.map((point) => point.series), [{ Events: null }, { Events: null }]);
+  assert.deepEqual(timechartValueFields(timeline), ["Events"]);
+  assert.deepEqual(timechartRowsForExport(timeline), [
+    { _time: "2026-09-10T00:00:00.000Z", Events: null },
+    { _time: "2026-09-10T01:00:00.000Z", Events: null },
+  ]);
 });
 
 test("exact time bucket parser accepts canonical nanoseconds without Date rounding", () => {

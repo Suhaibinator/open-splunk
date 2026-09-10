@@ -15,7 +15,7 @@ import { formatExactNumericText } from "../formatters";
 import type { StackMode } from "../model";
 import { sortTimechartRows } from "../timechart-series";
 import { linearTickScale } from "./chart-scale";
-import type { StackedChartRow } from "./chart-stacking";
+import { normalizeStackValue, type StackedChartRow } from "./chart-stacking";
 
 const VIEWBOX_WIDTH = 1000;
 const VIEWBOX_HEIGHT = 300;
@@ -163,10 +163,6 @@ export function timelineSeriesDisplayName(name: string): string {
   return /^(?:count|count\(.+\))$/i.test(name) ? "Events" : name;
 }
 
-function pointSeriesValue(point: TimelinePoint, name: string, fallbackLabel: string): number {
-  return point.series?.[name] ?? (name === fallbackLabel ? point.count : 0);
-}
-
 function seriesColorIndex(index: number): number {
   return (index % TIME_SERIES_COLORS.length) + 1;
 }
@@ -176,8 +172,12 @@ function pointSeriesCoordinate(
   name: string,
   fallbackLabel: string,
 ): number | null {
-  const value = point.series?.[name] ?? (name === fallbackLabel ? point.count : null);
-  return value !== null && Number.isFinite(value) ? value : null;
+  if (point.series !== undefined && Object.hasOwn(point.series, name)) {
+    const value = point.series[name];
+    return typeof value === "number" && Number.isFinite(value) ? value : null;
+  }
+  const fallback = name === fallbackLabel ? point.count : null;
+  return fallback !== null && Number.isFinite(fallback) ? fallback : null;
 }
 
 interface TimelineStackWindow {
@@ -211,12 +211,6 @@ export function timelinePointInspectionLabel(point: TimelinePoint): string {
     : `${point.label}, exact bucket ${point.earliest} to ${point.latest}`;
 }
 
-function normalizedStackValue(value: number, positiveTotal: number, negativeTotal: number): number {
-  if (value > 0) return positiveTotal === 0 ? 0 : (value / positiveTotal) * 100;
-  if (value < 0) return negativeTotal === 0 ? 0 : (value / negativeTotal) * 100;
-  return 0;
-}
-
 /**
  * Discover the authoritative series order and global scale inputs together.
  * This is the only full point-by-series scan required by a chart model.
@@ -234,7 +228,7 @@ export function timelineSeriesDomain(
     let positiveTotal = 0;
     for (const [name, value] of Object.entries(point.series ?? {})) {
       names.add(name);
-      if (!Number.isFinite(value)) continue;
+      if (typeof value !== "number" || !Number.isFinite(value)) continue;
       hasFinite = true;
       maximum = Math.max(maximum, value);
       minimum = Math.min(minimum, value);
@@ -259,8 +253,11 @@ export function timelineSeriesDomain(
   } else if (names.has(fallbackLabel)) {
     rows = rows.map((row, index) => {
       const point = points[index];
-      const explicit: number | null | undefined = point?.series?.[fallbackLabel];
-      if ((explicit !== undefined && explicit !== null) || !Number.isFinite(point?.count)) return row;
+      if (
+        point?.series !== undefined
+        && Object.hasOwn(point.series, fallbackLabel)
+      ) return row;
+      if (!Number.isFinite(point?.count)) return row;
       const value = point.count;
       return {
         hasFinite: true,
@@ -343,7 +340,7 @@ export function timelineVisibleStackWindow(
         continue;
       }
       const value = stackMode === "stacked100"
-        ? normalizedStackValue(raw, summary.positiveTotal, summary.negativeTotal)
+        ? normalizeStackValue(raw, summary.positiveTotal, summary.negativeTotal)
         : raw;
       let start = 0;
       let end = value;
@@ -373,10 +370,12 @@ export function formatTimelineSeriesValue(
   fallbackLabel = "Events",
   compact = false,
 ): string {
+  const coordinate = pointSeriesCoordinate(point, name, fallbackLabel);
+  if (coordinate === null) return "No value";
   const exact = point.exactSeries?.[name]
     ?? (name === fallbackLabel ? point.exactCount : undefined);
   return exact === undefined
-    ? (compact ? COMPACT_NUMBER_FORMAT : NUMBER_FORMAT).format(pointSeriesValue(point, name, fallbackLabel))
+    ? (compact ? COMPACT_NUMBER_FORMAT : NUMBER_FORMAT).format(coordinate)
     : formatExactNumericText(exact, { compact, compactSuffix: "s" });
 }
 

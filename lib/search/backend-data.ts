@@ -681,24 +681,28 @@ function timelineFromRows(
   const points = rows.flatMap((row, index) => {
     const rawTime = typedValueToJSON(row.cells[timeIndex]);
     const date = typeof rawTime === "string" || typeof rawTime === "number" ? new Date(rawTime) : new Date(Number.NaN);
-    const chartValues = numericIndexes.flatMap((sourceIndex) => {
-      const value = chartNumericValue(row.cells[sourceIndex]);
-      return value === null
-        ? []
-        : [{ name: schema.columns[sourceIndex].fieldName, value }];
-    });
-    if (Number.isNaN(date.valueOf()) || chartValues.length === 0) return [];
-    const series = Object.fromEntries(chartValues.map(({ name, value }) => [name, value.coordinate]));
-    const exactSeries = Object.fromEntries(chartValues.flatMap(({ name, value }) =>
+    const chartValues = numericIndexes.map((sourceIndex) => ({
+      name: schema.columns[sourceIndex].fieldName,
+      value: chartNumericValue(row.cells[sourceIndex]),
+    }));
+    if (Number.isNaN(date.valueOf())) return [];
+    const presentChartValues = chartValues.flatMap(({ name, value }) =>
+      value === null ? [] : [{ name, value }],
+    );
+    const series = Object.fromEntries(chartValues.map(({ name, value }) => [
+      name,
+      value?.coordinate ?? null,
+    ]));
+    const exactSeries = Object.fromEntries(presentChartValues.flatMap(({ name, value }) =>
       value.exactText === undefined ? [] : [[name, value.exactText]],
     ));
-    const count = chartValues.reduce((sum, item) => sum + item.value.coordinate, 0);
+    const count = presentChartValues.reduce((sum, item) => sum + item.value.coordinate, 0);
     if (!Number.isFinite(count)) return [];
-    const exactIntegers = chartValues.map((item) => item.value.exactInteger);
+    const exactIntegers = presentChartValues.map((item) => item.value.exactInteger);
     const exactIntegerTotal = exactIntegers.every((value) => value !== undefined)
       ? exactIntegers.reduce((sum, value) => sum + (value ?? 0n), 0n)
       : undefined;
-    const coordinateApproximate = chartValues.some((item) => item.value.approximate)
+    const coordinateApproximate = presentChartValues.some((item) => item.value.approximate)
       || (exactIntegerTotal !== undefined && !Number.isSafeInteger(count));
     const formatter = formatters.timeline ??= new Intl.DateTimeFormat(
       "en-US",
@@ -722,8 +726,8 @@ function timelineFromRows(
       series,
       exactCount: coordinateApproximate && exactIntegerTotal !== undefined
         ? exactIntegerTotal.toString()
-        : coordinateApproximate && chartValues.length === 1
-          ? chartValues[0].value.exactText
+        : coordinateApproximate && presentChartValues.length === 1
+          ? presentChartValues[0].value.exactText
           : undefined,
       exactSeries: Object.keys(exactSeries).length > 0 ? exactSeries : undefined,
       coordinateApproximate: coordinateApproximate || undefined,
@@ -760,7 +764,7 @@ export function timechartValueFields(
 /** Preserve every split-by series instead of exporting only the synthetic total. */
 export function timechartRowsForExport(points: TimelinePoint[]): Record<string, WorkspaceStatisticsValue>[] {
   const fields = timechartValueFields(points);
-  const hasExplicitSeries = points.some((point) => point.series !== undefined && Object.keys(point.series).length > 0);
+  const hasExplicitSeries = points.some((point) => point.series !== undefined);
   return points.map((point) => ({
     _time: point.earliest ?? point.timeValue ?? point.label,
     ...Object.fromEntries(fields.map((field) => [

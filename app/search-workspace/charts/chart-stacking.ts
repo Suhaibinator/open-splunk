@@ -8,7 +8,7 @@ export interface StackedChartValue {
 
 export type StackedChartRow = StackedChartValue[];
 
-function normalizedValue(
+export function normalizeStackValue(
   value: number,
   positiveTotal: number,
   negativeTotal: number,
@@ -41,7 +41,7 @@ export function stackChartRows(
     return finite.map((raw): StackedChartValue => {
       if (raw === null) return { end: 0, raw: null, start: 0 };
       const value = mode === "stacked100"
-        ? normalizedValue(raw, positiveTotal, negativeTotal)
+        ? normalizeStackValue(raw, positiveTotal, negativeTotal)
         : raw;
       if (mode === "none") return { end: value, raw, start: 0 };
       if (value >= 0) {
