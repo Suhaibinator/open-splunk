@@ -24,20 +24,20 @@
     "lint:css": "stylelint \"app/**/*.css\""
   },
   "dependencies": {
-    "@bufbuild/protobuf": "^2.14.0",
-    "lucide-react": "^1.37.0",
-    "next": "^16.3.3",
+    "@bufbuild/protobuf": "^2.14.1",
+    "lucide-react": "^1.41.0",
+    "next": "^16.3.4",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },
   "devDependencies": {
     "@bufbuild/buf": "1.72.0",
-    "@playwright/test": "1.62.1",
-    "@types/node": "^26.4.0",
+    "@playwright/test": "1.63.0",
+    "@types/node": "^26.4.1",
     "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.2.5",
-    "oxlint": "^1.80.0",
-    "stylelint": "^17.14.1",
+    "@types/react-dom": "^19.2.7",
+    "oxlint": "^1.81.0",
+    "stylelint": "^17.15.0",
     "stylelint-config-standard": "^40.0.0",
     "ts-proto": "^2.12.1",
     "typescript": "^7.0.2"
