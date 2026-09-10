@@ -126,6 +126,32 @@ func TestStoredNestedBytesRemainDetached(t *testing.T) {
 	}
 }
 
+func TestStoredRowPreservesAndValidatesExactTimeBucket(t *testing.T) {
+	t.Parallel()
+
+	bounds := &searchjobs.TimeBucketBounds{
+		Earliest: "2026-09-10T08:09:10.123456789Z",
+		Latest:   "2026-09-10T08:09:10.12345679Z",
+	}
+	stored, err := storedRow(searchjobs.ResultRow{
+		Ordinal: 4,
+		Values: []searchjobs.Value{searchjobs.TimeValue(time.Date(2026, 9, 10, 8, 9, 10, 123_456_789, time.UTC))},
+		TimeBucket: bounds,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bounds.Earliest = "mutated"
+	restored, err := restoreRow(stored)
+	if err != nil || restored.TimeBucket == nil || restored.TimeBucket.Earliest != "2026-09-10T08:09:10.123456789Z" {
+		t.Fatalf("restored exact bucket = %#v, %v", restored.TimeBucket, err)
+	}
+	stored.TimeBucket.Latest = "2026-09-10T08:09:10.123456789Z"
+	if _, err := restoreRow(stored); err != ErrCorrupt {
+		t.Fatalf("restore malformed bounds error = %v, want ErrCorrupt", err)
+	}
+}
+
 func BenchmarkStoredRowJSON(b *testing.B) {
 	for _, test := range artifactEncodingBenchmarkRows(b) {
 		b.Run(test.name, func(b *testing.B) {

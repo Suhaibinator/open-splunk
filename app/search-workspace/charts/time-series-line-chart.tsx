@@ -54,6 +54,25 @@ interface TimeSeriesCoordinate {
   y: number;
 }
 
+/**
+ * Lay out exact bucket starts by subtracting a nearby BigInt origin before
+ * conversion to Number. Legacy rows without bounds retain ordinal spacing.
+ */
+export function timelineXCoordinates(points: readonly TimelinePoint[]): number[] {
+  if (points.length <= 1) return points.map(() => VIEWBOX_WIDTH / 2);
+  const exact = points.map((point) => point.timeCoordinateNanoseconds);
+  if (exact.some((coordinate) => coordinate === undefined)) {
+    return points.map((_point, index) => (index / (points.length - 1)) * VIEWBOX_WIDTH);
+  }
+  const coordinates = exact as bigint[];
+  const minimum = coordinates.reduce((current, coordinate) => coordinate < current ? coordinate : current);
+  const maximum = coordinates.reduce((current, coordinate) => coordinate > current ? coordinate : current);
+  const range = maximum - minimum;
+  if (range === 0n) return points.map(() => VIEWBOX_WIDTH / 2);
+  const numericRange = Number(range);
+  return coordinates.map((coordinate) => (Number(coordinate - minimum) / numericRange) * VIEWBOX_WIDTH);
+}
+
 export function timelineSeriesNames(points: TimelinePoint[], fallbackLabel = "Events"): string[] {
   const names = new Set<string>();
   points.forEach((point) => Object.keys(point.series ?? {}).forEach((name) => names.add(name)));
@@ -150,6 +169,7 @@ export function TimeSeriesLineChart({
   );
   const axisRange = maximum - minimum;
   const hasApproximateCoordinates = points.some((point) => point.coordinateApproximate === true);
+  const xCoordinates = useMemo(() => timelineXCoordinates(points), [points]);
 
   useEffect(() => {
     const plot = plotRef.current;
@@ -177,12 +197,12 @@ export function TimeSeriesLineChart({
       const projectedEnd = Math.min(maximum, Math.max(minimum, value.end));
       const projectedStart = Math.min(maximum, Math.max(minimum, value.start));
       return {
-        x: points.length <= 1 ? VIEWBOX_WIDTH / 2 : (index / (points.length - 1)) * VIEWBOX_WIDTH,
+        x: xCoordinates[index] ?? VIEWBOX_WIDTH / 2,
         y: VIEWBOX_HEIGHT - ((projectedEnd - minimum) / axisRange) * VIEWBOX_HEIGHT,
         startY: VIEWBOX_HEIGHT - ((projectedStart - minimum) / axisRange) * VIEWBOX_HEIGHT,
       };
     }),
-  })), [axisRange, maximum, minimum, points, seriesNames, stackedRows]);
+  })), [axisRange, maximum, minimum, points, seriesNames, stackedRows, xCoordinates]);
   const xTicks = tickIndices(points.length, plotWidth < 520 ? 3 : plotWidth < 820 ? 4 : 5);
   const activePoint = activeIndex === null ? null : points[activeIndex] ?? null;
   const activeCoordinates = activeIndex === null ? [] : seriesCoordinates.flatMap((series, seriesIndex) => {
@@ -200,7 +220,9 @@ export function TimeSeriesLineChart({
     if (points.length === 0) return null;
     const bounds = event.currentTarget.getBoundingClientRect();
     const ratio = Math.min(1, Math.max(0, (event.clientX - bounds.left) / Math.max(1, bounds.width)));
-    return Math.round(ratio * Math.max(0, points.length - 1));
+    const targetX = ratio * VIEWBOX_WIDTH;
+    return xCoordinates.reduce((nearest, coordinate, index) =>
+      Math.abs(coordinate - targetX) < Math.abs(xCoordinates[nearest] - targetX) ? index : nearest, 0);
   }
 
   function inspectFromPointer(event: PointerEvent<HTMLButtonElement>) {

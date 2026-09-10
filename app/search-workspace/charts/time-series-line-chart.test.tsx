@@ -5,7 +5,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import type { TimelinePoint } from "@/lib/demo/search-data";
 
-import { TimeSeriesLineChart, formatTimelineSeriesValue } from "./time-series-line-chart";
+import {
+  TimeSeriesLineChart,
+  formatTimelineSeriesValue,
+  timelineXCoordinates,
+} from "./time-series-line-chart";
 
 const splitPoints: TimelinePoint[] = [
   {
@@ -68,4 +72,16 @@ test("time-series value formatting keeps exact raw server values", () => {
   };
 
   assert.equal(formatTimelineSeriesValue(point, "east"), "900,719,925,474,099,312,345");
+});
+
+test("time-series x coordinates preserve sub-millisecond spacing from a nearby BigInt origin", () => {
+  const origin = 1_789_027_750_123_456_789n;
+  const points: TimelinePoint[] = [0n, 100n, 1_000n].map((offset, index) => ({
+    id: `point-${index}`,
+    label: `${index}`,
+    count: index,
+    timeCoordinateNanoseconds: origin + offset,
+  }));
+  assert.deepEqual(timelineXCoordinates(points), [0, 100, 1_000]);
+  assert.deepEqual(timelineXCoordinates(points.map(({ timeCoordinateNanoseconds: _time, ...point }) => point)), [0, 500, 1_000]);
 });

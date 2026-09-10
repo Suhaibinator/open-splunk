@@ -608,11 +608,50 @@ function statisticsFromRows(schema: ResultSchema, rows: ResultRow[]): { rows: Wo
   };
 }
 
+const RFC3339_NANO_UTC = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?Z$/u;
+
+function floorDivide(dividend: bigint, divisor: bigint): bigint {
+  const quotient = dividend / divisor;
+  return dividend < 0n && dividend % divisor !== 0n ? quotient - 1n : quotient;
+}
+
+function daysFromCivil(year: bigint, month: bigint, day: bigint): bigint {
+  const adjustedYear = month <= 2n ? year - 1n : year;
+  const era = floorDivide(adjustedYear, 400n);
+  const yearOfEra = adjustedYear - era * 400n;
+  const shiftedMonth = month > 2n ? month - 3n : month + 9n;
+  const dayOfYear = (153n * shiftedMonth + 2n) / 5n + day - 1n;
+  const dayOfEra = yearOfEra * 365n + yearOfEra / 4n - yearOfEra / 100n + dayOfYear;
+  return era * 146_097n + dayOfEra - 719_468n;
+}
+
+function leapYear(year: number): boolean {
+  return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+}
+
+/** Parse canonical UTC RFC3339Nano without routing exact bounds through Date. */
+export function timeBucketBoundaryNanoseconds(value: string): bigint | null {
+  const match = RFC3339_NANO_UTC.exec(value);
+  if (match === null || (match[7]?.endsWith("0") ?? false)) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const monthLengths = [31, leapYear(year) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (month < 1 || month > 12 || day < 1 || day > monthLengths[month - 1]
+    || hour > 23 || minute > 59 || second > 59) return null;
+  const days = daysFromCivil(BigInt(year), BigInt(month), BigInt(day));
+  const seconds = days * 86_400n + BigInt(hour * 3_600 + minute * 60 + second);
+  return seconds * 1_000_000_000n + BigInt((match[7] ?? "").padEnd(9, "0"));
+}
+
 function timelineFromRows(
   schema: ResultSchema,
   rows: ResultRow[],
   formatters: ResultDateTimeFormatters,
-  knownBucketWidthMs?: number,
+  _knownBucketWidthMs?: number,
 ): TimelinePoint[] {
   const timeIndex = schema.columns.findIndex((column) => /^_?time$/i.test(column.fieldName));
   if (timeIndex < 0) return [];
@@ -655,6 +694,17 @@ function timelineFromRows(
       "en-US",
       TIMELINE_TIME_FORMAT_OPTIONS,
     );
+    const exactEarliest = row.timeBucket?.earliest;
+    const exactLatest = row.timeBucket?.latest;
+    const earliestNanoseconds = exactEarliest === undefined
+      ? null
+      : timeBucketBoundaryNanoseconds(exactEarliest);
+    const latestNanoseconds = exactLatest === undefined
+      ? null
+      : timeBucketBoundaryNanoseconds(exactLatest);
+    const validTimeBucket = earliestNanoseconds !== null
+      && latestNanoseconds !== null
+      && earliestNanoseconds < latestNanoseconds;
     return [{
       id: row.rowId || `bucket-${index}`,
       label: formatter.format(date),
@@ -667,32 +717,13 @@ function timelineFromRows(
           : undefined,
       exactSeries: Object.keys(exactSeries).length > 0 ? exactSeries : undefined,
       coordinateApproximate: coordinateApproximate || undefined,
-      earliest: date.toISOString(),
+      earliest: validTimeBucket ? exactEarliest : undefined,
+      latest: validTimeBucket ? exactLatest : undefined,
+      timeCoordinateNanoseconds: validTimeBucket ? earliestNanoseconds : undefined,
+      timeValue: typeof rawTime === "string" ? rawTime : date.toISOString(),
     } satisfies TimelinePoint];
   });
-  return points.map((point, index) => {
-    const currentTime = point.earliest ? new Date(point.earliest).valueOf() : Number.NaN;
-    const previousTime = points[index - 1]?.earliest ? new Date(points[index - 1].earliest as string).valueOf() : Number.NaN;
-    const inferredWidth = Number.isFinite(currentTime - previousTime)
-      ? currentTime - previousTime
-      : knownBucketWidthMs;
-    const nextEarliest = points[index + 1]?.earliest;
-    return {
-      id: point.id,
-      label: point.label,
-      count: point.count,
-      series: point.series,
-      exactCount: point.exactCount,
-      exactSeries: point.exactSeries,
-      coordinateApproximate: point.coordinateApproximate,
-      earliest: point.earliest,
-      latest: nextEarliest ?? (
-        inferredWidth !== undefined && Number.isFinite(inferredWidth) && inferredWidth > 0
-          ? new Date(currentTime + inferredWidth).toISOString()
-          : undefined
-      ),
-    };
-  });
+  return points;
 }
 
 /** Stable field order for a timechart table or export. */
@@ -720,7 +751,7 @@ export function timechartRowsForExport(points: TimelinePoint[]): Record<string, 
   const fields = timechartValueFields(points);
   const hasExplicitSeries = points.some((point) => point.series !== undefined && Object.keys(point.series).length > 0);
   return points.map((point) => ({
-    _time: point.earliest ?? point.label,
+    _time: point.earliest ?? point.timeValue ?? point.label,
     ...Object.fromEntries(fields.map((field) => [
       field,
       hasExplicitSeries

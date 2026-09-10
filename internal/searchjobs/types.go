@@ -742,10 +742,19 @@ func (value Value) Object() ([]ObjectField, bool) {
 	return cloneObject(value.objectValue), true
 }
 
+// TimeBucketBounds is an exact half-open UTC timechart bucket interval. Both
+// fields use canonical RFC3339Nano text so transport never rounds through a
+// lower-precision timestamp representation.
+type TimeBucketBounds struct {
+	Earliest string
+	Latest   string
+}
+
 // ResultRow is a stable, zero-based row within one completed result snapshot.
 type ResultRow struct {
-	Ordinal uint64
-	Values  []Value
+	Ordinal    uint64
+	Values     []Value
+	TimeBucket *TimeBucketBounds
 
 	retainedBytes uint64
 }
@@ -847,9 +856,78 @@ func cloneSchema(source Schema) Schema {
 func cloneRows(source []ResultRow) []ResultRow {
 	result := make([]ResultRow, len(source))
 	for index, row := range source {
-		result[index] = ResultRow{Ordinal: row.Ordinal, Values: cloneValues(row.Values), retainedBytes: row.retainedBytes}
+		result[index] = ResultRow{
+			Ordinal: row.Ordinal, Values: cloneValues(row.Values),
+			TimeBucket: cloneTimeBucketBounds(row.TimeBucket), retainedBytes: row.retainedBytes,
+		}
 	}
 	return result
+}
+
+func cloneTimeBucketBounds(source *TimeBucketBounds) *TimeBucketBounds {
+	if source == nil {
+		return nil
+	}
+	return &TimeBucketBounds{
+		Earliest: strings.Clone(source.Earliest),
+		Latest:   strings.Clone(source.Latest),
+	}
+}
+
+func measureTimeBucketBounds(
+	columns []Column,
+	values []Value,
+	bounds *TimeBucketBounds,
+	payloadBytes uint64,
+	retainedBytes uint64,
+) (uint64, uint64, error) {
+	if bounds == nil {
+		return payloadBytes, retainedBytes, nil
+	}
+	earliest, earliestOK := canonicalTimeBucketBoundary(bounds.Earliest)
+	latest, latestOK := canonicalTimeBucketBoundary(bounds.Latest)
+	if !earliestOK || !latestOK || !earliest.Before(latest) {
+		return 0, 0, fmt.Errorf("%w: time bucket bounds are invalid", ErrInvalidResult)
+	}
+	timeIndex := -1
+	for index, column := range columns {
+		if column.Name == "_time" && column.Kind == ValueKindTime {
+			timeIndex = index
+			break
+		}
+	}
+	if timeIndex < 0 || timeIndex >= len(values) {
+		return 0, 0, fmt.Errorf("%w: time bucket metadata requires a timestamp _time cell", ErrInvalidResult)
+	}
+	bucketTime, ok := values[timeIndex].Time()
+	if !ok || !bucketTime.Equal(earliest) {
+		return 0, 0, fmt.Errorf("%w: time bucket earliest does not match the _time cell", ErrInvalidResult)
+	}
+	stringsBytes, err := checkedAdd(uint64(len(bounds.Earliest)), uint64(len(bounds.Latest)))
+	if err != nil {
+		return 0, 0, ErrByteLimit
+	}
+	payloadBytes, err = checkedAdd(payloadBytes, stringsBytes)
+	if err != nil {
+		return 0, 0, ErrByteLimit
+	}
+	retainedBytes, err = checkedAdd(retainedBytes, uint64(unsafe.Sizeof(TimeBucketBounds{})))
+	if err != nil {
+		return 0, 0, ErrByteLimit
+	}
+	retainedBytes, err = checkedAdd(retainedBytes, stringsBytes)
+	if err != nil {
+		return 0, 0, ErrByteLimit
+	}
+	return payloadBytes, retainedBytes, nil
+}
+
+func canonicalTimeBucketBoundary(value string) (time.Time, bool) {
+	if len(value) < len("0000-00-00T00:00:00Z") || len(value) > len("0000-00-00T00:00:00.000000000Z") {
+		return time.Time{}, false
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	return parsed, err == nil && parsed.Location() == time.UTC && parsed.Format(time.RFC3339Nano) == value
 }
 
 func cloneValues(source []Value) []Value {

@@ -285,6 +285,27 @@ func TestRowsEnforcesBoundSchemaAndStableIDs(t *testing.T) {
 	}
 }
 
+func TestRowsPreservesExactTimeBucketMetadata(t *testing.T) {
+	t.Parallel()
+
+	bounds := searchjobs.TimeBucketBounds{
+		Earliest: "2026-09-10T08:09:10.123456789Z",
+		Latest:   "2026-09-10T08:09:10.12345679Z",
+	}
+	schema := searchjobs.Schema{Columns: []searchjobs.Column{{Name: "_time", Kind: searchjobs.ValueKindTime}}}
+	rows, err := Rows(context.Background(), "job", schema, []searchjobs.ResultRow{{
+		Values: []searchjobs.Value{searchjobs.TimeValue(time.Date(2026, 9, 10, 8, 9, 10, 123_456_789, time.UTC))},
+		TimeBucket: &bounds,
+	}}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].GetTimeBucket().GetEarliest() != bounds.Earliest ||
+		rows[0].GetTimeBucket().GetLatest() != bounds.Latest {
+		t.Fatalf("protobuf time bucket = %#v, want %#v", rows, bounds)
+	}
+}
+
 func TestResultPagePreservesHTTPPagingAndCompleteness(t *testing.T) {
 	t.Parallel()
 

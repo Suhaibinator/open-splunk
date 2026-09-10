@@ -62,10 +62,16 @@ message ResultSchema {
 
 // ResultRow cells correspond positionally to ResultSchema.columns. row_id is an
 // opaque stable identifier within one search snapshot.
+message TimeBucketBounds {
+  string earliest = 1;
+  string latest = 2;
+}
+
 message ResultRow {
   string row_id = 1;
   uint64 ordinal = 2;
   repeated TypedValue cells = 3;
+  TimeBucketBounds time_bucket = 4;
 }
 
 message ResultPage {

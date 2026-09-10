@@ -500,6 +500,17 @@ func (sink *reexecutionSink) SetSchema(schema searchjobs.Schema) error {
 }
 
 func (sink *reexecutionSink) AddRow(values []searchjobs.Value) error {
+	return sink.addRow(values, nil)
+}
+
+func (sink *reexecutionSink) AddRowWithTimeBucket(
+	values []searchjobs.Value,
+	bounds searchjobs.TimeBucketBounds,
+) error {
+	return sink.addRow(values, &bounds)
+}
+
+func (sink *reexecutionSink) addRow(values []searchjobs.Value, bounds *searchjobs.TimeBucketBounds) error {
 	// Claim the sole send turn before retaining caller-owned row storage. This
 	// bounds both cloned rows and registered senders to one even if a buggy
 	// executor invokes AddRow concurrently.
@@ -534,9 +545,14 @@ func (sink *reexecutionSink) AddRow(values []searchjobs.Value) error {
 			return err
 		}
 	}
+	if bounds != nil && !validReexecutionTimeBucket(sink.expected.Columns, values, *bounds) {
+		err := sink.rememberLocked(fmt.Errorf("%w: re-executed time bucket bounds are invalid", searchjobs.ErrInvalidResult))
+		sink.mu.Unlock()
+		return err
+	}
 	cloned := slices.Clone(values)
 	sink.active++
-	row := searchjobs.ResultRow{Ordinal: sink.ordinal, Values: cloned}
+	row := searchjobs.ResultRow{Ordinal: sink.ordinal, Values: cloned, TimeBucket: cloneReexecutionTimeBucket(bounds)}
 	sink.mu.Unlock()
 
 	var sendErr error
@@ -548,6 +564,44 @@ func (sink *reexecutionSink) AddRow(values []searchjobs.Value) error {
 	case sink.rows <- row:
 	}
 	return sink.finishRow(sendErr, sendErr == nil)
+}
+
+func cloneReexecutionTimeBucket(source *searchjobs.TimeBucketBounds) *searchjobs.TimeBucketBounds {
+	if source == nil {
+		return nil
+	}
+	return &searchjobs.TimeBucketBounds{
+		Earliest: strings.Clone(source.Earliest),
+		Latest:   strings.Clone(source.Latest),
+	}
+}
+
+func validReexecutionTimeBucket(
+	columns []searchjobs.Column,
+	values []searchjobs.Value,
+	bounds searchjobs.TimeBucketBounds,
+) bool {
+	if len(bounds.Earliest) < len("0000-00-00T00:00:00Z") ||
+		len(bounds.Earliest) > len("0000-00-00T00:00:00.000000000Z") ||
+		len(bounds.Latest) < len("0000-00-00T00:00:00Z") ||
+		len(bounds.Latest) > len("0000-00-00T00:00:00.000000000Z") {
+		return false
+	}
+	earliest, earliestErr := time.Parse(time.RFC3339Nano, bounds.Earliest)
+	latest, latestErr := time.Parse(time.RFC3339Nano, bounds.Latest)
+	if earliestErr != nil || latestErr != nil || earliest.Location() != time.UTC || latest.Location() != time.UTC ||
+		earliest.Format(time.RFC3339Nano) != bounds.Earliest || latest.Format(time.RFC3339Nano) != bounds.Latest ||
+		!earliest.Before(latest) {
+		return false
+	}
+	for index, column := range columns {
+		if column.Name != "_time" || column.Kind != searchjobs.ValueKindTime || index >= len(values) {
+			continue
+		}
+		stamp, ok := values[index].Time()
+		return ok && stamp.Equal(earliest)
+	}
+	return false
 }
 
 // rejectUnregisteredRow records cancellation without decrementing the active

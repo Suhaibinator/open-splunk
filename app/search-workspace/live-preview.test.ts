@@ -60,6 +60,7 @@ function row(rowId: string, ordinal: bigint, value = rowId): ResultRow {
     rowId,
     ordinal,
     cells: [{ kind: { $case: "stringValue", value } }],
+    timeBucket: undefined,
   };
 }
 
@@ -71,6 +72,7 @@ function typedRow(
     rowId: "typed-row",
     ordinal: 0n,
     cells,
+    timeBucket: undefined,
     ...overrides,
   };
 }
@@ -327,11 +329,11 @@ test("rejects malformed rows before they enter display state", () => {
     },
     {
       name: "cell count",
-      value: preview({ rows: [{ rowId: "row-1", ordinal: 0n, cells: [] }] }),
+      value: preview({ rows: [{ rowId: "row-1", ordinal: 0n, cells: [], timeBucket: undefined }] }),
     },
     {
       name: "missing typed value",
-      value: preview({ rows: [{ rowId: "row-1", ordinal: 0n, cells: [{ kind: undefined }] }] }),
+      value: preview({ rows: [{ rowId: "row-1", ordinal: 0n, cells: [{ kind: undefined }], timeBucket: undefined }] }),
     },
   ];
 

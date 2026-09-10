@@ -28,6 +28,7 @@ function row(id: string, ordinal: bigint): ResultRow {
     rowId: id,
     ordinal,
     cells: [{ kind: { $case: "stringValue", value: id } }],
+    timeBucket: undefined,
   };
 }
 

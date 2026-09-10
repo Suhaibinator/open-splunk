@@ -108,6 +108,12 @@ func Rows(
 			Ordinal: row.Ordinal,
 			Cells:   cells,
 		}
+		if row.TimeBucket != nil {
+			result[rowIndex].TimeBucket = &opensplunk.TimeBucketBounds{
+				Earliest: strings.Clone(row.TimeBucket.Earliest),
+				Latest:   strings.Clone(row.TimeBucket.Latest),
+			}
+		}
 	}
 	return result, nil
 }

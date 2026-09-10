@@ -17,6 +17,7 @@ function rows(start: number, count: number): ResultRow[] {
     rowId: `bucket-${start + index}`,
     ordinal: BigInt(start + index),
     cells: [],
+    timeBucket: undefined,
   }));
 }
 

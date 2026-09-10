@@ -154,6 +154,14 @@ type ResultSink interface {
 	AddRow([]Value) error
 }
 
+// TimeBucketResultSink is the optional result capability used by timechart
+// producers to attach an exact bucket interval without exposing it as an SPL
+// result column. Executors must continue to support sinks that implement only
+// ResultSink.
+type TimeBucketResultSink interface {
+	AddRowWithTimeBucket([]Value, TimeBucketBounds) error
+}
+
 // ExecutionProgressDelta is one non-cumulative storage progress packet.
 // ScannedRows and ScannedBytes are exact values reported by the executor; the
 // manager never derives either counter from retained result rows.
@@ -2791,6 +2799,16 @@ func (sink *resultSink) planRowGrowthLocked(
 }
 
 func (sink *resultSink) AddRow(values []Value) error {
+	return sink.addRow(values, nil)
+}
+
+// AddRowWithTimeBucket validates and retains exact timechart bucket metadata
+// separately from the positional result cells.
+func (sink *resultSink) AddRowWithTimeBucket(values []Value, bounds TimeBucketBounds) error {
+	return sink.addRow(values, &bounds)
+}
+
+func (sink *resultSink) addRow(values []Value, bounds *TimeBucketBounds) error {
 	entry := sink.entry
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
@@ -2802,7 +2820,7 @@ func (sink *resultSink) AddRow(values []Value) error {
 		return sink.rememberLocked(fmt.Errorf("%w: row was emitted before schema", ErrInvalidResult))
 	}
 	if sink.atomicResult {
-		return sink.stageAtomicRowLocked(values)
+		return sink.stageAtomicRowLocked(values, bounds)
 	}
 	if len(values) != len(entry.job.Schema.Columns) {
 		return sink.rememberLocked(fmt.Errorf("%w: row has %d cells for %d columns", ErrInvalidResult, len(values), len(entry.job.Schema.Columns)))
@@ -2813,6 +2831,12 @@ func (sink *resultSink) AddRow(values []Value) error {
 	payloadBytes, retainedBytes, measureErr := sink.measureRowCellsLocked(entry.job.Schema.Columns, values)
 	if measureErr != nil {
 		return sink.rememberLocked(measureErr)
+	}
+	payloadBytes, retainedBytes, boundsErr := measureTimeBucketBounds(
+		entry.job.Schema.Columns, values, bounds, payloadBytes, retainedBytes,
+	)
+	if boundsErr != nil {
+		return sink.rememberLocked(boundsErr)
 	}
 	// Validate an overflow row before recording truncation. A malformed row is
 	// not evidence that another valid result existed and must remain a failed
@@ -2842,7 +2866,9 @@ func (sink *resultSink) AddRow(values []Value) error {
 	cloned := cloneValues(values)
 
 	ordinal := safecast.MustConv[uint64](len(entry.rows))
-	entry.rows = append(entry.rows, ResultRow{Ordinal: ordinal, Values: cloned, retainedBytes: rowPageBytes})
+	entry.rows = append(entry.rows, ResultRow{
+		Ordinal: ordinal, Values: cloned, TimeBucket: cloneTimeBucketBounds(bounds), retainedBytes: rowPageBytes,
+	})
 	entry.job.RowCount++
 	entry.job.ResultBytes = nextBytes
 	incrementJobVersion(&entry.job)
@@ -2876,7 +2902,7 @@ func (sink *resultSink) stageAtomicSchemaLocked(schema Schema) error {
 // public limits as AddRow, but retains it only in the private sink transaction.
 // Atomic queries treat the configured row ceiling as a hard failure, never as
 // successful truncation.
-func (sink *resultSink) stageAtomicRowLocked(values []Value) error {
+func (sink *resultSink) stageAtomicRowLocked(values []Value, bounds *TimeBucketBounds) error {
 	schema := sink.atomicSchema
 	if schema == nil || len(values) != len(schema.Columns) {
 		columns := 0
@@ -2893,6 +2919,12 @@ func (sink *resultSink) stageAtomicRowLocked(values []Value) error {
 	payloadBytes, retainedBytes, measureErr := sink.measureRowCellsLocked(schema.Columns, values)
 	if measureErr != nil {
 		return sink.rememberLocked(measureErr)
+	}
+	payloadBytes, retainedBytes, boundsErr := measureTimeBucketBounds(
+		schema.Columns, values, bounds, payloadBytes, retainedBytes,
+	)
+	if boundsErr != nil {
+		return sink.rememberLocked(boundsErr)
 	}
 	if uint64(len(sink.atomicRows)) >= sink.effectiveLimits().MaxResultRows {
 		return sink.rememberLocked(ErrRowLimit)
@@ -2917,7 +2949,7 @@ func (sink *resultSink) stageAtomicRowLocked(values []Value) error {
 	}
 	ordinal := uint64(len(sink.atomicRows))
 	sink.atomicRows = append(sink.atomicRows, ResultRow{
-		Ordinal: ordinal, Values: cloneValues(values), retainedBytes: rowPageBytes,
+		Ordinal: ordinal, Values: cloneValues(values), TimeBucket: cloneTimeBucketBounds(bounds), retainedBytes: rowPageBytes,
 	})
 	sink.atomicResultBytes = nextBytes
 	return nil

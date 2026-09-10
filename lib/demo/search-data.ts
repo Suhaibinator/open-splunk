@@ -95,6 +95,10 @@ export interface TimelinePoint {
   /** Absolute boundaries are populated by the backend adapter. */
   earliest?: string;
   latest?: string;
+  /** Exact UTC bucket start used only for relative chart geometry. */
+  timeCoordinateNanoseconds?: bigint;
+  /** Authoritative `_time` cell text retained for tabular export. */
+  timeValue?: string;
 }
 
 function raw(fields: Record<string, DemoScalar>): string {

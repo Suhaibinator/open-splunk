@@ -15,6 +15,7 @@ import {
 } from "../../gen/ts/open_splunk/value";
 import {
   adaptSearchResults,
+  timeBucketBoundaryNanoseconds,
   timechartValueFields,
   timechartRowsForExport,
 } from "./backend-data";
@@ -67,8 +68,13 @@ function countedTimestampValue(
   return { kind: { $case: "timestampValue", value: date } };
 }
 
-function row(rowId: string, ordinal: bigint, cells: TypedValue[]): ResultRow {
-  return { rowId, ordinal, cells };
+function row(
+  rowId: string,
+  ordinal: bigint,
+  cells: TypedValue[],
+  timeBucket?: { earliest: string; latest: string },
+): ResultRow {
+  return { rowId, ordinal, cells, timeBucket };
 }
 
 function trackDateTimeFormatConstructions<T>(
@@ -1131,6 +1137,50 @@ test("timechart keeps siblings when a runtime series is named count", () => {
   }]);
 });
 
+test("timechart preserves nanosecond bounds as metadata and leaves legacy rows without drilldown bounds", () => {
+  const schema: ResultSchema = {
+    schemaId: "exact-timechart-v1",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_TIME_SERIES,
+    columns: [
+      column("_time", ValueType.VALUE_TYPE_TIMESTAMP, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_EVENT_TIME),
+      column("count", ValueType.VALUE_TYPE_UINT64, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_METRIC),
+    ],
+  };
+  const earliest = "2026-09-10T08:09:10.123456789Z";
+  const latest = "2026-09-10T08:09:10.12345679Z";
+  const exact = adaptSearchResults(schema, [row("exact", 0n, [
+    timestampValue("2026-09-10T08:09:10.123Z"),
+    uint64Value(1n),
+  ], { earliest, latest })]).timeline[0];
+  assert.equal(exact?.earliest, earliest);
+  assert.equal(exact?.latest, latest);
+  assert.equal(exact?.timeCoordinateNanoseconds, 1_789_027_750_123_456_789n);
+
+  const legacy = adaptSearchResults(schema, [row("legacy", 0n, [
+    timestampValue("2026-09-10T08:09:10.123Z"),
+    uint64Value(1n),
+  ])], 1_000).timeline[0];
+  assert.equal(legacy?.earliest, undefined);
+  assert.equal(legacy?.latest, undefined);
+  assert.equal(legacy?.timeValue, "2026-09-10T08:09:10.123Z");
+  assert.deepEqual(timechartRowsForExport([legacy!]), [{ _time: "2026-09-10T08:09:10.123Z", count: 1 }]);
+});
+
+test("exact time bucket parser accepts canonical nanoseconds without Date rounding", () => {
+  assert.equal(
+    timeBucketBoundaryNanoseconds("1970-01-01T00:00:00.000000001Z"),
+    1n,
+  );
+  assert.equal(
+    timeBucketBoundaryNanoseconds("1969-12-31T23:59:59.999999999Z"),
+    -1n,
+  );
+  assert.equal(timeBucketBoundaryNanoseconds("2026-09-10T08:09:10.120Z"), null);
+  assert.equal(timeBucketBoundaryNanoseconds("2026-02-29T00:00:00Z"), null);
+  assert.equal(timeBucketBoundaryNanoseconds("2026-09-10T08:09:10+00:00"), null);
+});
+
 test("time-series rows concatenated across server pages adapt as one contiguous bucket series", () => {
   const schema: ResultSchema = {
     schemaId: "paged-timechart-v1",
@@ -1151,7 +1201,10 @@ test("time-series rows concatenated across server pages adapt as one contiguous 
     timestampValue(new Date(start + index * spanMs).toISOString()),
     uint64Value(index === 1_500 ? 5n : 0n),
     uint64Value(index === 2_016 ? 1n : 0n),
-  ]);
+  ], {
+    earliest: new Date(start + index * spanMs).toISOString(),
+    latest: new Date(start + (index + 1) * spanMs).toISOString(),
+  });
   const pages = [0, 1, 2].map((page) => Array.from(
     { length: Math.min(pageSize, totalBuckets - page * pageSize) },
     (_, offset) => bucketRow(page * pageSize + offset),
