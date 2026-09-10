@@ -651,7 +651,6 @@ function timelineFromRows(
   schema: ResultSchema,
   rows: ResultRow[],
   formatters: ResultDateTimeFormatters,
-  _knownBucketWidthMs?: number,
 ): TimelinePoint[] {
   const timeIndex = schema.columns.findIndex((column) => /^_?time$/i.test(column.fieldName));
   if (timeIndex < 0) return [];
@@ -761,23 +760,9 @@ export function timechartRowsForExport(points: TimelinePoint[]): Record<string, 
   }));
 }
 
-export function timechartSpanMilliseconds(spl: string): number | null {
-  const match = /(?:^|\|)\s*timechart\s+span\s*=\s*(\d+)(s|m|h)\b/i.exec(spl);
-  if (match === null) return null;
-  const magnitude = Number(match[1]);
-  const multiplier = match[2].toLowerCase() === "s"
-    ? 1_000
-    : match[2].toLowerCase() === "m"
-      ? 60_000
-      : 3_600_000;
-  const milliseconds = magnitude * multiplier;
-  return Number.isSafeInteger(milliseconds) && milliseconds > 0 ? milliseconds : null;
-}
-
 export function adaptSearchResults(
   schema: ResultSchema,
   rows: ResultRow[],
-  timechartBucketWidthMs?: number,
 ): AdaptedSearchResults {
   assertBrowserResultColumnCount(schema.columns.length);
   for (const column of schema.columns) {
@@ -824,7 +809,7 @@ export function adaptSearchResults(
         statistics: [],
         statisticsTable: null,
         statisticDimension: "level",
-        timeline: timelineFromRows(schema, rows, dateTimeFormatters, timechartBucketWidthMs),
+        timeline: timelineFromRows(schema, rows, dateTimeFormatters),
       };
     }
     default:

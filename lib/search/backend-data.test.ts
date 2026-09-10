@@ -53,6 +53,10 @@ function timestampValue(value: string): TypedValue {
   return { kind: { $case: "timestampValue", value: new Date(value) } };
 }
 
+function canonicalBoundary(milliseconds: number): string {
+  return new Date(milliseconds).toISOString().replace(".000Z", "Z");
+}
+
 function countedTimestampValue(
   value: string,
   counter: { calls: number },
@@ -1031,7 +1035,7 @@ test("formatter reuse refreshes the local timezone for each adaptation", (contex
       () => adaptSearchResults(schema, rows),
     );
     const utcTimeSeries = trackDateTimeFormatConstructions(
-      () => adaptSearchResults(timeSeriesSchema, timeSeriesRows, 60_000),
+      () => adaptSearchResults(timeSeriesSchema, timeSeriesRows),
     );
 
     process.env.TZ = "America/Los_Angeles";
@@ -1054,7 +1058,7 @@ test("formatter reuse refreshes the local timezone for each adaptation", (contex
       () => adaptSearchResults(schema, rows),
     );
     const pacificTimeSeries = trackDateTimeFormatConstructions(
-      () => adaptSearchResults(timeSeriesSchema, timeSeriesRows, 60_000),
+      () => adaptSearchResults(timeSeriesSchema, timeSeriesRows),
     );
 
     assert.equal(utcEvents.constructions, 1);
@@ -1110,8 +1114,8 @@ test("timechart keeps siblings when a runtime series is named count", () => {
   }).format(new Date("2026-07-21T22:00:00.000Z"));
 
   const measured = trackDateTimeFormatConstructions(() => [
-    adaptSearchResults(schema, rows, 300_000),
-    adaptSearchResults(schema, rows.slice(0, 1), 300_000),
+    adaptSearchResults(schema, rows),
+    adaptSearchResults(schema, rows.slice(0, 1)),
   ]);
   const adapted = measured.value[0];
 
@@ -1160,7 +1164,7 @@ test("timechart preserves nanosecond bounds as metadata and leaves legacy rows w
   const legacy = adaptSearchResults(schema, [row("legacy", 0n, [
     timestampValue("2026-09-10T08:09:10.123Z"),
     uint64Value(1n),
-  ])], 1_000).timeline[0];
+  ])]).timeline[0];
   assert.equal(legacy?.earliest, undefined);
   assert.equal(legacy?.latest, undefined);
   assert.equal(legacy?.timeValue, "2026-09-10T08:09:10.123Z");
@@ -1202,26 +1206,26 @@ test("time-series rows concatenated across server pages adapt as one contiguous 
     uint64Value(index === 1_500 ? 5n : 0n),
     uint64Value(index === 2_016 ? 1n : 0n),
   ], {
-    earliest: new Date(start + index * spanMs).toISOString(),
-    latest: new Date(start + (index + 1) * spanMs).toISOString(),
+    earliest: canonicalBoundary(start + index * spanMs),
+    latest: canonicalBoundary(start + (index + 1) * spanMs),
   });
   const pages = [0, 1, 2].map((page) => Array.from(
     { length: Math.min(pageSize, totalBuckets - page * pageSize) },
     (_, offset) => bucketRow(page * pageSize + offset),
   ));
 
-  const firstPageOnly = adaptSearchResults(schema, pages[0], spanMs).timeline;
+  const firstPageOnly = adaptSearchResults(schema, pages[0]).timeline;
   assert.equal(firstPageOnly.length, pageSize);
   assert.equal(firstPageOnly.reduce((sum, point) => sum + point.count, 0), 0);
 
-  const complete = adaptSearchResults(schema, pages.flat(), spanMs).timeline;
+  const complete = adaptSearchResults(schema, pages.flat()).timeline;
   assert.equal(complete.length, totalBuckets);
   assert.equal(complete.reduce((sum, point) => sum + point.count, 0), 6);
   assert.deepEqual(complete[1_500].series, { "Failed to login user": 5, "worker lane drain failed": 0 });
   assert.deepEqual(complete[2_016].series, { "Failed to login user": 0, "worker lane drain failed": 1 });
   // Bucket edges chain across the page boundary instead of restarting at each page.
   assert.equal(complete[pageSize - 1].latest, complete[pageSize].earliest);
-  assert.equal(complete[pageSize].earliest, new Date(start + pageSize * spanMs).toISOString());
-  assert.equal(complete.at(-1)?.latest, new Date(start + totalBuckets * spanMs).toISOString());
+  assert.equal(complete[pageSize].earliest, canonicalBoundary(start + pageSize * spanMs));
+  assert.equal(complete.at(-1)?.latest, canonicalBoundary(start + totalBuckets * spanMs));
   assert.deepEqual(timechartValueFields(complete, schema), ["Failed to login user", "worker lane drain failed"]);
 });

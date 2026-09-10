@@ -84,4 +84,9 @@ test("time-series x coordinates preserve sub-millisecond spacing from a nearby B
   }));
   assert.deepEqual(timelineXCoordinates(points), [0, 100, 1_000]);
   assert.deepEqual(timelineXCoordinates(points.map(({ timeCoordinateNanoseconds: _time, ...point }) => point)), [0, 500, 1_000]);
+
+  const markup = renderToStaticMarkup(<TimeSeriesLineChart points={points} />);
+  assert.match(markup, /class="time-series-chart__x-axis"[^>]*>.*left:0%/u);
+  assert.match(markup, /class="time-series-chart__x-axis"[^>]*>.*left:10%/u);
+  assert.match(markup, /class="time-series-chart__x-axis"[^>]*>.*left:100%/u);
 });

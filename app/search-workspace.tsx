@@ -88,7 +88,6 @@ import {
   compareWorkspaceStatisticValues,
   patternsFromEvents,
   resolveAbsoluteTimeRange,
-  timechartSpanMilliseconds,
   timechartRowsForExport,
   timechartValueFields,
   type AdaptedSearchResults,
@@ -3260,13 +3259,7 @@ export function SearchWorkspace({
 
   function applyBackendResultPage(page: BackendResultPage) {
     const isTimeSeries = page.schema.resultKind === ResultSetKind.RESULT_SET_KIND_TIME_SERIES;
-    const adapted = adaptSearchResults(
-      page.schema,
-      page.rows,
-      timechartSpanMilliseconds(
-        runningSearch.jobSnapshot().job?.definition?.spl ?? submittedQuery,
-      ) ?? undefined,
-    );
+    const adapted = adaptSearchResults(page.schema, page.rows);
     clearBackendPreview("disabled", "Authoritative search results loaded.");
     setBackendAuthoritativeResultsReady(true);
     setBackendEvents(adapted.events);
@@ -3342,14 +3335,13 @@ export function SearchWorkspace({
     }
     const controller = new AbortController();
     backendChartSeriesAbortRef.current = controller;
-    const bucketWidthMs = timechartSpanMilliseconds(job.definition?.spl ?? submittedQuery) ?? undefined;
     const isCurrent = () => !controller.signal.aborted
       && runningSearch.isCurrent(generation, job.searchJobId);
     const publish = (rows: ResultRow[], coverage: TimechartCoverage) => {
       if (!isCurrent()) return;
       setBackendChartSeries({
         searchJobId: job.searchJobId,
-        points: adaptSearchResults(firstPage.schema, rows, bucketWidthMs).timeline,
+        points: adaptSearchResults(firstPage.schema, rows).timeline,
         coverage,
       });
     };
@@ -3798,13 +3790,7 @@ export function SearchWorkspace({
     }
 
     try {
-      const adapted = adaptSearchResults(
-        schema,
-        applied.snapshot.rows,
-        timechartSpanMilliseconds(
-          runningSearch.jobSnapshot().job?.definition?.spl ?? submittedQuery,
-        ) ?? undefined,
-      );
+      const adapted = adaptSearchResults(schema, applied.snapshot.rows);
       setBackendPreviewDisplay({ schema, snapshot: applied.snapshot, adapted });
       runningSearch.applyPreview(applied.snapshot, "live");
       setBackendResultSchema(schema);

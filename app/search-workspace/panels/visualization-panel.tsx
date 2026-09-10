@@ -56,6 +56,8 @@ interface VisualizationPanelProps {
   previewTruncated: boolean;
 }
 
+const TIMELINE_SERIES_WINDOW_SIZE = 24;
+
 interface StatisticSeriesDefinition {
   key: string;
   label: string;
@@ -635,6 +637,20 @@ export function VisualizationPanel({
   const chartAxisMaximum = maxTimelineCount;
   const timelineAxisLabels = timeAxisLabels(timelinePoints);
   const timelineSeries = timelineSeriesNames(timelinePoints);
+  const [timelineSeriesOffset, setTimelineSeriesOffset] = useState(0);
+  const maximumTimelineSeriesOffset = Math.floor(
+    Math.max(0, timelineSeries.length - 1) / TIMELINE_SERIES_WINDOW_SIZE,
+  ) * TIMELINE_SERIES_WINDOW_SIZE;
+  const boundedTimelineSeriesOffset = Math.min(
+    timelineSeriesOffset,
+    maximumTimelineSeriesOffset,
+  );
+  const timelineSeriesEnd = Math.min(
+    timelineSeries.length,
+    boundedTimelineSeriesOffset + TIMELINE_SERIES_WINDOW_SIZE,
+  );
+  const visibleTimelineSeries = timelineSeries.slice(boundedTimelineSeriesOffset, timelineSeriesEnd);
+  const timelineSeriesWindowed = timelineSeries.length > TIMELINE_SERIES_WINDOW_SIZE;
   const hasApproximateCoordinates = isTimechartResult
     ? timelinePoints.some((point) => point.coordinateApproximate === true)
     : statisticsRows.some((row) =>
@@ -734,6 +750,8 @@ export function VisualizationPanel({
           <TimeSeriesLineChart
             chartStyle={effectiveChartStyle === "area" ? "area" : "line"}
             points={timelinePoints}
+            seriesEnd={timelineSeriesEnd}
+            seriesStart={boundedTimelineSeriesOffset}
             stackMode={effectiveStackMode}
           />
         ) : isTimechartResult ? (
@@ -784,9 +802,9 @@ export function VisualizationPanel({
           <div className="chart-legend">
             {isTimechartResult
               ? isTimeSeriesChart
-                ? timelineSeries.map((name, index) => (
+                ? visibleTimelineSeries.map((name, index) => (
                   <span key={name}>
-                    <i style={{ backgroundColor: seriesColor(index) }} />
+                    <i style={{ backgroundColor: seriesColor(boundedTimelineSeriesOffset + index) }} />
                     {timelineSeriesDisplayName(name)}
                   </span>
                 ))
@@ -824,7 +842,33 @@ export function VisualizationPanel({
           }}><SelectOption value="none">None</SelectOption><SelectOption value="stacked">Stacked</SelectOption><SelectOption value="stacked100">100%</SelectOption></Select></label>
         ) : null}
         {isTimeSeriesChart ? (
-          <div className="visualization-interaction-note"><strong>Inspect values</strong><span>Hover, tap, or focus the plot and use the arrow keys.</span></div>
+          <>
+            {timelineSeriesWindowed ? (
+              <div className="visualization-interaction-note">
+                <strong>Rendered series</strong>
+                <span>Showing {boundedTimelineSeriesOffset + 1}–{timelineSeriesEnd} of {timelineSeries.length}. Every series remains available here and in Statistics.</span>
+                <div className="visualization-series-controls">
+                  <button
+                    className="button button--secondary button--compact"
+                    type="button"
+                    disabled={boundedTimelineSeriesOffset === 0}
+                    onClick={() => setTimelineSeriesOffset(Math.max(0, boundedTimelineSeriesOffset - TIMELINE_SERIES_WINDOW_SIZE))}
+                  >
+                    Previous series
+                  </button>
+                  <button
+                    className="button button--secondary button--compact"
+                    type="button"
+                    disabled={timelineSeriesEnd === timelineSeries.length}
+                    onClick={() => setTimelineSeriesOffset(timelineSeriesEnd)}
+                  >
+                    Next series
+                  </button>
+                </div>
+              </div>
+            ) : null}
+            <div className="visualization-interaction-note"><strong>Inspect values</strong><span>Hover, tap, or focus the plot and use the arrow keys.</span></div>
+          </>
         ) : (
           <>
             <label><span>Data labels</span><input type="checkbox" checked={showDataLabels} disabled={!hasCategoricalChart} onChange={(event) => {

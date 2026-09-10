@@ -83,6 +83,21 @@ test("single-series timecharts force unsupported stacking to none", () => {
   assert.doesNotMatch(markup, /<span>Stacking<\/span>/u);
 });
 
+test("wide timecharts bound rendered series and expose paging controls", () => {
+  const series = Object.fromEntries(Array.from({ length: 30 }, (_, index) => [`series-${index + 1}`, index + 1]));
+  const markup = renderPanel({
+    chartStyle: "line",
+    isTimechartResult: true,
+    timelinePoints: [{ id: "wide", label: "00:00", count: 465, series }],
+  });
+
+  assert.equal((markup.match(/class="time-series-chart__line time-series-chart__series"/gu) ?? []).length, 24);
+  assert.match(markup, /Showing 1–24 of 30/u);
+  assert.match(markup, />Previous series<\/button>/u);
+  assert.match(markup, />Next series<\/button>/u);
+  assert.doesNotMatch(markup, /data-series-name="series-25"/u);
+});
+
 test("horizontal categorical series render cumulative stacked geometry", () => {
   const markup = renderPanel({
     chartStyle: "horizontal",

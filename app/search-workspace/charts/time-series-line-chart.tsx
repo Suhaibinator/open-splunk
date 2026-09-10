@@ -44,7 +44,9 @@ export const TIME_SERIES_COLORS = [
 interface TimeSeriesLineChartProps {
   chartStyle?: "area" | "line";
   points: TimelinePoint[];
+  seriesEnd?: number;
   seriesLabel?: string;
+  seriesStart?: number;
   stackMode?: StackMode;
 }
 
@@ -148,7 +150,9 @@ function formatAxisTick(value: number, approximate: boolean, stackMode: StackMod
 export function TimeSeriesLineChart({
   chartStyle = "line",
   points,
+  seriesEnd,
   seriesLabel = "Events",
+  seriesStart = 0,
   stackMode = "none",
 }: TimeSeriesLineChartProps) {
   const plotRef = useRef<HTMLDivElement>(null);
@@ -159,6 +163,12 @@ export function TimeSeriesLineChart({
   const [plotWidth, setPlotWidth] = useState(900);
   const [keyboardActive, setKeyboardActive] = useState(false);
   const seriesNames = useMemo(() => timelineSeriesNames(points, seriesLabel), [points, seriesLabel]);
+  const boundedSeriesStart = Math.min(Math.max(0, seriesStart), Math.max(0, seriesNames.length - 1));
+  const boundedSeriesEnd = Math.min(
+    seriesNames.length,
+    Math.max(boundedSeriesStart + 1, seriesEnd ?? seriesNames.length),
+  );
+  const renderedSeriesNames = seriesNames.slice(boundedSeriesStart, boundedSeriesEnd);
   const stackedRows = useMemo(() => stackChartRows(
     points.map((point) => seriesNames.map((name) => pointSeriesCoordinate(point, name, seriesLabel))),
     stackMode,
@@ -189,27 +199,31 @@ export function TimeSeriesLineChart({
     setActiveIndex((current) => current === null || points.length === 0 ? null : Math.min(current, points.length - 1));
   }
 
-  const seriesCoordinates = useMemo(() => seriesNames.map((name, seriesIndex) => ({
-    name,
-    points: points.map((_point, index) => {
-      const value = stackedRows[index]?.[seriesIndex];
-      if (value === undefined || value.raw === null) return null;
-      const projectedEnd = Math.min(maximum, Math.max(minimum, value.end));
-      const projectedStart = Math.min(maximum, Math.max(minimum, value.start));
-      return {
-        x: xCoordinates[index] ?? VIEWBOX_WIDTH / 2,
-        y: VIEWBOX_HEIGHT - ((projectedEnd - minimum) / axisRange) * VIEWBOX_HEIGHT,
-        startY: VIEWBOX_HEIGHT - ((projectedStart - minimum) / axisRange) * VIEWBOX_HEIGHT,
-      };
-    }),
-  })), [axisRange, maximum, minimum, points, seriesNames, stackedRows, xCoordinates]);
+  const seriesCoordinates = useMemo(() => renderedSeriesNames.map((name, renderedSeriesIndex) => {
+    const seriesIndex = boundedSeriesStart + renderedSeriesIndex;
+    return {
+      name,
+      seriesIndex,
+      points: points.map((_point, index) => {
+        const value = stackedRows[index]?.[seriesIndex];
+        if (value === undefined || value.raw === null) return null;
+        const projectedEnd = Math.min(maximum, Math.max(minimum, value.end));
+        const projectedStart = Math.min(maximum, Math.max(minimum, value.start));
+        return {
+          x: xCoordinates[index] ?? VIEWBOX_WIDTH / 2,
+          y: VIEWBOX_HEIGHT - ((projectedEnd - minimum) / axisRange) * VIEWBOX_HEIGHT,
+          startY: VIEWBOX_HEIGHT - ((projectedStart - minimum) / axisRange) * VIEWBOX_HEIGHT,
+        };
+      }),
+    };
+  }), [axisRange, boundedSeriesStart, maximum, minimum, points, renderedSeriesNames, stackedRows, xCoordinates]);
   const xTicks = tickIndices(points.length, plotWidth < 520 ? 3 : plotWidth < 820 ? 4 : 5);
   const activePoint = activeIndex === null ? null : points[activeIndex] ?? null;
-  const activeCoordinates = activeIndex === null ? [] : seriesCoordinates.flatMap((series, seriesIndex) => {
+  const activeCoordinates = activeIndex === null ? [] : seriesCoordinates.flatMap((series) => {
     const coordinate = series.points[activeIndex];
     return coordinate === undefined || coordinate === null
       ? []
-      : [{ ...coordinate, name: series.name, seriesIndex }];
+      : [{ ...coordinate, name: series.name, seriesIndex: series.seriesIndex }];
   });
   const activeCoordinate = activeCoordinates.reduce<(typeof activeCoordinates)[number] | null>((highest, coordinate) =>
     highest === null || coordinate.y < highest.y ? coordinate : highest, null);
@@ -253,7 +267,7 @@ export function TimeSeriesLineChart({
   const tooltipVertical = activeYPercent < 28 ? "below" : "above";
   const activeDescription = activePoint === null
     ? `Inspect ${seriesLabel.toLowerCase()} over time. Use Left and Right arrow keys to move between time buckets.`
-    : `${activePoint.label}, ${seriesNames.map((name) => `${timelineSeriesDisplayName(name)} ${formatTimelineSeriesValue(activePoint, name, seriesLabel)}`).join(", ")}${activePoint.coordinateApproximate ? ". Chart position is approximate; displayed values are exact." : ""}`;
+    : `${activePoint.label}, ${renderedSeriesNames.map((name) => `${timelineSeriesDisplayName(name)} ${formatTimelineSeriesValue(activePoint, name, seriesLabel)}`).join(", ")}${activePoint.coordinateApproximate ? ". Chart position is approximate; displayed values are exact." : ""}`;
 
   return (
     <div
@@ -284,11 +298,11 @@ export function TimeSeriesLineChart({
               );
             })}
           </g>
-          {chartStyle === "area" ? seriesCoordinates.flatMap((series, seriesIndex) => (
+          {chartStyle === "area" ? seriesCoordinates.flatMap((series) => (
             contiguousSegments(series.points).map((segment) => (
               <polygon
                 className="time-series-chart__area time-series-chart__series"
-                data-series-color={seriesColorIndex(seriesIndex)}
+                data-series-color={seriesColorIndex(series.seriesIndex)}
                 data-series-name={series.name}
                 key={`${series.name}-area-${segment[0]?.x}`}
                 points={[
@@ -298,11 +312,11 @@ export function TimeSeriesLineChart({
               />
             ))
           )) : null}
-          {seriesCoordinates.flatMap((series, seriesIndex) => (
+          {seriesCoordinates.flatMap((series) => (
             contiguousSegments(series.points).map((segment) => (
               <polyline
                 className="time-series-chart__line time-series-chart__series"
-                data-series-color={seriesColorIndex(seriesIndex)}
+                data-series-color={seriesColorIndex(series.seriesIndex)}
                 data-series-name={series.name}
                 key={`${series.name}-line-${segment[0]?.x}`}
                 points={segment.map(({ x, y }) => `${x.toFixed(2)},${y.toFixed(2)}`).join(" ")}
@@ -349,12 +363,12 @@ export function TimeSeriesLineChart({
               style={{ left: `${activeXPercent}%`, top: `${activeYPercent}%` }}
             >
               <strong>{activePoint.label}</strong>
-              {seriesNames.map((name, seriesIndex) => (
+              {renderedSeriesNames.map((name, renderedSeriesIndex) => (
                 <span key={name}>
                   <i
                     aria-hidden="true"
                     className="time-series-chart__series"
-                    data-series-color={seriesColorIndex(seriesIndex)}
+                    data-series-color={seriesColorIndex(boundedSeriesStart + renderedSeriesIndex)}
                   />
                   <span>{timelineSeriesDisplayName(name)}</span>
                   <b>{formatTimelineSeriesValue(activePoint, name, seriesLabel)}</b>
@@ -366,7 +380,15 @@ export function TimeSeriesLineChart({
       </div>
       <div className="time-series-chart__axis-spacer" aria-hidden="true" />
       <div className="time-series-chart__x-axis" aria-hidden="true">
-        {xTicks.map((index) => <span key={points[index].id}>{points[index].label}</span>)}
+        {xTicks.map((index, tickIndex) => (
+          <span
+            key={points[index].id}
+            data-edge={tickIndex === 0 ? "start" : tickIndex === xTicks.length - 1 ? "end" : undefined}
+            style={{ left: `${(xCoordinates[index] / VIEWBOX_WIDTH) * 100}%` }}
+          >
+            {points[index].label}
+          </span>
+        ))}
       </div>
       <p className="sr-only" id={hintId}>Use Left and Right arrow keys to move through time buckets. Home and End jump to the first and last bucket. Escape clears the value.</p>
       <output className="sr-only" aria-live="polite">{activePoint === null ? "" : activeDescription}</output>
