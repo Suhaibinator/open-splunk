@@ -388,8 +388,20 @@ func automaticTimeSpanAtLeast(candidate, minimum spl.TimeSpan) bool {
 }
 
 func nominalTimeSpanNanoseconds(span spl.TimeSpan) (*big.Int, bool) {
+	magnitude := new(big.Int).SetUint64(span.Magnitude)
+	normalizedUnit := span.Unit
+	// Calendar aliases describe the same month grid. Normalize before the
+	// nominal duration comparison so a year cannot round up past twelve months.
+	switch normalizedUnit {
+	case spl.TimeSpanUnitQuarter:
+		magnitude.Mul(magnitude, big.NewInt(3))
+		normalizedUnit = spl.TimeSpanUnitMonth
+	case spl.TimeSpanUnitYear:
+		magnitude.Mul(magnitude, big.NewInt(12))
+		normalizedUnit = spl.TimeSpanUnitMonth
+	}
 	var unit uint64
-	switch span.Unit {
+	switch normalizedUnit {
 	case spl.TimeSpanUnitMicrosecond:
 		unit = 1000
 	case spl.TimeSpanUnitMillisecond:
@@ -398,18 +410,14 @@ func nominalTimeSpanNanoseconds(span spl.TimeSpan) (*big.Int, bool) {
 		unit = 10_000_000
 	case spl.TimeSpanUnitDecisecond:
 		unit = 100_000_000
-	case spl.TimeSpanUnitQuarter:
-		unit = 90 * 86400 * 1_000_000_000
-	case spl.TimeSpanUnitYear:
-		unit = 365 * 86400 * 1_000_000_000
 	default:
-		seconds, ok := nominalTimeSpanSeconds(spl.TimeSpan{Magnitude: 1, Unit: span.Unit})
+		seconds, ok := nominalTimeSpanSeconds(spl.TimeSpan{Magnitude: 1, Unit: normalizedUnit})
 		if !ok {
 			return nil, false
 		}
 		unit = seconds * 1_000_000_000
 	}
-	return new(big.Int).Mul(new(big.Int).SetUint64(span.Magnitude), new(big.Int).SetUint64(unit)), span.Magnitude > 0
+	return magnitude.Mul(magnitude, new(big.Int).SetUint64(unit)), span.Magnitude > 0
 }
 
 func nominalTimeSpanSeconds(span spl.TimeSpan) (uint64, bool) {

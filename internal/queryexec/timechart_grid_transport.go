@@ -19,21 +19,31 @@ import (
 type timechartGridRows struct {
 	driver.Rows
 	present []uint8
+	// Seven columns is the widest exact grid transport: ordinal, boundary,
+	// occupancy, names, values, value-presence, and invalid-value marker.
+	destinations [7]any
+	rowPresent   uint8
 }
 
 func (rows *timechartGridRows) Scan(dest ...any) error {
-	var present uint8
-	destinations := make([]any, 0, len(dest)+1)
-	destinations = append(destinations, dest[:2]...)
-	destinations = append(destinations, &present)
-	destinations = append(destinations, dest[2:]...)
-	if err := rows.Rows.Scan(destinations...); err != nil {
+	if len(dest) < 2 || len(dest)+1 > len(rows.destinations) {
+		return fmt.Errorf("%w: timechart grid scan width is invalid", searchjobs.ErrInvalidResult)
+	}
+	destinations := rows.destinations[:len(dest)+1]
+	copy(destinations, dest[:2])
+	destinations[2] = &rows.rowPresent
+	copy(destinations[3:], dest[2:])
+	rows.rowPresent = 0
+	err := rows.Rows.Scan(destinations...)
+	// Release caller pointers after each scan while retaining bounded storage.
+	clear(destinations)
+	if err != nil {
 		return err
 	}
-	if present > 1 {
+	if rows.rowPresent > 1 {
 		return fmt.Errorf("%w: timechart bucket presence is invalid", searchjobs.ErrInvalidResult)
 	}
-	rows.present = append(rows.present, present)
+	rows.present = append(rows.present, rows.rowPresent)
 	return nil
 }
 

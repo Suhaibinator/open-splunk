@@ -63,3 +63,76 @@ func TestTimechartExactBoundaryRejectsInteriorMutation(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestTimechartGridScanReusesStorageWithoutRetainingCallerDestinations(t *testing.T) {
+	first := time.Unix(0, 0).UTC()
+	source := &fakeRows{data: [][]any{{uint64(0), first, uint8(1), uint64(4)}, {uint64(1), first.Add(time.Millisecond), uint8(0), uint64(0)}}}
+	wrapped := &timechartGridRows{Rows: source, present: make([]uint8, 0, 2)}
+	var ordinal0, count0, ordinal1, count1 uint64
+	var bucket0, bucket1 time.Time
+	if !wrapped.Next() {
+		t.Fatal("first row missing")
+	}
+	if err := wrapped.Scan(&ordinal0, &bucket0, &count0); err != nil {
+		t.Fatal(err)
+	}
+	if !wrapped.Next() {
+		t.Fatal("second row missing")
+	}
+	if err := wrapped.Scan(&ordinal1, &bucket1, &count1); err != nil {
+		t.Fatal(err)
+	}
+	if ordinal0 != 0 || count0 != 4 || !bucket0.Equal(first) || ordinal1 != 1 || count1 != 0 || !bucket1.Equal(first.Add(time.Millisecond)) {
+		t.Fatal("scan destinations from different rows alias")
+	}
+	if len(wrapped.present) != 2 || wrapped.present[0] != 1 || wrapped.present[1] != 0 {
+		t.Fatalf("presence=%v", wrapped.present)
+	}
+	for _, destination := range wrapped.destinations {
+		if destination != nil {
+			t.Fatal("scan retains a caller destination")
+		}
+	}
+}
+
+func TestTimechartGridScanRejectsMalformedPresenceAndWidth(t *testing.T) {
+	source := &fakeRows{data: [][]any{{uint64(0), time.Unix(0, 0).UTC(), uint8(2), uint64(0)}}}
+	wrapped := &timechartGridRows{Rows: source, present: make([]uint8, 0, 1)}
+	if !wrapped.Next() {
+		t.Fatal("fixture row missing")
+	}
+	var ordinal, count uint64
+	var bucket time.Time
+	if err := wrapped.Scan(&ordinal, &bucket, &count); err == nil {
+		t.Fatal("invalid occupancy accepted")
+	}
+	if len(wrapped.present) != 0 {
+		t.Fatal("invalid occupancy was retained")
+	}
+	for _, destinations := range [][]any{nil, {&ordinal}, make([]any, 7)} {
+		if err := wrapped.Scan(destinations...); err == nil {
+			t.Fatal("invalid scan width accepted")
+		}
+	}
+}
+
+func TestTimechartGridScanAcceptsWidestNumericTransport(t *testing.T) {
+	first := time.Unix(0, 0).UTC()
+	source := &fakeRows{data: [][]any{{uint64(0), first, uint8(1), []string{"0:api"}, []float64{3.5}, []uint8{1}, uint8(0)}}}
+	wrapped := &timechartGridRows{Rows: source, present: make([]uint8, 0, 1)}
+	if !wrapped.Next() {
+		t.Fatal("fixture row missing")
+	}
+	var ordinal uint64
+	var bucket time.Time
+	var names []string
+	var values []float64
+	var present []uint8
+	var invalid uint8
+	if err := wrapped.Scan(&ordinal, &bucket, &names, &values, &present, &invalid); err != nil {
+		t.Fatal(err)
+	}
+	if ordinal != 0 || !bucket.Equal(first) || len(names) != 1 || names[0] != "0:api" || len(values) != 1 || values[0] != 3.5 || len(present) != 1 || present[0] != 1 || invalid != 0 || len(wrapped.present) != 1 || wrapped.present[0] != 1 {
+		t.Fatal("numeric transport fields changed while extracting occupancy")
+	}
+}
