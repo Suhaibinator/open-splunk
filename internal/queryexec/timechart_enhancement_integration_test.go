@@ -24,54 +24,58 @@ func queryIntegrationTestTimechartEnhancementSeams(
 ) {
 	t.Helper()
 
-	t.Run("unlimited split suffix scans events once and emits no other", func(t *testing.T) {
-		const source = `index=main source="timechart-top"` +
-			` | timechart span=5m cont=false count BY path limit=0 useother=true` +
-			` | head 1`
-		compiled := queryIntegrationCompileSearchRange(
-			t,
-			source,
-			indexTime,
-			base,
-			base.Add(5*time.Minute),
-		)
-		if strings.Count(compiled.SQL, `FROM "open_splunk"."events"`) != 1 {
-			t.Fatalf("initial stage does not contain exactly one events source:\n%s", compiled.SQL)
-		}
-		explained, err := explainer.Explain(ctx, compiled)
-		if err != nil {
-			t.Fatalf("EXPLAIN enhanced split timechart: %v", err)
-		}
-		physical := queryIntegrationAssertStructuredExplain(t, explained)
-		if len(physical.Reads) != 1 {
-			t.Fatalf("initial timechart physical reads = %#v, want one", physical.Reads)
-		}
-
-		job, page := queryIntegrationRunSearchRange(
-			t,
-			ctx,
-			executor,
-			indexTime,
-			"queryexec-timechart-enhanced-limit-zero",
-			source,
-			base,
-			base.Add(5*time.Minute),
-		)
-		if job.State != searchjobs.StateCompleted || len(page.Rows) != 1 {
-			t.Fatalf("unlimited split suffix job=%#v page=%#v", job, page)
-		}
+	t.Run("wide authored limits scan events once and emit no other", func(t *testing.T) {
 		wantColumns := []string{
 			"_time", "a", "b", "c", "d", "e", "f", "g", "h", "hot", "i", "j", "k", "NULL",
 		}
-		gotColumns := make([]string, len(page.Schema.Columns))
-		for index, column := range page.Schema.Columns {
-			gotColumns[index] = column.Name
-		}
-		if !slices.Equal(gotColumns, wantColumns) {
-			t.Fatalf("unlimited split columns = %v, want %v", gotColumns, wantColumns)
-		}
-		if slices.Contains(gotColumns, "OTHER") {
-			t.Fatalf("limit=0 emitted OTHER without an exclusion: %v", gotColumns)
+		for _, limit := range []string{"0", "20"} {
+			t.Run("limit="+limit, func(t *testing.T) {
+				source := `index=main source="timechart-top"` +
+					` | timechart span=5m cont=false count BY path limit=` + limit + ` useother=true` +
+					` | head 1`
+				compiled := queryIntegrationCompileSearchRange(
+					t,
+					source,
+					indexTime,
+					base,
+					base.Add(5*time.Minute),
+				)
+				if strings.Count(compiled.SQL, `FROM "open_splunk"."events"`) != 1 {
+					t.Fatalf("initial stage does not contain exactly one events source:\n%s", compiled.SQL)
+				}
+				explained, err := explainer.Explain(ctx, compiled)
+				if err != nil {
+					t.Fatalf("EXPLAIN enhanced split timechart: %v", err)
+				}
+				physical := queryIntegrationAssertStructuredExplain(t, explained)
+				if len(physical.Reads) != 1 {
+					t.Fatalf("initial timechart physical reads = %#v, want one", physical.Reads)
+				}
+
+				job, page := queryIntegrationRunSearchRange(
+					t,
+					ctx,
+					executor,
+					indexTime,
+					"queryexec-timechart-enhanced-limit-"+limit,
+					source,
+					base,
+					base.Add(5*time.Minute),
+				)
+				if job.State != searchjobs.StateCompleted || len(page.Rows) != 1 {
+					t.Fatalf("limit=%s split suffix job=%#v page=%#v", limit, job, page)
+				}
+				gotColumns := make([]string, len(page.Schema.Columns))
+				for index, column := range page.Schema.Columns {
+					gotColumns[index] = column.Name
+				}
+				if !slices.Equal(gotColumns, wantColumns) {
+					t.Fatalf("limit=%s split columns = %v, want %v", limit, gotColumns, wantColumns)
+				}
+				if slices.Contains(gotColumns, "OTHER") {
+					t.Fatalf("limit=%s emitted OTHER without an exclusion: %v", limit, gotColumns)
+				}
+			})
 		}
 	})
 

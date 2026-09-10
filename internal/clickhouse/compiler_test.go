@@ -1684,10 +1684,9 @@ func TestCompileTimechartRevalidatesExactGridAndOutputContract(t *testing.T) {
 			},
 		},
 		{
-			name: "series limit raised past the maximum",
-			corrupt: func(query *plan.Query, operator *plan.Timechart) {
+			name: "series limit raised without widening output",
+			corrupt: func(_ *plan.Query, operator *plan.Timechart) {
 				operator.Split.SeriesLimit = 11
-				query.DynamicOutput.MaxSeries = 13
 			},
 		},
 		{
