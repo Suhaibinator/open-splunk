@@ -47,6 +47,7 @@ type timechartStageSink struct {
 	columns       []clickhouse.RelationColumn
 	rows          [][]any
 	maxResultRows uint64
+	bucketEnds    []time.Time
 }
 
 func (sink *timechartStageSink) SetSchema(schema searchjobs.Schema) error {
@@ -173,7 +174,7 @@ func (executor *Executor) executeTimechartStages(ctx context.Context, query clic
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		query, err = query.ContinueContext(ctx, stage.columns, stage.rows)
+		query, err = query.ContinueWithTimeBucketsContext(ctx, stage.columns, stage.rows, stage.bucketEnds)
 		if err != nil {
 			return err
 		}
@@ -184,4 +185,30 @@ func (executor *Executor) executeTimechartStages(ctx context.Context, query clic
 		}
 	}
 	return frozen.executeSingle(ctx, query, stagedFinalSink{ResultSink: sink, stageBudget: budget})
+}
+
+func (sink *timechartStageSink) AddRowWithTimeBucket(values []searchjobs.Value, bounds searchjobs.TimeBucketBounds) error {
+	start, err := time.Parse(time.RFC3339Nano, bounds.Earliest)
+	end, endErr := time.Parse(time.RFC3339Nano, bounds.Latest)
+	if err != nil || endErr != nil || start.UTC().Format(time.RFC3339Nano) != bounds.Earliest || end.UTC().Format(time.RFC3339Nano) != bounds.Latest || !start.Before(end) || len(values) == 0 {
+		return searchjobs.ErrInvalidResult
+	}
+	actual, ok := values[0].Time()
+	if !ok || !actual.Equal(start) {
+		return searchjobs.ErrInvalidResult
+	}
+	if len(sink.rows) != len(sink.bucketEnds) {
+		return searchjobs.ErrInvalidResult
+	}
+	if err := sink.charge(2 * uint64(unsafe.Sizeof(time.Time{}))); err != nil {
+		return err
+	}
+	if err := sink.AddRow(values); err != nil {
+		return err
+	}
+	sink.bucketEnds = append(sink.bucketEnds, end)
+	return nil
+}
+func (sink stagedFinalSink) AddRowWithTimeBucket(values []searchjobs.Value, bounds searchjobs.TimeBucketBounds) error {
+	return publishWithTimeBucket(sink.ResultSink, values, bounds)
 }

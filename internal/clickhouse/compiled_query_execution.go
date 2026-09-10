@@ -607,7 +607,7 @@ func compiledExecutionDigestContext(
 	if err != nil {
 		return compiledExecutionSeal{}, false, err
 	}
-	if !validResultContainerOutputs(compiled) ||
+	if !validResultTimeBucketOutput(compiled) || !validResultContainerOutputs(compiled) ||
 		!validResultOptionalMultivalueOutputs(compiled) ||
 		!validResultStringOrBytesOutputs(compiled) ||
 		!validResultFieldPresentations(compiled) ||
@@ -618,6 +618,11 @@ func compiledExecutionDigestContext(
 	}
 	digest := sha256.New()
 	writeTokenPart(digest, compiledExecutionSealDomain)
+	writeBool(digest, compiled.TimeBucket != nil)
+	if compiled.TimeBucket != nil {
+		writeInt64(digest, int64(compiled.TimeBucket.TimeIndex))
+	}
+	writeBool(digest, compiled.hasTimechartStage)
 	writeTimechartContinuation(digest, compiled)
 	writeTokenPart(digest, compiled.SQL)
 	writeStringSlice(digest, compiled.OutputFields)
@@ -888,6 +893,10 @@ func (compiled CompiledQuery) CloneForExecutionContext(
 		return CompiledQuery{}, false, nil
 	}
 	cloned := compiled
+	if compiled.TimeBucket != nil {
+		bounds := *compiled.TimeBucket
+		cloned.TimeBucket = &bounds
+	}
 	cloned.SQL = strings.Clone(compiled.SQL)
 	cloned.OutputFields = cloneStrings(compiled.OutputFields)
 	cloned.OutputPresentations = cloneResultFieldPresentations(

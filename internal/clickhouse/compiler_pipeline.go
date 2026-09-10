@@ -101,6 +101,7 @@ func (c Compiler) compileWithFinalizerContext(
 		compiled CompiledQuery,
 		complexityRange spl.Range,
 	) (CompiledQuery, error) {
+		compiled.hasTimechartStage = state.context.hasTimechartStage
 		compiled.relationInput = c.relationInput
 		compiled.atomicResult = compiled.continuation != nil || (state.context != nil && state.context.atomicResult)
 		terminalWide := compiled.Chart != nil || compiled.Timechart != nil
@@ -978,6 +979,7 @@ func (c Compiler) compileWithFinalizerContext(
 			nextState, args = bindChronologicalBarrier(nextState, barrier, args)
 			state = nextState
 		case *plan.Timechart:
+			state.context.hasTimechartStage = true
 			if !permitTerminalWideOperators {
 				return CompiledQuery{}, errors.New("compile ClickHouse query: timechart is unavailable for event analysis")
 			}

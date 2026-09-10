@@ -714,10 +714,14 @@ func (executor *Executor) executeSingle(ctx context.Context, query clickhouse.Co
 		}
 		return publishChart(executionContext, sink, *query.Chart, buffered)
 	}
+	ordinaryColumns, ordinaryTypes, err := ordinaryTimeBucketColumns(query, columns, columnTypes)
+	if err != nil {
+		return err
+	}
 	containerTransports, optionalMultivalueTransports, err := validateOrdinaryResultColumns(
 		query,
-		columns,
-		columnTypes,
+		ordinaryColumns,
+		ordinaryTypes,
 		sparseFieldIndex,
 	)
 	if err != nil {
@@ -725,8 +729,8 @@ func (executor *Executor) executeSingle(ctx context.Context, query clickhouse.Co
 	}
 	stringOrBytesTransports, err := validateStringOrBytesResultColumns(
 		query,
-		columns,
-		columnTypes,
+		ordinaryColumns,
+		ordinaryTypes,
 	)
 	if err != nil {
 		return err
@@ -871,6 +875,13 @@ func (executor *Executor) executeSingle(ctx context.Context, query clickhouse.Co
 			}
 			values[index] = value
 		}
+		if query.TimeBucket != nil {
+			end, err := convertValue(scannedValue(destinations[len(destinations)-1]))
+			if err != nil {
+				return err
+			}
+			values = append(values, end)
+		}
 		if atomicResult {
 			if err := atomicRows.append(values); err != nil {
 				return err
@@ -886,7 +897,7 @@ func (executor *Executor) executeSingle(ctx context.Context, query clickhouse.Co
 			}
 			schemaPublished = true
 		}
-		if err := sink.AddRow(values); err != nil {
+		if err := publishOrdinaryTimeBucketRow(sink, query, values); err != nil {
 			return err
 		}
 	}
@@ -916,7 +927,7 @@ func (executor *Executor) executeSingle(ctx context.Context, query clickhouse.Co
 				if err := executionContext.Err(); err != nil {
 					return err
 				}
-				if err := sink.AddRow(block.rows[index]); err != nil {
+				if err := publishOrdinaryTimeBucketRow(sink, query, block.rows[index]); err != nil {
 					return err
 				}
 			}

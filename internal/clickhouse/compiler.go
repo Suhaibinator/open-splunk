@@ -480,12 +480,14 @@ type Compiler struct {
 // CompiledQuery is executable SQL plus ordered bind arguments and public
 // result fields. Internal helper columns never appear in OutputFields.
 type CompiledQuery struct {
-	continuationRoot *compiledExecutionSeal
-	continuation     *compiledTimechartContinuation
-	relationInput    *compiledRelationInput
-	SQL              string
-	Args             []any
-	OutputFields     []string
+	hasTimechartStage bool
+	TimeBucket        *ResultTimeBucketOutput
+	continuationRoot  *compiledExecutionSeal
+	continuation      *compiledTimechartContinuation
+	relationInput     *compiledRelationInput
+	SQL               string
+	Args              []any
+	OutputFields      []string
 	// OutputPresentations, when nonempty, is aligned exactly by ordinal with
 	// OutputFields. Zero entries carry no presentation metadata. The compiler
 	// attaches a display-only flat multivalue delimiter to stats list/values and
@@ -1002,6 +1004,10 @@ func finalizeOrdinaryQuery(
 	projection = append(projection, containerProjection...)
 	projection = append(projection, optionalMultivalueProjection...)
 	projection = append(projection, stringOrBytesProjection...)
+	timeBucket := resultTimeBucketOutput(state, outputFields)
+	if timeBucket != nil {
+		projection = append(projection, state.visible["_time"].timeBucketEndSQL+" AS "+quoteIdentifier(ResultTimeBucketEndColumn))
+	}
 	if len(state.chronologicalBarriers) > 0 {
 		return finalizeChronologicallyValidatedQuery(
 			relation,
@@ -1035,6 +1041,7 @@ func finalizeOrdinaryQuery(
 			Args:                      args,
 			OutputFields:              outputFields,
 			OutputPresentations:       outputPresentations,
+			TimeBucket:                resultTimeBucketOutput(state, outputFields),
 			ContainerOutputs:          containerOutputs,
 			OptionalMultivalueOutputs: optionalMultivalueOutputs,
 			StringOrBytesOutputs:      stringOrBytesOutputs,
@@ -1189,6 +1196,10 @@ func finalizeChronologicallyValidatedQuery(
 	for _, output := range stringOrBytesOutputs {
 		resultColumns = append(resultColumns, output.SemanticBytesColumn())
 	}
+	timeBucket := resultTimeBucketOutput(state, outputFields)
+	if timeBucket != nil {
+		resultColumns = append(resultColumns, ResultTimeBucketEndColumn)
+	}
 	dummyProjection, _ := ordinaryChronologicalDummyProjection(
 		state,
 		outputFields,
@@ -1197,6 +1208,9 @@ func finalizeChronologicallyValidatedQuery(
 		optionalMultivalueOutputs,
 		stringOrBytesOutputs,
 	)
+	if timeBucket != nil {
+		dummyProjection = append(dummyProjection, "toDateTime64(0, 9, 'UTC') AS "+quoteIdentifier(ResultTimeBucketEndColumn))
+	}
 	return wrapChronologicalValidation(
 		relation.sql,
 		relation.depth,
@@ -1210,6 +1224,7 @@ func finalizeChronologicallyValidatedQuery(
 			Args:                      args,
 			OutputFields:              outputFields,
 			OutputPresentations:       outputPresentations,
+			TimeBucket:                resultTimeBucketOutput(state, outputFields),
 			ContainerOutputs:          containerOutputs,
 			OptionalMultivalueOutputs: optionalMultivalueOutputs,
 			StringOrBytesOutputs:      stringOrBytesOutputs,
@@ -3316,6 +3331,7 @@ func unsupportedMultivalueUsage(operation string, sourceRange spl.Range) error {
 }
 
 type fieldState struct {
+	timeBucketEndSQL          string
 	valueSQL                  string
 	exactNumericKeySQL        string
 	dynamicNumericEligibleSQL string
@@ -6019,6 +6035,7 @@ func fieldStateReferencesPrivateColumn(field fieldState, column string) bool {
 		field.storedTypeSQL,
 		field.textEligibleSQL,
 		field.semanticBytesSQL,
+		field.timeBucketEndSQL,
 		field.descendantSQL,
 		field.relativeFieldNamesSQL,
 		field.relativeFieldTypesSQL,
@@ -7525,6 +7542,7 @@ func compileProjection(operator *plan.Project, state compileState, relationAlias
 			numberType:                   compiled.numberType,
 			numericSort:                  compiled.numericSort,
 			canonicalTime:                compiled.canonicalTime,
+			timeBucketEndSQL:             compiled.timeBucketEndSQL,
 			alwaysNull:                   compiled.alwaysNull,
 			materializeForPredicate:      compiled.materializeForPredicate,
 		}

@@ -32,6 +32,7 @@ type compiledTimechartContinuation struct {
 type compiledRelationInput struct {
 	columns       []RelationColumn
 	rows          [][]any
+	bucketEnds    []time.Time
 	commitment    [sha256.Size]byte
 	retainedBytes uint64
 }
@@ -50,6 +51,11 @@ func (compiled CompiledQuery) HasContinuation() bool { return compiled.continuat
 // ContinueContext lowers the retained SPL suffix through the ordinary compiler
 // over an immutable, exact-schema native external table. No event scan is used.
 func (compiled CompiledQuery) ContinueContext(ctx context.Context, columns []RelationColumn, rows [][]any) (CompiledQuery, error) {
+	return compiled.ContinueWithTimeBucketsContext(ctx, columns, rows, nil)
+}
+
+// ContinueWithTimeBucketsContext preserves exact optional bucket presentation.
+func (compiled CompiledQuery) ContinueWithTimeBucketsContext(ctx context.Context, columns []RelationColumn, rows [][]any, ends []time.Time) (CompiledQuery, error) {
 	if ctx == nil {
 		return CompiledQuery{}, errors.New("continue timechart: context is nil")
 	}
@@ -63,6 +69,25 @@ func (compiled CompiledQuery) ContinueContext(ctx context.Context, columns []Rel
 	input, err := newRelationInput(ctx, columns, rows)
 	if err != nil {
 		return CompiledQuery{}, err
+	}
+	if ends != nil {
+		if len(ends) != len(rows) || len(columns) == 0 || columns[0].Name != "_time" {
+			return CompiledQuery{}, errors.New("continue timechart: invalid bucket bounds")
+		}
+		for i, end := range ends {
+			start, ok := rows[i][0].(time.Time)
+			if !ok || !start.Before(end) {
+				return CompiledQuery{}, errors.New("continue timechart: invalid bucket interval")
+			}
+		}
+		input.bucketEnds = slices.Clone(ends)
+		input.retainedBytes += uint64(len(ends)) * uint64(unsafe.Sizeof(time.Time{}))
+		digest := sha256.New()
+		_, _ = digest.Write(input.commitment[:])
+		for _, end := range ends {
+			writeCompiledArgument(digest, end, 0)
+		}
+		copy(input.commitment[:], digest.Sum(nil))
 	}
 	fields := make([]string, len(columns))
 	for i, column := range columns {
@@ -244,6 +269,14 @@ func compileRelationInput(input *compiledRelationInput, query *plan.Query) (stri
 		state.publicOrder = append(state.publicOrder, column.Name)
 		projection[i] = quoteIdentifier(physical)
 	}
+	if input.bucketEnds != nil {
+		column := quoteIdentifier(ResultTimeBucketEndColumn)
+		field := state.visible["_time"]
+		field.timeBucketEndSQL = column
+		state.visible["_time"] = field
+		state.privateColumns = append(state.privateColumns, column)
+		projection = append(projection, column)
+	}
 	scope := append([]string{scan.TenantID}, scan.Indexes...)
 	args := make([]any, len(scope))
 	predicates := make([]string, len(scope))
@@ -280,13 +313,19 @@ func materializeRelationInput(ctx context.Context, input *compiledRelationInput)
 		}
 		definitions[i] = ext.Column(physical, column.Type(fieldColumn.Type))
 	}
+	if input.bucketEnds != nil {
+		definitions = append(definitions, ext.Column(ResultTimeBucketEndColumn, "DateTime64(9, 'UTC')"))
+	}
 	table, err := ext.NewTable(timechartRelationName, definitions...)
 	if err != nil {
 		return nil, err
 	}
-	for _, row := range input.rows {
+	for rowIndex, row := range input.rows {
 		if err := ctx.Err(); err != nil {
 			return nil, err
+		}
+		if input.bucketEnds != nil {
+			row = append(slices.Clone(row), input.bucketEnds[rowIndex])
 		}
 		if err := table.Append(row...); err != nil {
 			return nil, err
