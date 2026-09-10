@@ -52,6 +52,10 @@ func TestTimechartCompositionAgainstClickHouse(t *testing.T) {
 		{"rex rename dedup", `timechart span=1s count BY host | eval label="api-123" | rex field=label "(?<service>[a-z]+)-" | rename service AS kind | dedup kind | table kind`, 1, false},
 		{"eventstats suffix", `timechart span=1s count BY host | eventstats sum(east) AS total | where total>0 | head 1`, 1, true},
 		{"static count", `timechart span=1s count | where count>0 | head 1`, 1, true},
+		// IEEE overflow is an accepted terminal sum result, so compatible
+		// filters and split continuations must preserve that success.
+		{"overflow filtered", `eval metric=1e308 | timechart span=1s sum(metric) AS total | where total<0 | head 1`, 0, true},
+		{"overflow split", `eval metric=1e308 | eval source="api" | timechart span=1s sum(metric) AS total BY source | head 1`, 1, true},
 		{"static value", `eval metric=2 | timechart span=1s sum(metric) AS total | where total>0 | head 1`, 1, true},
 		{"dynamic literal", `timechart span=1s count BY host | where 'west coast'>0 | table _time 'west coast'`, 2, true},
 		{"dynamic reaggregate", `timechart span=1s count BY host | stats sum(*)`, 1, false},
@@ -170,8 +174,7 @@ func TestTimechartCompositionAgainstClickHouse(t *testing.T) {
 		`search host=absent | stats min(_time) AS _time | timechart span=1s avg(missing) BY absent | head 1`,
 		`search host=absent | stats min(_time) AS _time | timechart span=1s sum(missing) | head 1`,
 		`search host=absent | stats min(_time) AS _time | timechart span=1s p95(missing) BY absent | head 1`,
-		`eval metric=1e308 | timechart span=1s sum(metric) AS total | where total<0 | head 1`,
-		`eval metric=1e308 | timechart span=1s sum(metric) AS total BY source | head 1`,
+		`eval source="" | timechart span=1s count BY source | head 1`,
 		fmt.Sprintf(`eval host="%s" | timechart span=1s count BY host | head 1`, strings.Repeat("x", 257)),
 	} {
 		t.Run("validation "+source, func(t *testing.T) {

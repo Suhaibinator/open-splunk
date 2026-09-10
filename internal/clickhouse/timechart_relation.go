@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"hash"
-	"math"
 	"slices"
 	"strings"
 	"time"
@@ -244,8 +243,11 @@ func (walk *relationTraversal) valueValid(kind string, value any) bool {
 		_, ok := value.(int64)
 		return ok
 	case "Float64":
-		v, ok := value.(float64)
-		return ok && !math.IsInf(v, 0) && !math.IsNaN(v)
+		// This is a typed native Float64 cell, including accepted IEEE sum
+		// and average results. Aggregate-specific validity is checked before
+		// the relation is created; Dynamic values use their existing path.
+		_, ok := value.(float64)
+		return ok
 	case "String":
 		v, ok := value.(string)
 		return ok && utf8.ValidString(v)

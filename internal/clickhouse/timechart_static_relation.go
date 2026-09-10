@@ -25,7 +25,11 @@ func lowerStaticTimechartRelation(compiled CompiledQuery, previous compileState,
 	if compiled.Timechart.Mode == TimechartModeFixedValue {
 		physicalValue = q(TimechartValueColumn)
 		numberType = "Float64"
-		invalid = "toUInt8(NOT isFinite(ifNull(" + physicalValue + ", 0)))"
+		// Sum and average may legitimately overflow to IEEE non-finite
+		// results. Match the terminal decoder's finite-only percentile rule.
+		if compiled.Timechart.ValueKind == TimechartValueKindPercentile {
+			invalid = "toUInt8(NOT isFinite(ifNull(" + physicalValue + ", 0)))"
+		}
 	}
 	if compiled.Timechart.Mode != TimechartModeFixedCount {
 		present = q(TimechartInputPresentColumn) + " != 0"
