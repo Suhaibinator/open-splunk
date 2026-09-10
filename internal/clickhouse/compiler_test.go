@@ -1332,8 +1332,8 @@ func TestCompileTimechartUsesOneScopedScanAndPrivateWideTransport(t *testing.T) 
 		`"__os_tc_series_rank" <= 10`,
 		`sumIf("__os_tc_count", "__os_tc_kind" = 3)`,
 		`maxIf("__os_tc_collision_cardinality", "__os_tc_kind" = 0) > 1`,
-		`arrayPushBack(groupArrayIf("__os_tc_encoded", "__os_tc_encoded" != ''), CAST('' AS String))`,
-		`toUInt8(ifNull("__os_timechart_bucket_maps"."__os_tc_count_map"[''], toUInt64(0)) != 0)`,
+		`mapFromArrays(groupArrayIf("__os_tc_encoded", "__os_tc_encoded" != ''), groupArrayIf("__os_tc_collapsed_count", "__os_tc_encoded" != ''))`,
+		`"__os_timechart_validation" AS (SELECT toUInt8(maxOrDefault("__os_tc_invalid" != 0 OR "__os_tc_collision" != 0)) AS "__os_tc_invalid" FROM "__os_timechart_collapsed")`,
 		`concat('VALUE', "__os_tc_label")`,
 		`"__os_tc_sort_label"`,
 		`arrayMap(item -> item.3`,
@@ -1355,7 +1355,7 @@ func TestCompileTimechartUsesOneScopedScanAndPrivateWideTransport(t *testing.T) 
 		`FROM "__os_timechart_group_counts"`: 1,
 		`FROM "__os_timechart_scored"`:       1,
 		`FROM "__os_timechart_ranked"`:       1,
-		`FROM "__os_timechart_collapsed"`:    2,
+		`FROM "__os_timechart_collapsed"`:    3,
 	} {
 		if got := strings.Count(compiled.SQL, relation); got != want {
 			t.Fatalf("timechart relation %q occurs %d times, want %d:\n%s", relation, got, want, compiled.SQL)
@@ -1366,7 +1366,6 @@ func TestCompileTimechartUsesOneScopedScanAndPrivateWideTransport(t *testing.T) 
 		`"__os_timechart_checks"`,
 		`"__os_timechart_top"`,
 		`"__os_timechart_normalization_collisions"`,
-		`"__os_timechart_validation"`,
 	} {
 		if strings.Contains(compiled.SQL, removed) {
 			t.Fatalf("timechart SQL retains removed graph node %q:\n%s", removed, compiled.SQL)

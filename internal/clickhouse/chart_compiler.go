@@ -366,6 +366,7 @@ func compileTimechart(
 	guardedDomainRows := q("__os_timechart_guarded_domain_rows")
 	domain := q("__os_timechart_domain")
 	bucketMaps := q("__os_timechart_bucket_maps")
+	validation := q("__os_timechart_validation")
 	grid := q("__os_timechart_grid")
 
 	eventTime := q("__os_tc_event_time")
@@ -723,32 +724,32 @@ func compileTimechart(
 	sql.WriteString(guardedDomainRows)
 	sql.WriteString("), ")
 
-	sql.WriteString(bucketMaps)
-	mapValue := collapsedCount
-	// The empty String is outside the public encoded domain (0:/1:/2:) and is
-	// therefore a private per-bucket validation key. Carrying the combined flag
-	// in the existing map removes a third collapsed consumer without adding a
-	// second public projection or losing invalid-only buckets. The executor
-	// buffers the complete fixed grid before publishing, so any nonzero bucket
-	// still rejects the result atomically.
-	sql.WriteString(" AS (SELECT ")
-	sql.WriteString(bucketNumber)
-	sql.WriteString(", mapFromArrays(")
-	sql.WriteString("arrayPushBack(groupArrayIf(")
-	sql.WriteString(encoded)
-	sql.WriteString(", ")
-	sql.WriteString(encoded)
-	sql.WriteString(" != ''), CAST('' AS String)), ")
-	sql.WriteString("arrayPushBack(groupArrayIf(")
-	sql.WriteString(mapValue)
-	sql.WriteString(", ")
-	sql.WriteString(encoded)
-	sql.WriteString(" != ''), ")
-	sql.WriteString("toUInt64(max(")
+	// The complete-source witness is independent of the visible grid. A
+	// preceding bin or timestamp rewrite can move invalid labels/collisions
+	// outside its bounds, but clipping must not discard their validation.
+	sql.WriteString(validation)
+	sql.WriteString(" AS (SELECT toUInt8(maxOrDefault(")
 	sql.WriteString(invalid)
 	sql.WriteString(" != 0 OR ")
 	sql.WriteString(collision)
-	sql.WriteString(" != 0)))) AS ")
+	sql.WriteString(" != 0)) AS ")
+	sql.WriteString(invalid)
+	sql.WriteString(" FROM ")
+	sql.WriteString(collapsed)
+	sql.WriteString("), ")
+
+	sql.WriteString(bucketMaps)
+	sql.WriteString(" AS (SELECT ")
+	sql.WriteString(bucketNumber)
+	sql.WriteString(", mapFromArrays(groupArrayIf(")
+	sql.WriteString(encoded)
+	sql.WriteString(", ")
+	sql.WriteString(encoded)
+	sql.WriteString(" != ''), groupArrayIf(")
+	sql.WriteString(collapsedCount)
+	sql.WriteString(", ")
+	sql.WriteString(encoded)
+	sql.WriteString(" != '')) AS ")
 	sql.WriteString(countMap)
 	sql.WriteString(" FROM ")
 	sql.WriteString(collapsed)
@@ -795,16 +796,17 @@ func compileTimechart(
 	sql.WriteString(".names) AS ")
 	sql.WriteString(q(TimechartCountsColumn))
 	sql.WriteString(", ")
-	sql.WriteString("toUInt8(ifNull(")
-	sql.WriteString(bucketMaps)
+	sql.WriteString(validation)
 	sql.WriteString(".")
-	sql.WriteString(countMap)
-	sql.WriteString("[''], toUInt64(0)) != 0) AS ")
+	sql.WriteString(invalid)
+	sql.WriteString(" AS ")
 	sql.WriteString(q(TimechartInvalidColumn))
 	sql.WriteString(" FROM ")
 	sql.WriteString(grid)
 	sql.WriteString(" CROSS JOIN ")
 	sql.WriteString(domain)
+	sql.WriteString(" CROSS JOIN ")
+	sql.WriteString(validation)
 	sql.WriteString(" LEFT JOIN ")
 	sql.WriteString(bucketMaps)
 	sql.WriteString(" ON ")
@@ -835,12 +837,14 @@ func compileTimechart(
 	resourceUsageDepth := relationalNodeDepth(domainRowsDepth)
 	guardedDomainRowsDepth := relationalNodeDepth(domainRowsDepth, resourceUsageDepth)
 	domainDepth := relationalNodeDepth(guardedDomainRowsDepth)
+	validationDepth := relationalNodeDepth(collapsedDepth)
 	bucketMapsDepth := relationalNodeDepth(collapsedDepth, resourceUsageDepth)
 	gridDepth := gridSpec.relationalDepth()
 	resultDepth := relationalNodeDepth(
 		gridDepth,
 		domainDepth,
 		bucketMapsDepth,
+		validationDepth,
 	)
 
 	compiled := CompiledQuery{
