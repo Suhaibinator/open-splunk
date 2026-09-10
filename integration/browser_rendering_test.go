@@ -27,7 +27,7 @@ import (
 const (
 	browserRenderingJobID    = "browser-fixed-result-rendering"
 	browserRenderingRowCount = 1_000
-	browserRenderingColumns  = 64
+	browserRenderingColumns  = 70
 )
 
 type browserRenderingSnapshotter struct{}

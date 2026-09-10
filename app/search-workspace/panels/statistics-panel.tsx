@@ -112,6 +112,7 @@ const STANDARD_STATISTICS_ROW_HEIGHT = 52;
 const STATISTICS_HEADER_HEIGHT = 37;
 const STATS_SPARKLINE_WIDTH = 128;
 const STATS_SPARKLINE_HEIGHT = 28;
+const STATISTICS_COLUMN_WINDOW_SIZE = 24;
 
 const STATISTICS_COLUMN_SCALE_TOKENS = {
   maximum: "--space-statistics-column-maximum",
@@ -373,6 +374,7 @@ export function StatisticsPanel({
     VIRTUAL_TABLE_VIEWPORT_HEIGHT - STATISTICS_HEADER_HEIGHT,
   );
   const [timechartSeriesSort, setTimechartSeriesSort] = useState<TimechartSeriesSort | null>(null);
+  const [columnWindowOffset, setColumnWindowOffset] = useState(0);
   const [multivalueDialog, setMultivalueDialog] = useState<{
     label: string;
     fieldName: string;
@@ -474,12 +476,24 @@ export function StatisticsPanel({
         panelColumns,
       );
   const visibleColumnLayout = visibleColumns(columnLayout);
+  const maximumColumnWindowOffset = Math.floor(
+    Math.max(0, panelColumns.length - 1) / STATISTICS_COLUMN_WINDOW_SIZE,
+  ) * STATISTICS_COLUMN_WINDOW_SIZE;
+  const boundedColumnWindowOffset = Math.min(columnWindowOffset, maximumColumnWindowOffset);
+  const columnWindowEnd = Math.min(
+    panelColumns.length,
+    boundedColumnWindowOffset + STATISTICS_COLUMN_WINDOW_SIZE,
+  );
+  const panelColumnWindow = panelColumns.slice(boundedColumnWindowOffset, columnWindowEnd);
+  const columnWindowIds = new Set(panelColumnWindow.map((column) => column.id));
+  const renderedColumnLayout = visibleColumnLayout.filter((column) => columnWindowIds.has(column.id));
   const visibleColumnIds = new Set(visibleColumnLayout.map((column) => column.id));
-  const visiblePanelColumns = panelColumns.filter((column) => visibleColumnIds.has(column.id));
+  const visiblePanelColumns = panelColumnWindow.filter((column) => visibleColumnIds.has(column.id));
   const visibleGenericColumns = genericStatisticsTable?.columns.filter(
-    (column) => visibleColumnIds.has(column.key),
+    (column) => columnWindowIds.has(column.key) && visibleColumnIds.has(column.key),
   ) ?? [];
-  const tableMinimumWidth = visibleColumnWidth(columnLayout);
+  const tableMinimumWidth = visibleColumnWidth(renderedColumnLayout);
+  const columnWindowed = panelColumns.length > STATISTICS_COLUMN_WINDOW_SIZE;
 
   useEffect(() => {
     if (columnScale !== null) columnLayoutStore.set(layoutQueryKey, columnLayout);
@@ -545,7 +559,7 @@ export function StatisticsPanel({
   const displayedRowCount = isTimechartResult
     ? timelinePoints.length
     : genericStatisticsTable?.rows.length ?? statisticsRows.length;
-  const displayedColumnCount = visibleColumnLayout.length;
+  const displayedColumnCount = renderedColumnLayout.length;
   const statisticsRowHeight = statsDensity === "compact"
     ? COMPACT_STATISTICS_ROW_HEIGHT
     : STANDARD_STATISTICS_ROW_HEIGHT;
@@ -670,7 +684,7 @@ export function StatisticsPanel({
             <button className="button button--secondary button--compact" type="button" aria-haspopup="menu" aria-expanded={menu === "statistics-columns"} disabled={panelColumns.length === 0} onClick={() => onMenuChange(menu === "statistics-columns" ? null : "statistics-columns")}>Columns <AppIcon name="chevron-down" size="xs" /></button>
             {menu === "statistics-columns" ? (
               <div className="floating-menu result-control-menu statistics-columns-menu" role="menu" aria-label="Statistics table columns">
-                {panelColumns.map((column) => {
+                {panelColumnWindow.map((column) => {
                   const visible = columnLayout.find((item) => item.id === column.id)?.visible ?? true;
                   const finalVisibleColumn = visible && visibleColumnLayout.length === 1;
                   return (
@@ -693,6 +707,29 @@ export function StatisticsPanel({
           </div>
         </div>
       </header>
+      {columnWindowed ? (
+        <nav className="statistics-column-window-controls" aria-label="Statistics column pages">
+          <span>Showing columns {boundedColumnWindowOffset + 1}–{columnWindowEnd} of {panelColumns.length}</span>
+          <div>
+            <button
+              className="button button--secondary button--compact"
+              type="button"
+              disabled={boundedColumnWindowOffset === 0}
+              onClick={() => setColumnWindowOffset(Math.max(0, boundedColumnWindowOffset - STATISTICS_COLUMN_WINDOW_SIZE))}
+            >
+              Previous columns
+            </button>
+            <button
+              className="button button--secondary button--compact"
+              type="button"
+              disabled={columnWindowEnd === panelColumns.length}
+              onClick={() => setColumnWindowOffset(columnWindowEnd)}
+            >
+              Next columns
+            </button>
+          </div>
+        </nav>
+      ) : null}
       <div className={`statistics-table-frame${hasScrolled ? " has-scrolled" : ""}`}>
         <section
           className={`statistics-table-shell${virtualWindow.virtualized ? " statistics-table-shell--virtualized" : ""}`}
@@ -744,7 +781,7 @@ export function StatisticsPanel({
               data-total-rows={displayedRowCount}
             >
               <colgroup>
-                {visibleColumnLayout.map((column) => <col key={column.id} width={column.width ?? undefined} />)}
+                {renderedColumnLayout.map((column) => <col key={column.id} width={column.width ?? undefined} />)}
               </colgroup>
               <thead>
                 <tr>
@@ -856,7 +893,7 @@ export function StatisticsPanel({
               data-total-rows={displayedRowCount}
             >
               <colgroup>
-                {visibleColumnLayout.map((column) => <col key={column.id} width={column.width ?? undefined} />)}
+                {renderedColumnLayout.map((column) => <col key={column.id} width={column.width ?? undefined} />)}
               </colgroup>
               <thead>
                 <tr>
@@ -976,7 +1013,7 @@ export function StatisticsPanel({
               data-total-rows={displayedRowCount}
             >
               <colgroup>
-                {visibleColumnLayout.map((column) => <col key={column.id} width={column.width ?? undefined} />)}
+                {renderedColumnLayout.map((column) => <col key={column.id} width={column.width ?? undefined} />)}
               </colgroup>
               <thead>
                 <tr>

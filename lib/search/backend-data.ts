@@ -719,6 +719,7 @@ function timelineFromRows(
       earliest: validTimeBucket ? exactEarliest : undefined,
       latest: validTimeBucket ? exactLatest : undefined,
       timeCoordinateNanoseconds: validTimeBucket ? earliestNanoseconds : undefined,
+      timeLatestCoordinateNanoseconds: validTimeBucket ? latestNanoseconds : undefined,
       timeValue: typeof rawTime === "string" ? rawTime : date.toISOString(),
     } satisfies TimelinePoint];
   });

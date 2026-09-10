@@ -22,7 +22,6 @@ import { AppIcon } from "../../_components/app-icon";
 import {
   TIME_SERIES_COLORS,
   TimeSeriesLineChart,
-  formatTimelineSeriesValue,
   timelineSeriesDisplayName,
   timelineSeriesNames,
 } from "../charts/time-series-line-chart";
@@ -84,12 +83,6 @@ interface CategoricalChartProps {
 const CATEGORY_COLORS = TIME_SERIES_COLORS.slice(0, 6);
 const MAX_CATEGORICAL_ROWS = 12;
 const LEGACY_SERIES_KEY = "__events__";
-
-function timeAxisLabels(points: TimelinePoint[]): TimelinePoint[] {
-  if (points.length <= 5) return points;
-  return Array.from(new Set([0, 0.25, 0.5, 0.75, 1].map((ratio) => Math.round(ratio * (points.length - 1)))))
-    .map((index) => points[index]);
-}
 
 function categoryColor(category: string, index: number): string {
   // The four level swatches the log data itself carries, not the outcome of a
@@ -633,9 +626,6 @@ export function VisualizationPanel({
       .map(({ row }) => row)
     : statisticsRows;
   const categoricalSeries = categoricalSeriesDefinitions(displayedStatisticsRows);
-  const maxTimelineCount = Math.max(1, ...timelinePoints.map((point) => point.count));
-  const chartAxisMaximum = maxTimelineCount;
-  const timelineAxisLabels = timeAxisLabels(timelinePoints);
   const timelineSeries = timelineSeriesNames(timelinePoints);
   const [timelineSeriesOffset, setTimelineSeriesOffset] = useState(0);
   const maximumTimelineSeriesOffset = Math.floor(
@@ -657,10 +647,13 @@ export function VisualizationPanel({
       row.coordinateApproximate === true || row.series?.some((series) => series.coordinateApproximate) === true,
   );
   const splitTimechart = isTimechartResult && timelineSeries.length > 1;
-  const isTimeSeriesChart = isTimechartResult
-    && (chartStyle === "line" || chartStyle === "area" || splitTimechart);
+  const isTimeSeriesChart = isTimechartResult;
   const effectiveChartStyle = isTimeSeriesChart
-    ? chartStyle === "area" ? "area" : "line"
+    ? chartStyle === "area"
+      ? "area"
+      : chartStyle === "column" && !splitTimechart
+        ? "column"
+        : "line"
     : chartStyle;
   const hasCategoricalChart = isTimechartResult
     ? timelinePoints.length > 0
@@ -748,45 +741,17 @@ export function VisualizationPanel({
           </output>
         ) : isTimeSeriesChart ? (
           <TimeSeriesLineChart
-            chartStyle={effectiveChartStyle === "area" ? "area" : "line"}
+            chartStyle={effectiveChartStyle === "area"
+              ? "area"
+              : effectiveChartStyle === "column"
+                ? "column"
+                : "line"}
             points={timelinePoints}
             seriesEnd={timelineSeriesEnd}
             seriesStart={boundedTimelineSeriesOffset}
+            showDataLabels={showDataLabels}
             stackMode={effectiveStackMode}
           />
-        ) : isTimechartResult ? (
-          <>
-            <div className="chart-y-axis" aria-hidden="true">
-              {[1, 0.75, 0.5, 0.25, 0].map((ratio) => (
-                <span key={`time-${ratio}`}>
-                  {hasApproximateCoordinates ? "≈" : ""}{COMPACT_NUMBER_FORMAT.format(Math.round(chartAxisMaximum * ratio))}
-                </span>
-              ))}
-            </div>
-            <div className="chart-plot">
-              <div className="chart-grid" aria-hidden="true"><span /><span /><span /><span /></div>
-              <div className="timechart-columns" data-testid="timechart-columns">
-                <div className="timechart-column-bars">
-                  {timelinePoints.map((point, index) => (
-                    <button
-                      type="button"
-                      key={point.id}
-                      aria-label={`${point.label}: ${formatTimelineSeriesValue(point, "Events")} events${point.coordinateApproximate ? "; chart position approximate" : ""}`}
-                      title={`${point.label}\n${formatTimelineSeriesValue(point, "Events")} events${point.coordinateApproximate ? "\nChart position is approximate" : ""}`}
-                    >
-                      <span style={{ height: `${Math.max(3, (point.count / maxTimelineCount) * 100)}%` }} />
-                      {showDataLabels && (index % 12 === 0 || index === timelinePoints.length - 1)
-                        ? <b>{point.coordinateApproximate ? "≈" : ""}{formatTimelineSeriesValue(point, "Events", "Events", true)}</b>
-                        : null}
-                    </button>
-                  ))}
-                </div>
-                <div className="line-chart-axis" aria-hidden="true">
-                  {timelineAxisLabels.map((point) => <span key={point.id}>{point.label}</span>)}
-                </div>
-              </div>
-            </div>
-          </>
         ) : (
           <CategoricalChart
             dimension={statisticsDimension}
@@ -843,6 +808,12 @@ export function VisualizationPanel({
         ) : null}
         {isTimeSeriesChart ? (
           <>
+            {effectiveChartStyle === "column" ? (
+              <label><span>Data labels</span><input type="checkbox" checked={showDataLabels} onChange={(event) => {
+                onVisualizationEdited();
+                onShowDataLabelsChange(event.target.checked);
+              }} /></label>
+            ) : null}
             {timelineSeriesWindowed ? (
               <div className="visualization-interaction-note">
                 <strong>Rendered series</strong>

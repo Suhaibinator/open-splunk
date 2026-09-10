@@ -212,6 +212,20 @@
   position: relative;
 }
 
+.statistics-column-window-controls {
+  align-items: center;
+  color: var(--fg-muted);
+  display: flex;
+  font-size: var(--type-xs);
+  justify-content: space-between;
+  margin-top: var(--space-3);
+}
+
+.statistics-column-window-controls > div {
+  display: flex;
+  gap: var(--space-2);
+}
+
 .statistics-table-shell {
   border: 1px solid var(--border);
   max-width: 100%;
@@ -618,34 +632,6 @@
   box-shadow: inset 0 2px 0 var(--status-info-soft);
 }
 
-.chart-y-axis {
-  color: var(--fg-faint);
-  display: flex;
-  flex-direction: column;
-  font-size: var(--type-xxs);
-  justify-content: space-between;
-  padding: 2px var(--space-2) var(--space-7) 0;
-  text-align: right;
-}
-
-.chart-plot {
-  border-bottom: 1px solid var(--border-strong);
-  border-left: 1px solid var(--border-strong);
-  position: relative;
-}
-
-
-.line-chart-axis {
-  bottom: 3px;
-  color: var(--fg-faint);
-  display: flex;
-  font-size: var(--type-xxs);
-  justify-content: space-between;
-  left: 0;
-  position: absolute;
-  right: 0;
-}
-
 .visualization-canvas--line {
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(360px, 1fr) 40px;
@@ -818,6 +804,11 @@
   font-variant-numeric: tabular-nums;
 }
 
+.time-series-chart__data-label {
+  fill: var(--fg-secondary);
+  font-size: var(--type-xxs);
+}
+
 .time-series-chart__axis-spacer {
   grid-column: 1;
   grid-row: 2;
@@ -841,54 +832,6 @@
 
 .time-series-chart__x-axis span[data-edge="start"] { transform: none; }
 .time-series-chart__x-axis span[data-edge="end"] { transform: translateX(-100%); }
-
-.timechart-columns {
-  inset: 0;
-  padding: var(--space-3) 10px 27px;
-  position: absolute;
-}
-
-.timechart-column-bars {
-  align-items: flex-end;
-  display: flex;
-  gap: 2px;
-  height: 100%;
-}
-
-.timechart-column-bars > button {
-  align-items: flex-end;
-  align-self: stretch;
-  background: transparent;
-  border: 0;
-  display: flex;
-  flex: 1 1 0;
-  min-width: 2px;
-  padding: 0;
-  position: relative;
-}
-
-.timechart-column-bars > button > span {
-  background: var(--chart-series-1);
-  min-height: 2px;
-  width: 100%;
-}
-
-.timechart-column-bars > button:hover > span,
-.timechart-column-bars > button:focus-visible > span {
-  background: var(--accent);
-}
-
-.timechart-column-bars > button > b {
-  background: color-mix(in srgb, var(--bg-surface) 90%, transparent);
-  color: var(--fg-secondary);
-  font-size: var(--type-xxs);
-  left: 50%;
-  padding: 1px 3px;
-  position: absolute;
-  top: 3px;
-  transform: translateX(-50%);
-  z-index: 2;
-}
 
 .chart-legend {
   align-items: center;

@@ -86,6 +86,11 @@ label bytes, dense cells, retained intermediate capacity, query memory, result
 rows, and result bytes. Crossing one fails the whole search; it never silently
 reduces an authored limit or publishes a partial pivot.
 
+The browser accepts every column in that bounded server result. It does not add
+a separate 64-column ceiling: line and area charts page visible series, and the
+Statistics table pages columns, so every series remains inspectable without
+creating an unbounded DOM tree.
+
 ## Pipeline composition
 
 A fixed-schema timechart continues as an ordinary typed relation. A dynamic

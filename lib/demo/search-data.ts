@@ -97,6 +97,8 @@ export interface TimelinePoint {
   latest?: string;
   /** Exact UTC bucket start used only for relative chart geometry. */
   timeCoordinateNanoseconds?: bigint;
+  /** Exact UTC bucket end used only for relative column geometry. */
+  timeLatestCoordinateNanoseconds?: bigint;
   /** Authoritative `_time` cell text retained for tabular export. */
   timeValue?: string;
 }

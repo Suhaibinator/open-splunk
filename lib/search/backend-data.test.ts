@@ -108,7 +108,7 @@ function trackDateTimeFormatConstructions<T>(
   }
 }
 
-test("result adaptation rejects schemas wider than the browser contract", () => {
+test("result adaptation preserves schemas wider than 64 columns", () => {
   const schema: ResultSchema = {
     schemaId: "too-wide-v1",
     revision: 1n,
@@ -118,10 +118,7 @@ test("result adaptation rejects schemas wider than the browser contract", () => 
       (_, index) => column(`field_${index}`, ValueType.VALUE_TYPE_UINT64),
     ),
   };
-  assert.throws(
-    () => adaptSearchResults(schema, []),
-    /65 columns.*supports 1–64/,
-  );
+  assert.equal(adaptSearchResults(schema, []).statisticsTable?.columns.length, 65);
 });
 
 test("result adaptation rejects unsupported result kinds", () => {
@@ -1160,6 +1157,7 @@ test("timechart preserves nanosecond bounds as metadata and leaves legacy rows w
   assert.equal(exact?.earliest, earliest);
   assert.equal(exact?.latest, latest);
   assert.equal(exact?.timeCoordinateNanoseconds, 1_789_027_750_123_456_789n);
+  assert.equal(exact?.timeLatestCoordinateNanoseconds, 1_789_027_750_123_456_790n);
 
   const legacy = adaptSearchResults(schema, [row("legacy", 0n, [
     timestampValue("2026-09-10T08:09:10.123Z"),

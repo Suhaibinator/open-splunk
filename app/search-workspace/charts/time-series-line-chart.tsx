@@ -42,11 +42,12 @@ export const TIME_SERIES_COLORS = [
 ] as const;
 
 interface TimeSeriesLineChartProps {
-  chartStyle?: "area" | "line";
+  chartStyle?: "area" | "column" | "line";
   points: TimelinePoint[];
   seriesEnd?: number;
   seriesLabel?: string;
   seriesStart?: number;
+  showDataLabels?: boolean;
   stackMode?: StackMode;
 }
 
@@ -54,6 +55,25 @@ interface TimeSeriesCoordinate {
   startY: number;
   x: number;
   y: number;
+}
+
+export interface TimelineColumnCoordinate {
+  centerPercent: number;
+  leftPercent: number;
+  widthPercent: number;
+}
+
+interface TimelineCoordinateIndexEntry {
+  index: number;
+  x: number;
+}
+
+interface TimeSeriesPathGeometry {
+  areaSegments: Array<{ key: string; points: string }>;
+  columnPath: string;
+  lineSegments: Array<{ key: string; points: string }>;
+  name: string;
+  seriesIndex: number;
 }
 
 /**
@@ -73,6 +93,68 @@ export function timelineXCoordinates(points: readonly TimelinePoint[]): number[]
   if (range === 0n) return points.map(() => VIEWBOX_WIDTH / 2);
   const numericRange = Number(range);
   return coordinates.map((coordinate) => (Number(coordinate - minimum) / numericRange) * VIEWBOX_WIDTH);
+}
+
+/** Place exact bucket intervals within their complete authoritative extent. */
+export function timelineColumnCoordinates(
+  points: readonly TimelinePoint[],
+): TimelineColumnCoordinate[] {
+  if (points.length === 0) return [];
+  const exact = points.map((point) => ({
+    earliest: point.timeCoordinateNanoseconds,
+    latest: point.timeLatestCoordinateNanoseconds,
+  }));
+  if (exact.some(({ earliest, latest }) => (
+    earliest === undefined || latest === undefined || earliest >= latest
+  ))) {
+    return points.map((_point, index) => ({
+      centerPercent: ((index + 0.5) / points.length) * 100,
+      leftPercent: (index / points.length) * 100,
+      widthPercent: 100 / points.length,
+    }));
+  }
+  const bounds = exact as Array<{ earliest: bigint; latest: bigint }>;
+  const minimum = bounds.reduce((current, bound) => bound.earliest < current ? bound.earliest : current, bounds[0].earliest);
+  const maximum = bounds.reduce((current, bound) => bound.latest > current ? bound.latest : current, bounds[0].latest);
+  const range = maximum - minimum;
+  if (range <= 0n) return points.map(() => ({ centerPercent: 50, leftPercent: 0, widthPercent: 100 }));
+  const numericRange = Number(range);
+  return bounds.map(({ earliest, latest }) => {
+    const leftPercent = (Number(earliest - minimum) / numericRange) * 100;
+    const widthPercent = (Number(latest - earliest) / numericRange) * 100;
+    return { centerPercent: leftPercent + widthPercent / 2, leftPercent, widthPercent };
+  });
+}
+
+/** Collapse duplicate x positions and sort once for logarithmic pointer lookup. */
+export function timelineCoordinateIndex(
+  coordinates: readonly number[],
+): TimelineCoordinateIndexEntry[] {
+  const sorted = coordinates
+    .map((x, index) => ({ index, x }))
+    .toSorted((left, right) => left.x - right.x || left.index - right.index);
+  return sorted.filter((entry, index) => index === 0 || entry.x !== sorted[index - 1].x);
+}
+
+export function nearestTimelineCoordinateIndex(
+  coordinateIndex: readonly TimelineCoordinateIndexEntry[],
+  targetX: number,
+): number | null {
+  if (coordinateIndex.length === 0) return null;
+  let low = 0;
+  let high = coordinateIndex.length;
+  while (low < high) {
+    const middle = low + Math.floor((high - low) / 2);
+    if (coordinateIndex[middle].x < targetX) low = middle + 1;
+    else high = middle;
+  }
+  const right = coordinateIndex[Math.min(low, coordinateIndex.length - 1)];
+  const left = coordinateIndex[Math.max(0, low - 1)];
+  const leftDistance = Math.abs(left.x - targetX);
+  const rightDistance = Math.abs(right.x - targetX);
+  if (leftDistance < rightDistance) return left.index;
+  if (rightDistance < leftDistance) return right.index;
+  return Math.min(left.index, right.index);
 }
 
 export function timelineSeriesNames(points: TimelinePoint[], fallbackLabel = "Events"): string[] {
@@ -224,7 +306,7 @@ function contiguousSegments(
   return segments;
 }
 
-function tickIndices(length: number, targetCount: number): number[] {
+export function timelineTickIndices(length: number, targetCount: number): number[] {
   if (length <= 1) return [0];
   return Array.from(
     new Set(Array.from({ length: Math.min(length, targetCount) }, (_, index) =>
@@ -243,6 +325,7 @@ export function TimeSeriesLineChart({
   seriesEnd,
   seriesLabel = "Events",
   seriesStart = 0,
+  showDataLabels = false,
   stackMode = "none",
 }: TimeSeriesLineChartProps) {
   const plotRef = useRef<HTMLDivElement>(null);
@@ -280,6 +363,14 @@ export function TimeSeriesLineChart({
   const axisRange = maximum - minimum;
   const hasApproximateCoordinates = points.some((point) => point.coordinateApproximate === true);
   const xCoordinates = useMemo(() => timelineXCoordinates(points), [points]);
+  const columnCoordinates = useMemo(() => timelineColumnCoordinates(points), [points]);
+  const interactionXCoordinates = useMemo(() => chartStyle === "column"
+    ? columnCoordinates.map((coordinate) => (coordinate.centerPercent / 100) * VIEWBOX_WIDTH)
+    : xCoordinates, [chartStyle, columnCoordinates, xCoordinates]);
+  const pointerCoordinateIndex = useMemo(
+    () => timelineCoordinateIndex(interactionXCoordinates),
+    [interactionXCoordinates],
+  );
 
   useEffect(() => {
     const plot = plotRef.current;
@@ -310,14 +401,74 @@ export function TimeSeriesLineChart({
         const projectedEnd = Math.min(maximum, Math.max(minimum, value.end));
         const projectedStart = Math.min(maximum, Math.max(minimum, value.start));
         return {
-          x: xCoordinates[index] ?? VIEWBOX_WIDTH / 2,
+          x: interactionXCoordinates[index] ?? VIEWBOX_WIDTH / 2,
           y: VIEWBOX_HEIGHT - ((projectedEnd - minimum) / axisRange) * VIEWBOX_HEIGHT,
           startY: VIEWBOX_HEIGHT - ((projectedStart - minimum) / axisRange) * VIEWBOX_HEIGHT,
         };
       }),
     };
-  }), [axisRange, boundedSeriesStart, maximum, minimum, points, renderedSeriesNames, stackWindow.rows, xCoordinates]);
-  const xTicks = tickIndices(points.length, plotWidth < 520 ? 3 : plotWidth < 820 ? 4 : 5);
+  }), [axisRange, boundedSeriesStart, interactionXCoordinates, maximum, minimum, points, renderedSeriesNames, stackWindow.rows]);
+  const seriesPathGeometry = useMemo<TimeSeriesPathGeometry[]>(() => seriesCoordinates.map((series) => {
+    const segments = contiguousSegments(series.points);
+    return {
+      areaSegments: chartStyle === "area" ? segments.map((segment) => ({
+        key: `${series.name}-area-${segment[0]?.x}`,
+        points: [
+          ...segment.map(({ x, y }) => `${x.toFixed(2)},${y.toFixed(2)}`),
+          ...segment.toReversed().map(({ startY, x }) => `${x.toFixed(2)},${startY.toFixed(2)}`),
+        ].join(" "),
+      })) : [],
+      columnPath: chartStyle === "column" ? series.points.flatMap((coordinate, index) => {
+        const column = columnCoordinates[index];
+        if (coordinate === null || column === undefined) return [];
+        const left = (column.leftPercent / 100) * VIEWBOX_WIDTH;
+        const right = ((column.leftPercent + column.widthPercent) / 100) * VIEWBOX_WIDTH;
+        return [`M${left.toFixed(2)},${coordinate.startY.toFixed(2)}V${coordinate.y.toFixed(2)}H${right.toFixed(2)}V${coordinate.startY.toFixed(2)}Z`];
+      }).join("") : "",
+      lineSegments: chartStyle === "column" ? [] : segments.map((segment) => ({
+        key: `${series.name}-line-${segment[0]?.x}`,
+        points: segment.map(({ x, y }) => `${x.toFixed(2)},${y.toFixed(2)}`).join(" "),
+      })),
+      name: series.name,
+      seriesIndex: series.seriesIndex,
+    };
+  }), [chartStyle, columnCoordinates, seriesCoordinates]);
+  const seriesPaths = useMemo(() => (
+    <>
+      {chartStyle === "area" ? seriesPathGeometry.flatMap((series) => (
+        series.areaSegments.map((segment) => (
+          <polygon
+            className="time-series-chart__area time-series-chart__series"
+            data-series-color={seriesColorIndex(series.seriesIndex)}
+            data-series-name={series.name}
+            key={segment.key}
+            points={segment.points}
+          />
+        ))
+      )) : null}
+      {chartStyle === "column" ? seriesPathGeometry.map((series) => (
+        <path
+          className="time-series-chart__columns time-series-chart__series"
+          data-series-color={seriesColorIndex(series.seriesIndex)}
+          data-series-name={series.name}
+          d={series.columnPath}
+          key={`${series.name}-columns`}
+        />
+      )) : null}
+      {seriesPathGeometry.flatMap((series) => (
+        series.lineSegments.map((segment) => (
+          <polyline
+            className="time-series-chart__line time-series-chart__series"
+            data-series-color={seriesColorIndex(series.seriesIndex)}
+            data-series-name={series.name}
+            key={segment.key}
+            points={segment.points}
+          />
+        ))
+      ))}
+    </>
+  ), [chartStyle, seriesPathGeometry]);
+  const xTicks = timelineTickIndices(points.length, plotWidth < 520 ? 3 : plotWidth < 820 ? 4 : 5);
   const activePoint = activeIndex === null ? null : points[activeIndex] ?? null;
   const activeCoordinates = activeIndex === null ? [] : seriesCoordinates.flatMap((series) => {
     const coordinate = series.points[activeIndex];
@@ -335,8 +486,7 @@ export function TimeSeriesLineChart({
     const bounds = event.currentTarget.getBoundingClientRect();
     const ratio = Math.min(1, Math.max(0, (event.clientX - bounds.left) / Math.max(1, bounds.width)));
     const targetX = ratio * VIEWBOX_WIDTH;
-    return xCoordinates.reduce((nearest, coordinate, index) =>
-      Math.abs(coordinate - targetX) < Math.abs(xCoordinates[nearest] - targetX) ? index : nearest, 0);
+    return nearestTimelineCoordinateIndex(pointerCoordinateIndex, targetX);
   }
 
   function inspectFromPointer(event: PointerEvent<HTMLButtonElement>) {
@@ -399,31 +549,28 @@ export function TimeSeriesLineChart({
               );
             })}
           </g>
-          {chartStyle === "area" ? seriesCoordinates.flatMap((series) => (
-            contiguousSegments(series.points).map((segment) => (
-              <polygon
-                className="time-series-chart__area time-series-chart__series"
-                data-series-color={seriesColorIndex(series.seriesIndex)}
-                data-series-name={series.name}
-                key={`${series.name}-area-${segment[0]?.x}`}
-                points={[
-                  ...segment.map(({ x, y }) => `${x.toFixed(2)},${y.toFixed(2)}`),
-                  ...segment.toReversed().map(({ startY, x }) => `${x.toFixed(2)},${startY.toFixed(2)}`),
-                ].join(" ")}
-              />
-            ))
-          )) : null}
-          {seriesCoordinates.flatMap((series) => (
-            contiguousSegments(series.points).map((segment) => (
-              <polyline
-                className="time-series-chart__line time-series-chart__series"
-                data-series-color={seriesColorIndex(series.seriesIndex)}
-                data-series-name={series.name}
-                key={`${series.name}-line-${segment[0]?.x}`}
-                points={segment.map(({ x, y }) => `${x.toFixed(2)},${y.toFixed(2)}`).join(" ")}
-              />
-            ))
-          ))}
+          {seriesPaths}
+          {chartStyle === "column" && showDataLabels ? xTicks.map((index) => {
+            const point = points[index];
+            const coordinate = seriesCoordinates[0]?.points[index];
+            const column = columnCoordinates[index];
+            if (point === undefined || coordinate === undefined || coordinate === null || column === undefined) return null;
+            return (
+              <text
+                className="time-series-chart__data-label"
+                key={`${point.id}-label`}
+                textAnchor={column.leftPercent <= 0
+                  ? "start"
+                  : column.leftPercent + column.widthPercent >= 100
+                    ? "end"
+                    : "middle"}
+                x={coordinate.x}
+                y={Math.max(12, coordinate.y - 6)}
+              >
+                {point.coordinateApproximate ? "≈" : ""}{formatTimelineSeriesValue(point, "Events", "Events", true)}
+              </text>
+            );
+          }) : null}
         </svg>
         <button
           ref={inspectButtonRef}
@@ -481,19 +628,25 @@ export function TimeSeriesLineChart({
       </div>
       <div className="time-series-chart__axis-spacer" aria-hidden="true" />
       <div className="time-series-chart__x-axis" aria-hidden="true">
-        {xTicks.map((index) => (
-          <span
-            key={points[index].id}
-            data-edge={xCoordinates[index] <= 0
-              ? "start"
-              : xCoordinates[index] >= VIEWBOX_WIDTH
-                ? "end"
-                : undefined}
-            style={{ left: `${(xCoordinates[index] / VIEWBOX_WIDTH) * 100}%` }}
-          >
-            {points[index].label}
-          </span>
-        ))}
+        {xTicks.map((index) => {
+          const column = chartStyle === "column" ? columnCoordinates[index] : undefined;
+          const xPercent = column === undefined
+            ? (xCoordinates[index] / VIEWBOX_WIDTH) * 100
+            : column.leftPercent <= 0
+              ? 0
+              : column.leftPercent + column.widthPercent >= 100
+                ? 100
+                : column.centerPercent;
+          return (
+            <span
+              key={points[index].id}
+              data-edge={xPercent <= 0 ? "start" : xPercent >= 100 ? "end" : undefined}
+              style={{ left: `${xPercent}%` }}
+            >
+              {points[index].label}
+            </span>
+          );
+        })}
       </div>
       <p className="sr-only" id={hintId}>Use Left and Right arrow keys to move through time buckets. Home and End jump to the first and last bucket. Escape clears the value.</p>
       <output className="sr-only" aria-live="polite">{activePoint === null ? "" : activeDescription}</output>

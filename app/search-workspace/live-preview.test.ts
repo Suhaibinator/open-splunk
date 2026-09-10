@@ -18,7 +18,6 @@ import {
   ValueType,
   type TypedValue,
 } from "../../gen/ts/open_splunk/value";
-import { MAXIMUM_BROWSER_RESULT_COLUMNS } from "../../lib/api/pagination";
 import { MAXIMUM_FLAT_MULTIVALUE_DELIMITER_BYTES } from "../../lib/api/result-column-presentation";
 import {
   applyLiveResultPreview,
@@ -117,7 +116,7 @@ function applyTypedPreview(
   );
 }
 
-test("validates schema identity, revision, columns, and supported types", () => {
+test("validates schema identity, revision, wide columns, and supported types", () => {
   assert.equal(validateLivePreviewSchema(schema()), null);
   assert.match(validateLivePreviewSchema(schema({ schemaId: "" })) ?? "", /identifier/);
   assert.match(validateLivePreviewSchema(schema({ revision: 0n })) ?? "", /revision/);
@@ -125,12 +124,12 @@ test("validates schema identity, revision, columns, and supported types", () => 
   assert.match(validateLivePreviewSchema(schema({
     columns: [schema().columns[0], schema().columns[0]],
   })) ?? "", /repeats column/);
-  assert.match(validateLivePreviewSchema(schema({
+  assert.equal(validateLivePreviewSchema(schema({
     columns: Array.from(
-      { length: MAXIMUM_BROWSER_RESULT_COLUMNS + 1 },
+      { length: 65 },
       (_, index) => column({ fieldName: `field-${index}` }),
     ),
-  })) ?? "", /65 columns.*supports 1–64/);
+  })), null);
 });
 
 test("validates presence-sensitive flat multivalue presentation metadata", () => {

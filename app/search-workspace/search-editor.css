@@ -881,8 +881,7 @@
     margin-inline: 10px;
   }
 
-  .time-popover .modal-footer,
-  .time-popover .time-picker-footer { background: var(--bg-surface); bottom: 0; padding-bottom: max(10px, env(safe-area-inset-bottom)); position: sticky; z-index: 2; }
+  .time-popover .modal-footer { background: var(--bg-surface); bottom: 0; padding-bottom: max(10px, env(safe-area-inset-bottom)); position: sticky; z-index: 2; }
 
   /* Search-page action replacements. */
   .search-actions { overflow: visible; }

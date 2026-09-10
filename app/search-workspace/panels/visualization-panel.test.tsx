@@ -5,7 +5,14 @@ import type { ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { TimelinePoint } from "@/lib/demo/search-data";
-import type { WorkspaceStatistic } from "@/lib/search/backend-data";
+import {
+  ColumnSemanticType,
+  ResultSetKind,
+  type ResultRow,
+  type ResultSchema,
+} from "@/gen/ts/open_splunk/result";
+import { ValueType } from "@/gen/ts/open_splunk/value";
+import { adaptSearchResults, type WorkspaceStatistic } from "@/lib/search/backend-data";
 
 import { VisualizationPanel } from "./visualization-panel";
 
@@ -96,6 +103,95 @@ test("wide timecharts bound rendered series and expose paging controls", () => {
   assert.match(markup, />Previous series<\/button>/u);
   assert.match(markup, />Next series<\/button>/u);
   assert.doesNotMatch(markup, /data-series-name="series-25"/u);
+});
+
+test("adapts and renders timecharts wider than 64 columns", () => {
+  const seriesCount = 65;
+  const schema: ResultSchema = {
+    schemaId: "wide-timechart",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_TIME_SERIES,
+    columns: [
+      {
+        fieldName: "_time",
+        displayName: "_time",
+        valueType: ValueType.VALUE_TYPE_TIMESTAMP,
+        semanticType: ColumnSemanticType.COLUMN_SEMANTIC_TYPE_EVENT_TIME,
+        nullable: false,
+        multivalue: false,
+        hiddenByDefault: false,
+        statsSparkline: false,
+      },
+      ...Array.from({ length: seriesCount }, (_, index) => ({
+        fieldName: `series-${index + 1}`,
+        displayName: `series-${index + 1}`,
+        valueType: ValueType.VALUE_TYPE_UINT64,
+        semanticType: ColumnSemanticType.COLUMN_SEMANTIC_TYPE_METRIC,
+        nullable: false,
+        multivalue: false,
+        hiddenByDefault: false,
+        statsSparkline: false,
+      })),
+    ],
+  };
+  const row: ResultRow = {
+    rowId: "wide-row",
+    ordinal: 0n,
+    cells: [
+      { kind: { $case: "timestampValue", value: new Date("2026-09-10T00:00:00Z") } },
+      ...Array.from({ length: seriesCount }, () => ({
+        kind: { $case: "uint64Value" as const, value: 1n },
+      })),
+    ],
+    timeBucket: {
+      earliest: "2026-09-10T00:00:00Z",
+      latest: "2026-09-10T00:00:00.000000001Z",
+    },
+  };
+  const adapted = adaptSearchResults(schema, [row]);
+  const markup = renderPanel({
+    chartStyle: "line",
+    isTimechartResult: true,
+    timelinePoints: adapted.timeline,
+  });
+
+  assert.equal(Object.keys(adapted.timeline[0]?.series ?? {}).length, seriesCount);
+  assert.equal((markup.match(/class="time-series-chart__line time-series-chart__series"/gu) ?? []).length, 24);
+  assert.match(markup, /Showing 1–24 of 65/u);
+});
+
+test("default column timecharts preserve exact sparse bucket positions and inspection bounds", () => {
+  const origin = 1_789_027_750_123_456_789n;
+  const timelinePoints: TimelinePoint[] = [
+    {
+      id: "first",
+      label: "first",
+      count: 2,
+      earliest: "2026-09-10T00:00:00.000000001Z",
+      latest: "2026-09-10T00:00:00.250000001Z",
+      timeCoordinateNanoseconds: origin,
+      timeLatestCoordinateNanoseconds: origin + 250_000_000n,
+    },
+    {
+      id: "last",
+      label: "last",
+      count: 3,
+      earliest: "2026-09-10T00:00:00.750000001Z",
+      latest: "2026-09-10T00:00:01.000000001Z",
+      timeCoordinateNanoseconds: origin + 750_000_000n,
+      timeLatestCoordinateNanoseconds: origin + 1_000_000_000n,
+    },
+  ];
+  const markup = renderPanel({
+    chartStyle: "column",
+    isTimechartResult: true,
+    timelinePoints,
+  });
+
+  assert.match(markup, /data-chart-style="column"/u);
+  assert.equal((markup.match(/class="time-series-chart__columns time-series-chart__series"/gu) ?? []).length, 1);
+  assert.match(markup, /d="M0\.00,[\d.]+V[\d.]+H250\.00V[\d.]+ZM750\.00,[\d.]+V[\d.]+H1000\.00V[\d.]+Z"/u);
+  assert.doesNotMatch(markup, /<button[^>]+exact bucket/u);
 });
 
 test("horizontal categorical series render cumulative stacked geometry", () => {
