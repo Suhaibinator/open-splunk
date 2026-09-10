@@ -34,9 +34,10 @@ export interface TimechartFirstPage extends TimechartPage {
 }
 
 export interface TimechartBucketLoad {
+  /** Complete raw rows when retained; empty in streaming mode. */
   rows: ResultRow[];
   coverage: TimechartCoverage;
-  /** Set when the walk stopped on an error; the rows collected before it remain valid. */
+  /** Set when the walk stopped on an error; retained rows or previously delivered batches remain valid. */
   error?: unknown;
 }
 
@@ -52,6 +53,8 @@ export interface LoadTimechartBucketsOptions {
   maximumBuckets?: number;
   onProgress?: (batch: TimechartBucketBatch) => void;
   progressBatchSize?: number;
+  /** Keep the complete raw row collection in the resolved value. */
+  retainRows?: boolean;
   signal?: AbortSignal;
 }
 
@@ -100,12 +103,12 @@ export function sortTimechartRows(
 
 function coverageFor(
   status: TimechartCoverageStatus,
-  rows: ResultRow[],
+  plottedBuckets: number,
   firstPage: TimechartFirstPage,
 ): TimechartCoverage {
   return {
     status,
-    plottedBuckets: rows.length,
+    plottedBuckets,
     totalBuckets: firstPage.totalSize,
     totalExact: firstPage.totalSize !== null && firstPage.totalSizeExact,
   };
@@ -129,6 +132,7 @@ export async function loadTimechartBuckets({
   maximumBuckets = MAXIMUM_CHART_BUCKETS,
   onProgress,
   progressBatchSize = TIMECHART_PROGRESS_BATCH_SIZE,
+  retainRows = true,
   signal,
 }: LoadTimechartBucketsOptions): Promise<TimechartBucketLoad> {
   if (!Number.isSafeInteger(maximumBuckets) || maximumBuckets <= 0) {
@@ -137,57 +141,100 @@ export async function loadTimechartBuckets({
   if (!Number.isSafeInteger(progressBatchSize) || progressBatchSize <= 0) {
     throw new RangeError("Timechart progress batch size must be a positive safe integer.");
   }
-  const rows = firstPage.rows.slice(0, maximumBuckets);
+  const retainedRows = retainRows ? firstPage.rows.slice(0, maximumBuckets) : [];
+  let plottedBuckets = Math.min(firstPage.rows.length, maximumBuckets);
   let omittedRows = firstPage.rows.length > maximumBuckets;
   let pendingRows: ResultRow[] = [];
   const seenTokens = new Set<string>();
   const publish = (coverage: TimechartCoverage) => {
-    if (onProgress === undefined) return;
     const batch = pendingRows;
     pendingRows = [];
+    if (onProgress === undefined) return;
     onProgress({ rows: batch, coverage });
   };
   const completed = (status: Exclude<TimechartCoverageStatus, "loading">, error?: unknown): TimechartBucketLoad => {
-    const coverage = coverageFor(status, rows, firstPage);
+    const coverage = coverageFor(status, plottedBuckets, firstPage);
     publish(coverage);
-    return error === undefined ? { rows, coverage } : { rows, coverage, error };
+    return error === undefined
+      ? { rows: retainedRows, coverage }
+      : { rows: retainedRows, coverage, error };
   };
-  const failed = (message: string): TimechartBucketLoad => completed("failed", new Error(message));
-  const collectPage = async (nextPageToken: string | null): Promise<TimechartBucketLoad> => {
-    if (signal?.aborted) throw abortError();
-    if (nextPageToken === null) return completed(omittedRows ? "capped" : "complete");
-    if (rows.length >= maximumBuckets) return completed("capped");
-    if (seenTokens.has(nextPageToken)) {
-      return failed("Search results repeated a page cursor while loading timechart buckets.");
-    }
-    seenTokens.add(nextPageToken);
-    let page: TimechartPage;
-    try {
-      page = await fetchPage(nextPageToken);
-    } catch (error) {
-      if (signal?.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
-      return completed("failed", error);
-    }
-    if (signal?.aborted) throw abortError();
-    const remaining = maximumBuckets - rows.length;
-    const appended = page.rows.slice(0, remaining);
-    rows.push(...appended);
-    pendingRows.push(...appended);
-    omittedRows ||= page.rows.length > remaining;
-    const followingToken = page.nextPageToken?.trim() || null;
-    if (followingToken !== null && page.rows.length === 0) {
-      return failed("Search results returned an empty page with a further cursor.");
-    }
-    if (omittedRows || (rows.length >= maximumBuckets && followingToken !== null)) {
-      return completed("capped");
-    }
-    if (followingToken === null) return completed("complete");
-    if (pendingRows.length >= progressBatchSize) {
-      publish(coverageFor("loading", rows, firstPage));
-    }
-    return collectPage(followingToken);
-  };
-  return collectPage(firstPage.nextPageToken?.trim() || null);
+  let nextPageToken = firstPage.nextPageToken?.trim() || null;
+  return new Promise<TimechartBucketLoad>((resolve, reject) => {
+    const finish = (status: Exclude<TimechartCoverageStatus, "loading">, error?: unknown) => {
+      try {
+        resolve(completed(status, error));
+      } catch (completionError) {
+        reject(completionError);
+      }
+    };
+    const advance = () => {
+      if (signal?.aborted) {
+        reject(abortError());
+        return;
+      }
+      if (nextPageToken === null) {
+        finish(omittedRows ? "capped" : "complete");
+        return;
+      }
+      if (plottedBuckets >= maximumBuckets) {
+        finish("capped");
+        return;
+      }
+      if (seenTokens.has(nextPageToken)) {
+        finish("failed", new Error("Search results repeated a page cursor while loading timechart buckets."));
+        return;
+      }
+      const requestedToken = nextPageToken;
+      seenTokens.add(requestedToken);
+      let request: Promise<TimechartPage>;
+      try {
+        request = fetchPage(requestedToken);
+      } catch (error) {
+        if (signal?.aborted || (error instanceof DOMException && error.name === "AbortError")) reject(error);
+        else finish("failed", error);
+        return;
+      }
+      void request.then((page) => {
+        try {
+          if (signal?.aborted) {
+            reject(abortError());
+            return;
+          }
+          const remaining = maximumBuckets - plottedBuckets;
+          const appended = page.rows.slice(0, remaining);
+          plottedBuckets += appended.length;
+          if (retainRows) retainedRows.push(...appended);
+          if (onProgress !== undefined) pendingRows.push(...appended);
+          omittedRows ||= page.rows.length > remaining;
+          const followingToken = page.nextPageToken?.trim() || null;
+          if (followingToken !== null && page.rows.length === 0) {
+            finish("failed", new Error("Search results returned an empty page with a further cursor."));
+            return;
+          }
+          if (omittedRows || (plottedBuckets >= maximumBuckets && followingToken !== null)) {
+            finish("capped");
+            return;
+          }
+          if (followingToken === null) {
+            finish("complete");
+            return;
+          }
+          if (pendingRows.length >= progressBatchSize) {
+            publish(coverageFor("loading", plottedBuckets, firstPage));
+          }
+          nextPageToken = followingToken;
+          advance();
+        } catch (error) {
+          reject(error);
+        }
+      }, (error: unknown) => {
+        if (signal?.aborted || (error instanceof DOMException && error.name === "AbortError")) reject(error);
+        else finish("failed", error);
+      });
+    };
+    advance();
+  });
 }
 
 /** Coverage of a time-series result that fit on its first page. */

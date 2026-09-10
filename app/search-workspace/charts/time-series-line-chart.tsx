@@ -600,8 +600,11 @@ export function TimeSeriesLineChart({
   });
   const activeCoordinate = activeCoordinates.reduce<(typeof activeCoordinates)[number] | null>((highest, coordinate) =>
     highest === null || coordinate.y < highest.y ? coordinate : highest, null);
-  const activeXPercent = activeCoordinate === null ? 0 : (activeCoordinate.x / VIEWBOX_WIDTH) * 100;
-  const activeYPercent = activeCoordinate === null ? 0 : (activeCoordinate.y / VIEWBOX_HEIGHT) * 100;
+  const activeXCoordinate = activeIndex === null
+    ? null
+    : interactionXCoordinates[activeIndex] ?? VIEWBOX_WIDTH / 2;
+  const activeXPercent = activeXCoordinate === null ? 0 : (activeXCoordinate / VIEWBOX_WIDTH) * 100;
+  const activeYPercent = ((activeCoordinate?.y ?? VIEWBOX_HEIGHT / 2) / VIEWBOX_HEIGHT) * 100;
 
   function indexFromPointer(event: PointerEvent<HTMLButtonElement>): number | null {
     if (chartPoints.length === 0) return null;
@@ -712,7 +715,7 @@ export function TimeSeriesLineChart({
         >
           <span className="sr-only">Inspect chart values</span>
         </button>
-        {activePoint === null || activeCoordinate === null ? null : (
+        {activePoint === null ? null : (
           <>
             <span className="time-series-chart__crosshair" aria-hidden="true" style={{ left: `${activeXPercent}%` }} />
             {activeCoordinates.map((coordinate) => (

@@ -3388,12 +3388,13 @@ export function SearchWorkspace({
         }
         publish(batch.coverage);
       },
+      retainRows: false,
       signal: controller.signal,
     }).then((load) => {
       if (load.error !== undefined && isCurrent()) {
         setBackendNotices((current) => appendUniqueMessage(
           current,
-          `The visualization stops at ${NUMBER_FORMAT.format(load.rows.length)} timechart buckets: ${
+          `The visualization stops at ${NUMBER_FORMAT.format(load.coverage.plottedBuckets)} timechart buckets: ${
             load.error instanceof Error ? load.error.message : "the remaining buckets could not be loaded."
           }`,
         ));

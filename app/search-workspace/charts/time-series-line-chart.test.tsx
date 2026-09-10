@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+// Load-bearing order: react-dom/client detects the fake DOM at module load.
+import { browser } from "@/lib/testing/fake-browser";
+import { FakeElement, fakeEvent } from "@/lib/testing/fake-dom";
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { TimelinePoint } from "@/lib/demo/search-data";
@@ -34,6 +39,20 @@ const splitPoints: TimelinePoint[] = [
   },
 ];
 
+Object.assign(globalThis, {
+  ResizeObserver: class {
+    disconnect() {}
+    observe() {}
+  },
+});
+Object.assign(window, {
+  cancelAnimationFrame() {},
+  requestAnimationFrame() { return 0; },
+});
+(FakeElement.prototype as unknown as {
+  getBoundingClientRect: () => { left: number; top: number; width: number; height: number };
+}).getBoundingClientRect = () => ({ left: 0, top: 0, width: 1_000, height: 300 });
+
 test("area time series render fills before cumulative line strokes", () => {
   const markup = renderToStaticMarkup(
     <TimeSeriesLineChart chartStyle="area" points={splitPoints} stackMode="stacked100" />,
@@ -65,6 +84,58 @@ test("missing series values split both area fills and line strokes", () => {
 
   assert.equal((markup.match(/class="time-series-chart__area time-series-chart__series"/gu) ?? []).length, 2);
   assert.equal((markup.match(/class="time-series-chart__line time-series-chart__series"/gu) ?? []).length, 2);
+});
+
+test("pointer and keyboard inspection expose exact all-null buckets without markers", async () => {
+  const points: TimelinePoint[] = Array.from({ length: 3 }, (_value, index) => ({
+    id: `bucket-${index}`,
+    label: `hour ${index}`,
+    count: 0,
+    series: { "avg(latency)": null },
+    earliest: `2026-09-10T0${index}:00:00Z`,
+    latest: `2026-09-10T0${index + 1}:00:00Z`,
+    timeCoordinateNanoseconds: BigInt(index) * 3_600_000_000_000n,
+    timeLatestCoordinateNanoseconds: BigInt(index + 1) * 3_600_000_000_000n,
+  }));
+  const container = browser.document.body.appendChild(browser.document.createElement("div"));
+  const root = createRoot(container as unknown as Element);
+  try {
+    await act(async () => root.render(<TimeSeriesLineChart points={points} />));
+    const elementsWithClass = () => container.querySelectorAll("[class]");
+    const elementsByClass = (className: string) => elementsWithClass().filter((element) =>
+      (element.getAttribute("class") ?? "").split(" ").includes(className)
+    );
+    const inspect = container.querySelector("button");
+    assert.ok(inspect);
+
+    await act(async () => {
+      inspect.dispatchEvent(Object.assign(fakeEvent("pointermove"), {
+        clientX: 500,
+        pointerType: "mouse",
+      }));
+    });
+    let tooltip = container.querySelector('[role="tooltip"]');
+    assert.ok(tooltip);
+    assert.match(tooltip.textContent, /hour 1, exact bucket 2026-09-10T01:00:00Z to 2026-09-10T02:00:00Z/u);
+    assert.match(tooltip.textContent, /avg\(latency\)No value/u);
+    assert.equal(elementsByClass("time-series-chart__marker").length, 0);
+    const [crosshair] = elementsByClass("time-series-chart__crosshair");
+    assert.ok(crosshair);
+    assert.equal((crosshair.style as unknown as { left: string }).left, "50%");
+    assert.match(inspect.getAttribute("aria-label") ?? "", /hour 1.*No value/u);
+
+    await act(async () => {
+      inspect.dispatchEvent(Object.assign(fakeEvent("keydown"), { key: "ArrowRight" }));
+    });
+    tooltip = container.querySelector('[role="tooltip"]');
+    assert.ok(tooltip);
+    assert.match(tooltip.textContent, /hour 2, exact bucket 2026-09-10T02:00:00Z to 2026-09-10T03:00:00Z/u);
+    assert.match(inspect.getAttribute("aria-label") ?? "", /hour 2.*No value/u);
+    assert.equal(elementsByClass("time-series-chart__marker").length, 0);
+  } finally {
+    await act(async () => root.unmount());
+    browser.document.body.removeChild(container);
+  }
 });
 
 test("explicit null Events values stay gaps instead of using the legacy count fallback", () => {
