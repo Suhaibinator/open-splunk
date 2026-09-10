@@ -192,18 +192,25 @@ func (executor *Executor) executeTimechartStages(ctx context.Context, query clic
 		return err
 	}
 	defer release()
-	settings, err := executor.settingsForContext(admitted, query)
+	base, expand, err := executor.effectiveSettingsSnapshot(admitted)
+	if err != nil {
+		return err
+	}
+	frozen := &Executor{connection: executor.connection, settings: base, expandTimechartGroupLimit: expand, newQueryID: executor.newQueryID, withProgress: executor.withProgress, readAdmission: executor.readAdmission}
+	settings, err := frozen.settingsForContext(admitted, query)
 	if err != nil {
 		return err
 	}
 	seconds, _ := settings["max_execution_time"].(uint64)
 	ctx, cancel := context.WithTimeout(admitted, time.Duration(min(seconds, uint64(math.MaxInt64/int64(time.Second))))*time.Second)
 	defer cancel()
-	base, expand := executor.settingsSnapshot()
-	frozen := &Executor{connection: executor.connection, settings: base, expandTimechartGroupLimit: expand, newQueryID: executor.newQueryID, withProgress: executor.withProgress, readAdmission: executor.readAdmission}
 	policy := searchlimits.Default()
+	logicalRowLimit := base.limit("max_result_rows")
 	if admittedPolicy, ok := searchlimits.FromContext(ctx); ok {
 		policy = admittedPolicy
+		// The native envelope includes an overflow sentinel. Private stages
+		// and atomic publication must enforce the exact admitted logical cap.
+		logicalRowLimit = admittedPolicy.MaxResultRows
 	}
 	maximumRetained := min(policy.MaxResultBytes, policy.MaxMemoryBytes, settings["max_memory_usage"].(uint64), settings["max_result_bytes"].(uint64))
 	budget := &stageBudget{sink: sink, maxRows: settings["max_rows_to_read"].(uint64), maxBytes: settings["max_bytes_to_read"].(uint64), maxRetained: maximumRetained, maxMemory: settings["max_memory_usage"].(uint64)}
@@ -218,7 +225,7 @@ func (executor *Executor) executeTimechartStages(ctx context.Context, query clic
 	}
 
 	for query.HasContinuation() {
-		rowLimit := base.limit("max_result_rows")
+		rowLimit := logicalRowLimit
 		if query.RequiresTimechartInputDiscovery() {
 			rowLimit = settings["max_rows_to_read"].(uint64)
 		}
@@ -262,7 +269,7 @@ func (executor *Executor) executeTimechartStages(ctx context.Context, query clic
 	if err := budget.charge(uint64(unsafe.Sizeof(stagedFinalSink{}))); err != nil {
 		return err
 	}
-	transaction := &stagedFinalSink{ctx: ctx, stageBudget: budget, maxRows: base.limit("max_result_rows")}
+	transaction := &stagedFinalSink{ctx: ctx, stageBudget: budget, maxRows: logicalRowLimit}
 	if err := frozen.executeSingle(stageContext, query, transaction); err != nil {
 		return err
 	}

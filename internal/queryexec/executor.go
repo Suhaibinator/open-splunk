@@ -1151,22 +1151,30 @@ func (executor *Executor) settingsFor(query clickhouse.CompiledQuery) clickhouse
 	return settings
 }
 
-func (executor *Executor) settingsForContext(
-	ctx context.Context,
-	query clickhouse.CompiledQuery,
-) (clickhousedriver.Settings, error) {
+func (executor *Executor) effectiveSettingsSnapshot(ctx context.Context) (*validatedExecutorSettings, bool, error) {
 	base, expand := executor.settingsSnapshot()
 	policy, admitted := searchlimits.FromContext(ctx)
 	if admitted {
 		config, err := ConfigFromPolicy(policy)
 		if err != nil {
-			return nil, fmt.Errorf("execute ClickHouse search: admitted limits are invalid: %w", err)
+			return nil, false, fmt.Errorf("execute ClickHouse search: admitted limits are invalid: %w", err)
 		}
 		base, err = validatedQuerySettings(config)
 		if err != nil {
-			return nil, fmt.Errorf("execute ClickHouse search: admitted limits are invalid: %w", err)
+			return nil, false, fmt.Errorf("execute ClickHouse search: admitted limits are invalid: %w", err)
 		}
 		expand = true
+	}
+	return base, expand, nil
+}
+
+func (executor *Executor) settingsForContext(
+	ctx context.Context,
+	query clickhouse.CompiledQuery,
+) (clickhousedriver.Settings, error) {
+	base, expand, err := executor.effectiveSettingsSnapshot(ctx)
+	if err != nil {
+		return nil, err
 	}
 	settings := groupLimitSettingsFor(base, expand, query)
 	if query.RequiresTimechartInputDiscovery() {
