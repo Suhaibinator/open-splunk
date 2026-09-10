@@ -252,18 +252,6 @@ func TestProjectLogicalPlanOutputShapesAndDetachment(t *testing.T) {
 			},
 		},
 		{
-			name: "dynamic unlimited",
-			query: &plan.Query{
-				Operators: []plan.Operator{&plan.Scan{Range: sourceRange}},
-				DynamicOutput: &plan.DynamicSeriesOutput{
-					FixedFields: []string{"_time"},
-				},
-			},
-			want: OutputShape{
-				Kind: OutputKindDynamic, Fields: []string{"_time"},
-			},
-		},
-		{
 			name: "dynamic beyond historical bound",
 			query: &plan.Query{
 				Operators: []plan.Operator{&plan.Scan{Range: sourceRange}},
@@ -296,6 +284,26 @@ func TestProjectLogicalPlanOutputShapesAndDetachment(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestProjectLogicalPlanAcceptsUnlimitedTimechartOutput(t *testing.T) {
+	snapshot := validInspectionSnapshot()
+	snapshot.SPL = "index=" + snapshot.EffectiveIndexes[0] +
+		" | timechart span=5m count BY level limit=0"
+	logical, err := buildInspectionAuthoredPlan(snapshot)
+	if err != nil {
+		t.Fatalf("BuildExecutionPlan: %v", err)
+	}
+	projected, err := projectLogicalPlan(context.Background(), logical, snapshot.SPL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projected.Output.Kind != OutputKindDynamic ||
+		!slices.Equal(projected.Output.Fields, []string{"_time"}) ||
+		projected.Output.MaxDynamicFields != 0 ||
+		projected.Stages[len(projected.Stages)-1].Operator != "Timechart" {
+		t.Fatalf("unlimited timechart projection = %#v", projected)
 	}
 }
 
@@ -509,6 +517,15 @@ func TestProjectLogicalPlanFailsClosedAndReturnsNoPartialPlan(t *testing.T) {
 				OutputFields: []string{"host"},
 				DynamicOutput: &plan.DynamicSeriesOutput{
 					FixedFields: []string{"_time"}, MaxSeries: 1,
+				},
+			},
+		},
+		{
+			name: "unlimited dynamic output without timechart",
+			query: &plan.Query{
+				Operators: []plan.Operator{&plan.Scan{Range: validRange}},
+				DynamicOutput: &plan.DynamicSeriesOutput{
+					FixedFields: []string{"_time"},
 				},
 			},
 		},

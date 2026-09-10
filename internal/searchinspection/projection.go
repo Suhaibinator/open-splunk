@@ -707,6 +707,16 @@ func projectOutputShape(
 				"logical dynamic output is invalid",
 			)
 		}
+		if logical.DynamicOutput.MaxSeries == 0 {
+			if len(logical.Operators) == 0 {
+				return OutputShape{}, invalidProjection("unlimited dynamic output has no producer")
+			}
+			timechart, ok := logical.Operators[len(logical.Operators)-1].(*plan.Timechart)
+			if !ok || timechart == nil || timechart.Split == nil ||
+				timechart.Split.SeriesLimit != 0 {
+				return OutputShape{}, invalidProjection("unlimited dynamic output is not a timechart")
+			}
+		}
 		if hasDuplicateStrings(logical.DynamicOutput.FixedFields) {
 			return OutputShape{}, invalidProjection(
 				"logical dynamic output has duplicate fields",

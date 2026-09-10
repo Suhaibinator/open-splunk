@@ -219,6 +219,11 @@ func validInspectionLogicalPlan(
 	if !validInspectionOutputShape(&budget, logical.Output) {
 		return nil, false
 	}
+	if logical.Output.Kind == OutputKindDynamic &&
+		logical.Output.MaxDynamicFields == 0 &&
+		logical.Stages[len(logical.Stages)-1].Operator != "Timechart" {
+		return nil, false
+	}
 	return knowledgeObjects, true
 }
 
