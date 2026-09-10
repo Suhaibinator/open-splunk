@@ -480,6 +480,7 @@ type Compiler struct {
 // CompiledQuery is executable SQL plus ordered bind arguments and public
 // result fields. Internal helper columns never appear in OutputFields.
 type CompiledQuery struct {
+	rangeDiscovery    *compiledTimechartRangeDiscovery
 	hasTimechartStage bool
 	TimeBucket        *ResultTimeBucketOutput
 	continuationRoot  *compiledExecutionSeal

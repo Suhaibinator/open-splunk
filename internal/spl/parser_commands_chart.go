@@ -476,7 +476,7 @@ func (p *parser) parseTimechartAggregate() (StatsAggregate, Position, error) {
 			)
 	}
 	input := p.current()
-	if input.kind != tokenWord || strings.Contains(input.text, "*") ||
+	if (input.kind != tokenWord && input.kind != tokenQuotedField) || (input.kind == tokenWord && strings.Contains(input.text, "*")) ||
 		(strings.EqualFold(input.text, "eval") &&
 			p.index+1 < len(p.tokens) &&
 			p.tokens[p.index+1].kind == tokenLeftParen) {
@@ -502,13 +502,14 @@ func (p *parser) parseTimechartAggregate() (StatsAggregate, Position, error) {
 	}
 	end := p.previous().sourceRange.End
 	aggregate := StatsAggregate{
-		Function:   spec.function,
-		Input:      input.text,
-		InputRange: input.sourceRange,
-		Percentile: spec.percentile,
-		Alias:      spec.canonicalName + "(" + input.text + ")",
-		Range:      Range{Start: function.sourceRange.Start, End: end},
-		AliasRange: Range{Start: function.sourceRange.Start, End: end},
+		Function:    spec.function,
+		Input:       input.text,
+		InputQuoted: input.kind == tokenQuotedField,
+		InputRange:  input.sourceRange,
+		Percentile:  spec.percentile,
+		Alias:       spec.canonicalName + "(" + input.text + ")",
+		Range:       Range{Start: function.sourceRange.Start, End: end},
+		AliasRange:  Range{Start: function.sourceRange.Start, End: end},
 	}
 	if !p.isKeyword("AS") {
 		return aggregate, end, nil

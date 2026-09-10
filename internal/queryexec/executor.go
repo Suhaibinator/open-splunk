@@ -1055,6 +1055,10 @@ func (executor *Executor) settingsForContext(
 		expand = true
 	}
 	settings := groupLimitSettingsFor(base, expand, query)
+	if query.RequiresTimechartInputDiscovery() {
+		settings["max_result_rows"] = base.limit("max_rows_to_read")
+		settings["max_result_bytes"] = base.limit("max_memory_usage") / 4
+	}
 	hint, ok, err := query.StatsPartitionsMaxThreadsHintContext(ctx)
 	if err != nil {
 		return nil, err

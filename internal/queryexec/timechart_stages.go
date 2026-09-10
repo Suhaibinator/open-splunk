@@ -61,6 +61,8 @@ func (sink *timechartStageSink) SetSchema(schema searchjobs.Schema) error {
 	for i, column := range schema.Columns {
 		kind := ""
 		switch column.Kind {
+		case searchjobs.ValueKindMixed, searchjobs.ValueKindList:
+			kind = "Dynamic"
 		case searchjobs.ValueKindTime:
 			kind = "DateTime64(9, 'UTC')"
 		case searchjobs.ValueKindUnsigned:
@@ -76,7 +78,7 @@ func (sink *timechartStageSink) SetSchema(schema searchjobs.Schema) error {
 		default:
 			return fmt.Errorf("%w: timechart continuation has unsupported column type", searchjobs.ErrInvalidResult)
 		}
-		if column.Nullable {
+		if column.Nullable && kind != "Dynamic" {
 			kind = "Nullable(" + kind + ")"
 		}
 		if err := sink.charge(uint64(len(column.Name) + len(kind))); err != nil {
@@ -110,6 +112,12 @@ func (sink *timechartStageSink) AddRow(values []searchjobs.Value) error {
 		switch value.Kind() {
 		case searchjobs.ValueKindNull, searchjobs.ValueKindMissing:
 			row[i] = nil
+		case searchjobs.ValueKindList:
+			var err error
+			row[i], err = stageDynamicValue(value)
+			if err != nil {
+				return err
+			}
 		case searchjobs.ValueKindTime:
 			row[i], _ = value.Time()
 		case searchjobs.ValueKindUnsigned:
@@ -165,9 +173,13 @@ func (executor *Executor) executeTimechartStages(ctx context.Context, query clic
 	defer cancel()
 	base, expand := executor.settingsSnapshot()
 	frozen := &Executor{connection: executor.connection, settings: base, expandTimechartGroupLimit: expand, newQueryID: executor.newQueryID, withProgress: executor.withProgress, readAdmission: executor.readAdmission}
-	budget := &stageBudget{sink: sink, maxRows: settings["max_rows_to_read"].(uint64), maxBytes: settings["max_bytes_to_read"].(uint64), maxRetained: min(settings["max_result_bytes"].(uint64), settings["max_memory_usage"].(uint64))}
+	budget := &stageBudget{sink: sink, maxRows: settings["max_rows_to_read"].(uint64), maxBytes: settings["max_bytes_to_read"].(uint64), maxRetained: settings["max_memory_usage"].(uint64)}
 	for query.HasContinuation() {
-		stage := &timechartStageSink{stageBudget: budget, maxResultRows: settings["max_result_rows"].(uint64)}
+		rowLimit := base.limit("max_result_rows")
+		if query.RequiresTimechartInputDiscovery() {
+			rowLimit = settings["max_rows_to_read"].(uint64)
+		}
+		stage := &timechartStageSink{stageBudget: budget, maxResultRows: rowLimit}
 		if err := frozen.executeSingle(ctx, query, stage); err != nil {
 			return err
 		}
@@ -211,4 +223,42 @@ func (sink *timechartStageSink) AddRowWithTimeBucket(values []searchjobs.Value, 
 }
 func (sink stagedFinalSink) AddRowWithTimeBucket(values []searchjobs.Value, bounds searchjobs.TimeBucketBounds) error {
 	return publishWithTimeBucket(sink.ResultSink, values, bounds)
+}
+
+func stageDynamicValue(value searchjobs.Value) (any, error) {
+	switch value.Kind() {
+	case searchjobs.ValueKindMissing, searchjobs.ValueKindNull:
+		return nil, nil
+	case searchjobs.ValueKindString:
+		v, _ := value.String()
+		return v, nil
+	case searchjobs.ValueKindSigned:
+		v, _ := value.Signed()
+		return v, nil
+	case searchjobs.ValueKindUnsigned:
+		v, _ := value.Unsigned()
+		return v, nil
+	case searchjobs.ValueKindDouble:
+		v, _ := value.Double()
+		return v, nil
+	case searchjobs.ValueKindBool:
+		v, _ := value.Bool()
+		return v, nil
+	case searchjobs.ValueKindTime:
+		v, _ := value.Time()
+		return v, nil
+	case searchjobs.ValueKindList:
+		items, _ := value.List()
+		result := make([]any, len(items))
+		for i, item := range items {
+			v, err := stageDynamicValue(item)
+			if err != nil {
+				return nil, err
+			}
+			result[i] = v
+		}
+		return result, nil
+	default:
+		return nil, searchjobs.ErrInvalidResult
+	}
 }

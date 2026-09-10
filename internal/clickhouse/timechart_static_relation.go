@@ -31,26 +31,38 @@ func lowerStaticTimechartRelation(compiled CompiledQuery, previous compileState,
 		present = q(TimechartInputPresentColumn) + " != 0"
 	}
 	bucket := q(TimechartBucketColumn)
-	if !compiled.Timechart.Calendar {
-		bucket = "fromUnixTimestamp64Nano(toInt64(toInt128(" + strconv.FormatInt(compiled.Timechart.FirstBucket.UnixNano(), 10) + ") + toInt128(" + ordinal + ") * toInt128(" + strconv.FormatInt(int64(compiled.Timechart.Span), 10) + ")))"
+	if !compiled.Timechart.Calendar && !compiled.Timechart.ExactGrid {
+		bucket = "fromUnixTimestamp64Nano(toInt64(toInt128(" + strconv.FormatInt(compiled.Timechart.FirstBucket.UnixNano(), 10) + ") + toInt128(" + ordinal + ") * toInt128(" + strconv.FormatInt(int64(compiled.Timechart.Span), 10) + ")), 'UTC')"
+	}
+	ends := make([]int64, len(compiled.Timechart.Boundaries)-1)
+	for i := range ends {
+		ends[i] = compiled.Timechart.Boundaries[i+1].UnixNano()
+	}
+	endColumn := q(fmt.Sprintf("__os_timechart_end_%d", stage))
+	endSQL := "fromUnixTimestamp64Nano(arrayElement(?, " + ordinal + " + 1), 'UTC')"
+	if compiled.Timechart.ExactGrid && !compiled.Timechart.Continuous {
+		present = "(" + present + ") AND " + q(TimechartBucketPresentColumn) + " != 0"
+	}
+	if compiled.Timechart.ExactGrid && !compiled.Timechart.IncludePartial {
+		present = "(" + present + ") AND toUnixTimestamp64Nano(" + bucket + ") >= " + strconv.FormatInt(compiled.Timechart.SearchEarliest.UnixNano(), 10) + " AND " + endColumn + " <= fromUnixTimestamp64Nano(" + strconv.FormatInt(compiled.Timechart.SearchLatest.UnixNano(), 10) + ")"
 	}
 	invalidColumn := q(fmt.Sprintf("__os_timechart_invalid_%d", stage))
 	presentColumn := q(fmt.Sprintf("__os_timechart_present_%d", stage))
 	physical := strings.TrimSuffix(compiled.SQL, materializedCTESettingsSQL)
-	sql := "SELECT " + bucket + " AS " + timeColumn + ", " + physicalValue + " AS " + valueColumn + ", " + invalid + " AS " + invalidColumn + ", toUInt8(" + present + ") AS " + presentColumn + " FROM (" + physical + ")"
+	sql := "SELECT " + endSQL + " AS " + endColumn + ", " + bucket + " AS " + timeColumn + ", " + physicalValue + " AS " + valueColumn + ", " + invalid + " AS " + invalidColumn + ", toUInt8(" + present + ") AS " + presentColumn + " FROM (" + physical + ")"
 	state := compileState{visible: map[string]fieldState{
-		"_time":                 {valueSQL: timeColumn, kind: fieldKindTime, canonicalTime: true, existsSQL: "1"},
+		"_time":                 {valueSQL: timeColumn, kind: fieldKindTime, canonicalTime: true, existsSQL: "1", timeBucketEndSQL: endColumn},
 		operator.Measure.Output: {valueSQL: valueColumn, kind: kind, numberType: numberType, numericIntegral: numberType == "UInt64", numericSort: true, existsSQL: "1"},
-	}, publicOrder: []string{"_time", operator.Measure.Output}, context: previous.context, chronologicalBarriers: previous.chronologicalBarriers, order: []compiledSortKey{{valueSQL: timeColumn}}}
+	}, publicOrder: []string{"_time", operator.Measure.Output}, privateColumns: []string{endColumn}, context: previous.context, chronologicalBarriers: previous.chronologicalBarriers, order: []compiledSortKey{{valueSQL: timeColumn}}}
 	if numberType == "Float64" {
 		field := state.visible[operator.Measure.Output]
 		field.existsSQL = "isNotNull(" + valueColumn + ")"
 		state.visible[operator.Measure.Output] = field
 	}
 	barrier := &pendingChronologicalBarrier{name: name, sql: sql, validationColumns: []string{invalidColumn}, fanout: 2, depth: compiled.relationalDepth + 1, ownerRange: operator.Range}
-	state, args := bindChronologicalBarrier(state, barrier, compiled.Args)
+	state, args := bindChronologicalBarrier(state, barrier, append([]any{ends}, compiled.Args...))
 	state.context.atomicResult = true
 	state.context.requiresMaterializedValidationSettings = true
-	relation := compiledRelation{sql: "SELECT " + timeColumn + ", " + valueColumn + " FROM " + name + " WHERE " + presentColumn + " != 0", depth: compiled.relationalDepth + 2, ownerRange: operator.Range}
+	relation := compiledRelation{sql: "SELECT " + timeColumn + ", " + valueColumn + ", " + endColumn + " FROM " + name + " WHERE " + presentColumn + " != 0", depth: compiled.relationalDepth + 2, ownerRange: operator.Range}
 	return relation, state, args
 }

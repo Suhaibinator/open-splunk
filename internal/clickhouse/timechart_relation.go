@@ -14,6 +14,7 @@ import (
 	"unsafe"
 
 	"github.com/ClickHouse/clickhouse-go/v2/ext"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/chcol"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/column"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/searchlimits"
@@ -46,7 +47,9 @@ func timechartStageOutput(operator *plan.Timechart) ([]string, *plan.DynamicSeri
 
 // HasContinuation reports whether this executable is an intermediate validated
 // pivot. The physical decoder remains independent from suffix presentation.
-func (compiled CompiledQuery) HasContinuation() bool { return compiled.continuation != nil }
+func (compiled CompiledQuery) HasContinuation() bool {
+	return compiled.continuation != nil || compiled.rangeDiscovery != nil
+}
 
 // ContinueContext lowers the retained SPL suffix through the ordinary compiler
 // over an immutable, exact-schema native external table. No event scan is used.
@@ -63,10 +66,10 @@ func (compiled CompiledQuery) ContinueWithTimeBucketsContext(ctx context.Context
 	if err != nil {
 		return CompiledQuery{}, err
 	}
-	if !valid || compiled.continuation == nil {
+	if !valid || !compiled.HasContinuation() {
 		return CompiledQuery{}, errors.New("continue timechart: continuation authority is invalid")
 	}
-	input, err := newRelationInput(ctx, columns, rows)
+	input, err := newRelationInput(ctx, columns, rows, compiled.rangeDiscovery != nil)
 	if err != nil {
 		return CompiledQuery{}, err
 	}
@@ -88,6 +91,18 @@ func (compiled CompiledQuery) ContinueWithTimeBucketsContext(ctx context.Context
 			writeCompiledArgument(digest, end, 0)
 		}
 		copy(input.commitment[:], digest.Sum(nil))
+	}
+	if compiled.rangeDiscovery != nil {
+		result, err := compiled.continueObservedTimechart(ctx, input)
+		if err != nil {
+			return CompiledQuery{}, err
+		}
+		result.continuationRoot = compiled.continuationRoot
+		if result.continuationRoot == nil {
+			root := *compiled.executionSeal
+			result.continuationRoot = &root
+		}
+		return sealCompiledQueryExecutionContext(ctx, result)
 	}
 	fields := make([]string, len(columns))
 	for i, column := range columns {
@@ -111,7 +126,7 @@ func (compiled CompiledQuery) ContinueWithTimeBucketsContext(ctx context.Context
 	return sealCompiledQueryExecutionContext(ctx, result)
 }
 
-func newRelationInput(ctx context.Context, columns []RelationColumn, rows [][]any) (*compiledRelationInput, error) {
+func newRelationInput(ctx context.Context, columns []RelationColumn, rows [][]any, discovery bool) (*compiledRelationInput, error) {
 	if len(columns) == 0 {
 		return nil, errors.New("materialize timechart: empty schema")
 	}
@@ -120,7 +135,12 @@ func newRelationInput(ctx context.Context, columns []RelationColumn, rows [][]an
 		policy = admitted
 	}
 	maximum := min(policy.MaxResultBytes, policy.MaxMemoryBytes)
-	if uint64(len(rows)) > policy.MaxResultRows {
+	maxRows := policy.MaxResultRows
+	if discovery {
+		maximum = policy.MaxMemoryBytes
+		maxRows = policy.MaxRowsToRead
+	}
+	if uint64(len(rows)) > maxRows {
 		return nil, errors.New("materialize timechart: row limit exceeded")
 	}
 	retained := uint64(unsafe.Sizeof(compiledRelationInput{}))
@@ -152,7 +172,8 @@ func newRelationInput(ctx context.Context, columns []RelationColumn, rows [][]an
 			if !relationValueValid(columns[j].Type, value) {
 				return nil, errors.New("materialize timechart: cell type is invalid")
 			}
-			if text, ok := value.(string); ok && !charge(uint64(len(text))) {
+			size, ok := retainedRelationValue(value, 0)
+			if !ok || !charge(size) {
 				return nil, errors.New("materialize timechart: cells exceed byte limit")
 			}
 		}
@@ -190,8 +211,12 @@ func newRelationInput(ctx context.Context, columns []RelationColumn, rows [][]an
 			if text, ok := value.(string); ok {
 				value = strings.Clone(text)
 			}
-			input.rows[i][j] = value
-			if !writeCompiledArgument(digest, value, 0) {
+			cloned, ok := cloneRelationValue(value, 0)
+			if !ok {
+				return nil, errors.New("materialize timechart: cell cannot be cloned")
+			}
+			input.rows[i][j] = cloned
+			if !writeRelationValue(digest, value, 0) {
 				return nil, errors.New("materialize timechart: unsupported cell")
 			}
 		}
@@ -201,6 +226,9 @@ func newRelationInput(ctx context.Context, columns []RelationColumn, rows [][]an
 }
 
 func relationValueValid(kind string, value any) bool {
+	if kind == "Dynamic" {
+		return validRelationDynamicValue(value)
+	}
 	if value == nil {
 		return strings.HasPrefix(kind, "Nullable(")
 	}
@@ -241,6 +269,10 @@ func relationField(column RelationColumn, index int) (fieldState, string, error)
 		field.numericSort = true
 	case "String":
 		field.kind = fieldKindString
+	case "Dynamic":
+		field.kind = fieldKindDynamic
+		field.dynamicTypeSQL = "dynamicType(" + field.valueSQL + ")"
+		field.existsSQL = "isNotNull(" + field.valueSQL + ")"
 	case "Bool":
 		field.kind = fieldKindBool
 	case "DateTime64(9, 'UTC')":
@@ -259,6 +291,7 @@ func compileRelationInput(input *compiledRelationInput, query *plan.Query) (stri
 	state := compileState{visible: make(map[string]fieldState, len(input.columns)), context: newCompileContext(query.SearchStart, query.SearchTimezone)}
 	scan := query.Operators[0].(*plan.Scan)
 	state.context.searchEarliest, state.context.searchLatest = scan.Earliest, scan.Latest
+	state.context.hasTimechartStage = true
 	projection := make([]string, len(input.columns))
 	for i, column := range input.columns {
 		field, physical, err := relationField(column, i)
@@ -277,6 +310,9 @@ func compileRelationInput(input *compiledRelationInput, query *plan.Query) (stri
 		state.privateColumns = append(state.privateColumns, column)
 		projection = append(projection, column)
 	}
+	if field, ok := state.visible["_time"]; ok {
+		state.order = []compiledSortKey{{valueSQL: field.valueSQL}}
+	}
 	scope := append([]string{scan.TenantID}, scan.Indexes...)
 	args := make([]any, len(scope))
 	predicates := make([]string, len(scope))
@@ -288,6 +324,15 @@ func compileRelationInput(input *compiledRelationInput, query *plan.Query) (stri
 }
 
 func writeTimechartContinuation(digest hash.Hash, compiled CompiledQuery) {
+	writeBool(digest, compiled.rangeDiscovery != nil)
+	if compiled.rangeDiscovery != nil {
+		writeTokenPart(digest, compiled.rangeDiscovery.timezone)
+		writeCompiledArgument(digest, compiled.rangeDiscovery.searchStart, 0)
+		writeTokenPart(digest, fmt.Sprintf("%#v", compiled.rangeDiscovery.operator))
+		if compiled.rangeDiscovery.continuation != nil {
+			writeTokenPart(digest, compiled.rangeDiscovery.continuation.plan.Source())
+		}
+	}
 	writeBool(digest, compiled.continuationRoot != nil)
 	if compiled.continuationRoot != nil {
 		_, _ = digest.Write(compiled.continuationRoot[:])
@@ -324,6 +369,12 @@ func materializeRelationInput(ctx context.Context, input *compiledRelationInput)
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
+		row = slices.Clone(row)
+		for i, column := range input.columns {
+			if column.Type == "Dynamic" {
+				row[i] = nativeRelationDynamic(row[i])
+			}
+		}
 		if input.bucketEnds != nil {
 			row = append(slices.Clone(row), input.bucketEnds[rowIndex])
 		}
@@ -347,4 +398,75 @@ func (compiled CompiledQuery) IsContinuationOf(source CompiledQuery) bool {
 	return compiled.continuationRoot != nil && source.executionSeal != nil &&
 		compiled.HasValidExecutionSeal() && source.HasValidExecutionSeal() &&
 		*compiled.continuationRoot == *source.executionSeal
+}
+
+func validRelationDynamicValue(value any) bool { _, ok := retainedRelationValue(value, 0); return ok }
+func retainedRelationValue(value any, depth int) (uint64, bool) {
+	if depth > 17 {
+		return 0, false
+	}
+	if items, ok := value.([]any); ok {
+		total := uint64(unsafe.Sizeof([]any{})) + uint64(len(items))*uint64(unsafe.Sizeof(any(nil)))
+		for _, item := range items {
+			size, ok := retainedRelationValue(item, depth+1)
+			if !ok {
+				return 0, false
+			}
+			total, ok = retainedAdd(total, size)
+			if !ok {
+				return 0, false
+			}
+		}
+		return total, true
+	}
+	switch value.(type) {
+	case nil, string, int64, uint64, float64, bool, time.Time:
+		return retainedCompiledArgument(value)
+	default:
+		return 0, false
+	}
+}
+func cloneRelationValue(value any, depth int) (any, bool) {
+	if depth > 17 {
+		return nil, false
+	}
+	if items, ok := value.([]any); ok {
+		result := make([]any, len(items))
+		for i, item := range items {
+			cloned, ok := cloneRelationValue(item, depth+1)
+			if !ok {
+				return nil, false
+			}
+			result[i] = cloned
+		}
+		return result, true
+	}
+	return cloneCompiledArgument(value)
+}
+func writeRelationValue(digest hash.Hash, value any, depth int) bool {
+	if depth > 17 {
+		return false
+	}
+	if items, ok := value.([]any); ok {
+		writeTokenPart(digest, "Array(Dynamic)")
+		writeBool(digest, items == nil)
+		writeUint64(digest, uint64(len(items)))
+		for _, item := range items {
+			if !writeRelationValue(digest, item, depth+1) {
+				return false
+			}
+		}
+		return true
+	}
+	return writeCompiledArgument(digest, value, 0)
+}
+func nativeRelationDynamic(value any) chcol.Dynamic {
+	if items, ok := value.([]any); ok {
+		result := make([]chcol.Dynamic, len(items))
+		for i, item := range items {
+			result[i] = nativeRelationDynamic(item)
+		}
+		return chcol.NewDynamicWithType(result, "Array(Dynamic)")
+	}
+	return chcol.NewDynamic(value)
 }

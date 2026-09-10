@@ -1,0 +1,90 @@
+package queryexec
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"testing"
+	"time"
+
+	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
+	"github.com/Suhaibinator/open-splunk/internal/plan"
+	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"github.com/Suhaibinator/open-splunk/internal/spl"
+)
+
+type compositionSink struct {
+	fakeSink
+	bounds []searchjobs.TimeBucketBounds
+}
+
+func (sink *compositionSink) AddRowWithTimeBucket(values []searchjobs.Value, bounds searchjobs.TimeBucketBounds) error {
+	sink.bounds = append(sink.bounds, bounds)
+	return sink.AddRow(values)
+}
+
+func TestTimechartCompositionAgainstClickHouse(t *testing.T) {
+	if os.Getenv("OPEN_SPLUNK_CLICKHOUSE_INTEGRATION") != "1" {
+		t.Skip("set OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1")
+	}
+	earliest := time.Date(2026, 8, 12, 20, 0, 0, 0, time.UTC)
+	latest := earliest.Add(time.Hour)
+	indexTime := latest.Add(time.Hour)
+	ctx, executor := semanticBytesLineageStartClickHouse(t, indexTime, []semanticBytesLineageEvent{
+		{id: "compose-a", at: earliest.Add(100 * time.Millisecond), host: "west coast", raw: []byte("a")},
+		{id: "compose-b", at: earliest.Add(900 * time.Millisecond), host: "east", raw: []byte("b")},
+		{id: "compose-c", at: earliest.Add(2100 * time.Millisecond), host: "west coast", raw: []byte("c")},
+	})
+	for _, test := range []struct {
+		name, source string
+		rows         int
+		bounds       bool
+	}{
+		{"static count", `timechart span=1s count | where count>0 | head 1`, 1, true},
+		{"static value", `eval metric=2 | timechart span=1s sum(metric) AS total | where total>0 | head 1`, 1, true},
+		{"dynamic literal", `timechart span=1s count BY host | where 'west coast'>0 | table _time 'west coast'`, 2, true},
+		{"dynamic reaggregate", `timechart span=1s count BY host | stats sum(*)`, 1, false},
+		{"dynamic repeated", `timechart span=1s count BY host | timechart span=5s sum('west coast') AS total | head 1`, 1, true},
+		{"static observed", `timechart span=250ms fixedrange=false cont=false count | head 1`, 1, true},
+		{"split observed", `eval metric=2 | timechart span=250ms fixedrange=false cont=false sum(metric) BY host | where 'west coast'>0`, 2, true},
+		{"observed auto", `timechart fixedrange=false cont=false count | head 1`, 1, true},
+		{"removed time", `timechart span=1s count BY host | table east`, 3600, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			query, err := spl.Parse(fmt.Sprintf("index=%s | %s", semanticBytesLineageIndex, test.source))
+			if err != nil {
+				t.Fatal(err)
+			}
+			visibility := uint64(1)
+			logical, err := plan.Build(query, plan.Scope{TenantID: "tenant", AuthorizedIndexes: []string{semanticBytesLineageIndex}, Earliest: earliest, Latest: latest, SearchStart: indexTime, IndexTimeCutoff: indexTime, VisibilityCutoff: &visibility, SearchTimezone: "UTC"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			compiled, err := (clickhouse.Compiler{}).Compile(logical)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sink := &compositionSink{}
+			if err := executor.Execute(ctx, compiled, sink); err != nil {
+				t.Fatal(err)
+			}
+			if len(sink.rows) != test.rows {
+				t.Fatalf("rows=%d want=%d", len(sink.rows), test.rows)
+			}
+			if test.bounds && len(sink.bounds) != test.rows {
+				t.Fatalf("bounds=%d rows=%d", len(sink.bounds), len(sink.rows))
+			}
+			if !test.bounds && len(sink.bounds) != 0 {
+				t.Fatal("replaced time retained bounds")
+			}
+		})
+	}
+}
+
+func TestTimechartContinuationCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := (&Executor{}).executeTimechartStages(ctx, clickhouse.CompiledQuery{}, &fakeSink{}); err == nil {
+		t.Fatal("canceled stage accepted")
+	}
+}

@@ -103,7 +103,7 @@ func (c Compiler) compileWithFinalizerContext(
 	) (CompiledQuery, error) {
 		compiled.hasTimechartStage = state.context.hasTimechartStage
 		compiled.relationInput = c.relationInput
-		compiled.atomicResult = compiled.continuation != nil || (state.context != nil && state.context.atomicResult)
+		compiled.atomicResult = compiled.rangeDiscovery != nil || compiled.continuation != nil || (state.context != nil && state.context.atomicResult)
 		terminalWide := compiled.Chart != nil || compiled.Timechart != nil
 		if terminalWide && len(state.chronologicalBarriers) > 0 {
 			var wrapErr error
@@ -989,6 +989,19 @@ func (c Compiler) compileWithFinalizerContext(
 				outputFields, dynamic = timechartStageOutput(operator)
 			} else if operatorIndex+1 != len(remainingOperators) {
 				return CompiledQuery{}, errors.New("compile ClickHouse timechart: missing continuation authority")
+			}
+			if !operator.FixedRange && operator.BucketCount == 0 {
+				compiled, err := compileTimechartRangeSource(relation, state, args, operator, scan, aliasSequence)
+				if err != nil {
+					return CompiledQuery{}, err
+				}
+				var suffix *compiledTimechartContinuation
+				if hasContinuation {
+					suffix = &compiledTimechartContinuation{plan: continuation, compiler: c}
+					suffix.compiler.relationInput = nil
+				}
+				compiled.rangeDiscovery = newTimechartRangeDiscovery(operator, scan, query, c, suffix)
+				return finishCompiled(compiled, operator.Range)
 			}
 			compiled, compileErr := compileTimechart(
 				relation,

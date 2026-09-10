@@ -185,7 +185,7 @@ func buildTimechartMeasure(
 	if aggregate.Sparkline != nil ||
 		aggregate.InputGlob != nil || aggregate.AliasGlob != nil ||
 		aggregate.Predicate != nil || aggregate.InputExpression != nil ||
-		aggregate.InputQuoted || aggregate.AliasQuoted ||
+		(aggregate.InputQuoted && !outputSchemaKnown) || aggregate.AliasQuoted ||
 		aggregate.AliasSourceDerived || aggregate.AliasWildcardDerived {
 		return AggregateMeasure{}, &Diagnostic{
 			Code:    "SPL_UNSUPPORTED_TIMECHART_AGGREGATE",
@@ -286,7 +286,7 @@ func buildTimechartFieldMeasure(
 			Range:   aggregate.InputRange,
 		}
 	}
-	input, inputErr := ResolveField(aggregate.Input, aggregate.InputRange)
+	input, inputErr := resolveStatsInputField(aggregate.Input, aggregate.InputRange, aggregate.InputQuoted)
 	if inputErr != nil {
 		return AggregateMeasure{}, inputErr
 	}
