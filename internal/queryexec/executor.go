@@ -851,6 +851,7 @@ func (executor *Executor) executeSingle(ctx context.Context, query clickhouse.Co
 	if remaining, constrained := searchlimits.RemainingExecutionBytes(executionContext); constrained {
 		atomicRows.maximumBytes = min(atomicRows.maximumBytes, remaining)
 	}
+	decoder := &resultValueDecoder{ctx: executionContext}
 	var metadataCacheBudget resultMetadataCacheBudget
 	var sparseMetadataCache resultMetadataCache
 	destinations, err := scanDestinations(columnTypes)
@@ -896,7 +897,7 @@ func (executor *Executor) executeSingle(ctx context.Context, query clickhouse.Co
 		for index, destination := range destinations[:len(query.OutputFields)] {
 			var value searchjobs.Value
 			if optionalMultivalueTransports[index].valid {
-				value, err = convertOptionalMultivalueOutput(
+				value, err = decoder.convertOptionalMultivalueOutput(
 					destinations,
 					index,
 					optionalMultivalueTransports[index],
@@ -914,7 +915,7 @@ func (executor *Executor) executeSingle(ctx context.Context, query clickhouse.Co
 						metadataErr,
 					)
 				}
-				value, err = convertContainerOutputWithCache(
+				value, err = decoder.convertContainerOutputWithCache(
 					scannedValue(destination),
 					names,
 					types,
@@ -923,18 +924,21 @@ func (executor *Executor) executeSingle(ctx context.Context, query clickhouse.Co
 					&metadataCacheBudget,
 				)
 			} else if index == sparseFieldIndex {
-				value, err = convertSparseEventFieldsWithCache(
+				value, err = decoder.convertSparseEventFieldsWithCache(
 					scannedValue(destination), fieldNames, query.SparseFieldsSubset,
 					&sparseMetadataCache, &metadataCacheBudget,
 				)
 			} else if stringOrBytesTransports[index].valid {
-				value, err = convertStringOrBytesOutput(
+				value, err = decoder.convertStringOrBytesOutput(
 					destinations,
 					index,
 					stringOrBytesTransports[index],
 				)
 			} else {
-				value, err = convertValue(scannedValue(destination))
+				value, err = decoder.convertValue(scannedValue(destination))
+			}
+			if canceled := decoder.phase(); canceled != nil {
+				return canceled
 			}
 			if err != nil {
 				return fmt.Errorf("%w: convert ClickHouse column %q: %w", searchjobs.ErrInvalidResult, columns[index], err)
@@ -942,7 +946,7 @@ func (executor *Executor) executeSingle(ctx context.Context, query clickhouse.Co
 			values[index] = value
 		}
 		if query.TimeBucket != nil {
-			end, err := convertValue(scannedValue(destinations[len(destinations)-1]))
+			end, err := decoder.convertValue(scannedValue(destinations[len(destinations)-1]))
 			if err != nil {
 				return err
 			}
@@ -952,7 +956,7 @@ func (executor *Executor) executeSingle(ctx context.Context, query clickhouse.Co
 			}
 		}
 		if atomicResult {
-			if err := atomicRows.append(values); err != nil {
+			if err := atomicRows.appendContext(executionContext, values); err != nil {
 				return err
 			}
 			continue
@@ -1029,21 +1033,35 @@ type atomicResultBuffer struct {
 }
 
 func (buffer *atomicResultBuffer) append(values []searchjobs.Value) error {
+	return buffer.appendMeasured(nil, values)
+}
+
+func (buffer *atomicResultBuffer) appendContext(ctx context.Context, values []searchjobs.Value) error {
+	return buffer.appendMeasured(&resultValueDecoder{ctx: ctx}, values)
+}
+
+func (buffer *atomicResultBuffer) appendMeasured(decoder *resultValueDecoder, values []searchjobs.Value) error {
+	if err := decoder.phase(); err != nil {
+		return err
+	}
 	newBlock := buffer.last == nil || buffer.last.count == atomicRowsPerBlock
 	structural := uint64(0)
 	if newBlock {
 		structural = uint64(unsafe.Sizeof(atomicBufferedRowBlock{}))
 	}
-	nextBytes, err := chargeAtomicResultRow(buffer.bytes, structural, values)
+	nextBytes, err := chargeAtomicResultRowMeasured(decoder, buffer.bytes, structural, values)
 	if err != nil {
 		return err
 	}
 	if buffer.maximumBytes != 0 && nextBytes > buffer.maximumBytes {
 		return searchjobs.ErrByteLimit
 	}
+	if err := decoder.phase(); err != nil {
+		return err
+	}
 	buffer.appendRetained(values)
 	buffer.bytes = nextBytes
-	return nil
+	return decoder.phase()
 }
 
 // appendRetained transfers an already measured immutable row without cloning.
@@ -1063,6 +1081,10 @@ func (buffer *atomicResultBuffer) appendRetained(values []searchjobs.Value) {
 }
 
 func chargeAtomicResultRow(current, structural uint64, values []searchjobs.Value) (uint64, error) {
+	return chargeAtomicResultRowMeasured(nil, current, structural, values)
+}
+
+func chargeAtomicResultRowMeasured(decoder *resultValueDecoder, current, structural uint64, values []searchjobs.Value) (uint64, error) {
 	if current > maximumAtomicResultBytes {
 		return 0, searchjobs.ErrByteLimit
 	}
@@ -1072,7 +1094,16 @@ func chargeAtomicResultRow(current, structural uint64, values []searchjobs.Value
 	current += structural
 	for _, value := range values {
 		remaining := maximumAtomicResultBytes - current
-		size, err := value.RetainedSizeBytes()
+		var size uint64
+		var err error
+		if decoder == nil {
+			size, err = value.RetainedSizeBytes()
+		} else {
+			size, err = value.RetainedSizeBytesContext(decoder.ctx)
+		}
+		if canceled := decoder.phase(); canceled != nil {
+			return 0, canceled
+		}
 		if err != nil {
 			return 0, fmt.Errorf(
 				"%w: size retained atomic ClickHouse result value: %w",
@@ -1084,6 +1115,9 @@ func chargeAtomicResultRow(current, structural uint64, values []searchjobs.Value
 			return 0, searchjobs.ErrByteLimit
 		}
 		current += size
+	}
+	if err := decoder.phase(); err != nil {
+		return 0, err
 	}
 	return current, nil
 }
@@ -2725,6 +2759,8 @@ func readChartRows(
 	columnTypes []driver.ColumnType,
 	output clickhouse.ChartOutput,
 ) (bufferedChart, error) {
+	decoder := &resultValueDecoder{ctx: ctx}
+
 	if err := ctx.Err(); err != nil {
 		return bufferedChart{}, err
 	}
@@ -2813,14 +2849,14 @@ func readChartRows(
 		)
 		switch output.ValueKind {
 		case clickhouse.ChartValueKindCount:
-			ordinal, rowValue, names, counts, invalid, err = scannedChartRow(
+			ordinal, rowValue, names, counts, invalid, err = decoder.scannedChartRow(
 				destinations,
 				rowKind,
 				output.RowSemanticBytes,
 			)
 		case clickhouse.ChartValueKindSum, clickhouse.ChartValueKindAverage,
 			clickhouse.ChartValueKindPercentile:
-			ordinal, rowValue, names, values, invalid, err = scannedNumericChartRow(
+			ordinal, rowValue, names, values, invalid, err = decoder.scannedNumericChartRow(
 				destinations,
 				rowKind,
 				output.RowSemanticBytes,
@@ -2974,7 +3010,7 @@ func chartRowTransport(
 
 // scannedChartRowValue decodes the row value column every chart row shares and
 // checks it against the compiled row kind.
-func scannedChartRowValue(
+func (decoder *resultValueDecoder) scannedChartRowValue(
 	destinations []any,
 	rowKind searchjobs.ValueKind,
 	semanticBytesTransport bool,
@@ -2984,9 +3020,12 @@ func scannedChartRowValue(
 	if scanned == nil {
 		return searchjobs.Value{}, fmt.Errorf("%w: ClickHouse chart row value is null", searchjobs.ErrInvalidResult)
 	}
-	value, err := convertValue(scanned)
+	value, err := decoder.convertValue(scanned)
 	if semanticBytesTransport {
-		value, err = convertSemanticStringOrBytes(scanned, semanticBytes, false)
+		value, err = decoder.convertSemanticStringOrBytes(scanned, semanticBytes, false)
+	}
+	if canceled := decoder.phase(); canceled != nil {
+		return searchjobs.Value{}, canceled
 	}
 	if err != nil {
 		return searchjobs.Value{}, fmt.Errorf("%w: ClickHouse chart row value cannot be converted", searchjobs.ErrInvalidResult)
@@ -3004,7 +3043,7 @@ func scannedChartRowValue(
 	return value, nil
 }
 
-func scannedChartRow(
+func (decoder *resultValueDecoder) scannedChartRow(
 	destinations []any,
 	rowKind searchjobs.ValueKind,
 	semanticBytesTransport bool,
@@ -3028,14 +3067,14 @@ func scannedChartRow(
 	if !ordinalOK || !namesOK || !countsOK || !invalidOK {
 		return invalidResult("ClickHouse chart row has invalid native values")
 	}
-	value, err := scannedChartRowValue(destinations, rowKind, semanticBytesTransport, semanticBytes)
+	value, err := decoder.scannedChartRowValue(destinations, rowKind, semanticBytesTransport, semanticBytes)
 	if err != nil {
 		return 0, searchjobs.Value{}, nil, nil, 0, err
 	}
 	return ordinal, value, names, counts, invalid, nil
 }
 
-func scannedNumericChartRow(
+func (decoder *resultValueDecoder) scannedNumericChartRow(
 	destinations []any,
 	rowKind searchjobs.ValueKind,
 	semanticBytesTransport bool,
@@ -3077,7 +3116,7 @@ func scannedNumericChartRow(
 			values[index] = nullableFloat64{value: rawValues[index], valid: true}
 		}
 	}
-	value, err := scannedChartRowValue(destinations, rowKind, semanticBytesTransport, semanticBytes)
+	value, err := decoder.scannedChartRowValue(destinations, rowKind, semanticBytesTransport, semanticBytes)
 	if err != nil {
 		return 0, searchjobs.Value{}, nil, nil, 0, err
 	}
@@ -3321,39 +3360,57 @@ func unwrapDatabaseTypeWrapper(value, wrapper string) (string, bool) {
 	return strings.TrimSpace(remainder[1 : len(remainder)-1]), true
 }
 
-func convertValue(value any) (searchjobs.Value, error) {
+func (decoder *resultValueDecoder) convertValue(value any) (searchjobs.Value, error) {
 	if value == nil {
 		return searchjobs.NullValue(), nil
 	}
 	switch value := value.(type) {
 	case chcol.Dynamic:
+		if err := decoder.check(); err != nil {
+			return searchjobs.Value{}, err
+		}
 		if value.Nil() {
 			return searchjobs.NullValue(), nil
 		}
-		return convertValue(value.Any())
+		return decoder.convertValue(value.Any())
 	case *chcol.Dynamic:
+		if err := decoder.check(); err != nil {
+			return searchjobs.Value{}, err
+		}
 		if value == nil || value.Nil() {
 			return searchjobs.NullValue(), nil
 		}
-		return convertValue(value.Any())
+		return decoder.convertValue(value.Any())
 	case chcol.JSON:
-		return convertJSON(&value)
+		return decoder.convertJSON(&value)
 	case *chcol.JSON:
-		return convertJSON(value)
+		return decoder.convertJSON(value)
 	case time.Time:
 		return searchjobs.TimeValue(value), nil
 	case time.Duration:
 		return searchjobs.DurationValue(value), nil
 	case decimal.Decimal:
+		if err := decoder.phase(); err != nil {
+			return searchjobs.Value{}, err
+		}
 		return searchjobs.DecimalValue(value.String())
 	case *decimal.Decimal:
+		if err := decoder.phase(); err != nil {
+			return searchjobs.Value{}, err
+		}
 		if value == nil {
 			return searchjobs.NullValue(), nil
 		}
 		return searchjobs.DecimalValue(value.String())
 	case big.Int:
+		if err := decoder.phase(); err != nil {
+			return searchjobs.Value{}, err
+		}
 		return searchjobs.DecimalValue(value.String())
 	case *big.Int:
+		if err := decoder.phase(); err != nil {
+			return searchjobs.Value{}, err
+		}
 		if value == nil {
 			return searchjobs.NullValue(), nil
 		}
@@ -3363,11 +3420,17 @@ func convertValue(value any) (searchjobs.Value, error) {
 	case net.IP:
 		return searchjobs.StringValue(value.String()), nil
 	case string:
+		if err := decoder.phase(); err != nil {
+			return searchjobs.Value{}, err
+		}
 		if !utf8.ValidString(value) {
 			return searchjobs.BytesValue([]byte(value)), nil
 		}
 		return searchjobs.StringValue(value), nil
 	case []byte:
+		if err := decoder.phase(); err != nil {
+			return searchjobs.Value{}, err
+		}
 		return searchjobs.BytesValue(value), nil
 	case bool:
 		return searchjobs.BoolValue(value), nil
@@ -3396,12 +3459,18 @@ func convertValue(value any) (searchjobs.Value, error) {
 	case float64:
 		return searchjobs.DoubleValue(value), nil
 	}
+	if err := decoder.check(); err != nil {
+		return searchjobs.Value{}, err
+	}
 	if decoded, tagged, err := convertExtendedValue(value); tagged {
 		return decoded, err
 	}
 
 	reflected := reflect.ValueOf(value)
 	for reflected.IsValid() && (reflected.Kind() == reflect.Pointer || reflected.Kind() == reflect.Interface) {
+		if err := decoder.check(); err != nil {
+			return searchjobs.Value{}, err
+		}
 		if reflected.IsNil() {
 			return searchjobs.NullValue(), nil
 		}
@@ -3413,12 +3482,15 @@ func convertValue(value any) (searchjobs.Value, error) {
 	switch reflected.Kind() {
 	case reflect.Slice, reflect.Array:
 		if reflected.Type().Elem().Kind() == reflect.Uint8 {
+			if err := decoder.phase(); err != nil {
+				return searchjobs.Value{}, err
+			}
 			bytes := make([]byte, reflected.Len())
 			reflect.Copy(reflect.ValueOf(bytes), reflected)
 			return searchjobs.BytesValue(bytes), nil
 		}
-		return searchjobs.ListValueFromItems(reflected.Len(), func(index int) (searchjobs.Value, error) {
-			item, err := convertValue(reflected.Index(index).Interface())
+		return decoder.list(reflected.Len(), func(index int) (searchjobs.Value, error) {
+			item, err := decoder.convertValue(reflected.Index(index).Interface())
 			if err != nil {
 				return searchjobs.Value{}, fmt.Errorf("list item %d: %w", index, err)
 			}
@@ -3428,19 +3500,21 @@ func convertValue(value any) (searchjobs.Value, error) {
 		if reflected.Type().Key().Kind() != reflect.String {
 			return searchjobs.Value{}, fmt.Errorf("map key type %s is not a string", reflected.Type().Key())
 		}
-		keys := reflected.MapKeys()
-		slices.SortFunc(keys, func(left, right reflect.Value) int {
-			return strings.Compare(left.String(), right.String())
-		})
-		fields := make([]searchjobs.ObjectField, len(keys))
-		for index, key := range keys {
-			child, err := convertValue(reflected.MapIndex(key).Interface())
-			if err != nil {
-				return searchjobs.Value{}, fmt.Errorf("map field %q: %w", key.String(), err)
-			}
-			fields[index] = searchjobs.ObjectField{Name: key.String(), Value: child}
+		if err := decoder.phase(); err != nil {
+			return searchjobs.Value{}, err
 		}
-		return searchjobs.ObjectValue(fields...)
+		keys := reflected.MapKeys()
+		if err := sortDecodedValues(decoder, keys, func(left, right reflect.Value) int { return strings.Compare(left.String(), right.String()) }); err != nil {
+			return searchjobs.Value{}, err
+		}
+		return decoder.object(len(keys), func(index int) (searchjobs.ObjectField, error) {
+			key := keys[index]
+			child, err := decoder.convertValue(reflected.MapIndex(key).Interface())
+			if err != nil {
+				return searchjobs.ObjectField{}, fmt.Errorf("map field %q: %w", key.String(), err)
+			}
+			return searchjobs.ObjectField{Name: key.String(), Value: child}, nil
+		})
 	default:
 		return searchjobs.Value{}, fmt.Errorf("unsupported result type %T", value)
 	}
@@ -3567,40 +3641,60 @@ func decodeExtendedDuration(encoded string) (time.Duration, error) {
 	return result + time.Duration(nanos), nil
 }
 
-func convertJSON(document *chcol.JSON) (searchjobs.Value, error) {
+func (decoder *resultValueDecoder) convertJSON(document *chcol.JSON) (searchjobs.Value, error) {
+	if err := decoder.check(); err != nil {
+		return searchjobs.Value{}, err
+	}
 	if document == nil {
 		return searchjobs.NullValue(), nil
 	}
-	values, err := normalizedJSONValues(document)
+	values, err := decoder.normalizedJSONValues(document)
 	if err != nil {
 		return searchjobs.Value{}, err
 	}
+	if err := decoder.phase(); err != nil {
+		return searchjobs.Value{}, err
+	}
 	root := make(map[string]any)
+	if err := decoder.phase(); err != nil {
+		return searchjobs.Value{}, err
+	}
 	paths := make([]string, 0, len(values))
 	for path := range values {
+		if err := decoder.check(); err != nil {
+			return searchjobs.Value{}, err
+		}
 		paths = append(paths, path)
 	}
-	slices.Sort(paths)
+	if err := sortDecodedValues(decoder, paths, strings.Compare); err != nil {
+		return searchjobs.Value{}, err
+	}
 	for _, path := range paths {
+		if err := decoder.check(); err != nil {
+			return searchjobs.Value{}, err
+		}
 		segments, parseErr := eventfields.ParseNormalizedDynamicPath(path)
-		if parseErr != nil || insertResultPath(root, segments, values[path]) != nil {
+		if parseErr != nil || decoder.insertResultPath(root, segments, values[path]) != nil {
 			return searchjobs.Value{}, errors.New("JSON result contains invalid field paths")
 		}
 	}
-	return convertValue(root)
+	return decoder.convertValue(root)
 }
 
 func convertSparseEventFields(value any, fieldNames []string, allowSubset bool) (searchjobs.Value, error) {
 	return convertSparseEventFieldsWithCache(value, fieldNames, allowSubset, nil, nil)
 }
 
-func convertSparseEventFieldsWithCache(
+func (decoder *resultValueDecoder) convertSparseEventFieldsWithCache(
 	value any,
 	fieldNames []string,
 	allowSubset bool,
 	cache *resultMetadataCache,
 	budget *resultMetadataCacheBudget,
 ) (searchjobs.Value, error) {
+	if err := decoder.check(); err != nil {
+		return searchjobs.Value{}, err
+	}
 	var document *chcol.JSON
 	switch value := value.(type) {
 	case chcol.JSON:
@@ -3613,7 +3707,7 @@ func convertSparseEventFieldsWithCache(
 	if document == nil {
 		return searchjobs.Value{}, errors.New("sparse event fields JSON is nil")
 	}
-	physicalValues, err := normalizedJSONValues(document)
+	physicalValues, err := decoder.normalizedJSONValues(document)
 	if err != nil {
 		return searchjobs.Value{}, errors.New("sparse event fields JSON paths are invalid")
 	}
@@ -3627,36 +3721,57 @@ func convertSparseEventFieldsWithCache(
 			return searchjobs.Value{}, errors.New("sparse event fields metadata is invalid")
 		}
 	}
+	if err := decoder.phase(); err != nil {
+		return searchjobs.Value{}, err
+	}
 	root := make(map[string]any)
 	for index, name := range fieldNames {
+		if err := decoder.check(); err != nil {
+			return searchjobs.Value{}, err
+		}
 		fieldValue := any(nil)
 		if stored, exists := physicalValues[name]; exists {
 			fieldValue = stored
 			delete(physicalValues, name)
 		}
-		if insertResultPath(root, parsedPaths[index], fieldValue) != nil {
+		if decoder.insertResultPath(root, parsedPaths[index], fieldValue) != nil {
 			return searchjobs.Value{}, errors.New("sparse event fields metadata paths collide")
 		}
 	}
 	for _, stored := range physicalValues {
+		if err := decoder.check(); err != nil {
+			return searchjobs.Value{}, err
+		}
 		if !allowSubset && !isNullJSONPathValue(stored) {
 			return searchjobs.Value{}, errors.New("sparse event fields metadata does not match its JSON value")
 		}
 	}
-	converted, err := convertValue(root)
+	converted, err := decoder.convertValue(root)
 	if err == nil {
 		if cacheHit {
 			cache.recordHit()
 		} else {
+			if err := decoder.phase(); err != nil {
+				return searchjobs.Value{}, err
+			}
 			cache.retain(budget, fieldNames, nil, 0, nil, parsedPaths)
 		}
 	}
 	return converted, err
 }
 
-func normalizedJSONValues(document *chcol.JSON) (map[string]any, error) {
+func (decoder *resultValueDecoder) normalizedJSONValues(document *chcol.JSON) (map[string]any, error) {
+	if err := decoder.check(); err != nil {
+		return nil, err
+	}
+	if err := decoder.phase(); err != nil {
+		return nil, err
+	}
 	values := make(map[string]any, len(document.ValuesByPath()))
 	for physical, value := range document.ValuesByPath() {
+		if err := decoder.check(); err != nil {
+			return nil, err
+		}
 		normalized, err := eventfields.NormalizePhysicalDynamicPath(physical)
 		if err != nil {
 			return nil, err
@@ -3669,12 +3784,18 @@ func normalizedJSONValues(document *chcol.JSON) (map[string]any, error) {
 	return values, nil
 }
 
-func insertResultPath(root map[string]any, segments []string, value any) error {
+func (decoder *resultValueDecoder) insertResultPath(root map[string]any, segments []string, value any) error {
+	if err := decoder.check(); err != nil {
+		return err
+	}
 	if len(segments) == 0 {
 		return errors.New("result path is empty")
 	}
 	current := root
 	for index, segment := range segments {
+		if err := decoder.check(); err != nil {
+			return err
+		}
 		if index == len(segments)-1 {
 			if _, exists := current[segment]; exists {
 				return errors.New("result path is duplicated")
@@ -3684,6 +3805,9 @@ func insertResultPath(root map[string]any, segments []string, value any) error {
 		}
 		next, exists := current[segment]
 		if !exists {
+			if err := decoder.phase(); err != nil {
+				return err
+			}
 			nested := make(map[string]any)
 			current[segment] = nested
 			current = nested

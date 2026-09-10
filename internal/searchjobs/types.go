@@ -1139,6 +1139,11 @@ func (measurement *valueMeasurement) measure(value Value, depth int) (uint64, ui
 		}
 		return payload, retained, nil
 	case ValueKindObject:
+		if measurement != nil {
+			if err := measurement.ctx.Err(); err != nil {
+				return 0, 0, err
+			}
+		}
 		seen := make(map[string]struct{}, len(value.objectValue))
 		var payload uint64
 		for _, field := range value.objectValue {

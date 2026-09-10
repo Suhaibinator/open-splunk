@@ -235,11 +235,14 @@ func validateStringOrBytesResultColumns(
 	return transports, nil
 }
 
-func convertStringOrBytesOutput(
+func (decoder *resultValueDecoder) convertStringOrBytesOutput(
 	destinations []any,
 	valueColumn int,
 	transport resultStringOrBytesTransport,
 ) (searchjobs.Value, error) {
+	if err := decoder.check(); err != nil {
+		return searchjobs.Value{}, err
+	}
 	semanticBytes, ok := scannedValue(
 		destinations[transport.semanticBytesColumn],
 	).(uint8)
@@ -248,24 +251,27 @@ func convertStringOrBytesOutput(
 			"String-or-Bytes semantic flag has an invalid native value",
 		)
 	}
-	return convertSemanticStringOrBytes(
+	return decoder.convertSemanticStringOrBytes(
 		scannedValue(destinations[valueColumn]),
 		semanticBytes,
 		transport.nullable,
 	)
 }
 
-func convertSemanticStringOrBytes(
+func (decoder *resultValueDecoder) convertSemanticStringOrBytes(
 	raw any,
 	semanticBytes uint8,
 	nullable bool,
 ) (searchjobs.Value, error) {
+	if err := decoder.check(); err != nil {
+		return searchjobs.Value{}, err
+	}
 	if semanticBytes > 1 {
 		return searchjobs.Value{}, errors.New(
 			"String-or-Bytes semantic flag is outside the supported domain",
 		)
 	}
-	value, err := convertValue(raw)
+	value, err := decoder.convertValue(raw)
 	if err != nil {
 		return searchjobs.Value{}, err
 	}
@@ -294,11 +300,14 @@ func convertSemanticStringOrBytes(
 	}
 }
 
-func convertOptionalMultivalueOutput(
+func (decoder *resultValueDecoder) convertOptionalMultivalueOutput(
 	destinations []any,
 	valueColumn int,
 	transport resultOptionalMultivalueTransport,
 ) (searchjobs.Value, error) {
+	if err := decoder.check(); err != nil {
+		return searchjobs.Value{}, err
+	}
 	state, ok := scannedValue(destinations[transport.presentColumn]).(uint8)
 	if !ok || state > 2 {
 		return searchjobs.Value{}, errors.New(
@@ -342,7 +351,7 @@ func convertOptionalMultivalueOutput(
 		return searchjobs.MissingValue(), nil
 	}
 	if transport.dynamic {
-		return convertOptionalDynamicMultivalue(dynamicMembers)
+		return decoder.convertOptionalDynamicMultivalue(dynamicMembers)
 	}
 	if len(members) > maximumOptionalMultivalueMembers {
 		return searchjobs.Value{}, errors.New(
@@ -351,6 +360,9 @@ func convertOptionalMultivalueOutput(
 	}
 	payloadBytes := 0
 	for _, member := range members {
+		if err := decoder.check(); err != nil {
+			return searchjobs.Value{}, err
+		}
 		if !utf8.ValidString(member) {
 			return searchjobs.Value{}, errors.New(
 				"optional multivalue contains an invalid UTF-8 String member",
@@ -363,19 +375,25 @@ func convertOptionalMultivalueOutput(
 		}
 		payloadBytes += len(member)
 	}
-	return convertValue(members)
+	return decoder.convertValue(members)
 }
 
-func convertOptionalDynamicMultivalue(raw []chcol.Dynamic) (searchjobs.Value, error) {
+func (decoder *resultValueDecoder) convertOptionalDynamicMultivalue(raw []chcol.Dynamic) (searchjobs.Value, error) {
+	if err := decoder.check(); err != nil {
+		return searchjobs.Value{}, err
+	}
 	if len(raw) > maximumOptionalMultivalueMembers {
 		return searchjobs.Value{}, errors.New(
 			"optional multivalue exceeds the member limit",
 		)
 	}
-	members := make([]searchjobs.Value, len(raw))
 	payloadBytes := 0
-	for index, native := range raw {
-		member, err := convertValue(native)
+	return decoder.list(len(raw), func(index int) (searchjobs.Value, error) {
+		native := raw[index]
+		if err := decoder.check(); err != nil {
+			return searchjobs.Value{}, err
+		}
+		member, err := decoder.convertValue(native)
 		if err != nil {
 			return searchjobs.Value{}, fmt.Errorf(
 				"optional multivalue member %d: %w",
@@ -396,15 +414,8 @@ func convertOptionalDynamicMultivalue(raw []chcol.Dynamic) (searchjobs.Value, er
 			)
 		}
 		payloadBytes += memberBytes
-		members[index] = member
-	}
-	result := searchjobs.ListValue(members...)
-	if result.Kind() != searchjobs.ValueKindList {
-		return searchjobs.Value{}, errors.New(
-			"optional multivalue exceeds result value limits",
-		)
-	}
-	return result, nil
+		return member, nil
+	})
 }
 
 func canonicalOptionalMultivalueMemberBytes(member searchjobs.Value) (int, bool) {
@@ -654,7 +665,7 @@ func convertContainerOutput(
 	return convertContainerOutputWithCache(value, names, types, metadataVersion, nil, nil)
 }
 
-func convertContainerOutputWithCache(
+func (decoder *resultValueDecoder) convertContainerOutputWithCache(
 	value any,
 	names []string,
 	types []uint8,
@@ -662,15 +673,18 @@ func convertContainerOutputWithCache(
 	cache *resultMetadataCache,
 	budget *resultMetadataCacheBudget,
 ) (searchjobs.Value, error) {
+	if err := decoder.check(); err != nil {
+		return searchjobs.Value{}, err
+	}
 	// Container-capable outputs can be overwritten by a scalar on an individual
 	// row. The compiler seals that case as version zero with both relative
 	// metadata arrays empty; no container reconstruction is required. A version
 	// zero row carrying either sidecar remains invalid and is rejected below.
 	if metadataVersion == 0 && len(names) == 0 && len(types) == 0 {
-		return convertValue(value)
+		return decoder.convertValue(value)
 	}
 	if cache.matches(names, types, metadataVersion) {
-		converted, err := convertParsedContainerOutput(cache.root, value)
+		converted, err := decoder.convertParsedContainerOutput(cache.root, value)
 		if err == nil {
 			cache.recordHit()
 		}
@@ -684,8 +698,14 @@ func convertContainerOutputWithCache(
 	if err != nil {
 		return searchjobs.Value{}, err
 	}
+	if err := decoder.phase(); err != nil {
+		return searchjobs.Value{}, err
+	}
 	leaves := make([]resultContainerLeaf, len(metadata.Paths))
 	for index, path := range metadata.Paths {
+		if err := decoder.check(); err != nil {
+			return searchjobs.Value{}, err
+		}
 		leaves[index].path = path
 		if metadata.Types != nil {
 			leaves[index].typed = true
@@ -694,16 +714,24 @@ func convertContainerOutputWithCache(
 	}
 	// Stored names sort by escaped spelling. Public object keys sort by their
 	// decoded spelling, so establish that order once when constructing a tree.
-	slices.SortFunc(leaves, func(left, right resultContainerLeaf) int {
+	if err := sortDecodedValues(decoder, leaves, func(left, right resultContainerLeaf) int {
 		return slices.Compare(left.path, right.path)
-	})
+	}); err != nil {
+		return searchjobs.Value{}, err
+	}
 	var root *resultContainerNode
 	if len(leaves) != 0 {
-		built := buildResultContainerNode(leaves, 0)
+		built := decoder.buildResultContainerNode(leaves, 0)
+		if err := decoder.phase(); err != nil {
+			return searchjobs.Value{}, err
+		}
 		root = &built
 	}
-	converted, err := convertParsedContainerOutput(root, value)
+	converted, err := decoder.convertParsedContainerOutput(root, value)
 	if err == nil {
+		if err := decoder.phase(); err != nil {
+			return searchjobs.Value{}, err
+		}
 		cache.retain(budget, names, types, metadataVersion, root, nil)
 	}
 	return converted, err
@@ -715,42 +743,60 @@ type resultContainerLeaf struct {
 	typed      bool
 }
 
-func buildResultContainerNode(leaves []resultContainerLeaf, depth int) resultContainerNode {
+func (decoder *resultValueDecoder) buildResultContainerNode(leaves []resultContainerLeaf, depth int) resultContainerNode {
+	if decoder.check() != nil {
+		return resultContainerNode{}
+	}
 	if len(leaves[0].path) == depth {
 		return resultContainerNode{leaf: true, typed: leaves[0].typed, storedType: leaves[0].storedType}
 	}
 	groups := 1
 	for index := 1; index < len(leaves); index++ {
+		if decoder.check() != nil {
+			return resultContainerNode{}
+		}
 		if leaves[index-1].path[depth] != leaves[index].path[depth] {
 			groups++
 		}
 	}
 	node := resultContainerNode{children: make([]resultContainerNode, groups)}
 	for first, group := 0, 0; first < len(leaves); group++ {
+		if decoder.check() != nil {
+			return resultContainerNode{}
+		}
 		name := leaves[first].path[depth]
 		end := first + 1
 		for end < len(leaves) && leaves[end].path[depth] == name {
+			if decoder.check() != nil {
+				return resultContainerNode{}
+			}
 			end++
 		}
-		node.children[group] = buildResultContainerNode(leaves[first:end], depth+1)
+		node.children[group] = decoder.buildResultContainerNode(leaves[first:end], depth+1)
 		node.children[group].name = strings.Clone(name)
 		first = end
 	}
 	return node
 }
 
-func convertParsedContainerOutput(root *resultContainerNode, value any) (searchjobs.Value, error) {
-	if root == nil {
-		return convertValue(value)
+func (decoder *resultValueDecoder) convertParsedContainerOutput(root *resultContainerNode, value any) (searchjobs.Value, error) {
+	if err := decoder.check(); err != nil {
+		return searchjobs.Value{}, err
 	}
-	return convertContainerNode(root, value, true)
+	if root == nil {
+		return decoder.convertValue(value)
+	}
+	return decoder.convertContainerNode(root, value, true)
 }
 
-func convertContainerNode(
+func (decoder *resultValueDecoder) convertContainerNode(
 	node *resultContainerNode,
 	raw any,
 	present bool,
 ) (searchjobs.Value, error) {
+	if err := decoder.check(); err != nil {
+		return searchjobs.Value{}, err
+	}
 	if node == nil {
 		return searchjobs.Value{}, errors.New("container metadata node is absent")
 	}
@@ -763,7 +809,7 @@ func convertContainerNode(
 			}
 			return searchjobs.NullValue(), nil
 		}
-		converted, err := convertValue(raw)
+		converted, err := decoder.convertValue(raw)
 		if err != nil {
 			return searchjobs.Value{}, err
 		}
@@ -774,37 +820,51 @@ func convertContainerNode(
 		}
 		return converted, nil
 	}
-	rawFields, err := containerObjectFields(raw, present)
+	rawFields, err := decoder.containerObjectFields(raw, present)
 	if err != nil {
 		return searchjobs.Value{}, err
 	}
-	fields := make([]searchjobs.ObjectField, 0, len(node.children))
-	for index := range node.children {
+	result, err := decoder.object(len(node.children), func(index int) (searchjobs.ObjectField, error) {
+		if err := decoder.check(); err != nil {
+			return searchjobs.ObjectField{}, err
+		}
 		childNode := &node.children[index]
 		name := childNode.name
 		childRaw, childPresent := rawFields[name]
-		child, convertErr := convertContainerNode(
+		child, convertErr := decoder.convertContainerNode(
 			childNode,
 			childRaw,
 			childPresent,
 		)
 		if convertErr != nil {
-			return searchjobs.Value{}, fmt.Errorf("container field %q: %w", name, convertErr)
+			return searchjobs.ObjectField{}, fmt.Errorf("container field %q: %w", name, convertErr)
 		}
-		fields = append(fields, searchjobs.ObjectField{Name: name, Value: child})
 		delete(rawFields, name)
+		return searchjobs.ObjectField{Name: name, Value: child}, nil
+	})
+	if err != nil {
+		return searchjobs.Value{}, err
 	}
 	for _, extra := range rawFields {
-		if !containerNativeValueIsOnlyNull(extra) {
+		if err := decoder.check(); err != nil {
+			return searchjobs.Value{}, err
+		}
+		if !decoder.containerNativeValueIsOnlyNull(extra) {
 			return searchjobs.Value{}, errors.New(
 				"container value contains fields absent from its metadata",
 			)
 		}
 	}
-	return searchjobs.ObjectValue(fields...)
+	if err := decoder.phase(); err != nil {
+		return searchjobs.Value{}, err
+	}
+	return result, nil
 }
 
-func containerObjectFields(raw any, present bool) (map[string]any, error) {
+func (decoder *resultValueDecoder) containerObjectFields(raw any, present bool) (map[string]any, error) {
+	if err := decoder.check(); err != nil {
+		return nil, err
+	}
 	if !present || raw == nil {
 		return make(map[string]any), nil
 	}
@@ -822,12 +882,15 @@ func containerObjectFields(raw any, present bool) (map[string]any, error) {
 	}
 	switch value := raw.(type) {
 	case chcol.JSON:
-		return containerJSONFields(&value)
+		return decoder.containerJSONFields(&value)
 	case *chcol.JSON:
-		return containerJSONFields(value)
+		return decoder.containerJSONFields(value)
 	}
 	reflected := reflect.ValueOf(raw)
 	for reflected.IsValid() && (reflected.Kind() == reflect.Pointer || reflected.Kind() == reflect.Interface) {
+		if err := decoder.check(); err != nil {
+			return nil, err
+		}
 		if reflected.IsNil() {
 			return make(map[string]any), nil
 		}
@@ -837,8 +900,14 @@ func containerObjectFields(raw any, present bool) (map[string]any, error) {
 		reflected.Type().Key().Kind() != reflect.String {
 		return nil, errors.New("container value is not an object")
 	}
+	if err := decoder.phase(); err != nil {
+		return nil, err
+	}
 	result := make(map[string]any, reflected.Len())
 	for _, key := range reflected.MapKeys() {
+		if err := decoder.check(); err != nil {
+			return nil, err
+		}
 		name, err := eventfields.DecodePhysicalPathSegment(key.String())
 		if err != nil {
 			return nil, fmt.Errorf("container object key %q: %w", key.String(), err)
@@ -851,48 +920,71 @@ func containerObjectFields(raw any, present bool) (map[string]any, error) {
 	return result, nil
 }
 
-func containerJSONFields(document *chcol.JSON) (map[string]any, error) {
+func (decoder *resultValueDecoder) containerJSONFields(document *chcol.JSON) (map[string]any, error) {
+	if err := decoder.check(); err != nil {
+		return nil, err
+	}
 	if document == nil {
 		return make(map[string]any), nil
 	}
-	values, err := normalizedJSONValues(document)
+	values, err := decoder.normalizedJSONValues(document)
 	if err != nil {
 		return nil, errors.New("container JSON paths are invalid")
 	}
+	if err := decoder.phase(); err != nil {
+		return nil, err
+	}
 	paths := make([]string, 0, len(values))
 	for path := range values {
+		if err := decoder.check(); err != nil {
+			return nil, err
+		}
 		paths = append(paths, path)
 	}
-	slices.Sort(paths)
+	if err := sortDecodedValues(decoder, paths, strings.Compare); err != nil {
+		return nil, err
+	}
+	if err := decoder.phase(); err != nil {
+		return nil, err
+	}
 	root := make(map[string]any)
 	for _, path := range paths {
+		if err := decoder.check(); err != nil {
+			return nil, err
+		}
 		segments, parseErr := eventfields.ParseNormalizedDynamicPath(path)
-		if parseErr != nil || insertResultPath(root, segments, values[path]) != nil {
+		if parseErr != nil || decoder.insertResultPath(root, segments, values[path]) != nil {
 			return nil, errors.New("container JSON paths collide after decoding")
 		}
 	}
 	return root, nil
 }
 
-func containerNativeValueIsOnlyNull(value any) bool {
+func (decoder *resultValueDecoder) containerNativeValueIsOnlyNull(value any) bool {
+	if decoder.check() != nil {
+		return false
+	}
 	if isNullJSONPathValue(value) {
 		return true
 	}
 	switch value := value.(type) {
 	case chcol.Dynamic:
-		return containerNativeValueIsOnlyNull(value.Any())
+		return decoder.containerNativeValueIsOnlyNull(value.Any())
 	case *chcol.Dynamic:
 		if value == nil {
 			return true
 		}
-		return containerNativeValueIsOnlyNull(value.Any())
+		return decoder.containerNativeValueIsOnlyNull(value.Any())
 	case chcol.JSON:
-		return containerJSONIsOnlyNull(&value)
+		return decoder.containerJSONIsOnlyNull(&value)
 	case *chcol.JSON:
-		return containerJSONIsOnlyNull(value)
+		return decoder.containerJSONIsOnlyNull(value)
 	}
 	reflected := reflect.ValueOf(value)
 	for reflected.IsValid() && (reflected.Kind() == reflect.Pointer || reflected.Kind() == reflect.Interface) {
+		if decoder.check() != nil {
+			return false
+		}
 		if reflected.IsNil() {
 			return true
 		}
@@ -902,23 +994,32 @@ func containerNativeValueIsOnlyNull(value any) bool {
 		return false
 	}
 	for _, key := range reflected.MapKeys() {
-		if !containerNativeValueIsOnlyNull(reflected.MapIndex(key).Interface()) {
+		if decoder.check() != nil {
+			return false
+		}
+		if !decoder.containerNativeValueIsOnlyNull(reflected.MapIndex(key).Interface()) {
 			return false
 		}
 	}
 	return true
 }
 
-func containerJSONIsOnlyNull(document *chcol.JSON) bool {
+func (decoder *resultValueDecoder) containerJSONIsOnlyNull(document *chcol.JSON) bool {
+	if decoder.check() != nil {
+		return false
+	}
 	if document == nil {
 		return true
 	}
-	values, err := normalizedJSONValues(document)
+	values, err := decoder.normalizedJSONValues(document)
 	if err != nil || len(values) == 0 {
 		return false
 	}
 	for _, value := range values {
-		if !containerNativeValueIsOnlyNull(value) {
+		if decoder.check() != nil {
+			return false
+		}
+		if !decoder.containerNativeValueIsOnlyNull(value) {
 			return false
 		}
 	}
