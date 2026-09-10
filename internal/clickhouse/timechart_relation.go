@@ -32,11 +32,12 @@ type compiledTimechartContinuation struct {
 	lookups  []compiledLookupExternalTable
 }
 type compiledRelationInput struct {
-	columns       []RelationColumn
-	rows          [][]any
-	bucketEnds    []time.Time
-	commitment    [sha256.Size]byte
-	retainedBytes uint64
+	timechartOccurrences bool
+	columns              []RelationColumn
+	rows                 [][]any
+	bucketEnds           []time.Time
+	commitment           [sha256.Size]byte
+	retainedBytes        uint64
 }
 
 func timechartStageOutput(operator *plan.Timechart) ([]string, *plan.DynamicSeriesOutput) {
@@ -254,6 +255,7 @@ func compileRelationInput(input *compiledRelationInput, query *plan.Query) (stri
 		if err != nil {
 			return "", state, nil, err
 		}
+		field.timechartOccurrences = input.timechartOccurrences && column.Name == timechartObservedMeasure
 		state.visible[column.Name] = field
 		state.publicOrder = append(state.publicOrder, column.Name)
 		projection[i] = quoteIdentifier(physical) + " AS " + quoteIdentifier(column.Name)
@@ -313,6 +315,7 @@ func writeTimechartContinuation(digest hash.Hash, compiled CompiledQuery) {
 	writeBool(digest, compiled.relationInput != nil)
 	if compiled.relationInput != nil {
 		_, _ = digest.Write(compiled.relationInput.commitment[:])
+		writeBool(digest, compiled.relationInput.timechartOccurrences)
 	}
 }
 

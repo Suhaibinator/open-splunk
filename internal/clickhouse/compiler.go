@@ -3372,6 +3372,8 @@ func unsupportedMultivalueUsage(operation string, sourceRange spl.Range) error {
 }
 
 type fieldState struct {
+	// timechartOccurrences marks an exact cardinality captured before observed-range materialization.
+	timechartOccurrences      bool
 	timeBucketEndSQL          string
 	valueSQL                  string
 	exactNumericKeySQL        string

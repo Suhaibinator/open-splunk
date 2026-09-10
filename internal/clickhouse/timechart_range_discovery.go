@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,16 +24,42 @@ func compileTimechartRangeSource(relation compiledRelation, state compileState, 
 	if err := validateTimechartMeasure(operator, state); err != nil {
 		return CompiledQuery{}, err
 	}
-	fields := []plan.FieldRef{operator.Time}
-	if operator.Measure.Input.Name != "" {
-		fields = append(fields, operator.Measure.Input)
-	}
-	if operator.Split != nil {
-		fields = append(fields, operator.Split.Field)
-	}
-	projection, next, prefix, err := compileProjection(&plan.Project{Mode: plan.ProjectModeTable, Fields: fields, Range: operator.Range}, state, "", stage)
+	projection, next, prefix, err := compileProjection(&plan.Project{Mode: plan.ProjectModeTable, Fields: []plan.FieldRef{operator.Time}, Range: operator.Range}, state, "", stage)
 	if err != nil {
 		return CompiledQuery{}, err
+	}
+	appendInput := func(name, expression string, field fieldState, binds []any) {
+		projection = append(projection, expression+" AS "+quoteIdentifier(name))
+		field.valueSQL = quoteIdentifier(name)
+		next.visible[name] = field
+		next.publicOrder = append(next.publicOrder, name)
+		prefix = append(prefix, binds...)
+	}
+	if operator.Measure.Input.Name != "" {
+		field, _, resolveErr := resolveCompiledField(operator.Measure.Input, state)
+		if resolveErr != nil {
+			return CompiledQuery{}, resolveErr
+		}
+		if operator.Measure.Function == plan.AggregateFunctionCountValues {
+			expression, binds, resolveErr := resolveCountValueInput(operator.Measure.Input, state)
+			if resolveErr != nil {
+				return CompiledQuery{}, resolveErr
+			}
+			appendInput(timechartObservedMeasure, expression, fieldState{kind: fieldKindNumber, numberType: "UInt64", existsSQL: "1", numericIntegral: true}, binds)
+		} else {
+			expression, binds := numericArrayInputSQL(field)
+			// Preserve the compiler's numeric eligibility and multiplicity before
+			// public result decoding discards semantic tags or flattened parents.
+			expression = "CAST(arrayMap(sample -> CAST(sample AS Dynamic), " + expression + ") AS Dynamic)"
+			appendInput(timechartObservedMeasure, expression, fieldState{kind: fieldKindDynamic, existsSQL: "1"}, binds)
+		}
+	}
+	if operator.Split != nil {
+		expression, binds, resolveErr := observedTimechartSplitInput(operator.Split.Field, state)
+		if resolveErr != nil {
+			return CompiledQuery{}, resolveErr
+		}
+		appendInput(timechartObservedSplit, expression, fieldState{kind: fieldKindString, existsSQL: "1"}, binds)
 	}
 	projected := "SELECT " + strings.Join(projection, ", ") + " FROM (" + relation.sql + ")"
 	relation = relation.selectFrom(projected, operator.Range)
@@ -57,7 +84,33 @@ func newTimechartRangeDiscovery(operator *plan.Timechart, scan *plan.Scan, query
 
 func (compiled CompiledQuery) continueObservedTimechart(ctx context.Context, input *compiledRelationInput) (CompiledQuery, error) {
 	discovery := compiled.rangeDiscovery
+	if len(input.columns) != len(compiled.OutputFields) {
+		return CompiledQuery{}, errors.New("timechart input discovery schema is invalid")
+	}
+	for i, column := range input.columns {
+		if column.Name != compiled.OutputFields[i] {
+			return CompiledQuery{}, errors.New("timechart input discovery column is invalid")
+		}
+		if column.Name == timechartObservedMeasure {
+			expected := "Dynamic"
+			if discovery.operator.Measure.Function == plan.AggregateFunctionCountValues {
+				expected = "UInt64"
+			}
+			if column.Type != expected {
+				return CompiledQuery{}, errors.New("timechart input discovery contribution type is invalid")
+			}
+		}
+	}
 	operator := discovery.operator
+	if operator.Measure.Input.Name != "" {
+		operator.Measure.Input = plan.FieldRef{Name: timechartObservedMeasure, Path: []string{timechartObservedMeasure}, Range: operator.Measure.Input.Range}
+		input.timechartOccurrences = operator.Measure.Function == plan.AggregateFunctionCountValues
+	}
+	if operator.Split != nil {
+		split := *operator.Split
+		split.Field = plan.FieldRef{Name: timechartObservedSplit, Path: []string{timechartObservedSplit}, Range: split.Field.Range}
+		operator.Split = &split
+	}
 	var earliest, latest time.Time
 	for _, row := range input.rows {
 		timestamp, ok := row[0].(time.Time)
@@ -100,3 +153,44 @@ func (compiled CompiledQuery) RequiresTimechartInputDiscovery() bool {
 
 // HasEmptyTimechartInput is sealed evidence that observed-range input was empty.
 func (compiled CompiledQuery) HasEmptyTimechartInput() bool { return compiled.emptyTimechartInput }
+
+const (
+	timechartObservedMeasure = "timechart_observed_measure"
+	timechartObservedSplit   = "timechart_observed_split"
+)
+
+// Capture only valid split labels and missingness. The reserved NULL label is
+// an invalid-input witness, so the ordinary pivot validation rejects every bad
+// source row even when a later filter, series limit, or head would hide it.
+func observedTimechartSplitInput(input plan.FieldRef, state compileState) (string, []any, error) {
+	field, resolved, err := resolveCompiledField(input, state)
+	if err != nil {
+		return "", nil, err
+	}
+	if !resolved {
+		return "CAST(NULL AS Nullable(String))", nil, nil
+	}
+	if field.kind == fieldKindInvalid {
+		field.kind, field.valueSQL = fieldKindString, "CAST(NULL AS Nullable(String))"
+	}
+	if field.kind != fieldKindString && field.kind != fieldKindDynamic {
+		return "", nil, &plan.Diagnostic{Code: "SPL_UNSUPPORTED_TIMECHART_FIELD_TYPE", Message: "timechart split fields currently support strings and missing values", Range: input.Range, Suggestions: []string{"convert the split field to a string before timechart"}}
+	}
+	present := field.existsSQL
+	if present == "" {
+		present = "1"
+	}
+	descendant, kind := "0", "'String'"
+	binds := append([]any(nil), field.existsArgs...)
+	if field.kind == fieldKindDynamic {
+		kind = dynamicTypeExpression(field)
+		if field.descendantSQL != "" {
+			descendant = field.descendantSQL
+			binds = append(binds, field.descendantArgs...)
+		}
+	}
+	label := "assumeNotNull(toString(value))"
+	valid := "isValidUTF8(" + label + ") AND length(" + label + ") BETWEEN 1 AND " + strconv.Itoa(maxTimechartLabelBytes) + " AND " + label + " NOT IN ('NULL', 'OTHER')"
+	body := "multiIf(present = 0 AND descendant != 0, 'NULL', present = 0 OR isNull(value) OR kind = 'None', CAST(NULL AS Nullable(String)), kind != 'String', 'NULL', if(" + valid + ", " + label + ", 'NULL'))"
+	return bindSQLExpressions([]string{"value", "kind", "present", "descendant"}, []string{field.valueSQL, kind, present, descendant}, body), binds, nil
+}
