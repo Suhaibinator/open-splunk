@@ -94,8 +94,12 @@ func (compiled CompiledQuery) ContinueWithTimeBucketsAndWorkContext(ctx context.
 		if len(ends) != len(rows) || len(columns) == 0 || columns[0].Name != "_time" {
 			return CompiledQuery{}, errors.New("continue timechart: invalid bucket bounds")
 		}
-		for i, end := range ends {
-			start, ok := rows[i][0].(time.Time)
+		for i, row := range rows {
+			if len(row) == 0 {
+				return CompiledQuery{}, errors.New("continue timechart: invalid bucket row")
+			}
+			end := ends[i]
+			start, ok := row[0].(time.Time)
 			if !ok || !start.Before(end) {
 				return CompiledQuery{}, errors.New("continue timechart: invalid bucket interval")
 			}
