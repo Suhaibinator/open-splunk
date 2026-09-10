@@ -3598,7 +3598,7 @@
     },
     {
       "id": "SPL-CALENDAR-SPAN-001",
-      "summary": "Calendar bins accept only one local day or one Sunday-aligned local week in the effective IANA timezone.",
+      "summary": "Timechart grids support exact fixed subsecond and elapsed spans plus magnitude-aware civil day, week, month, quarter, and year spans.",
       "cases": [
         {
           "name": "spring daylight-saving day",
@@ -3633,21 +3633,45 @@
           }
         },
         {
-          "name": "multi-day rejected",
+          "name": "multi-day timechart",
           "source": "index=main | timechart span=2d count",
           "expect": {
-            "diagnostic": "SPL_UNSUPPORTED_CALENDAR_SPAN",
-            "diagnostic_phase": "parser",
-            "suggestion": "span=1d"
+            "parse": "accept"
           }
         },
         {
-          "name": "multi-week rejected",
-          "source": "index=main | bin _time span=2w",
+          "name": "multi-week timechart",
+          "source": "index=main | timechart span=2w count",
           "expect": {
-            "diagnostic": "SPL_UNSUPPORTED_CALENDAR_SPAN",
-            "diagnostic_phase": "parser",
-            "suggestion": "span=1d"
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "quarter and year aliases",
+          "source": "index=main | timechart span=2qtr count | timechart span=1yr count",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "subsecond exact divisor",
+          "source": "index=main | timechart span=250ms count",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "relative alignment",
+          "source": "index=main | timechart span=2h aligntime=-30m count",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "split suffix and sparse controls",
+          "source": "index=main | timechart span=2d cont=false partial=false fixedrange=false count BY service limit=0 useother=false",
+          "expect": {
+            "parse": "accept"
           }
         }
       ]

@@ -97,7 +97,7 @@ The semantic rule inventory is:
 | `SPL-PRECEDENCE-001` | fixed operator precedence and associativity |
 | `SPL-GROUPING-001` | scalar/Boolean parenthesis disambiguation |
 | `SPL-LEXER-001` | exact punctuation and operator transitions |
-| `SPL-CALENDAR-SPAN-001` | timezone-aware one-day and Sunday-aligned one-week bins |
+| `SPL-CALENDAR-SPAN-001` | exact subsecond, elapsed, and magnitude-aware civil timechart grids |
 | `SPL-QUOTED-FIELD-001` | exact quoted field references where explicitly supported |
 | `SPL-STATS-BY-MULTIVALUE-001` | bounded multivalue grouping |
 | `SPL-ARITHMETIC-TYPE-001` | numeric operator eligibility and result types |
@@ -148,15 +148,12 @@ minimum. Both endpoints resolve from one clock capture and form `[earliest,
 latest)`. Calendar-day operations use the effective IANA timezone; elapsed
 hours and calendar days can differ across daylight-saving transitions.
 
-`bin`/`bucket` over `_time` and `timechart` accept fixed elapsed spans in
-seconds, minutes, or hours, plus the exact calendar spans `1d` and `1w`.
-`timechart` also accepts `1mon` or `1month`, canonically represented as
-`1month`. A fixed `24h` span remains an elapsed 86,400-second interval and is
-distinct from the timezone-aware `1d` calendar span. A calendar day starts at
-local midnight in the effective search timezone; a calendar week starts on
-the preceding Sunday (`@w0`), and a calendar month starts on its first day.
-Boundaries therefore remain civil-time aligned while adjacent UTC instants
-may differ across daylight-saving changes.
+`bin`/`bucket` retain their existing time discretization. `timechart` supports
+exact subsecond and elapsed spans plus positive-magnitude civil day, week,
+month, quarter, and year spans. A fixed `24h` span remains an elapsed
+86,400-second interval and is distinct from the timezone-aware `1d` calendar
+span. Full grid, alignment, sparse-output, series, composition, and result
+metadata behavior is defined in the [timechart contract](timechart.md).
 
 When `timechart` omits `span`, it uses `bins=100` and chooses the first aligned
 step that produces no more than that many buckets: `1s`, `5s`, `10s`, `30s`,
@@ -165,15 +162,12 @@ rather than requesting exactly N buckets, and is bounded from 1 through
 10,000. `minspan=` skips smaller ladder steps; for example, `minspan=15m`
 selects at least `30m`, while `minspan=2d` selects `1month`. An explicit
 `span=` takes precedence over `bins=` and `minspan=`. These time-axis options
-must precede the aggregate. Series options retain their existing placement
+must precede the aggregate. Time-axis controls also include `aligntime`,
+`cont`, `partial`, and `fixedrange`; series options retain their placement
 before the aggregate or after the `BY` field. Calendar and fixed timechart
-grids remain bounded to 10,000 buckets. Multi-day, multi-week, and multi-month
-explicit spans, `aligntime`, and calendar quarter/year spans are not
-supported. The command fails when no ladder step through `1month` satisfies
-the requested `bins` and `minspan` constraints. Exact automatic boundary
-parity has not been verified against a live Splunk oracle; this implementation
-uses the documented ladder with the existing epoch and civil-time alignment.
-The timeline endpoint continues to use its fixed elapsed-time grid.
+grids remain bounded to 10,000 buckets. The command fails when no supported
+automatic step satisfies the requested `bins` and `minspan` constraints. The
+timeline endpoint continues to use its fixed elapsed-time grid.
 
 Base search and pipeline `search` support terms and phrases over `_raw`,
 parentheses, implicit and explicit `AND`, `OR`, `NOT`, typed field comparisons,
@@ -314,7 +308,7 @@ The cumulative command surface is:
 | `streamstats` | bounded ordered running aggregates |
 | `top`, `rare` | bounded frequency summaries; `countfield=`/`percentfield=` rename and `showcount=false`/`showperc=false` hide the generated outputs; `BY g…` groups the tuples, scopes `percent` to each group, and keeps `limit` tuples per group (`SPL-FREQUENCY-BY-001`) |
 | `bin`/`bucket` | numeric discretization and `_time` discretization by fixed `s`/`m`/`h` spans or timezone-aware `1d`/`1w` calendar spans (`SPL-CALENDAR-SPAN-001`) |
-| `timechart`, `chart` | bounded chart aggregation and split series; `timechart` defaults to an automatic `bins=100` span, accepts leading `bins=`, `minspan=`, explicit fixed `s`/`m`/`h` spans, and timezone-aware `1d`/`1w`/`1month` calendar spans; `timechart … BY <field>` accepts `limit=1..10`, `useother=<bool>`, and `usenull=<bool>` before the aggregate or after the split field (`limit=0` is rejected); `chart <agg> BY <row>` (or `OVER <row>`) with one split field is the `stats <agg> BY <row>` table |
+| `timechart`, `chart` | bounded chart aggregation and split series; `timechart` supports exact subsecond, elapsed, and magnitude-aware calendar grids, sparse and partial controls, relative alignment, composable typed output, and exact bucket-bound metadata; split `limit=0` selects all ordinary series subject to independent atomic resource limits; see the [timechart contract](timechart.md); `chart <agg> BY <row>` (or `OVER <row>`) with one split field is the `stats <agg> BY <row>` table |
 | `regex` | bounded RE2 row filtering (`SPL-REGEX-001`) |
 | `reverse` | reverse the complete established relation order (`SPL-REVERSE-001`) |
 | `accum` | running numeric sum (`SPL-ACCUM-001`) |

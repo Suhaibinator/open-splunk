@@ -13,6 +13,8 @@ a document explicitly says otherwise.
 - [API](api.md) describes the `open_splunk` protobuf package, HTTP routes,
   collector gRPC stream, and search WebSocket.
 - [SPL](spl.md) is the cumulative authored-search contract.
+- [Timechart](timechart.md) defines exact grids, split selection, pipeline
+  composition, bucket metadata, and resource behavior.
 - [Knowledge](knowledge.md) covers field knowledge, lookups, immutable
   snapshots, lifecycle, and security.
 - [Theming](theming.md) defines the two-tier colour token layer, the
