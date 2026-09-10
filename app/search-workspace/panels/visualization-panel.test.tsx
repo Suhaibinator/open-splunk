@@ -372,6 +372,33 @@ test("stacked categorical windows retain baselines from hidden preceding series"
   assert.ok(Math.abs((window.rows[0]?.[0]?.end ?? 0) - (250 / 3)) < Number.EPSILON * 100);
 });
 
+test("categorical scales and percentage stacks stay finite for extreme values", () => {
+  const maximum = Number.MAX_VALUE;
+  const statisticsRows: WorkspaceStatistic[] = [{
+    id: "extreme",
+    level: "extreme",
+    count: maximum,
+    percent: "100%",
+    avgDuration: 0,
+    series: [
+      { key: "first", label: "first", value: maximum },
+      { key: "second", label: "second", value: maximum },
+      { key: "negative", label: "negative", value: -maximum },
+    ],
+  }];
+  const model = categoricalChartModel(statisticsRows);
+  const window = categoricalStackWindow(model, 0, 3, "stacked100");
+  const markup = renderPanel({ chartStyle: "column", stackMode: "stacked", statisticsRows });
+
+  assert.equal(model.approximate, true);
+  assert.deepEqual(window.rows[0], [
+    { end: 50, raw: maximum, start: 0 },
+    { end: 100, raw: maximum, start: 50 },
+    { end: -100, raw: -maximum, start: 0 },
+  ]);
+  assert.doesNotMatch(markup, /(?:NaN|Infinity)/u);
+});
+
 test("legacy categorical results do not offer or apply stacking", () => {
   const markup = renderPanel({
     stackMode: "stacked100",

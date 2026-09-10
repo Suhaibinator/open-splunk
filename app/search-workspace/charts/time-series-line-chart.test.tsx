@@ -375,3 +375,42 @@ test("wide stacked windows retain global baselines while bounding rendered serie
   // The first visible series starts after the 24 hidden series, at 80% of the stack.
   assert.match(markup, /data-series-name="series-25"[^>]*points="500\.00,50\.00"/u);
 });
+
+test("extreme finite series keep chart paths and axes finite", () => {
+  const maximum = Number.MAX_VALUE;
+  const sameSign: TimelinePoint[] = [{
+    id: "maximum",
+    label: "maximum",
+    count: maximum,
+    series: { first: maximum, second: maximum },
+  }];
+  const oppositeSigns: TimelinePoint[] = [{
+    id: "opposite",
+    label: "opposite",
+    count: 0,
+    series: { negative: -maximum, positive: maximum },
+  }];
+
+  assert.equal(timelineChartModel(sameSign).hasApproximateCoordinates, true);
+  for (const [points, stackMode] of [
+    [sameSign, "stacked"],
+    [sameSign, "stacked100"],
+    [oppositeSigns, "none"],
+  ] as const) {
+    const markup = renderToStaticMarkup(<TimeSeriesLineChart points={points} stackMode={stackMode} />);
+    assert.doesNotMatch(markup, /(?:NaN|Infinity)/u);
+  }
+
+  const normalized = timelineVisibleStackWindow(
+    sameSign,
+    timelineChartModel(sameSign).series,
+    "Events",
+    0,
+    2,
+    "stacked100",
+  );
+  assert.deepEqual(normalized.rows[0], [
+    { end: 50, raw: maximum, start: 0 },
+    { end: 100, raw: maximum, start: 50 },
+  ]);
+});

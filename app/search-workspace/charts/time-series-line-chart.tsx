@@ -14,8 +14,17 @@ import { COMPACT_NUMBER_FORMAT, NUMBER_FORMAT } from "../constants";
 import { formatExactNumericText } from "../formatters";
 import type { StackMode } from "../model";
 import { sortTimechartRows } from "../timechart-series";
-import { linearTickScale } from "./chart-scale";
-import { normalizeStackValue, type StackedChartRow } from "./chart-stacking";
+import { linearTickScale, projectScaleValue } from "./chart-scale";
+import {
+  addStackCoordinate,
+  addStackMagnitude,
+  createStackMagnitudeTotal,
+  normalizeStackValue,
+  stackMagnitudeCoordinate,
+  stackMagnitudeIsApproximate,
+  type StackedChartRow,
+  type StackMagnitudeTotal,
+} from "./chart-stacking";
 
 const VIEWBOX_WIDTH = 1000;
 const VIEWBOX_HEIGHT = 300;
@@ -189,11 +198,12 @@ interface TimelinePointDomain {
   hasFinite: boolean;
   maximum: number;
   minimum: number;
-  negativeTotal: number;
-  positiveTotal: number;
+  negativeTotal: StackMagnitudeTotal;
+  positiveTotal: StackMagnitudeTotal;
 }
 
 export interface TimelineSeriesDomain {
+  coordinateApproximate: boolean;
   domains: Record<StackMode, number[]>;
   names: string[];
   rows: TimelinePointDomain[];
@@ -224,16 +234,15 @@ export function timelineSeriesDomain(
     let hasFinite = false;
     let maximum = 0;
     let minimum = 0;
-    let negativeTotal = 0;
-    let positiveTotal = 0;
+    const negativeTotal = createStackMagnitudeTotal();
+    const positiveTotal = createStackMagnitudeTotal();
     for (const [name, value] of Object.entries(point.series ?? {})) {
       names.add(name);
       if (typeof value !== "number" || !Number.isFinite(value)) continue;
       hasFinite = true;
       maximum = Math.max(maximum, value);
       minimum = Math.min(minimum, value);
-      if (value < 0) negativeTotal += Math.abs(value);
-      else positiveTotal += value;
+      addStackMagnitude(value < 0 ? negativeTotal : positiveTotal, value);
     }
     return { hasFinite, maximum, minimum, negativeTotal, positiveTotal };
   });
@@ -242,13 +251,15 @@ export function timelineSeriesDomain(
     rows = points.map((point) => {
       const value = point.count;
       const hasFinite = Number.isFinite(value);
-      return {
+      const result: TimelinePointDomain = {
         hasFinite,
         maximum: hasFinite ? Math.max(0, value) : 0,
         minimum: hasFinite ? Math.min(0, value) : 0,
-        negativeTotal: hasFinite && value < 0 ? Math.abs(value) : 0,
-        positiveTotal: hasFinite && value >= 0 ? value : 0,
+        negativeTotal: createStackMagnitudeTotal(),
+        positiveTotal: createStackMagnitudeTotal(),
       };
+      if (hasFinite) addStackMagnitude(value < 0 ? result.negativeTotal : result.positiveTotal, value);
+      return result;
     });
   } else if (names.has(fallbackLabel)) {
     rows = rows.map((row, index) => {
@@ -259,12 +270,13 @@ export function timelineSeriesDomain(
       ) return row;
       if (!Number.isFinite(point?.count)) return row;
       const value = point.count;
+      addStackMagnitude(value < 0 ? row.negativeTotal : row.positiveTotal, value);
       return {
         hasFinite: true,
         maximum: Math.max(row.maximum, value),
         minimum: Math.min(row.minimum, value),
-        negativeTotal: row.negativeTotal + (value < 0 ? Math.abs(value) : 0),
-        positiveTotal: row.positiveTotal + (value >= 0 ? value : 0),
+        negativeTotal: row.negativeTotal,
+        positiveTotal: row.positiveTotal,
       };
     });
   }
@@ -281,14 +293,26 @@ export function timelineSeriesDomain(
   for (const row of rows) {
     if (!row.hasFinite) continue;
     extendDomain("none", row.minimum, row.maximum);
-    extendDomain("stacked", -row.negativeTotal, row.positiveTotal);
+    extendDomain(
+      "stacked",
+      -stackMagnitudeCoordinate(row.negativeTotal),
+      stackMagnitudeCoordinate(row.positiveTotal),
+    );
     extendDomain(
       "stacked100",
-      row.negativeTotal === 0 ? 0 : -100,
-      row.positiveTotal === 0 ? 0 : 100,
+      row.negativeTotal.maximum === 0 ? 0 : -100,
+      row.positiveTotal.maximum === 0 ? 0 : 100,
     );
   }
-  return { domains, names: [...names], rows };
+  return {
+    coordinateApproximate: rows.some((row) =>
+      stackMagnitudeIsApproximate(row.negativeTotal)
+      || stackMagnitudeIsApproximate(row.positiveTotal)
+    ),
+    domains,
+    names: [...names],
+    rows,
+  };
 }
 
 /** Stable chronological chart order; Statistics retains the server row order. */
@@ -297,10 +321,12 @@ export function timelineChartModel(
   fallbackLabel = "Events",
 ): TimelineChartModel {
   const chronologicalPoints = sortTimechartRows(points, { direction: "asc", key: "time" });
+  const series = timelineSeriesDomain(chronologicalPoints, fallbackLabel);
   return {
-    hasApproximateCoordinates: chronologicalPoints.some((point) => point.coordinateApproximate === true),
+    hasApproximateCoordinates: series.coordinateApproximate
+      || chronologicalPoints.some((point) => point.coordinateApproximate === true),
     points: chronologicalPoints,
-    series: timelineSeriesDomain(chronologicalPoints, fallbackLabel),
+    series,
   };
 }
 
@@ -322,8 +348,8 @@ export function timelineVisibleStackWindow(
       hasFinite: false,
       maximum: 0,
       minimum: 0,
-      negativeTotal: 0,
-      positiveTotal: 0,
+      negativeTotal: createStackMagnitudeTotal(),
+      positiveTotal: createStackMagnitudeTotal(),
     };
     let negative = 0;
     let positive = 0;
@@ -347,11 +373,11 @@ export function timelineVisibleStackWindow(
       if (stackMode !== "none") {
         if (value >= 0) {
           start = positive;
-          positive += value;
+          positive = addStackCoordinate(positive, value);
           end = positive;
         } else {
           start = negative;
-          negative += value;
+          negative = addStackCoordinate(negative, value);
           end = negative;
         }
       }
@@ -454,11 +480,11 @@ export function TimeSeriesLineChart({
     ),
     [boundedSeriesEnd, boundedSeriesStart, chartModel.series, chartPoints, seriesLabel, stackMode],
   );
-  const { minimum, maximum, ticks } = useMemo(
+  const scale = useMemo(
     () => linearTickScale(stackWindow.domain),
     [stackWindow.domain],
   );
-  const axisRange = maximum - minimum;
+  const { ticks } = scale;
   const { hasApproximateCoordinates } = chartModel;
   const xCoordinates = useMemo(() => timelineXCoordinates(chartPoints), [chartPoints]);
   const columnCoordinates = useMemo(() => timelineColumnCoordinates(chartPoints), [chartPoints]);
@@ -496,16 +522,14 @@ export function TimeSeriesLineChart({
       points: chartPoints.map((_point, index) => {
         const value = stackWindow.rows[index]?.[renderedSeriesIndex];
         if (value === undefined || value.raw === null) return null;
-        const projectedEnd = Math.min(maximum, Math.max(minimum, value.end));
-        const projectedStart = Math.min(maximum, Math.max(minimum, value.start));
         return {
           x: interactionXCoordinates[index] ?? VIEWBOX_WIDTH / 2,
-          y: VIEWBOX_HEIGHT - ((projectedEnd - minimum) / axisRange) * VIEWBOX_HEIGHT,
-          startY: VIEWBOX_HEIGHT - ((projectedStart - minimum) / axisRange) * VIEWBOX_HEIGHT,
+          y: VIEWBOX_HEIGHT - projectScaleValue(value.end, scale) * VIEWBOX_HEIGHT,
+          startY: VIEWBOX_HEIGHT - projectScaleValue(value.start, scale) * VIEWBOX_HEIGHT,
         };
       }),
     };
-  }), [axisRange, boundedSeriesStart, chartPoints, interactionXCoordinates, maximum, minimum, renderedSeriesNames, stackWindow.rows]);
+  }), [boundedSeriesStart, chartPoints, interactionXCoordinates, renderedSeriesNames, scale, stackWindow.rows]);
   const seriesPathGeometry = useMemo<TimeSeriesPathGeometry[]>(() => seriesCoordinates.map((series) => {
     const segments = contiguousSegments(series.points);
     return {
@@ -634,7 +658,7 @@ export function TimeSeriesLineChart({
         <svg viewBox={`0 0 ${VIEWBOX_WIDTH} ${VIEWBOX_HEIGHT}`} preserveAspectRatio="none" aria-hidden="true">
           <g className="time-series-chart__grid">
             {ticks.map((tick) => {
-              const y = VIEWBOX_HEIGHT - ((tick - minimum) / axisRange) * VIEWBOX_HEIGHT;
+              const y = VIEWBOX_HEIGHT - projectScaleValue(tick, scale) * VIEWBOX_HEIGHT;
               return (
                 <line
                   className={tick === 0 ? "is-zero" : undefined}

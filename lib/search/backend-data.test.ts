@@ -1311,6 +1311,40 @@ test("all-null and missing timechart measures retain their schema series", () =>
   ]);
 });
 
+test("timechart retains finite series when their compatibility total overflows", () => {
+  const schema: ResultSchema = {
+    schemaId: "extreme-timechart-v1",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_TIME_SERIES,
+    columns: [
+      column("_time", ValueType.VALUE_TYPE_TIMESTAMP, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_EVENT_TIME),
+      column("first", ValueType.VALUE_TYPE_DOUBLE, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_METRIC),
+      column("second", ValueType.VALUE_TYPE_DOUBLE, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_METRIC),
+    ],
+  };
+  const maximum = Number.MAX_VALUE;
+  const [point] = adaptSearchResults(schema, [
+    row("extreme", 0n, [
+      timestampValue("2026-09-10T00:00:00Z"),
+      doubleValue(maximum),
+      doubleValue(maximum),
+    ], {
+      earliest: "2026-09-10T00:00:00Z",
+      latest: "2026-09-10T01:00:00Z",
+    }),
+  ]).timeline;
+
+  assert.ok(point);
+  assert.equal(point.count, maximum);
+  assert.equal(point.coordinateApproximate, true);
+  assert.deepEqual(point.series, { first: maximum, second: maximum });
+  assert.deepEqual(timechartRowsForExport([point]), [{
+    _time: "2026-09-10T00:00:00Z",
+    first: maximum,
+    second: maximum,
+  }]);
+});
+
 test("exact time bucket parser accepts canonical nanoseconds without Date rounding", () => {
   assert.equal(
     timeBucketBoundaryNanoseconds("1970-01-01T00:00:00.000000001Z"),

@@ -1,5 +1,14 @@
-import { linearTickScale } from "../charts/chart-scale";
-import { normalizeStackValue, type StackedChartRow } from "../charts/chart-stacking";
+import { linearTickScale, projectScaleValue } from "../charts/chart-scale";
+import {
+  addStackCoordinate,
+  addStackMagnitude,
+  createStackMagnitudeTotal,
+  normalizeStackValue,
+  stackMagnitudeCoordinate,
+  stackMagnitudeIsApproximate,
+  type StackedChartRow,
+  type StackMagnitudeTotal,
+} from "../charts/chart-stacking";
 import {
   type FocusEvent,
   type KeyboardEvent,
@@ -89,8 +98,8 @@ interface CategoricalChartRow {
   hasFinite: boolean;
   maximum: number;
   minimum: number;
-  negativeTotal: number;
-  positiveTotal: number;
+  negativeTotal: StackMagnitudeTotal;
+  positiveTotal: StackMagnitudeTotal;
   row: WorkspaceStatistic;
   seriesByKey: Map<string, WorkspaceStatisticSeries>;
 }
@@ -169,8 +178,8 @@ export function categoricalChartModel(rows: WorkspaceStatistic[]): CategoricalCh
     let hasFinite = false;
     let maximum = 0;
     let minimum = 0;
-    let negativeTotal = 0;
-    let positiveTotal = 0;
+    const negativeTotal = createStackMagnitudeTotal();
+    const positiveTotal = createStackMagnitudeTotal();
     approximate ||= row.coordinateApproximate === true;
     for (const item of row.series ?? []) {
       if (!definitions.has(item.key)) {
@@ -183,8 +192,7 @@ export function categoricalChartModel(rows: WorkspaceStatistic[]): CategoricalCh
       hasFinite = true;
       maximum = Math.max(maximum, item.value);
       minimum = Math.min(minimum, item.value);
-      if (item.value < 0) negativeTotal += Math.abs(item.value);
-      else positiveTotal += item.value;
+      addStackMagnitude(item.value < 0 ? negativeTotal : positiveTotal, item.value);
     }
     return { hasFinite, maximum, minimum, negativeTotal, positiveTotal, row, seriesByKey };
   });
@@ -198,24 +206,35 @@ export function categoricalChartModel(rows: WorkspaceStatistic[]): CategoricalCh
       indexed.hasFinite = Number.isFinite(value);
       indexed.maximum = Number.isFinite(value) ? Math.max(0, value) : 0;
       indexed.minimum = Number.isFinite(value) ? Math.min(0, value) : 0;
-      indexed.negativeTotal = Number.isFinite(value) && value < 0 ? Math.abs(value) : 0;
-      indexed.positiveTotal = Number.isFinite(value) && value >= 0 ? value : 0;
+      indexed.negativeTotal = createStackMagnitudeTotal();
+      indexed.positiveTotal = createStackMagnitudeTotal();
+      if (Number.isFinite(value)) {
+        addStackMagnitude(value < 0 ? indexed.negativeTotal : indexed.positiveTotal, value);
+      }
     }
   }
   const domains: Record<StackMode, number[]> = { none: [], stacked: [], stacked100: [] };
   for (const row of indexedRows) {
     if (!row.hasFinite) continue;
     extendCategoricalDomain(domains, "none", row.minimum, row.maximum);
-    extendCategoricalDomain(domains, "stacked", -row.negativeTotal, row.positiveTotal);
+    extendCategoricalDomain(
+      domains,
+      "stacked",
+      -stackMagnitudeCoordinate(row.negativeTotal),
+      stackMagnitudeCoordinate(row.positiveTotal),
+    );
     extendCategoricalDomain(
       domains,
       "stacked100",
-      row.negativeTotal === 0 ? 0 : -100,
-      row.positiveTotal === 0 ? 0 : 100,
+      row.negativeTotal.maximum === 0 ? 0 : -100,
+      row.positiveTotal.maximum === 0 ? 0 : 100,
     );
   }
   return {
-    approximate,
+    approximate: approximate || indexedRows.some((row) =>
+      stackMagnitudeIsApproximate(row.negativeTotal)
+      || stackMagnitudeIsApproximate(row.positiveTotal)
+    ),
     backendSeries: rows.some((row) => row.series !== undefined),
     domains,
     rows: indexedRows,
@@ -262,11 +281,11 @@ export function categoricalStackWindow(
       if (stackMode !== "none") {
         if (value >= 0) {
           start = positive;
-          positive += value;
+          positive = addStackCoordinate(positive, value);
           end = positive;
         } else {
           start = negative;
-          negative += value;
+          negative = addStackCoordinate(negative, value);
           end = negative;
         }
       }
@@ -278,20 +297,22 @@ export function categoricalStackWindow(
 }
 
 function verticalGeometry(start: number, end: number, scale: ChartScale): { top: number; height: number } {
-  const range = scale.maximum - scale.minimum;
   const upper = Math.max(start, end);
   const lower = Math.min(start, end);
+  const projectedUpper = projectScaleValue(upper, scale);
+  const projectedLower = projectScaleValue(lower, scale);
   return {
-    top: ((scale.maximum - upper) / range) * 100,
-    height: ((upper - lower) / range) * 100,
+    top: (1 - projectedUpper) * 100,
+    height: (projectedUpper - projectedLower) * 100,
   };
 }
 
 function horizontalGeometry(start: number, end: number, scale: ChartScale): { left: number; width: number } {
-  const range = scale.maximum - scale.minimum;
+  const projectedStart = projectScaleValue(Math.min(start, end), scale);
+  const projectedEnd = projectScaleValue(Math.max(start, end), scale);
   return {
-    left: ((Math.min(start, end) - scale.minimum) / range) * 100,
-    width: (Math.abs(end - start) / range) * 100,
+    left: projectedStart * 100,
+    width: (projectedEnd - projectedStart) * 100,
   };
 }
 
@@ -591,7 +612,7 @@ function CategoricalChart({
                 <span
                   key={tick}
                   className={tick === 0 ? "visualization-grid-line--zero" : undefined}
-                  style={{ left: `${((tick - scale.minimum) / (scale.maximum - scale.minimum)) * 100}%` }}
+                  style={{ left: `${projectScaleValue(tick, scale) * 100}%` }}
                 />
               ))}
             </div>
@@ -680,7 +701,7 @@ function CategoricalChart({
               <span
                 key={tick}
                 className={tick === 0 ? "visualization-grid-line--zero" : undefined}
-                style={{ top: `${((scale.maximum - tick) / (scale.maximum - scale.minimum)) * 100}%` }}
+                style={{ top: `${(1 - projectScaleValue(tick, scale)) * 100}%` }}
               />
             ))}
           </div>

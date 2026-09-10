@@ -401,6 +401,44 @@ function chartNumericValue(value: TypedValue | undefined): ChartNumericValue | n
   }
 }
 
+function boundedChartCoordinateSum(values: readonly { value: ChartNumericValue }[]): {
+  approximate: boolean;
+  coordinate: number;
+} {
+  let compensation = 0;
+  let scale = 0;
+  let scaledSum = 0;
+  for (const { value: { coordinate } } of values) {
+    const magnitude = Math.abs(coordinate);
+    if (magnitude > scale) {
+      const factor = scale === 0 ? 0 : scale / magnitude;
+      scaledSum *= factor;
+      compensation *= factor;
+      scale = magnitude;
+    }
+    if (scale === 0) continue;
+    const normalized = coordinate / scale;
+    const next = scaledSum + normalized;
+    compensation += Math.abs(scaledSum) >= Math.abs(normalized)
+      ? (scaledSum - next) + normalized
+      : (normalized - next) + scaledSum;
+    scaledSum = next;
+  }
+  const normalizedTotal = scaledSum + compensation;
+  if (scale === 0 || normalizedTotal === 0) return { approximate: false, coordinate: 0 };
+  if (Math.abs(normalizedTotal) > Number.MAX_VALUE / scale) {
+    return {
+      approximate: true,
+      coordinate: Math.sign(normalizedTotal) * Number.MAX_VALUE,
+    };
+  }
+  const coordinate = normalizedTotal * scale;
+  return {
+    approximate: coordinate === 0,
+    coordinate,
+  };
+}
+
 function numericValueType(valueType: ValueType): boolean {
   return valueType === ValueType.VALUE_TYPE_SINT64
     || valueType === ValueType.VALUE_TYPE_UINT64
@@ -696,13 +734,14 @@ function timelineFromRows(
     const exactSeries = Object.fromEntries(presentChartValues.flatMap(({ name, value }) =>
       value.exactText === undefined ? [] : [[name, value.exactText]],
     ));
-    const count = presentChartValues.reduce((sum, item) => sum + item.value.coordinate, 0);
-    if (!Number.isFinite(count)) return [];
+    const countSummary = boundedChartCoordinateSum(presentChartValues);
+    const count = countSummary.coordinate;
     const exactIntegers = presentChartValues.map((item) => item.value.exactInteger);
     const exactIntegerTotal = exactIntegers.every((value) => value !== undefined)
       ? exactIntegers.reduce((sum, value) => sum + (value ?? 0n), 0n)
       : undefined;
-    const coordinateApproximate = presentChartValues.some((item) => item.value.approximate)
+    const coordinateApproximate = countSummary.approximate
+      || presentChartValues.some((item) => item.value.approximate)
       || (exactIntegerTotal !== undefined && !Number.isSafeInteger(count));
     const formatter = formatters.timeline ??= new Intl.DateTimeFormat(
       "en-US",

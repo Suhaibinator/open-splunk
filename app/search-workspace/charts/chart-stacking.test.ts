@@ -1,12 +1,23 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { normalizeStackValue, stackChartRows, stackedChartDomain } from "./chart-stacking";
+import {
+  addStackMagnitude,
+  createStackMagnitudeTotal,
+  normalizeStackValue,
+  stackChartRows,
+  stackedChartDomain,
+} from "./chart-stacking";
 
 test("shared stack normalization handles positive, negative, and zero coordinates", () => {
-  assert.equal(normalizeStackValue(1, 4, 8), 25);
-  assert.equal(normalizeStackValue(-2, 4, 8), -25);
-  assert.equal(normalizeStackValue(0, 0, 0), 0);
+  const positive = createStackMagnitudeTotal();
+  const negative = createStackMagnitudeTotal();
+  addStackMagnitude(positive, 4);
+  addStackMagnitude(negative, -8);
+
+  assert.equal(normalizeStackValue(1, positive, negative), 25);
+  assert.equal(normalizeStackValue(-2, positive, negative), -25);
+  assert.equal(normalizeStackValue(0, positive, negative), 0);
 });
 
 test("stacking uses independent positive and negative baselines", () => {
@@ -46,5 +57,21 @@ test("none mode leaves every series on the zero baseline", () => {
   assert.deepEqual(stackChartRows([[2, -3]], "none"), [[
     { end: 2, raw: 2, start: 0 },
     { end: -3, raw: -3, start: 0 },
+  ]]);
+});
+
+test("stacking keeps extreme finite and subnormal coordinates inspectable", () => {
+  const maximum = Number.MAX_VALUE;
+  assert.deepEqual(stackChartRows([[maximum, maximum]], "stacked"), [[
+    { end: maximum, raw: maximum, start: 0 },
+    { end: maximum, raw: maximum, start: maximum },
+  ]]);
+  assert.deepEqual(stackChartRows([[maximum, maximum]], "stacked100"), [[
+    { end: 50, raw: maximum, start: 0 },
+    { end: 100, raw: maximum, start: 50 },
+  ]]);
+  assert.deepEqual(stackChartRows([[Number.MIN_VALUE, Number.MIN_VALUE]], "stacked100"), [[
+    { end: 50, raw: Number.MIN_VALUE, start: 0 },
+    { end: 100, raw: Number.MIN_VALUE, start: 50 },
   ]]);
 });
