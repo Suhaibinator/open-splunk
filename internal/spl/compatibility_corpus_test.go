@@ -274,7 +274,7 @@ func validateCompatibilityCorpus(corpus compatibilityCorpus) error {
 		"audit": {}, "authorized_indexes": {}, "boolean": {}, "bound_arguments": {},
 		"compatibility": {}, "diagnostic": {}, "diagnostic_phase": {}, "explain": {},
 		"job_failure": {}, "parse": {}, "phase": {}, "range": {}, "range_text": {},
-		"relation": {}, "sql_literal_fragments": {}, "suggestion": {}, "surfaces": {},
+		"relation": {}, "search_range": {}, "sql_literal_fragments": {}, "suggestion": {}, "surfaces": {},
 		"value": {}, "atomic": {}, "command": {}, "commands": {}, "keys": {},
 		"mode": {}, "order": {}, "outputs": {}, "resource": {}, "type": {},
 	}
