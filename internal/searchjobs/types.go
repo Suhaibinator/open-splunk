@@ -1057,11 +1057,43 @@ func validateValue(value Value, depth int) error {
 // temporarily buffer values use this same accounting as the durable result
 // sink so recursive containers cannot evade a private memory ceiling.
 func (value Value) RetainedSizeBytes() (uint64, error) {
-	_, retained, err := measureValue(value, 0)
-	return retained, err
+	return value.RetainedSizeBytesContext(context.Background())
+}
+
+// RetainedSizeBytesContext applies the same modeled heap accounting while
+// checking cancellation throughout nested lists and objects.
+func (value Value) RetainedSizeBytesContext(ctx context.Context) (uint64, error) {
+	if ctx == nil {
+		return 0, errors.New("measure search result value: context is nil")
+	}
+	measurement := valueMeasurement{ctx: ctx}
+	_, retained, err := measurement.measure(value, 0)
+	if err != nil {
+		return 0, err
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	return retained, nil
+}
+
+type valueMeasurement struct {
+	ctx   context.Context
+	nodes uint64
 }
 
 func measureValue(value Value, depth int) (uint64, uint64, error) {
+	measurement := valueMeasurement{ctx: context.Background()}
+	return measurement.measure(value, depth)
+}
+
+func (measurement *valueMeasurement) measure(value Value, depth int) (uint64, uint64, error) {
+	if measurement.nodes&255 == 0 {
+		if err := measurement.ctx.Err(); err != nil {
+			return 0, 0, err
+		}
+	}
+	measurement.nodes++
 	if depth > 32 {
 		return 0, 0, errors.New("search result value exceeds maximum nesting depth")
 	}
@@ -1088,7 +1120,7 @@ func measureValue(value Value, depth int) (uint64, uint64, error) {
 	case ValueKindList:
 		var payload uint64
 		for _, child := range value.listValue {
-			childPayload, childRetained, err := measureValue(child, depth+1)
+			childPayload, childRetained, err := measurement.measure(child, depth+1)
 			if err != nil {
 				return 0, 0, err
 			}
@@ -1113,7 +1145,7 @@ func measureValue(value Value, depth int) (uint64, uint64, error) {
 				return 0, 0, fmt.Errorf("search result object field %q is duplicated", field.Name)
 			}
 			seen[field.Name] = struct{}{}
-			childPayload, childRetained, err := measureValue(field.Value, depth+1)
+			childPayload, childRetained, err := measurement.measure(field.Value, depth+1)
 			if err != nil {
 				return 0, 0, err
 			}
