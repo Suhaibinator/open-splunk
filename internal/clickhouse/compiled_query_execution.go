@@ -1143,8 +1143,51 @@ func (compiled CompiledQuery) RetainedBytesContext(
 			return 0, false, nil
 		}
 	}
-	if compiled.continuation != nil {
-		total, ok = retainedAdd(total, uint64(len(compiled.continuation.plan.Source()))+uint64(unsafe.Sizeof(*compiled.continuation)))
+	total, ok = retainedTimechartContinuationBytes(total, compiled.continuation)
+	if !ok {
+		return 0, false, nil
+	}
+	if compiled.rangeDiscovery != nil {
+		discovery := compiled.rangeDiscovery
+		total, ok = retainedAdd(total, uint64(unsafe.Sizeof(*discovery)))
+		if !ok {
+			return 0, false, nil
+		}
+		total, ok = retainedStringSlice(total, []string{discovery.timezone, discovery.scan.TenantID, discovery.compiler.Database, discovery.compiler.Table, discovery.operator.Time.Name, discovery.operator.Measure.Input.Name, discovery.operator.Measure.Output, discovery.operator.Axis.AlignTime})
+		if !ok {
+			return 0, false, nil
+		}
+		for _, values := range [][]string{discovery.scan.Indexes, discovery.operator.Time.Path, discovery.operator.Measure.Input.Path} {
+			total, ok = retainedStringSlice(total, values)
+			if !ok {
+				return 0, false, nil
+			}
+		}
+		total, ok = retainedAdd(total, uint64(cap(discovery.operator.GridBoundaries))*uint64(unsafe.Sizeof(time.Time{})))
+		if !ok {
+			return 0, false, nil
+		}
+		if discovery.operator.Split != nil {
+			total, ok = retainedAdd(total, uint64(unsafe.Sizeof(*discovery.operator.Split)))
+			if !ok {
+				return 0, false, nil
+			}
+			total, ok = retainedStringSlice(total, []string{discovery.operator.Split.Field.Name, discovery.operator.Split.NullLabel, discovery.operator.Split.OtherLabel})
+			if !ok {
+				return 0, false, nil
+			}
+			total, ok = retainedStringSlice(total, discovery.operator.Split.Field.Path)
+			if !ok {
+				return 0, false, nil
+			}
+		}
+		total, ok = retainedTimechartContinuationBytes(total, discovery.continuation)
+		if !ok {
+			return 0, false, nil
+		}
+	}
+	if compiled.TimeBucket != nil {
+		total, ok = retainedAdd(total, uint64(unsafe.Sizeof(*compiled.TimeBucket)))
 		if !ok {
 			return 0, false, nil
 		}

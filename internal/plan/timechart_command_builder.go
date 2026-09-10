@@ -2,6 +2,7 @@ package plan
 
 import (
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/spl"
@@ -28,7 +29,7 @@ func buildTimechartCommand(
 	if measureErr != nil {
 		return measureErr
 	}
-	if !canonicalTimeAvailable && !outputSchemaKnown {
+	if !canonicalTimeAvailable && (!outputSchemaKnown || !slices.Contains(result.OutputFields, "_time")) {
 		return &Diagnostic{
 			Code:        "SPL_UNSUPPORTED_TIMECHART_TIME_FIELD",
 			Message:     "timechart requires the unmodified canonical _time field",

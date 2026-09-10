@@ -2,12 +2,13 @@ package clickhouse
 
 import (
 	"context"
-	"github.com/Suhaibinator/open-splunk/internal/knowledge"
-	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
-	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Suhaibinator/open-splunk/internal/knowledge"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
+	"github.com/Suhaibinator/open-splunk/internal/plan"
 )
 
 func TestTimechartDeferredLookupAuthority(t *testing.T) {
@@ -100,5 +101,29 @@ func TestTimechartDeferredLookupWithAutomaticAdmission(t *testing.T) {
 	}
 	if !next.IsContinuationOf(compiled) {
 		t.Fatal("lost admitted ancestry")
+	}
+}
+
+func TestTimechartDeferredLookupRetainedBytesAndClone(t *testing.T) {
+	logical := buildPlan(t, `index=gradethis | timechart span=1h count BY host | eval service="api" | lookup service_catalog service_id AS service OUTPUT owner | table owner`)
+	compiler, err := (Compiler{}).WithDeferredLookupResolutionsContext(context.Background(), []LookupResolution{testLookupResolution(t, "tenant-1", [][]string{{"api", strings.Repeat("x", 1024)}})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := compiler.Compile(logical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bytes, ok := compiled.RetainedBytes()
+	if !ok || bytes < uint64(len(compiled.SQL))+1024 {
+		t.Fatalf("retained bytes=%d valid=%v", bytes, ok)
+	}
+	clone, ok := compiled.CloneForExecution()
+	if !ok {
+		t.Fatal("clone failed")
+	}
+	clone.continuation.lookups[0].columns[0].name = "tampered"
+	if clone.HasValidExecutionSeal() || !compiled.HasValidExecutionSeal() {
+		t.Fatal("deferred lookup descriptor clone aliases or escapes seal")
 	}
 }

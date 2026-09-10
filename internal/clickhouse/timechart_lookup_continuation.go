@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"unsafe"
 
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 )
@@ -118,4 +119,23 @@ func cloneTimechartContinuation(source *compiledTimechartContinuation) *compiled
 	clone := *source
 	clone.lookups = cloneCompiledLookupExternalTables(source.lookups)
 	return &clone
+}
+
+func retainedTimechartContinuationBytes(total uint64, continuation *compiledTimechartContinuation) (uint64, bool) {
+	if continuation == nil {
+		return total, true
+	}
+	source, ok := continuation.plan.RetainedBytes()
+	if !ok {
+		return 0, false
+	}
+	total, ok = retainedAdd(total, source)
+	if !ok {
+		return 0, false
+	}
+	total, ok = retainedAdd(total, uint64(unsafe.Sizeof(*continuation)))
+	if !ok {
+		return 0, false
+	}
+	return retainedStringSlice(total, []string{continuation.compiler.Database, continuation.compiler.Table})
 }

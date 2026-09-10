@@ -2,8 +2,10 @@ package plan
 
 import (
 	"errors"
+	"math"
 	"slices"
 	"strings"
+	"unsafe"
 
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
@@ -101,4 +103,35 @@ func shiftedTimechartContinuations(source map[int]TimechartContinuation, at, cou
 		result[index] = continuation
 	}
 	return result
+}
+
+// RetainedBytes accounts for the detached parser source and admission snapshot.
+func (continuation TimechartContinuation) RetainedBytes() (uint64, bool) {
+	total := uint64(unsafe.Sizeof(continuation))
+	add := func(charge uint64) bool {
+		if charge > math.MaxUint64-total {
+			return false
+		}
+		total += charge
+		return true
+	}
+	for _, value := range []string{continuation.source, continuation.scope.TenantID, continuation.scope.SearchJobID, continuation.scope.SearchTimezone} {
+		if !add(uint64(len(value))) {
+			return 0, false
+		}
+	}
+	for _, values := range [][]string{continuation.scope.AuthorizedIndexes, continuation.scope.RequestedIndexes} {
+		if uint64(cap(values)) > math.MaxUint64/uint64(unsafe.Sizeof("")) || !add(uint64(cap(values))*uint64(unsafe.Sizeof(""))) {
+			return 0, false
+		}
+		for _, value := range values {
+			if !add(uint64(len(value))) {
+				return 0, false
+			}
+		}
+	}
+	if continuation.scope.VisibilityCutoff != nil && !add(uint64(unsafe.Sizeof(uint64(0)))) {
+		return 0, false
+	}
+	return total, true
 }

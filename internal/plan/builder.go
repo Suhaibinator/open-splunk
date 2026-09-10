@@ -152,7 +152,7 @@ func buildWithRelationStart(query *spl.Query, scope Scope, inputFields []string,
 	if outputSchemaKnown {
 		result.OutputFields = slices.Clone(inputFields)
 	}
-	canonicalTimeAvailable := true
+	canonicalTimeAvailable := !outputSchemaKnown || slices.Contains(inputFields, "_time")
 	extractionOutputCount := 0
 	spathEvaluationWorkUnits := 0
 	mvExpandOrdinal := 0
