@@ -65,7 +65,7 @@ func TestTimechartRemainingBudgetReachesAllStageAllocators(t *testing.T) {
 
 func TestStageDynamicValueUsesOneBackingPerList(t *testing.T) {
 	value := searchjobs.ListValue(searchjobs.StringValue("outer"), searchjobs.ListValue(searchjobs.UnsignedValue(2), searchjobs.ListValue(searchjobs.BoolValue(true))))
-	got, err := stageDynamicValue(value)
+	got, err := stageDynamicValue(context.Background(), value)
 	if err != nil {
 		t.Fatal(err)
 	}

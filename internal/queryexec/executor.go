@@ -1041,6 +1041,14 @@ func (buffer *atomicResultBuffer) append(values []searchjobs.Value) error {
 	if buffer.maximumBytes != 0 && nextBytes > buffer.maximumBytes {
 		return searchjobs.ErrByteLimit
 	}
+	buffer.appendRetained(values)
+	buffer.bytes = nextBytes
+	return nil
+}
+
+// appendRetained transfers an already measured immutable row without cloning.
+func (buffer *atomicResultBuffer) appendRetained(values []searchjobs.Value) {
+	newBlock := buffer.last == nil || buffer.last.count == atomicRowsPerBlock
 	if newBlock {
 		block := new(atomicBufferedRowBlock)
 		if buffer.last == nil {
@@ -1052,8 +1060,6 @@ func (buffer *atomicResultBuffer) append(values []searchjobs.Value) error {
 	}
 	buffer.last.rows[buffer.last.count] = values
 	buffer.last.count++
-	buffer.bytes = nextBytes
-	return nil
 }
 
 func chargeAtomicResultRow(current, structural uint64, values []searchjobs.Value) (uint64, error) {
@@ -2444,6 +2450,9 @@ func publishFixedGrid[T any](
 		}
 
 		bucketUnix := first.Unix() + safecast.MustConv[int64](ordinal)*spanSeconds
+		if err := preflightStagedPublicationRow(sink, 2); err != nil {
+			return err
+		}
 		if err := sink.AddRow([]searchjobs.Value{
 			searchjobs.TimeValue(time.Unix(bucketUnix, 0).UTC()),
 			cell(value),
@@ -2482,6 +2491,9 @@ func publishCalendarGrid[T any](
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		if err := preflightStagedPublicationRow(sink, 2); err != nil {
+			return err
+		}
 		if err := sink.AddRow([]searchjobs.Value{
 			searchjobs.TimeValue(buckets[index]),
 			cell(value),
@@ -2506,6 +2518,9 @@ func publishWideGrid[T any](
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if err := preflightStagedPublicationRow(sink, len(columns)+1); err != nil {
+		return err
+	}
 	schema := searchjobs.Schema{Columns: make([]searchjobs.Column, len(columns)+1)}
 	schema.Columns[0] = searchjobs.Column{Name: "_time", Kind: searchjobs.ValueKindTime}
 	for index, name := range columns {
@@ -2523,6 +2538,9 @@ func publishWideGrid[T any](
 	}
 	for _, row := range rows {
 		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := preflightStagedPublicationRow(sink, len(row.cells)+1); err != nil {
 			return err
 		}
 		values := make([]searchjobs.Value, len(row.cells)+1)
@@ -3092,6 +3110,9 @@ func publishChart(ctx context.Context, sink searchjobs.ResultSink, output clickh
 	default:
 		return fmt.Errorf("%w: compiled chart value kind is invalid", searchjobs.ErrInvalidResult)
 	}
+	if err := preflightStagedPublicationRow(sink, len(buffered.columns)+1); err != nil {
+		return err
+	}
 	schema := searchjobs.Schema{Columns: make([]searchjobs.Column, len(buffered.columns)+1)}
 	// A Mixed row column mirrors the ordinary result path, which declares every
 	// Mixed column nullable so the same field publishes one schema either way.
@@ -3115,6 +3136,9 @@ func publishChart(ctx context.Context, sink searchjobs.ResultSink, output clickh
 			if err := ctx.Err(); err != nil {
 				return err
 			}
+			if err := preflightStagedPublicationRow(sink, len(row.counts)+1); err != nil {
+				return err
+			}
 			values := make([]searchjobs.Value, len(row.counts)+1)
 			values[0] = row.value
 			for index, count := range row.counts {
@@ -3128,6 +3152,9 @@ func publishChart(ctx context.Context, sink searchjobs.ResultSink, output clickh
 	}
 	for _, row := range buffered.valueRows {
 		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := preflightStagedPublicationRow(sink, len(row.values)+1); err != nil {
 			return err
 		}
 		values := make([]searchjobs.Value, len(row.values)+1)

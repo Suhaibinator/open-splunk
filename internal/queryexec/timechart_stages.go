@@ -46,6 +46,7 @@ func (budget *stageBudget) charge(bytes uint64) error {
 }
 
 type timechartStageSink struct {
+	ctx  context.Context
 	work uint64
 	*stageBudget
 	columns       []clickhouse.RelationColumn
@@ -55,6 +56,9 @@ type timechartStageSink struct {
 }
 
 func (sink *timechartStageSink) SetSchema(schema searchjobs.Schema) error {
+	if err := sink.ctx.Err(); err != nil {
+		return err
+	}
 	if sink.columns != nil {
 		return searchjobs.ErrInvalidResult
 	}
@@ -63,6 +67,9 @@ func (sink *timechartStageSink) SetSchema(schema searchjobs.Schema) error {
 	}
 	sink.columns = make([]clickhouse.RelationColumn, len(schema.Columns))
 	for i, column := range schema.Columns {
+		if err := sink.ctx.Err(); err != nil {
+			return err
+		}
 		kind := ""
 		switch column.Kind {
 		case searchjobs.ValueKindMixed, searchjobs.ValueKindList:
@@ -90,9 +97,12 @@ func (sink *timechartStageSink) SetSchema(schema searchjobs.Schema) error {
 		}
 		sink.columns[i] = clickhouse.RelationColumn{Name: column.Name, Type: kind}
 	}
-	return nil
+	return sink.ctx.Err()
 }
 func (sink *timechartStageSink) AddRow(values []searchjobs.Value) error {
+	if err := sink.ctx.Err(); err != nil {
+		return err
+	}
 	if sink.columns == nil || len(values) != len(sink.columns) {
 		return searchjobs.ErrInvalidResult
 	}
@@ -102,8 +112,11 @@ func (sink *timechartStageSink) AddRow(values []searchjobs.Value) error {
 	// Charge both row-slice capacity and the detached compiler/native transports.
 	bytes := 4 * (uint64(unsafe.Sizeof([]any{})) + uint64(len(values))*uint64(unsafe.Sizeof(any(nil))))
 	for _, value := range values {
-		retained, err := value.RetainedSizeBytes()
-		if err != nil || retained > math.MaxUint64-bytes {
+		retained, err := value.RetainedSizeBytesContext(sink.ctx)
+		if err != nil {
+			return err
+		}
+		if retained > math.MaxUint64-bytes {
 			return searchjobs.ErrExecutionLimit
 		}
 		bytes += retained
@@ -113,12 +126,15 @@ func (sink *timechartStageSink) AddRow(values []searchjobs.Value) error {
 	}
 	row := make([]any, len(values))
 	for i, value := range values {
+		if err := sink.ctx.Err(); err != nil {
+			return err
+		}
 		switch value.Kind() {
 		case searchjobs.ValueKindNull, searchjobs.ValueKindMissing:
 			row[i] = nil
 		case searchjobs.ValueKindList:
 			var err error
-			row[i], err = stageDynamicValue(value)
+			row[i], err = stageDynamicValue(sink.ctx, value)
 			if err != nil {
 				return err
 			}
@@ -138,17 +154,11 @@ func (sink *timechartStageSink) AddRow(values []searchjobs.Value) error {
 			return searchjobs.ErrInvalidResult
 		}
 	}
+	if err := sink.ctx.Err(); err != nil {
+		return err
+	}
 	sink.rows = append(sink.rows, row)
-	return nil
-}
-
-type stagedFinalSink struct {
-	searchjobs.ResultSink
-	*stageBudget
-}
-
-func (sink stagedFinalSink) ReportProgress(delta searchjobs.ExecutionProgressDelta) error {
-	return sink.stageBudget.ReportProgress(delta)
+	return sink.ctx.Err()
 }
 
 func (executor *Executor) executeTimechartStages(ctx context.Context, query clickhouse.CompiledQuery, sink searchjobs.ResultSink) error {
@@ -212,7 +222,7 @@ func (executor *Executor) executeTimechartStages(ctx context.Context, query clic
 		if query.RequiresTimechartInputDiscovery() {
 			rowLimit = settings["max_rows_to_read"].(uint64)
 		}
-		stage := &timechartStageSink{stageBudget: budget, maxResultRows: rowLimit, work: query.TimechartWorkFloor()}
+		stage := &timechartStageSink{ctx: ctx, stageBudget: budget, maxResultRows: rowLimit, work: query.TimechartWorkFloor()}
 		if err := frozen.executeSingle(budget.allocationContext(ctx), query, stage); err != nil {
 			return err
 		}
@@ -241,15 +251,36 @@ func (executor *Executor) executeTimechartStages(ctx context.Context, query clic
 			return err
 		}
 	}
+	// Keep native input, transport and decoder reservations live while the
+	// terminal publication transaction owns its rows. The fourth share covers
+	// both those rows and the downstream sink's detached copy.
+	stageContext := budget.allocationContext(ctx)
+	share, _ := searchlimits.RemainingExecutionBytes(stageContext)
+	if err := budget.charge(3 * share); err != nil {
+		return err
+	}
+	if err := budget.charge(uint64(unsafe.Sizeof(stagedFinalSink{}))); err != nil {
+		return err
+	}
+	transaction := &stagedFinalSink{ctx: ctx, stageBudget: budget, maxRows: base.limit("max_result_rows")}
+	if err := frozen.executeSingle(stageContext, query, transaction); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if recipient, ok := sink.(searchjobs.CompiledResultSink); ok {
 		if err := recipient.SetCompiledQuery(query); err != nil {
 			return err
 		}
 	}
-	return frozen.executeSingle(budget.allocationContext(ctx), query, stagedFinalSink{ResultSink: sink, stageBudget: budget})
+	return transaction.publish(sink)
 }
 
 func (sink *timechartStageSink) AddRowWithTimeBucket(values []searchjobs.Value, bounds searchjobs.TimeBucketBounds) error {
+	if err := sink.ctx.Err(); err != nil {
+		return err
+	}
 	start, err := time.Parse(time.RFC3339Nano, bounds.Earliest)
 	end, endErr := time.Parse(time.RFC3339Nano, bounds.Latest)
 	if err != nil || endErr != nil || start.UTC().Format(time.RFC3339Nano) != bounds.Earliest || end.UTC().Format(time.RFC3339Nano) != bounds.Latest || !start.Before(end) || len(values) == 0 {
@@ -269,19 +300,12 @@ func (sink *timechartStageSink) AddRowWithTimeBucket(values []searchjobs.Value, 
 		return err
 	}
 	sink.bucketEnds = append(sink.bucketEnds, end)
-	return nil
+	return sink.ctx.Err()
 }
-func (sink stagedFinalSink) AddRowWithTimeBucket(values []searchjobs.Value, bounds searchjobs.TimeBucketBounds) error {
-	if err := sink.charge(uint64(unsafe.Sizeof(bounds)) + uint64(len(bounds.Earliest)+len(bounds.Latest))); err != nil {
-		return err
+func stageDynamicValue(ctx context.Context, value searchjobs.Value) (any, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	if err := sink.chargeValues(values); err != nil {
-		return err
-	}
-	return publishWithTimeBucket(sink.ResultSink, values, bounds)
-}
-
-func stageDynamicValue(value searchjobs.Value) (any, error) {
 	type frame struct {
 		values []any
 		next   int
@@ -302,12 +326,22 @@ func stageDynamicValue(value searchjobs.Value) (any, error) {
 		parent.next++
 		return nil
 	}
+	nodes := 0
 	err := value.VisitDetached(func(token searchjobs.ValueVisitToken) error {
+		if nodes%128 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		nodes++
 		var scalar any
 		switch token.Kind {
 		case searchjobs.ValueVisitListBegin:
 			if depth >= len(stack) {
 				return searchjobs.ErrInvalidResult
+			}
+			if err := ctx.Err(); err != nil {
+				return err
 			}
 			values := make([]any, token.Length)
 			if err := appendValue(values); err != nil {
@@ -341,6 +375,9 @@ func stageDynamicValue(value searchjobs.Value) (any, error) {
 		return appendValue(scalar)
 	})
 	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	return result, nil
@@ -415,42 +452,13 @@ func publishEmptyObservedTimechart(sink searchjobs.ResultSink, query clickhouse.
 	return sink.SetSchema(schema)
 }
 
-func (sink stagedFinalSink) SetSchema(schema searchjobs.Schema) error {
-	if err := sink.charge(uint64(len(schema.Columns)) * uint64(unsafe.Sizeof(searchjobs.Column{}))); err != nil {
-		return err
-	}
-	for _, column := range schema.Columns {
-		if err := sink.charge(uint64(len(column.Name) + len(column.FlatMultivalueDelimiter))); err != nil {
-			return err
-		}
-	}
-	return sink.ResultSink.SetSchema(schema)
-}
-func (sink stagedFinalSink) chargeValues(values []searchjobs.Value) error {
-	bytes := uint64(unsafe.Sizeof([]searchjobs.Value{})) + uint64(len(values))*uint64(unsafe.Sizeof(searchjobs.Value{}))
-	for _, value := range values {
-		size, err := value.RetainedSizeBytes()
-		if err != nil || size > math.MaxUint64-bytes {
-			return searchjobs.ErrExecutionLimit
-		}
-		bytes += size
-	}
-	return sink.charge(bytes)
-}
-func (sink stagedFinalSink) AddRow(values []searchjobs.Value) error {
-	if err := sink.chargeValues(values); err != nil {
-		return err
-	}
-	return sink.ResultSink.AddRow(values)
-}
-
 func (sink *timechartStageSink) SetTimechartWork(work uint64) error {
+	if err := sink.ctx.Err(); err != nil {
+		return err
+	}
 	if work < sink.work {
 		return searchjobs.ErrInvalidResult
 	}
 	sink.work = work
-	return nil
-}
-func (sink stagedFinalSink) SetTimechartWork(work uint64) error {
-	return publishTimechartWork(sink.ResultSink, work)
+	return sink.ctx.Err()
 }
