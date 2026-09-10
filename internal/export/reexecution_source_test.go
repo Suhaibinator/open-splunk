@@ -18,20 +18,21 @@ import (
 )
 
 type reexecutionTestSearches struct {
-	mu            sync.Mutex
-	job           searchjobs.Job
-	execution     *searchjobs.ExecutionSnapshot
-	resolvedRange *searchtime.Range
-	pin           *reexecutionTestPin
-	manager       *searchjobs.Manager
-	resolver      searchjobs.KnowledgeResolver
-	appID         string
-	lastLease     searchjobs.ResultLease
-	acquireErr    error
-	acquireCalls  int
-	access        searchjobs.AccessScope
-	id            string
-	onGet         func()
+	mu              sync.Mutex
+	job             searchjobs.Job
+	execution       *searchjobs.ExecutionSnapshot
+	resolvedRange   *searchtime.Range
+	pin             *reexecutionTestPin
+	manager         *searchjobs.Manager
+	resolver        searchjobs.KnowledgeResolver
+	initialExecutor searchjobs.Executor
+	appID           string
+	lastLease       searchjobs.ResultLease
+	acquireErr      error
+	acquireCalls    int
+	access          searchjobs.AccessScope
+	id              string
+	onGet           func()
 }
 
 func (searches *reexecutionTestSearches) AcquireExecutionFor(
@@ -90,10 +91,13 @@ func (searches *reexecutionTestSearches) startManagerLocked() error {
 	now := searches.job.CreatedAt
 	manager, err := searchjobs.New(searchjobs.Config{
 		Executor: integrationSearchExecutor(func(
-			_ context.Context,
-			_ clickhouse.CompiledQuery,
+			ctx context.Context,
+			query clickhouse.CompiledQuery,
 			sink searchjobs.ResultSink,
 		) error {
+			if searches.initialExecutor != nil {
+				return searches.initialExecutor.Execute(ctx, query, sink)
+			}
 			if err := sink.SetSchema(schema); err != nil {
 				return err
 			}
@@ -570,7 +574,7 @@ func TestReexecutionSourceAdmitsBoundedDynamicTimechartSchema(t *testing.T) {
 			searchjobs.UnsignedValue(1),
 		})
 	})
-	source := newReexecutionTestSource(t, searches, executor, nil)
+	source := newRetainedTimechartTestSource(t, searches, executor)
 	lease, err := source.AcquireResultsFor(context.Background(), access, searches.job.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -610,7 +614,7 @@ func TestReexecutionSourceAdmitsStaticTimechartSchema(t *testing.T) {
 			searchjobs.UnsignedValue(3),
 		})
 	})
-	source := newReexecutionTestSource(t, searches, executor, nil)
+	source := newRetainedTimechartTestSource(t, searches, executor)
 	lease, err := source.AcquireResultsFor(context.Background(), access, searches.job.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -659,7 +663,7 @@ func TestReexecutionSourceAdmitsFixedPercentileTimechartSchema(t *testing.T) {
 			searchjobs.DoubleValue(125.5),
 		})
 	})
-	source := newReexecutionTestSource(t, searches, executor, nil)
+	source := newRetainedTimechartTestSource(t, searches, executor)
 	lease, err := source.AcquireResultsFor(context.Background(), access, searches.job.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -729,7 +733,7 @@ func TestReexecutionSourceAdmitsFixedSumAndAverageTimechartSchemas(t *testing.T)
 					searchjobs.DoubleValue(test.value),
 				})
 			})
-			source := newReexecutionTestSource(t, searches, executor, nil)
+			source := newRetainedTimechartTestSource(t, searches, executor)
 			lease, err := source.AcquireResultsFor(
 				context.Background(),
 				access,
@@ -1669,4 +1673,15 @@ func newReexecutionTestSource(t *testing.T, searches SearchSnapshotSource, execu
 		t.Fatal(err)
 	}
 	return source
+}
+
+// Seed the immutable chart snapshot with the same contract assertions used by
+// the execution fixtures, then prove export never asks storage to recreate it.
+func newRetainedTimechartTestSource(t *testing.T, searches *reexecutionTestSearches, executor searchjobs.Executor) *ReexecutionSource {
+	t.Helper()
+	searches.initialExecutor = executor
+	return newReexecutionTestSource(t, searches, reexecutionTestExecutor(func(context.Context, clickhouse.CompiledQuery, searchjobs.ResultSink) error {
+		t.Error("timechart export unexpectedly re-executed the query")
+		return searchjobs.ErrInvalidResult
+	}), nil)
 }

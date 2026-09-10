@@ -64,7 +64,7 @@ func TestCalendarTimechartReexecutionExportPreservesIrregularUTCBoundaries(t *te
 		}
 		return nil
 	})
-	source := newReexecutionTestSource(t, searches, executor, nil)
+	source := newRetainedTimechartTestSource(t, searches, executor)
 	manager := newExportTestManager(t, source, nil)
 	created, err := manager.Create(context.Background(), access, CreateRequest{
 		SearchJobID: searches.job.ID,

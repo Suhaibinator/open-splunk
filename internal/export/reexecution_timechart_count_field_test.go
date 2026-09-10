@@ -80,7 +80,7 @@ func TestReexecutionSourceRoundTripsFixedTimechartCountFieldMetadata(t *testing.
 				})
 			})
 
-			source := newReexecutionTestSource(t, searches, executor, nil)
+			source := newRetainedTimechartTestSource(t, searches, executor)
 			lease, err := source.AcquireResultsFor(
 				context.Background(),
 				access,

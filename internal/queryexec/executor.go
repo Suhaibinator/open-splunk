@@ -1110,14 +1110,29 @@ func withTimechartResourceSettings(
 	}
 	domain, domainOK := settings["max_rows_to_group_by"].(uint64)
 	retainedBytes, bytesOK := settings["max_result_bytes"].(uint64)
+	memoryBytes, memoryOK := settings["max_memory_usage"].(uint64)
 	if admitted {
 		domain = policy.MaxGroupedRows
 		retainedBytes = policy.MaxResultBytes
+		memoryBytes = policy.MaxMemoryBytes
 		domainOK = domain != 0
 		bytesOK = retainedBytes != 0
+		memoryOK = memoryBytes != 0
 	}
-	if !domainOK || !bytesOK || domain == 0 || retainedBytes == 0 {
+	if !domainOK || !bytesOK || !memoryOK || domain == 0 || retainedBytes == 0 || memoryBytes == 0 {
 		return nil, errors.New("execute ClickHouse timechart: resource policy is invalid")
+	}
+	retainedBytes = min(retainedBytes, memoryBytes)
+	if query.Timechart.ExactGrid {
+		// Reserve the occupancy wrapper before its allocation. The same reduced
+		// budget reaches SQL array guards and the Go decoder, so neither can
+		// spend the bytes already needed to retain bucket presence.
+		wrapperBytes := uint64(unsafe.Sizeof(timechartGridRows{}))
+		if query.Timechart.BucketCount > math.MaxUint64-wrapperBytes ||
+			query.Timechart.BucketCount+wrapperBytes >= retainedBytes {
+			return nil, fmt.Errorf("%w: timechart bucket presence exceeds its budget", searchjobs.ErrExecutionLimit)
+		}
+		retainedBytes -= query.Timechart.BucketCount + wrapperBytes
 	}
 	cellBytes := timechartCountCellBytes
 	if query.Timechart.Mode == clickhouse.TimechartModeRuntimeWideValue {

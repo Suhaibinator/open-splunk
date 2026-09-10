@@ -2660,6 +2660,7 @@ func (sink *resultSink) SetCompiledQuery(compiled clickhouse.CompiledQuery) erro
 	sink.timechart = nil
 	if compiled.Timechart != nil {
 		cloned := *compiled.Timechart
+		cloned.Boundaries = slices.Clone(compiled.Timechart.Boundaries)
 		sink.timechart = &cloned
 	}
 	sink.chart = nil

@@ -28,9 +28,9 @@ const (
 
 // SearchSnapshotSource atomically supplies an immutable result pin and the
 // detached execution authority that produced the same retained generation.
-// searchjobs.Manager satisfies this interface. ReexecutionSource deliberately
-// does not consume the pin's rows, but keeps the pin open for its whole lease
-// lifetime so expiry cannot reclaim the corresponding job authority.
+// searchjobs.Manager satisfies this interface. Timechart pipelines export the
+// complete pinned rows. Other searches keep the pin open during re-execution
+// so expiry cannot reclaim the corresponding job authority.
 type SearchSnapshotSource interface {
 	AcquireExecutionFor(
 		context.Context,
@@ -51,9 +51,10 @@ type ReexecutionSourceConfig struct {
 	RowBuffer  int
 }
 
-// ReexecutionSource executes a completed search exclusively from its trusted,
-// immutable execution snapshot. Knowledge-enabled searches use the exact
-// retained compiler seal; only legacy snapshots are rebuilt and recompiled.
+// ReexecutionSource exports timechart pipelines from their complete retained
+// result and re-executes other completed searches from trusted execution
+// snapshots. Knowledge-enabled searches use the retained compiler seal;
+// only legacy execution snapshots are rebuilt and recompiled.
 type ReexecutionSource struct {
 	searches   SearchSnapshotSource
 	executor   searchjobs.Executor
@@ -145,12 +146,12 @@ func (source *ReexecutionSource) AcquireResultsFor(ctx context.Context, access s
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if compiled.HasContinuation() {
-		// A successful continuation is an atomic, complete retained result. Its
+	if compiled.HasTimechartStage() {
+		// A successful timechart pipeline is an atomic, complete retained result. Its
 		// runtime series schema belongs to that snapshot: executing its prefix
 		// again could change the schema after storage retention removes events.
 		if !compiled.RequiresAtomicResult() || pin.ResultsTruncated() {
-			return nil, fmt.Errorf("%w: continuation snapshot is incomplete", searchjobs.ErrResultsUnavailable)
+			return nil, fmt.Errorf("%w: timechart snapshot is incomplete", searchjobs.ErrResultsUnavailable)
 		}
 		pinReleased = true
 		return &continuationResultLease{ResultLease: pin, knowledgeSnapshot: summary}, nil
