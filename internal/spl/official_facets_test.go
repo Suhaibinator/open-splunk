@@ -224,7 +224,7 @@ func officialFacets(t *testing.T, source string, command spl.Command) map[string
 		if command.SplitBy != nil {
 			splitBy = command.SplitBy.Name
 		}
-		limit := uint64(spl.MaximumTimechartSeriesLimit)
+		limit := spl.MaximumTimechartSeriesLimit
 		if command.Options.LimitSpecified {
 			limit = command.Options.Limit
 		}

@@ -294,7 +294,7 @@ func TestRowsPreservesExactTimeBucketMetadata(t *testing.T) {
 	}
 	schema := searchjobs.Schema{Columns: []searchjobs.Column{{Name: "_time", Kind: searchjobs.ValueKindTime}}}
 	rows, err := Rows(context.Background(), "job", schema, []searchjobs.ResultRow{{
-		Values: []searchjobs.Value{searchjobs.TimeValue(time.Date(2026, 9, 10, 8, 9, 10, 123_456_789, time.UTC))},
+		Values:     []searchjobs.Value{searchjobs.TimeValue(time.Date(2026, 9, 10, 8, 9, 10, 123_456_789, time.UTC))},
 		TimeBucket: &bounds,
 	}}, 1)
 	if err != nil {

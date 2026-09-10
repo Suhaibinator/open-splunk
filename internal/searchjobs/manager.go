@@ -3271,7 +3271,7 @@ func ValidateTimechartSchema(schema Schema, expected []string, output clickhouse
 	if !output.RuntimeWideBoundsValid() || output.ValueField != "" ||
 		!slices.Equal(expected, []string{"_time"}) ||
 		len(schema.Columns) == 0 ||
-		(output.MaxSeries != 0 && uint64(len(schema.Columns)-1) > output.MaxSeries) {
+		(output.MaxSeries != 0 && safecast.MustConv[uint64](len(schema.Columns)-1) > output.MaxSeries) {
 		return fmt.Errorf("%w: timechart schema exceeds the compiled output", ErrInvalidResult)
 	}
 	seen := make(map[string]struct{}, len(schema.Columns))

@@ -87,34 +87,34 @@ func TestTimeBucketBoundsRejectMalformedOrUnboundMetadata(t *testing.T) {
 		bounds  TimeBucketBounds
 	}{
 		{
-			name: "missing time column",
+			name:    "missing time column",
 			columns: []Column{{Name: "count", Kind: ValueKindUnsigned}},
-			values: []Value{UnsignedValue(1)},
-			bounds: validBounds,
+			values:  []Value{UnsignedValue(1)},
+			bounds:  validBounds,
 		},
 		{
-			name: "mismatched time cell",
+			name:    "mismatched time cell",
 			columns: []Column{{Name: "_time", Kind: ValueKindTime}},
-			values: []Value{TimeValue(stamp.Add(time.Nanosecond))},
-			bounds: validBounds,
+			values:  []Value{TimeValue(stamp.Add(time.Nanosecond))},
+			bounds:  validBounds,
 		},
 		{
-			name: "non canonical offset",
+			name:    "non canonical offset",
 			columns: []Column{{Name: "_time", Kind: ValueKindTime}},
-			values: []Value{TimeValue(stamp)},
-			bounds: TimeBucketBounds{Earliest: "2026-09-10T08:09:10.123456789+00:00", Latest: validBounds.Latest},
+			values:  []Value{TimeValue(stamp)},
+			bounds:  TimeBucketBounds{Earliest: "2026-09-10T08:09:10.123456789+00:00", Latest: validBounds.Latest},
 		},
 		{
-			name: "non canonical fractional precision",
+			name:    "non canonical fractional precision",
 			columns: []Column{{Name: "_time", Kind: ValueKindTime}},
-			values: []Value{TimeValue(stamp)},
-			bounds: TimeBucketBounds{Earliest: "2026-09-10T08:09:10.1234567890Z", Latest: validBounds.Latest},
+			values:  []Value{TimeValue(stamp)},
+			bounds:  TimeBucketBounds{Earliest: "2026-09-10T08:09:10.1234567890Z", Latest: validBounds.Latest},
 		},
 		{
-			name: "empty interval",
+			name:    "empty interval",
 			columns: []Column{{Name: "_time", Kind: ValueKindTime}},
-			values: []Value{TimeValue(stamp)},
-			bounds: TimeBucketBounds{Earliest: validBounds.Earliest, Latest: validBounds.Earliest},
+			values:  []Value{TimeValue(stamp)},
+			bounds:  TimeBucketBounds{Earliest: validBounds.Earliest, Latest: validBounds.Earliest},
 		},
 	}
 	for _, test := range tests {
