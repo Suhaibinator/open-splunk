@@ -556,6 +556,9 @@ func (executor *Executor) executeSingle(ctx context.Context, query clickhouse.Co
 		}
 	}
 	if query.HasEmptyTimechartInput() {
+		if err := publishTimechartWork(sink, query.TimechartWorkFloor()); err != nil {
+			return err
+		}
 		return publishEmptyObservedTimechart(sink, query)
 	}
 	sparseFieldIndex, err := validateSparseFieldsOutput(query)
@@ -655,6 +658,14 @@ func (executor *Executor) executeSingle(ctx context.Context, query clickhouse.Co
 
 	columnTypes := rows.ColumnTypes()
 	columns := rows.Columns()
+	var workRows *timechartWorkRows
+	rows, columns, columnTypes, workRows, err = prepareTimechartWorkTransport(executionContext, rows, columns, columnTypes, query)
+	if err != nil {
+		return err
+	}
+	if workRows != nil {
+		sink = timechartWorkSink{ResultSink: sink, receipt: workRows}
+	}
 	if query.Timechart != nil {
 		if remaining, constrained := searchlimits.RemainingExecutionBytes(executionContext); constrained && query.Timechart.ExactGrid {
 			structural := uint64(unsafe.Sizeof(timechartGridRows{}))

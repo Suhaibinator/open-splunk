@@ -503,6 +503,8 @@ type Compiler struct {
 // CompiledQuery is executable SQL plus ordered bind arguments and public
 // result fields. Internal helper columns never appear in OutputFields.
 type CompiledQuery struct {
+	timechartWorkReceipt    bool
+	timechartWorkFloor      uint64
 	logicalExtractionBudget authoredKnowledgeCompilation
 	emptyTimechartInput     bool
 	rangeDiscovery          *compiledTimechartRangeDiscovery
@@ -1399,6 +1401,9 @@ func wrapCompiledChronologicalValidation(
 		return CompiledQuery{}, errors.New(
 			"compile ClickHouse query: chronological terminal output contract is invalid",
 		)
+	}
+	if compiled.timechartWorkReceipt {
+		resultColumns = append(resultColumns, TimechartWorkRowsColumn)
 	}
 	projection := make([]string, 0, len(resultColumns))
 	for _, name := range resultColumns {

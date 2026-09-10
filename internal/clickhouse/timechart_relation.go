@@ -32,6 +32,8 @@ type compiledTimechartContinuation struct {
 	lookups  []compiledLookupExternalTable
 }
 type compiledRelationInput struct {
+	observedWorkHeader   bool
+	mvExpandRows         uint64
 	timechartOccurrences bool
 	columns              []RelationColumn
 	rows                 [][]any
@@ -61,6 +63,15 @@ func (compiled CompiledQuery) ContinueContext(ctx context.Context, columns []Rel
 
 // ContinueWithTimeBucketsContext preserves exact optional bucket presentation.
 func (compiled CompiledQuery) ContinueWithTimeBucketsContext(ctx context.Context, columns []RelationColumn, rows [][]any, ends []time.Time) (CompiledQuery, error) {
+	if compiled.timechartWorkReceipt {
+		return CompiledQuery{}, errors.New("continue timechart: native work receipt is required")
+	}
+	return compiled.ContinueWithTimeBucketsAndWorkContext(ctx, columns, rows, ends, compiled.timechartWorkFloor)
+}
+
+// ContinueWithTimeBucketsAndWorkContext retains the validated cumulative native
+// work receipt alongside the immutable intermediate relation.
+func (compiled CompiledQuery) ContinueWithTimeBucketsAndWorkContext(ctx context.Context, columns []RelationColumn, rows [][]any, ends []time.Time, work uint64) (CompiledQuery, error) {
 	if ctx == nil {
 		return CompiledQuery{}, errors.New("continue timechart: context is nil")
 	}
@@ -71,10 +82,14 @@ func (compiled CompiledQuery) ContinueWithTimeBucketsContext(ctx context.Context
 	if !valid || !compiled.HasContinuation() {
 		return CompiledQuery{}, errors.New("continue timechart: continuation authority is invalid")
 	}
+	if err := validateTimechartWork(work, compiled.timechartWorkFloor); err != nil {
+		return CompiledQuery{}, err
+	}
 	input, err := newRelationInput(ctx, columns, rows, compiled.rangeDiscovery != nil)
 	if err != nil {
 		return CompiledQuery{}, err
 	}
+	input.mvExpandRows = work
 	if ends != nil {
 		if len(ends) != len(rows) || len(columns) == 0 || columns[0].Name != "_time" {
 			return CompiledQuery{}, errors.New("continue timechart: invalid bucket bounds")
@@ -260,6 +275,12 @@ func compileRelationInput(input *compiledRelationInput, query *plan.Query) (stri
 		state.publicOrder = append(state.publicOrder, column.Name)
 		projection[i] = quoteIdentifier(physical) + " AS " + quoteIdentifier(column.Name)
 	}
+	if input.mvExpandRows != 0 {
+		projection = append(projection, carriedTimechartWorkProjection(input.mvExpandRows))
+		state.context.mvExpandWorkSQL = "toUInt64(" + fmt.Sprint(input.mvExpandRows) + ")"
+		state.mvExpandQueryRowsSQL = quoteIdentifier(timechartCarriedWork)
+		state.privateColumns = append(state.privateColumns, state.mvExpandQueryRowsSQL)
+	}
 	if input.bucketEnds != nil {
 		column := quoteIdentifier(ResultTimeBucketEndColumn)
 		field := state.visible["_time"]
@@ -278,10 +299,18 @@ func compileRelationInput(input *compiledRelationInput, query *plan.Query) (stri
 		args[i] = compiledReadScopeArgument{ordinal: i, value: value}
 		predicates[i] = "notEmpty(?)"
 	}
+	if input.observedWorkHeader {
+		predicates = append(predicates, quoteIdentifier(timechartObservedInputRow)+" = 1")
+	}
 	return "SELECT " + strings.Join(projection, ", ") + " FROM " + quoteIdentifier(timechartRelationName) + " WHERE " + strings.Join(predicates, " AND "), state, args, nil
 }
 
 func writeTimechartContinuation(digest hash.Hash, compiled CompiledQuery) {
+	if compiled.timechartWorkReceipt || compiled.timechartWorkFloor != 0 {
+		writeTokenPart(digest, "timechart-expansion-work-v1")
+		writeBool(digest, compiled.timechartWorkReceipt)
+		writeUint64(digest, compiled.timechartWorkFloor)
+	}
 	if compiled.hasTimechartStage && compiled.logicalExtractionBudget != (authoredKnowledgeCompilation{}) {
 		writeTokenPart(digest, "timechart-logical-extraction-v1")
 		compiled.logicalExtractionBudget.write(digest)
@@ -324,6 +353,8 @@ func writeTimechartContinuation(digest hash.Hash, compiled CompiledQuery) {
 	if compiled.relationInput != nil {
 		_, _ = digest.Write(compiled.relationInput.commitment[:])
 		writeBool(digest, compiled.relationInput.timechartOccurrences)
+		writeUint64(digest, compiled.relationInput.mvExpandRows)
+		writeBool(digest, compiled.relationInput.observedWorkHeader)
 	}
 }
 

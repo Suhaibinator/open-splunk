@@ -110,6 +110,9 @@ func (c Compiler) compileWithFinalizerContext(
 		compiled.hasTimechartStage = state.context.hasTimechartStage
 		compiled.logicalExtractionBudget = state.context.extractionBudget
 		compiled.relationInput = c.relationInput
+		if c.relationInput != nil {
+			compiled.timechartWorkFloor = c.relationInput.mvExpandRows
+		}
 		compiled.atomicResult = compiled.rangeDiscovery != nil || compiled.continuation != nil || (state.context != nil && state.context.atomicResult)
 		terminalWide := compiled.Chart != nil || compiled.Timechart != nil
 		if terminalWide && len(state.chronologicalBarriers) > 0 {
@@ -498,6 +501,7 @@ func (c Compiler) compileWithFinalizerContext(
 			relation = enriched
 			args = prependArguments(prefixArgs, args)
 			state = nextState
+			relation, state, args = retainTimechartExpansionWork(relation, state, args, operator, remainingOperators[operatorIndex+1:], aliasSequence)
 		case *plan.NoMultivalue:
 			presented, nextState, prefixArgs, compileErr := compileNoMultivalue(
 				relation,
@@ -1020,6 +1024,7 @@ func (c Compiler) compileWithFinalizerContext(
 				compiled.rangeDiscovery = newTimechartRangeDiscovery(operator, scan, query, discoveryCompiler, suffix)
 				return finishCompiled(compiled, operator.Range)
 			}
+			workInput := prepareTimechartWorkInput(state)
 			compiled, compileErr := compileTimechart(
 				relation,
 				state,
@@ -1030,6 +1035,10 @@ func (c Compiler) compileWithFinalizerContext(
 				scan,
 				alias,
 			)
+			if compileErr != nil {
+				return CompiledQuery{}, compileErr
+			}
+			compiled, compileErr = workInput.wrap(compiled)
 			if compileErr != nil {
 				return CompiledQuery{}, compileErr
 			}

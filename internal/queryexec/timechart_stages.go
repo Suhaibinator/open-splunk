@@ -46,6 +46,7 @@ func (budget *stageBudget) charge(bytes uint64) error {
 }
 
 type timechartStageSink struct {
+	work uint64
 	*stageBudget
 	columns       []clickhouse.RelationColumn
 	rows          [][]any
@@ -211,14 +212,14 @@ func (executor *Executor) executeTimechartStages(ctx context.Context, query clic
 		if query.RequiresTimechartInputDiscovery() {
 			rowLimit = settings["max_rows_to_read"].(uint64)
 		}
-		stage := &timechartStageSink{stageBudget: budget, maxResultRows: rowLimit}
+		stage := &timechartStageSink{stageBudget: budget, maxResultRows: rowLimit, work: query.TimechartWorkFloor()}
 		if err := frozen.executeSingle(budget.allocationContext(ctx), query, stage); err != nil {
 			return err
 		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		query, err = query.ContinueWithTimeBucketsContext(budget.allocationContext(ctx), stage.columns, stage.rows, stage.bucketEnds)
+		query, err = query.ContinueWithTimeBucketsAndWorkContext(budget.allocationContext(ctx), stage.columns, stage.rows, stage.bucketEnds, stage.work)
 		if err != nil {
 			if errors.Is(err, clickhouse.ErrTimechartResourceLimit) {
 				return fmt.Errorf("%w: %w", searchjobs.ErrExecutionLimit, err)
@@ -441,4 +442,15 @@ func (sink stagedFinalSink) AddRow(values []searchjobs.Value) error {
 		return err
 	}
 	return sink.ResultSink.AddRow(values)
+}
+
+func (sink *timechartStageSink) SetTimechartWork(work uint64) error {
+	if work < sink.work {
+		return searchjobs.ErrInvalidResult
+	}
+	sink.work = work
+	return nil
+}
+func (sink stagedFinalSink) SetTimechartWork(work uint64) error {
+	return publishTimechartWork(sink.ResultSink, work)
 }

@@ -61,8 +61,18 @@ func compileTimechartRangeSource(relation compiledRelation, state compileState, 
 		}
 		appendInput(timechartObservedSplit, expression, fieldState{kind: fieldKindString, existsSQL: "1"}, binds)
 	}
+	if state.context.mvExpandWorkSQL != "" {
+		appendInput(timechartObservedWork, state.context.mvExpandWorkSQL, fieldState{kind: fieldKindNumber, numberType: "UInt64", existsSQL: "1", numericIntegral: true}, nil)
+	}
 	projected := "SELECT " + strings.Join(projection, ", ") + " FROM (" + relation.sql + ")"
 	relation = relation.selectFrom(projected, operator.Range)
+	field := next.visible["_time"]
+	field.timeBucketEndSQL = ""
+	next.visible["_time"] = field
+	relation, next, err = addObservedTimechartWorkHeader(relation, next, scan)
+	if err != nil {
+		return CompiledQuery{}, err
+	}
 	return finalizeOrdinaryQuery(relation, next, prependArguments(prefix, args), scan, stage)
 }
 
@@ -111,8 +121,48 @@ func (compiled CompiledQuery) continueObservedTimechart(ctx context.Context, inp
 		split.Field = plan.FieldRef{Name: timechartObservedSplit, Path: []string{timechartObservedSplit}, Range: split.Field.Range}
 		operator.Split = &split
 	}
+	for i, column := range input.columns {
+		if column.Name != timechartObservedWork {
+			continue
+		}
+		var received uint64
+		seen := false
+		for _, row := range input.rows {
+			work, ok := row[i].(uint64)
+			if !ok {
+				return CompiledQuery{}, errors.New("timechart discovery work receipt is invalid")
+			}
+			if err := validateTimechartWork(work, compiled.timechartWorkFloor); err != nil {
+				return CompiledQuery{}, err
+			}
+			if seen && received != work {
+				return CompiledQuery{}, errors.New("timechart discovery work receipt is inconsistent")
+			}
+			received, seen = work, true
+			input.mvExpandRows = max(input.mvExpandRows, work)
+		}
+	}
+	marker := -1
+	for i, column := range input.columns {
+		if column.Name == timechartObservedInputRow {
+			marker = i
+			input.observedWorkHeader = true
+		}
+	}
+	observedRows, headers := 0, 0
 	var earliest, latest time.Time
 	for _, row := range input.rows {
+		if marker >= 0 {
+			value, ok := row[marker].(uint64)
+			if !ok || value > 1 {
+				return CompiledQuery{}, errors.New("observed timechart input marker is invalid")
+			}
+			if value == 0 {
+				headers++
+				continue
+			}
+		}
+		observedRows++
 		timestamp, ok := row[0].(time.Time)
 		if !ok {
 			return CompiledQuery{}, errors.New("timechart input extent requires timestamp _time")
@@ -123,6 +173,9 @@ func (compiled CompiledQuery) continueObservedTimechart(ctx context.Context, inp
 		if latest.IsZero() || timestamp.After(latest) {
 			latest = timestamp
 		}
+	}
+	if marker >= 0 && headers != 1 {
+		return CompiledQuery{}, errors.New("observed timechart work header is missing or duplicated")
 	}
 	if earliest.IsZero() {
 		earliest = discovery.scan.Earliest
@@ -140,7 +193,7 @@ func (compiled CompiledQuery) continueObservedTimechart(ctx context.Context, inp
 	if err != nil {
 		return CompiledQuery{}, err
 	}
-	result.emptyTimechartInput = len(input.rows) == 0
+	result.emptyTimechartInput = observedRows == 0
 	result.continuation = discovery.continuation
 	result.atomicResult = true
 	return result, nil

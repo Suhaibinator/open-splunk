@@ -49,7 +49,11 @@ func lowerStaticTimechartRelation(compiled CompiledQuery, previous compileState,
 	invalidColumn := q(fmt.Sprintf("__os_timechart_invalid_%d", stage))
 	presentColumn := q(fmt.Sprintf("__os_timechart_present_%d", stage))
 	physical := strings.TrimSuffix(compiled.SQL, materializedCTESettingsSQL)
-	sql := "SELECT " + endSQL + " AS " + endColumn + ", " + bucket + " AS " + timeColumn + ", " + physicalValue + " AS " + valueColumn + ", " + invalid + " AS " + invalidColumn + ", toUInt8(" + present + ") AS " + presentColumn + " FROM (" + physical + ")"
+	workProjection := ""
+	if compiled.timechartWorkReceipt {
+		workProjection = ", " + q(TimechartWorkRowsColumn)
+	}
+	sql := "SELECT " + endSQL + " AS " + endColumn + ", " + bucket + " AS " + timeColumn + ", " + physicalValue + " AS " + valueColumn + ", " + invalid + " AS " + invalidColumn + ", toUInt8(" + present + ") AS " + presentColumn + workProjection + " FROM (" + physical + ")"
 	state := compileState{visible: map[string]fieldState{
 		"_time":                 {valueSQL: timeColumn, kind: fieldKindTime, canonicalTime: true, existsSQL: "1", timeBucketEndSQL: endColumn},
 		operator.Measure.Output: {valueSQL: valueColumn, kind: kind, numberType: numberType, numericIntegral: numberType == "UInt64", numericSort: true, existsSQL: "1"},
@@ -59,10 +63,16 @@ func lowerStaticTimechartRelation(compiled CompiledQuery, previous compileState,
 		field.existsSQL = "isNotNull(" + valueColumn + ")"
 		state.visible[operator.Measure.Output] = field
 	}
+	if compiled.timechartWorkReceipt {
+		workColumn := q(TimechartWorkRowsColumn)
+		// The validated private scalar survives projection and reaggregation.
+		state.mvExpandQueryRowsSQL = workColumn
+		state.privateColumns = append(state.privateColumns, workColumn)
+	}
 	barrier := &pendingChronologicalBarrier{name: name, sql: sql, validationColumns: []string{invalidColumn}, fanout: 2, depth: compiled.relationalDepth + 1, ownerRange: operator.Range}
 	state, args := bindChronologicalBarrier(state, barrier, append([]any{ends}, compiled.Args...))
 	state.context.atomicResult = true
 	state.context.requiresMaterializedValidationSettings = true
-	relation := compiledRelation{sql: "SELECT " + timeColumn + ", " + valueColumn + ", " + endColumn + " FROM " + name + " WHERE " + presentColumn + " != 0", depth: compiled.relationalDepth + 2, ownerRange: operator.Range}
+	relation := compiledRelation{sql: "SELECT " + timeColumn + ", " + valueColumn + ", " + endColumn + workProjection + " FROM " + name + " WHERE " + presentColumn + " != 0", depth: compiled.relationalDepth + 2, ownerRange: operator.Range}
 	return relation, state, args
 }
