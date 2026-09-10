@@ -135,7 +135,8 @@ export async function loadTimechartBuckets({
   if (!Number.isSafeInteger(progressBatchSize) || progressBatchSize <= 0) {
     throw new RangeError("Timechart progress batch size must be a positive safe integer.");
   }
-  const rows = [...firstPage.rows];
+  const rows = firstPage.rows.slice(0, maximumBuckets);
+  let omittedRows = firstPage.rows.length > maximumBuckets;
   let pendingRows: ResultRow[] = [];
   const seenTokens = new Set<string>();
   const publish = (coverage: TimechartCoverage) => {
@@ -153,7 +154,7 @@ export async function loadTimechartBuckets({
   let nextPageToken = firstPage.nextPageToken?.trim() || null;
   while (true) {
     if (signal?.aborted) throw abortError();
-    if (nextPageToken === null) return completed("complete");
+    if (nextPageToken === null) return completed(omittedRows ? "capped" : "complete");
     if (rows.length >= maximumBuckets) return completed("capped");
     if (seenTokens.has(nextPageToken)) {
       return failed("Search results repeated a page cursor while loading timechart buckets.");
@@ -171,13 +172,16 @@ export async function loadTimechartBuckets({
     const appended = page.rows.slice(0, remaining);
     rows.push(...appended);
     pendingRows.push(...appended);
+    omittedRows ||= page.rows.length > remaining;
     const followingToken = page.nextPageToken?.trim() || null;
     if (followingToken !== null && page.rows.length === 0) {
       return failed("Search results returned an empty page with a further cursor.");
     }
     nextPageToken = followingToken;
+    if (omittedRows || (rows.length >= maximumBuckets && nextPageToken !== null)) {
+      return completed("capped");
+    }
     if (nextPageToken === null) return completed("complete");
-    if (rows.length >= maximumBuckets) return completed("capped");
     if (pendingRows.length >= progressBatchSize) {
       publish(coverageFor("loading", rows, firstPage));
     }

@@ -176,6 +176,37 @@ test("bucket loading stops at the cap and reports the truncation", async () => {
   );
 });
 
+test("bucket cap reports every omitted row including an oversized terminal page", async () => {
+  const terminal = await loadTimechartBuckets({
+    firstPage: {
+      rows: rows(0, 20),
+      nextPageToken: "final",
+      totalSize: 1_020,
+      totalSizeExact: true,
+    },
+    fetchPage: async () => ({ rows: rows(20, 1_000), nextPageToken: null }),
+    maximumBuckets: 1_000,
+  });
+  assert.equal(terminal.rows.length, 1_000);
+  assert.equal(terminal.rows.at(-1)?.ordinal, 999n);
+  assert.equal(terminal.coverage.status, "capped");
+
+  const oversizedFirstPage = await loadTimechartBuckets({
+    firstPage: {
+      rows: rows(0, 1_200),
+      nextPageToken: null,
+      totalSize: 1_200,
+      totalSizeExact: true,
+    },
+    fetchPage: async () => {
+      throw new Error("an oversized terminal first page must not fetch");
+    },
+    maximumBuckets: 1_000,
+  });
+  assert.equal(oversizedFirstPage.rows.length, 1_000);
+  assert.equal(oversizedFirstPage.coverage.status, "capped");
+});
+
 test("a failing page keeps the buckets loaded before it and surfaces the error", async () => {
   const pages = pagedResult(1_000, 3_000);
   const failure = new Error("boom");
