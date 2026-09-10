@@ -8,6 +8,68 @@ import (
 	"unicode/utf8"
 )
 
+func TestTimechartSuggestionsAfterLeadingOptions(t *testing.T) {
+	t.Parallel()
+	for _, options := range []string{
+		"span=250ms", "bins=100", "minspan=1q", "cont=false",
+		"partial=false", "fixedrange=false", "aligntime=earliest",
+		`aligntime="@d"`, `aligntime="@d+17m"`, "aligntime=0.25",
+		"limit=0", "useother=false", "usenull=false", "CONT=TRUE",
+		`span=1h bins=100 minspan=1s cont=false partial=true fixedrange=false aligntime="@d" limit=0 useother=false usenull=true`,
+	} {
+		for _, test := range []struct {
+			suffix   string
+			kind     SuggestionKind
+			keywords []string
+		}{
+			{"co", SuggestionKindFunction, nil},
+			{"count ", SuggestionKindKeyword, []string{"BY"}},
+			{"count BY ", SuggestionKindField, nil},
+			{"count BY ho", SuggestionKindField, nil},
+			{"count(", SuggestionKindField, nil},
+			{"avg(du", SuggestionKindField, nil},
+			{"p95(", SuggestionKindField, nil},
+			{"sum(duration) AS ", SuggestionKindField, nil},
+			{"avg(duration) BY ", SuggestionKindField, nil},
+		} {
+			source := "| timechart " + options + " " + test.suffix
+			t.Run(source, func(t *testing.T) {
+				context, diagnostic := AnalyzeSuggestionContext(source, len(source))
+				if diagnostic != nil || !slices.Equal(context.Kinds, []SuggestionKind{test.kind}) || !slices.Equal(context.Keywords, test.keywords) {
+					t.Fatalf("context=%+v diagnostic=%v, want kind=%s keywords=%v", context, diagnostic, test.kind, test.keywords)
+				}
+				if test.kind == SuggestionKindFunction && !slices.Equal(context.FunctionNames, []string{"count", "p50", "p95", "sum", "avg"}) {
+					t.Fatalf("functions=%v", context.FunctionNames)
+				}
+			})
+		}
+	}
+}
+
+func TestTimechartOptionValueSuggestionsStayWithinOption(t *testing.T) {
+	t.Parallel()
+	source := `| timechart aligntime="@`
+	context, diagnostic := AnalyzeSuggestionContext(source, len(source))
+	if diagnostic == nil || diagnostic.Code != "SPL_UNTERMINATED_STRING" || len(context.Kinds) != 0 {
+		t.Fatalf("partial quoted alignment context=%+v diagnostic=%v", context, diagnostic)
+	}
+	for _, option := range []string{"span", "bins", "minspan", "cont", "partial", "fixedrange", "aligntime", "limit", "useother", "usenull"} {
+		for _, value := range []string{"", "par"} {
+			source := "| timechart span=1h " + option + "=" + value
+			context, diagnostic := AnalyzeSuggestionContext(source, len(source))
+			if diagnostic != nil || len(context.Kinds) != 0 {
+				t.Errorf("%q context=%+v diagnostic=%v", source, context, diagnostic)
+			}
+		}
+	}
+	for _, source := range []string{`| timechart span="1h" count BY `, `| timechart cont="false" avg(`} {
+		context, diagnostic := AnalyzeSuggestionContext(source, len(source))
+		if diagnostic != nil || len(context.Kinds) != 0 {
+			t.Errorf("%q context=%+v diagnostic=%v", source, context, diagnostic)
+		}
+	}
+}
+
 func TestAnalyzeSuggestionContextRejectsInvalidSourceAndCursor(t *testing.T) {
 	t.Parallel()
 
