@@ -115,9 +115,9 @@ function abortError(): DOMException {
 
 /**
  * Follows the retained result cursor from the first time-series page until the
- * buckets are complete, the cap is reached, or a page fails. Every page of a
- * time-series result is one chronological slice of the same snapshot, so the
- * rows concatenate directly. Progress delivers only newly appended rows in
+ * buckets are complete, the cap is reached, or a page fails. Every page belongs
+ * to the same stable server-order snapshot, so rows concatenate directly before
+ * chart-only chronological ordering. Progress delivers only newly appended rows in
  * bounded batches so callers can adapt each row once and avoid publishing a
  * new copy of every preceding bucket after each cursor response.
  */
