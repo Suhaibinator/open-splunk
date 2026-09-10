@@ -33,6 +33,30 @@ func queryIntegrationTestTimechartCountField(
 	earliest := base
 	latest := base.Add(15 * time.Minute)
 
+	t.Run("observed grid retains flattened object occurrences", func(t *testing.T) {
+		job, page := queryIntegrationRunSearchRange(
+			t,
+			ctx,
+			executor,
+			indexTime,
+			"queryexec-timechart-count-field-observed",
+			`index=main source="timechart-count-field-fixed" | timechart span=5m fixedrange=false count(occurrence) AS occurrences`,
+			earliest,
+			latest,
+		)
+		if job.State != searchjobs.StateCompleted {
+			t.Fatalf("observed count(field) state = %v, failure=%#v", job.State, job.Failure)
+		}
+		queryIntegrationAssertCountFieldSchema(t, page, []string{"_time", "occurrences"})
+		queryIntegrationAssertTimechartMatrix(
+			t,
+			page,
+			base,
+			5*time.Minute,
+			map[string][]uint64{"occurrences": {8, 1}},
+		)
+	})
+
 	t.Run("fixed exact occurrences isolation and physical shape", func(t *testing.T) {
 		const source = `index=main source="timechart-count-field-fixed" | timechart span=5m count(occurrence) AS occurrences`
 		compiled := queryIntegrationCompileSearchRange(
@@ -181,6 +205,49 @@ func queryIntegrationTestTimechartCountField(
 			t.Fatalf("empty fixed count(field) job=%#v page=%#v", job, page)
 		}
 		queryIntegrationAssertCountFieldSchema(t, page, []string{"_time", "occurrences"})
+	})
+
+	t.Run("object split domain fails for fixed and observed grids", func(t *testing.T) {
+		for _, testCase := range []struct {
+			name    string
+			control string
+		}{
+			{name: "fixed"},
+			{name: "observed", control: " fixedrange=false"},
+		} {
+			t.Run(testCase.name, func(t *testing.T) {
+				source := `index=main source="timechart-count-field-object-domain" | timechart span=5m` +
+					testCase.control + ` count BY occurrence`
+				compiled := queryIntegrationCompileSearchRange(t, source, indexTime, earliest, latest)
+				sink := &fakeSink{}
+				err := executor.Execute(ctx, compiled, sink)
+				if !errors.Is(err, searchjobs.ErrUnsupportedValue) ||
+					sink.setCalls != 0 || len(sink.schema.Columns) != 0 || len(sink.rows) != 0 {
+					t.Fatalf(
+						"object split direct execution: err=%v schema calls=%d schema=%#v rows=%d",
+						err,
+						sink.setCalls,
+						sink.schema,
+						len(sink.rows),
+					)
+				}
+				job, _ := queryIntegrationRunSearchRange(
+					t,
+					ctx,
+					executor,
+					indexTime,
+					"queryexec-timechart-count-field-object-domain-"+testCase.name,
+					source,
+					earliest,
+					latest,
+				)
+				if job.State != searchjobs.StateFailed || job.Failure == nil ||
+					job.Failure.Code != searchjobs.FailureUnsupportedSPL ||
+					job.RowCount != 0 || job.Schema != nil {
+					t.Fatalf("object split manager job = %#v", job)
+				}
+			})
+		}
 	})
 
 	t.Run("split ranking uses occurrence totals and retains zero NULL", func(t *testing.T) {
@@ -453,6 +520,7 @@ func queryIntegrationInsertTimechartCountFieldEvents(
 		{id: "fixed-mv", source: "timechart-count-field-fixed", at: base.Add(80 * time.Second), occurrenceSet: true, occurrence: queryIntegrationCountFieldArray(int64(7), nil, false, "", uint64(0))},
 		{id: "fixed-second", source: "timechart-count-field-fixed", at: base.Add(6 * time.Minute), occurrenceSet: true, occurrence: queryIntegrationCountFieldDynamic("present")},
 		{id: "fixed-second-null", source: "timechart-count-field-fixed", at: base.Add(7 * time.Minute), occurrenceSet: true, occurrence: queryIntegrationCountFieldDynamic(nil)},
+		{id: "object-domain", source: "timechart-count-field-object-domain", at: base.Add(time.Minute), objectParent: true},
 		// Scope poison must be discarded before occurrence aggregation.
 		{id: "fixed-other-tenant", tenant: "other", source: "timechart-count-field-fixed", at: base.Add(2 * time.Minute), occurrenceSet: true, occurrence: queryIntegrationRepeatedCountFieldOccurrences(50)},
 		{id: "fixed-other-index", indexName: "other", source: "timechart-count-field-fixed", at: base.Add(2 * time.Minute), occurrenceSet: true, occurrence: queryIntegrationRepeatedCountFieldOccurrences(50)},
