@@ -11,10 +11,14 @@ import {
   type ResultRow,
   type ResultSchema,
 } from "@/gen/ts/open_splunk/result";
-import { ValueType } from "@/gen/ts/open_splunk/value";
+import { NullValue, ValueType } from "@/gen/ts/open_splunk/value";
 import { adaptSearchResults, type WorkspaceStatistic } from "@/lib/search/backend-data";
 
-import { VisualizationPanel } from "./visualization-panel";
+import {
+  VisualizationPanel,
+  categoricalChartModel,
+  categoricalStackWindow,
+} from "./visualization-panel";
 
 const timechartPoints: TimelinePoint[] = [
   { id: "first", label: "00:00", count: 5, series: { east: 2, west: 3 } },
@@ -160,6 +164,64 @@ test("adapts and renders timecharts wider than 64 columns", () => {
   assert.match(markup, /Showing 1–24 of 65/u);
 });
 
+test("adapted null timechart buckets remain visible gaps in the chart", () => {
+  const schema: ResultSchema = {
+    schemaId: "nullable-timechart",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_TIME_SERIES,
+    columns: [
+      {
+        fieldName: "_time",
+        displayName: "_time",
+        valueType: ValueType.VALUE_TYPE_TIMESTAMP,
+        semanticType: ColumnSemanticType.COLUMN_SEMANTIC_TYPE_EVENT_TIME,
+        nullable: false,
+        multivalue: false,
+        hiddenByDefault: false,
+        statsSparkline: false,
+      },
+      {
+        fieldName: "avg(metric)",
+        displayName: "avg(metric)",
+        valueType: ValueType.VALUE_TYPE_DOUBLE,
+        semanticType: ColumnSemanticType.COLUMN_SEMANTIC_TYPE_METRIC,
+        nullable: true,
+        multivalue: false,
+        hiddenByDefault: false,
+        statsSparkline: false,
+      },
+    ],
+  };
+  const values = [
+    { kind: { $case: "doubleValue" as const, value: 1 } },
+    { kind: { $case: "nullValue" as const, value: NullValue.NULL_VALUE_NULL } },
+    { kind: { $case: "doubleValue" as const, value: 2 } },
+  ];
+  const rows: ResultRow[] = values.map((value, index) => ({
+    rowId: `bucket-${index}`,
+    ordinal: BigInt(index),
+    cells: [
+      { kind: { $case: "timestampValue", value: new Date(`2026-09-10T0${index}:00:00Z`) } },
+      value,
+    ],
+    timeBucket: {
+      earliest: `2026-09-10T0${index}:00:00Z`,
+      latest: `2026-09-10T0${index + 1}:00:00Z`,
+    },
+  }));
+  const adapted = adaptSearchResults(schema, rows);
+  const markup = renderPanel({
+    chartStyle: "line",
+    isTimechartResult: true,
+    timelinePoints: adapted.timeline,
+  });
+
+  assert.equal(adapted.timeline.length, 3);
+  assert.deepEqual(adapted.timeline[1]?.series, { "avg(metric)": null });
+  assert.equal((markup.match(/class="time-series-chart__line time-series-chart__series"/gu) ?? []).length, 2);
+  assert.match(markup, /avg\(metric\)/u);
+});
+
 test("default column timecharts preserve exact sparse bucket positions and inspection bounds", () => {
   const origin = 1_789_027_750_123_456_789n;
   const timelinePoints: TimelinePoint[] = [
@@ -216,6 +278,98 @@ test("vertical categorical series use the same stacked baselines", () => {
 
   assert.match(markup, /visualization-vertical-bars is-stacked/u);
   assert.match(markup, /data-chart-end="5" data-chart-raw="3" data-chart-start="2"/u);
+});
+
+test("wide categorical charts render a bounded series window with indexed row access", () => {
+  const rowCount = 12;
+  const seriesCount = 1_024;
+  const schema: ResultSchema = {
+    schemaId: "wide-categorical",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_STATISTICS,
+    columns: [
+      ...Array.from({ length: seriesCount }, (_value, index) => ({
+        fieldName: `series-${index + 1}`,
+        displayName: `series-${index + 1}`,
+        valueType: ValueType.VALUE_TYPE_UINT64,
+        semanticType: ColumnSemanticType.COLUMN_SEMANTIC_TYPE_METRIC,
+        nullable: false,
+        multivalue: false,
+        hiddenByDefault: false,
+        statsSparkline: false,
+      })),
+      {
+        fieldName: "category",
+        displayName: "category",
+        valueType: ValueType.VALUE_TYPE_STRING,
+        semanticType: ColumnSemanticType.COLUMN_SEMANTIC_TYPE_DIMENSION,
+        nullable: false,
+        multivalue: false,
+        hiddenByDefault: false,
+        statsSparkline: false,
+      },
+    ],
+  };
+  const rows: ResultRow[] = Array.from({ length: rowCount }, (_value, rowIndex) => ({
+    rowId: `row-${rowIndex}`,
+    ordinal: BigInt(rowIndex),
+    cells: [
+      ...Array.from({ length: seriesCount }, (_item, seriesIndex) => ({
+        kind: { $case: "uint64Value" as const, value: BigInt(rowIndex + seriesIndex + 1) },
+      })),
+      { kind: { $case: "stringValue" as const, value: `row-${rowIndex}` } },
+    ],
+    timeBucket: undefined,
+  }));
+  const adapted = adaptSearchResults(schema, rows);
+  let seriesEntryReads = 0;
+  const statisticsRows = adapted.statistics.map((row): WorkspaceStatistic => ({
+    ...row,
+    series: new Proxy(row.series ?? [], {
+        get(target, property, receiver) {
+          if (/^\d+$/u.test(String(property))) seriesEntryReads += 1;
+          return Reflect.get(target, property, receiver);
+        },
+      }),
+  }));
+  const markup = renderPanel({ chartStyle: "column", statisticsRows });
+
+  assert.equal(adapted.statistics[0]?.series?.length, seriesCount);
+  assert.equal(seriesEntryReads, rowCount * seriesCount);
+  assert.equal((markup.match(/class="visualization-vertical-bar"/gu) ?? []).length, rowCount * 24);
+  assert.match(markup, /Showing 1–24 of 1,024/u);
+  assert.match(markup, />Previous series<\/button>/u);
+  assert.match(markup, />Next series<\/button>/u);
+  assert.doesNotMatch(markup, />series-25<\/span>/u);
+  assert.ok(markup.length < 300_000, `wide categorical markup was ${markup.length} bytes`);
+
+  const model = categoricalChartModel(statisticsRows);
+  const secondWindow = categoricalStackWindow(model, 24, 48, "none");
+  assert.equal(secondWindow.rows[0]?.length, 24);
+  assert.equal(secondWindow.rows[0]?.[0]?.raw, 25);
+  assert.deepEqual(secondWindow.domain, model.domains.none);
+});
+
+test("stacked categorical windows retain baselines from hidden preceding series", () => {
+  const series = Array.from({ length: 30 }, (_value, index) => ({
+    key: `series-${index + 1}`,
+    label: `series-${index + 1}`,
+    value: 1,
+  }));
+  const model = categoricalChartModel([{
+    id: "wide",
+    level: "wide",
+    count: 30,
+    percent: "100%",
+    avgDuration: 0,
+    series,
+  }]);
+  const window = categoricalStackWindow(model, 24, 30, "stacked100");
+
+  assert.deepEqual(window.domain, [0, 100]);
+  assert.equal(window.rows[0]?.length, 6);
+  assert.equal(window.rows[0]?.[0]?.start, 80);
+  assert.ok(Math.abs((window.rows[0]?.[0]?.end ?? 0) - (250 / 3)) < Number.EPSILON * 100);
 });
 
 test("legacy categorical results do not offer or apply stacking", () => {
