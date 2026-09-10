@@ -122,7 +122,7 @@ class TimechartPageFailure {
   constructor(readonly cause: unknown) {}
 }
 
-/** Sequential cursor iterator whose settled `next` call releases its page before the next fetch. */
+/** Sequential cursor iterator with one in-flight page and no accumulating request chain. */
 function timechartPageStream(
   initialPageToken: string | null,
   fetchPage: (pageToken: string) => Promise<TimechartPage>,
