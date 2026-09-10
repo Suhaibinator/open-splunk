@@ -64,6 +64,7 @@ const testFiles = [
   path.join("app", "search-workspace", "running-search-controller.test.ts"),
   path.join("app", "search-workspace", "categorical-interaction.test.ts"),
   path.join("app", "search-workspace", "charts", "chart-stacking.test.ts"),
+  path.join("app", "search-workspace", "charts", "chart-scale.test.ts"),
   path.join("app", "search-workspace", "charts", "time-series-line-chart.test.tsx"),
   path.join("app", "search-workspace", "clipboard-export.test.ts"),
   path.join("app", "search-workspace", "editor-history-recall.test.ts"),
