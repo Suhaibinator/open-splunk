@@ -1282,6 +1282,15 @@ const (
 	// MaximumTimechartBins preserves the backend's existing hard limit for a
 	// continuous timechart grid.
 	MaximumTimechartBins = 10_000
+	// DefaultTimechartSeriesLimit is Splunk's default number of ordinary split
+	// series. Authored limit values are uint64 and are not capped by this
+	// default; limit=0 selects every ordinary series that fits the execution
+	// resource policy.
+	DefaultTimechartSeriesLimit uint64 = 10
+	// MaximumTimechartSeriesLimit is retained as a source-compatibility alias
+	// for callers that used the former name as the default. It is not an
+	// authored limit ceiling.
+	MaximumTimechartSeriesLimit = DefaultTimechartSeriesLimit
 )
 
 // TimechartAxisOptions preserves automatic time-axis controls. Span remains
@@ -1300,12 +1309,6 @@ type TimechartAxisOptions struct {
 	MinSpan                                              TimeSpan
 	MinSpanSpecified                                     bool
 }
-
-// MaximumTimechartSeriesLimit bounds timechart limit=N: the ordinary split
-// series a chart may retain before the remainder collapses into OTHER. It is
-// Splunk's default of 10 and, with the NULL and OTHER series, fills the
-// backend's runtime series allowance.
-const MaximumTimechartSeriesLimit = 10
 
 // TimechartOptions preserves the authored split-series options and their
 // source locations. Unspecified options are zero-valued and distinct from an

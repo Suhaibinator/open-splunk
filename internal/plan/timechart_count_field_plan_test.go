@@ -319,6 +319,7 @@ func TestAnalyzeRejectsForgedTimechartCountFieldMeasures(t *testing.T) {
 		name    string
 		measure AggregateMeasure
 		split   *TimechartSplit
+		valid   bool
 	}{
 		{name: "missing input", measure: func() AggregateMeasure { got := valid; got.Input = FieldRef{}; return got }()},
 		{name: "percentile metadata", measure: func() AggregateMeasure { got := valid; got.Percentile = 50; return got }()},
@@ -328,12 +329,12 @@ func TestAnalyzeRejectsForgedTimechartCountFieldMeasures(t *testing.T) {
 		{name: "forged path", measure: func() AggregateMeasure { got := valid; got.Input.Path = []string{"attacker"}; return got }()},
 		{name: "canonical input", measure: func() AggregateMeasure { got := valid; got.Input.Canonical = true; return got }()},
 		{name: "same measure and split", measure: valid, split: validSplit(input)},
-		{name: "zero series limit", measure: valid, split: func() *TimechartSplit {
+		{name: "unlimited series", measure: valid, valid: true, split: func() *TimechartSplit {
 			got := validSplit(mustResolveEventAggregateField(t, "service"))
 			got.SeriesLimit = 0
 			return got
 		}()},
-		{name: "series limit above maximum", measure: valid, split: func() *TimechartSplit {
+		{name: "series limit above default", measure: valid, valid: true, split: func() *TimechartSplit {
 			got := validSplit(mustResolveEventAggregateField(t, "service"))
 			got.SeriesLimit = timechartSeriesLimit + 1
 			return got
@@ -352,6 +353,12 @@ func TestAnalyzeRejectsForgedTimechartCountFieldMeasures(t *testing.T) {
 			_, err := Analyze(&Query{Operators: []Operator{&Timechart{
 				Time: timeField, Measure: test.measure, Split: test.split, Span: time.Minute,
 			}}})
+			if test.valid {
+				if err != nil {
+					t.Fatalf("Analyze: %v", err)
+				}
+				return
+			}
 			if err == nil {
 				t.Fatal("Analyze succeeded, want forged timechart rejection")
 			}

@@ -64,7 +64,10 @@ func (query *Query) AuthoredScalarPredicateCount() (uint32, bool) {
 // runtime values and must not exceed MaxSeries.
 type DynamicSeriesOutput struct {
 	FixedFields []string
-	MaxSeries   uint16
+	// MaxSeries is the greatest possible public runtime width. Zero is reserved
+	// for an explicitly unlimited timechart split whose actual width is bounded
+	// by the admitted execution resource policy.
+	MaxSeries uint64
 }
 
 // Operator is one logical pipeline stage.
@@ -428,8 +431,9 @@ func (op *StreamAggregate) SourceRange() spl.Range { return op.Range }
 // count, percentile, sum, or average timechart BY field. A nil split selects a
 // fixed two-column form.
 type TimechartSplit struct {
-	Field        FieldRef
-	SeriesLimit  uint16
+	Field FieldRef
+	// SeriesLimit is the authored ordinary-series limit. Zero means all.
+	SeriesLimit  uint64
 	IncludeNull  bool
 	IncludeOther bool
 	NullLabel    string

@@ -65,9 +65,9 @@ const (
 	// independent, fixed defense-in-depth setting rather than a derived value.
 	defaultMaxSubqueryDepth = uint64(100)
 	maximumTimechartBuckets = uint64(10_000)
-	// Runtime-wide timecharts must rank every raw split label before reducing
-	// the result to twelve public series. Bound that exact pre-ranking work
-	// independently of the much smaller output width.
+	// Runtime-wide timecharts must rank every raw split label before selecting
+	// the public series. Bound that exact pre-ranking work independently of the
+	// authored output width.
 	maximumRuntimeWideTimechartGroups = uint64(130_000)
 	// Percentiles retain a mergeable GK sketch per raw axis/series group,
 	// unlike the constant-size count or sum/count state used by other wide
@@ -101,6 +101,12 @@ const (
 	chartValueCellBytes        = uint64(unsafe.Sizeof(nullableFloat64{}))
 	chartBufferedBaseBytes     = uint64(unsafe.Sizeof(bufferedChart{}))
 	chartStringHeaderBytes     = uint64(unsafe.Sizeof(""))
+	timechartCountCellBytes    = uint64(unsafe.Sizeof(uint64(0)))
+	timechartValueCellBytes    = uint64(unsafe.Sizeof(nullableFloat64{}))
+	timechartRowBytes          = uint64(unsafe.Sizeof(timechartRow{}))
+	timechartValueRowBytes     = uint64(unsafe.Sizeof(timechartValueRow{}))
+	timechartStringHeaderBytes = uint64(unsafe.Sizeof(""))
+	timechartColumnBytes       = uint64(unsafe.Sizeof(searchjobs.Column{}))
 
 	extendedTypeKey  = "\x00open_splunk_type"
 	extendedValueKey = "\x00open_splunk_value"
@@ -593,6 +599,15 @@ func (executor *Executor) executeSingle(ctx context.Context, query clickhouse.Co
 	if settingsErr != nil {
 		return settingsErr
 	}
+	var timechartLimits timechartResourceLimits
+	if query.Timechart != nil &&
+		(query.Timechart.Mode == clickhouse.TimechartModeRuntimeWide ||
+			query.Timechart.Mode == clickhouse.TimechartModeRuntimeWideValue) {
+		timechartLimits, settingsErr = timechartResourceLimitsFromSettings(executionSettings)
+		if settingsErr != nil {
+			return settingsErr
+		}
+	}
 	executionSQL, executionArgs, executionErr := executor.eventExecutionSurfaceContext(executionContext, query)
 	if executionErr != nil {
 		return executionErr
@@ -672,6 +687,7 @@ func (executor *Executor) executeSingle(ctx context.Context, query clickhouse.Co
 				columns,
 				columnTypes,
 				*query.Timechart,
+				timechartLimits,
 			)
 			if readErr != nil {
 				return readErr
@@ -689,6 +705,7 @@ func (executor *Executor) executeSingle(ctx context.Context, query clickhouse.Co
 			columns,
 			columnTypes,
 			*query.Timechart,
+			timechartLimits,
 		)
 		if err != nil {
 			return err
@@ -1043,7 +1060,8 @@ func (executor *Executor) settingsForContext(
 	query clickhouse.CompiledQuery,
 ) (clickhousedriver.Settings, error) {
 	base, expand := executor.settingsSnapshot()
-	if policy, ok := searchlimits.FromContext(ctx); ok {
+	policy, admitted := searchlimits.FromContext(ctx)
+	if admitted {
 		config, err := ConfigFromPolicy(policy)
 		if err != nil {
 			return nil, fmt.Errorf("execute ClickHouse search: admitted limits are invalid: %w", err)
@@ -1063,16 +1081,77 @@ func (executor *Executor) settingsForContext(
 	if err != nil {
 		return nil, err
 	}
-	if !ok {
+	if ok {
+		current, valid := settings["max_threads"].(uint64)
+		if valid && current > uint64(hint) {
+			settings = maps.Clone(settings)
+			settings["max_threads"] = uint64(hint)
+		}
+	}
+	return withTimechartResourceSettings(settings, query, policy, admitted)
+}
+
+type timechartResourceLimits struct {
+	domain        uint64
+	cells         uint64
+	retainedBytes uint64
+}
+
+func withTimechartResourceSettings(
+	settings clickhousedriver.Settings,
+	query clickhouse.CompiledQuery,
+	policy searchlimits.Policy,
+	admitted bool,
+) (clickhousedriver.Settings, error) {
+	if query.Timechart == nil ||
+		(query.Timechart.Mode != clickhouse.TimechartModeRuntimeWide &&
+			query.Timechart.Mode != clickhouse.TimechartModeRuntimeWideValue) {
 		return settings, nil
 	}
-	current, ok := settings["max_threads"].(uint64)
-	if !ok || current <= uint64(hint) {
-		return settings, nil
+	domain, domainOK := settings["max_rows_to_group_by"].(uint64)
+	retainedBytes, bytesOK := settings["max_result_bytes"].(uint64)
+	if admitted {
+		domain = policy.MaxGroupedRows
+		retainedBytes = policy.MaxResultBytes
+		domainOK = domain != 0
+		bytesOK = retainedBytes != 0
+	}
+	if !domainOK || !bytesOK || domain == 0 || retainedBytes == 0 {
+		return nil, errors.New("execute ClickHouse timechart: resource policy is invalid")
+	}
+	cellBytes := timechartCountCellBytes
+	if query.Timechart.Mode == clickhouse.TimechartModeRuntimeWideValue {
+		cellBytes = timechartValueCellBytes
+	}
+	limits := timechartResourceLimits{
+		domain:        domain,
+		cells:         retainedBytes / cellBytes,
+		retainedBytes: retainedBytes,
+	}
+	if limits.cells == 0 {
+		return nil, errors.New("execute ClickHouse timechart: resource policy cannot retain one cell")
 	}
 	bounded := maps.Clone(settings)
-	bounded["max_threads"] = uint64(hint)
+	bounded["param_"+clickhouse.TimechartDomainLimitParameter] = limits.domain
+	bounded["param_"+clickhouse.TimechartCellLimitParameter] = limits.cells
+	bounded["param_"+clickhouse.TimechartRetainedBytesLimitParameter] = limits.retainedBytes
 	return bounded, nil
+}
+
+func timechartResourceLimitsFromSettings(
+	settings clickhousedriver.Settings,
+) (timechartResourceLimits, error) {
+	read := func(name string) (uint64, bool) {
+		value, ok := settings["param_"+name].(uint64)
+		return value, ok && value != 0
+	}
+	domain, domainOK := read(clickhouse.TimechartDomainLimitParameter)
+	cells, cellsOK := read(clickhouse.TimechartCellLimitParameter)
+	retainedBytes, bytesOK := read(clickhouse.TimechartRetainedBytesLimitParameter)
+	if !domainOK || !cellsOK || !bytesOK {
+		return timechartResourceLimits{}, errors.New("execute ClickHouse timechart: resource settings are incomplete")
+	}
+	return timechartResourceLimits{domain: domain, cells: cells, retainedBytes: retainedBytes}, nil
 }
 
 func groupLimitSettingsFor(
@@ -1162,6 +1241,94 @@ type bufferedValueTimechart struct {
 	rows    []timechartValueRow
 }
 
+type timechartRetainedBudget struct {
+	limit uint64
+	used  uint64
+}
+
+func (budget *timechartRetainedBudget) charge(count, size uint64) error {
+	if budget == nil || size != 0 && count > math.MaxUint64/size {
+		return fmt.Errorf("%w: timechart retained allocation exceeds its budget", searchjobs.ErrExecutionLimit)
+	}
+	amount := count * size
+	if amount > budget.limit-budget.used {
+		return fmt.Errorf("%w: timechart retained allocation exceeds its budget", searchjobs.ErrExecutionLimit)
+	}
+	budget.used += amount
+	return nil
+}
+
+func (budget *timechartRetainedBudget) checkTransient(count, size uint64) error {
+	if budget == nil || size != 0 && count > math.MaxUint64/size ||
+		count*size > budget.limit-budget.used {
+		return fmt.Errorf("%w: ClickHouse timechart row allocation exceeds its budget", searchjobs.ErrExecutionLimit)
+	}
+	return nil
+}
+
+func newTimechartRetainedBudget(
+	limits timechartResourceLimits,
+	buckets uint64,
+	rowBytes uint64,
+	bufferBytes uint64,
+) (*timechartRetainedBudget, error) {
+	budget := &timechartRetainedBudget{limit: limits.retainedBytes}
+	if budget.limit == 0 {
+		return nil, errors.New("execute ClickHouse timechart: retained byte budget is invalid")
+	}
+	if err := budget.charge(1, bufferBytes); err != nil {
+		return nil, err
+	}
+	if err := budget.charge(buckets, rowBytes); err != nil {
+		return nil, err
+	}
+	return budget, nil
+}
+
+func validateTimechartSeriesCount(
+	output clickhouse.TimechartOutput,
+	limits timechartResourceLimits,
+	series int,
+) error {
+	if series < 0 || (output.MaxSeries != 0 && uint64(series) > output.MaxSeries) {
+		return fmt.Errorf("%w: ClickHouse timechart series domain exceeds its compiled bound", searchjobs.ErrInvalidResult)
+	}
+	if uint64(series) > limits.domain {
+		return fmt.Errorf("%w: ClickHouse timechart series domain exceeded its budget", searchjobs.ErrExecutionLimit)
+	}
+	if uint64(series) != 0 &&
+		output.BucketCount > limits.cells/uint64(series) {
+		return fmt.Errorf("%w: ClickHouse timechart cells exceeded their budget", searchjobs.ErrExecutionLimit)
+	}
+	return nil
+}
+
+func chargeTimechartSeriesSchema(
+	budget *timechartRetainedBudget,
+	names []string,
+) error {
+	series := uint64(len(names))
+	if err := budget.checkTransient(uint64(cap(names)), timechartStringHeaderBytes); err != nil {
+		return err
+	}
+	// The decoder retains one exact-capacity public-name slice. The future
+	// public schema retains one Column per series plus the _time column.
+	if err := budget.charge(series, timechartStringHeaderBytes); err != nil {
+		return err
+	}
+	if err := budget.charge(series+1, timechartColumnBytes); err != nil {
+		return err
+	}
+	for _, name := range names {
+		// The decoded ordinary label shares this backing string. Reserved-name
+		// normalization can add the five-byte VALUE prefix.
+		if err := budget.charge(1, uint64(len(name))+uint64(len("VALUE"))); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func validateTimechartOutput(query clickhouse.CompiledQuery) error {
 	output := query.Timechart
 	if output == nil {
@@ -1178,6 +1345,7 @@ func validateTimechartOutput(query clickhouse.CompiledQuery) error {
 	case clickhouse.TimechartModeFixedCount:
 		if !slices.Equal(query.OutputFields, []string{"_time", "count"}) ||
 			output.MaxSeries != 1 || output.MaxLabelBytes != 0 ||
+			output.SeriesLimit != 0 || output.IncludeNull || output.IncludeOther ||
 			output.ValueField != "" ||
 			output.ValueKind != clickhouse.TimechartValueKindInvalid {
 			return fmt.Errorf("%w: compiled fixed timechart output contract is invalid", searchjobs.ErrInvalidResult)
@@ -1188,6 +1356,7 @@ func validateTimechartOutput(query clickhouse.CompiledQuery) error {
 			output.ValueField == "" || output.ValueField == "_time" ||
 			!slices.Equal(query.OutputFields, []string{"_time", output.ValueField}) ||
 			output.MaxSeries != 1 || output.MaxLabelBytes != 0 ||
+			output.SeriesLimit != 0 || output.IncludeNull || output.IncludeOther ||
 			output.ValueKind != clickhouse.TimechartValueKindInvalid {
 			return fmt.Errorf("%w: compiled fixed field-count timechart output contract is invalid", searchjobs.ErrInvalidResult)
 		}
@@ -1200,6 +1369,7 @@ func validateTimechartOutput(query clickhouse.CompiledQuery) error {
 			query.OutputFields[1] == "" || query.OutputFields[1] == "_time" ||
 			query.OutputFields[1] != output.ValueField || output.MaxSeries != 1 ||
 			output.MaxLabelBytes != 0 || valueFieldErr != nil ||
+			output.SeriesLimit != 0 || output.IncludeNull || output.IncludeOther ||
 			resolvedValueField.Name != output.ValueField ||
 			!output.ValueKind.Valid() {
 			return fmt.Errorf("%w: compiled fixed value timechart output contract is invalid", searchjobs.ErrInvalidResult)
@@ -1639,7 +1809,14 @@ func readFixedValueTimechartRows(
 	return buffered, nil
 }
 
-func readTimechartRows(ctx context.Context, rows driver.Rows, columns []string, columnTypes []driver.ColumnType, output clickhouse.TimechartOutput) (bufferedTimechart, error) {
+func readTimechartRows(
+	ctx context.Context,
+	rows driver.Rows,
+	columns []string,
+	columnTypes []driver.ColumnType,
+	output clickhouse.TimechartOutput,
+	limits timechartResourceLimits,
+) (bufferedTimechart, error) {
 	if err := ctx.Err(); err != nil {
 		return bufferedTimechart{}, err
 	}
@@ -1658,9 +1835,18 @@ func readTimechartRows(ctx context.Context, rows driver.Rows, columns []string, 
 		return bufferedTimechart{}, err
 	}
 
+	budget, err := newTimechartRetainedBudget(
+		limits,
+		output.BucketCount,
+		timechartRowBytes,
+		uint64(unsafe.Sizeof(bufferedTimechart{})),
+	)
+	if err != nil {
+		return bufferedTimechart{}, err
+	}
 	bucketCapacity := safecast.MustConv[int](output.BucketCount)
 	buffered := bufferedTimechart{rows: make([]timechartRow, 0, bucketCapacity)}
-	var encodedNames []string
+	seriesCount := -1
 	destinations, err := scanDestinations(columnTypes)
 	if err != nil {
 		return bufferedTimechart{}, fmt.Errorf(
@@ -1687,10 +1873,24 @@ func readTimechartRows(ctx context.Context, rows driver.Rows, columns []string, 
 			return bufferedTimechart{}, err
 		}
 		rowIndex := len(buffered.rows)
-		if len(counts) > int(output.MaxSeries) ||
-			(rowIndex == 0 && len(names) != len(counts)) ||
-			(rowIndex > 0 && (len(names) != 0 || len(counts) != len(encodedNames))) {
+		if err := budget.checkTransient(uint64(cap(counts)), timechartCountCellBytes); err != nil {
+			return bufferedTimechart{}, err
+		}
+		if (rowIndex == 0 && len(names) != len(counts)) ||
+			(rowIndex > 0 && (len(names) != 0 || len(counts) != seriesCount)) {
 			return bufferedTimechart{}, fmt.Errorf("%w: ClickHouse timechart series arrays are invalid", searchjobs.ErrInvalidResult)
+		}
+		if rowIndex == 0 {
+			if seriesErr := validateTimechartSeriesCount(output, limits, len(counts)); seriesErr != nil {
+				return bufferedTimechart{}, seriesErr
+			}
+			if err := chargeTimechartSeriesSchema(budget, names); err != nil {
+				return bufferedTimechart{}, err
+			}
+			seriesCount = len(counts)
+		}
+		if err := budget.charge(uint64(len(counts)), timechartCountCellBytes); err != nil {
+			return bufferedTimechart{}, err
 		}
 		if ordinal >= output.BucketCount || ordinal != uint64(rowIndex) {
 			return bufferedTimechart{}, fmt.Errorf("%w: ClickHouse timechart ordinal sequence is invalid", searchjobs.ErrInvalidResult)
@@ -1713,13 +1913,14 @@ func readTimechartRows(ctx context.Context, rows driver.Rows, columns []string, 
 			if validateErr != nil {
 				return bufferedTimechart{}, validateErr
 			}
-			encodedNames = slices.Clone(names)
 			buffered.columns = publicColumns
 		}
 		if invalid != 0 {
 			return bufferedTimechart{}, searchjobs.ErrUnsupportedValue
 		}
-		buffered.rows = append(buffered.rows, timechartRow{bucket: bucket, cells: slices.Clone(counts)})
+		cells := make([]uint64, len(counts))
+		copy(cells, counts)
+		buffered.rows = append(buffered.rows, timechartRow{bucket: bucket, cells: cells})
 	}
 	if err := rows.Err(); err != nil {
 		return bufferedTimechart{}, classifyQueryError(ctx, fmt.Errorf("iterate ClickHouse timechart results: %w", err))
@@ -1770,6 +1971,7 @@ func readValueTimechartRows(
 	columns []string,
 	columnTypes []driver.ColumnType,
 	output clickhouse.TimechartOutput,
+	limits timechartResourceLimits,
 ) (bufferedValueTimechart, error) {
 	if err := ctx.Err(); err != nil {
 		return bufferedValueTimechart{}, err
@@ -1790,9 +1992,18 @@ func readValueTimechartRows(
 		return bufferedValueTimechart{}, err
 	}
 
+	budget, err := newTimechartRetainedBudget(
+		limits,
+		output.BucketCount,
+		timechartValueRowBytes,
+		uint64(unsafe.Sizeof(bufferedValueTimechart{})),
+	)
+	if err != nil {
+		return bufferedValueTimechart{}, err
+	}
 	bucketCapacity := safecast.MustConv[int](output.BucketCount)
 	buffered := bufferedValueTimechart{rows: make([]timechartValueRow, 0, bucketCapacity)}
-	var encodedNames []string
+	seriesCount := -1
 	destinations, err := scanDestinations(columnTypes)
 	if err != nil {
 		return bufferedValueTimechart{}, fmt.Errorf(
@@ -1825,13 +2036,31 @@ func readValueTimechartRows(
 			return bufferedValueTimechart{}, err
 		}
 		rowIndex := len(buffered.rows)
-		if len(values) != len(present) || len(values) > int(output.MaxSeries) ||
+		if err := budget.checkTransient(uint64(cap(values)), uint64(unsafe.Sizeof(float64(0)))); err != nil {
+			return bufferedValueTimechart{}, err
+		}
+		if err := budget.checkTransient(uint64(cap(present)), uint64(unsafe.Sizeof(uint8(0)))); err != nil {
+			return bufferedValueTimechart{}, err
+		}
+		if len(values) != len(present) ||
 			(rowIndex == 0 && len(names) != len(values)) ||
-			(rowIndex > 0 && (len(names) != 0 || len(values) != len(encodedNames))) {
+			(rowIndex > 0 && (len(names) != 0 || len(values) != seriesCount)) {
 			return bufferedValueTimechart{}, fmt.Errorf(
 				"%w: ClickHouse split value timechart series arrays are invalid",
 				searchjobs.ErrInvalidResult,
 			)
+		}
+		if rowIndex == 0 {
+			if seriesErr := validateTimechartSeriesCount(output, limits, len(values)); seriesErr != nil {
+				return bufferedValueTimechart{}, seriesErr
+			}
+			if err := chargeTimechartSeriesSchema(budget, names); err != nil {
+				return bufferedValueTimechart{}, err
+			}
+			seriesCount = len(values)
+		}
+		if err := budget.charge(uint64(len(values)), timechartValueCellBytes); err != nil {
+			return bufferedValueTimechart{}, err
 		}
 		rowValues := make([]nullableFloat64, len(values))
 		for index, presence := range present {
@@ -1877,7 +2106,6 @@ func readValueTimechartRows(
 			if validateErr != nil {
 				return bufferedValueTimechart{}, validateErr
 			}
-			encodedNames = slices.Clone(names)
 			buffered.columns = publicColumns
 		}
 		if invalid != 0 {
@@ -3329,6 +3557,9 @@ var executionLimitMarkers = [...]struct {
 	{clickhouse.NativeMVMembersLimitMarker, "native multivalue members exceeded the per-row limit"},
 	{clickhouse.NativeMVPayloadLimitMarker, "native multivalue payload exceeded the per-row limit"},
 	{clickhouse.ChartRowLimitMarker, "chart row values exceeded the supported limit"},
+	{clickhouse.TimechartDomainLimitMarker, "timechart series domain exceeded the admitted limit"},
+	{clickhouse.TimechartCellLimitMarker, "timechart cells exceeded the admitted limit"},
+	{clickhouse.TimechartRetainedBytesLimitMarker, "timechart retained bytes exceeded the admitted limit"},
 	{clickhouse.EventStatsInputLimitMarker, "eventstats input rows exceeded the supported limit"},
 	{clickhouse.StreamStatsInputLimitMarker, "streamstats input rows exceeded the supported limit"},
 	{clickhouse.StatsMultivalueByExpansionLimitMarker, "stats multivalue BY expansion exceeded the per-event limit"},

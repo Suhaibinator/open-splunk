@@ -136,8 +136,8 @@ func TestCompileSplitTimechartCountFieldRanksOccurrencesButKeepsRowDomain(t *tes
 			t.Fatalf("split count(field) relation %q occurs %d times, want %d:\n%s", relation, got, want, compiled.SQL)
 		}
 	}
-	if got := strings.Count(compiled.SQL, ` AS MATERIALIZED (`); got != 1 {
-		t.Fatalf("split count(field) materialized CTE count = %d, want collapsed only:\n%s", got, compiled.SQL)
+	if got := strings.Count(compiled.SQL, ` AS MATERIALIZED (`); got != 3 {
+		t.Fatalf("split count(field) materialized CTE count = %d, want collapse plus resource usage and guard:\n%s", got, compiled.SQL)
 	}
 
 	scored := timechartCTESection(

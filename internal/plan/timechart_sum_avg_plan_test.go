@@ -344,6 +344,7 @@ func TestAnalyzeAcceptsValidAndRejectsForgedTimechartSumAndAverageMeasures(t *te
 			name    string
 			measure AggregateMeasure
 			split   *TimechartSplit
+			valid   bool
 		}{
 			{name: "missing input", measure: func() AggregateMeasure { got := valid; got.Input = FieldRef{}; return got }()},
 			{name: "percentile metadata", measure: func() AggregateMeasure { got := valid; got.Percentile = 50; return got }()},
@@ -352,8 +353,8 @@ func TestAnalyzeAcceptsValidAndRejectsForgedTimechartSumAndAverageMeasures(t *te
 			{name: "forged path", measure: func() AggregateMeasure { got := valid; got.Input.Path = []string{"attacker"}; return got }()},
 			{name: "canonical input", measure: func() AggregateMeasure { got := valid; got.Input.Canonical = true; return got }()},
 			{name: "same measure and split", measure: valid, split: validSplit(input)},
-			{name: "zero series limit", measure: valid, split: func() *TimechartSplit { got := validSplit(splitField); got.SeriesLimit = 0; return got }()},
-			{name: "wrong series limit", measure: valid, split: func() *TimechartSplit { got := validSplit(splitField); got.SeriesLimit++; return got }()},
+			{name: "unlimited series", measure: valid, valid: true, split: func() *TimechartSplit { got := validSplit(splitField); got.SeriesLimit = 0; return got }()},
+			{name: "series limit above default", measure: valid, valid: true, split: func() *TimechartSplit { got := validSplit(splitField); got.SeriesLimit++; return got }()},
 			{name: "forged split path", measure: valid, split: func() *TimechartSplit {
 				got := validSplit(splitField)
 				got.Field.Path = []string{"attacker"}
@@ -368,6 +369,12 @@ func TestAnalyzeAcceptsValidAndRejectsForgedTimechartSumAndAverageMeasures(t *te
 				_, err := Analyze(&Query{Operators: []Operator{&Timechart{
 					Time: timeField, Measure: test.measure, Split: test.split, Span: time.Minute,
 				}}})
+				if test.valid {
+					if err != nil {
+						t.Fatalf("Analyze: %v", err)
+					}
+					return
+				}
 				if err == nil {
 					t.Fatal("Analyze succeeded, want forged timechart rejection")
 				}

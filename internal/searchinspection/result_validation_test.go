@@ -100,6 +100,24 @@ func TestValidateResultAcceptsCanonicalResultAndExactBounds(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "dynamic output has unlimited bound",
+			mutate: func(result *Result) {
+				result.Plan.Output = OutputShape{
+					Kind: OutputKindDynamic, Fields: []string{"_time"},
+				}
+			},
+		},
+		{
+			name: "dynamic output exceeds historical bound",
+			mutate: func(result *Result) {
+				result.Plan.Output = OutputShape{
+					Kind:             OutputKindDynamic,
+					Fields:           []string{"_time"},
+					MaxDynamicFields: maximumDynamicFields + 1,
+				}
+			},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -440,24 +458,6 @@ func TestValidateResultRejectsMalformedLogicalProjection(t *testing.T) {
 			mutate: func(result *Result) {
 				result.Plan.Output = OutputShape{
 					Kind: OutputKindDynamic, MaxDynamicFields: 1,
-				}
-			},
-		},
-		{
-			name: "dynamic output has zero bound",
-			mutate: func(result *Result) {
-				result.Plan.Output = OutputShape{
-					Kind: OutputKindDynamic, Fields: []string{"_time"},
-				}
-			},
-		},
-		{
-			name: "dynamic output bound is too large",
-			mutate: func(result *Result) {
-				result.Plan.Output = OutputShape{
-					Kind:             OutputKindDynamic,
-					Fields:           []string{"_time"},
-					MaxDynamicFields: maximumDynamicFields + 1,
 				}
 			},
 		},

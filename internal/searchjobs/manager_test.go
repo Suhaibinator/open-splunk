@@ -1134,7 +1134,10 @@ func TestValueKindWireNumbersMatchProto(t *testing.T) {
 func TestValidateTimechartSchemaEnforcesRuntimeWideContract(t *testing.T) {
 	t.Parallel()
 
-	output := clickhouse.TimechartOutput{MaxSeries: 3, MaxLabelBytes: 256}
+	output := clickhouse.TimechartOutput{
+		SeriesLimit: 1, MaxSeries: 3, MaxLabelBytes: 256,
+		IncludeNull: true, IncludeOther: true,
+	}
 	valid := Schema{Columns: []Column{
 		{Name: "_time", Kind: ValueKindTime},
 		{Name: "api", Kind: ValueKindUnsigned},

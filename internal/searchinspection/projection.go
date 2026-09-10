@@ -36,7 +36,9 @@ const (
 	maximumProjectedFieldOccurrences = uint64(16_384)
 	maximumProjectedStringBytes      = uint64(1 << 20)
 	maximumOperatorNameBytes         = 32
-	maximumDynamicFields             = uint16(1_024)
+	// Retained for compatibility tests; runtime validation does not use this
+	// historical inspection width as a timechart ceiling.
+	maximumDynamicFields             = uint64(1_024)
 	maximumProjectionSourceBytes     = 16 << 10
 	maximumProjectedKnowledgeObjects = uint32(knowledgeprogram.MaximumObjects)
 	maximumProjectedKnowledgeOutputs = uint32(knowledgeprogram.MaximumGeneratedFields)
@@ -101,9 +103,11 @@ type PlanStage struct {
 // OutputShape is the final relation's bounded public schema. Fields preserves
 // final output order; for dynamic output it is the fixed prefix.
 type OutputShape struct {
-	Kind             OutputKind
-	Fields           []string
-	MaxDynamicFields uint16
+	Kind   OutputKind
+	Fields []string
+	// MaxDynamicFields is zero only for a dynamic output whose authored
+	// timechart limit selects all series under runtime resource policy.
+	MaxDynamicFields uint64
 }
 
 // LogicalPlan is a detached, bounded projection safe to keep separate from
@@ -698,8 +702,6 @@ func projectOutputShape(
 		if len(logical.OutputFields) != 0 ||
 			len(logical.DynamicOutput.FixedFields) >
 				int(maximumStageFields) ||
-			logical.DynamicOutput.MaxSeries == 0 ||
-			logical.DynamicOutput.MaxSeries > maximumDynamicFields ||
 			len(logical.DynamicOutput.FixedFields) == 0 {
 			return OutputShape{}, invalidProjection(
 				"logical dynamic output is invalid",

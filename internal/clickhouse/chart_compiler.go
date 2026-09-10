@@ -9,9 +9,82 @@ import (
 	"strings"
 	"time"
 
+	"fortio.org/safecast"
+
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
+
+const (
+	timechartCountCellRetainedBytes = uint64(8)
+	// A nullable Float64 is retained as a Float64 plus validity state and Go
+	// alignment. The executor verifies the matching concrete size.
+	timechartValueCellRetainedBytes = uint64(16)
+	timechartSeriesRetainedBytes    = uint64(80)
+	timechartBucketRetainedBytes    = uint64(48)
+	timechartBufferRetainedBytes    = uint64(64)
+)
+
+func timechartResourceParameter(name string) string {
+	return "{" + name + ":UInt64}"
+}
+
+func timechartResourceGuardPredicate(
+	resourceUsage string,
+	bucketCount uint64,
+	cellBytes uint64,
+) string {
+	domainCount := resourceUsage + "." + quoteIdentifier("__os_tc_domain_count")
+	labelBytes := resourceUsage + "." + quoteIdentifier("__os_tc_label_bytes")
+	buckets := strconv.FormatUint(bucketCount, 10)
+	cells := "toUInt128(" + domainCount + ") * toUInt128(" + buckets + ")"
+	retained := "toUInt128(" + strconv.FormatUint(timechartBufferRetainedBytes, 10) +
+		") + toUInt128(" + labelBytes + ") + toUInt128(" + domainCount + ") * toUInt128(" +
+		strconv.FormatUint(timechartSeriesRetainedBytes, 10) + ") + toUInt128(" + buckets +
+		") * toUInt128(" + strconv.FormatUint(timechartBucketRetainedBytes, 10) + ") + " +
+		cells + " * toUInt128(" + strconv.FormatUint(cellBytes, 10) + ")"
+	return "throwIf(toUInt8(" + domainCount + " > " +
+		timechartResourceParameter(TimechartDomainLimitParameter) + "), '" +
+		TimechartDomainLimitMarker + "') = 0 AND throwIf(toUInt8(" + cells +
+		" > toUInt128(" + timechartResourceParameter(TimechartCellLimitParameter) + ")), '" +
+		TimechartCellLimitMarker + "') = 0 AND throwIf(toUInt8(" + retained +
+		" > toUInt128(" + timechartResourceParameter(TimechartRetainedBytesLimitParameter) + ")), '" +
+		TimechartRetainedBytesLimitMarker + "') = 0"
+}
+
+func writeTimechartResourceGuardCTEs(
+	sql *strings.Builder,
+	domainRows string,
+	resourceUsage string,
+	guardedDomainRows string,
+	encoded string,
+	bucketCount uint64,
+	cellBytes uint64,
+) {
+	domainSource := quoteIdentifier("__os_tc_domain_source")
+	sql.WriteString(resourceUsage)
+	sql.WriteString(" AS MATERIALIZED (SELECT count() AS ")
+	sql.WriteString(quoteIdentifier("__os_tc_domain_count"))
+	sql.WriteString(", sum(toUInt64(length(")
+	sql.WriteString(encoded)
+	sql.WriteString("))) AS ")
+	sql.WriteString(quoteIdentifier("__os_tc_label_bytes"))
+	sql.WriteString(" FROM ")
+	sql.WriteString(domainRows)
+	sql.WriteString("), ")
+	sql.WriteString(guardedDomainRows)
+	sql.WriteString(" AS MATERIALIZED (SELECT ")
+	sql.WriteString(domainSource)
+	sql.WriteString(".* FROM ")
+	sql.WriteString(domainRows)
+	sql.WriteString(" AS ")
+	sql.WriteString(domainSource)
+	sql.WriteString(" CROSS JOIN ")
+	sql.WriteString(resourceUsage)
+	sql.WriteString(" WHERE ")
+	sql.WriteString(timechartResourceGuardPredicate(resourceUsage, bucketCount, cellBytes))
+	sql.WriteString("), ")
+}
 
 func compileTimechart(
 	relation compiledRelation,
@@ -147,8 +220,6 @@ func compileTimechart(
 	}
 	if len(outputFields) != 0 || dynamic == nil ||
 		!slices.Equal(dynamic.FixedFields, []string{"_time"}) ||
-		operator.Split.SeriesLimit < 1 ||
-		operator.Split.SeriesLimit > spl.MaximumTimechartSeriesLimit ||
 		dynamic.MaxSeries != timechartSplitMaxSeries(operator.Split) ||
 		operator.Split.NullLabel != "NULL" || operator.Split.OtherLabel != "OTHER" {
 		return CompiledQuery{}, errors.New("compile ClickHouse timechart: dynamic output contract is invalid")
@@ -267,6 +338,8 @@ func compileTimechart(
 	ranked := q("__os_timechart_ranked")
 	collapsed := q("__os_timechart_collapsed")
 	domainRows := q("__os_timechart_domain_rows")
+	resourceUsage := q("__os_timechart_resource_usage")
+	guardedDomainRows := q("__os_timechart_guarded_domain_rows")
 	domain := q("__os_timechart_domain")
 	bucketMaps := q("__os_timechart_bucket_maps")
 	grid := q("__os_timechart_grid")
@@ -505,7 +578,7 @@ func compileTimechart(
 	// usenull=false and useother=false drop their sentinel branch, so the
 	// affected rows collapse into the private empty encoding that never becomes
 	// a map key or a public series name.
-	seriesLimit := strconv.FormatUint(uint64(operator.Split.SeriesLimit), 10)
+	seriesLimit := strconv.FormatUint(operator.Split.SeriesLimit, 10)
 	sql.WriteString(collapsed)
 	sql.WriteString(" AS MATERIALIZED (SELECT ")
 	sql.WriteString(bucketNumber)
@@ -515,14 +588,17 @@ func compileTimechart(
 		sql.WriteString(" = 1, '1:', ")
 	}
 	sql.WriteString(kind)
-	sql.WriteString(" = 0 AND ")
-	sql.WriteString(seriesRank)
-	sql.WriteString(" <= ")
-	sql.WriteString(seriesLimit)
+	sql.WriteString(" = 0")
+	if operator.Split.SeriesLimit != 0 {
+		sql.WriteString(" AND ")
+		sql.WriteString(seriesRank)
+		sql.WriteString(" <= ")
+		sql.WriteString(seriesLimit)
+	}
 	sql.WriteString(", concat('0:', ")
 	sql.WriteString(label)
 	sql.WriteString("), ")
-	if operator.Split.IncludeOther {
+	if operator.Split.IncludeOther && operator.Split.SeriesLimit != 0 {
 		sql.WriteString(kind)
 		sql.WriteString(" = 0, '2:', ")
 	}
@@ -604,13 +680,23 @@ func compileTimechart(
 	sql.WriteString(encoded)
 	sql.WriteString("), ")
 
+	writeTimechartResourceGuardCTEs(
+		&sql,
+		domainRows,
+		resourceUsage,
+		guardedDomainRows,
+		encoded,
+		operator.BucketCount,
+		timechartCountCellRetainedBytes,
+	)
+
 	sql.WriteString(domain)
 	sql.WriteString(" AS (SELECT arrayMap(item -> item.3, arraySort(item -> (item.1, item.2), groupArray((sort_kind, ")
 	sql.WriteString(sortLabel)
 	sql.WriteString(", ")
 	sql.WriteString(encoded)
 	sql.WriteString(")))) AS names FROM ")
-	sql.WriteString(domainRows)
+	sql.WriteString(guardedDomainRows)
 	sql.WriteString("), ")
 
 	sql.WriteString(bucketMaps)
@@ -642,6 +728,14 @@ func compileTimechart(
 	sql.WriteString(countMap)
 	sql.WriteString(" FROM ")
 	sql.WriteString(collapsed)
+	sql.WriteString(" CROSS JOIN ")
+	sql.WriteString(resourceUsage)
+	sql.WriteString(" WHERE ")
+	sql.WriteString(timechartResourceGuardPredicate(
+		resourceUsage,
+		operator.BucketCount,
+		timechartCountCellRetainedBytes,
+	))
 	sql.WriteString(" GROUP BY ")
 	sql.WriteString(bucketNumber)
 	sql.WriteString("), ")
@@ -714,8 +808,10 @@ func compileTimechart(
 	rankedDepth := relationalNodeDepth(scoredDepth)
 	collapsedDepth := relationalNodeDepth(rankedDepth)
 	domainRowsDepth := relationalNodeDepth(collapsedDepth)
-	domainDepth := relationalNodeDepth(domainRowsDepth)
-	bucketMapsDepth := relationalNodeDepth(collapsedDepth)
+	resourceUsageDepth := relationalNodeDepth(domainRowsDepth)
+	guardedDomainRowsDepth := relationalNodeDepth(domainRowsDepth, resourceUsageDepth)
+	domainDepth := relationalNodeDepth(guardedDomainRowsDepth)
+	bucketMapsDepth := relationalNodeDepth(collapsedDepth, resourceUsageDepth)
 	gridDepth := gridSpec.relationalDepth()
 	resultDepth := relationalNodeDepth(
 		gridDepth,
@@ -739,6 +835,9 @@ func compileTimechart(
 			SearchEarliest: operator.SearchEarliest,
 			SearchLatest:   operator.SearchLatest,
 			BucketCount:    operator.BucketCount,
+			SeriesLimit:    operator.Split.SeriesLimit,
+			IncludeNull:    operator.Split.IncludeNull,
+			IncludeOther:   operator.Split.IncludeOther,
 			MaxSeries:      dynamic.MaxSeries,
 			MaxLabelBytes:  maxTimechartLabelBytes,
 			ValueKind:      TimechartValueKindInvalid,
@@ -784,6 +883,8 @@ func compileSplitValueTimechart(
 	collapsed := q("__os_timechart_collapsed")
 	finalized := q("__os_timechart_finalized")
 	domainRows := q("__os_timechart_domain_rows")
+	resourceUsage := q("__os_timechart_resource_usage")
+	guardedDomainRows := q("__os_timechart_guarded_domain_rows")
 	domain := q("__os_timechart_domain")
 	collisions := q("__os_timechart_normalization_collisions")
 	bucketMaps := q("__os_timechart_bucket_maps")
@@ -1074,8 +1175,11 @@ func compileSplitValueTimechart(
 	sql.WriteString(score)
 	sql.WriteString(", toFloat64(0)) DESC, ")
 	sql.WriteString(label)
-	sql.WriteString(" ASC LIMIT ")
-	sql.WriteString(strconv.FormatUint(uint64(operator.Split.SeriesLimit), 10))
+	sql.WriteString(" ASC")
+	if operator.Split.SeriesLimit != 0 {
+		sql.WriteString(" LIMIT ")
+		sql.WriteString(strconv.FormatUint(operator.Split.SeriesLimit, 10))
+	}
 	sql.WriteString("), ")
 
 	// usenull=false excludes the missing/null rows before they are collapsed;
@@ -1092,13 +1196,21 @@ func compileSplitValueTimechart(
 	sql.WriteString(collapsed)
 	sql.WriteString(" AS (SELECT ")
 	sql.WriteString(bucketNumber)
-	sql.WriteString(", multiIf(")
-	sql.WriteString(kind)
-	sql.WriteString(" = 1, '1:', ")
-	sql.WriteString(selectedLabel)
-	sql.WriteString(", concat('0:', ")
-	sql.WriteString(label)
-	sql.WriteString("), '2:') AS ")
+	if operator.Split.SeriesLimit == 0 {
+		sql.WriteString(", if(")
+		sql.WriteString(kind)
+		sql.WriteString(" = 1, '1:', concat('0:', ")
+		sql.WriteString(label)
+		sql.WriteString(")) AS ")
+	} else {
+		sql.WriteString(", multiIf(")
+		sql.WriteString(kind)
+		sql.WriteString(" = 1, '1:', ")
+		sql.WriteString(selectedLabel)
+		sql.WriteString(", concat('0:', ")
+		sql.WriteString(label)
+		sql.WriteString("), '2:') AS ")
+	}
 	sql.WriteString(encoded)
 	sql.WriteString(", ")
 	if valueKind == TimechartValueKindPercentile {
@@ -1160,7 +1272,7 @@ func compileSplitValueTimechart(
 		sql.WriteString(kind)
 		sql.WriteString(" = 1 LIMIT 1)")
 	}
-	if operator.Split.IncludeOther {
+	if operator.Split.IncludeOther && operator.Split.SeriesLimit != 0 {
 		sql.WriteString(" UNION ALL SELECT toUInt8(2), CAST('' AS String), CAST('2:' AS String) FROM (SELECT 1 FROM ")
 		sql.WriteString(numericGroups)
 		sql.WriteString(" WHERE ")
@@ -1175,13 +1287,23 @@ func compileSplitValueTimechart(
 	}
 	sql.WriteString("), ")
 
+	writeTimechartResourceGuardCTEs(
+		&sql,
+		domainRows,
+		resourceUsage,
+		guardedDomainRows,
+		encoded,
+		operator.BucketCount,
+		timechartValueCellRetainedBytes,
+	)
+
 	sql.WriteString(domain)
 	sql.WriteString(" AS (SELECT arrayMap(item -> item.3, arraySort(item -> (item.1, item.2), groupArray((sort_kind, ")
 	sql.WriteString(sortLabel)
 	sql.WriteString(", ")
 	sql.WriteString(encoded)
 	sql.WriteString(")))) AS names FROM ")
-	sql.WriteString(domainRows)
+	sql.WriteString(guardedDomainRows)
 	sql.WriteString("), ")
 
 	sql.WriteString(collisions)
@@ -1220,6 +1342,14 @@ func compileSplitValueTimechart(
 	sql.WriteString(presentMap)
 	sql.WriteString(" FROM ")
 	sql.WriteString(finalized)
+	sql.WriteString(" CROSS JOIN ")
+	sql.WriteString(resourceUsage)
+	sql.WriteString(" WHERE ")
+	sql.WriteString(timechartResourceGuardPredicate(
+		resourceUsage,
+		operator.BucketCount,
+		timechartValueCellRetainedBytes,
+	))
 	sql.WriteString(" GROUP BY ")
 	sql.WriteString(bucketNumber)
 	sql.WriteString("), ")
@@ -1337,10 +1467,12 @@ func compileSplitValueTimechart(
 		domainNullBranchDepth,
 		domainOtherBranchDepth,
 	)
-	domainDepth := relationalNodeDepth(domainRowsDepth)
+	resourceUsageDepth := relationalNodeDepth(domainRowsDepth)
+	guardedDomainRowsDepth := relationalNodeDepth(domainRowsDepth, resourceUsageDepth)
+	domainDepth := relationalNodeDepth(guardedDomainRowsDepth)
 	collisionInputDepth := relationalNodeDepth(numericGroupsDepth)
 	collisionsDepth := relationalNodeDepth(collisionInputDepth)
-	bucketMapsDepth := relationalNodeDepth(finalizedDepth)
+	bucketMapsDepth := relationalNodeDepth(finalizedDepth, resourceUsageDepth)
 	validationDepth := relationalNodeDepth(numericGroupsDepth)
 	gridDepth := gridSpec.relationalDepth()
 	resultDepth := relationalNodeDepth(
@@ -1367,6 +1499,9 @@ func compileSplitValueTimechart(
 			SearchEarliest: operator.SearchEarliest,
 			SearchLatest:   operator.SearchLatest,
 			BucketCount:    operator.BucketCount,
+			SeriesLimit:    operator.Split.SeriesLimit,
+			IncludeNull:    operator.Split.IncludeNull,
+			IncludeOther:   operator.Split.IncludeOther,
 			MaxSeries:      dynamic.MaxSeries,
 			MaxLabelBytes:  maxTimechartLabelBytes,
 			ValueKind:      valueKind,
@@ -3317,7 +3452,7 @@ func compileCountChart(
 			RowKind:          rowKind,
 			RowDatabaseType:  rowDatabaseType,
 			RowLimit:         uint64(operator.RowLimit),
-			MaxSeries:        dynamic.MaxSeries,
+			MaxSeries:        safecast.MustConv[uint16](dynamic.MaxSeries),
 			MaxLabelBytes:    maxTimechartLabelBytes,
 			ValueKind:        ChartValueKindCount,
 			RowSemanticBytes: rowKind == ChartRowKindMixed,
@@ -4234,7 +4369,7 @@ func compileNumericChart(
 			RowKind:          rowKind,
 			RowDatabaseType:  rowDatabaseType,
 			RowLimit:         uint64(operator.RowLimit),
-			MaxSeries:        dynamic.MaxSeries,
+			MaxSeries:        safecast.MustConv[uint16](dynamic.MaxSeries),
 			MaxLabelBytes:    maxTimechartLabelBytes,
 			ValueKind:        valueKind,
 			RowSemanticBytes: rowKind == ChartRowKindMixed,

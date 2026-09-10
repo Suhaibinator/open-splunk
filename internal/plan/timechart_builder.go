@@ -43,15 +43,7 @@ func buildTimechartSplit(
 		if options.LimitRange == (spl.Range{}) {
 			return invalid("timechart limit metadata is invalid", options.LimitRange)
 		}
-		if options.Limit == 0 || options.Limit > timechartSeriesLimit {
-			return nil, &Diagnostic{
-				Code:        "SPL_UNSUPPORTED_TIMECHART_LIMIT",
-				Message:     fmt.Sprintf("timechart limit must be from 1 through %d", timechartSeriesLimit),
-				Range:       options.LimitRange,
-				Suggestions: []string{fmt.Sprintf("limit=%d", timechartSeriesLimit)},
-			}
-		}
-		split.SeriesLimit = uint16(options.Limit)
+		split.SeriesLimit = options.Limit
 	} else if options.Limit != 0 || options.LimitRange != (spl.Range{}) {
 		return invalid("unspecified timechart limit contains authored metadata", options.LimitRange)
 	}
@@ -76,12 +68,15 @@ func buildTimechartSplit(
 
 // timechartMaxSeries is the runtime series allowance a split publishes: the
 // ordinary series limit plus each enabled NULL and OTHER sentinel series.
-func timechartMaxSeries(split *TimechartSplit) uint16 {
+func timechartMaxSeries(split *TimechartSplit) uint64 {
+	if split.SeriesLimit == 0 {
+		return 0
+	}
 	series := split.SeriesLimit
-	if split.IncludeNull {
+	if split.IncludeNull && series != math.MaxUint64 {
 		series++
 	}
-	if split.IncludeOther {
+	if split.IncludeOther && series != math.MaxUint64 {
 		series++
 	}
 	return series

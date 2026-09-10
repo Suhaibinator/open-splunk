@@ -3179,6 +3179,7 @@ func ValidateTimechartSchema(schema Schema, expected []string, output clickhouse
 	if output.Mode == clickhouse.TimechartModeFixedCount {
 		if output.MaxSeries != 1 ||
 			output.MaxLabelBytes != 0 ||
+			output.SeriesLimit != 0 || output.IncludeNull || output.IncludeOther ||
 			output.ValueField != "" ||
 			output.ValueKind != clickhouse.TimechartValueKindInvalid ||
 			!slices.Equal(expected, []string{"_time", "count"}) ||
@@ -3204,6 +3205,7 @@ func ValidateTimechartSchema(schema Schema, expected []string, output clickhouse
 		if resolveErr != nil || resolved.Name != output.ValueField ||
 			output.ValueField == "" || output.ValueField == "_time" ||
 			output.MaxSeries != 1 || output.MaxLabelBytes != 0 ||
+			output.SeriesLimit != 0 || output.IncludeNull || output.IncludeOther ||
 			output.ValueKind != clickhouse.TimechartValueKindInvalid ||
 			!slices.Equal(expected, []string{"_time", output.ValueField}) ||
 			len(schema.Columns) != 2 {
@@ -3226,6 +3228,7 @@ func ValidateTimechartSchema(schema Schema, expected []string, output clickhouse
 			spl.Range{},
 		)
 		if output.MaxSeries != 1 || output.MaxLabelBytes != 0 ||
+			output.SeriesLimit != 0 || output.IncludeNull || output.IncludeOther ||
 			output.ValueField == "" || output.ValueField == "_time" ||
 			valueFieldErr != nil || resolvedValueField.Name != output.ValueField ||
 			!output.ValueKind.Valid() ||
@@ -3266,7 +3269,8 @@ func ValidateTimechartSchema(schema Schema, expected []string, output clickhouse
 	}
 	if !output.RuntimeWideBoundsValid() || output.ValueField != "" ||
 		!slices.Equal(expected, []string{"_time"}) ||
-		len(schema.Columns) == 0 || len(schema.Columns)-1 > int(output.MaxSeries) {
+		len(schema.Columns) == 0 ||
+		(output.MaxSeries != 0 && uint64(len(schema.Columns)-1) > output.MaxSeries) {
 		return fmt.Errorf("%w: timechart schema exceeds the compiled output", ErrInvalidResult)
 	}
 	seen := make(map[string]struct{}, len(schema.Columns))

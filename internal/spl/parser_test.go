@@ -2246,9 +2246,9 @@ func TestParseTimechartRejectsUnsupportedOrMalformedSyntax(t *testing.T) {
 		{"trailing span", `index=main | timechart span=5m count by level span=1h`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "span"},
 		{"limit without split", `index=main | timechart span=5m limit=5 count`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "limit=5"},
 		{"useother without split", `index=main | timechart span=5m useother=false count`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "useother=false"},
-		{"zero limit", `index=main | timechart span=5m limit=0 count by level`, "SPL_UNSUPPORTED_TIMECHART_LIMIT", "limit=0"},
-		{"limit above the series allowance", `index=main | timechart span=5m limit=11 count by level`, "SPL_UNSUPPORTED_TIMECHART_LIMIT", "limit=11"},
-		{"limit overflow", `index=main | timechart span=5m limit=18446744073709551616 count by level`, "SPL_UNSUPPORTED_TIMECHART_LIMIT", "limit=18446744073709551616"},
+		{name: "zero limit", source: `index=main | timechart span=5m limit=0 count by level`},
+		{name: "limit above the default", source: `index=main | timechart span=5m limit=11 count by level`},
+		{"limit overflow", `index=main | timechart span=5m limit=18446744073709551616 count by level`, "SPL_INVALID_ARGUMENT", "limit=18446744073709551616"},
 		{"negative limit", `index=main | timechart span=5m limit=-1 count by level`, "SPL_INVALID_ARGUMENT", "-1"},
 		{"missing limit value", `index=main | timechart span=5m count by level limit=`, "SPL_INVALID_ARGUMENT", "limit"},
 		{"non-boolean useother", `index=main | timechart span=5m count by level useother=maybe`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "maybe"},
@@ -2260,6 +2260,12 @@ func TestParseTimechartRejectsUnsupportedOrMalformedSyntax(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := Parse(test.source)
+			if test.code == "" {
+				if err != nil {
+					t.Fatalf("Parse: %v", err)
+				}
+				return
+			}
 			if err == nil {
 				t.Fatal("Parse succeeded")
 			}
@@ -3222,6 +3228,12 @@ func TestParseTimechartSeriesOptionsInEitherPosition(t *testing.T) {
 			`index=main | timechart limit=10 span=1h sum(bytes) BY host USEOTHER=FALSE`,
 			TimechartOptions{Limit: 10, LimitSpecified: true, UseOtherSpecified: true},
 			"USEOTHER=FALSE",
+		},
+		{
+			"maximum uint64 limit",
+			`index=main | timechart span=1h count BY host limit=18446744073709551615`,
+			TimechartOptions{Limit: ^uint64(0), LimitSpecified: true},
+			"limit=18446744073709551615",
 		},
 		{"no options", `index=main | timechart span=1h count BY host`, TimechartOptions{}, "host"},
 	}

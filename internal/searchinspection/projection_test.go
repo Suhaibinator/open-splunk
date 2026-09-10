@@ -251,6 +251,31 @@ func TestProjectLogicalPlanOutputShapesAndDetachment(t *testing.T) {
 				Kind: OutputKindDynamic, Fields: []string{"_time"}, MaxDynamicFields: 12,
 			},
 		},
+		{
+			name: "dynamic unlimited",
+			query: &plan.Query{
+				Operators: []plan.Operator{&plan.Scan{Range: sourceRange}},
+				DynamicOutput: &plan.DynamicSeriesOutput{
+					FixedFields: []string{"_time"},
+				},
+			},
+			want: OutputShape{
+				Kind: OutputKindDynamic, Fields: []string{"_time"},
+			},
+		},
+		{
+			name: "dynamic beyond historical bound",
+			query: &plan.Query{
+				Operators: []plan.Operator{&plan.Scan{Range: sourceRange}},
+				DynamicOutput: &plan.DynamicSeriesOutput{
+					FixedFields: []string{"_time"}, MaxSeries: maximumDynamicFields + 1,
+				},
+			},
+			want: OutputShape{
+				Kind: OutputKindDynamic, Fields: []string{"_time"},
+				MaxDynamicFields: maximumDynamicFields + 1,
+			},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -484,15 +509,6 @@ func TestProjectLogicalPlanFailsClosedAndReturnsNoPartialPlan(t *testing.T) {
 				OutputFields: []string{"host"},
 				DynamicOutput: &plan.DynamicSeriesOutput{
 					FixedFields: []string{"_time"}, MaxSeries: 1,
-				},
-			},
-		},
-		{
-			name: "dynamic output over bound",
-			query: &plan.Query{
-				Operators: []plan.Operator{&plan.Scan{Range: validRange}},
-				DynamicOutput: &plan.DynamicSeriesOutput{
-					FixedFields: []string{"_time"}, MaxSeries: maximumDynamicFields + 1,
 				},
 			},
 		},

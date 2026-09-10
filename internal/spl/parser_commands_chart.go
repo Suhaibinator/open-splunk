@@ -368,16 +368,12 @@ func (p *parser) parseTimechartOptions(
 				}
 			}
 			limit, limitErr := strconv.ParseUint(value.text, 10, 64)
-			if limitErr != nil || limit == 0 || limit > MaximumTimechartSeriesLimit {
-				message := fmt.Sprintf("timechart limit must be from 1 through %d", MaximumTimechartSeriesLimit)
-				if limitErr == nil && limit == 0 {
-					message = "timechart limit=0 (unlimited series) is not supported"
-				}
+			if limitErr != nil {
 				return &Diagnostic{
-					Code:        "SPL_UNSUPPORTED_TIMECHART_LIMIT",
-					Message:     message,
+					Code:        "SPL_INVALID_ARGUMENT",
+					Message:     "timechart limit exceeds the unsigned 64-bit range",
 					Range:       Range{Start: option.sourceRange.Start, End: value.sourceRange.End},
-					Suggestions: []string{fmt.Sprintf("limit=%d", MaximumTimechartSeriesLimit)},
+					Suggestions: []string{"limit=10"},
 				}
 			}
 			options.Limit = limit

@@ -1301,6 +1301,9 @@ func TestCompileTimechartUsesOneScopedScanAndPrivateWideTransport(t *testing.T) 
 	if compiled.Timechart == nil {
 		t.Fatal("compiled timechart metadata is missing")
 	}
+	if !compiled.RequiresAtomicResult() {
+		t.Fatal("terminal timechart did not require complete-result publication")
+	}
 	if compiled.Timechart.FirstBucket != time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC) ||
 		compiled.Timechart.Span != 5*time.Minute || compiled.Timechart.BucketCount != 288 ||
 		compiled.Timechart.MaxSeries != 12 || compiled.Timechart.MaxLabelBytes != 256 ||
@@ -1362,8 +1365,8 @@ func TestCompileTimechartUsesOneScopedScanAndPrivateWideTransport(t *testing.T) 
 			t.Fatalf("timechart SQL retains removed graph node %q:\n%s", removed, compiled.SQL)
 		}
 	}
-	if got := strings.Count(compiled.SQL, ` AS MATERIALIZED (`); got != 1 {
-		t.Fatalf("timechart materialized CTE count = %d, want collapsed only:\n%s", got, compiled.SQL)
+	if got := strings.Count(compiled.SQL, ` AS MATERIALIZED (`); got != 3 {
+		t.Fatalf("timechart materialized CTE count = %d, want collapse plus resource usage and guard:\n%s", got, compiled.SQL)
 	}
 	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
 		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
@@ -1733,7 +1736,7 @@ func TestCompileTimechartSeriesOptionsNarrowTheCollapsedSeries(t *testing.T) {
 	tests := []struct {
 		name      string
 		source    string
-		maxSeries uint16
+		maxSeries uint64
 		contains  []string
 		excludes  []string
 	}{
@@ -1758,6 +1761,25 @@ func TestCompileTimechartSeriesOptionsNarrowTheCollapsedSeries(t *testing.T) {
 			excludes:  []string{countOther, nullBranch},
 		},
 		{
+			name:      "count above default",
+			source:    `index=gradethis | timechart span=5m count BY level limit=20`,
+			maxSeries: 22,
+			contains:  []string{`__os_tc_series_rank" <= 20, concat('0:'`, nullBranch, countOther},
+		},
+		{
+			name:      "count unlimited",
+			source:    `index=gradethis | timechart span=5m count BY level limit=0`,
+			maxSeries: 0,
+			contains:  []string{`"__os_tc_kind" = 0, concat('0:'`, nullBranch},
+			excludes:  []string{`__os_tc_series_rank" <=`, countOther},
+		},
+		{
+			name:      "count maximum uint64",
+			source:    `index=gradethis | timechart span=5m count BY level limit=18446744073709551615`,
+			maxSeries: math.MaxUint64,
+			contains:  []string{`__os_tc_series_rank" <= 18446744073709551615`, nullBranch, countOther},
+		},
+		{
 			name:      "value defaults",
 			source:    `index=gradethis | timechart span=5m sum(bytes) BY level`,
 			maxSeries: 12,
@@ -1777,6 +1799,27 @@ func TestCompileTimechartSeriesOptionsNarrowTheCollapsedSeries(t *testing.T) {
 			contains:  []string{`ASC LIMIT 4), `, `__os_tc_kind" = 0 AND ("__os_tc_kind" != 0 OR "__os_tc_label" IN (SELECT "__os_tc_label" FROM "__os_timechart_numeric_scores")) GROUP BY`},
 			excludes:  []string{nullSentinel, otherSentinel},
 		},
+		{
+			name:      "sum unlimited",
+			source:    `index=gradethis | timechart span=5m sum(bytes) BY level limit=0`,
+			maxSeries: 0,
+			contains:  []string{`ORDER BY multiIf(isNaN(`, nullSentinel},
+			excludes:  []string{`ASC LIMIT`, otherSentinel, valueOther},
+		},
+		{
+			name:      "average unlimited",
+			source:    `index=gradethis | timechart span=5m avg(bytes) BY level limit=0`,
+			maxSeries: 0,
+			contains:  []string{`ORDER BY multiIf(isNaN(`, nullSentinel},
+			excludes:  []string{`ASC LIMIT`, otherSentinel, valueOther},
+		},
+		{
+			name:      "percentile unlimited",
+			source:    `index=gradethis | timechart span=5m p95(bytes) BY level limit=0`,
+			maxSeries: 0,
+			contains:  []string{`ORDER BY multiIf(isNaN(`, nullSentinel},
+			excludes:  []string{`ASC LIMIT`, otherSentinel, valueOther},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -1792,6 +1835,12 @@ func TestCompileTimechartSeriesOptionsNarrowTheCollapsedSeries(t *testing.T) {
 			}
 			if compiled.Timechart == nil || compiled.Timechart.MaxSeries != test.maxSeries {
 				t.Fatalf("compiled timechart output = %#v, want max series %d", compiled.Timechart, test.maxSeries)
+			}
+			if compiled.Timechart == nil || !compiled.RequiresAtomicResult() {
+				t.Fatalf("compiled timechart atomic contract = %#v / %t", compiled.Timechart, compiled.RequiresAtomicResult())
+			}
+			if test.maxSeries == 0 && compiled.Timechart.SeriesLimit != 0 {
+				t.Fatalf("compiled unlimited timechart output = %#v", compiled.Timechart)
 			}
 			for _, fragment := range test.contains {
 				if !strings.Contains(compiled.SQL, fragment) {

@@ -96,7 +96,8 @@ export interface SearchInspectionOutputProvenance {
 /**
  * SearchInspectionOutputShape describes the final logical relation. fields is
  * the complete ordered schema for STATIC output and the fixed prefix for
- * DYNAMIC output; max_dynamic_fields is nonzero only for DYNAMIC output.
+ * DYNAMIC output; max_dynamic_fields is zero for an unlimited timechart whose
+ * actual field count is bounded by the admitted execution resource policy.
  */
 export interface SearchInspectionOutputShape {
   kind: SearchInspectionOutputKind;

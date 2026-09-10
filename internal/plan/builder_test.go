@@ -2013,10 +2013,10 @@ func TestBuildTimechartSeriesOptionsNarrowTheSplitAndRuntimeAllowance(t *testing
 	tests := []struct {
 		name         string
 		source       string
-		seriesLimit  uint16
+		seriesLimit  uint64
 		includeNull  bool
 		includeOther bool
-		maxSeries    uint16
+		maxSeries    uint64
 	}{
 		{
 			name:         "defaults",
@@ -2103,9 +2103,10 @@ func TestBuildTimechartRejectsForgedSeriesOptions(t *testing.T) {
 		options spl.TimechartOptions
 		split   *spl.StatsGroupField
 		code    string
+		valid   bool
 	}{
-		{name: "zero limit", options: spl.TimechartOptions{Limit: 0, LimitSpecified: true, LimitRange: optionRange}, split: command.SplitBy, code: "SPL_UNSUPPORTED_TIMECHART_LIMIT"},
-		{name: "limit above maximum", options: spl.TimechartOptions{Limit: 11, LimitSpecified: true, LimitRange: optionRange}, split: command.SplitBy, code: "SPL_UNSUPPORTED_TIMECHART_LIMIT"},
+		{name: "unlimited", options: spl.TimechartOptions{Limit: 0, LimitSpecified: true, LimitRange: optionRange}, split: command.SplitBy, valid: true},
+		{name: "limit above default", options: spl.TimechartOptions{Limit: 11, LimitSpecified: true, LimitRange: optionRange}, split: command.SplitBy, valid: true},
 		{name: "limit without range", options: spl.TimechartOptions{Limit: 5, LimitSpecified: true}, split: command.SplitBy, code: "SPL_UNSUPPORTED_TIMECHART_SYNTAX"},
 		{name: "unspecified limit with value", options: spl.TimechartOptions{Limit: 5}, split: command.SplitBy, code: "SPL_UNSUPPORTED_TIMECHART_SYNTAX"},
 		{name: "useother without range", options: spl.TimechartOptions{UseOtherSpecified: true}, split: command.SplitBy, code: "SPL_UNSUPPORTED_TIMECHART_SYNTAX"},
@@ -2126,7 +2127,13 @@ func TestBuildTimechartRejectsForgedSeriesOptions(t *testing.T) {
 				Commands: []spl.Command{&forged},
 				Range:    base.Range,
 			}
-			_, err := Build(query, testScope([]string{"gradethis"}, nil))
+			logical, err := Build(query, testScope([]string{"gradethis"}, nil))
+			if test.valid {
+				if err != nil || logical == nil {
+					t.Fatalf("Build: (%#v, %v), want valid", logical, err)
+				}
+				return
+			}
 			assertDiagnosticCode(t, err, test.code)
 		})
 	}

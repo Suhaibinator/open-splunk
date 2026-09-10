@@ -747,7 +747,8 @@ func TestExecutorRejectsMalformedChartAtomically(t *testing.T) {
 			name: "two wide contracts",
 			mutate: func(_ *fakeRows, query *clickhouse.CompiledQuery) {
 				query.Timechart = &clickhouse.TimechartOutput{
-					FirstBucket: time.Unix(0, 0).UTC(), Span: time.Minute, BucketCount: 1, MaxSeries: 12, MaxLabelBytes: 256,
+					FirstBucket: time.Unix(0, 0).UTC(), Span: time.Minute, BucketCount: 1,
+					SeriesLimit: 10, MaxSeries: 12, MaxLabelBytes: 256, IncludeNull: true, IncludeOther: true,
 				}
 			},
 			want: searchjobs.ErrInvalidResult,
@@ -851,7 +852,10 @@ func TestExecutorRejectsMalformedTimechartAtomically(t *testing.T) {
 			setTimechartNames(rows, []string{"0:VALUE_x", "0:_x"})
 		}, want: searchjobs.ErrUnsupportedValue, queryIssued: true},
 		{name: "too many series", mutate: func(rows *fakeRows, query *clickhouse.CompiledQuery) {
+			query.Timechart.SeriesLimit = 1
 			query.Timechart.MaxSeries = 1
+			query.Timechart.IncludeNull = false
+			query.Timechart.IncludeOther = false
 			setTimechartNames(rows, []string{"0:a", "0:b"})
 		}, want: searchjobs.ErrInvalidResult, queryIssued: true},
 		{name: "oversized label", mutate: func(rows *fakeRows, query *clickhouse.CompiledQuery) {
@@ -904,13 +908,91 @@ func TestExecutorRejectsMalformedTimechartAtomically(t *testing.T) {
 	}
 }
 
+func TestExecutorRejectsUnlimitedTimechartOverAdmittedDomainAtomically(t *testing.T) {
+	t.Parallel()
+
+	first := time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)
+	rows := timechartOrdinalRows(
+		[]string{"0:a", "0:b"},
+		[][]uint64{{1, 2}, {3, 4}},
+	)
+	query := timechartQuery(first, 2)
+	query.Timechart.SeriesLimit = 0
+	query.Timechart.MaxSeries = 0
+	query.Timechart.IncludeOther = false
+	policy := searchlimits.Default()
+	policy.MaxGroupedRows = 1
+	sink := &fakeSink{}
+	err := mustExecutor(t, &fakeQueryConnection{rows: rows}).Execute(
+		searchlimits.WithPolicy(context.Background(), policy),
+		query,
+		sink,
+	)
+	if !errors.Is(err, searchjobs.ErrExecutionLimit) {
+		t.Fatalf("Execute() error = %v, want ErrExecutionLimit", err)
+	}
+	if sink.setCalls != 0 || len(sink.rows) != 0 {
+		t.Fatalf("resource failure published schema=%d rows=%d", sink.setCalls, len(sink.rows))
+	}
+}
+
+func TestTimechartDecoderEnforcesCellRetainedAndDriverCapacityBudgets(t *testing.T) {
+	t.Parallel()
+
+	first := time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)
+	output := *timechartQuery(first, 2).Timechart
+	tests := []struct {
+		name   string
+		rows   *fakeRows
+		limits timechartResourceLimits
+	}{
+		{
+			name:   "dense cells",
+			rows:   timechartOrdinalRows([]string{"0:a"}, [][]uint64{{1}, {2}}),
+			limits: timechartResourceLimits{domain: 1, cells: 1, retainedBytes: 1 << 20},
+		},
+		{
+			name:   "preallocated retained rows",
+			rows:   timechartOrdinalRows([]string{"0:a"}, [][]uint64{{1}, {2}}),
+			limits: timechartResourceLimits{domain: 1, cells: 2, retainedBytes: 1},
+		},
+		{
+			name: "driver array capacity",
+			rows: func() *fakeRows {
+				rows := timechartOrdinalRows([]string{"0:a"}, [][]uint64{{1}, {2}})
+				names := make([]string, 1, 100_000)
+				names[0] = "0:a"
+				rows.data[0][1] = names
+				return rows
+			}(),
+			limits: timechartResourceLimits{domain: 1, cells: 2, retainedBytes: 1 << 20},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := readTimechartRows(
+				context.Background(),
+				test.rows,
+				test.rows.columns,
+				test.rows.types,
+				output,
+				test.limits,
+			)
+			if !errors.Is(err, searchjobs.ErrExecutionLimit) {
+				t.Fatalf("readTimechartRows() error = %v, want ErrExecutionLimit", err)
+			}
+		})
+	}
+}
+
 func timechartQuery(first time.Time, bucketCount uint64) clickhouse.CompiledQuery {
 	return clickhouse.CompiledQuery{
 		SQL:          "SELECT bounded_timechart",
 		OutputFields: []string{"_time"},
 		Timechart: &clickhouse.TimechartOutput{
 			FirstBucket: first, Span: 5 * time.Minute, BucketCount: bucketCount,
-			MaxSeries: 12, MaxLabelBytes: 256,
+			SeriesLimit: 10, MaxSeries: 12, MaxLabelBytes: 256,
+			IncludeNull: true, IncludeOther: true,
 		},
 	}
 }
@@ -1709,6 +1791,31 @@ func TestConfigFromPolicyDerivesCheckedResultGuards(t *testing.T) {
 	invalid.MaxResultRows = math.MaxUint64
 	if _, err := ConfigFromPolicy(invalid); err == nil {
 		t.Fatal("ConfigFromPolicy() accepted an invalid overflowing policy")
+	}
+}
+
+func TestTimechartResourceSettingsUseAdmittedPolicySnapshot(t *testing.T) {
+	t.Parallel()
+
+	policy := searchlimits.Default()
+	policy.MaxGroupedRows = 777
+	query := timechartQuery(time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC), 2)
+	settings, err := mustExecutor(t, &fakeQueryConnection{}).settingsForContext(
+		searchlimits.WithPolicy(context.Background(), policy),
+		query,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]uint64{
+		"param_" + clickhouse.TimechartDomainLimitParameter:        policy.MaxGroupedRows,
+		"param_" + clickhouse.TimechartCellLimitParameter:          policy.MaxResultBytes / timechartCountCellBytes,
+		"param_" + clickhouse.TimechartRetainedBytesLimitParameter: policy.MaxResultBytes,
+	}
+	for name, value := range want {
+		if settings[name] != value {
+			t.Fatalf("setting %q = %#v, want %d", name, settings[name], value)
+		}
 	}
 }
 

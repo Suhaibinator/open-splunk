@@ -376,8 +376,6 @@ func validInspectionOutputShape(
 	case OutputKindDynamic:
 		return len(output.Fields) > 0 &&
 			len(output.Fields) <= int(maximumStageFields) &&
-			output.MaxDynamicFields > 0 &&
-			output.MaxDynamicFields <= maximumDynamicFields &&
 			validInspectionFields(
 				budget,
 				output.Fields,

@@ -1016,6 +1016,10 @@ func (c Compiler) compileWithFinalizerContext(
 			if compileErr != nil {
 				return CompiledQuery{}, compileErr
 			}
+			// Every timechart transport is consumed completely before publication.
+			// Seal that atomic requirement so resource failures cannot expose a
+			// successful truncated prefix through any execution consumer.
+			state.context.atomicResult = true
 			if hasContinuation && operator.Split == nil {
 				relation, state, args = lowerStaticTimechartRelation(compiled, state, operator, aliasSequence)
 				continue

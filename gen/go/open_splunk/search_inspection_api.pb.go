@@ -274,12 +274,13 @@ func (x *SearchInspectionOutputProvenance) GetProvenance() *KnowledgeProvenance 
 
 // SearchInspectionOutputShape describes the final logical relation. fields is
 // the complete ordered schema for STATIC output and the fixed prefix for
-// DYNAMIC output; max_dynamic_fields is nonzero only for DYNAMIC output.
+// DYNAMIC output; max_dynamic_fields is zero for an unlimited timechart whose
+// actual field count is bounded by the admitted execution resource policy.
 type SearchInspectionOutputShape struct {
 	state            protoimpl.MessageState     `protogen:"open.v1"`
 	Kind             SearchInspectionOutputKind `protobuf:"varint,1,opt,name=kind,proto3,enum=open_splunk.SearchInspectionOutputKind" json:"kind,omitempty"`
 	Fields           []string                   `protobuf:"bytes,2,rep,name=fields,proto3" json:"fields,omitempty"`
-	MaxDynamicFields uint32                     `protobuf:"varint,3,opt,name=max_dynamic_fields,json=maxDynamicFields,proto3" json:"max_dynamic_fields,omitempty"`
+	MaxDynamicFields uint64                     `protobuf:"varint,3,opt,name=max_dynamic_fields,json=maxDynamicFields,proto3" json:"max_dynamic_fields,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -328,7 +329,7 @@ func (x *SearchInspectionOutputShape) GetFields() []string {
 	return nil
 }
 
-func (x *SearchInspectionOutputShape) GetMaxDynamicFields() uint32 {
+func (x *SearchInspectionOutputShape) GetMaxDynamicFields() uint64 {
 	if x != nil {
 		return x.MaxDynamicFields
 	}
@@ -714,7 +715,7 @@ const file_open_splunk_search_inspection_api_proto_rawDesc = "" +
 	"\x1bSearchInspectionOutputShape\x12;\n" +
 	"\x04kind\x18\x01 \x01(\x0e2'.open_splunk.SearchInspectionOutputKindR\x04kind\x12\x16\n" +
 	"\x06fields\x18\x02 \x03(\tR\x06fields\x12,\n" +
-	"\x12max_dynamic_fields\x18\x03 \x01(\rR\x10maxDynamicFields\"\xcf\x01\n" +
+	"\x12max_dynamic_fields\x18\x03 \x01(\x04R\x10maxDynamicFields\"\xcf\x01\n" +
 	"\x1bSearchInspectionLogicalPlan\x12A\n" +
 	"\x06stages\x18\x01 \x03(\v2).open_splunk.SearchInspectionLogicalStageR\x06stages\x12+\n" +
 	"\x11referenced_fields\x18\x02 \x03(\tR\x10referencedFields\x12@\n" +

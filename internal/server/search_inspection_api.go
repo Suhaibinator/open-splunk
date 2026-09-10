@@ -225,7 +225,7 @@ func searchInspectionResultToProto(
 			Output: &opensplunk.SearchInspectionOutputShape{
 				Kind:             outputKind,
 				Fields:           slices.Clone(result.Plan.Output.Fields),
-				MaxDynamicFields: uint32(result.Plan.Output.MaxDynamicFields),
+				MaxDynamicFields: result.Plan.Output.MaxDynamicFields,
 			},
 		},
 		PhysicalPlan: &opensplunk.SearchInspectionPhysicalPlan{

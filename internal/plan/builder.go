@@ -27,8 +27,7 @@ const (
 	maxFieldPathSegments                = 17
 	maxFieldPathSegmentBytes            = 256
 	maxTimechartBuckets                 = spl.MaximumTimechartBins
-	timechartSeriesLimit                = spl.MaximumTimechartSeriesLimit
-	maxTimechartSeries                  = timechartSeriesLimit + 2
+	timechartSeriesLimit                = spl.DefaultTimechartSeriesLimit
 	eventStatsSupportedAggregateMessage = "eventstats currently supports exactly one count, " +
 		"count(field), count(eval(predicate)), pN(field), percN(field), min(field), " +
 		"max(field), earliest(field), latest(field), sum(field), avg(field), " +

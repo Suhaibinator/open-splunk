@@ -66,8 +66,6 @@ func validTimechartMeasureContract(operator *Timechart) bool {
 func validTimechartSplitContract(split *TimechartSplit) bool {
 	return split != nil &&
 		validResolvedEventAggregateField(split.Field) &&
-		split.SeriesLimit >= 1 &&
-		split.SeriesLimit <= timechartSeriesLimit &&
 		split.NullLabel == "NULL" &&
 		split.OtherLabel == "OTHER"
 }

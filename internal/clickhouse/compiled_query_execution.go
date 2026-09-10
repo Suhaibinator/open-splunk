@@ -710,8 +710,11 @@ func compiledExecutionDigestContext(
 			writeBool(digest, true)
 		}
 		writeUint64(digest, compiled.Timechart.BucketCount)
-		writeUint64(digest, uint64(compiled.Timechart.MaxSeries))
+		writeUint64(digest, compiled.Timechart.SeriesLimit)
+		writeUint64(digest, compiled.Timechart.MaxSeries)
 		writeUint64(digest, uint64(compiled.Timechart.MaxLabelBytes))
+		writeBool(digest, compiled.Timechart.IncludeNull)
+		writeBool(digest, compiled.Timechart.IncludeOther)
 		writeTokenPart(digest, compiled.Timechart.ValueField)
 		writeInt64(digest, int64(compiled.Timechart.ValueKind))
 	}

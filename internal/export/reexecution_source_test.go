@@ -1053,8 +1053,11 @@ func TestSchemaMatchesCompiledSplitPercentileTimechart(t *testing.T) {
 		OutputFields: []string{"_time"},
 		Timechart: &clickhouse.TimechartOutput{
 			Mode:          clickhouse.TimechartModeRuntimeWideValue,
+			SeriesLimit:   10,
 			MaxSeries:     clickhouse.MaximumTimechartSeries,
 			MaxLabelBytes: clickhouse.MaximumTimechartLabelBytes,
+			IncludeNull:   true,
+			IncludeOther:  true,
 			ValueKind:     clickhouse.TimechartValueKindPercentile,
 		},
 	}

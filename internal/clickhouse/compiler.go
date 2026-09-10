@@ -413,6 +413,21 @@ const (
 	// its bounded ceiling. The guard runs before the ordered result is
 	// produced, so the search fails atomically rather than truncating.
 	ChartRowLimitMarker = "open-splunk: chart row values exceed the supported limit"
+	// TimechartDomainLimitMarker classifies a runtime-wide timechart whose
+	// selected public series domain exceeds its admitted execution budget.
+	TimechartDomainLimitMarker = "open-splunk: timechart series domain exceeds the admitted limit"
+	// TimechartCellLimitMarker classifies a runtime-wide timechart whose dense
+	// bucket-by-series cell count exceeds its admitted execution budget.
+	TimechartCellLimitMarker = "open-splunk: timechart cells exceed the admitted limit"
+	// TimechartRetainedBytesLimitMarker classifies a runtime-wide timechart whose
+	// labels and dense cells exceed its admitted retained-result byte budget.
+	TimechartRetainedBytesLimitMarker = "open-splunk: timechart retained bytes exceed the admitted limit"
+	// These named query parameters are supplied from the immutable policy
+	// snapshot attached to the execution context. They intentionally remain
+	// separate from authored selection and from chart's fixed limits.
+	TimechartDomainLimitParameter        = "open_splunk_timechart_domain_limit"
+	TimechartCellLimitParameter          = "open_splunk_timechart_cell_limit"
+	TimechartRetainedBytesLimitParameter = "open_splunk_timechart_retained_bytes_limit"
 )
 
 // ChartRowKind is the backend-neutral public value kind of a chart's row
@@ -601,12 +616,12 @@ const (
 	// distinct from row count prevents a public output name from selecting a
 	// physical transport protocol.
 	TimechartModeFixedFieldCount
-	// MaximumTimechartSeries bounds the runtime-selected ordinary and sentinel
-	// columns carried by either wide timechart transport.
-	MaximumTimechartSeries uint16 = 12
 	// MaximumTimechartLabelBytes bounds one raw runtime series label before its
 	// reserved-name normalization is applied.
 	MaximumTimechartLabelBytes uint16 = maxTimechartLabelBytes
+	// MaximumTimechartSeries is the default runtime-wide width retained for
+	// source compatibility. It is not an execution or authored-series ceiling.
+	MaximumTimechartSeries uint64 = spl.DefaultTimechartSeriesLimit + 2
 )
 
 // TimechartValueKind identifies the semantic policy carried by the shared
@@ -646,10 +661,15 @@ type TimechartOutput struct {
 	Span                         time.Duration
 	// Calendar selects the private exact-boundary transport. It is mutually
 	// exclusive with a positive fixed Span and is covered by the execution seal.
-	Calendar      bool
-	BucketCount   uint64
-	MaxSeries     uint16
+	Calendar    bool
+	BucketCount uint64
+	// SeriesLimit is the authored ordinary-series selection. Zero means all;
+	// MaxSeries is then also zero and execution policy bounds the actual domain.
+	SeriesLimit   uint64
+	MaxSeries     uint64
 	MaxLabelBytes uint16
+	IncludeNull   bool
+	IncludeOther  bool
 	// ValueKind is populated for both fixed and runtime-wide nullable values.
 	// Together ValueField and ValueKind bind each private transport to its
 	// aggregate validation policy instead of trusting mutable OutputFields alone.
@@ -667,12 +687,15 @@ func validTimechartOutputSpanContract(output *TimechartOutput) bool {
 // publishes: its ordinary series limit plus each enabled NULL and OTHER
 // sentinel series. The planner derives DynamicOutput.MaxSeries the same way,
 // so a forged plan whose allowance disagrees with its split is rejected.
-func timechartSplitMaxSeries(split *plan.TimechartSplit) uint16 {
+func timechartSplitMaxSeries(split *plan.TimechartSplit) uint64 {
+	if split == nil || split.SeriesLimit == 0 {
+		return 0
+	}
 	series := split.SeriesLimit
-	if split.IncludeNull {
+	if split.IncludeNull && series != math.MaxUint64 {
 		series++
 	}
-	if split.IncludeOther {
+	if split.IncludeOther && series != math.MaxUint64 {
 		series++
 	}
 	return series
@@ -681,8 +704,16 @@ func timechartSplitMaxSeries(split *plan.TimechartSplit) uint16 {
 // RuntimeWideBoundsValid reports whether the dynamic-series metadata is safe
 // for both the executor transport and the public search-job schema boundary.
 func (output TimechartOutput) RuntimeWideBoundsValid() bool {
-	return output.MaxSeries > 0 && output.MaxSeries <= MaximumTimechartSeries &&
-		output.MaxLabelBytes > 0 && output.MaxLabelBytes <= MaximumTimechartLabelBytes
+	if output.MaxLabelBytes == 0 ||
+		output.MaxLabelBytes > MaximumTimechartLabelBytes {
+		return false
+	}
+	split := &plan.TimechartSplit{
+		SeriesLimit:  output.SeriesLimit,
+		IncludeNull:  output.IncludeNull,
+		IncludeOther: output.IncludeOther,
+	}
+	return output.MaxSeries == timechartSplitMaxSeries(split)
 }
 
 // Compile compiles one plan without mutating it.
