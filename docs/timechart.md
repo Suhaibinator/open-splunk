@@ -142,7 +142,8 @@ Clients must treat these strings as exact instants. Browser chart coordinates
 derive differences with integer nanosecond arithmetic instead of passing the
 precision-bearing metadata through JavaScript `Date`. Line and area geometry,
 domains, and point inspection use a chronological copy keyed by those exact
-nanoseconds; the Statistics table preserves the suffix or server result order.
+nanoseconds. The Statistics table applies its own selected table sort while
+retaining stable membership of the server result page.
 Rows with explicit null or missing metric values remain present: line and area
 charts show a gap, while Statistics displays the value as unavailable instead
 of inventing zero. Finite values at representable numeric extremes remain in
