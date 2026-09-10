@@ -45,7 +45,7 @@ func compileTimechart(
 			)
 		}
 		gridSpec, err = fixedTimechartGridSpec(operator, scan)
-	case plan.CalendarDay, plan.CalendarWeek:
+	case plan.CalendarDay, plan.CalendarWeek, plan.CalendarMonth:
 		if operator.Span != 0 || state.context == nil {
 			return CompiledQuery{}, errors.New(
 				"compile ClickHouse timechart: calendar span is invalid",

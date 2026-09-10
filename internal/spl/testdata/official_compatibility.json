@@ -826,6 +826,30 @@
       }
     },
     {
+      "id": "timechart.auto-count-by-message",
+      "command": "timechart",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.2/search-commands/timechart",
+        "release": "10.2",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "timechart count by message",
+        "verified_on": "2026-09-10"
+      },
+      "query": "index=main | timechart count by message",
+      "expect": {
+        "commands": ["timechart"],
+        "facets": {
+          "aggregate": "count",
+          "limit": "10",
+          "span": "auto",
+          "split_by": "message",
+          "usenull": "true",
+          "useother": "true"
+        }
+      }
+    },
+    {
       "id": "timechart.hourly-count",
       "command": "timechart",
       "source": {

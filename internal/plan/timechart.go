@@ -10,7 +10,7 @@ func validBucketSpanContract(span time.Duration, calendar CalendarUnit) bool {
 	switch calendar {
 	case CalendarNone:
 		return span > 0
-	case CalendarDay, CalendarWeek:
+	case CalendarDay, CalendarWeek, CalendarMonth:
 		return span == 0
 	default:
 		return false

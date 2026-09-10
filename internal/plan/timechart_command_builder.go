@@ -45,18 +45,26 @@ func buildTimechartCommand(
 			Suggestions: []string{"run timechart before removing, replacing, or transforming _time"},
 		}
 	}
-	span, calendar, spanErr := timechartSpan(command.Span)
-	if spanErr != nil {
-		return spanErr
+	var span time.Duration
+	var calendar CalendarUnit
+	var firstBucket time.Time
+	var bucketCount uint64
+	var bucketErr error
+	if _, axisErr := validateTimechartAxisOptions(command.Axis, command.Range); axisErr != nil {
+		return axisErr
 	}
-	firstBucket, bucketCount, bucketErr := timechartBuckets(
-		earliest,
-		latest,
-		span,
-		calendar,
-		searchLocation,
-		command.Span.Range,
-	)
+	if command.Span != (spl.TimeSpan{}) {
+		span, calendar, bucketErr = timechartSpan(command.Span)
+		if bucketErr == nil {
+			firstBucket, bucketCount, bucketErr = timechartBuckets(
+				earliest, latest, span, calendar, searchLocation, command.Span.Range,
+			)
+		}
+	} else {
+		span, calendar, firstBucket, bucketCount, bucketErr = automaticTimechartSpan(
+			command.Axis, earliest, latest, searchLocation, command.Range,
+		)
+	}
 	if bucketErr != nil {
 		return bucketErr
 	}

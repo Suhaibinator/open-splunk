@@ -154,14 +154,15 @@ func (p *parser) unsupportedBinSyntax(tok token, message string) *Diagnostic {
 
 func (p *parser) parseTimechartCommand(name token) (Command, error) {
 	var options TimechartOptions
-	span, spanSpecified, err := p.parseTimechartOptions(&options, true)
-	if err != nil {
+	var axis TimechartAxisOptions
+	var span TimeSpan
+	if err := p.parseTimechartOptions(&options, &axis, &span, true); err != nil {
 		return nil, err
 	}
-	if !spanSpecified {
-		return nil, p.unsupportedTimechartSyntax(p.current(), "timechart requires span=<positive integer><s|m|h> before its aggregate")
+	if p.atCommandEnd() && span == (TimeSpan{}) && axis == (TimechartAxisOptions{}) &&
+		options == (TimechartOptions{}) {
+		return nil, p.unsupportedTimechartSyntax(p.current(), "timechart requires one aggregate")
 	}
-
 	aggregate, aggregateEnd, err := p.parseTimechartAggregate()
 	if err != nil {
 		return nil, err
@@ -172,6 +173,7 @@ func (p *parser) parseTimechartCommand(name token) (Command, error) {
 		}
 		return &TimechartCommand{
 			Span:      span,
+			Axis:      axis,
 			Aggregate: aggregate,
 			Options:   options,
 			Range: Range{
@@ -208,7 +210,7 @@ func (p *parser) parseTimechartCommand(name token) (Command, error) {
 	p.advance()
 	end := field.sourceRange.End
 	if !p.atCommandEnd() {
-		if _, _, optionsErr := p.parseTimechartOptions(&options, false); optionsErr != nil {
+		if optionsErr := p.parseTimechartOptions(&options, &axis, &span, false); optionsErr != nil {
 			return nil, optionsErr
 		}
 		end = p.previous().sourceRange.End
@@ -218,6 +220,7 @@ func (p *parser) parseTimechartCommand(name token) (Command, error) {
 	}
 	return &TimechartCommand{
 		Span:      span,
+		Axis:      axis,
 		Aggregate: aggregate,
 		SplitBy:   &StatsGroupField{Name: field.text, Range: field.sourceRange},
 		Options:   options,
@@ -225,43 +228,45 @@ func (p *parser) parseTimechartCommand(name token) (Command, error) {
 	}, nil
 }
 
-// parseTimechartOptions consumes the span=, limit=, useother=, and usenull=
-// options at the current position: before the aggregate (where span is
-// required) or after the split field, where Splunk places the series options.
-// Each option may be authored once across both positions.
-func (p *parser) parseTimechartOptions(options *TimechartOptions, allowSpan bool) (TimeSpan, bool, error) {
-	var span TimeSpan
-	spanSpecified := false
+// parseTimechartOptions consumes time-axis and series options. Time-axis
+// options are accepted only before the aggregate; series options may also
+// follow the split field. Each option may be authored once.
+func (p *parser) parseTimechartOptions(
+	options *TimechartOptions,
+	axis *TimechartAxisOptions,
+	span *TimeSpan,
+	allowAxis bool,
+) error {
 	for {
 		option := p.current()
 		if option.kind != tokenWord {
-			return span, spanSpecified, nil
+			return nil
 		}
 		lower := strings.ToLower(option.text)
 		if !p.nextIs(tokenEqual) {
-			if lower == "span" && allowSpan && !spanSpecified {
-				return span, spanSpecified, &Diagnostic{
+			if lower == "span" && allowAxis && span.Range == (Range{}) {
+				return &Diagnostic{
 					Code:        "SPL_EXPECTED_EQUAL",
 					Message:     "timechart span must be followed by '='",
 					Range:       option.sourceRange,
 					Suggestions: []string{timechartSyntaxSuggestion},
 				}
 			}
-			return span, spanSpecified, nil
+			return nil
 		}
 		switch lower {
 		case "span":
-			if !allowSpan {
-				return span, spanSpecified, p.unsupportedTimechartSyntax(option, "timechart span must precede the aggregate")
+			if !allowAxis {
+				return p.unsupportedTimechartSyntax(option, "timechart span must precede the aggregate")
 			}
-			if spanSpecified {
-				return span, spanSpecified, p.unsupportedTimechartSyntax(option, "timechart option \"span\" is repeated")
+			if span.Range != (Range{}) {
+				return p.unsupportedTimechartSyntax(option, "timechart option \"span\" is repeated")
 			}
 			p.advance()
 			p.advance()
 			spanToken := p.current()
 			if spanToken.kind != tokenWord {
-				return span, spanSpecified, &Diagnostic{
+				return &Diagnostic{
 					Code:        "SPL_INVALID_ARGUMENT",
 					Message:     "timechart span must be a positive integer followed by s, m, or h",
 					Range:       spanToken.sourceRange,
@@ -270,13 +275,16 @@ func (p *parser) parseTimechartOptions(options *TimechartOptions, allowSpan bool
 			}
 			parsed, err := parseTimechartSpan(spanToken)
 			if err != nil {
-				return span, spanSpecified, err
+				return err
 			}
-			span, spanSpecified = parsed, true
+			*span = parsed
 			p.advance()
-		case "limit":
-			if options.LimitSpecified {
-				return span, spanSpecified, p.unsupportedTimechartSyntax(option, "timechart option \"limit\" is repeated")
+		case "bins":
+			if !allowAxis {
+				return p.unsupportedTimechartSyntax(option, "timechart bins must precede the aggregate")
+			}
+			if axis.BinsSpecified {
+				return p.unsupportedTimechartSyntax(option, "timechart option \"bins\" is repeated")
 			}
 			p.advance()
 			p.advance()
@@ -285,7 +293,66 @@ func (p *parser) parseTimechartOptions(options *TimechartOptions, allowSpan bool
 				if p.atCommandEnd() {
 					value = option
 				}
-				return span, spanSpecified, &Diagnostic{
+				return &Diagnostic{
+					Code:        "SPL_INVALID_ARGUMENT",
+					Message:     "timechart bins must be a positive integer",
+					Range:       value.sourceRange,
+					Suggestions: []string{"bins=100"},
+				}
+			}
+			bins, binsErr := strconv.ParseUint(value.text, 10, 64)
+			if binsErr != nil || bins == 0 || bins > MaximumTimechartBins {
+				return &Diagnostic{
+					Code:        "SPL_UNSUPPORTED_TIMECHART_BINS",
+					Message:     fmt.Sprintf("timechart bins must be from 1 through %d", MaximumTimechartBins),
+					Range:       Range{Start: option.sourceRange.Start, End: value.sourceRange.End},
+					Suggestions: []string{"bins=100"},
+				}
+			}
+			axis.Bins = bins
+			axis.BinsSpecified = true
+			axis.BinsRange = Range{Start: option.sourceRange.Start, End: value.sourceRange.End}
+			p.advance()
+		case "minspan":
+			if !allowAxis {
+				return p.unsupportedTimechartSyntax(option, "timechart minspan must precede the aggregate")
+			}
+			if axis.MinSpanSpecified {
+				return p.unsupportedTimechartSyntax(option, "timechart option \"minspan\" is repeated")
+			}
+			p.advance()
+			p.advance()
+			value := p.current()
+			if value.kind != tokenWord {
+				if p.atCommandEnd() {
+					value = option
+				}
+				return &Diagnostic{
+					Code:        "SPL_INVALID_ARGUMENT",
+					Message:     "timechart minspan must be a positive time span",
+					Range:       value.sourceRange,
+					Suggestions: []string{"minspan=1m"},
+				}
+			}
+			parsed, minSpanErr := parseTimechartMinSpan(value)
+			if minSpanErr != nil {
+				return minSpanErr
+			}
+			axis.MinSpan = parsed
+			axis.MinSpanSpecified = true
+			p.advance()
+		case "limit":
+			if options.LimitSpecified {
+				return p.unsupportedTimechartSyntax(option, "timechart option \"limit\" is repeated")
+			}
+			p.advance()
+			p.advance()
+			value := p.current()
+			if value.kind != tokenWord || !unsignedIntegerSyntax(value.text) {
+				if p.atCommandEnd() {
+					value = option
+				}
+				return &Diagnostic{
 					Code:        "SPL_INVALID_ARGUMENT",
 					Message:     "timechart limit must be a non-negative integer",
 					Range:       value.sourceRange,
@@ -298,7 +365,7 @@ func (p *parser) parseTimechartOptions(options *TimechartOptions, allowSpan bool
 				if limitErr == nil && limit == 0 {
 					message = "timechart limit=0 (unlimited series) is not supported"
 				}
-				return span, spanSpecified, &Diagnostic{
+				return &Diagnostic{
 					Code:        "SPL_UNSUPPORTED_TIMECHART_LIMIT",
 					Message:     message,
 					Range:       Range{Start: option.sourceRange.Start, End: value.sourceRange.End},
@@ -315,7 +382,7 @@ func (p *parser) parseTimechartOptions(options *TimechartOptions, allowSpan bool
 				specified = options.UseNullSpecified
 			}
 			if specified {
-				return span, spanSpecified, p.unsupportedTimechartSyntax(option, fmt.Sprintf("timechart option %q is repeated", lower))
+				return p.unsupportedTimechartSyntax(option, fmt.Sprintf("timechart option %q is repeated", lower))
 			}
 			p.advance()
 			p.advance()
@@ -325,7 +392,7 @@ func (p *parser) parseTimechartOptions(options *TimechartOptions, allowSpan bool
 				if p.atCommandEnd() {
 					value = option
 				}
-				return span, spanSpecified, p.unsupportedTimechartSyntax(value, fmt.Sprintf("timechart %s must be true or false", lower))
+				return p.unsupportedTimechartSyntax(value, fmt.Sprintf("timechart %s must be true or false", lower))
 			}
 			optionRange := Range{Start: option.sourceRange.Start, End: value.sourceRange.End}
 			if lower == "useother" {
@@ -335,7 +402,7 @@ func (p *parser) parseTimechartOptions(options *TimechartOptions, allowSpan bool
 			}
 			p.advance()
 		default:
-			return span, spanSpecified, p.unsupportedTimechartSyntax(option, fmt.Sprintf("timechart option %q is not supported", option.text))
+			return p.unsupportedTimechartSyntax(option, fmt.Sprintf("timechart option %q is not supported", option.text))
 		}
 	}
 }
@@ -489,6 +556,10 @@ func parseTimechartSpan(tok token) (TimeSpan, error) {
 	return parseFixedTimeSpan(tok, timechartTimeSpanConfig)
 }
 
+func parseTimechartMinSpan(tok token) (TimeSpan, error) {
+	return parseFixedTimeSpan(tok, timechartMinSpanConfig)
+}
+
 func parseBinSpan(tok token) (BinSpan, error) {
 	if unsignedIntegerSyntax(tok.text) {
 		magnitude, err := strconv.ParseUint(tok.text, 10, 64)
@@ -536,6 +607,8 @@ type fixedTimeSpanParserConfig struct {
 	suggestion         string
 	logSpanUnsupported bool
 	calendarAllowed    bool
+	monthAllowed       bool
+	multiCalendar      bool
 }
 
 const timechartSyntaxSuggestion = "timechart span=5m count"
@@ -553,6 +626,15 @@ var (
 		syntaxCode:      "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
 		suggestion:      timechartSyntaxSuggestion,
 		calendarAllowed: true,
+		monthAllowed:    true,
+	}
+	timechartMinSpanConfig = fixedTimeSpanParserConfig{
+		commandName:     "timechart",
+		syntaxCode:      "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
+		suggestion:      "minspan=1m",
+		calendarAllowed: true,
+		monthAllowed:    true,
+		multiCalendar:   true,
 	}
 )
 
@@ -598,6 +680,12 @@ func parseFixedTimeSpan(tok token, config fixedTimeSpanParserConfig) (TimeSpan, 
 		}
 		unit = TimeSpanUnitWeek
 		calendar = true
+	case "mon", "month":
+		if !config.monthAllowed {
+			return TimeSpan{}, unsupportedFixedTimeSpanUnit(tok, config)
+		}
+		unit = TimeSpanUnitMonth
+		calendar = true
 	default:
 		return TimeSpan{}, unsupportedFixedTimeSpanUnit(tok, config)
 	}
@@ -613,7 +701,7 @@ func parseFixedTimeSpan(tok token, config fixedTimeSpanParserConfig) (TimeSpan, 
 		return TimeSpan{}, invalidFixedTimeSpan(tok, config)
 	}
 	if calendar {
-		if magnitude != 1 {
+		if magnitude != 1 && !config.multiCalendar {
 			return TimeSpan{}, unsupportedCalendarSpan(tok, config)
 		}
 		return TimeSpan{Magnitude: magnitude, Unit: unit, Range: tok.sourceRange}, nil

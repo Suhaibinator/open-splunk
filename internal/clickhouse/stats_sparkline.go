@@ -52,18 +52,34 @@ type statsSparklineBucketSpec struct {
 	AlignmentOracleRequired bool
 }
 
-var statsSparklineAutomaticSteps = [...]plan.SparklineSpan{
-	{Kind: plan.SparklineSpanKindExplicit, Magnitude: 1, Unit: plan.SparklineSpanUnitSecond},
-	{Kind: plan.SparklineSpanKindExplicit, Magnitude: 5, Unit: plan.SparklineSpanUnitSecond},
-	{Kind: plan.SparklineSpanKindExplicit, Magnitude: 10, Unit: plan.SparklineSpanUnitSecond},
-	{Kind: plan.SparklineSpanKindExplicit, Magnitude: 30, Unit: plan.SparklineSpanUnitSecond},
-	{Kind: plan.SparklineSpanKindExplicit, Magnitude: 1, Unit: plan.SparklineSpanUnitMinute},
-	{Kind: plan.SparklineSpanKindExplicit, Magnitude: 5, Unit: plan.SparklineSpanUnitMinute},
-	{Kind: plan.SparklineSpanKindExplicit, Magnitude: 10, Unit: plan.SparklineSpanUnitMinute},
-	{Kind: plan.SparklineSpanKindExplicit, Magnitude: 30, Unit: plan.SparklineSpanUnitMinute},
-	{Kind: plan.SparklineSpanKindExplicit, Magnitude: 1, Unit: plan.SparklineSpanUnitHour},
-	{Kind: plan.SparklineSpanKindExplicit, Magnitude: 1, Unit: plan.SparklineSpanUnitDay},
-	{Kind: plan.SparklineSpanKindExplicit, Magnitude: 1, Unit: plan.SparklineSpanUnitMonth},
+var statsSparklineAutomaticSteps = statsSparklineSteps()
+
+func statsSparklineSteps() []plan.SparklineSpan {
+	shared := plan.AutomaticTimeSpanSteps()
+	steps := make([]plan.SparklineSpan, 0, len(shared))
+	for _, step := range shared {
+		var unit plan.SparklineSpanUnit
+		switch step.Unit {
+		case plan.AutomaticTimeSpanUnitSecond:
+			unit = plan.SparklineSpanUnitSecond
+		case plan.AutomaticTimeSpanUnitMinute:
+			unit = plan.SparklineSpanUnitMinute
+		case plan.AutomaticTimeSpanUnitHour:
+			unit = plan.SparklineSpanUnitHour
+		case plan.AutomaticTimeSpanUnitDay:
+			unit = plan.SparklineSpanUnitDay
+		case plan.AutomaticTimeSpanUnitMonth:
+			unit = plan.SparklineSpanUnitMonth
+		default:
+			panic("invalid shared automatic time span unit")
+		}
+		steps = append(steps, plan.SparklineSpan{
+			Kind:      plan.SparklineSpanKindExplicit,
+			Magnitude: step.Magnitude,
+			Unit:      unit,
+		})
+	}
+	return steps
 }
 
 // statsSparklineBucketSpecFor resolves an authored span against the half-open

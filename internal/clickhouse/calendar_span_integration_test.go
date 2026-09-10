@@ -154,7 +154,7 @@ func TestCalendarSpansAgainstClickHouse(t *testing.T) {
 		boundaries []time.Time
 		counts     []uint64
 	}
-	for _, test := range []timechartCase{
+	timechartCases := []timechartCase{
 		{
 			name:     "spring day has a 23-hour UTC interval",
 			source:   `index=calendar-span source="calendar-spring" | timechart span=1d count`,
@@ -192,7 +192,39 @@ func TestCalendarSpansAgainstClickHouse(t *testing.T) {
 			},
 			counts: []uint64{1, 1, 0},
 		},
-	} {
+	}
+	newYork, locationErr := time.LoadLocation("America/New_York")
+	if locationErr != nil {
+		t.Fatalf("load New York timezone: %v", locationErr)
+	}
+	monthBoundaries := make([]time.Time, 0, 12)
+	for month := time.January; month <= time.December; month++ {
+		monthBoundaries = append(monthBoundaries,
+			time.Date(2026, month, 1, 0, 0, 0, 0, newYork).UTC())
+	}
+	monthCounts := make([]uint64, len(monthBoundaries))
+	monthCounts[time.March-1] = 2
+	monthCounts[time.November-1] = 2
+	monthCounts[time.December-1] = 1
+	timechartCases = append(timechartCases, timechartCase{
+		name:       "month key joins populated events across daylight saving changes",
+		source:     `index=calendar-span | timechart span=1month count`,
+		earliest:   time.Date(2026, time.January, 1, 5, 0, 0, 0, time.UTC),
+		latest:     time.Date(2027, time.January, 1, 5, 0, 0, 0, time.UTC),
+		timezone:   "America/New_York",
+		boundaries: monthBoundaries,
+		counts:     monthCounts,
+	})
+	timechartCases = append(timechartCases, timechartCase{
+		name:       "automatic year uses timezone-aware months and emits an empty grid",
+		source:     `index=calendar-span source="calendar-nothing" | timechart count`,
+		earliest:   time.Date(2026, time.January, 1, 5, 0, 0, 0, time.UTC),
+		latest:     time.Date(2027, time.January, 1, 5, 0, 0, 0, time.UTC),
+		timezone:   "America/New_York",
+		boundaries: monthBoundaries,
+		counts:     make([]uint64, len(monthBoundaries)),
+	})
+	for _, test := range timechartCases {
 		t.Run(test.name, func(t *testing.T) {
 			compiled := compile(t, test.source, test.earliest, test.latest, test.timezone)
 			if compiled.Timechart == nil || !compiled.Timechart.Calendar ||
@@ -242,4 +274,50 @@ func TestCalendarSpansAgainstClickHouse(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("month split count joins populated series", func(t *testing.T) {
+		compiled := compile(
+			t,
+			`index=calendar-span | timechart count BY source`,
+			time.Date(2026, time.January, 1, 5, 0, 0, 0, time.UTC),
+			time.Date(2027, time.January, 1, 5, 0, 0, 0, time.UTC),
+			"America/New_York",
+		)
+		rows, queryErr := connection.Query(queryContext, compiled.SQL, compiled.Args...)
+		if queryErr != nil {
+			t.Fatalf("execute split month timechart: %v\nSQL: %s", queryErr, compiled.SQL)
+		}
+		defer rows.Close()
+		wantNames := []string{"0:calendar-fall", "0:calendar-spring", "0:calendar-week"}
+		totals := make([]uint64, len(wantNames))
+		rowCount := 0
+		for rows.Next() {
+			var ordinal uint64
+			var boundary time.Time
+			var names []string
+			var counts []uint64
+			var invalid uint8
+			if scanErr := rows.Scan(&ordinal, &boundary, &names, &counts, &invalid); scanErr != nil {
+				t.Fatalf("scan split month timechart: %v", scanErr)
+			}
+			namesValid := rowCount == 0 && reflect.DeepEqual(names, wantNames)
+			if rowCount > 0 {
+				namesValid = len(names) == 0
+			}
+			if ordinal != uint64(rowCount) || boundary != monthBoundaries[rowCount] ||
+				!namesValid || len(counts) != len(totals) || invalid != 0 {
+				t.Fatalf("split month row %d = ordinal %d boundary %v names %v counts %v invalid %d", rowCount, ordinal, boundary, names, counts, invalid)
+			}
+			for index, count := range counts {
+				totals[index] += count
+			}
+			rowCount++
+		}
+		if rowsErr := rows.Err(); rowsErr != nil {
+			t.Fatalf("iterate split month timechart: %v", rowsErr)
+		}
+		if rowCount != len(monthBoundaries) || !reflect.DeepEqual(totals, []uint64{2, 2, 1}) {
+			t.Fatalf("split month result = rows %d totals %v", rowCount, totals)
+		}
+	})
 }

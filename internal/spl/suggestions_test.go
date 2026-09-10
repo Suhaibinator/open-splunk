@@ -1104,10 +1104,10 @@ func TestCompletionCatalogCoversSupportedFixedCommandsAndFunctions(t *testing.T)
 			t.Fatalf("command metadata incomplete: %#v", command)
 		}
 		if command.Name == "timechart" {
-			if command.Insertion != "timechart span=5m count" {
+			if command.Insertion != "timechart count" {
 				t.Fatalf("timechart insertion = %q, want static count form", command.Insertion)
 			}
-			if command.Detail != "Chart row counts, field occurrence counts, percentiles, sums, or averages over fixed time buckets; every supported aggregate may split BY one field." {
+			if command.Detail != "Chart row counts, field occurrence counts, percentiles, sums, or averages over automatic or explicit time buckets; every supported aggregate may split BY one field." {
 				t.Fatalf("timechart detail = %q, want aggregate/split description", command.Detail)
 			}
 		}

@@ -149,13 +149,14 @@ func (*Extend) LogicalName() string       { return "Extend" }
 func (op *Extend) SourceRange() spl.Range { return op.Range }
 
 // CalendarUnit identifies civil-time bucket alignment. CalendarNone denotes a
-// fixed duration; day and week boundaries use the effective search timezone.
+// fixed duration; day, week, and month boundaries use the effective search timezone.
 type CalendarUnit uint8
 
 const (
 	CalendarNone CalendarUnit = iota
 	CalendarDay
 	CalendarWeek
+	CalendarMonth
 )
 
 // TimeBucket replaces or copies the canonical event time with the start of its

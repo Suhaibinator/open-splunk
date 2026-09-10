@@ -88,6 +88,32 @@ func TestCompileCalendarWeekTimechartAlignsToSunday(t *testing.T) {
 	}
 }
 
+func TestCompileCalendarMonthTimechartAlignsInSearchTimezone(t *testing.T) {
+	t.Parallel()
+
+	scope := testChartScope()
+	scope.SearchTimezone = "America/New_York"
+	scope.Earliest = time.Date(2026, time.February, 15, 5, 0, 0, 0, time.UTC)
+	scope.Latest = time.Date(2026, time.April, 15, 4, 0, 0, 0, time.UTC)
+	scope.SearchStart = scope.Latest.Add(time.Second)
+	scope.IndexTimeCutoff = scope.SearchStart
+	compiled := compileSPLWithScope(t, `index=gradethis | timechart span=1month count`, scope)
+	if compiled.Timechart == nil || !compiled.Timechart.Calendar ||
+		compiled.Timechart.FirstBucket != time.Date(2026, time.February, 1, 5, 0, 0, 0, time.UTC) ||
+		compiled.Timechart.BucketCount != 3 {
+		t.Fatalf("calendar month metadata = %#v", compiled.Timechart)
+	}
+	for _, fragment := range []string{
+		`toStartOfMonth(toTimeZone("__os_tc_event_time", ?))`,
+		`toDateTime64(toStartOfMonth(toTimeZone("__os_tc_event_time", ?)), 9, ?)`,
+		`addMonths(toTimeZone(toDateTime64(?, 9, 'UTC'), ?), i)`,
+	} {
+		if !strings.Contains(compiled.SQL, fragment) {
+			t.Fatalf("calendar month SQL missing %q:\n%s", fragment, compiled.SQL)
+		}
+	}
+}
+
 func TestCompileCalendarTimechartCoversEveryTransportMode(t *testing.T) {
 	t.Parallel()
 
@@ -96,11 +122,17 @@ func TestCompileCalendarTimechartCoversEveryTransportMode(t *testing.T) {
 		spl  string
 		mode TimechartMode
 	}{
-		{name: "fixed count", spl: `index=gradethis | timechart span=1d count`, mode: TimechartModeFixedCount},
-		{name: "fixed field count", spl: `index=gradethis | timechart span=1d count(status)`, mode: TimechartModeFixedFieldCount},
-		{name: "fixed value", spl: `index=gradethis | timechart span=1d sum(status)`, mode: TimechartModeFixedValue},
-		{name: "wide count", spl: `index=gradethis | timechart span=1d count BY level`, mode: TimechartModeRuntimeWide},
-		{name: "wide value", spl: `index=gradethis | timechart span=1d avg(status) BY level`, mode: TimechartModeRuntimeWideValue},
+		{name: "day fixed count", spl: `index=gradethis | timechart span=1d count`, mode: TimechartModeFixedCount},
+		{name: "day fixed field count", spl: `index=gradethis | timechart span=1d count(status)`, mode: TimechartModeFixedFieldCount},
+		{name: "day fixed value", spl: `index=gradethis | timechart span=1d sum(status)`, mode: TimechartModeFixedValue},
+		{name: "day wide count", spl: `index=gradethis | timechart span=1d count BY level`, mode: TimechartModeRuntimeWide},
+		{name: "day wide value", spl: `index=gradethis | timechart span=1d avg(status) BY level`, mode: TimechartModeRuntimeWideValue},
+		{name: "month fixed count", spl: `index=gradethis | timechart span=1month count`, mode: TimechartModeFixedCount},
+		{name: "month fixed field count", spl: `index=gradethis | timechart span=1month count(status)`, mode: TimechartModeFixedFieldCount},
+		{name: "month fixed sum", spl: `index=gradethis | timechart span=1month sum(status)`, mode: TimechartModeFixedValue},
+		{name: "month fixed percentile", spl: `index=gradethis | timechart span=1month p95(status)`, mode: TimechartModeFixedValue},
+		{name: "month wide count", spl: `index=gradethis | timechart span=1month count BY level`, mode: TimechartModeRuntimeWide},
+		{name: "month wide average", spl: `index=gradethis | timechart span=1month avg(status) BY level`, mode: TimechartModeRuntimeWideValue},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

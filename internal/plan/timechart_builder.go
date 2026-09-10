@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -341,6 +342,147 @@ func timechartSpan(span spl.TimeSpan) (time.Duration, CalendarUnit, error) {
 	return duration, CalendarNone, nil
 }
 
+func automaticTimechartSpan(
+	axis spl.TimechartAxisOptions,
+	earliest time.Time,
+	latest time.Time,
+	location *time.Location,
+	sourceRange spl.Range,
+) (time.Duration, CalendarUnit, time.Time, uint64, error) {
+	bins, err := validateTimechartAxisOptions(axis, sourceRange)
+	if err != nil {
+		return 0, CalendarNone, time.Time{}, 0, err
+	}
+
+	for _, candidate := range AutomaticTimeSpanSteps() {
+		candidateSpan := automaticTimeSpanAsSPL(candidate, sourceRange)
+		if axis.MinSpanSpecified && !automaticTimeSpanAtLeast(candidateSpan, axis.MinSpan) {
+			continue
+		}
+		span, calendar, err := timechartSpan(candidateSpan)
+		if err != nil {
+			return 0, CalendarNone, time.Time{}, 0, err
+		}
+		firstBucket, bucketCount, err := timechartBuckets(
+			earliest, latest, span, calendar, location, sourceRange,
+		)
+		if err != nil {
+			if diagnostic, ok := errors.AsType[*Diagnostic](err); ok &&
+				diagnostic.Code == "SPL_QUERY_TOO_COMPLEX" {
+				continue
+			}
+			return 0, CalendarNone, time.Time{}, 0, err
+		}
+		if bucketCount <= bins {
+			return span, calendar, firstBucket, bucketCount, nil
+		}
+	}
+	return 0, CalendarNone, time.Time{}, 0, &Diagnostic{
+		Code:    "SPL_UNSUPPORTED_TIMECHART_SPAN",
+		Message: "timechart cannot select an automatic span for the requested bounds and options",
+		Range:   sourceRange,
+		Suggestions: []string{
+			"remove minspan or choose a smaller value",
+			"use an explicit supported span",
+		},
+	}
+}
+
+func validateTimechartAxisOptions(
+	axis spl.TimechartAxisOptions,
+	sourceRange spl.Range,
+) (uint64, error) {
+	bins := uint64(spl.DefaultTimechartBins)
+	if axis.BinsSpecified {
+		if axis.Bins == 0 || axis.Bins > spl.MaximumTimechartBins ||
+			axis.BinsRange == (spl.Range{}) {
+			return 0, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_TIMECHART_BINS",
+				Message: fmt.Sprintf("timechart bins must be from 1 through %d", spl.MaximumTimechartBins),
+				Range:   axis.BinsRange,
+			}
+		}
+		bins = axis.Bins
+	} else if axis.Bins != 0 || axis.BinsRange != (spl.Range{}) {
+		return 0, &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
+			Message: "unspecified timechart bins contains authored metadata",
+			Range:   sourceRange,
+		}
+	}
+	if axis.MinSpanSpecified {
+		if axis.MinSpan == (spl.TimeSpan{}) || axis.MinSpan.Range == (spl.Range{}) {
+			return 0, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
+				Message: "timechart minspan metadata is invalid",
+				Range:   sourceRange,
+			}
+		}
+		if _, ok := nominalTimeSpanSeconds(axis.MinSpan); !ok {
+			return 0, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
+				Message: "timechart minspan is outside the automatic span range",
+				Range:   axis.MinSpan.Range,
+			}
+		}
+	} else if axis.MinSpan != (spl.TimeSpan{}) {
+		return 0, &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
+			Message: "unspecified timechart minspan contains authored metadata",
+			Range:   sourceRange,
+		}
+	}
+
+	return bins, nil
+}
+
+func automaticTimeSpanAsSPL(span AutomaticTimeSpan, sourceRange spl.Range) spl.TimeSpan {
+	unit := spl.TimeSpanUnitInvalid
+	switch span.Unit {
+	case AutomaticTimeSpanUnitSecond:
+		unit = spl.TimeSpanUnitSecond
+	case AutomaticTimeSpanUnitMinute:
+		unit = spl.TimeSpanUnitMinute
+	case AutomaticTimeSpanUnitHour:
+		unit = spl.TimeSpanUnitHour
+	case AutomaticTimeSpanUnitDay:
+		unit = spl.TimeSpanUnitDay
+	case AutomaticTimeSpanUnitMonth:
+		unit = spl.TimeSpanUnitMonth
+	}
+	return spl.TimeSpan{Magnitude: span.Magnitude, Unit: unit, Range: sourceRange}
+}
+
+func automaticTimeSpanAtLeast(candidate, minimum spl.TimeSpan) bool {
+	candidateSeconds, candidateOK := nominalTimeSpanSeconds(candidate)
+	minimumSeconds, minimumOK := nominalTimeSpanSeconds(minimum)
+	return candidateOK && minimumOK && candidateSeconds >= minimumSeconds
+}
+
+func nominalTimeSpanSeconds(span spl.TimeSpan) (uint64, bool) {
+	var seconds uint64
+	switch span.Unit {
+	case spl.TimeSpanUnitSecond:
+		seconds = 1
+	case spl.TimeSpanUnitMinute:
+		seconds = 60
+	case spl.TimeSpanUnitHour:
+		seconds = 60 * 60
+	case spl.TimeSpanUnitDay:
+		seconds = 24 * 60 * 60
+	case spl.TimeSpanUnitWeek:
+		seconds = 7 * 24 * 60 * 60
+	case spl.TimeSpanUnitMonth:
+		seconds = 30 * 24 * 60 * 60
+	default:
+		return 0, false
+	}
+	if span.Magnitude == 0 || span.Magnitude > math.MaxUint64/seconds {
+		return 0, false
+	}
+	return span.Magnitude * seconds, true
+}
+
 func fixedNumericBinSpan(span spl.BinSpan) (uint64, error) {
 	if span.Kind != spl.BinSpanKindNumeric || span.Unit != spl.TimeSpanUnitInvalid {
 		return 0, &Diagnostic{
@@ -403,7 +545,14 @@ func fixedBinSpan(span spl.BinSpan) (time.Duration, error) {
 
 func timeBucketSpan(span spl.BinSpan) (time.Duration, CalendarUnit, error) {
 	if span.Kind == spl.BinSpanKindTime {
-		if calendar, ok := calendarUnit(span.Unit); ok {
+		var calendar CalendarUnit
+		switch span.Unit {
+		case spl.TimeSpanUnitDay:
+			calendar = CalendarDay
+		case spl.TimeSpanUnitWeek:
+			calendar = CalendarWeek
+		}
+		if calendar != CalendarNone {
 			if err := validateCalendarMagnitude(span.Magnitude, "bin", span.Range); err != nil {
 				return 0, CalendarNone, err
 			}
@@ -423,6 +572,8 @@ func calendarUnit(unit spl.TimeSpanUnit) (CalendarUnit, bool) {
 		return CalendarDay, true
 	case spl.TimeSpanUnitWeek:
 		return CalendarWeek, true
+	case spl.TimeSpanUnitMonth:
+		return CalendarMonth, true
 	default:
 		return CalendarNone, false
 	}
@@ -531,7 +682,9 @@ func timechartBuckets(
 	if calendar == CalendarNone {
 		return fixedTimechartBuckets(earliest, latest, span, sourceRange)
 	}
-	if span != 0 || (calendar != CalendarDay && calendar != CalendarWeek) || location == nil {
+	if span != 0 ||
+		(calendar != CalendarDay && calendar != CalendarWeek && calendar != CalendarMonth) ||
+		location == nil {
 		return time.Time{}, 0, &Diagnostic{
 			Code:    "SPL_INVALID_ARGUMENT",
 			Message: "timechart calendar span metadata is invalid",
@@ -551,13 +704,18 @@ func timechartBuckets(
 		location,
 	)
 	daysPerBucket := 1
-	if calendar == CalendarWeek {
+	switch calendar {
+	case CalendarWeek:
 		firstBucket = firstBucket.AddDate(0, 0, -int(firstBucket.Weekday()))
 		daysPerBucket = 7
+	case CalendarMonth:
+		firstBucket = time.Date(
+			localEarliest.Year(), localEarliest.Month(), 1, 0, 0, 0, 0, location,
+		)
 	}
 
 	var bucketCount uint64
-	for bucket := firstBucket; bucket.Before(latest); bucket = bucket.AddDate(0, 0, daysPerBucket) {
+	for bucket := firstBucket; bucket.Before(latest); {
 		bucketCount++
 		if bucketCount > maxTimechartBuckets {
 			return time.Time{}, 0, &Diagnostic{
@@ -565,6 +723,11 @@ func timechartBuckets(
 				Message: fmt.Sprintf("timechart produces more than %d fixed-range buckets", maxTimechartBuckets),
 				Range:   sourceRange,
 			}
+		}
+		if calendar == CalendarMonth {
+			bucket = bucket.AddDate(0, 1, 0)
+		} else {
+			bucket = bucket.AddDate(0, 0, daysPerBucket)
 		}
 	}
 	if bucketCount == 0 {

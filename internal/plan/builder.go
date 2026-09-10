@@ -26,7 +26,7 @@ const (
 	maxFieldNameBytes                   = eventfields.MaximumNormalizedFieldNameBytes
 	maxFieldPathSegments                = 17
 	maxFieldPathSegmentBytes            = 256
-	maxTimechartBuckets                 = 10_000
+	maxTimechartBuckets                 = spl.MaximumTimechartBins
 	maxTimechartSpan                    = 24 * time.Hour
 	timechartSeriesLimit                = spl.MaximumTimechartSeriesLimit
 	maxTimechartSeries                  = timechartSeriesLimit + 2

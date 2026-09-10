@@ -228,10 +228,14 @@ func officialFacets(t *testing.T, source string, command spl.Command) map[string
 		if command.Options.LimitSpecified {
 			limit = command.Options.Limit
 		}
+		span := "auto"
+		if command.Span != (spl.TimeSpan{}) {
+			span = number(command.Span.Magnitude, 10) + command.Span.Unit.String()
+		}
 		return map[string]string{
 			"aggregate": text(command.Aggregate.Range),
 			"limit":     number(limit, 10),
-			"span":      number(command.Span.Magnitude, 10) + command.Span.Unit.String(),
+			"span":      span,
 			"split_by":  splitBy,
 			"useother":  boolean(!command.Options.UseOtherSpecified || command.Options.UseOther),
 			"usenull":   boolean(!command.Options.UseNullSpecified || command.Options.UseNull),
