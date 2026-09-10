@@ -22,6 +22,7 @@ func queryIntegrationTestExactTimechartGrid(t *testing.T, ctx context.Context, e
 					source := fmt.Sprintf(`index=main source="timechart-level" | eval metric=1 | timechart span=250ms %s %s%s`, controls.source, aggregate, split)
 					job, page := queryIntegrationRunSearchRange(t, ctx, executor, indexTime, "exact-grid", source, anchor.Add(-100*time.Millisecond), anchor.Add(600*time.Millisecond))
 					if job.State != searchjobs.StateCompleted {
+						queryIntegrationExplainExactGridFailure(t, ctx, executor, indexTime, source, anchor.Add(-100*time.Millisecond), anchor.Add(600*time.Millisecond))
 						t.Fatalf("state=%v failure=%+v", job.State, job.Failure)
 					}
 					if len(page.Rows) != controls.rows {
@@ -46,6 +47,9 @@ func queryIntegrationTestExactTimechartGrid(t *testing.T, ctx context.Context, e
 						source := fmt.Sprintf(`index=main source="%s" | timechart span=250ms %s %s%s`, filter, controls.source, aggregate, split)
 						job, page := queryIntegrationRunSearchRange(t, ctx, executor, indexTime, "exact-grid-missing", source, anchor.Add(-100*time.Millisecond), anchor.Add(600*time.Millisecond))
 						if job.State != searchjobs.StateCompleted || len(page.Rows) != want {
+							if job.State != searchjobs.StateCompleted {
+								queryIntegrationExplainExactGridFailure(t, ctx, executor, indexTime, source, anchor.Add(-100*time.Millisecond), anchor.Add(600*time.Millisecond))
+							}
 							t.Fatalf("state=%v failure=%+v rows=%d want=%d", job.State, job.Failure, len(page.Rows), want)
 						}
 					})
@@ -133,4 +137,11 @@ func queryIntegrationTestExactTimechartBoundaries(t *testing.T, ctx context.Cont
 			}
 		})
 	}
+}
+
+func queryIntegrationExplainExactGridFailure(t *testing.T, ctx context.Context, executor *Executor, indexTime time.Time, source string, earliest, latest time.Time) {
+	t.Helper()
+	compiled := queryIntegrationCompileSearchRange(t, source, indexTime, earliest, latest)
+	diagnosticSink := &exactGridTestSink{}
+	t.Logf("direct native execution error: %v", executor.Execute(ctx, compiled, diagnosticSink))
 }
