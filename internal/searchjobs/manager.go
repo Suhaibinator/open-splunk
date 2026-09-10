@@ -2039,6 +2039,7 @@ func (manager *Manager) executeCompiled(
 	sink := &resultSink{
 		manager:        manager,
 		entry:          entry,
+		sourceCompiled: &retained,
 		expectedFields: cloneStrings(retained.OutputFields),
 		timechart:      timechart,
 		chart:          chart,
@@ -2625,6 +2626,8 @@ type resultSink struct {
 	manager           *Manager
 	entry             *jobEntry
 	ctx               context.Context
+	sourceCompiled    *clickhouse.CompiledQuery
+	resolvedCompiled  bool
 	expectedFields    []string
 	timechart         *clickhouse.TimechartOutput
 	chart             *clickhouse.ChartOutput
@@ -2638,6 +2641,35 @@ type resultSink struct {
 	firstErr          error
 	truncationErr     *retainedRowLimitError
 	limits            searchlimits.Policy
+}
+
+// SetCompiledQuery accepts the final descriptor of a compiler-authenticated
+// continuation before its public schema arrives. Keep only the small output
+// contract here; native intermediate rows belong to the executing query.
+func (sink *resultSink) SetCompiledQuery(compiled clickhouse.CompiledQuery) error {
+	sink.entry.mu.Lock()
+	defer sink.entry.mu.Unlock()
+	if err := sink.readyLocked(); err != nil {
+		return err
+	}
+	if sink.receivedSchema || sink.resolvedCompiled || sink.sourceCompiled == nil ||
+		!compiled.IsContinuationOf(*sink.sourceCompiled) {
+		return sink.rememberLocked(fmt.Errorf("%w: invalid continuation result authority", ErrInvalidResult))
+	}
+	sink.expectedFields = cloneStrings(compiled.OutputFields)
+	sink.timechart = nil
+	if compiled.Timechart != nil {
+		cloned := *compiled.Timechart
+		sink.timechart = &cloned
+	}
+	sink.chart = nil
+	if compiled.Chart != nil {
+		cloned := *compiled.Chart
+		sink.chart = &cloned
+	}
+	sink.atomicResult = sink.atomicResult || compiled.RequiresAtomicResult()
+	sink.resolvedCompiled = true
+	return nil
 }
 
 // retainedRowLimitError is allocated once for the first overflow row of one

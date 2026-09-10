@@ -145,6 +145,16 @@ func (source *ReexecutionSource) AcquireResultsFor(ctx context.Context, access s
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if compiled.HasContinuation() {
+		// A successful continuation is an atomic, complete retained result. Its
+		// runtime series schema belongs to that snapshot: executing its prefix
+		// again could change the schema after storage retention removes events.
+		if !compiled.RequiresAtomicResult() || pin.ResultsTruncated() {
+			return nil, fmt.Errorf("%w: continuation snapshot is incomplete", searchjobs.ErrResultsUnavailable)
+		}
+		pinReleased = true
+		return &continuationResultLease{ResultLease: pin, knowledgeSnapshot: summary}, nil
+	}
 	if !schemaMatchesCompiledQuery(schema, compiled) {
 		return nil, fmt.Errorf("%w: completed search schema changed", searchjobs.ErrResultsUnavailable)
 	}
@@ -170,6 +180,18 @@ func (source *ReexecutionSource) AcquireResultsFor(ctx context.Context, access s
 	}
 	pinReleased = true
 	return lease, nil
+}
+
+type continuationResultLease struct {
+	searchjobs.ResultLease
+	knowledgeSnapshot *opensplunk.KnowledgeSnapshotSummary
+}
+
+func (lease *continuationResultLease) knowledgeSnapshotSummary() (*opensplunk.KnowledgeSnapshotSummary, error) {
+	if lease.knowledgeSnapshot == nil {
+		return nil, nil
+	}
+	return knowledgesnapshot.CloneSummary(lease.knowledgeSnapshot)
 }
 
 func (source *ReexecutionSource) nextGeneration() (uint64, bool) {
