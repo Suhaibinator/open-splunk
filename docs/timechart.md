@@ -158,7 +158,7 @@ results:
 Subsequent independent review and final gate outcomes are recorded on
 [pull request #113](https://github.com/Suhaibinator/open-splunk/pull/113).
 
-Run the deterministic paired compiler and publication benchmark with:
+Run the deterministic compiler and publication benchmark with:
 
 ```sh
 go test ./internal/clickhouse ./internal/queryexec -run '^$' \
@@ -171,24 +171,33 @@ reference. The publication cases report retained pivot cells and include
 buffering, validation, schema construction, and sink publication in the timed
 region.
 
-The following paired result uses Darwin arm64 on an Apple M4 Max. Each value is
-the median of five fixed 100-iteration samples from baseline `ebcf1554` and the
-final implementation candidate `1c418dbe`:
+For the paired result, the benchmark-only files from `61fa5829` were present in
+both checkouts. Each package was compiled once per revision with `go test -c`;
+the resulting baseline and final binaries were then alternated, one process per
+sample, with `-test.benchtime=500x -test.count=1 -test.benchmem`. This avoids
+including compilation or a concurrently populated build cache in one side of
+the comparison.
+
+The following result uses Darwin arm64 on an Apple M4 Max. Each value is the
+median of seven paired samples from baseline `ebcf1554` and final candidate
+`1c418dbe`:
 
 | Case | Baseline ns/op | Final ns/op | Baseline B/op | Final B/op | Baseline allocs/op | Final allocs/op | SQL bytes, baseline → final |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Compile, fixed count | 48,415 | 70,102 | 85,273 | 103,230 | 521 | 545 | 2,147 → 2,147 |
-| Compile, automatic count | 47,463 | 60,150 | 85,265 | 92,160 | 520 | 544 | 2,147 → 2,147 |
-| Compile, calendar count | 48,894 | 84,605 | 86,460 | 91,378 | 527 | 551 | 2,411 → 2,411 |
-| Compile, split count | 52,110 | 163,501 | 100,569 | 138,036 | 555 | 601 | 5,989 → 8,879 |
-| Compile, split average | 64,546 | 131,626 | 133,850 | 175,415 | 638 | 684 | 10,029 → 12,921 |
-| Publish 100 buckets × 10 series | 57,997 | 127,930 | 229,018 | 229,258 | 629 | 630 | n/a |
-| Publish 1,000 buckets × 10 series | 470,752 | 1,161,648 | 2,246,120 | 2,246,377 | 6,029 | 6,030 | n/a |
+| Compile, fixed count | 45,487 | 52,690 | 85,265 | 103,194 | 521 | 545 | 2,147 → 2,147 |
+| Compile, automatic count | 45,017 | 47,434 | 85,245 | 92,144 | 520 | 544 | 2,147 → 2,147 |
+| Compile, calendar count | 45,137 | 46,599 | 86,439 | 91,361 | 527 | 551 | 2,411 → 2,411 |
+| Compile, split count | 51,038 | 62,856 | 100,562 | 138,038 | 555 | 601 | 5,989 → 8,879 |
+| Compile, split average | 62,682 | 73,803 | 133,845 | 175,400 | 638 | 684 | 10,029 → 12,921 |
+| Publish 100 buckets × 10 series | 50,973 | 51,312 | 229,029 | 229,268 | 629 | 630 | n/a |
+| Publish 1,000 buckets × 10 series | 466,496 | 470,775 | 2,246,137 | 2,246,376 | 6,029 | 6,030 | n/a |
 
 Every compiler sample reported one textual event-source reference at both
 commits. The opt-in ClickHouse integration test separately requires exactly one
 physical `ReadFromMergeTree` node. Split SQL grows because it carries the
-domain, dense-cell, and retained-byte guards.
+domain, dense-cell, and retained-byte guards. Across these paired samples,
+publication medians differ by less than 1%; compiler medians rise by 3% to 23%
+depending on the path, alongside the additional grid and series validation.
 
 The exact-grid harness compares the pre-allocation-fix transport at `d5fe39c6`
 with the final candidate. At 10,000 buckets, transport allocation fell from
