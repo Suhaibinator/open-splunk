@@ -691,7 +691,7 @@
   position: relative;
 }
 
-.time-series-chart__plot svg {
+.time-series-chart__plot > svg {
   display: block;
   height: 100%;
   inset: 0;
