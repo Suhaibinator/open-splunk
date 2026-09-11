@@ -121,6 +121,34 @@ test("mouse selection keeps a pinned bucket stable and series copy uses the visi
   await expect(pinned).toHaveCount(0);
 });
 
+for (const activationKey of ["Enter", "Space"] as const) {
+  test(`keyboard ${activationKey} keeps the pinned bucket after focus returns from its controls`, async ({ page }) => {
+    const inspector = await openSplitTimechart(page);
+    await inspector.focus();
+    await expect(page.getByRole("tooltip")).toBeVisible();
+    const firstBucket = await inspector.getAttribute("aria-label");
+    expect(firstBucket).not.toBeNull();
+
+    await page.keyboard.press("End");
+    await expect.poll(() => inspector.getAttribute("aria-label")).not.toBe(firstBucket);
+    await page.keyboard.press(activationKey);
+
+    const pinned = page.getByRole("group", { name: /^Pinned chart values for /u });
+    await expect(pinned).toBeVisible();
+    const pinnedBucket = await pinned.getAttribute("aria-label");
+    expect(pinnedBucket).not.toBeNull();
+
+    const close = pinned.getByRole("button", { name: "Close pinned chart values", exact: true });
+    await page.keyboard.press("Tab");
+    await expect(close).toBeFocused();
+    await page.keyboard.press("Shift+Tab");
+    await expect(inspector).toBeFocused();
+
+    await page.keyboard.press(activationKey);
+    await expect(pinned).toHaveAttribute("aria-label", pinnedBucket!);
+  });
+}
+
 test("keyboard inspection pins, copies, and dismisses without losing the chart", async ({ page }) => {
   const inspector = await openSplitTimechart(page);
   await prepareClipboard(page);
