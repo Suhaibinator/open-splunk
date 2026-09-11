@@ -255,6 +255,48 @@ combine Dynamic type validation with retained-size accounting and reuse trusted
 export-schema measurements. The historical publication measurements above were
 not rerun for those distinct paths.
 
+A subsequent CI timeout exposed duplicate analysis in the chronological
+validation envelope. Its schema-only branch inferred types from the complete
+timechart pipeline even though the private transport types are already known.
+The fix in `89265394` (owner commit `6c8b3f33`) supplies those types directly;
+the validation aggregate and empty-result forcing branch remain intact. The
+separate `chart` lowering and all query/resource deadlines remain unchanged.
+
+Three alternating pairs compare `83bd1d53` with that compiler fix using identical
+test instrumentation, precompiled binaries, Go 1.27.1 on Darwin arm64, Apple M4
+Max, and default `GOMAXPROCS` (16). Other local test workloads were paused.
+ClickHouse was the pinned 26.7.5.10-alpine image with digest
+`sha256:0a45b864c73322d4360dea1973ee9b77f29c51af1242ad2d47409908071fa56e`.
+The two-row knowledge timechart fixture measures the native driver's `Query`
+call through its first response; row draining and plan parsing are excluded.
+
+| Native first response | Before median | After median | Change |
+| --- | ---: | ---: | ---: |
+| Timechart query | 10.863 s | 5.967 s | -45.1% |
+| One-read EXPLAIN check | 11.041 s | 5.895 s | -46.6% |
+
+The inspected plan shrinks from 254 to 212 nodes, retaining the same transport
+header and one physical event read. These are local first-response timings,
+not production or complete-query latency claims. The complete knowledge matrix
+also passed in 92.015 seconds under its existing four-minute internal budget.
+Native regressions compare actual wrapped/unwrapped transport types across
+fixed, subsecond, and calendar spans and verify atomic invalid-input rejection
+through empty filters, clipped grids, limits, and repeated timecharts. Those
+regressions are registered in the pinned ClickHouse CI job.
+
+Reproduce the current fixture and its separate first-response diagnostics with:
+
+```sh
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 go test ./internal/queryexec \
+  -run '^TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse$/^timechart$' \
+  -count=1 -timeout=4m30s -v
+```
+
+For a paired baseline, use the same test source and restore only `compiler.go`
+from `83bd1d53` in an isolated checkout; the new dummy-projection helper is then
+unused. Build both test binaries first and alternate their runs from their
+`internal/queryexec` directories, where the fixture resolves migrations.
+
 The later native-allocation fix measures relation preflight separately from
 SQL compilation and native table construction. It compares `fc1539b5` with
 `d193f3fa` (integrated as `08ea539d`) using Go 1.27.1, Darwin arm64, Apple M4
