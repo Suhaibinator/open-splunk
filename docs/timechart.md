@@ -111,7 +111,9 @@ split timechart first materializes and validates its pivot once, seals the
 exact runtime schema, and continues the remaining pipeline over that immutable
 relation. This continuation does not discover or scan source events again.
 Every stage shares the admitted search scope, snapshot, deadline, cancellation,
-and cumulative resource policy.
+and cumulative resource policy. The executor detaches and validates the sealed
+authority before acquiring one index-read lease, holds that lease across every
+physical stage, and releases it once after success, failure, or cancellation.
 
 Runtime series labels are literal closed-schema column names. Quoted field
 references address labels containing spaces, punctuation, or dots; field
@@ -149,6 +151,10 @@ charts show a gap, while Statistics displays the value as unavailable instead
 of inventing zero. Finite values at representable numeric extremes remain in
 the chart domain, and coordinate projection bounds intermediate arithmetic
 that would overflow.
+Clicking the chart inspector, or pressing Enter while it has focus, pins the
+current values so their text can be selected. Copy controls in pinned values
+and the legend copy the exact server series label. Escape or the Close control
+returns focus to the inspector; clicking outside dismisses the pinned values.
 Legacy result rows that do not contain `time_bucket` continue to render without
 an invented bucket end or drilldown range.
 
@@ -253,6 +259,16 @@ There is no baseline value for this harness because the baseline does not have
 the sealed provenance and admitted-row path it measures. The benchmark uses a
 deterministic driver fixture and excludes ClickHouse and network execution.
 
+An independent two-stage executor fixture counted three admission acquisitions
+and releases before staged lease reuse and one acquisition and release after
+it. The one-lease result is required on success, suffix failure, and caller
+cancellation. The same checks mutate the caller's original argument and output
+slices only after outer admission begins, require execution to complete, and
+verify that the first physical query receives the original sealed arguments.
+The real retirement registry confirms that retirement cancels a blocked suffix
+and waits for the outer lease to release. These are deterministic lifecycle
+counts, not a staged-execution latency measurement.
+
 The exact-grid harness compares the pre-allocation-fix transport at `d5fe39c6`
 with the final candidate. At 10,000 buckets, transport allocation fell from
 20,001 allocations and 660,244 B/op to 2 allocations and 10,400 B/op. Complete
@@ -330,6 +346,18 @@ and retained 39,820.32 bytes per copy, measured over 200 retained copies. The
 direct timings exclude garbage collection and browser rendering; this local
 allocation contrast verifies removal of repeated full adaptation and is not a
 production speedup claim.
+
+A separate Node 26.7 server-rendering fixture alternated null and finite values
+across 10,000 buckets and 64 series, with 24 series visible. Before gapped paths
+were batched, the line chart emitted 120,000 polylines and 18,328,290 bytes of
+markup; the area chart emitted 120,000 polygons plus 120,000 polylines and
+38,081,890 bytes. With one gap-preserving path per visible line or area series,
+the same fixture emits 24 paths and 1,671,334 bytes for the line chart, and 48
+paths and 5,127,978 bytes for the area chart. These deterministic node and byte
+counts compare `f90d788b` before with geometry commit `02e867db`, integrated as
+`16e4f347`, after. The measurement predates later copy-control markup. It is
+historical evidence of the rendering bound; the local server-rendering timings
+are not used as browser or production latency evidence.
 
 The publication harnesses use production buffering and publication paths with
 in-memory driver fixtures. They exclude ClickHouse and network execution.
