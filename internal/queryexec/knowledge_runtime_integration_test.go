@@ -826,7 +826,11 @@ func (connection knowledgeRuntimeDiagnosticConnection) Query(
 	query string,
 	args ...any,
 ) (clickhousedriverlib.Rows, error) {
+	started := time.Now()
 	rows, err := connection.connection.Query(ctx, query, args...)
+	if strings.Contains(query, clickhouse.TimechartOrdinalColumn) {
+		connection.t.Logf("knowledge timechart native first response: elapsed=%s explain=%t sql_bytes=%d", time.Since(started), strings.HasPrefix(query, "EXPLAIN"), len(query))
+	}
 	if exception, ok := errors.AsType[*clickhousedriver.Exception](err); ok {
 		connection.t.Logf(
 			"knowledge runtime ClickHouse failure code=%d name=%s",

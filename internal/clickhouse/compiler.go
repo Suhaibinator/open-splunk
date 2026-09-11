@@ -1405,6 +1405,13 @@ func wrapCompiledChronologicalValidation(
 	if compiled.timechartWorkReceipt {
 		resultColumns = append(resultColumns, TimechartWorkRowsColumn)
 	}
+	if compiled.Timechart != nil {
+		var err error
+		compiled.validationDummyProjection, err = timechartChronologicalDummyProjection(resultColumns)
+		if err != nil {
+			return CompiledQuery{}, err
+		}
+	}
 	projection := make([]string, 0, len(resultColumns))
 	for _, name := range resultColumns {
 		projection = append(projection, quoteIdentifier(name))
@@ -1418,7 +1425,7 @@ func wrapCompiledChronologicalValidation(
 		resultOrder = quoteIdentifier(ChartInvalidColumn) + " DESC, " +
 			quoteIdentifier(ChartOrdinalColumn) + " ASC"
 	}
-	return wrapChronologicalValidation(
+	wrapped, err := wrapChronologicalValidation(
 		compiled.SQL,
 		compiled.relationalDepth,
 		compiled.relationalDepthRange,
@@ -1430,6 +1437,10 @@ func wrapCompiledChronologicalValidation(
 		compiled,
 		aliasSequence,
 	)
+	if compiled.Timechart != nil {
+		wrapped.validationDummyProjection = nil
+	}
+	return wrapped, err
 }
 
 func wrapChronologicalValidation(
