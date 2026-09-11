@@ -3,6 +3,7 @@ package queryexec
 import (
 	"context"
 	"errors"
+	"reflect"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -100,15 +101,20 @@ func TestStagedTimechartReadLeaseSurvivesCallerMutation(t *testing.T) {
 	}}
 	executor := mustExecutor(t, connection)
 	executor.readAdmission = admission
+	originalArgs := slices.Clone(compiled.Args)
+	originalOutputFields := slices.Clone(compiled.OutputFields)
+	sink := &terminalTimechartSink{}
 	done := make(chan error, 1)
 	go func(query clickhouse.CompiledQuery) {
-		done <- executor.Execute(context.Background(), query, &terminalTimechartSink{})
+		done <- executor.Execute(context.Background(), query, sink)
 	}(compiled)
 
 	waitStagedAdmissionSignal(t, admission.entered, "outer admission")
-	compiled.Args = slices.Clone(compiled.Args)
 	for index := range compiled.Args {
 		compiled.Args[index] = "caller mutation"
+	}
+	for index := range compiled.OutputFields {
+		compiled.OutputFields[index] = "caller mutation"
 	}
 	if compiled.HasValidExecutionSeal() {
 		t.Fatal("caller mutation did not invalidate the source query")
@@ -122,6 +128,13 @@ func TestStagedTimechartReadLeaseSurvivesCallerMutation(t *testing.T) {
 	}
 	if connection.calls.Load() != 2 {
 		t.Fatalf("physical query calls = %d, want 2", connection.calls.Load())
+	}
+	observedArgs := connection.firstQueryArgs()
+	if !reflect.DeepEqual(observedArgs, originalArgs) {
+		t.Fatalf("first physical query args = %#v, want detached original %#v", observedArgs, originalArgs)
+	}
+	if reflect.DeepEqual(compiled.OutputFields, originalOutputFields) || sink.setCalls != 1 || len(sink.rows) != 3 {
+		t.Fatalf("caller output mutation was not isolated: caller=%#v original=%#v schema=%d rows=%d", compiled.OutputFields, originalOutputFields, sink.setCalls, len(sink.rows))
 	}
 }
 
@@ -172,19 +185,33 @@ type stagedAdmissionQueryResult struct {
 type stagedAdmissionQueueConnection struct {
 	results []stagedAdmissionQueryResult
 	calls   atomic.Int32
+	mu      sync.Mutex
+	args    [][]any
 }
 
 func (connection *stagedAdmissionQueueConnection) Query(
-	context.Context,
-	string,
-	...any,
+	_ context.Context,
+	_ string,
+	args ...any,
 ) (driver.Rows, error) {
 	call := int(connection.calls.Add(1)) - 1
+	connection.mu.Lock()
+	connection.args = append(connection.args, slices.Clone(args))
+	connection.mu.Unlock()
 	if call < 0 || call >= len(connection.results) {
 		return nil, errors.New("unexpected staged query")
 	}
 	result := connection.results[call]
 	return result.rows, result.err
+}
+
+func (connection *stagedAdmissionQueueConnection) firstQueryArgs() []any {
+	connection.mu.Lock()
+	defer connection.mu.Unlock()
+	if len(connection.args) == 0 {
+		return nil
+	}
+	return slices.Clone(connection.args[0])
 }
 
 type stagedAdmissionBlockingConnection struct {
