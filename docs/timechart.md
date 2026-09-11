@@ -225,6 +225,35 @@ visible grid. Across these paired samples, publication medians rise by 1.3%
 and 2.0%; compiler medians rise by 6.1% to 25.9% depending on the path,
 alongside the additional grid and series validation.
 
+The later CI fix reduces repeated query-tree branches while preserving scalar
+resource checks before label and bucket arrays. Knowledge-bearing count,
+count(field), sum, average, and percentile fixtures now execute under the
+unchanged ClickHouse 100,000-node limit; native plans retain one physical event
+read. The earlier table records its stated historical candidate. A separate
+compiler-only comparison below measures failed-CI head `4dc1a544` against the
+completed compiler fix `f21038a0`, using Go 1.27.1 on the same Darwin arm64
+Apple M4 Max, seven alternating pairs of precompiled binaries, and 500 iterations
+per process. Other test workloads were paused during these samples.
+
+| Compile case | Before ns/op | After ns/op | Before B/op | After B/op | Before allocs/op | After allocs/op | SQL bytes, before → after |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Fixed count | 51,385 | 50,103 | 103,193 | 103,180 | 545 | 545 | 2,147 → 2,147 |
+| Automatic count | 45,274 | 45,319 | 92,144 | 92,154 | 544 | 544 | 2,147 → 2,147 |
+| Calendar count | 48,418 | 48,211 | 109,463 | 109,454 | 566 | 566 | 3,776 → 3,776 |
+| Split count | 59,236 | 60,603 | 138,068 | 139,941 | 602 | 615 | 8,927 → 8,941 |
+| Split average | 70,086 | 70,866 | 175,405 | 179,295 | 684 | 714 | 12,921 → 12,832 |
+
+All 70 samples retain one textual event-source reference. Split count and
+average median compilation times rise 2.31% and 1.11%; their temporary SQL
+construction adds 13 and 30 allocations, respectively. The extra allocation
+is localized to window/domain SQL assembly: unsplit allocation counts stay
+unchanged, and split-average SQL shrinks despite its 3,890-byte heap increase.
+These small compiler costs accompany the bounded query-tree structure; they
+are not native execution latency measurements. The final native plans also
+remove an unused numeric count aggregate. Subsequent relation and export fixes
+avoid repeated Dynamic-value and trusted-schema traversals; the historical
+publication measurements above were not rerun for those distinct paths.
+
 The legacy publication benchmark uses a manually constructed descriptor, so it
 does not exercise the sealed timechart provenance or admitted logical row cap.
 `BenchmarkTimechartSingleStageRowLimit` measures that path separately on the
