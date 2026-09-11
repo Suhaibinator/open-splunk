@@ -56,7 +56,7 @@ func TestRelationInputRetainedTypedValueWalksDynamicOnce(t *testing.T) {
 		items[index] = []any{uint64(index)}
 	}
 	walk := relationTraversal{ctx: context.Background()}
-	if _, _, ok := walk.preflightTypedValue("Dynamic", items); !ok {
+	if _, _, ok := walk.preflightTypedValue("Dynamic", items, nil); !ok {
 		t.Fatal("valid nested Dynamic value was rejected")
 	}
 	want := uint64(1 + 2*len(items))
@@ -92,7 +92,7 @@ func TestRelationInputRetainedTypedValuePreservesValidation(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			walk := relationTraversal{ctx: context.Background()}
-			_, _, ok := walk.preflightTypedValue(test.kind, test.value)
+			_, _, ok := walk.preflightTypedValue(test.kind, test.value, nil)
 			if ok != test.valid || walk.err != nil {
 				t.Fatalf("retainedTypedValue(%q, %#v) = (%t, %v), want (%t, nil)", test.kind, test.value, ok, walk.err, test.valid)
 			}
@@ -379,6 +379,6 @@ func newRelationInput(ctx context.Context, columns []RelationColumn, rows [][]an
 
 func nativeRelationCellBytesForTest(kind string, value any) (uint64, bool) {
 	walk := relationTraversal{ctx: context.Background()}
-	_, native, ok := walk.preflightTypedValue(kind, value)
+	_, native, ok := walk.preflightTypedValue(kind, value, nil)
 	return native, ok
 }

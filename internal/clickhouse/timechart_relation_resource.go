@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -36,6 +37,25 @@ type relationInputPreflight struct {
 	nativeBytes        uint64
 	dynamicColumnCount int
 }
+
+type relationDynamicKindMask uint8
+
+const (
+	relationDynamicArray relationDynamicKindMask = 1 << iota
+	relationDynamicUInt64
+	relationDynamicInt64
+	relationDynamicFloat64
+	relationDynamicString
+	relationDynamicBool
+	relationDynamicTime
+	relationDynamicDepths = 19
+	// The admitted seven non-null subtype bits plus the driver's mandatory
+	// SharedVariant bound every Dynamic type index to eight entries.
+	relationDynamicMaxTypeEntries = 8
+	// Go 1.27 uses a 48-byte map object and one small eight-slot group for this
+	// string-to-int index. Include allocator rounding and control storage.
+	relationDynamicTypeIndexBytes = 512
+)
 
 // preflightRelationInput validates and sizes every retained and native backing
 // before newRelationInput allocates cell payload.
@@ -91,9 +111,9 @@ func preflightRelationInput(
 	if ends != nil {
 		physicalColumns++
 	}
-	perColumn := 2*uint64(unsafe.Sizeof("")) +
-		3*uint64(unsafe.Sizeof(any(nil))) +
-		uint64(unsafe.Sizeof((func(*ext.Table) error)(nil)))
+	perColumn := externalTableDefinitionBytes() +
+		2*uint64(unsafe.Sizeof("")) +
+		3*uint64(unsafe.Sizeof(any(nil)))
 	if !chargeProduct(uint64(physicalColumns), perColumn, addNative) {
 		return relationInputPreflight{}, errors.New("materialize timechart: native relation is invalid")
 	}
@@ -146,8 +166,14 @@ func preflightRelationInput(
 		if !chargeProduct(uint64(len(row)), uint64(unsafe.Sizeof(any(nil))), chargeRetained) {
 			return relationInputPreflight{}, fmt.Errorf("%w: materialize timechart cell capacity exceeds byte limit", ErrTimechartResourceLimit)
 		}
-		for index, column := range columns {
-			retainedCell, nativeCell, ok := walk.preflightTypedValue(column.Type, row[index])
+	}
+	for columnIndex, descriptor := range columns {
+		if err := ctx.Err(); err != nil {
+			return relationInputPreflight{}, err
+		}
+		var observed [relationDynamicDepths]relationDynamicKindMask
+		for _, row := range rows {
+			retainedCell, nativeCell, ok := walk.preflightTypedValue(descriptor.Type, row[columnIndex], &observed)
 			if walk.err != nil {
 				return relationInputPreflight{}, walk.err
 			}
@@ -158,6 +184,18 @@ func preflightRelationInput(
 				return relationInputPreflight{}, fmt.Errorf("%w: materialize timechart cells exceed byte limit", ErrTimechartResourceLimit)
 			}
 			if !addNative(nativeCell) {
+				return relationInputPreflight{}, errors.New("materialize timechart: native relation is invalid")
+			}
+		}
+		if relationBaseType(descriptor.Type) == "Dynamic" {
+			if err := ctx.Err(); err != nil {
+				return relationInputPreflight{}, err
+			}
+			graphBytes, ok, err := nativeDynamicColumnGraphBytes(ctx, observed)
+			if err != nil {
+				return relationInputPreflight{}, err
+			}
+			if !ok || !addNative(graphBytes) {
 				return relationInputPreflight{}, errors.New("materialize timechart: native relation is invalid")
 			}
 		}
@@ -251,9 +289,13 @@ func nativeColumnDescriptorBytes(descriptor RelationColumn) uint64 {
 	return base + physicalNameBytes + uint64(len(descriptor.Type))
 }
 
-func (walk *relationTraversal) preflightTypedValue(kind string, value any) (uint64, uint64, bool) {
+func (walk *relationTraversal) preflightTypedValue(
+	kind string,
+	value any,
+	observed *[relationDynamicDepths]relationDynamicKindMask,
+) (uint64, uint64, bool) {
 	if kind == "Dynamic" {
-		return walk.preflightDynamicValue(value, 0, true)
+		return walk.preflightDynamicValue(value, 0, true, observed)
 	}
 	if !walk.step() {
 		return 0, 0, false
@@ -321,7 +363,12 @@ func nativeScalarCellBytes(kind string, value any) (uint64, bool) {
 	return bytes, true
 }
 
-func (walk *relationTraversal) preflightDynamicValue(value any, depth int, root bool) (uint64, uint64, bool) {
+func (walk *relationTraversal) preflightDynamicValue(
+	value any,
+	depth int,
+	root bool,
+	observed *[relationDynamicDepths]relationDynamicKindMask,
+) (uint64, uint64, bool) {
 	if !walk.step() {
 		return 0, 0, false
 	}
@@ -340,6 +387,9 @@ func (walk *relationTraversal) preflightDynamicValue(value any, depth int, root 
 		return 0, 0, false
 	}
 	if items, list := value.([]any); list {
+		if observed != nil {
+			observed[depth] |= relationDynamicArray
+		}
 		retained := uint64(unsafe.Sizeof([]any{}))
 		if uint64(len(items)) > math.MaxUint64/uint64(unsafe.Sizeof(any(nil))) {
 			return 0, 0, false
@@ -362,7 +412,7 @@ func (walk *relationTraversal) preflightDynamicValue(value any, depth int, root 
 			return 0, 0, false
 		}
 		for _, item := range items {
-			childRetained, childNative, childOK := walk.preflightDynamicValue(item, depth+1, false)
+			childRetained, childNative, childOK := walk.preflightDynamicValue(item, depth+1, false, observed)
 			if !childOK {
 				return 0, 0, false
 			}
@@ -378,7 +428,19 @@ func (walk *relationTraversal) preflightDynamicValue(value any, depth int, root 
 		return retained, native, true
 	}
 	switch value.(type) {
-	case nil, string, int64, uint64, float64, bool, time.Time:
+	case nil:
+	case string:
+		observeRelationDynamicKind(observed, depth, relationDynamicString)
+	case int64:
+		observeRelationDynamicKind(observed, depth, relationDynamicInt64)
+	case uint64:
+		observeRelationDynamicKind(observed, depth, relationDynamicUInt64)
+	case float64:
+		observeRelationDynamicKind(observed, depth, relationDynamicFloat64)
+	case bool:
+		observeRelationDynamicKind(observed, depth, relationDynamicBool)
+	case time.Time:
+		observeRelationDynamicKind(observed, depth, relationDynamicTime)
 	default:
 		return 0, 0, false
 	}
@@ -393,6 +455,109 @@ func (walk *relationTraversal) preflightDynamicValue(value any, depth int, root 
 	}
 	native, ok = retainedAdd(native, 2*storage)
 	return storage, native, ok
+}
+
+func observeRelationDynamicKind(
+	observed *[relationDynamicDepths]relationDynamicKindMask,
+	depth int,
+	kind relationDynamicKindMask,
+) {
+	if observed != nil {
+		observed[depth] |= kind
+	}
+}
+
+// nativeDynamicColumnGraphBytes models the finite descriptor graph built by
+// clickhouse-go v2.48.0 for one physical Dynamic column. NewTable supplies a
+// zero-valued ServerContext, so each reached Dynamic creates its deprecated
+// SharedVariant and type index even when no rows are appended. The admitted
+// scalar domain and one Array edge bound each index to eight entries. A
+// 512-byte reserve covers Go 1.27's map header, one eight-slot string-to-int
+// group, and allocator rounding; it is intentionally not a general map model.
+func nativeDynamicColumnGraphBytes(
+	ctx context.Context,
+	observed [relationDynamicDepths]relationDynamicKindMask,
+) (uint64, bool, error) {
+	var total uint64
+	add := func(value uint64) bool {
+		var ok bool
+		total, ok = retainedAdd(total, value)
+		return ok
+	}
+	reached := true
+	for depth := 0; depth < relationDynamicDepths && reached; depth++ {
+		mask := observed[depth]
+		if depth > 0 && !add(uint64(unsafe.Sizeof(column.Dynamic{}))) {
+			return 0, false, nil
+		}
+		entries := uint64(1)
+		for kind := relationDynamicArray; kind <= relationDynamicTime; kind <<= 1 {
+			if mask&kind != 0 {
+				entries++
+			}
+		}
+		if entries > relationDynamicMaxTypeEntries {
+			return 0, false, nil
+		}
+		listEntryBytes := 2 * (uint64(unsafe.Sizeof(any(nil))) + uint64(unsafe.Sizeof("")))
+		if !add(uint64(unsafe.Sizeof(column.SharedVariant{}))) ||
+			!add(relationDynamicTypeIndexBytes) ||
+			!chargeProduct(entries, listEntryBytes, add) ||
+			!add(uint64(len("SharedVariant"))) {
+			return 0, false, nil
+		}
+		for _, scalar := range []relationDynamicKindMask{
+			relationDynamicUInt64,
+			relationDynamicInt64,
+			relationDynamicFloat64,
+			relationDynamicString,
+			relationDynamicBool,
+			relationDynamicTime,
+		} {
+			if mask&scalar == 0 {
+				continue
+			}
+			descriptorBytes, typeName, initialBytes := nativeDynamicScalarDescriptor(scalar)
+			if !add(descriptorBytes) || !add(uint64(len(typeName))) || !add(initialBytes) {
+				return 0, false, nil
+			}
+		}
+		reached = mask&relationDynamicArray != 0
+		if reached {
+			typeHeaderBytes := uint64(unsafe.Sizeof(reflect.Type(nil)))
+			offsetBytes := uint64(unsafe.Sizeof(column.UInt64{})) + typeHeaderBytes
+			if !add(uint64(unsafe.Sizeof(column.Array{}))) ||
+				!add(offsetBytes) ||
+				!add(uint64(unsafe.Sizeof((*any)(nil)))) ||
+				!add(typeHeaderBytes) ||
+				!add(uint64(len("Array(Dynamic)"))) {
+				return 0, false, nil
+			}
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, false, err
+	}
+	return total, true, nil
+}
+
+func nativeDynamicScalarDescriptor(kind relationDynamicKindMask) (uint64, string, uint64) {
+	switch kind {
+	case relationDynamicUInt64:
+		return uint64(unsafe.Sizeof(column.UInt64{})), "UInt64", 0
+	case relationDynamicInt64:
+		return uint64(unsafe.Sizeof(column.Int64{})), "Int64", 0
+	case relationDynamicFloat64:
+		return uint64(unsafe.Sizeof(column.Float64{})), "Float64", 0
+	case relationDynamicString:
+		return uint64(unsafe.Sizeof(column.String{})), "String", nativeColumnInitialCapacityBytes("String", 1)
+	case relationDynamicBool:
+		return uint64(unsafe.Sizeof(column.Bool{})), "Bool", nativeColumnInitialCapacityBytes("Bool", 1)
+	case relationDynamicTime:
+		return uint64(unsafe.Sizeof(column.DateTime64{})), "DateTime64(3)", 0
+	default:
+		return 0, "", 0
+	}
 }
 
 func relationColumnTypeSupported(kind string) bool {

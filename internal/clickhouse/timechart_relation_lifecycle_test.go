@@ -4,8 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"hash"
 	"math"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 	"unsafe"
@@ -71,7 +74,7 @@ func TestRelationLifecycleWalksDynamicOncePerAllocationPhase(t *testing.T) {
 	}
 	wantNodes := uint64(1 + 2*len(items))
 	preflight := relationTraversal{ctx: context.Background()}
-	if _, _, ok := preflight.preflightTypedValue("Dynamic", items); !ok || preflight.err != nil || preflight.nodes != wantNodes {
+	if _, _, ok := preflight.preflightTypedValue("Dynamic", items, nil); !ok || preflight.err != nil || preflight.nodes != wantNodes {
 		t.Fatalf("preflight = (ok=%t, err=%v, nodes=%d), want (true, nil, %d)", ok, preflight.err, preflight.nodes, wantNodes)
 	}
 	clone := relationTraversal{ctx: context.Background()}
@@ -112,6 +115,135 @@ func TestRelationNativeEstimateIsCachedAndExact(t *testing.T) {
 	exact := searchlimits.WithRemainingExecutionBytes(context.Background(), input.nativeBytes)
 	if table, err := materializeRelationInput(exact, input); err != nil || table == nil || table.Block().Rows() != 1 {
 		t.Fatalf("bounds relation at native cache = (%#v, %v)", table, err)
+	}
+}
+
+func TestRelationNativeEstimateCoversPinnedDriverGraph(t *testing.T) {
+	stamp := time.Unix(100, 123).UTC()
+	allKindsAtDepth := make([][]any, 0, 18*6)
+	for depth := range 18 {
+		for _, scalar := range []any{uint64(1), int64(-1), 1.5, "text", true, stamp} {
+			value := scalar
+			for range depth {
+				value = []any{value}
+			}
+			allKindsAtDepth = append(allKindsAtDepth, []any{value})
+		}
+	}
+	terminalEmpty := any([]any{})
+	for range 17 {
+		terminalEmpty = []any{terminalEmpty}
+	}
+	wideColumns := make([]RelationColumn, 1_000)
+	for index := range wideColumns {
+		wideColumns[index] = RelationColumn{Name: "value_" + fmt.Sprint(index), Type: "Dynamic"}
+	}
+	tests := []struct {
+		name    string
+		columns []RelationColumn
+		rows    [][]any
+	}{
+		{name: "empty Dynamic", columns: []RelationColumn{{Name: "value", Type: "Dynamic"}}},
+		{name: "empty Nullable Dynamic", columns: []RelationColumn{{Name: "value", Type: "Nullable(Dynamic)"}}},
+		{name: "all-null Nullable Dynamic", columns: []RelationColumn{{Name: "value", Type: "Nullable(Dynamic)"}}, rows: [][]any{{nil}, {nil}, {nil}}},
+		{name: "nil Dynamic", columns: []RelationColumn{{Name: "value", Type: "Dynamic"}}, rows: [][]any{{nil}}},
+		{name: "typed nil array", columns: []RelationColumn{{Name: "value", Type: "Dynamic"}}, rows: [][]any{{[]any(nil)}}},
+		{name: "all scalar kinds at every depth", columns: []RelationColumn{{Name: "value", Type: "Dynamic"}}, rows: allKindsAtDepth},
+		{name: "empty array at depth 17", columns: []RelationColumn{{Name: "value", Type: "Dynamic"}}, rows: [][]any{{terminalEmpty}}},
+		{name: "empty String", columns: []RelationColumn{{Name: "value", Type: "String"}}},
+		{name: "populated String", columns: []RelationColumn{{Name: "value", Type: "String"}}, rows: [][]any{{""}, {"value"}}},
+		{name: "empty UInt64", columns: []RelationColumn{{Name: "value", Type: "UInt64"}}},
+		{name: "populated UInt64", columns: []RelationColumn{{Name: "value", Type: "UInt64"}}, rows: [][]any{{uint64(0)}, {uint64(42)}}},
+		{name: "wide empty schema", columns: wideColumns},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			input, err := newRelationInput(context.Background(), test.columns, test.rows)
+			if err != nil {
+				t.Fatal(err)
+			}
+			table, err := materializeRelationInput(context.Background(), input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lowerBound := relationDriverObjectAndSliceLowerBound(reflect.ValueOf(table), make(map[uintptr]bool))
+			if input.nativeBytes < lowerBound {
+				t.Fatalf("native estimate %d is below driver object/slice lower bound %d", input.nativeBytes, lowerBound)
+			}
+		})
+	}
+}
+
+func TestRelationDynamicGraphCostIsDeduplicatedAcrossRows(t *testing.T) {
+	value := []any{uint64(1), "text", []any{true}}
+	var oneObservation [relationDynamicDepths]relationDynamicKindMask
+	oneWalk := relationTraversal{ctx: context.Background()}
+	_, oneCellBytes, ok := oneWalk.preflightTypedValue("Dynamic", value, &oneObservation)
+	if !ok || oneWalk.err != nil {
+		t.Fatalf("one-row preflight = (%t, %v)", ok, oneWalk.err)
+	}
+	oneGraphBytes, ok, err := nativeDynamicColumnGraphBytes(context.Background(), oneObservation)
+	if err != nil || !ok {
+		t.Fatalf("one-row graph = (%d, %t, %v)", oneGraphBytes, ok, err)
+	}
+	var repeatedObservation [relationDynamicDepths]relationDynamicKindMask
+	for range 100 {
+		walk := relationTraversal{ctx: context.Background()}
+		if _, _, valid := walk.preflightTypedValue("Dynamic", value, &repeatedObservation); !valid || walk.err != nil {
+			t.Fatalf("repeated preflight = (%t, %v)", valid, walk.err)
+		}
+	}
+	repeatedGraphBytes, ok, err := nativeDynamicColumnGraphBytes(context.Background(), repeatedObservation)
+	if err != nil || !ok || repeatedGraphBytes != oneGraphBytes {
+		t.Fatalf("repeated graph bytes = (%d, %t, %v), want (%d, true, nil)", repeatedGraphBytes, ok, err, oneGraphBytes)
+	}
+	columns := []RelationColumn{{Name: "value", Type: "Dynamic"}}
+	one, err := newRelationInput(context.Background(), columns, [][]any{{value}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := make([][]any, 100)
+	for index := range rows {
+		rows[index] = []any{value}
+	}
+	repeated, err := newRelationInput(context.Background(), columns, rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := 99 * oneCellBytes; repeated.nativeBytes-one.nativeBytes != want {
+		t.Fatalf("repeated native growth = %d, want payload-only %d", repeated.nativeBytes-one.nativeBytes, want)
+	}
+}
+
+func TestPublicRelationRejectsFormerDynamicDriverAllowance(t *testing.T) {
+	compiled := compileSPL(t, `index=gradethis | timechart span=1h count BY host | table _time values`)
+	value := any(uint64(1))
+	for range 17 {
+		value = []any{value}
+	}
+	next, err := compiled.ContinueContext(
+		context.Background(),
+		[]RelationColumn{{Name: "_time", Type: "DateTime64(9, 'UTC')"}, {Name: "values", Type: "Dynamic"}},
+		[][]any{{time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC), value}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const formerAllowance = 2_119
+	if tables, err := next.ExternalTablesForExecution(searchlimits.WithRemainingExecutionBytes(context.Background(), formerAllowance)); tables != nil || !errors.Is(err, ErrTimechartResourceLimit) {
+		t.Fatalf("former Dynamic allowance = (%#v, %v)", tables, err)
+	}
+	bytes, ok, err := externalTablesNativeMaterializationBytes(context.Background(), next.lookupTables, next.relationInput)
+	if err != nil || !ok {
+		t.Fatalf("complete native estimate = (%d, %t, %v)", bytes, ok, err)
+	}
+	below := searchlimits.WithRemainingExecutionBytes(context.Background(), bytes-1)
+	if tables, err := next.ExternalTablesForExecution(below); tables != nil || !errors.Is(err, ErrTimechartResourceLimit) {
+		t.Fatalf("below complete estimate = (%#v, %v)", tables, err)
+	}
+	exact := searchlimits.WithRemainingExecutionBytes(context.Background(), bytes)
+	if tables, err := next.ExternalTablesForExecution(exact); err != nil || len(tables) != 1 {
+		t.Fatalf("at complete estimate = (%#v, %v)", tables, err)
 	}
 }
 
@@ -249,9 +381,10 @@ func relationNativeBytesOracle(t *testing.T, input *compiledRelationInput) uint6
 	}
 	total := uint64(unsafe.Sizeof(ext.Table{})) + uint64(unsafe.Sizeof(driverproto.Block{})) +
 		uint64(unsafe.Sizeof(column.ServerContext{}))
-	total += uint64(physicalColumns) * (2*uint64(unsafe.Sizeof("")) +
-		3*uint64(unsafe.Sizeof(any(nil))) + uint64(unsafe.Sizeof((func(*ext.Table) error)(nil))))
+	total += uint64(physicalColumns) * (externalTableDefinitionBytes() +
+		2*uint64(unsafe.Sizeof("")) + 3*uint64(unsafe.Sizeof(any(nil))))
 	dynamicColumns := 0
+	observed := make([][relationDynamicDepths]relationDynamicKindMask, len(input.columns))
 	for _, descriptor := range input.columns {
 		total += nativeColumnDescriptorBytes(descriptor)
 		total += nativeColumnInitialCapacityBytes(descriptor.Type, len(input.rows))
@@ -267,7 +400,8 @@ func relationNativeBytesOracle(t *testing.T, input *compiledRelationInput) uint6
 	}
 	for rowIndex, row := range input.rows {
 		for columnIndex, value := range row {
-			cell, ok := nativeRelationCellBytesForTest(input.columns[columnIndex].Type, value)
+			walk := relationTraversal{ctx: context.Background()}
+			_, cell, ok := walk.preflightTypedValue(input.columns[columnIndex].Type, value, &observed[columnIndex])
 			if !ok {
 				t.Fatalf("native oracle rejected row %d column %d", rowIndex, columnIndex)
 			}
@@ -277,5 +411,56 @@ func relationNativeBytesOracle(t *testing.T, input *compiledRelationInput) uint6
 			total += 2 * uint64(unsafe.Sizeof(time.Time{}))
 		}
 	}
+	for columnIndex, descriptor := range input.columns {
+		if relationBaseType(descriptor.Type) != "Dynamic" {
+			continue
+		}
+		graph, ok, err := nativeDynamicColumnGraphBytes(context.Background(), observed[columnIndex])
+		if err != nil || !ok {
+			t.Fatalf("native oracle Dynamic column %d = (%d, %t, %v)", columnIndex, graph, ok, err)
+		}
+		total += graph
+	}
 	return total
+}
+
+// This oracle deliberately excludes maps, strings, definition closures,
+// scratch and allocator rounding. It measures only distinct pinned-driver
+// objects and slice capacities, independently of the production estimator;
+// the source-based model separately charges everything excluded here.
+func relationDriverObjectAndSliceLowerBound(value reflect.Value, seen map[uintptr]bool) uint64 {
+	if !value.IsValid() {
+		return 0
+	}
+	switch value.Kind() {
+	case reflect.Interface:
+		if value.IsNil() {
+			return 0
+		}
+		return relationDriverObjectAndSliceLowerBound(value.Elem(), seen)
+	case reflect.Pointer:
+		if value.IsNil() || !strings.Contains(value.Type().Elem().PkgPath(), "github.com/ClickHouse/") || seen[value.Pointer()] {
+			return 0
+		}
+		seen[value.Pointer()] = true
+		return uint64(value.Type().Elem().Size()) + relationDriverObjectAndSliceLowerBound(value.Elem(), seen)
+	case reflect.Struct:
+		var total uint64
+		for field := range value.Fields() {
+			total += relationDriverObjectAndSliceLowerBound(value.FieldByIndex(field.Index), seen)
+		}
+		return total
+	case reflect.Slice:
+		var total uint64
+		if !value.IsNil() && !seen[value.Pointer()] {
+			seen[value.Pointer()] = true
+			total = uint64(value.Cap()) * uint64(value.Type().Elem().Size())
+		}
+		for index := range value.Len() {
+			total += relationDriverObjectAndSliceLowerBound(value.Index(index), seen)
+		}
+		return total
+	default:
+		return 0
+	}
 }

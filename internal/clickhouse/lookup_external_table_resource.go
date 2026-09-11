@@ -70,12 +70,7 @@ func measureCompiledLookupExternalTable(
 		total, ok = retainedAdd(total, value)
 		return ok
 	}
-	// NewTable consumes one definition closure per column. Charge the function
-	// slice slot, closure code pointer, captured name/type string headers, and
-	// one word of small-allocation padding; they coexist with the finished block.
-	functionWord := uint64(unsafe.Sizeof((func(*ext.Table) error)(nil)))
-	definitionBytes := 3*functionWord + 2*uint64(unsafe.Sizeof(""))
-	if !chargeProduct(columnCount, definitionBytes, add) ||
+	if !chargeProduct(columnCount, externalTableDefinitionBytes(), add) ||
 		// Block.AddColumn grows both the retained name and interface slices.
 		!chargeProduct(columnCount, 2*uint64(unsafe.Sizeof("")), add) ||
 		!chargeProduct(columnCount, 2*uint64(unsafe.Sizeof(any(nil))), add) ||
@@ -114,6 +109,14 @@ func measureCompiledLookupExternalTable(
 		}
 	}
 	return total, true
+}
+
+// NewTable consumes one definition closure per column. Charge the function
+// slice slot, closure code pointer, captured name/type string headers, and one
+// word of small-allocation padding; they coexist with the finished block.
+func externalTableDefinitionBytes() uint64 {
+	functionWord := uint64(unsafe.Sizeof((func(*ext.Table) error)(nil)))
+	return 3*functionWord + 2*uint64(unsafe.Sizeof(""))
 }
 
 func externalTablesNativeMaterializationBytes(

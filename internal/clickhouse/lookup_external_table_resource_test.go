@@ -89,13 +89,17 @@ func TestLookupAndRelationNativeMaterializationShareOneBudget(t *testing.T) {
 		testCompiledLookupExternalTable(t, [][]string{{"first"}}),
 		testCompiledLookupExternalTableNamed(t, "__os_lookup_table_second", [][]string{{"second"}}),
 	}
-	input, err := newRelationInput(
+	start := time.Unix(0, 0).UTC()
+	input, err := newRelationInputWithTimeBuckets(
 		context.Background(),
 		[]RelationColumn{
 			{Name: "_time", Type: "DateTime64(9, 'UTC')"},
 			{Name: "owner", Type: "String"},
+			{Name: "details", Type: "Dynamic"},
 		},
-		[][]any{{time.Unix(0, 0).UTC(), "first"}},
+		[][]any{{start, "first", []any{uint64(1), "nested"}}},
+		[]time.Time{start.Add(time.Second)},
+		false,
 	)
 	if err != nil {
 		t.Fatal(err)

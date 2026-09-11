@@ -18,7 +18,7 @@ func TestNestedRelationTraversalsPollWithinSingleCell(t *testing.T) {
 		name string
 		run  func(*relationTraversal)
 	}{
-		{"retained and native size", func(walk *relationTraversal) { _, _, _ = walk.preflightTypedValue("Dynamic", items) }},
+		{"retained and native size", func(walk *relationTraversal) { _, _, _ = walk.preflightTypedValue("Dynamic", items, nil) }},
 		{"clone and commitment", func(walk *relationTraversal) { _, _ = walk.cloneAndWriteValue(sha256.New(), items, 0) }},
 		{"native conversion", func(walk *relationTraversal) { _ = walk.nativeDynamic(items) }},
 	} {
@@ -44,6 +44,31 @@ func TestRelationBucketEndCommitmentPollsWithinBounds(t *testing.T) {
 	}
 	if ctx.calls > 4 {
 		t.Fatalf("bucket-end commitment continued after cancellation: checks=%d", ctx.calls)
+	}
+}
+
+func TestRelationDynamicGraphChecksCancellationAtCompletion(t *testing.T) {
+	ctx := &cancelAfterLookupChecks{Context: context.Background(), cancelAt: 1}
+	if _, _, err := nativeDynamicColumnGraphBytes(ctx, [relationDynamicDepths]relationDynamicKindMask{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Dynamic graph completed after final cancellation: %v", err)
+	}
+}
+
+func TestRelationPreflightCancelsDuringRowMetadata(t *testing.T) {
+	rows := make([][]any, 1_024)
+	for index := range rows {
+		rows[index] = []any{make(chan struct{})}
+	}
+	ctx := &cancelAfterLookupChecks{Context: context.Background(), cancelAt: 20}
+	if _, err := preflightRelationInput(
+		ctx,
+		[]RelationColumn{{Name: "value", Type: "UInt64"}},
+		rows,
+		nil,
+		uint64(len(rows)),
+		math.MaxUint64,
+	); !errors.Is(err, context.Canceled) {
+		t.Fatalf("row metadata phase ignored cancellation: %v", err)
 	}
 }
 
