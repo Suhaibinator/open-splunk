@@ -205,12 +205,9 @@ func (executor *Executor) executeTimechartStages(ctx context.Context, query clic
 	ctx, cancel := context.WithTimeout(admitted, time.Duration(min(seconds, uint64(math.MaxInt64/int64(time.Second))))*time.Second)
 	defer cancel()
 	policy := searchlimits.Default()
-	logicalRowLimit := base.limit("max_result_rows")
+	logicalRowLimit := logicalResultRowLimit(ctx, base.limit("max_result_rows"))
 	if admittedPolicy, ok := searchlimits.FromContext(ctx); ok {
 		policy = admittedPolicy
-		// The native envelope includes an overflow sentinel. Private stages
-		// and atomic publication must enforce the exact admitted logical cap.
-		logicalRowLimit = admittedPolicy.MaxResultRows
 	}
 	maximumRetained := min(policy.MaxResultBytes, policy.MaxMemoryBytes, settings["max_memory_usage"].(uint64), settings["max_result_bytes"].(uint64))
 	budget := &stageBudget{sink: sink, maxRows: settings["max_rows_to_read"].(uint64), maxBytes: settings["max_bytes_to_read"].(uint64), maxRetained: maximumRetained, maxMemory: settings["max_memory_usage"].(uint64)}

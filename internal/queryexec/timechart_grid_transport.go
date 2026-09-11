@@ -1,6 +1,7 @@
 package queryexec
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"slices"
@@ -96,13 +97,11 @@ func (sink *timechartGridSink) AddRow(values []searchjobs.Value) error {
 		return fmt.Errorf("%w: timechart row is outside its grid", searchjobs.ErrInvalidResult)
 	}
 	if sink.output.ExactGrid {
-		if sink.occupancy == nil || uint64(len(sink.occupancy.present)) != sink.output.BucketCount {
-			return fmt.Errorf("%w: timechart presence sequence is incomplete", searchjobs.ErrInvalidResult)
+		included, err := sink.includesOrdinal(ordinal)
+		if err != nil {
+			return err
 		}
-		if !sink.output.Continuous && sink.occupancy.present[ordinal] == 0 {
-			return nil
-		}
-		if !sink.output.IncludePartial && (bucket.Before(sink.output.SearchEarliest) || boundaries[ordinal+1].After(sink.output.SearchLatest)) {
+		if !included {
 			return nil
 		}
 	}
@@ -110,4 +109,55 @@ func (sink *timechartGridSink) AddRow(values []searchjobs.Value) error {
 		return bounded.AddRowWithTimeBucket(values, searchjobs.TimeBucketBounds{Earliest: bucket.UTC().Format(time.RFC3339Nano), Latest: boundaries[ordinal+1].UTC().Format(time.RFC3339Nano)})
 	}
 	return sink.ResultSink.AddRow(values)
+}
+
+// includesOrdinal is shared by prepublication admission and presentation, so
+// sparse and partial buckets count identically at both boundaries.
+func (sink *timechartGridSink) includesOrdinal(ordinal int) (bool, error) {
+	if sink.occupancy == nil || uint64(len(sink.occupancy.present)) != sink.output.BucketCount {
+		return false, fmt.Errorf("%w: timechart presence sequence is incomplete", searchjobs.ErrInvalidResult)
+	}
+	if ordinal < 0 || ordinal >= len(sink.occupancy.present) || ordinal >= len(sink.output.Boundaries)-1 {
+		return false, fmt.Errorf("%w: timechart row is outside its grid", searchjobs.ErrInvalidResult)
+	}
+	if !sink.output.Continuous && sink.occupancy.present[ordinal] == 0 {
+		return false, nil
+	}
+	if !sink.output.IncludePartial && (sink.output.Boundaries[ordinal].Before(sink.output.SearchEarliest) || sink.output.Boundaries[ordinal+1].After(sink.output.SearchLatest)) {
+		return false, nil
+	}
+	return true, nil
+}
+
+// All native rows have already passed the complete validation barrier. Count
+// only rows the publisher will expose, without constructing another buffer.
+func (sink *timechartGridSink) validateRowLimit(ctx context.Context, rows int, maximum uint64) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if maximum == 0 || safecast.MustConv[uint64](rows) <= maximum {
+		return nil
+	}
+	if !sink.output.ExactGrid {
+		return searchjobs.ErrExecutionLimit
+	}
+	var visible uint64
+	for ordinal := range rows {
+		if ordinal%256 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		included, err := sink.includesOrdinal(ordinal)
+		if err != nil {
+			return err
+		}
+		if included {
+			visible++
+			if visible > maximum {
+				return searchjobs.ErrExecutionLimit
+			}
+		}
+	}
+	return ctx.Err()
 }

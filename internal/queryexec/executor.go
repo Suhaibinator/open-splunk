@@ -604,9 +604,17 @@ func (executor *Executor) executeSingle(ctx context.Context, query clickhouse.Co
 			resultErr = progressReporter.finish(ctx, resultErr)
 		}()
 	}
-	executionSettings, settingsErr := executor.settingsForContext(executionContext, query)
+	base, expand, settingsErr := executor.effectiveSettingsSnapshot(executionContext)
 	if settingsErr != nil {
 		return settingsErr
+	}
+	executionSettings, settingsErr := settingsForSnapshotContext(executionContext, query, base, expand)
+	if settingsErr != nil {
+		return settingsErr
+	}
+	rowLimit := uint64(0)
+	if query.HasTimechartStage() && !query.RequiresTimechartInputDiscovery() {
+		rowLimit = logicalResultRowLimit(executionContext, base.limit("max_result_rows"))
 	}
 	var timechartLimits timechartResourceLimits
 	if query.Timechart != nil &&
@@ -678,7 +686,8 @@ func (executor *Executor) executeSingle(ctx context.Context, query clickhouse.Co
 		if err != nil {
 			return err
 		}
-		sink = &timechartGridSink{ResultSink: sink, output: *query.Timechart, occupancy: gridRows}
+		gridSink := &timechartGridSink{ResultSink: sink, output: *query.Timechart, occupancy: gridRows}
+		sink = gridSink
 		switch query.Timechart.Mode {
 		case clickhouse.TimechartModeFixedCount,
 			clickhouse.TimechartModeFixedFieldCount:
@@ -697,6 +706,9 @@ func (executor *Executor) executeSingle(ctx context.Context, query clickhouse.Co
 			if closeErr != nil {
 				return classifyQueryError(executionContext, fmt.Errorf("close ClickHouse fixed timechart result stream: %w", closeErr))
 			}
+			if err := gridSink.validateRowLimit(executionContext, len(buffered.counts), rowLimit); err != nil {
+				return err
+			}
 			return publishFixedTimechart(executionContext, sink, buffered)
 		case clickhouse.TimechartModeFixedValue:
 			buffered, readErr := readFixedValueTimechartRows(
@@ -713,6 +725,9 @@ func (executor *Executor) executeSingle(ctx context.Context, query clickhouse.Co
 			rowsClosed = true
 			if closeErr != nil {
 				return classifyQueryError(executionContext, fmt.Errorf("close ClickHouse fixed value timechart result stream: %w", closeErr))
+			}
+			if err := gridSink.validateRowLimit(executionContext, len(buffered.values), rowLimit); err != nil {
+				return err
 			}
 			return publishFixedValueTimechart(executionContext, sink, buffered)
 		case clickhouse.TimechartModeRuntimeWideValue:
@@ -732,6 +747,11 @@ func (executor *Executor) executeSingle(ctx context.Context, query clickhouse.Co
 			if closeErr != nil {
 				return classifyQueryError(executionContext, fmt.Errorf("close ClickHouse split value timechart result stream: %w", closeErr))
 			}
+			if len(buffered.columns) != 0 {
+				if err := gridSink.validateRowLimit(executionContext, len(buffered.rows), rowLimit); err != nil {
+					return err
+				}
+			}
 			return publishValueTimechart(executionContext, sink, buffered)
 		}
 		buffered, err := readTimechartRows(
@@ -750,6 +770,11 @@ func (executor *Executor) executeSingle(ctx context.Context, query clickhouse.Co
 		if closeErr != nil {
 			return classifyQueryError(executionContext, fmt.Errorf("close ClickHouse timechart result stream: %w", closeErr))
 		}
+		if len(buffered.columns) != 0 {
+			if err := gridSink.validateRowLimit(executionContext, len(buffered.rows), rowLimit); err != nil {
+				return err
+			}
+		}
 		return publishTimechart(executionContext, sink, buffered)
 	}
 	if query.Chart != nil {
@@ -763,6 +788,9 @@ func (executor *Executor) executeSingle(ctx context.Context, query clickhouse.Co
 		rowsClosed = true
 		if closeErr != nil {
 			return classifyQueryError(executionContext, fmt.Errorf("close ClickHouse chart result stream: %w", closeErr))
+		}
+		if rowLimit != 0 && len(buffered.columns) != 0 && safecast.MustConv[uint64](max(len(buffered.rows), len(buffered.valueRows))) > rowLimit {
+			return searchjobs.ErrExecutionLimit
 		}
 		return publishChart(executionContext, sink, *query.Chart, buffered)
 	}
@@ -845,6 +873,7 @@ func (executor *Executor) executeSingle(ctx context.Context, query clickhouse.Co
 		}
 	}
 	atomicRows := atomicResultBuffer{maximumBytes: maximumAtomicResultBytes}
+	var resultRows uint64
 	if policy, admitted := searchlimits.FromContext(executionContext); admitted {
 		atomicRows.maximumBytes = min(atomicRows.maximumBytes, policy.MaxResultBytes, policy.MaxMemoryBytes)
 	}
@@ -956,6 +985,10 @@ func (executor *Executor) executeSingle(ctx context.Context, query clickhouse.Co
 			}
 		}
 		if atomicResult {
+			if rowLimit != 0 && resultRows >= rowLimit {
+				return searchjobs.ErrExecutionLimit
+			}
+			resultRows++
 			if err := atomicRows.appendContext(executionContext, values); err != nil {
 				return err
 			}
@@ -1176,7 +1209,31 @@ func (executor *Executor) settingsForContext(
 	if err != nil {
 		return nil, err
 	}
+	return settingsForSnapshotContext(ctx, query, base, expand)
+}
+
+// logicalResultRowLimit excludes the native overflow sentinel only when an
+// admitted policy supplies the logical cap. Explicit Config limits stay exact.
+func logicalResultRowLimit(ctx context.Context, nativeLimit uint64) uint64 {
+	if policy, admitted := searchlimits.FromContext(ctx); admitted {
+		return policy.MaxResultRows
+	}
+	return nativeLimit
+}
+
+func settingsForSnapshotContext(
+	ctx context.Context,
+	query clickhouse.CompiledQuery,
+	base *validatedExecutorSettings,
+	expand bool,
+) (clickhousedriver.Settings, error) {
 	settings := groupLimitSettingsFor(base, expand, query)
+	if query.HasTimechartStage() && query.Timechart != nil && query.Timechart.BucketCount > base.limit("max_result_rows") {
+		// The sealed dense grid is validated before cont/partial presentation.
+		// Its transport allowance must not replace the logical public row cap.
+		settings = maps.Clone(settings)
+		settings["max_result_rows"] = query.Timechart.BucketCount
+	}
 	if query.RequiresTimechartInputDiscovery() {
 		settings = maps.Clone(settings)
 		settings["max_result_rows"] = base.limit("max_rows_to_read")
