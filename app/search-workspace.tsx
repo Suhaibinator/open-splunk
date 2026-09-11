@@ -8022,6 +8022,9 @@ export function SearchWorkspace({
           onApplyPivot={(field, value, mode) => applyPivot(field, value, mode)}
           onChartStyleChange={setChartStyle}
           onChartTitleChange={setChartTitle}
+          onCopySeriesLabel={(label) => {
+            void copyShareText(label, `Copied series label “${label}”.`);
+          }}
           onLegendPositionChange={setLegendPosition}
           onShowDataLabelsChange={setShowDataLabels}
           onStackModeChange={setStackMode}

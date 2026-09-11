@@ -754,7 +754,7 @@
 
 .time-series-chart__tooltip {
   background: var(--bg-surface);
-  border: 1px solid var(--border-strong);
+  border: var(--space-chart-overlay-border) solid var(--border-strong);
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-md);
   color: var(--fg-text);
@@ -804,6 +804,71 @@
   font-variant-numeric: tabular-nums;
 }
 
+.time-series-chart__pinned-values {
+  background: var(--bg-surface);
+  border: var(--space-chart-overlay-border) solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  color: var(--fg-text);
+  display: grid;
+  gap: var(--space-1);
+  max-height: calc(100% - var(--space-4));
+  max-width: calc(100% - var(--space-4));
+  overflow: auto;
+  padding: var(--space-2);
+  pointer-events: auto;
+  position: absolute;
+  right: var(--space-2);
+  top: var(--space-2);
+  user-select: text;
+  z-index: var(--z-chart-overlay);
+}
+
+.time-series-chart__pinned-header {
+  align-items: center;
+  border-bottom: var(--space-chart-overlay-border) solid var(--border-subtle);
+  display: flex;
+  font-size: var(--type-xs);
+  gap: var(--space-2);
+  justify-content: space-between;
+  padding-bottom: var(--space-1);
+}
+
+.time-series-chart__pinned-row {
+  align-items: center;
+  display: grid;
+  font-size: var(--type-xs);
+  gap: var(--space-1);
+  grid-template-columns: var(--space-2) minmax(0, 1fr) auto var(--space-7);
+}
+
+.time-series-chart__pinned-row > i {
+  background: currentcolor;
+  height: var(--space-2);
+  width: var(--space-2);
+}
+
+.time-series-chart__pinned-row > b {
+  font-size: var(--type-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.time-series-chart__pinned-label {
+  overflow-wrap: anywhere;
+}
+
+.time-series-chart__interaction-hint {
+  bottom: var(--space-1);
+  color: var(--fg-muted);
+  font-size: var(--type-xxs);
+  left: var(--space-2);
+  margin: 0;
+  pointer-events: none;
+  position: absolute;
+  user-select: none;
+  z-index: var(--z-base);
+}
+
 .time-series-chart__data-label {
   fill: var(--fg-secondary);
   font-size: var(--type-xxs);
@@ -840,6 +905,7 @@
   gap: 18px;
   grid-column: 2;
   justify-content: center;
+  user-select: text;
 }
 
 .chart-legend span {

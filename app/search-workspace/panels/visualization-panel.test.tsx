@@ -52,6 +52,7 @@ const baseProps = {
   onApplyPivot: () => undefined,
   onChartStyleChange: () => undefined,
   onChartTitleChange: () => undefined,
+  onCopySeriesLabel: () => undefined,
   onLegendPositionChange: () => undefined,
   onShowDataLabelsChange: () => undefined,
   onStackModeChange: () => undefined,
@@ -79,6 +80,17 @@ test("split timecharts expose Area and an accessible stacking selector", () => {
   assert.match(markup, /<span>Stacking<\/span><div class="select">/u);
   assert.match(markup, /role="combobox"[^>]*><span class="select__value">100%/u);
   assert.match(markup, /role="option" aria-selected="true"[^>]*>100%/u);
+});
+
+test("timechart legends expose selectable visible labels with exact copy actions", () => {
+  const markup = renderPanel({
+    chartStyle: "line",
+    isTimechartResult: true,
+    timelinePoints: timechartPoints,
+  });
+
+  assert.match(markup, /class="chart-legend">.*>east<.*aria-label="Copy series label east"/u);
+  assert.match(markup, /class="chart-legend">.*>west<.*aria-label="Copy series label west"/u);
 });
 
 test("single-series timecharts force unsupported stacking to none", () => {
@@ -218,7 +230,8 @@ test("adapted null timechart buckets remain visible gaps in the chart", () => {
 
   assert.equal(adapted.timeline.length, 3);
   assert.deepEqual(adapted.timeline[1]?.series, { "avg(metric)": null });
-  assert.equal((markup.match(/class="time-series-chart__line time-series-chart__series"/gu) ?? []).length, 2);
+  assert.equal((markup.match(/class="time-series-chart__line time-series-chart__series"/gu) ?? []).length, 1);
+  assert.match(markup, /d="M0\.00,[\d.]+M1000\.00,[\d.]+"/u);
   assert.match(markup, /avg\(metric\)/u);
 });
 

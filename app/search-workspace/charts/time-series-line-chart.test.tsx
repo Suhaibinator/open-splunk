@@ -81,11 +81,13 @@ test("area time series render fills before cumulative line strokes", () => {
   assert.match(markup, />-100%<\/span>/u);
 });
 
-test("missing series values split both area fills and line strokes", () => {
+test("missing series values start new strokes and close each area against its reversed baseline", () => {
   const points: TimelinePoint[] = [
     { id: "first", label: "00:00", count: 2, series: { east: 2 } },
-    { id: "gap", label: "01:00", count: 0, series: {} },
-    { id: "last", label: "02:00", count: 4, series: { east: 4 } },
+    { id: "second", label: "01:00", count: 3, series: { east: 3 } },
+    { id: "gap", label: "02:00", count: 0, series: {} },
+    { id: "fourth", label: "03:00", count: 4, series: { east: 4 } },
+    { id: "last", label: "04:00", count: 1, series: { east: 1 } },
   ];
   const markup = renderToStaticMarkup(
     <TimeSeriesLineChart chartStyle="area" points={points} />,
@@ -94,8 +96,11 @@ test("missing series values split both area fills and line strokes", () => {
   const [areaPath] = renderedPathData(markup, "time-series-chart__area time-series-chart__series");
   const [linePath] = renderedPathData(markup, "time-series-chart__line time-series-chart__series");
   assert.equal((areaPath.match(/Z/gu) ?? []).length, 2);
-  assert.match(areaPath, /^M0\.00,[\d.]+L0\.00,[\d.]+ZM1000\.00,[\d.]+L1000\.00,[\d.]+Z$/u);
-  assert.match(linePath, /^M0\.00,[\d.]+M1000\.00,[\d.]+$/u);
+  assert.equal(
+    areaPath,
+    "M0.00,150.00L250.00,75.00L250.00,300.00L0.00,300.00ZM750.00,0.00L1000.00,225.00L1000.00,300.00L750.00,300.00Z",
+  );
+  assert.equal(linePath, "M0.00,150.00L250.00,75.00M750.00,0.00L1000.00,225.00");
 });
 
 test("pointer and keyboard inspection expose exact all-null buckets without markers", async () => {
@@ -144,6 +149,75 @@ test("pointer and keyboard inspection expose exact all-null buckets without mark
     assert.match(tooltip.textContent, /hour 2, exact bucket 2026-09-10T02:00:00Z to 2026-09-10T03:00:00Z/u);
     assert.match(inspect.getAttribute("aria-label") ?? "", /hour 2.*No value/u);
     assert.equal(elementsByClass("time-series-chart__marker").length, 0);
+  } finally {
+    await act(async () => root.unmount());
+    browser.document.body.removeChild(container);
+  }
+});
+
+test("pinned chart values stay stable, copy visible labels, and restore inspector focus", async () => {
+  const copiedLabels: string[] = [];
+  const visibleLabel = 'Request summary.statistics "cached"';
+  const points: TimelinePoint[] = [
+    { id: "first", label: "hour 0", count: 3, series: { [visibleLabel]: 3 } },
+    { id: "second", label: "hour 1", count: 5, series: { [visibleLabel]: 5 } },
+  ];
+  const container = browser.document.body.appendChild(browser.document.createElement("div"));
+  const root = createRoot(container as unknown as Element);
+  try {
+    await act(async () => root.render(
+      <TimeSeriesLineChart onCopySeriesLabel={(label) => copiedLabels.push(label)} points={points} />,
+    ));
+    const inspect = container.querySelector("button");
+    assert.ok(inspect);
+
+    await act(async () => {
+      inspect.dispatchEvent(Object.assign(fakeEvent("pointerdown"), {
+        clientX: 1_000,
+        pointerType: "mouse",
+      }));
+    });
+    let pinned = container.querySelector('[role="group"]');
+    assert.ok(pinned);
+    assert.equal(pinned.getAttribute("aria-label"), "Pinned chart values for hour 1");
+
+    await act(async () => {
+      inspect.dispatchEvent(Object.assign(fakeEvent("pointermove"), {
+        clientX: 0,
+        pointerType: "mouse",
+      }));
+    });
+    pinned = container.querySelector('[role="group"]');
+    assert.equal(pinned?.getAttribute("aria-label"), "Pinned chart values for hour 1");
+    assert.equal(
+      container.querySelector('[class="time-series-chart__pinned-label"]')?.textContent,
+      visibleLabel,
+    );
+
+    const copy = container.querySelectorAll("[aria-label]").find((element) =>
+      element.getAttribute("aria-label") === `Copy series label ${visibleLabel}`
+    );
+    assert.ok(copy);
+    await act(async () => copy.dispatchEvent(fakeEvent("click")));
+    assert.deepEqual(copiedLabels, [visibleLabel]);
+
+    await act(async () => copy.dispatchEvent(Object.assign(fakeEvent("keydown"), { key: "Escape" })));
+    assert.equal(container.querySelector('[role="group"]'), null);
+    assert.equal(browser.document.activeElement, inspect);
+
+    await act(async () => inspect.dispatchEvent(Object.assign(fakeEvent("keydown"), { key: "Enter" })));
+    const close = container.querySelector('[aria-label="Close pinned chart values"]');
+    assert.ok(close);
+    close.focus();
+    await act(async () => close.dispatchEvent(fakeEvent("click")));
+    assert.equal(container.querySelector('[role="group"]'), null);
+    assert.equal(browser.document.activeElement, inspect);
+
+    await act(async () => inspect.dispatchEvent(Object.assign(fakeEvent("keydown"), { key: "Enter" })));
+    assert.ok(container.querySelector('[role="group"]'));
+    await act(async () => browser.document.body.dispatchEvent(fakeEvent("pointerdown")));
+    assert.equal(container.querySelector('[role="group"]'), null);
+    assert.equal(container.querySelector('[role="tooltip"]'), null);
   } finally {
     await act(async () => root.unmount());
     browser.document.body.removeChild(container);

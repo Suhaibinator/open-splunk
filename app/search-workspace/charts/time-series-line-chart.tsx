@@ -10,6 +10,8 @@ import {
 
 import type { TimelinePoint } from "@/lib/demo/search-data";
 
+import { AppIcon } from "../../_components/app-icon";
+import { Button } from "../../_components/button";
 import { COMPACT_NUMBER_FORMAT, NUMBER_FORMAT } from "../constants";
 import { formatExactNumericText } from "../formatters";
 import type { StackMode } from "../model";
@@ -55,6 +57,7 @@ interface TimeSeriesLineChartProps {
   chartStyle?: "area" | "column" | "line";
   model?: TimelineChartModel;
   points: TimelinePoint[];
+  onCopySeriesLabel?: (label: string) => void;
   seriesEnd?: number;
   seriesLabel?: string;
   seriesStart?: number;
@@ -460,6 +463,7 @@ function formatAxisTick(value: number, approximate: boolean, stackMode: StackMod
 export function TimeSeriesLineChart({
   chartStyle = "line",
   model,
+  onCopySeriesLabel,
   points,
   seriesEnd,
   seriesLabel = "Events",
@@ -467,6 +471,7 @@ export function TimeSeriesLineChart({
   showDataLabels = false,
   stackMode = "none",
 }: TimeSeriesLineChartProps) {
+  const chartRef = useRef<HTMLDivElement>(null);
   const plotRef = useRef<HTMLDivElement>(null);
   const inspectButtonRef = useRef<HTMLButtonElement>(null);
   const hintId = useId();
@@ -477,6 +482,7 @@ export function TimeSeriesLineChart({
   const chartPoints = chartModel.points;
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const [activePoints, setActivePoints] = useState(chartPoints);
+  const [pinnedIndex, setPinnedIndex] = useState<number | null>(null);
   const [plotWidth, setPlotWidth] = useState(900);
   const [keyboardActive, setKeyboardActive] = useState(false);
   const seriesNames = chartModel.series.names;
@@ -529,9 +535,22 @@ export function TimeSeriesLineChart({
     };
   }, []);
 
+  useEffect(() => {
+    if (pinnedIndex === null) return;
+    function dismissPinnedValues(event: globalThis.PointerEvent) {
+      if (chartRef.current?.contains(event.target as Node)) return;
+      setPinnedIndex(null);
+      setActiveIndex(null);
+      setKeyboardActive(false);
+    }
+    document.addEventListener("pointerdown", dismissPinnedValues);
+    return () => document.removeEventListener("pointerdown", dismissPinnedValues);
+  }, [pinnedIndex]);
+
   if (activePoints !== chartPoints) {
     setActivePoints(chartPoints);
     setActiveIndex((current) => current === null || chartPoints.length === 0 ? null : Math.min(current, chartPoints.length - 1));
+    setPinnedIndex(null);
   }
 
   const seriesCoordinates = useMemo(() => renderedSeriesNames.map((name, renderedSeriesIndex) => {
@@ -604,18 +623,19 @@ export function TimeSeriesLineChart({
     </>
   ), [chartStyle, seriesPathGeometry]);
   const xTicks = timelineTickIndices(chartPoints.length, plotWidth < 520 ? 3 : plotWidth < 820 ? 4 : 5);
-  const activePoint = activeIndex === null ? null : chartPoints[activeIndex] ?? null;
-  const activeCoordinates = activeIndex === null ? [] : seriesCoordinates.flatMap((series) => {
-    const coordinate = series.points[activeIndex];
+  const inspectedIndex = pinnedIndex ?? activeIndex;
+  const activePoint = inspectedIndex === null ? null : chartPoints[inspectedIndex] ?? null;
+  const activeCoordinates = inspectedIndex === null ? [] : seriesCoordinates.flatMap((series) => {
+    const coordinate = series.points[inspectedIndex];
     return coordinate === undefined || coordinate === null
       ? []
       : [{ ...coordinate, name: series.name, seriesIndex: series.seriesIndex }];
   });
   const activeCoordinate = activeCoordinates.reduce<(typeof activeCoordinates)[number] | null>((highest, coordinate) =>
     highest === null || coordinate.y < highest.y ? coordinate : highest, null);
-  const activeXCoordinate = activeIndex === null
+  const activeXCoordinate = inspectedIndex === null
     ? null
-    : interactionXCoordinates[activeIndex] ?? VIEWBOX_WIDTH / 2;
+    : interactionXCoordinates[inspectedIndex] ?? VIEWBOX_WIDTH / 2;
   const activeXPercent = activeXCoordinate === null ? 0 : (activeXCoordinate / VIEWBOX_WIDTH) * 100;
   const activeYPercent = ((activeCoordinate?.y ?? VIEWBOX_HEIGHT / 2) / VIEWBOX_HEIGHT) * 100;
 
@@ -628,23 +648,55 @@ export function TimeSeriesLineChart({
   }
 
   function inspectFromPointer(event: PointerEvent<HTMLButtonElement>) {
+    if (pinnedIndex !== null) return;
     setKeyboardActive(false);
     setActiveIndex(indexFromPointer(event));
   }
 
+  function closePinnedValues(returnFocus: boolean) {
+    const index = pinnedIndex;
+    setPinnedIndex(null);
+    if (!returnFocus) {
+      setActiveIndex(null);
+      setKeyboardActive(false);
+      return;
+    }
+    setActiveIndex(index);
+    setKeyboardActive(true);
+    inspectButtonRef.current?.focus({ preventScroll: true });
+  }
+
+  function handleChartKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.key !== "Escape" || pinnedIndex === null) return;
+    event.preventDefault();
+    event.stopPropagation();
+    closePinnedValues(true);
+  }
+
   function handleKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
     if (chartPoints.length === 0) return;
-    const current = activeIndex ?? 0;
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      const next = activeIndex ?? pinnedIndex ?? 0;
+      setActiveIndex(next);
+      setPinnedIndex(next);
+      return;
+    }
+    const current = pinnedIndex ?? activeIndex ?? 0;
     let next: number | null = current;
     if (event.key === "ArrowRight") next = Math.min(chartPoints.length - 1, current + 1);
     else if (event.key === "ArrowLeft") next = Math.max(0, current - 1);
     else if (event.key === "Home") next = 0;
     else if (event.key === "End") next = chartPoints.length - 1;
-    else if (event.key === "Escape") next = null;
+    else if (event.key === "Escape") {
+      setPinnedIndex(null);
+      next = null;
+    }
     else return;
     event.preventDefault();
     setKeyboardActive(next !== null);
     setActiveIndex(next);
+    if (pinnedIndex !== null) setPinnedIndex(next);
   }
 
   if (chartPoints.length === 0) {
@@ -660,10 +712,12 @@ export function TimeSeriesLineChart({
 
   return (
     <div
+      ref={chartRef}
       className="time-series-chart"
       data-chart-style={chartStyle}
       data-stack-mode={stackMode}
       data-testid="line-chart"
+      onKeyDownCapture={handleChartKeyDown}
     >
       <div className="time-series-chart__y-axis" aria-hidden="true">
         {ticks.map((tick) => (
@@ -720,7 +774,9 @@ export function TimeSeriesLineChart({
           onFocus={() => { setKeyboardActive(true); setActiveIndex((current) => current ?? 0); }}
           onKeyDown={handleKeyDown}
           onPointerDown={(event) => {
-            inspectFromPointer(event);
+            const index = indexFromPointer(event);
+            setActiveIndex(index);
+            setPinnedIndex(index);
             event.currentTarget.focus({ preventScroll: true });
           }}
           onPointerMove={inspectFromPointer}
@@ -728,6 +784,9 @@ export function TimeSeriesLineChart({
         >
           <span className="sr-only">Inspect chart values</span>
         </button>
+        <p aria-hidden="true" className="time-series-chart__interaction-hint">
+          Hover to inspect. Click to pin{onCopySeriesLabel === undefined ? " values." : " and copy labels."}
+        </p>
         {activePoint === null ? null : (
           <>
             <span className="time-series-chart__crosshair" aria-hidden="true" style={{ left: `${activeXPercent}%` }} />
@@ -743,24 +802,71 @@ export function TimeSeriesLineChart({
                 }}
               />
             ))}
-            <div
-              className={`time-series-chart__tooltip is-${tooltipHorizontal} is-${tooltipVertical}`}
-              role="tooltip"
-              style={{ left: `${activeXPercent}%`, top: `${activeYPercent}%` }}
-            >
-              <strong>{activePointLabel}</strong>
-              {renderedSeriesNames.map((name, renderedSeriesIndex) => (
-                <span key={name}>
-                  <i
-                    aria-hidden="true"
-                    className="time-series-chart__series"
-                    data-series-color={seriesColorIndex(boundedSeriesStart + renderedSeriesIndex)}
-                  />
-                  <span>{timelineSeriesDisplayName(name)}</span>
-                  <b>{formatTimelineSeriesValue(activePoint, name, seriesLabel)}</b>
-                </span>
-              ))}
-            </div>
+            {pinnedIndex === null ? (
+              <div
+                className={`time-series-chart__tooltip is-${tooltipHorizontal} is-${tooltipVertical}`}
+                role="tooltip"
+                style={{ left: `${activeXPercent}%`, top: `${activeYPercent}%` }}
+              >
+                <strong>{activePointLabel}</strong>
+                {renderedSeriesNames.map((name, renderedSeriesIndex) => (
+                  <span key={name}>
+                    <i
+                      aria-hidden="true"
+                      className="time-series-chart__series"
+                      data-series-color={seriesColorIndex(boundedSeriesStart + renderedSeriesIndex)}
+                    />
+                    <span>{timelineSeriesDisplayName(name)}</span>
+                    <b>{formatTimelineSeriesValue(activePoint, name, seriesLabel)}</b>
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <div
+                aria-label={`Pinned chart values for ${activePointLabel}`}
+                className="time-series-chart__pinned-values"
+                role="group"
+              >
+                <div className="time-series-chart__pinned-header">
+                  <strong>{activePointLabel}</strong>
+                  <Button
+                    aria-label="Close pinned chart values"
+                    icon
+                    onClick={() => closePinnedValues(true)}
+                    size="compact"
+                    variant="ghost"
+                  >
+                    <AppIcon name="close" size="xs" />
+                  </Button>
+                </div>
+                {renderedSeriesNames.map((name, renderedSeriesIndex) => {
+                  const visibleLabel = timelineSeriesDisplayName(name);
+                  return (
+                    <div className="time-series-chart__pinned-row" key={name}>
+                      <i
+                        aria-hidden="true"
+                        className="time-series-chart__series"
+                        data-series-color={seriesColorIndex(boundedSeriesStart + renderedSeriesIndex)}
+                      />
+                      <span className="time-series-chart__pinned-label">{visibleLabel}</span>
+                      <b>{formatTimelineSeriesValue(activePoint, name, seriesLabel)}</b>
+                      {onCopySeriesLabel === undefined ? null : (
+                        <Button
+                          aria-label={`Copy series label ${visibleLabel}`}
+                          icon
+                          onClick={() => onCopySeriesLabel(visibleLabel)}
+                          size="compact"
+                          title={`Copy ${visibleLabel}`}
+                          variant="ghost"
+                        >
+                          <AppIcon name="copy" size="xs" />
+                        </Button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </>
         )}
       </div>
@@ -786,7 +892,7 @@ export function TimeSeriesLineChart({
           );
         })}
       </div>
-      <p className="sr-only" id={hintId}>Use Left and Right arrow keys to move through time buckets. Home and End jump to the first and last bucket. Escape clears the value.</p>
+      <p className="sr-only" id={hintId}>Use Left and Right arrow keys to move through time buckets. Home and End jump to the first and last bucket. Press Enter to pin values for selection or copying. Escape clears the value.</p>
       <output className="sr-only" aria-live="polite">{activePoint === null ? "" : activeDescription}</output>
     </div>
   );

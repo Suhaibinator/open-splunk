@@ -27,6 +27,7 @@ import type {
 import type { PivotMode } from "@/lib/search/query-pivots";
 
 import { AppIcon } from "../../_components/app-icon";
+import { Button } from "../../_components/button";
 
 import {
   TIME_SERIES_COLORS,
@@ -57,6 +58,7 @@ interface VisualizationPanelProps {
   onApplyPivot: (fieldName: string, fieldValue: DemoScalar, mode: PivotMode) => void;
   onChartStyleChange: (style: ChartStyle) => void;
   onChartTitleChange: (title: string) => void;
+  onCopySeriesLabel: (label: string) => void;
   onLegendPositionChange: (position: LegendPosition) => void;
   onShowDataLabelsChange: (show: boolean) => void;
   onStackModeChange: (mode: StackMode) => void;
@@ -780,6 +782,7 @@ export function VisualizationPanel({
   onApplyPivot,
   onChartStyleChange,
   onChartTitleChange,
+  onCopySeriesLabel,
   onLegendPositionChange,
   onShowDataLabelsChange,
   onStackModeChange,
@@ -921,6 +924,7 @@ export function VisualizationPanel({
                 ? "column"
                 : "line"}
             model={timechartModel}
+            onCopySeriesLabel={onCopySeriesLabel}
             points={timelinePoints}
             seriesEnd={activeSeriesEnd}
             seriesStart={boundedSeriesOffset}
@@ -943,12 +947,25 @@ export function VisualizationPanel({
           <div className="chart-legend">
             {isTimechartResult
               ? isTimeSeriesChart
-                ? visibleTimelineSeries.map((name, index) => (
-                  <span key={name}>
-                    <i style={{ backgroundColor: seriesColor(boundedSeriesOffset + index) }} />
-                    {timelineSeriesDisplayName(name)}
-                  </span>
-                ))
+                ? visibleTimelineSeries.map((name, index) => {
+                  const visibleLabel = timelineSeriesDisplayName(name);
+                  return (
+                    <span key={name}>
+                      <i style={{ backgroundColor: seriesColor(boundedSeriesOffset + index) }} />
+                      {visibleLabel}
+                      <Button
+                        aria-label={`Copy series label ${visibleLabel}`}
+                        icon
+                        onClick={() => onCopySeriesLabel(visibleLabel)}
+                        size="compact"
+                        title={`Copy ${visibleLabel}`}
+                        variant="ghost"
+                      >
+                        <AppIcon name="copy" size="xs" />
+                      </Button>
+                    </span>
+                  );
+                })
                 : <span><i className="legend-info" />Events</span>
               : backendCategoricalResult
                 ? visibleCategoricalSeries.map((series, index) => (
