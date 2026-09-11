@@ -677,7 +677,7 @@ export function TimeSeriesLineChart({
     if (chartPoints.length === 0) return;
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      const next = activeIndex ?? pinnedIndex ?? 0;
+      const next = pinnedIndex ?? activeIndex ?? 0;
       setActiveIndex(next);
       setPinnedIndex(next);
       return;
@@ -771,7 +771,10 @@ export function TimeSeriesLineChart({
           aria-describedby={hintId}
           aria-label={activeDescription}
           onBlur={() => { setKeyboardActive(false); setActiveIndex(null); }}
-          onFocus={() => { setKeyboardActive(true); setActiveIndex((current) => current ?? 0); }}
+          onFocus={() => {
+            setKeyboardActive(true);
+            setActiveIndex((current) => current ?? pinnedIndex ?? 0);
+          }}
           onKeyDown={handleKeyDown}
           onPointerDown={(event) => {
             const index = indexFromPointer(event);

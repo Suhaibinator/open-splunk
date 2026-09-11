@@ -201,6 +201,24 @@ test("pinned chart values stay stable, copy visible labels, and restore inspecto
     await act(async () => copy.dispatchEvent(fakeEvent("click")));
     assert.deepEqual(copiedLabels, [visibleLabel]);
 
+    async function repinAfterFocusRoundTrip(
+      key: " " | "Enter",
+      inspectButton: FakeElement,
+      copyButton: FakeElement,
+    ) {
+      copyButton.focus();
+      await act(async () => inspectButton.dispatchEvent(fakeEvent("focusout")));
+      inspectButton.focus();
+      await act(async () => inspectButton.dispatchEvent(fakeEvent("focusin")));
+      await act(async () => inspectButton.dispatchEvent(Object.assign(fakeEvent("keydown"), { key })));
+      assert.equal(
+        container.querySelector('[role="group"]')?.getAttribute("aria-label"),
+        "Pinned chart values for hour 1",
+      );
+    }
+    await repinAfterFocusRoundTrip("Enter", inspect, copy);
+    await repinAfterFocusRoundTrip(" ", inspect, copy);
+
     await act(async () => copy.dispatchEvent(Object.assign(fakeEvent("keydown"), { key: "Escape" })));
     assert.equal(container.querySelector('[role="group"]'), null);
     assert.equal(browser.document.activeElement, inspect);
