@@ -156,7 +156,7 @@ func newRelationInputWithTimeBuckets(
 		dynamicColumnCount: preflight.dynamicColumnCount,
 	}
 	if ends != nil {
-		input.bucketEnds = make([]time.Time, len(ends))
+		input.bucketEnds = make([]time.Time, 0, len(ends))
 	}
 	digest := sha256.New()
 	writeTokenPart(digest, "timechart-external-relation-v1")
@@ -188,10 +188,11 @@ func newRelationInputWithTimeBuckets(
 			input.rows[i][j] = cloned
 		}
 		if ends != nil {
-			if i >= len(ends) {
+			if len(ends) == 0 {
 				return nil, errors.New("continue timechart: invalid bucket bounds")
 			}
-			input.bucketEnds[i] = ends[i]
+			input.bucketEnds = append(input.bucketEnds, ends[0])
+			ends = ends[1:]
 		}
 	}
 	copy(input.commitment[:], digest.Sum(nil))
