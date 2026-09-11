@@ -153,7 +153,7 @@ the chart domain, and coordinate projection bounds intermediate arithmetic
 that would overflow.
 Clicking the chart inspector, or pressing Enter while it has focus, pins the
 current values so their text can be selected. Copy controls in pinned values
-and the legend copy the exact server series label. Escape or the Close control
+and the legend copy the exact displayed series label. Escape or the Close control
 returns focus to the inspector; clicking outside dismisses the pinned values.
 Legacy result rows that do not contain `time_bucket` continue to render without
 an invented bucket end or drilldown range.
