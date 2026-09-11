@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/Suhaibinator/SRouter/pkg/codec"
-	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
@@ -22,27 +21,17 @@ const (
 	maximumAuditActorIDBytes      = 255
 )
 
-func (handler *apiHandler) auditEventRoutes(
-	noAuth router.AuthLevel,
+func (handler *apiHandler) registerAuditEventRoutes(
+	group *apiRouteGroup,
 	smallRequestBytes int64,
-) []router.RouteDefinition {
-	return []router.RouteDefinition{
-		router.RouteConfig[
-			*opensplunk.ListAuditEventsRequest,
-			*serializedAuditEventListResponse,
-		]{
-			Path:       auditEventsListRoute,
-			Methods:    []router.HttpMethod{router.MethodPost},
-			AuthLevel:  &noAuth,
-			Codec:      newSerializedAuditEventListCodec(),
-			Handler:    handler.listAuditEvents,
-			SourceType: router.Body,
-			Overrides: sroutercommon.RouteOverrides{
-				MaxBodySize: smallRequestBytes,
-			},
-			Sanitizer: handler.sanitizeListAuditEventsRequest,
-		},
-	}
+) {
+	group.Route(sizedPostRoute(
+		auditEventsListRoute,
+		smallRequestBytes,
+		newSerializedAuditEventListCodec(),
+		handler.listAuditEvents,
+		handler.sanitizeListAuditEventsRequest,
+	))
 }
 
 func (handler *apiHandler) listAuditEvents(

@@ -9,8 +9,6 @@ import (
 	"time"
 
 	"fortio.org/safecast"
-	"github.com/Suhaibinator/SRouter/pkg/codec"
-	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/proto"
@@ -41,69 +39,19 @@ type alertRunCursor struct {
 	AlertID    string `json:"alert_id"`
 }
 
-func (handler *apiHandler) alertRoutes(noAuth router.AuthLevel, maximumRequestBytes, smallRequestBytes int64) []router.RouteDefinition {
-	return []router.RouteDefinition{
-		router.RouteConfig[*opensplunk.CreateAlertRequest, *opensplunk.CreateAlertResponse]{
-			Path: "/alerts/create", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.CreateAlertRequest, *opensplunk.CreateAlertResponse](), Handler: handler.createAlert,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumRequestBytes},
-			Sanitizer: sanitizeCreateAlertRequest,
-		},
-		router.RouteConfig[*opensplunk.GetAlertRequest, *opensplunk.GetAlertResponse]{
-			Path: "/alerts/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.GetAlertRequest, *opensplunk.GetAlertResponse](), Handler: handler.getAlert,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeGetAlertRequest,
-		},
-		router.RouteConfig[*opensplunk.ListAlertsRequest, *opensplunk.ListAlertsResponse]{
-			Path: "/alerts/list", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.ListAlertsRequest, *opensplunk.ListAlertsResponse](), Handler: handler.listAlerts,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: handler.sanitizeListAlertsRequest,
-		},
-		router.RouteConfig[*opensplunk.UpdateAlertRequest, *opensplunk.UpdateAlertResponse]{
-			Path: "/alerts/update", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.UpdateAlertRequest, *opensplunk.UpdateAlertResponse](), Handler: handler.updateAlert,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumRequestBytes},
-			Sanitizer: sanitizeUpdateAlertRequest,
-		},
-		router.RouteConfig[*opensplunk.SetAlertEnabledRequest, *opensplunk.SetAlertEnabledResponse]{
-			Path: "/alerts/state/set", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.SetAlertEnabledRequest, *opensplunk.SetAlertEnabledResponse](), Handler: handler.setAlertEnabled,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeSetAlertEnabledRequest,
-		},
-		router.RouteConfig[*opensplunk.DeleteAlertRequest, *opensplunk.DeleteAlertResponse]{
-			Path: "/alerts/delete", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.DeleteAlertRequest, *opensplunk.DeleteAlertResponse](), Handler: handler.deleteAlert,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeDeleteAlertRequest,
-		},
-		router.RouteConfig[*opensplunk.RunAlertRequest, *opensplunk.RunAlertResponse]{
-			Path: "/alerts/run", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.RunAlertRequest, *opensplunk.RunAlertResponse](), Handler: handler.runAlert,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeRunAlertRequest,
-		},
-		router.RouteConfig[*opensplunk.TestAlertWebhookRequest, *opensplunk.TestAlertWebhookResponse]{
-			Path: "/alerts/webhook/test", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.TestAlertWebhookRequest, *opensplunk.TestAlertWebhookResponse](), Handler: handler.testAlertWebhook,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeTestAlertWebhookRequest,
-		},
-		router.RouteConfig[*opensplunk.RotateAlertSecretRequest, *opensplunk.RotateAlertSecretResponse]{
-			Path: "/alerts/secret/rotate", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.RotateAlertSecretRequest, *opensplunk.RotateAlertSecretResponse](), Handler: handler.rotateAlertSecret,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeRotateAlertSecretRequest,
-		},
-		router.RouteConfig[*opensplunk.ListAlertRunsRequest, *opensplunk.ListAlertRunsResponse]{
-			Path: "/alerts/runs/list", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.ListAlertRunsRequest, *opensplunk.ListAlertRunsResponse](), Handler: handler.listAlertRuns,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: handler.sanitizeListAlertRunsRequest,
-		},
-	}
+func (handler *apiHandler) registerAlertRoutes(group *apiRouteGroup, maximumRequestBytes, smallRequestBytes int64) {
+	group.Route(
+		sizedProtoPostRoute("/alerts/create", maximumRequestBytes, handler.createAlert, sanitizeCreateAlertRequest),
+		sizedProtoPostRoute("/alerts/get", smallRequestBytes, handler.getAlert, sanitizeGetAlertRequest),
+		sizedProtoPostRoute("/alerts/list", smallRequestBytes, handler.listAlerts, handler.sanitizeListAlertsRequest),
+		sizedProtoPostRoute("/alerts/update", maximumRequestBytes, handler.updateAlert, sanitizeUpdateAlertRequest),
+		sizedProtoPostRoute("/alerts/state/set", smallRequestBytes, handler.setAlertEnabled, sanitizeSetAlertEnabledRequest),
+		sizedProtoPostRoute("/alerts/delete", smallRequestBytes, handler.deleteAlert, sanitizeDeleteAlertRequest),
+		sizedProtoPostRoute("/alerts/run", smallRequestBytes, handler.runAlert, sanitizeRunAlertRequest),
+		sizedProtoPostRoute("/alerts/webhook/test", smallRequestBytes, handler.testAlertWebhook, sanitizeTestAlertWebhookRequest),
+		sizedProtoPostRoute("/alerts/secret/rotate", smallRequestBytes, handler.rotateAlertSecret, sanitizeRotateAlertSecretRequest),
+		sizedProtoPostRoute("/alerts/runs/list", smallRequestBytes, handler.listAlertRuns, handler.sanitizeListAlertRunsRequest),
+	)
 }
 
 func (handler *apiHandler) createAlert(request *http.Request, input *opensplunk.CreateAlertRequest) (*opensplunk.CreateAlertResponse, error) {

@@ -6,8 +6,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Suhaibinator/SRouter/pkg/codec"
-	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/cursorcodec"
@@ -31,27 +29,12 @@ type searchArtifactCursor struct {
 	Offset     uint64 `json:"offset"`
 }
 
-func (handler *apiHandler) searchArtifactRoutes(noAuth router.AuthLevel, smallRequestBytes int64) []router.RouteDefinition {
-	return []router.RouteDefinition{
-		router.RouteConfig[*opensplunk.GetSearchJobSettingsRequest, *opensplunk.GetSearchJobSettingsResponse]{
-			Path: "/search/jobs/settings/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.GetSearchJobSettingsRequest, *opensplunk.GetSearchJobSettingsResponse](), Handler: handler.getSearchJobSettings,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeGetSearchJobSettingsRequest,
-		},
-		router.RouteConfig[*opensplunk.UpdateSearchJobSettingsRequest, *opensplunk.UpdateSearchJobSettingsResponse]{
-			Path: "/search/jobs/settings/update", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.UpdateSearchJobSettingsRequest, *opensplunk.UpdateSearchJobSettingsResponse](), Handler: handler.updateSearchJobSettings,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeUpdateSearchJobSettingsRequest,
-		},
-		router.RouteConfig[*opensplunk.ShareSearchJobRequest, *opensplunk.ShareSearchJobResponse]{
-			Path: "/search/jobs/share", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.ShareSearchJobRequest, *opensplunk.ShareSearchJobResponse](), Handler: handler.shareSearchJob,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeShareSearchJobRequest,
-		},
-	}
+func (handler *apiHandler) registerSearchArtifactRoutes(group *apiRouteGroup, smallRequestBytes int64) {
+	group.Route(
+		sizedProtoPostRoute("/search/jobs/settings/get", smallRequestBytes, handler.getSearchJobSettings, sanitizeGetSearchJobSettingsRequest),
+		sizedProtoPostRoute("/search/jobs/settings/update", smallRequestBytes, handler.updateSearchJobSettings, sanitizeUpdateSearchJobSettingsRequest),
+		sizedProtoPostRoute("/search/jobs/share", smallRequestBytes, handler.shareSearchJob, sanitizeShareSearchJobRequest),
+	)
 }
 
 func (handler *apiHandler) getSearchJobSettings(request *http.Request, input *opensplunk.GetSearchJobSettingsRequest) (*opensplunk.GetSearchJobSettingsResponse, error) {

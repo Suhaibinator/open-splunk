@@ -785,7 +785,7 @@ func TestKnowledgeValidationCreateDependencyContextExceptionIsNarrow(
 
 func TestKnowledgeValidationPathIsRegisteredInExactManagementBoundary(t *testing.T) {
 	appender := &knowledgeBoundaryAppender{}
-	handler, httpHandler := newKnowledgeHTTPHandler(
+	_, httpHandler := newKnowledgeHTTPHandler(
 		t,
 		auth.BrowserRoleAdministrator,
 		&knowledgeHTTPCatalog{},
@@ -793,9 +793,6 @@ func TestKnowledgeValidationPathIsRegisteredInExactManagementBoundary(t *testing
 		knowledgeHTTPApps(),
 		appender,
 	)
-	if routes := handler.knowledgeManagementRoutes(router.NoAuth); len(routes) != 9 {
-		t.Fatalf("management routes=%d, want exactly nine", len(routes))
-	}
 	request := httptest.NewRequestWithContext(
 		t.Context(),
 		http.MethodPost,

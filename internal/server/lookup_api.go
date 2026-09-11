@@ -10,7 +10,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/Suhaibinator/SRouter/pkg/codec"
-	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
@@ -82,51 +81,16 @@ func (handler *apiHandler) lookupManagementConfigured() bool {
 	return handler != nil && !isNilDependency(handler.lookupManagement) && handler.lookupManagement.Ready()
 }
 
-func (handler *apiHandler) lookupManagementRoutes(noAuth router.AuthLevel) []router.RouteDefinition {
-	return []router.RouteDefinition{
-		router.RouteConfig[*opensplunk.CreateLookupRequest, *serializedCreateLookupResponse]{
-			Path: lookupCreateRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newLookupBoundedCodec(codec.NewProtoCodec[*opensplunk.CreateLookupRequest, *opensplunk.CreateLookupResponse](), "create"), Handler: handler.createLookup,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumLookupMutationRequestBytes},
-			Sanitizer: sanitizeCreateLookupRequest,
-		},
-		router.RouteConfig[*opensplunk.GetLookupRequest, *serializedGetLookupResponse]{
-			Path: lookupGetRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newLookupBoundedCodec(codec.NewProtoCodec[*opensplunk.GetLookupRequest, *opensplunk.GetLookupResponse](), "get"), Handler: handler.getLookup,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumLookupSmallRequestBytes},
-			Sanitizer: sanitizeGetLookupRequest,
-		},
-		router.RouteConfig[*opensplunk.ListLookupsRequest, *serializedListLookupsResponse]{
-			Path: lookupListRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newLookupBoundedCodec(codec.NewProtoCodec[*opensplunk.ListLookupsRequest, *opensplunk.ListLookupsResponse](), "list"), Handler: handler.listLookups,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumLookupSmallRequestBytes},
-			Sanitizer: sanitizeListLookupsRequest,
-		},
-		router.RouteConfig[*opensplunk.ReplaceLookupRequest, *serializedReplaceLookupResponse]{
-			Path: lookupReplaceRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newLookupBoundedCodec(codec.NewProtoCodec[*opensplunk.ReplaceLookupRequest, *opensplunk.ReplaceLookupResponse](), "replace"), Handler: handler.replaceLookup,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumLookupMutationRequestBytes},
-			Sanitizer: sanitizeReplaceLookupRequest,
-		},
-		router.RouteConfig[*opensplunk.SetLookupStateRequest, *serializedSetLookupStateResponse]{
-			Path: lookupSetStateRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newLookupBoundedCodec(codec.NewProtoCodec[*opensplunk.SetLookupStateRequest, *opensplunk.SetLookupStateResponse](), "set state"), Handler: handler.setLookupState,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumLookupSmallRequestBytes},
-			Sanitizer: sanitizeSetLookupStateRequest,
-		},
-		router.RouteConfig[*opensplunk.DeleteLookupRequest, *serializedDeleteLookupResponse]{
-			Path: lookupDeleteRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newLookupBoundedCodec(codec.NewProtoCodec[*opensplunk.DeleteLookupRequest, *opensplunk.DeleteLookupResponse](), "delete"), Handler: handler.deleteLookup,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumLookupSmallRequestBytes},
-			Sanitizer: sanitizeDeleteLookupRequest,
-		},
-		router.RouteConfig[*opensplunk.PreviewLookupRequest, *serializedPreviewLookupResponse]{
-			Path: lookupPreviewRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newLookupBoundedCodec(codec.NewProtoCodec[*opensplunk.PreviewLookupRequest, *opensplunk.PreviewLookupResponse](), "preview"), Handler: handler.previewLookup,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumLookupMutationRequestBytes},
-			Sanitizer: sanitizePreviewLookupRequest,
-		},
-	}
+func (handler *apiHandler) registerLookupManagementRoutes(group *apiRouteGroup) {
+	group.Route(
+		sizedPostRoute(lookupCreateRoute, maximumLookupMutationRequestBytes, newLookupBoundedCodec(codec.NewProtoCodec[*opensplunk.CreateLookupRequest, *opensplunk.CreateLookupResponse](), "create"), handler.createLookup, sanitizeCreateLookupRequest),
+		sizedPostRoute(lookupGetRoute, maximumLookupSmallRequestBytes, newLookupBoundedCodec(codec.NewProtoCodec[*opensplunk.GetLookupRequest, *opensplunk.GetLookupResponse](), "get"), handler.getLookup, sanitizeGetLookupRequest),
+		sizedPostRoute(lookupListRoute, maximumLookupSmallRequestBytes, newLookupBoundedCodec(codec.NewProtoCodec[*opensplunk.ListLookupsRequest, *opensplunk.ListLookupsResponse](), "list"), handler.listLookups, sanitizeListLookupsRequest),
+		sizedPostRoute(lookupReplaceRoute, maximumLookupMutationRequestBytes, newLookupBoundedCodec(codec.NewProtoCodec[*opensplunk.ReplaceLookupRequest, *opensplunk.ReplaceLookupResponse](), "replace"), handler.replaceLookup, sanitizeReplaceLookupRequest),
+		sizedPostRoute(lookupSetStateRoute, maximumLookupSmallRequestBytes, newLookupBoundedCodec(codec.NewProtoCodec[*opensplunk.SetLookupStateRequest, *opensplunk.SetLookupStateResponse](), "set state"), handler.setLookupState, sanitizeSetLookupStateRequest),
+		sizedPostRoute(lookupDeleteRoute, maximumLookupSmallRequestBytes, newLookupBoundedCodec(codec.NewProtoCodec[*opensplunk.DeleteLookupRequest, *opensplunk.DeleteLookupResponse](), "delete"), handler.deleteLookup, sanitizeDeleteLookupRequest),
+		sizedPostRoute(lookupPreviewRoute, maximumLookupMutationRequestBytes, newLookupBoundedCodec(codec.NewProtoCodec[*opensplunk.PreviewLookupRequest, *opensplunk.PreviewLookupResponse](), "preview"), handler.previewLookup, sanitizePreviewLookupRequest),
+	)
 }
 
 func (handler *apiHandler) createLookup(request *http.Request, input *opensplunk.CreateLookupRequest) (*serializedCreateLookupResponse, error) {

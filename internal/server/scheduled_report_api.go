@@ -7,8 +7,6 @@ import (
 	"time"
 
 	"fortio.org/safecast"
-	"github.com/Suhaibinator/SRouter/pkg/codec"
-	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -24,27 +22,12 @@ type searchArtifactMetadataBatchInspector interface {
 	InspectMany(context.Context, searchjobs.AccessScope, []string) (map[string]searchartifacts.Record, error)
 }
 
-func (handler *apiHandler) scheduledReportRoutes(noAuth router.AuthLevel, smallRequestBytes int64) []router.RouteDefinition {
-	return []router.RouteDefinition{
-		router.RouteConfig[*opensplunk.SetSavedSearchScheduleRequest, *opensplunk.SetSavedSearchScheduleResponse]{
-			Path: "/saved-searches/schedule/set", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.SetSavedSearchScheduleRequest, *opensplunk.SetSavedSearchScheduleResponse](), Handler: handler.setSavedSearchSchedule,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeSetSavedSearchScheduleRequest,
-		},
-		router.RouteConfig[*opensplunk.RunSavedSearchRequest, *opensplunk.RunSavedSearchResponse]{
-			Path: "/saved-searches/run", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.RunSavedSearchRequest, *opensplunk.RunSavedSearchResponse](), Handler: handler.runSavedSearch,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeRunSavedSearchRequest,
-		},
-		router.RouteConfig[*opensplunk.ListScheduledSearchRunsRequest, *opensplunk.ListScheduledSearchRunsResponse]{
-			Path: "/saved-searches/runs/list", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.ListScheduledSearchRunsRequest, *opensplunk.ListScheduledSearchRunsResponse](), Handler: handler.listScheduledSearchRuns,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: handler.sanitizeListScheduledSearchRunsRequest,
-		},
-	}
+func (handler *apiHandler) registerScheduledReportRoutes(group *apiRouteGroup, smallRequestBytes int64) {
+	group.Route(
+		sizedProtoPostRoute("/saved-searches/schedule/set", smallRequestBytes, handler.setSavedSearchSchedule, sanitizeSetSavedSearchScheduleRequest),
+		sizedProtoPostRoute("/saved-searches/run", smallRequestBytes, handler.runSavedSearch, sanitizeRunSavedSearchRequest),
+		sizedProtoPostRoute("/saved-searches/runs/list", smallRequestBytes, handler.listScheduledSearchRuns, handler.sanitizeListScheduledSearchRunsRequest),
+	)
 }
 
 func (handler *apiHandler) setSavedSearchSchedule(request *http.Request, input *opensplunk.SetSavedSearchScheduleRequest) (*opensplunk.SetSavedSearchScheduleResponse, error) {

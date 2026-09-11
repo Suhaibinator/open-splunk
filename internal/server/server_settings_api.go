@@ -4,8 +4,6 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/Suhaibinator/SRouter/pkg/codec"
-	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -16,36 +14,16 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/uipalette"
 )
 
-func (handler *apiHandler) serverSettingsRoutes(
-	noAuth router.AuthLevel,
+func (handler *apiHandler) registerServerSettingsRoutes(
+	group *apiRouteGroup,
 	maximumRequestBytes int64,
-) []router.RouteDefinition {
-	return []router.RouteDefinition{
-		router.RouteConfig[*opensplunk.GetServerSettingsRequest, *opensplunk.GetServerSettingsResponse]{
-			Path: "/server/settings/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.GetServerSettingsRequest, *opensplunk.GetServerSettingsResponse](), Handler: handler.getServerSettings,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumRequestBytes},
-			Sanitizer: sanitizeGetServerSettingsRequest,
-		},
-		router.RouteConfig[*opensplunk.UpdateServerSettingsRequest, *opensplunk.UpdateServerSettingsResponse]{
-			Path: "/server/settings/update", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.UpdateServerSettingsRequest, *opensplunk.UpdateServerSettingsResponse](), Handler: handler.updateServerSettings,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumRequestBytes},
-			Sanitizer: sanitizeUpdateServerSettingsRequest,
-		},
-		router.RouteConfig[*opensplunk.GetServerAppearanceRequest, *opensplunk.GetServerAppearanceResponse]{
-			Path: "/server/appearance/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.GetServerAppearanceRequest, *opensplunk.GetServerAppearanceResponse](), Handler: handler.getServerAppearance,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumRequestBytes},
-			Sanitizer: sanitizeGetServerAppearanceRequest,
-		},
-		router.RouteConfig[*opensplunk.UpdateServerAppearanceRequest, *opensplunk.UpdateServerAppearanceResponse]{
-			Path: "/server/appearance/update", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.UpdateServerAppearanceRequest, *opensplunk.UpdateServerAppearanceResponse](), Handler: handler.updateServerAppearance,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumRequestBytes},
-			Sanitizer: sanitizeUpdateServerAppearanceRequest,
-		},
-	}
+) {
+	group.Route(
+		sizedProtoPostRoute("/server/settings/get", maximumRequestBytes, handler.getServerSettings, sanitizeGetServerSettingsRequest),
+		sizedProtoPostRoute("/server/settings/update", maximumRequestBytes, handler.updateServerSettings, sanitizeUpdateServerSettingsRequest),
+		sizedProtoPostRoute("/server/appearance/get", maximumRequestBytes, handler.getServerAppearance, sanitizeGetServerAppearanceRequest),
+		sizedProtoPostRoute("/server/appearance/update", maximumRequestBytes, handler.updateServerAppearance, sanitizeUpdateServerAppearanceRequest),
+	)
 }
 
 func (handler *apiHandler) getServerAppearance(

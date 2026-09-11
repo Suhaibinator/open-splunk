@@ -4,8 +4,6 @@ import (
 	"net/http"
 
 	"fortio.org/safecast"
-	"github.com/Suhaibinator/SRouter/pkg/codec"
-	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -142,23 +140,14 @@ func hecFixedHistogramToProto(snapshot HECFixedHistogramSnapshot) *opensplunk.HE
 	}
 }
 
-func (handler *apiHandler) hecOperationalRoutes(
-	noAuth router.AuthLevel,
+func (handler *apiHandler) registerHECOperationalRoutes(
+	group *apiRouteGroup,
 	smallRequestBytes int64,
-) []router.RouteDefinition {
-	return []router.RouteDefinition{
-		router.RouteConfig[
-			*opensplunk.GetHECOperationalSnapshotRequest,
-			*opensplunk.GetHECOperationalSnapshotResponse,
-		]{
-			Path:       hecOperationsRoute,
-			Methods:    []router.HttpMethod{router.MethodPost},
-			AuthLevel:  &noAuth,
-			Codec:      codec.NewProtoCodec[*opensplunk.GetHECOperationalSnapshotRequest, *opensplunk.GetHECOperationalSnapshotResponse](),
-			Handler:    handler.getHECOperationalSnapshot,
-			SourceType: router.Body,
-			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer:  sanitizeGetHECOperationalSnapshotRequest,
-		},
-	}
+) {
+	group.Route(sizedProtoPostRoute(
+		hecOperationsRoute,
+		smallRequestBytes,
+		handler.getHECOperationalSnapshot,
+		sanitizeGetHECOperationalSnapshotRequest,
+	))
 }

@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/Suhaibinator/SRouter/pkg/codec"
-	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
@@ -24,27 +23,17 @@ const (
 	maximumSearchAttemptAuditIdentityBytes  = 255
 )
 
-func (handler *apiHandler) searchAttemptAuditRoutes(
-	noAuth router.AuthLevel,
+func (handler *apiHandler) registerSearchAttemptAuditRoutes(
+	group *apiRouteGroup,
 	smallRequestBytes int64,
-) []router.RouteDefinition {
-	return []router.RouteDefinition{
-		router.RouteConfig[
-			*opensplunk.ListSearchAttemptAuditEventsRequest,
-			*serializedSearchAttemptAuditListResponse,
-		]{
-			Path:       searchAttemptAuditListRoute,
-			Methods:    []router.HttpMethod{router.MethodPost},
-			AuthLevel:  &noAuth,
-			Codec:      newSerializedSearchAttemptAuditListCodec(),
-			Handler:    handler.listSearchAttemptAuditEvents,
-			SourceType: router.Body,
-			Overrides: sroutercommon.RouteOverrides{
-				MaxBodySize: smallRequestBytes,
-			},
-			Sanitizer: handler.sanitizeListSearchAttemptAuditEventsRequest,
-		},
-	}
+) {
+	group.Route(sizedPostRoute(
+		searchAttemptAuditListRoute,
+		smallRequestBytes,
+		newSerializedSearchAttemptAuditListCodec(),
+		handler.listSearchAttemptAuditEvents,
+		handler.sanitizeListSearchAttemptAuditEventsRequest,
+	))
 }
 
 func (handler *apiHandler) listSearchAttemptAuditEvents(

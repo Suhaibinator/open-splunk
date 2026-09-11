@@ -1098,7 +1098,10 @@ func NewHandler(config Config) (*Handler, error) {
 		browserAllowedHosts:        browserAllowedHosts,
 		trustForwardedProto:        config.TrustForwardedProto,
 	}
-	apiRouter := api.newRouter(requestBytes, routeTimeout)
+	apiRouter, err := api.newRouter(requestBytes, routeTimeout)
+	if err != nil {
+		return nil, err
+	}
 	apiRoutes := postAPIRoutes(
 		"/api/system/bootstrap",
 		"/api/search/validate",
@@ -1558,210 +1561,15 @@ func (handler *apiHandler) srouterDependencies() router.RouterDependencies[strin
 	return dependencies
 }
 
-func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout time.Duration) http.Handler {
+func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout time.Duration) (*router.Router[string, struct{}], error) {
 	// NewHandler substitutes a no-op logger for a nil Config.Logger, so this is
 	// always non-nil.
 	routerLogger := newSRouterLogger(handler.logger)
-	noAuth := router.NoAuth
 	protobufMiddleware := requireProtobufContentType
 	requestMiddleware := handler.boundRequests
 	deadlineMiddleware := withSynchronousDeadline(routeTimeout)
 	smallRequestBytes := min(maximumRequestBytes, maximumSmallRequestBytes)
-
-	routes := []router.RouteDefinition{
-		router.RouteConfig[*opensplunk.GetSystemBootstrapRequest, *opensplunk.GetSystemBootstrapResponse]{
-			Path: "/system/bootstrap", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.GetSystemBootstrapRequest, *opensplunk.GetSystemBootstrapResponse](), Handler: handler.getSystemBootstrap,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeGetSystemBootstrapRequest,
-		},
-		router.RouteConfig[*opensplunk.ValidateSearchRequest, *opensplunk.ValidateSearchResponse]{
-			Path: "/search/validate", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.ValidateSearchRequest, *opensplunk.ValidateSearchResponse](), Handler: handler.validateSearch,
-			SourceType: router.Body,
-			Sanitizer:  sanitizeValidateSearchRequest,
-		},
-		router.RouteConfig[*opensplunk.CreateSearchJobRequest, *opensplunk.CreateSearchJobResponse]{
-			Path: "/search/jobs/create", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.CreateSearchJobRequest, *opensplunk.CreateSearchJobResponse](), Handler: handler.createSearchJob,
-			SourceType: router.Body,
-			Sanitizer:  sanitizeCreateSearchJobRequest,
-		},
-		router.RouteConfig[*opensplunk.GetSearchJobRequest, *opensplunk.GetSearchJobResponse]{
-			Path: "/search/jobs/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.GetSearchJobRequest, *opensplunk.GetSearchJobResponse](), Handler: handler.getSearchJob,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeGetSearchJobRequest,
-		},
-		router.RouteConfig[*opensplunk.ListSearchJobsRequest, *serializedSearchJobListResponse]{
-			Path: searchJobsListRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newSerializedSearchJobListCodec(), Handler: handler.listSearchJobs,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: handler.sanitizeListSearchJobsRequest,
-		},
-		router.RouteConfig[*opensplunk.GetSearchResultsRequest, *serializedSearchResultsResponse]{
-			Path: "/search/jobs/results", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newSerializedSearchResultsCodec(), Handler: handler.getSearchResults,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: handler.sanitizeGetSearchResultsRequest,
-		},
-		router.RouteConfig[*opensplunk.CancelSearchJobRequest, *opensplunk.CancelSearchJobResponse]{
-			Path: "/search/jobs/cancel", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.CancelSearchJobRequest, *opensplunk.CancelSearchJobResponse](), Handler: handler.cancelSearchJob,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeCancelSearchJobRequest,
-		},
-		router.RouteConfig[*opensplunk.CreateSavedSearchRequest, *opensplunk.CreateSavedSearchResponse]{
-			Path: "/saved-searches/create", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.CreateSavedSearchRequest, *opensplunk.CreateSavedSearchResponse](), Handler: handler.createSavedSearch,
-			SourceType: router.Body,
-			Sanitizer:  sanitizeCreateSavedSearchRequest,
-		},
-		router.RouteConfig[*opensplunk.GetSavedSearchRequest, *opensplunk.GetSavedSearchResponse]{
-			Path: "/saved-searches/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.GetSavedSearchRequest, *opensplunk.GetSavedSearchResponse](), Handler: handler.getSavedSearch,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeGetSavedSearchRequest,
-		},
-		router.RouteConfig[*opensplunk.ListSavedSearchesRequest, *serializedSavedSearchListResponse]{
-			Path: "/saved-searches/list", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newSerializedSavedSearchListCodec(), Handler: handler.listSavedSearches,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: handler.sanitizeListSavedSearchesRequest,
-		},
-		router.RouteConfig[*opensplunk.UpdateSavedSearchRequest, *opensplunk.UpdateSavedSearchResponse]{
-			Path: "/saved-searches/update", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.UpdateSavedSearchRequest, *opensplunk.UpdateSavedSearchResponse](), Handler: handler.updateSavedSearch,
-			SourceType: router.Body,
-			Sanitizer:  sanitizeUpdateSavedSearchRequest,
-		},
-		router.RouteConfig[*opensplunk.DuplicateSavedSearchRequest, *opensplunk.DuplicateSavedSearchResponse]{
-			Path: "/saved-searches/duplicate", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.DuplicateSavedSearchRequest, *opensplunk.DuplicateSavedSearchResponse](), Handler: handler.duplicateSavedSearch,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeDuplicateSavedSearchRequest,
-		},
-		router.RouteConfig[*opensplunk.DeleteSavedSearchRequest, *opensplunk.DeleteSavedSearchResponse]{
-			Path: "/saved-searches/delete", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.DeleteSavedSearchRequest, *opensplunk.DeleteSavedSearchResponse](), Handler: handler.deleteSavedSearch,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeDeleteSavedSearchRequest,
-		},
-	}
-	if handler.dashboards != nil {
-		routes = append(routes, handler.dashboardRoutes(noAuth, smallRequestBytes)...)
-	}
-	if handler.searchArtifacts != nil {
-		routes = append(routes, handler.searchArtifactRoutes(noAuth, smallRequestBytes)...)
-	}
-	if handler.scheduledReports != nil {
-		routes = append(routes, handler.scheduledReportRoutes(noAuth, smallRequestBytes)...)
-	}
-	if handler.scheduledReports != nil || handler.alertsEnabled {
-		routes = append(routes, handler.scheduleValidationRoutes(noAuth, smallRequestBytes)...)
-	}
-	if handler.alertsEnabled {
-		routes = append(routes, handler.alertRoutes(noAuth, maximumRequestBytes, smallRequestBytes)...)
-	}
-	if handler.indexAdmin != nil {
-		routes = append(routes, handler.indexAdministrationRoutes(noAuth, smallRequestBytes)...)
-	}
-	if handler.ingestionTokens != nil {
-		routes = append(routes, handler.ingestionTokenRoutes(noAuth, maximumRequestBytes, smallRequestBytes)...)
-	}
-	if handler.hecOperations != nil {
-		routes = append(routes, handler.hecOperationalRoutes(noAuth, smallRequestBytes)...)
-	}
-	if handler.auditEvents != nil {
-		routes = append(
-			routes,
-			handler.auditEventRoutes(noAuth, smallRequestBytes)...,
-		)
-	}
-	if handler.searchAttemptAuditEvents != nil {
-		routes = append(
-			routes,
-			handler.searchAttemptAuditRoutes(noAuth, smallRequestBytes)...,
-		)
-	}
-	if handler.serverSettings != nil {
-		routes = append(routes, handler.serverSettingsRoutes(noAuth, smallRequestBytes)...)
-	}
-	if handler.collectorAdmin != nil {
-		routes = append(
-			routes,
-			handler.collectorAdministrationRoutes(noAuth, smallRequestBytes)...,
-		)
-	}
-	if handler.appAdmin != nil {
-		routes = append(
-			routes,
-			handler.appAdministrationRoutes(
-				noAuth,
-				maximumRequestBytes,
-				smallRequestBytes,
-			)...,
-		)
-	}
-	if handler.knowledgeManagementConfigured() {
-		routes = append(
-			routes,
-			handler.knowledgeManagementRoutes(noAuth)...,
-		)
-	}
-	if handler.lookupManagementConfigured() {
-		routes = append(routes, handler.lookupManagementRoutes(noAuth)...)
-	}
-	if handler.searchHistory != nil {
-		routes = append(routes, handler.searchHistoryRoutes(noAuth, smallRequestBytes)...)
-	}
-	if handler.searchTimelines != nil {
-		routes = append(routes, handler.searchTimelineRoutes(noAuth, smallRequestBytes)...)
-	}
-	if handler.searchInspections != nil {
-		routes = append(routes, handler.searchInspectionRoutes(noAuth, smallRequestBytes)...)
-	}
-	if handler.searchFields != nil {
-		routes = append(routes, handler.searchFieldRoutes(noAuth, smallRequestBytes)...)
-	}
-	if handler.searchSuggestions != nil {
-		routes = append(
-			routes,
-			handler.searchSuggestionRoutes(
-				noAuth,
-				min(maximumRequestBytes, maximumSearchSuggestionRequestBytes),
-			)...,
-		)
-	}
-	if handler.exports != nil {
-		routes = append(routes,
-			router.RouteConfig[*opensplunk.CreateExportJobRequest, *opensplunk.CreateExportJobResponse]{
-				Path: "/search/exports/create", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-				Codec: codec.NewProtoCodec[*opensplunk.CreateExportJobRequest, *opensplunk.CreateExportJobResponse](), Handler: handler.createExportJob,
-				SourceType: router.Body,
-				Sanitizer:  sanitizeCreateExportJobRequest,
-			},
-			router.RouteConfig[*opensplunk.GetExportJobRequest, *opensplunk.GetExportJobResponse]{
-				Path: "/search/exports/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-				Codec: codec.NewProtoCodec[*opensplunk.GetExportJobRequest, *opensplunk.GetExportJobResponse](), Handler: handler.getExportJob,
-				SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-				Sanitizer: sanitizeGetExportJobRequest,
-			},
-			router.RouteConfig[*opensplunk.ListExportJobsRequest, *serializedExportListResponse]{
-				Path: exportJobsListRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-				Codec: newSerializedExportListCodec(), Handler: handler.listExportJobs,
-				SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-				Sanitizer: handler.sanitizeListExportJobsRequest,
-			},
-			router.RouteConfig[*opensplunk.CancelExportJobRequest, *opensplunk.CancelExportJobResponse]{
-				Path: "/search/exports/cancel", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-				Codec: codec.NewProtoCodec[*opensplunk.CancelExportJobRequest, *opensplunk.CancelExportJobResponse](), Handler: handler.cancelExportJob,
-				SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-				Sanitizer: sanitizeCancelExportJobRequest,
-			},
-		)
-	}
-	apiRouter := router.NewRouter[string, struct{}](router.RouterConfig{
+	apiRouter := router.NewRouter(router.RouterConfig{
 		ServiceName: "open-splunk-server",
 		Logger:      routerLogger,
 		// SRouter's built-in timeout returns while its handler goroutine may
@@ -1770,35 +1578,125 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 		GlobalTimeout:     0,
 		GlobalMaxBodySize: maximumRequestBytes,
 	}, handler.srouterDependencies())
-	apiRouter.Group(apiPathPrefix).
-		Auth(noAuth).
-		Use(disableAPICaching, protobufMiddleware, requestMiddleware, deadlineMiddleware).
-		Route(routes...)
+	apiGroup := apiRouter.Group(apiPathPrefix).
+		Auth(router.NoAuth).
+		Use(disableAPICaching)
+	protobufGroup := apiGroup.Group("/").
+		Use(protobufMiddleware, requestMiddleware, deadlineMiddleware)
+
+	handler.registerCoreRoutes(protobufGroup, smallRequestBytes)
+	if handler.dashboards != nil {
+		handler.registerDashboardRoutes(protobufGroup, smallRequestBytes)
+	}
+	if handler.searchArtifacts != nil {
+		handler.registerSearchArtifactRoutes(protobufGroup, smallRequestBytes)
+	}
+	if handler.scheduledReports != nil {
+		handler.registerScheduledReportRoutes(protobufGroup, smallRequestBytes)
+	}
+	if handler.scheduledReports != nil || handler.alertsEnabled {
+		handler.registerScheduleValidationRoutes(protobufGroup, smallRequestBytes)
+	}
+	if handler.alertsEnabled {
+		handler.registerAlertRoutes(protobufGroup, maximumRequestBytes, smallRequestBytes)
+	}
+	if handler.indexAdmin != nil {
+		handler.registerIndexAdministrationRoutes(protobufGroup, smallRequestBytes)
+	}
+	if handler.ingestionTokens != nil {
+		handler.registerIngestionTokenRoutes(protobufGroup, maximumRequestBytes, smallRequestBytes)
+	}
+	if handler.hecOperations != nil {
+		handler.registerHECOperationalRoutes(protobufGroup, smallRequestBytes)
+	}
+	if handler.auditEvents != nil {
+		handler.registerAuditEventRoutes(protobufGroup, smallRequestBytes)
+	}
+	if handler.searchAttemptAuditEvents != nil {
+		handler.registerSearchAttemptAuditRoutes(protobufGroup, smallRequestBytes)
+	}
+	if handler.serverSettings != nil {
+		handler.registerServerSettingsRoutes(protobufGroup, smallRequestBytes)
+	}
+	if handler.collectorAdmin != nil {
+		handler.registerCollectorAdministrationRoutes(protobufGroup, smallRequestBytes)
+	}
+	if handler.appAdmin != nil {
+		handler.registerAppAdministrationRoutes(protobufGroup, maximumRequestBytes, smallRequestBytes)
+	}
+	if handler.knowledgeManagementConfigured() {
+		handler.registerKnowledgeManagementRoutes(protobufGroup)
+	}
+	if handler.lookupManagementConfigured() {
+		handler.registerLookupManagementRoutes(protobufGroup)
+	}
+	if handler.searchHistory != nil {
+		handler.registerSearchHistoryRoutes(protobufGroup, smallRequestBytes)
+	}
+	if handler.searchTimelines != nil {
+		handler.registerSearchTimelineRoutes(protobufGroup, smallRequestBytes)
+	}
+	if handler.searchInspections != nil {
+		handler.registerSearchInspectionRoutes(protobufGroup, smallRequestBytes)
+	}
+	if handler.searchFields != nil {
+		handler.registerSearchFieldRoutes(protobufGroup, smallRequestBytes)
+	}
+	if handler.searchSuggestions != nil {
+		handler.registerSearchSuggestionRoutes(
+			protobufGroup,
+			min(maximumRequestBytes, maximumSearchSuggestionRequestBytes),
+		)
+	}
 	if handler.exports != nil {
-		apiRouter.Group("/api").
-			Auth(noAuth).
-			Use(disableAPICaching, handler.boundDownloads).
-			Route(router.RouteConfigBase{
-				Path:           "/search/exports/download",
-				Methods:        []router.HttpMethod{router.MethodGet},
-				AuthLevel:      &noAuth,
-				DisableTimeout: true,
-				Handler:        handler.downloadExport,
-			})
+		handler.registerExportRoutes(protobufGroup, smallRequestBytes)
+	}
+	if handler.exports != nil {
+		apiGroup.Route(rawGetRoute(
+			"/search/exports/download",
+			handler.downloadExport,
+			true,
+			handler.boundDownloads,
+		))
 	}
 	if handler.searchWebSocket != nil {
-		apiRouter.Group("/api").
-			Auth(noAuth).
-			Use(disableAPICaching).
-			Route(router.RouteConfigBase{
-				Path:           "/search/ws",
-				Methods:        []router.HttpMethod{router.MethodGet},
-				AuthLevel:      &noAuth,
-				DisableTimeout: true,
-				Handler:        handler.searchWebSocket.ServeHTTP,
-			})
+		apiGroup.Route(rawGetRoute(
+			"/search/ws",
+			handler.searchWebSocket.ServeHTTP,
+			true,
+		))
 	}
-	return apiRouter
+	if err := apiRouter.Build(); err != nil {
+		return nil, fmt.Errorf("create server handler: build API router: %w", err)
+	}
+	return apiRouter, nil
+}
+
+func (handler *apiHandler) registerCoreRoutes(group *apiRouteGroup, smallRequestBytes int64) {
+	group.Route(
+		sizedProtoPostRoute("/system/bootstrap", smallRequestBytes, handler.getSystemBootstrap, sanitizeGetSystemBootstrapRequest),
+		protoPostRoute("/search/validate", handler.validateSearch, sanitizeValidateSearchRequest),
+		protoPostRoute("/search/jobs/create", handler.createSearchJob, sanitizeCreateSearchJobRequest),
+		sizedProtoPostRoute("/search/jobs/get", smallRequestBytes, handler.getSearchJob, sanitizeGetSearchJobRequest),
+		sizedPostRoute(searchJobsListRoute, smallRequestBytes, newSerializedSearchJobListCodec(), handler.listSearchJobs, handler.sanitizeListSearchJobsRequest),
+		sizedPostRoute("/search/jobs/results", smallRequestBytes, newSerializedSearchResultsCodec(), handler.getSearchResults, handler.sanitizeGetSearchResultsRequest),
+		sizedProtoPostRoute("/search/jobs/cancel", smallRequestBytes, handler.cancelSearchJob, sanitizeCancelSearchJobRequest),
+		protoPostRoute("/saved-searches/create", handler.createSavedSearch, sanitizeCreateSavedSearchRequest),
+		sizedProtoPostRoute("/saved-searches/get", smallRequestBytes, handler.getSavedSearch, sanitizeGetSavedSearchRequest),
+		sizedPostRoute("/saved-searches/list", smallRequestBytes, newSerializedSavedSearchListCodec(), handler.listSavedSearches, handler.sanitizeListSavedSearchesRequest),
+		protoPostRoute("/saved-searches/update", handler.updateSavedSearch, sanitizeUpdateSavedSearchRequest),
+		sizedProtoPostRoute("/saved-searches/duplicate", smallRequestBytes, handler.duplicateSavedSearch, sanitizeDuplicateSavedSearchRequest),
+		sizedProtoPostRoute("/saved-searches/delete", smallRequestBytes, handler.deleteSavedSearch, sanitizeDeleteSavedSearchRequest),
+	)
+}
+
+func (handler *apiHandler) registerExportRoutes(group *apiRouteGroup, smallRequestBytes int64) {
+	group.Route(
+		protoPostRoute("/search/exports/create", handler.createExportJob, sanitizeCreateExportJobRequest),
+		sizedProtoPostRoute("/search/exports/get", smallRequestBytes, handler.getExportJob, sanitizeGetExportJobRequest),
+		sizedPostRoute(exportJobsListRoute, smallRequestBytes, newSerializedExportListCodec(), handler.listExportJobs, handler.sanitizeListExportJobsRequest),
+		sizedProtoPostRoute("/search/exports/cancel", smallRequestBytes, handler.cancelExportJob, sanitizeCancelExportJobRequest),
+	)
 }
 
 func disableAPICaching(next http.Handler) http.Handler {

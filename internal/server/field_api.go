@@ -10,7 +10,6 @@ import (
 
 	"fortio.org/safecast"
 	"github.com/Suhaibinator/SRouter/pkg/codec"
-	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
@@ -25,21 +24,11 @@ const (
 	maximumSearchFieldDisplayNameBytes = eventfields.MaximumNormalizedFieldNameBytes
 )
 
-func (handler *apiHandler) searchFieldRoutes(noAuth router.AuthLevel, smallRequestBytes int64) []router.RouteDefinition {
-	return []router.RouteDefinition{
-		router.RouteConfig[*opensplunk.ListSearchFieldsRequest, *serializedSearchFieldsResponse]{
-			Path: searchFieldsListRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newSerializedSearchFieldsCodec(), Handler: handler.listSearchFields,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: handler.sanitizeListSearchFieldsRequest,
-		},
-		router.RouteConfig[*opensplunk.GetSearchFieldSummaryRequest, *serializedSearchFieldSummaryResponse]{
-			Path: searchFieldSummaryRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newSerializedSearchFieldSummaryCodec(), Handler: handler.getSearchFieldSummary,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: handler.sanitizeGetSearchFieldSummaryRequest,
-		},
-	}
+func (handler *apiHandler) registerSearchFieldRoutes(group *apiRouteGroup, smallRequestBytes int64) {
+	group.Route(
+		sizedPostRoute(searchFieldsListRoute, smallRequestBytes, newSerializedSearchFieldsCodec(), handler.listSearchFields, handler.sanitizeListSearchFieldsRequest),
+		sizedPostRoute(searchFieldSummaryRoute, smallRequestBytes, newSerializedSearchFieldSummaryCodec(), handler.getSearchFieldSummary, handler.sanitizeGetSearchFieldSummaryRequest),
+	)
 }
 
 func (handler *apiHandler) listSearchFields(request *http.Request, input *opensplunk.ListSearchFieldsRequest) (*serializedSearchFieldsResponse, error) {

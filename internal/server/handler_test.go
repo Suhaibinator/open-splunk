@@ -84,13 +84,13 @@ func TestSRouterDependenciesUseSourceRevisionWithoutProductVersion(t *testing.T)
 	}
 }
 
-// TestRegisteredProtobufRoutesAllDeclareASanitizer replaces the compile-time
-// wrapper that used to force every protobuf route through one sanitizer. Each
-// route now names its own Sanitizer in its RouteConfig literal, and SRouter
-// warns at registration when a typed route leaves it nil. The Config below
-// enables every route group the in-package fakes can stand up; knowledge,
-// lookup, alert, scheduled-report, index-administration and ingestion-token
-// routes need real services and are covered by their own handler tests.
+// TestRegisteredProtobufRoutesAllDeclareASanitizer checks the shared route
+// builders and the custom-codec registrations together. SRouter warns during
+// the explicit startup Build when a typed route leaves its sanitizer nil. The
+// Config below enables every route group the in-package fakes can stand up;
+// knowledge, lookup, alert, scheduled-report, index-administration and
+// ingestion-token routes need real services and are covered by their own
+// handler tests.
 func TestRegisteredProtobufRoutesAllDeclareASanitizer(t *testing.T) {
 	t.Parallel()
 
@@ -118,9 +118,8 @@ func TestRegisteredProtobufRoutesAllDeclareASanitizer(t *testing.T) {
 		WebUI:                    testUI(),
 	})
 
-	// SRouter compiles its route tree on the first request, and that is when it
-	// inspects each route's Sanitizer. Bootstrap sits outside the browser gate,
-	// so this one request builds every registered group.
+	// Exercise the already-built route tree as well as checking its build-time
+	// diagnostics.
 	response := postProtoHeaders(
 		t,
 		handler,

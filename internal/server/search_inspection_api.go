@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/Suhaibinator/SRouter/pkg/codec"
-	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
@@ -20,27 +19,17 @@ import (
 
 const maximumSearchInspectionResponseBytes = 8 << 20
 
-func (handler *apiHandler) searchInspectionRoutes(
-	noAuth router.AuthLevel,
+func (handler *apiHandler) registerSearchInspectionRoutes(
+	group *apiRouteGroup,
 	smallRequestBytes int64,
-) []router.RouteDefinition {
-	return []router.RouteDefinition{
-		router.RouteConfig[
-			*opensplunk.InspectSearchJobRequest,
-			*serializedSearchInspectionResponse,
-		]{
-			Path:       searchInspectionRoute,
-			Methods:    []router.HttpMethod{router.MethodPost},
-			AuthLevel:  &noAuth,
-			Codec:      newSerializedSearchInspectionCodec(),
-			Handler:    handler.inspectSearchJob,
-			SourceType: router.Body,
-			Overrides: sroutercommon.RouteOverrides{
-				MaxBodySize: smallRequestBytes,
-			},
-			Sanitizer: sanitizeInspectSearchJobRequest,
-		},
-	}
+) {
+	group.Route(sizedPostRoute(
+		searchInspectionRoute,
+		smallRequestBytes,
+		newSerializedSearchInspectionCodec(),
+		handler.inspectSearchJob,
+		sanitizeInspectSearchJobRequest,
+	))
 }
 
 func (handler *apiHandler) inspectSearchJob(

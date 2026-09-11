@@ -4,25 +4,19 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/Suhaibinator/SRouter/pkg/codec"
-	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
-	"github.com/Suhaibinator/SRouter/pkg/router"
-
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/schedulevalidation"
 )
 
 var errScheduleValidationProjection = errors.New("schedule-validation projection is unsupported")
 
-func (handler *apiHandler) scheduleValidationRoutes(noAuth router.AuthLevel, smallRequestBytes int64) []router.RouteDefinition {
-	return []router.RouteDefinition{
-		router.RouteConfig[*opensplunk.ValidateScheduleRequest, *opensplunk.ValidateScheduleResponse]{
-			Path: "/schedules/validate", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.ValidateScheduleRequest, *opensplunk.ValidateScheduleResponse](), Handler: handler.validateSchedule,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeValidateScheduleRequest,
-		},
-	}
+func (handler *apiHandler) registerScheduleValidationRoutes(group *apiRouteGroup, smallRequestBytes int64) {
+	group.Route(sizedProtoPostRoute(
+		"/schedules/validate",
+		smallRequestBytes,
+		handler.validateSchedule,
+		sanitizeValidateScheduleRequest,
+	))
 }
 
 func (handler *apiHandler) validateSchedule(_ *http.Request, input *opensplunk.ValidateScheduleRequest) (*opensplunk.ValidateScheduleResponse, error) {
