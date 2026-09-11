@@ -217,6 +217,10 @@ import {
   serializeRawPageForClipboard,
 } from "./search-workspace/event-page-controls";
 import {
+  adaptAndApplyBackendResultPage,
+  seedBackendChartPoints,
+} from "./search-workspace/backend-result-bootstrap";
+import {
   BackendResultPages,
   equalResultSchemas,
   type BackendResultPage,
@@ -3267,9 +3271,8 @@ export function SearchWorkspace({
     replaceBackendNotices(job);
   }
 
-  function applyBackendResultPage(page: BackendResultPage) {
+  function applyBackendResultPage(page: BackendResultPage, adapted: AdaptedSearchResults) {
     const isTimeSeries = page.schema.resultKind === ResultSetKind.RESULT_SET_KIND_TIME_SERIES;
-    const adapted = adaptSearchResults(page.schema, page.rows);
     clearBackendPreview("disabled", "Authoritative search results loaded.");
     setBackendAuthoritativeResultsReady(true);
     setBackendEvents(adapted.events);
@@ -3333,6 +3336,7 @@ export function SearchWorkspace({
   function startBackendChartSeries(
     job: SearchJob,
     firstPage: BackendResultPage,
+    firstPagePoints: readonly TimelinePoint[],
     bootstrap: BackendBootstrapState,
     generation: number,
   ) {
@@ -3347,7 +3351,7 @@ export function SearchWorkspace({
     backendChartSeriesAbortRef.current = controller;
     const isCurrent = () => !controller.signal.aborted
       && runningSearch.isCurrent(generation, job.searchJobId);
-    const points = adaptSearchResults(firstPage.schema, firstPage.rows).timeline;
+    const points = seedBackendChartPoints(firstPagePoints);
     const publish = (coverage: TimechartCoverage) => {
       if (!isCurrent()) return;
       setBackendChartSeries({
@@ -3423,6 +3427,7 @@ export function SearchWorkspace({
     // Intermediate pages of a cursor walk are fetched only to record the next cursor; rendering
     // them would flash every crossed page through the events table.
     apply = true,
+    onAppliedTimeline?: (points: readonly TimelinePoint[]) => void,
   ): Promise<BackendResultPage> {
     const pageSize = normalizedBackendPageSize(requestedPageSize, bootstrap);
     return backendResultPages.fetch({
@@ -3433,7 +3438,10 @@ export function SearchWorkspace({
       signal,
       isCurrent: () => runningSearch.isCurrent(generation, job.searchJobId),
       apply,
-      onApply: applyBackendResultPage,
+      onApply: (page) => {
+        const points = adaptAndApplyBackendResultPage(page, applyBackendResultPage);
+        onAppliedTimeline?.(points);
+      },
       onNotice: (message) => setBackendNotices((current) => appendUniqueMessage(current, message)),
     });
   }
@@ -3453,8 +3461,18 @@ export function SearchWorkspace({
     const pageSize = normalizedBackendPageSize(requestedPageSize, bootstrap);
     backendResultPages.prepareFirstPage(pageSize);
     setBackendResultPageSize(pageSize);
-    const firstPage = await fetchBackendResultPage(job, 1, pageSize, bootstrap, signal, generation);
-    startBackendChartSeries(job, firstPage, bootstrap, generation);
+    let firstPagePoints: readonly TimelinePoint[] = [];
+    const firstPage = await fetchBackendResultPage(
+      job,
+      1,
+      pageSize,
+      bootstrap,
+      signal,
+      generation,
+      true,
+      (points) => { firstPagePoints = points; },
+    );
+    startBackendChartSeries(job, firstPage, firstPagePoints, bootstrap, generation);
   }
 
   async function fetchAuthoritativeBackendMetadata(
@@ -5421,7 +5439,10 @@ export function SearchWorkspace({
         generation,
       );
       if (!runningSearch.isCurrent(generation, job.searchJobId)) return;
-      applyBackendResultPage(backendResultPages.display(pageSize, landedPage, landedResult));
+      adaptAndApplyBackendResultPage(
+        backendResultPages.display(pageSize, landedPage, landedResult),
+        applyBackendResultPage,
+      );
       setEventPage(landedPage);
       if (landedPage < requestedPage) {
         showToast(
