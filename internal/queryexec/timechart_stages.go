@@ -161,7 +161,7 @@ func (sink *timechartStageSink) AddRow(values []searchjobs.Value) error {
 	return sink.ctx.Err()
 }
 
-func (executor *Executor) executeTimechartStages(ctx context.Context, query clickhouse.CompiledQuery, sink searchjobs.ResultSink) error {
+func (executor *Executor) executeTimechartStages(ctx context.Context, query clickhouse.CompiledQuery, sink searchjobs.ResultSink) (resultErr error) {
 	if ctx == nil || sink == nil {
 		return searchjobs.ErrInvalidResult
 	}
@@ -192,6 +192,9 @@ func (executor *Executor) executeTimechartStages(ctx context.Context, query clic
 		return err
 	}
 	defer release()
+	defer func() {
+		resultErr = preserveReadCancellationCause(admitted, resultErr)
+	}()
 	base, expand, err := executor.effectiveSettingsSnapshot(admitted)
 	if err != nil {
 		return err
@@ -227,7 +230,7 @@ func (executor *Executor) executeTimechartStages(ctx context.Context, query clic
 			rowLimit = settings["max_rows_to_read"].(uint64)
 		}
 		stage := &timechartStageSink{ctx: ctx, stageBudget: budget, maxResultRows: rowLimit, work: query.TimechartWorkFloor()}
-		if err := frozen.executeSingle(budget.allocationContext(ctx), query, stage); err != nil {
+		if err := frozen.executeAdmittedStage(budget.allocationContext(ctx), query, stage); err != nil {
 			return err
 		}
 		if err := ctx.Err(); err != nil {
@@ -267,7 +270,7 @@ func (executor *Executor) executeTimechartStages(ctx context.Context, query clic
 		return err
 	}
 	transaction := &stagedFinalSink{ctx: ctx, stageBudget: budget, maxRows: logicalRowLimit}
-	if err := frozen.executeSingle(stageContext, query, transaction); err != nil {
+	if err := frozen.executeAdmittedStage(stageContext, query, transaction); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {

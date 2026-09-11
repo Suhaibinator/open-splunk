@@ -509,7 +509,25 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 	return executor.executeSingle(ctx, query, sink)
 }
 
-func (executor *Executor) executeSingle(ctx context.Context, query clickhouse.CompiledQuery, sink searchjobs.ResultSink) (resultErr error) {
+type executionAdmissionMode uint8
+
+const (
+	acquireExecutionRead executionAdmissionMode = iota
+	reuseStagedExecutionRead
+)
+
+func (executor *Executor) executeSingle(ctx context.Context, query clickhouse.CompiledQuery, sink searchjobs.ResultSink) error {
+	return executor.executeSingleWithAdmission(ctx, query, sink, acquireExecutionRead)
+}
+
+// executeAdmittedStage is reserved for the detached, sealed continuation chain
+// while executeTimechartStages holds its outer read lease. It reuses that
+// admission without weakening any native or result-contract validation.
+func (executor *Executor) executeAdmittedStage(ctx context.Context, query clickhouse.CompiledQuery, sink searchjobs.ResultSink) error {
+	return executor.executeSingleWithAdmission(ctx, query, sink, reuseStagedExecutionRead)
+}
+
+func (executor *Executor) executeSingleWithAdmission(ctx context.Context, query clickhouse.CompiledQuery, sink searchjobs.ResultSink, admission executionAdmissionMode) (resultErr error) {
 	if ctx == nil {
 		return errors.New("execute ClickHouse search: context is nil")
 	}
@@ -521,7 +539,7 @@ func (executor *Executor) executeSingle(ctx context.Context, query clickhouse.Co
 	// compiler authority before inspecting it or reaching admission/driver
 	// state. Same-package diagnostic fixtures intentionally omit admission and
 	// retain their historical ability to exercise hand-built row contracts.
-	if executor.readAdmission != nil {
+	if admission == acquireExecutionRead && executor.readAdmission != nil {
 		detached, ok, cloneErr := query.CloneForExecutionContext(ctx)
 		if cloneErr != nil {
 			return cloneErr
@@ -565,11 +583,17 @@ func (executor *Executor) executeSingle(ctx context.Context, query clickhouse.Co
 	if err != nil {
 		return err
 	}
-	admittedContext, releaseRead, err := executor.acquireRead(ctx, query, "execute ClickHouse search")
-	if err != nil {
-		return err
+	admittedContext := ctx
+	if admission == acquireExecutionRead {
+		var releaseRead func()
+		admittedContext, releaseRead, err = executor.acquireRead(ctx, query, "execute ClickHouse search")
+		if err != nil {
+			return err
+		}
+		defer releaseRead()
+	} else if _, _, valid := query.ReadScope(); !valid {
+		return fmt.Errorf("%w: staged compiled query read scope is missing or invalid", searchjobs.ErrInvalidResult)
 	}
-	defer releaseRead()
 	defer func() {
 		resultErr = preserveReadCancellationCause(admittedContext, resultErr)
 	}()
