@@ -17,6 +17,8 @@ import (
 const maximumTrustedSourceSchemaBytes = uint64(defaultMaxTotalMetadata)
 
 type trustedResolvedSchemaLease interface {
+	// The byte count attests an already measured immutable schema. Selection
+	// may reuse it for size admission while still validating every source name.
 	trustedResolvedSchema() (searchjobs.Schema, uint64, bool)
 }
 
