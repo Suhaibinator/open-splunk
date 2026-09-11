@@ -145,6 +145,7 @@ func TestCompileSplitTimechartSumAndAverageUseBoundedMergeableStates(t *testing.
 				`AS "__os_tc_measure_values"`,
 				`"__os_timechart_numeric_groups" AS MATERIALIZED (`,
 				`sumCountArray("__os_tc_measure_values")`,
+				`toUInt64(tupleElement("__os_tc_numeric_state", 2)) AS "__os_tc_denominator"`,
 				`"__os_timechart_numeric_scores" AS (`,
 				test.score + ` OVER (PARTITION BY "__os_tc_kind", "__os_tc_label")`,
 				`multiIf(isNaN("__os_tc_score"), toUInt8(0), isInfinite("__os_tc_score") AND "__os_tc_score" < 0, toUInt8(1), isInfinite("__os_tc_score"), toUInt8(3), toUInt8(2)) DESC`,
@@ -163,6 +164,11 @@ func TestCompileSplitTimechartSumAndAverageUseBoundedMergeableStates(t *testing.
 			}
 			if got := strings.Count(compiled.SQL, `FROM "open_splunk"."events"`); got != 1 {
 				t.Fatalf("scoped storage scan occurs %d times, want once:\n%s", got, compiled.SQL)
+			}
+			// Native EXPLAIN retains this unused count through the materialized
+			// raw groups; sumCountArray already supplies the required denominator.
+			if strings.Contains(compiled.SQL, `"__os_tc_count"`) {
+				t.Fatalf("split numeric timechart retains unused row-frequency aggregate:\n%s", compiled.SQL)
 			}
 			if strings.Contains(strings.ToUpper(compiled.SQL), "ARRAY JOIN") {
 				t.Fatalf("split numeric timechart expanded multivalue rows:\n%s", compiled.SQL)

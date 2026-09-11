@@ -129,6 +129,7 @@ func TestCompileSplitTimechartPercentileUsesMergeableGKStates(t *testing.T) {
 		t.Fatalf("GK state merges = %d, want one shared OTHER/finalization path:\n%s", got, compiled.SQL)
 	}
 	for _, forbidden := range []string{
+		`"__os_tc_count"`,
 		"ARRAY JOIN",
 		"sumCountArray(",
 		`avg("__os_tc_measure_value")`,
