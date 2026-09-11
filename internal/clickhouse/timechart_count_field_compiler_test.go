@@ -117,12 +117,12 @@ func TestCompileSplitTimechartCountFieldRanksOccurrencesButKeepsRowDomain(t *tes
 		`sumIf(` + timechartCountRowAlias + `, "__os_tc_kind" = 3)`,
 		`uniqExact("__os_tc_label") OVER (PARTITION BY "__os_tc_kind"`,
 		`maxIf("__os_tc_collision_cardinality", "__os_tc_kind" = 0) > 1`,
-		`FROM "__os_timechart_collapsed" WHERE "__os_tc_encoded" != '' AND ` + timechartCollapsedRowAlias + ` > 0`,
+		`"__os_tc_encoded" != '' AND ` + timechartCollapsedRowAlias + ` > 0`,
 		`mapFromArrays(groupArrayIf("__os_tc_encoded", "__os_tc_encoded" != ''), groupArrayIf("__os_tc_collapsed_count", "__os_tc_encoded" != ''))`,
-		`"__os_timechart_validation" AS (SELECT toUInt8(maxOrDefault("__os_tc_invalid" != 0 OR "__os_tc_collision" != 0)) AS "__os_tc_invalid" FROM "__os_timechart_collapsed")`,
+		`toUInt8(maxOrDefault("__os_tc_invalid" != 0 OR "__os_tc_collision" != 0)) AS "__os_tc_invalid" FROM "__os_timechart_collapsed"`,
 		`"__os_timechart_collapsed" AS MATERIALIZED (`,
-		`"__os_timechart_resource_usage" AS MATERIALIZED (`,
-		`"__os_timechart_guarded_domain_rows" AS MATERIALIZED (`,
+		`"__os_timechart_resource_usage" AS (`,
+		`"__os_timechart_domain" AS MATERIALIZED (`,
 		`mapFromArrays(`,
 		`AS "` + TimechartCountsColumn + `"`,
 	} {
@@ -134,7 +134,7 @@ func TestCompileSplitTimechartCountFieldRanksOccurrencesButKeepsRowDomain(t *tes
 		`FROM "__os_timechart_group_counts"`: 1,
 		`FROM "__os_timechart_scored"`:       1,
 		`FROM "__os_timechart_ranked"`:       1,
-		`FROM "__os_timechart_collapsed"`:    3,
+		`FROM "__os_timechart_collapsed"`:    2,
 	} {
 		if got := strings.Count(compiled.SQL, relation); got != want {
 			t.Fatalf("split count(field) relation %q occurs %d times, want %d:\n%s", relation, got, want, compiled.SQL)
@@ -154,7 +154,7 @@ func TestCompileSplitTimechartCountFieldRanksOccurrencesButKeepsRowDomain(t *tes
 		t,
 		compiled.SQL,
 		"__os_timechart_collapsed",
-		"__os_timechart_domain_rows",
+		"__os_timechart_resource_usage",
 	)
 	if !strings.Contains(collapsed, `sumIf(`+timechartCountRowAlias+`, "__os_tc_kind" = 3)`) {
 		t.Fatalf("split validation is not row-based:\n%s", collapsed)
@@ -183,7 +183,7 @@ func TestCompileSplitTimechartCountFieldKeepsProjectedInputInRowDomain(t *testin
 	}
 	for _, rowDomainFragment := range []string{
 		`count() AS ` + timechartCountRowAlias,
-		`FROM "__os_timechart_collapsed" WHERE "__os_tc_encoded" != '' AND ` + timechartCollapsedRowAlias + ` > 0`,
+		`"__os_tc_encoded" != '' AND ` + timechartCollapsedRowAlias + ` > 0`,
 		`sumIf(` + timechartCountRowAlias + `, "__os_tc_kind" = 3)`,
 	} {
 		if !strings.Contains(compiled.SQL, rowDomainFragment) {

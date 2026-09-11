@@ -61,40 +61,6 @@ func timechartResourceGuardPredicate(
 		TimechartRetainedBytesLimitMarker + "') = 0"
 }
 
-func writeTimechartResourceGuardCTEs(
-	sql *strings.Builder,
-	domainRows string,
-	resourceUsage string,
-	guardedDomainRows string,
-	encoded string,
-	bucketCount uint64,
-	cellBytes uint64,
-) {
-	domainSource := quoteIdentifier("__os_tc_domain_source")
-	sql.WriteString(resourceUsage)
-	sql.WriteString(" AS MATERIALIZED (SELECT count() AS ")
-	sql.WriteString(quoteIdentifier("__os_tc_domain_count"))
-	sql.WriteString(", sum(toUInt64(length(")
-	sql.WriteString(encoded)
-	sql.WriteString("))) AS ")
-	sql.WriteString(quoteIdentifier("__os_tc_label_bytes"))
-	sql.WriteString(" FROM ")
-	sql.WriteString(domainRows)
-	sql.WriteString("), ")
-	sql.WriteString(guardedDomainRows)
-	sql.WriteString(" AS MATERIALIZED (SELECT ")
-	sql.WriteString(domainSource)
-	sql.WriteString(".* FROM ")
-	sql.WriteString(domainRows)
-	sql.WriteString(" AS ")
-	sql.WriteString(domainSource)
-	sql.WriteString(" CROSS JOIN ")
-	sql.WriteString(resourceUsage)
-	sql.WriteString(" WHERE ")
-	sql.WriteString(timechartResourceGuardPredicate(resourceUsage, bucketCount, cellBytes))
-	sql.WriteString("), ")
-}
-
 func compileTimechart(
 	relation compiledRelation,
 	state compileState,
@@ -361,12 +327,9 @@ func compileTimechart(
 	scored := q("__os_timechart_scored")
 	ranked := q("__os_timechart_ranked")
 	collapsed := q("__os_timechart_collapsed")
-	domainRows := q("__os_timechart_domain_rows")
 	resourceUsage := q("__os_timechart_resource_usage")
-	guardedDomainRows := q("__os_timechart_guarded_domain_rows")
 	domain := q("__os_timechart_domain")
 	bucketMaps := q("__os_timechart_bucket_maps")
-	validation := q("__os_timechart_validation")
 	grid := q("__os_timechart_grid")
 
 	eventTime := q("__os_tc_event_time")
@@ -389,7 +352,6 @@ func compileTimechart(
 	encoded := q("__os_tc_encoded")
 	collisionCardinality := q("__os_tc_collision_cardinality")
 	collision := q("__os_tc_collision")
-	sortLabel := q("__os_tc_sort_label")
 	countMap := q("__os_tc_count_map")
 	invalid := q("__os_tc_invalid")
 	ordinal := q(TimechartOrdinalColumn)
@@ -673,70 +635,12 @@ func compileTimechart(
 	sql.WriteString(encoded)
 	sql.WriteString("), ")
 
-	// Every domain member now comes from the sealed, already-collapsed relation.
-	// Empty encodings are private validation rows and never become map keys or
-	// public names.
 	domainFrequency := collapsedCount
 	if fieldOccurrenceCount {
 		domainFrequency = collapsedRowCount
 	}
-	rawEncodedLabel := "substring(" + encoded + ", 3)"
-	sql.WriteString(domainRows)
-	sql.WriteString(" AS (SELECT multiIf(")
-	sql.WriteString(encoded)
-	sql.WriteString(" = '1:', toUInt8(1), ")
-	sql.WriteString(encoded)
-	sql.WriteString(" = '2:', toUInt8(2), toUInt8(0)) AS sort_kind, ")
-	sql.WriteString("if(startsWith(")
-	sql.WriteString(encoded)
-	sql.WriteString(", '0:'), ")
-	sql.WriteString(splunkSeriesLabelSQL(rawEncodedLabel))
-	sql.WriteString(", CAST('' AS String)) AS ")
-	sql.WriteString(sortLabel)
-	sql.WriteString(", ")
-	sql.WriteString(encoded)
-	sql.WriteString(" FROM ")
-	sql.WriteString(collapsed)
-	sql.WriteString(" WHERE ")
-	sql.WriteString(encoded)
-	sql.WriteString(" != '' AND ")
-	sql.WriteString(domainFrequency)
-	sql.WriteString(" > 0 GROUP BY ")
-	sql.WriteString(encoded)
-	sql.WriteString("), ")
-
-	writeTimechartResourceGuardCTEs(
-		&sql,
-		domainRows,
-		resourceUsage,
-		guardedDomainRows,
-		encoded,
-		operator.BucketCount,
-		timechartCountCellRetainedBytes,
-	)
-
-	sql.WriteString(domain)
-	sql.WriteString(" AS (SELECT arrayMap(item -> item.3, arraySort(item -> (item.1, item.2), groupArray((sort_kind, ")
-	sql.WriteString(sortLabel)
-	sql.WriteString(", ")
-	sql.WriteString(encoded)
-	sql.WriteString(")))) AS names FROM ")
-	sql.WriteString(guardedDomainRows)
-	sql.WriteString("), ")
-
-	// The complete-source witness is independent of the visible grid. A
-	// preceding bin or timestamp rewrite can move invalid labels/collisions
-	// outside its bounds, but clipping must not discard their validation.
-	sql.WriteString(validation)
-	sql.WriteString(" AS (SELECT toUInt8(maxOrDefault(")
-	sql.WriteString(invalid)
-	sql.WriteString(" != 0 OR ")
-	sql.WriteString(collision)
-	sql.WriteString(" != 0)) AS ")
-	sql.WriteString(invalid)
-	sql.WriteString(" FROM ")
-	sql.WriteString(collapsed)
-	sql.WriteString("), ")
+	writeTimechartDomainCTEs(&sql, collapsed, resourceUsage, domain,
+		domainFrequency+" > 0", operator.BucketCount, timechartCountCellRetainedBytes)
 
 	sql.WriteString(bucketMaps)
 	sql.WriteString(" AS (SELECT ")
@@ -753,14 +657,7 @@ func compileTimechart(
 	sql.WriteString(countMap)
 	sql.WriteString(" FROM ")
 	sql.WriteString(collapsed)
-	sql.WriteString(" CROSS JOIN ")
-	sql.WriteString(resourceUsage)
-	sql.WriteString(" WHERE ")
-	sql.WriteString(timechartResourceGuardPredicate(
-		resourceUsage,
-		operator.BucketCount,
-		timechartCountCellRetainedBytes,
-	))
+	sql.WriteString(" CROSS JOIN " + domain + " WHERE " + timechartResourceGuardPredicate(domain, operator.BucketCount, timechartCountCellRetainedBytes))
 	sql.WriteString(" GROUP BY ")
 	sql.WriteString(bucketNumber)
 	sql.WriteString("), ")
@@ -796,7 +693,7 @@ func compileTimechart(
 	sql.WriteString(".names) AS ")
 	sql.WriteString(q(TimechartCountsColumn))
 	sql.WriteString(", ")
-	sql.WriteString(validation)
+	sql.WriteString(domain)
 	sql.WriteString(".")
 	sql.WriteString(invalid)
 	sql.WriteString(" AS ")
@@ -805,8 +702,6 @@ func compileTimechart(
 	sql.WriteString(grid)
 	sql.WriteString(" CROSS JOIN ")
 	sql.WriteString(domain)
-	sql.WriteString(" CROSS JOIN ")
-	sql.WriteString(validation)
 	sql.WriteString(" LEFT JOIN ")
 	sql.WriteString(bucketMaps)
 	sql.WriteString(" ON ")
@@ -835,16 +730,14 @@ func compileTimechart(
 	collapsedDepth := relationalNodeDepth(rankedDepth)
 	domainRowsDepth := relationalNodeDepth(collapsedDepth)
 	resourceUsageDepth := relationalNodeDepth(domainRowsDepth)
-	guardedDomainRowsDepth := relationalNodeDepth(domainRowsDepth, resourceUsageDepth)
-	domainDepth := relationalNodeDepth(guardedDomainRowsDepth)
-	validationDepth := relationalNodeDepth(collapsedDepth)
-	bucketMapsDepth := relationalNodeDepth(collapsedDepth, resourceUsageDepth)
+	guardedDomainDepth := relationalNodeDepth(resourceUsageDepth)
+	domainDepth := relationalNodeDepth(guardedDomainDepth)
+	bucketMapsDepth := relationalNodeDepth(collapsedDepth, domainDepth)
 	gridDepth := gridSpec.relationalDepth()
 	resultDepth := relationalNodeDepth(
 		gridDepth,
 		domainDepth,
 		bucketMapsDepth,
-		validationDepth,
 	)
 
 	compiled := CompiledQuery{
@@ -908,15 +801,12 @@ func compileSplitValueTimechart(
 	canonicalized := q("__os_timechart_canonicalized")
 	numericGroups := q("__os_timechart_numeric_groups")
 	numericScores := q("__os_timechart_numeric_scores")
+	ranked := q("__os_timechart_numeric_ranked")
 	collapsed := q("__os_timechart_collapsed")
 	finalized := q("__os_timechart_finalized")
-	domainRows := q("__os_timechart_domain_rows")
 	resourceUsage := q("__os_timechart_resource_usage")
-	guardedDomainRows := q("__os_timechart_guarded_domain_rows")
 	domain := q("__os_timechart_domain")
-	collisions := q("__os_timechart_normalization_collisions")
 	bucketMaps := q("__os_timechart_bucket_maps")
-	validation := q("__os_timechart_validation")
 	grid := q("__os_timechart_grid")
 
 	eventTime := q("__os_tc_event_time")
@@ -938,9 +828,9 @@ func compileSplitValueTimechart(
 	score := q("__os_tc_score")
 	encoded := q("__os_tc_encoded")
 	measureValue := q("__os_tc_measure_value")
-	normalized := q("__os_tc_normalized")
 	collision := q("__os_tc_collision")
-	sortLabel := q("__os_tc_sort_label")
+	collisionCardinality := q("__os_tc_collision_cardinality")
+	seriesRank := q("__os_tc_series_rank")
 	valueMap := q("__os_tc_value_map")
 	presentMap := q("__os_tc_present_map")
 	invalid := q("__os_tc_invalid")
@@ -1172,102 +1062,40 @@ func compileSplitValueTimechart(
 		sql.WriteString("), ")
 	}
 
-	sql.WriteString(numericScores)
-	sql.WriteString(" AS MATERIALIZED (SELECT ")
-	sql.WriteString(label)
-	sql.WriteString(", ")
-	sql.WriteString(scoreSQL)
-	sql.WriteString(" AS ")
-	sql.WriteString(score)
-	sql.WriteString(" FROM ")
-	sql.WriteString(numericGroups)
-	sql.WriteString(" WHERE ")
-	sql.WriteString(kind)
-	sql.WriteString(" = 0 GROUP BY ")
-	sql.WriteString(label)
-	sql.WriteString(" ORDER BY ")
-	// Splunk does not specify computed non-finite score ordering. Pin a stable
-	// boundary: +Inf, finite descending, -Inf, NaN, then raw label lexical order.
-	sql.WriteString("multiIf(isNaN(")
-	sql.WriteString(score)
-	sql.WriteString("), toUInt8(0), isInfinite(")
-	sql.WriteString(score)
-	sql.WriteString(") AND ")
-	sql.WriteString(score)
-	sql.WriteString(" < 0, toUInt8(1), isInfinite(")
-	sql.WriteString(score)
-	sql.WriteString("), toUInt8(3), toUInt8(2)) DESC, ")
-	sql.WriteString("if(isFinite(")
-	sql.WriteString(score)
-	sql.WriteString("), ")
-	sql.WriteString(score)
-	sql.WriteString(", toFloat64(0)) DESC, ")
-	sql.WriteString(label)
-	sql.WriteString(" ASC")
-	if operator.Split.SeriesLimit != 0 {
-		sql.WriteString(" LIMIT ")
-		sql.WriteString(strconv.FormatUint(operator.Split.SeriesLimit, 10))
-	}
-	sql.WriteString("), ")
+	// Score and validate every raw label in one window chain, preserving the
+	// score ordering and raw-label tie break before collapsing excluded series.
+	sql.WriteString(numericScores + " AS (SELECT *, " + scoreSQL + " OVER (PARTITION BY " + kind + ", " + label + ") AS " + score)
+	sql.WriteString(", uniqExact(" + label + ") OVER (PARTITION BY " + kind + ", " + splunkSeriesLabelSQL(label) + ") AS " + collisionCardinality + " FROM " + numericGroups + "), ")
+	sql.WriteString(ranked + " AS (SELECT *, dense_rank() OVER (PARTITION BY " + kind + " ORDER BY ")
+	// Pin the established +Inf, finite, -Inf, NaN ordering, then raw label.
+	sql.WriteString("multiIf(isNaN(" + score + "), toUInt8(0), isInfinite(" + score + ") AND " + score + " < 0, toUInt8(1), isInfinite(" + score + "), toUInt8(3), toUInt8(2)) DESC, ")
+	sql.WriteString("if(isFinite(" + score + "), " + score + ", toFloat64(0)) DESC, " + label + " ASC) AS " + seriesRank + " FROM " + numericScores + "), ")
 
-	// usenull=false excludes the missing/null rows before they are collapsed;
-	// useother=false keeps only the selected ordinary labels, so neither
-	// sentinel encoding can appear.
-	selectedLabel := label + " IN (SELECT " + label + " FROM " + numericScores + ")"
-	collapsedKinds := kind + " IN (0, 1)"
-	if !operator.Split.IncludeNull {
-		collapsedKinds = kind + " = 0"
+	// Preserve excluded rows under an empty private encoding so their invalid
+	// labels and normalization collisions still reach the complete-source guard.
+	// Bucket maps and the public domain omit only the encoding, not its witness.
+	sql.WriteString(collapsed + " AS MATERIALIZED (SELECT " + bucketNumber + ", multiIf(")
+	if operator.Split.IncludeNull {
+		sql.WriteString(kind + " = 1, '1:', ")
 	}
-	if !operator.Split.IncludeOther {
-		collapsedKinds += " AND (" + kind + " != 0 OR " + selectedLabel + ")"
+	sql.WriteString(kind + " = 0")
+	if operator.Split.SeriesLimit != 0 {
+		sql.WriteString(" AND " + seriesRank + " <= " + strconv.FormatUint(operator.Split.SeriesLimit, 10))
 	}
-	sql.WriteString(collapsed)
-	sql.WriteString(" AS (SELECT ")
-	sql.WriteString(bucketNumber)
-	if operator.Split.SeriesLimit == 0 {
-		sql.WriteString(", if(")
-		sql.WriteString(kind)
-		sql.WriteString(" = 1, '1:', concat('0:', ")
-		sql.WriteString(label)
-		sql.WriteString(")) AS ")
-	} else {
-		sql.WriteString(", multiIf(")
-		sql.WriteString(kind)
-		sql.WriteString(" = 1, '1:', ")
-		sql.WriteString(selectedLabel)
-		sql.WriteString(", concat('0:', ")
-		sql.WriteString(label)
-		sql.WriteString("), '2:') AS ")
+	sql.WriteString(", concat('0:', " + label + "), ")
+	if operator.Split.IncludeOther && operator.Split.SeriesLimit != 0 {
+		sql.WriteString(kind + " = 0, '2:', ")
 	}
-	sql.WriteString(encoded)
-	sql.WriteString(", ")
+	sql.WriteString("CAST('' AS String)) AS " + encoded + ", ")
 	if valueKind == TimechartValueKindPercentile {
 		level := statsPercentileLevelSQL(operator.Measure.Percentile)
-		sql.WriteString("quantilesGKOrNullArrayMerge(100, ")
-		sql.WriteString(level)
-		sql.WriteString(")(")
-		sql.WriteString(percentileState)
-		sql.WriteString(") AS ")
-		sql.WriteString(percentileValues)
+		sql.WriteString("quantilesGKOrNullArrayMerge(100, " + level + ")(" + percentileState + ") AS " + percentileValues)
 	} else {
-		sql.WriteString("sum(")
-		sql.WriteString(numerator)
-		sql.WriteString(") AS ")
-		sql.WriteString(numerator)
-		sql.WriteString(", sum(")
-		sql.WriteString(denominator)
-		sql.WriteString(") AS ")
-		sql.WriteString(denominator)
+		sql.WriteString("sum(" + numerator + ") AS " + numerator + ", sum(" + denominator + ") AS " + denominator)
 	}
-	sql.WriteString(" FROM ")
-	sql.WriteString(numericGroups)
-	sql.WriteString(" WHERE ")
-	sql.WriteString(collapsedKinds)
-	sql.WriteString(" GROUP BY ")
-	sql.WriteString(bucketNumber)
-	sql.WriteString(", ")
-	sql.WriteString(encoded)
-	sql.WriteString("), ")
+	sql.WriteString(", toUInt8(maxOrDefault(" + kind + " = 3)) AS " + invalid)
+	sql.WriteString(", toUInt8(maxIf(" + collisionCardinality + ", " + kind + " = 0) > 1) AS " + collision)
+	sql.WriteString(" FROM " + ranked + " GROUP BY " + bucketNumber + ", " + encoded + "), ")
 
 	sql.WriteString(finalized)
 	sql.WriteString(" AS (SELECT ")
@@ -1278,120 +1106,19 @@ func compileSplitValueTimechart(
 	sql.WriteString(publishSQL)
 	sql.WriteString(" AS ")
 	sql.WriteString(measureValue)
+	sql.WriteString(", " + invalid + ", " + collision)
 	sql.WriteString(" FROM ")
 	sql.WriteString(collapsed)
 	sql.WriteString("), ")
 
-	sql.WriteString(domainRows)
-	sql.WriteString(" AS (SELECT toUInt8(0) AS sort_kind, ")
-	sql.WriteString(splunkSeriesLabelSQL(label))
-	sql.WriteString(" AS ")
-	sql.WriteString(sortLabel)
-	sql.WriteString(", concat('0:', ")
-	sql.WriteString(label)
-	sql.WriteString(") AS ")
-	sql.WriteString(encoded)
-	sql.WriteString(" FROM ")
-	sql.WriteString(numericScores)
-	if operator.Split.IncludeNull {
-		sql.WriteString(" UNION ALL SELECT toUInt8(1), CAST('' AS String), CAST('1:' AS String) FROM (SELECT 1 FROM ")
-		sql.WriteString(numericGroups)
-		sql.WriteString(" WHERE ")
-		sql.WriteString(kind)
-		sql.WriteString(" = 1 LIMIT 1)")
-	}
-	if operator.Split.IncludeOther && operator.Split.SeriesLimit != 0 {
-		sql.WriteString(" UNION ALL SELECT toUInt8(2), CAST('' AS String), CAST('2:' AS String) FROM (SELECT 1 FROM ")
-		sql.WriteString(numericGroups)
-		sql.WriteString(" WHERE ")
-		sql.WriteString(kind)
-		sql.WriteString(" = 0 AND ")
-		sql.WriteString(label)
-		sql.WriteString(" NOT IN (SELECT ")
-		sql.WriteString(label)
-		sql.WriteString(" FROM ")
-		sql.WriteString(numericScores)
-		sql.WriteString(") LIMIT 1)")
-	}
-	sql.WriteString("), ")
+	writeTimechartDomainCTEs(&sql, finalized, resourceUsage, domain,
+		"1", operator.BucketCount, timechartValueCellRetainedBytes)
 
-	writeTimechartResourceGuardCTEs(
-		&sql,
-		domainRows,
-		resourceUsage,
-		guardedDomainRows,
-		encoded,
-		operator.BucketCount,
-		timechartValueCellRetainedBytes,
-	)
-
-	sql.WriteString(domain)
-	sql.WriteString(" AS (SELECT arrayMap(item -> item.3, arraySort(item -> (item.1, item.2), groupArray((sort_kind, ")
-	sql.WriteString(sortLabel)
-	sql.WriteString(", ")
-	sql.WriteString(encoded)
-	sql.WriteString(")))) AS names FROM ")
-	sql.WriteString(guardedDomainRows)
-	sql.WriteString("), ")
-
-	sql.WriteString(collisions)
-	sql.WriteString(" AS (SELECT toUInt8(count() > 0) AS ")
-	sql.WriteString(collision)
-	sql.WriteString(" FROM (")
-	sql.WriteString("SELECT ")
-	sql.WriteString(splunkSeriesLabelSQL(label))
-	sql.WriteString(" AS ")
-	sql.WriteString(normalized)
-	sql.WriteString(" FROM ")
-	sql.WriteString(numericGroups)
-	sql.WriteString(" WHERE ")
-	sql.WriteString(kind)
-	sql.WriteString(" = 0 GROUP BY ")
-	sql.WriteString(normalized)
-	sql.WriteString(" HAVING uniqExact(")
-	sql.WriteString(label)
-	sql.WriteString(") > 1 LIMIT 1)), ")
-
-	sql.WriteString(bucketMaps)
-	sql.WriteString(" AS (SELECT ")
-	sql.WriteString(bucketNumber)
-	sql.WriteString(", mapFromArrays(groupArray(")
-	sql.WriteString(encoded)
-	sql.WriteString("), groupArray(ifNull(")
-	sql.WriteString(measureValue)
-	sql.WriteString(", toFloat64(0)))) AS ")
-	sql.WriteString(valueMap)
-	sql.WriteString(", ")
-	sql.WriteString("mapFromArrays(groupArray(")
-	sql.WriteString(encoded)
-	sql.WriteString("), groupArray(toUInt8(isNotNull(")
-	sql.WriteString(measureValue)
-	sql.WriteString(")))) AS ")
-	sql.WriteString(presentMap)
-	sql.WriteString(" FROM ")
-	sql.WriteString(finalized)
-	sql.WriteString(" CROSS JOIN ")
-	sql.WriteString(resourceUsage)
-	sql.WriteString(" WHERE ")
-	sql.WriteString(timechartResourceGuardPredicate(
-		resourceUsage,
-		operator.BucketCount,
-		timechartValueCellRetainedBytes,
-	))
-	sql.WriteString(" GROUP BY ")
-	sql.WriteString(bucketNumber)
-	sql.WriteString("), ")
-
-	sql.WriteString(validation)
-	sql.WriteString(" AS (SELECT toUInt8(sumIf(")
-	sql.WriteString(frequency)
-	sql.WriteString(", ")
-	sql.WriteString(kind)
-	sql.WriteString(" = 3) > 0) AS ")
-	sql.WriteString(invalid)
-	sql.WriteString(" FROM ")
-	sql.WriteString(numericGroups)
-	sql.WriteString("), ")
+	sql.WriteString(bucketMaps + " AS (SELECT " + bucketNumber)
+	sql.WriteString(", mapFromArrays(groupArrayIf(" + encoded + ", " + encoded + " != ''), groupArrayIf(ifNull(" + measureValue + ", toFloat64(0)), " + encoded + " != '')) AS " + valueMap)
+	sql.WriteString(", mapFromArrays(groupArrayIf(" + encoded + ", " + encoded + " != ''), groupArrayIf(toUInt8(isNotNull(" + measureValue + ")), " + encoded + " != '')) AS " + presentMap)
+	sql.WriteString(" FROM " + finalized + " CROSS JOIN " + domain + " WHERE " + timechartResourceGuardPredicate(domain, operator.BucketCount, timechartValueCellRetainedBytes))
+	sql.WriteString(" GROUP BY " + bucketNumber + "), ")
 
 	sql.WriteString(grid)
 	sql.WriteString(" AS (")
@@ -1433,24 +1160,12 @@ func compileSplitValueTimechart(
 	sql.WriteString(".names) AS ")
 	sql.WriteString(q(TimechartValuePresentColumn))
 	sql.WriteString(", ")
-	sql.WriteString("toUInt8(")
-	sql.WriteString(validation)
-	sql.WriteString(".")
-	sql.WriteString(invalid)
-	sql.WriteString(" != 0 OR ")
-	sql.WriteString(collisions)
-	sql.WriteString(".")
-	sql.WriteString(collision)
-	sql.WriteString(" != 0) AS ")
+	sql.WriteString(domain + "." + invalid + " AS ")
 	sql.WriteString(q(TimechartInvalidColumn))
 	sql.WriteString(" FROM ")
 	sql.WriteString(grid)
 	sql.WriteString(" CROSS JOIN ")
 	sql.WriteString(domain)
-	sql.WriteString(" CROSS JOIN ")
-	sql.WriteString(validation)
-	sql.WriteString(" CROSS JOIN ")
-	sql.WriteString(collisions)
 	sql.WriteString(" LEFT JOIN ")
 	sql.WriteString(bucketMaps)
 	sql.WriteString(" ON ")
@@ -1481,33 +1196,18 @@ func compileSplitValueTimechart(
 		numericGroupsDepth = relationalNodeDepth(numericStateDepth)
 	}
 	numericScoresDepth := relationalNodeDepth(numericGroupsDepth)
-	scoreMembershipDepth := relationalNodeDepth(numericScoresDepth)
-	collapsedDepth := relationalNodeDepth(numericGroupsDepth, scoreMembershipDepth)
+	rankedDepth := relationalNodeDepth(numericScoresDepth)
+	collapsedDepth := relationalNodeDepth(rankedDepth)
 	finalizedDepth := relationalNodeDepth(collapsedDepth)
-
-	domainScoreBranchDepth := relationalNodeDepth(numericScoresDepth)
-	domainNullInputDepth := relationalNodeDepth(numericGroupsDepth)
-	domainNullBranchDepth := relationalNodeDepth(domainNullInputDepth)
-	domainOtherInputDepth := relationalNodeDepth(numericGroupsDepth, scoreMembershipDepth)
-	domainOtherBranchDepth := relationalNodeDepth(domainOtherInputDepth)
-	domainRowsDepth := relationalNodeDepth(
-		domainScoreBranchDepth,
-		domainNullBranchDepth,
-		domainOtherBranchDepth,
-	)
+	domainRowsDepth := relationalNodeDepth(finalizedDepth)
 	resourceUsageDepth := relationalNodeDepth(domainRowsDepth)
-	guardedDomainRowsDepth := relationalNodeDepth(domainRowsDepth, resourceUsageDepth)
-	domainDepth := relationalNodeDepth(guardedDomainRowsDepth)
-	collisionInputDepth := relationalNodeDepth(numericGroupsDepth)
-	collisionsDepth := relationalNodeDepth(collisionInputDepth)
-	bucketMapsDepth := relationalNodeDepth(finalizedDepth, resourceUsageDepth)
-	validationDepth := relationalNodeDepth(numericGroupsDepth)
+	guardedDomainDepth := relationalNodeDepth(resourceUsageDepth)
+	domainDepth := relationalNodeDepth(guardedDomainDepth)
+	bucketMapsDepth := relationalNodeDepth(finalizedDepth, domainDepth)
 	gridDepth := gridSpec.relationalDepth()
 	resultDepth := relationalNodeDepth(
 		gridDepth,
 		domainDepth,
-		validationDepth,
-		collisionsDepth,
 		bucketMapsDepth,
 	)
 

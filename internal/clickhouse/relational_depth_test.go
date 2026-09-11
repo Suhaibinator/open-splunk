@@ -443,7 +443,7 @@ func TestCompiledRelationalDepthPinsTerminalWideOperatorCosts(t *testing.T) {
 		{
 			name:     "timechart",
 			terminal: "timechart span=5m count BY level",
-			depth:    14,
+			depth:    15,
 		},
 		{
 			name:      "chart",
@@ -533,8 +533,8 @@ func TestTerminalWideRelationalDepthBoundariesAreSourceLocated(t *testing.T) {
 		{
 			name:            "timechart",
 			terminal:        "timechart span=5m count BY level",
-			acceptedSingles: 18,
-			rejectedSingles: 19,
+			acceptedSingles: 17,
+			rejectedSingles: 18,
 		},
 		{
 			name:            "chart",

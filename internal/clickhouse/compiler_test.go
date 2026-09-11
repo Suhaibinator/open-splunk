@@ -1327,15 +1327,15 @@ func TestCompileTimechartUsesOneScopedScanAndPrivateWideTransport(t *testing.T) 
 		`"__os_timechart_ranked" AS (`,
 		`dense_rank() OVER (PARTITION BY "__os_tc_kind" ORDER BY "__os_tc_series_score" DESC, "__os_tc_label" ASC) AS "__os_tc_series_rank"`,
 		`"__os_timechart_collapsed" AS MATERIALIZED (`,
-		`"__os_timechart_resource_usage" AS MATERIALIZED (`,
-		`"__os_timechart_guarded_domain_rows" AS MATERIALIZED (`,
+		`"__os_timechart_resource_usage" AS (`,
+		`"__os_timechart_domain" AS MATERIALIZED (`,
 		`"__os_tc_series_rank" <= 10`,
 		`sumIf("__os_tc_count", "__os_tc_kind" = 3)`,
 		`maxIf("__os_tc_collision_cardinality", "__os_tc_kind" = 0) > 1`,
 		`mapFromArrays(groupArrayIf("__os_tc_encoded", "__os_tc_encoded" != ''), groupArrayIf("__os_tc_collapsed_count", "__os_tc_encoded" != ''))`,
-		`"__os_timechart_validation" AS (SELECT toUInt8(maxOrDefault("__os_tc_invalid" != 0 OR "__os_tc_collision" != 0)) AS "__os_tc_invalid" FROM "__os_timechart_collapsed")`,
+		`toUInt8(maxOrDefault("__os_tc_invalid" != 0 OR "__os_tc_collision" != 0)) AS "__os_tc_invalid" FROM "__os_timechart_collapsed"`,
 		`concat('VALUE', "__os_tc_label")`,
-		`"__os_tc_sort_label"`,
+		`groupArrayIf((multiIf(`,
 		`arrayMap(item -> item.3`,
 		`mapFromArrays(`,
 		`FROM numbers(?)`,
@@ -1355,7 +1355,7 @@ func TestCompileTimechartUsesOneScopedScanAndPrivateWideTransport(t *testing.T) 
 		`FROM "__os_timechart_group_counts"`: 1,
 		`FROM "__os_timechart_scored"`:       1,
 		`FROM "__os_timechart_ranked"`:       1,
-		`FROM "__os_timechart_collapsed"`:    3,
+		`FROM "__os_timechart_collapsed"`:    2,
 	} {
 		if got := strings.Count(compiled.SQL, relation); got != want {
 			t.Fatalf("timechart relation %q occurs %d times, want %d:\n%s", relation, got, want, compiled.SQL)
@@ -1729,11 +1729,8 @@ func TestCompileTimechartSeriesOptionsNarrowTheCollapsedSeries(t *testing.T) {
 	t.Parallel()
 
 	const (
-		nullBranch    = `"__os_tc_kind" = 1, '1:'`
-		countOther    = `"__os_tc_kind" = 0, '2:'`
-		valueOther    = ", '2:') AS"
-		nullSentinel  = "CAST('1:' AS String) FROM"
-		otherSentinel = "CAST('2:' AS String) FROM"
+		nullBranch = `"__os_tc_kind" = 1, '1:'`
+		countOther = `"__os_tc_kind" = 0, '2:'`
 	)
 	tests := []struct {
 		name      string
@@ -1785,42 +1782,42 @@ func TestCompileTimechartSeriesOptionsNarrowTheCollapsedSeries(t *testing.T) {
 			name:      "value defaults",
 			source:    `index=gradethis | timechart span=5m sum(bytes) BY level`,
 			maxSeries: 12,
-			contains:  []string{`ASC LIMIT 10), `, `__os_tc_kind" IN (0, 1) GROUP BY`, nullSentinel, otherSentinel, valueOther},
+			contains:  []string{`__os_tc_series_rank" <= 10, concat('0:'`, nullBranch, countOther},
 		},
 		{
 			name:      "value limit without null",
 			source:    `index=gradethis | timechart span=5m avg(bytes) BY level limit=2 usenull=false`,
 			maxSeries: 3,
-			contains:  []string{`ASC LIMIT 2), `, `__os_tc_kind" = 0 GROUP BY`, otherSentinel},
-			excludes:  []string{nullSentinel, `IN (0, 1) GROUP BY`},
+			contains:  []string{`__os_tc_series_rank" <= 2, concat('0:'`, countOther},
+			excludes:  []string{nullBranch, `IN (0, 1) GROUP BY`},
 		},
 		{
 			name:      "value ordinary series only",
 			source:    `index=gradethis | timechart span=5m useother=false p95(bytes) BY level limit=4 usenull=false`,
 			maxSeries: 4,
-			contains:  []string{`ASC LIMIT 4), `, `__os_tc_kind" = 0 AND ("__os_tc_kind" != 0 OR "__os_tc_label" IN (SELECT "__os_tc_label" FROM "__os_timechart_numeric_scores")) GROUP BY`},
-			excludes:  []string{nullSentinel, otherSentinel},
+			contains:  []string{`__os_tc_series_rank" <= 4, concat('0:'`},
+			excludes:  []string{nullBranch, countOther},
 		},
 		{
 			name:      "sum unlimited",
 			source:    `index=gradethis | timechart span=5m sum(bytes) BY level limit=0`,
 			maxSeries: 0,
-			contains:  []string{`ORDER BY multiIf(isNaN(`, nullSentinel},
-			excludes:  []string{`ASC LIMIT`, otherSentinel, valueOther},
+			contains:  []string{`ORDER BY multiIf(isNaN(`, nullBranch},
+			excludes:  []string{`ASC LIMIT`, countOther},
 		},
 		{
 			name:      "average unlimited",
 			source:    `index=gradethis | timechart span=5m avg(bytes) BY level limit=0`,
 			maxSeries: 0,
-			contains:  []string{`ORDER BY multiIf(isNaN(`, nullSentinel},
-			excludes:  []string{`ASC LIMIT`, otherSentinel, valueOther},
+			contains:  []string{`ORDER BY multiIf(isNaN(`, nullBranch},
+			excludes:  []string{`ASC LIMIT`, countOther},
 		},
 		{
 			name:      "percentile unlimited",
 			source:    `index=gradethis | timechart span=5m p95(bytes) BY level limit=0`,
 			maxSeries: 0,
-			contains:  []string{`ORDER BY multiIf(isNaN(`, nullSentinel},
-			excludes:  []string{`ASC LIMIT`, otherSentinel, valueOther},
+			contains:  []string{`ORDER BY multiIf(isNaN(`, nullBranch},
+			excludes:  []string{`ASC LIMIT`, countOther},
 		},
 	}
 	for _, test := range tests {

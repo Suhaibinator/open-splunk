@@ -453,7 +453,61 @@ func TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse(t *testing.T) {
 			t.Fatalf("execute knowledge timechart: %v", err)
 		}
 		knowledgeRuntimeAssertTimechart(t, sink, base)
+		assertTimechartWorkOneRead(t, ctx, executor, matrix.timechart)
 	})
+
+	for _, measure := range []string{"count(unsigned_copy)", "sum(unsigned_copy)", "avg(unsigned_copy)", "p95(unsigned_copy)"} {
+		runSubtest("timechart "+measure, func(t *testing.T, ctx context.Context) {
+			logical := knowledgeRuntimePlan(t,
+				`index=`+indexName+` service=matrix | timechart span=1m `+measure+` BY regex_value`,
+				program, tenantID, []string{indexName}, indexTime, earliest, latest)
+			compiled, err := (clickhouse.Compiler{}).Compile(logical)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if sources := strings.Count(compiled.SQL, `FROM "open_splunk"."events"`); sources != 1 {
+				t.Fatalf("knowledge timechart %s sources = %d, want 1", measure, sources)
+			}
+			t.Logf("knowledge timechart %s: SQL %d bytes, scoped sources 1", measure, len(compiled.SQL))
+			sink := &compositionSink{}
+			if err := executor.Execute(ctx, compiled, sink); err != nil {
+				t.Fatalf("execute knowledge timechart %s: %v", measure, err)
+			}
+			if len(sink.bounds) != 2 {
+				t.Fatalf("knowledge timechart %s bounds = %#v", measure, sink.bounds)
+			}
+			for index, bounds := range sink.bounds {
+				start := base.Add(time.Duration(index) * time.Minute)
+				want := searchjobs.TimeBucketBounds{Earliest: start.Format(time.RFC3339Nano), Latest: start.Add(time.Minute).Format(time.RFC3339Nano)}
+				if bounds != want {
+					t.Fatalf("knowledge timechart %s bounds = %#v, want %#v", measure, bounds, want)
+				}
+			}
+			if strings.HasPrefix(measure, "count(") {
+				knowledgeRuntimeAssertTimechart(t, &sink.fakeSink, base)
+				return
+			}
+			wantSchema := []searchjobs.Column{
+				{Name: "_time", Kind: searchjobs.ValueKindTime},
+				{Name: "alpha", Kind: searchjobs.ValueKindDouble, Nullable: true},
+				{Name: "beta", Kind: searchjobs.ValueKindDouble, Nullable: true},
+			}
+			if sink.setCalls != 1 || len(sink.rows) != 2 || !slices.Equal(sink.schema.Columns, wantSchema) {
+				t.Fatalf("knowledge timechart %s: schema %#v rows %#v", measure, sink.schema, sink.rows)
+			}
+			for index, row := range sink.rows {
+				at, ok := row[0].Time()
+				if !ok || !at.Equal(base.Add(time.Duration(index)*time.Minute)) {
+					t.Fatalf("knowledge timechart %s bucket = %#v", measure, row[0])
+				}
+				for _, cell := range row[1:] {
+					if value, ok := cell.Double(); !ok || value != 9 {
+						t.Fatalf("knowledge timechart %s cell = %#v, want 9", measure, cell)
+					}
+				}
+			}
+		})
+	}
 
 	runSubtest("stats", func(t *testing.T, ctx context.Context) {
 		sink := &fakeSink{}
