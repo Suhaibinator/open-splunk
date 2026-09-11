@@ -1,7 +1,6 @@
 package alerts
 
 import (
-	"context"
 	"errors"
 	"time"
 
@@ -84,20 +83,6 @@ func ParseDestination(rawURL string) (ParsedDestination, error) {
 	return destination, compatibilityWebhookError(err)
 }
 
-func ResolveDestination(
-	ctx context.Context,
-	resolver Resolver,
-	rawURL string,
-	policy DestinationPolicy,
-) (ResolvedDestination, error) {
-	destination, err := alertwebhook.ResolveDestination(ctx, resolver, rawURL, policy)
-	return destination, compatibilityWebhookError(err)
-}
-
-func ValidateDestinationPolicy(policy DestinationPolicy) error {
-	return compatibilityWebhookError(alertwebhook.ValidateDestinationPolicy(policy))
-}
-
 func BuildSignedPayload(payload WebhookPayload, deliveryID string, secret []byte) (SignedPayload, error) {
 	signed, err := alertwebhook.BuildSignedPayload(alertwebhook.Payload{
 		EventType: payload.EventType, SchemaVersion: payload.SchemaVersion,
@@ -113,10 +98,6 @@ func BuildSignedPayload(payload WebhookPayload, deliveryID string, secret []byte
 		ResultsURL: payload.ResultsURL,
 	}, deliveryID, secret)
 	return signed, compatibilityWebhookError(err)
-}
-
-func Sign(timestamp string, body, secret []byte) string {
-	return alertwebhook.Sign(timestamp, body, secret)
 }
 
 func VerifySignature(timestamp string, body, secret []byte, encoded string) bool {
