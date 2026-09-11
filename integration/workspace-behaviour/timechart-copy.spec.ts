@@ -42,6 +42,28 @@ async function tabTo(page: Page, control: Locator): Promise<void> {
   await expect(control).toBeFocused();
 }
 
+async function expectPinnedIconsInsideButtons(pinned: Locator): Promise<void> {
+  const icons = await pinned.locator("button svg").evaluateAll((elements) => elements.map((element) => {
+    const button = element.closest("button");
+    if (button === null) throw new Error("Pinned chart icon is not inside a button");
+    const buttonBounds = button.getBoundingClientRect();
+    const iconBounds = element.getBoundingClientRect();
+    return {
+      bottom: iconBounds.bottom <= buttonBounds.bottom,
+      left: iconBounds.left >= buttonBounds.left,
+      right: iconBounds.right <= buttonBounds.right,
+      top: iconBounds.top >= buttonBounds.top,
+    };
+  }));
+  expect(icons).toHaveLength(3);
+  expect(icons).toEqual(icons.map(() => ({
+    bottom: true,
+    left: true,
+    right: true,
+    top: true,
+  })));
+}
+
 test("mouse selection keeps a pinned bucket stable and series copy uses the visible label", async ({ page }) => {
   const inspector = await openSplitTimechart(page);
   await prepareClipboard(page);
@@ -67,6 +89,9 @@ test("mouse selection keeps a pinned bucket stable and series copy uses the visi
   );
   const pinned = page.getByRole("group", { name: /^Pinned chart values for /u });
   await expect(pinned).toBeVisible();
+  await expectPinnedIconsInsideButtons(pinned);
+  await page.setViewportSize({ width: 760, height: 800 });
+  await expectPinnedIconsInsideButtons(pinned);
   const pinnedBucket = await pinned.getAttribute("aria-label");
   expect(pinnedBucket).not.toBeNull();
 
