@@ -255,6 +255,41 @@ combine Dynamic type validation with retained-size accounting and reuse trusted
 export-schema measurements. The historical publication measurements above were
 not rerun for those distinct paths.
 
+The later native-allocation fix measures relation preflight separately from
+SQL compilation and native table construction. It compares `fc1539b5` with
+`d193f3fa` (integrated as `08ea539d`) using Go 1.27.1, Darwin arm64, Apple M4
+Max, `GOMAXPROCS=2`, seven alternating pairs of precompiled binaries, and 500
+iterations per sample. Fixture construction is outside the timer; other test
+workloads were paused. Medians are:
+
+| Relation preflight fixture | Before ns/op | After ns/op | Change | B/op, both | allocs/op, both |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 4,096 rows × 6 scalar columns | 274,368 | 255,574 | −6.9% | 96 | 1 |
+| 256 rows × 96 mixed columns | 354,272 | 409,702 | +15.6% | 1,792 | 1 |
+| 256 rows × 96 UInt64 columns | 222,828 | 238,440 | +7.0% | 1,792 | 1 |
+
+The mixed fixture contains 24 nested Dynamic columns, with the remaining
+columns split equally among String, Bool, and UInt64. The new preflight
+records observed types by column and depth in a fixed stack array, then charges
+each driver descriptor once rather than per row. It covers previously omitted
+Dynamic/Array objects and backing, including empty and maximum-depth arrays.
+The scalar diagnostic shows that traversal order can affect the wide case;
+these different fixtures do not isolate how much of the mixed change comes
+from traversal order versus graph accounting. A separate trial using row-major
+scalar validation and column-major Dynamic validation was slower in all three
+fixtures, with unchanged allocations, and was discarded. The retained design
+adds about 56 microseconds of preflight time in the mixed fixture while keeping
+allocation counts unchanged and accounting for the complete bounded type graph.
+These are local preflight timings, not native-query or end-to-end latency.
+
+The measured fixtures are retained as benchmarks; run the current candidate with:
+
+```sh
+GOTOOLCHAIN=go1.27.1 GOMAXPROCS=2 go test ./internal/clickhouse -run '^$' \
+  -bench '^BenchmarkTimechartRelationPreflight(Scalar|WideMixed|WideScalar)$' \
+  -benchtime=500x -count=7 -benchmem
+```
+
 The legacy publication benchmark uses a manually constructed descriptor, so it
 does not exercise the sealed timechart provenance or admitted logical row cap.
 `BenchmarkTimechartSingleStageRowLimit` measures that path separately on the
@@ -311,10 +346,11 @@ go test ./internal/queryexec -run '^$' \
   -benchtime=100x -count=5 -benchmem
 ```
 
-The final native external-table preflight benchmark scans the capacity of a
+The earlier native external-table preflight benchmark scanned the capacity of a
 10,000-row, two-string-column lookup and a 10,000-row continuation relation in
-84,051 ns/op with 24 B/op and zero allocations/op. It measures the bounded
-capacity calculation, not native table construction. Run it with:
+84,051 ns/op with 24 B/op and zero allocations/op. That historical measurement covers the bounded
+capacity calculation before immutable relation estimates were cached, not native
+table construction. Run it with:
 
 ```sh
 go test ./internal/clickhouse -run '^$' \
