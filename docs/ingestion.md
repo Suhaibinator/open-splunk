@@ -183,6 +183,15 @@ visibility, and outbox work. Concurrent duplicates, ambiguous inserts,
 restart, and stream takeover therefore cannot double-charge inside the retained
 replay horizon.
 
+Fresh terminal whole-batch rejections use a separate durable token budget:
+at most 10 receipts per second and 256 KiB of encoded receipt metadata per
+second, tightened by either nonzero token rate when lower. This budget permits
+one complete receipt burst and retains debt across reconnect, restart, and
+receipt pruning. It does not debit accepted-event or index quotas. A denial
+returns `RetryBatch(RATE_LIMITED)` and `Throttle(TOKEN_QUOTA)` without storing a
+terminal receipt; retry the unchanged batch. Existing durable outcomes replay
+before this budget is checked, including `REPACK_REQUIRED` receipts.
+
 Each tenant/source has a durable pending budget of 10,000 batches, 128 MiB of
 outbox payload, and 128 MiB of response metadata, within shared ceilings of
 20,000 batches and 256 MiB for each byte dimension. Native sources use the

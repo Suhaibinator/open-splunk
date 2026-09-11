@@ -288,7 +288,7 @@ func TestSQLitePrincipalUpgradePreservesUnattributedDebt(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, entry := range entries {
-		if entry.Name() == "0012_ingest_principal_backlog.sql" {
+		if entry.Name() >= "0012_ingest_principal_backlog.sql" {
 			continue
 		}
 		contents, err := fs.ReadFile(migrations.SQLite(), entry.Name())

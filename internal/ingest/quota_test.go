@@ -162,6 +162,62 @@ func TestProcessBatchBuildsAtomicAcceptedEventQuotaAdmission(t *testing.T) {
 	}
 }
 
+func TestProcessBatchRejectionQuotaRetryUsesFreshTimeAndRetainsIdentity(t *testing.T) {
+	t.Parallel()
+	for _, kind := range []string{"policy", "invalid-event", "nil-event", "repack"} {
+		t.Run(kind, func(t *testing.T) {
+			t.Parallel()
+			config := testServiceConfig()
+			config.Limits.MaxBatchEvents = 1
+			store := &recoverableTestStore{rejectErr: &TransientStoreError{
+				Err: errors.New("rejection quota"), RetryAfter: time.Second,
+				Reason:         opensplunk.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED,
+				ThrottleReason: opensplunk.ThrottleReason_THROTTLE_REASON_TOKEN_QUOTA,
+			}}
+			service, err := NewService(withTestSessionManager(config, staticTestAuthorizer()), staticTestAuthorizer(), store)
+			if err != nil {
+				t.Fatal(err)
+			}
+			state := testBatchStreamState(service)
+			state.authorization.SubjectID = "token-a"
+			state.authorization.TokenRateLimits = ingestquota.Limits{MaxEventsPerSecond: 1}
+			events := []*opensplunk.LogEvent{validTestEvent("one", "main"), validTestEvent("two", "main")}
+			switch kind {
+			case "invalid-event":
+				events = []*opensplunk.LogEvent{validTestEvent("one", "forbidden")}
+			case "nil-event":
+				events = []*opensplunk.LogEvent{nil}
+			case "repack":
+				state.supportsRepacking, state.repackRequest = true, true
+			}
+			batch := validTestBatch("collector-a", "budget-retry", 1, events...)
+			firstAt := validationTestNow
+			response, err := service.processBatch(context.Background(), batch, state, firstAt)
+			if err != nil || response.GetRetryBatch().GetReason() != opensplunk.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED ||
+				response.GetBatchReject() != nil || state.pendingThrottle.GetReason() != opensplunk.ThrottleReason_THROTTLE_REASON_TOKEN_QUOTA || len(state.pendingBatches) != 1 {
+				t.Fatalf("quota denial = %+v, %v; state=%+v", response, err, state)
+			}
+			if admission := store.rejection.RejectionAdmission; admission == nil ||
+				admission.Scope != (ingestquota.ScopeKey{Kind: ingestquota.ScopeKindToken, TenantID: "tenant-a", Identity: "token-a"}) ||
+				admission.TokenLimits != state.authorization.TokenRateLimits {
+				t.Fatalf("untrusted or absent rejection quota = %+v", admission)
+			}
+			store.rejectErr = nil
+			retryAt := firstAt.Add(time.Second)
+			response, err = service.processBatch(context.Background(), batch, state, retryAt)
+			if err != nil || response.GetBatchReject() == nil || len(state.pendingBatches) != 0 || store.storeCalls != 0 {
+				t.Fatalf("terminal retry = %+v, %v", response, err)
+			}
+			if store.rejection.ReceivedAt != firstAt || store.rejection.QuotaEvaluatedAt != retryAt {
+				t.Fatalf("retry reused quota time or changed receive time: %+v", store.rejection)
+			}
+			if kind == "repack" && response.GetBatchReject().GetCode() != opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_REPACK_REQUIRED {
+				t.Fatalf("durable repacking permission = %+v", response)
+			}
+		})
+	}
+}
+
 func TestCollectRefreshesQuotaRatesBeforeNextStore(t *testing.T) {
 	t.Parallel()
 

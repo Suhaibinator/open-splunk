@@ -726,19 +726,23 @@ func (s *Store) rejectBatchAdmitted(
 	}
 	rejectedAt := s.clock().UTC().Truncate(time.Microsecond)
 	reservation, err := s.visibility.Reject(ctx, visibility.RejectRequest{
-		BatchKey:      deduplicationKey,
-		SequenceKey:   sequenceKey,
-		IndexTime:     rejected.ReceivedAt,
-		PayloadSHA256: payloadDigest,
-		Metadata:      metadata,
-		RejectedAt:    rejectedAt,
+		BatchKey:           deduplicationKey,
+		SequenceKey:        sequenceKey,
+		IndexTime:          rejected.ReceivedAt,
+		PayloadSHA256:      payloadDigest,
+		Metadata:           metadata,
+		RejectedAt:         rejectedAt,
+		RejectionAdmission: rejected.RejectionAdmission,
+		QuotaEvaluatedAt:   rejected.QuotaEvaluatedAt,
 	})
 	if err != nil {
 		// A failed SQLite commit can be outcome-ambiguous: the rejection may
 		// already be terminal even though this caller did not observe it. Wake
-		// maintenance on every ledger error so a later exact replay (which is not
-		// NewlyRejected) cannot leave terminal retention dependent on restart.
-		s.wakeReconciler()
+		// maintenance unless quota denied before any write, so an exact replay
+		// cannot leave terminal retention dependent on restart.
+		if _, ok := errors.AsType[*ingestquota.ExceededError](err); !ok {
+			s.wakeReconciler()
+		}
 		return ingest.StoreResult{}, s.visibilityFailure("commit terminal batch rejection", err)
 	}
 	if reservation.NewlyRejected {

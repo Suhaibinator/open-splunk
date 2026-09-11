@@ -169,6 +169,10 @@ type RejectRequest struct {
 	PayloadSHA256 [32]byte
 	Metadata      []byte
 	RejectedAt    time.Time
+	// RejectionAdmission is checked only for a new terminal disposition. Exact
+	// durable replay precedes mutable quota; nil preserves trusted legacy callers.
+	RejectionAdmission *ingestquota.RejectionAdmission
+	QuotaEvaluatedAt   time.Time
 }
 
 // Reservation is the durable sequence assigned to one stable batch key.

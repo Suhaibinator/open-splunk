@@ -817,6 +817,11 @@ func (sequencer *SQLiteSequencer) Reject(
 		return Reservation{}, fmt.Errorf("read active visibility disposition: %w", activeErr)
 	}
 
+	rejectionQuota, err := planRejectionQuota(ctx, tx, request)
+	if err != nil {
+		return Reservation{}, err
+	}
+
 	sequence, err := allocateSequence(ctx, tx)
 	if err != nil {
 		return Reservation{}, err
@@ -860,6 +865,11 @@ func (sequencer *SQLiteSequencer) Reject(
 			return Reservation{}, ErrConflict
 		}
 		return Reservation{}, fmt.Errorf("persist terminal visibility rejection: %w", err)
+	}
+	if rejectionQuota != nil {
+		if err := persistRejectionQuota(ctx, tx, *rejectionQuota); err != nil {
+			return Reservation{}, err
+		}
 	}
 	if err := advanceCutoff(ctx, tx); err != nil {
 		return Reservation{}, err
