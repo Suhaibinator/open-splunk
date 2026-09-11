@@ -264,7 +264,7 @@ workloads were paused. Medians are:
 
 | Relation preflight fixture | Before ns/op | After ns/op | Change | B/op, both | allocs/op, both |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| 4,096 rows × 6 scalar columns | 274,368 | 255,574 | −6.9% | 96 | 1 |
+| 4,096 rows × 6 scalar columns | 274,368 | 255,574 | −6.8% | 96 | 1 |
 | 256 rows × 96 mixed columns | 354,272 | 409,702 | +15.6% | 1,792 | 1 |
 | 256 rows × 96 UInt64 columns | 222,828 | 238,440 | +7.0% | 1,792 | 1 |
 
