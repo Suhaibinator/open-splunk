@@ -235,23 +235,51 @@ func TestNewRelationInputRejectsOversizedNestedPayloadBeforeDeepCopy(t *testing.
 	policy := searchlimits.SupportedRange().Minimum
 	ctx := searchlimits.WithPolicy(context.Background(), policy)
 	columns := []RelationColumn{{Name: "values", Type: "Dynamic"}}
-	rows := [][]any{{[]any{[]any{strings.Repeat("x", int(policy.MaxResultBytes))}}}}
-
-	var got error
-	allocations := testing.AllocsPerRun(10, func() {
-		var input *compiledRelationInput
-		input, got = newRelationInput(ctx, columns, rows, false)
-		if input != nil {
-			t.Fatal("oversized relation returned an input")
-		}
-	})
-	if got == nil {
-		t.Fatal("oversized nested relation was accepted")
+	measure := func(value any) (testing.BenchmarkResult, error) {
+		rows := [][]any{{value}}
+		var got error
+		result := testing.Benchmark(func(b *testing.B) {
+			b.ReportAllocs()
+			for range b.N {
+				input, err := newRelationInput(ctx, columns, rows, false)
+				got = err
+				if input != nil {
+					b.Fatal("oversized relation returned an input")
+				}
+			}
+		})
+		return result, got
 	}
-	// The wrapped returned error may escape. No allocation is proportional to the
-	// rejected nested payload, in particular no []any/string deep copy occurs.
-	if allocations > 2 {
-		t.Fatalf("oversized preflight allocations = %v, want only the bounded error", allocations)
+
+	compact := []any{[]any{strings.Repeat("x", int(policy.MaxResultBytes))}}
+	expanded := make([]any, 4_097)
+	for index := range expanded[:len(expanded)-1] {
+		expanded[index] = []any{uint64(index)}
+	}
+	expanded[len(expanded)-1] = []any{strings.Repeat("x", 8*int(policy.MaxResultBytes))}
+
+	compactResult, compactErr := measure(compact)
+	expandedResult, expandedErr := measure(expanded)
+	if !errors.Is(compactErr, ErrTimechartResourceLimit) ||
+		!errors.Is(expandedErr, ErrTimechartResourceLimit) {
+		t.Fatalf("oversized relation errors = (%v, %v), want resource limits", compactErr, expandedErr)
+	}
+	// Benchmark accounting can differ by a few bytes or one allocation under the
+	// race runtime. The expanded input adds seven times the byte limit and thousands
+	// of nested slices, so that constant drift cannot conceal a deep copy.
+	if expandedResult.AllocedBytesPerOp() > compactResult.AllocedBytesPerOp()+1<<10 {
+		t.Fatalf(
+			"oversized preflight bytes/op = compact %d, expanded %d; allocation grew with rejected payload",
+			compactResult.AllocedBytesPerOp(),
+			expandedResult.AllocedBytesPerOp(),
+		)
+	}
+	if expandedResult.AllocsPerOp() > compactResult.AllocsPerOp()+1 {
+		t.Fatalf(
+			"oversized preflight allocations/op = compact %d, expanded %d; allocations grew with rejected nesting",
+			compactResult.AllocsPerOp(),
+			expandedResult.AllocsPerOp(),
+		)
 	}
 }
 
