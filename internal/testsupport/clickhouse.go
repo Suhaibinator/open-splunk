@@ -566,13 +566,12 @@ func (container *ClickHouseContainer) waitReadyWithCredentials(
 	username string,
 	password string,
 ) error {
-	deadline := time.NewTimer(90 * time.Second)
-	defer deadline.Stop()
+	readinessContext, readinessCancel := context.WithTimeout(ctx, 90*time.Second)
+	defer readinessCancel()
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	return waitForClickHouseReadiness(
-		ctx,
-		deadline.C,
+		readinessContext,
 		ticker.C,
 		func(probeContext context.Context) clickHouseReadinessObservation {
 			processOutput, processErr := docker(
@@ -651,15 +650,20 @@ func (observation clickHouseReadinessObservation) diagnostic() string {
 
 func waitForClickHouseReadiness(
 	ctx context.Context,
-	deadline <-chan time.Time,
 	ticks <-chan time.Time,
 	probe func(context.Context) clickHouseReadinessObservation,
 ) error {
 	stable := 0
 	var last string
 	for {
+		if err := ctx.Err(); err != nil {
+			return clickHouseReadinessContextError(err, last)
+		}
 		observation := probe(ctx)
 		last = observation.diagnostic()
+		if err := ctx.Err(); err != nil {
+			return clickHouseReadinessContextError(err, last)
+		}
 		if observation.ready() {
 			stable++
 			if stable == 4 {
@@ -670,16 +674,24 @@ func waitForClickHouseReadiness(
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf(
-				"wait for ClickHouse test container: %w (last observation: %s)",
-				ctx.Err(),
-				last,
-			)
-		case <-deadline:
-			return fmt.Errorf("wait for ClickHouse test container: timed out: %s", last)
+			return clickHouseReadinessContextError(ctx.Err(), last)
 		case <-ticks:
 		}
 	}
+}
+
+func clickHouseReadinessContextError(err error, last string) error {
+	if last == "" {
+		return fmt.Errorf(
+			"wait for ClickHouse test container: %w before first readiness probe",
+			err,
+		)
+	}
+	return fmt.Errorf(
+		"wait for ClickHouse test container: %w (last observation: %s)",
+		err,
+		last,
+	)
 }
 
 func (container *ClickHouseContainer) waitSecureReady(

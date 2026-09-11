@@ -62,11 +62,9 @@ func TestWaitForClickHouseReadinessRequiresStableFinalDaemon(t *testing.T) {
 	for range observations {
 		ticks <- time.Time{}
 	}
-	deadline := make(chan time.Time)
 	probes := 0
 	err := waitForClickHouseReadiness(
 		context.Background(),
-		deadline,
 		ticks,
 		func(context.Context) clickHouseReadinessObservation {
 			observation := observations[probes]
@@ -86,38 +84,39 @@ func TestWaitForClickHouseReadinessRequiresStableFinalDaemon(t *testing.T) {
 	}
 }
 
-func TestWaitForClickHouseReadinessPreservesCancellationAndDiagnostics(t *testing.T) {
+func TestWaitForClickHouseReadinessRejectsCanceledContextBeforeProbe(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
+	probes := 0
 	err := waitForClickHouseReadiness(
 		ctx,
 		make(chan time.Time),
-		make(chan time.Time),
 		func(context.Context) clickHouseReadinessObservation {
-			return clickHouseReadinessObservation{
-				processName: "entrypoint.sh",
-			}
+			probes++
+			return clickHouseReadinessObservation{}
 		},
 	)
 	if err == nil ||
 		!errors.Is(err, context.Canceled) ||
-		!strings.Contains(err.Error(), "PID 1 is \"entrypoint.sh\"") {
+		!strings.Contains(err.Error(), "before first readiness probe") {
 		t.Fatalf("canceled readiness error = %v", err)
+	}
+	if probes != 0 {
+		t.Fatalf("canceled readiness probes = %d, want 0", probes)
 	}
 }
 
 func TestWaitForClickHouseReadinessReportsFinalDaemonFailure(t *testing.T) {
 	t.Parallel()
 
-	deadline := make(chan time.Time, 1)
-	deadline <- time.Time{}
+	ctx, cancel := context.WithCancel(context.Background())
 	err := waitForClickHouseReadiness(
-		context.Background(),
-		deadline,
+		ctx,
 		make(chan time.Time),
 		func(context.Context) clickHouseReadinessObservation {
+			cancel()
 			return clickHouseReadinessObservation{
 				processName: clickHouseFinalProcessName,
 				queryOutput: []byte("native endpoint unavailable"),
@@ -126,9 +125,41 @@ func TestWaitForClickHouseReadinessReportsFinalDaemonFailure(t *testing.T) {
 		},
 	)
 	if err == nil ||
+		!errors.Is(err, context.Canceled) ||
 		!strings.Contains(err.Error(), "query final ClickHouse daemon: connection refused") ||
 		!strings.Contains(err.Error(), "native endpoint unavailable") {
 		t.Fatalf("final-daemon readiness error = %v", err)
+	}
+}
+
+func TestWaitForClickHouseReadinessDeadlineCancelsBlockedProbe(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	probes := 0
+	err := waitForClickHouseReadiness(
+		ctx,
+		make(chan time.Time),
+		func(probeContext context.Context) clickHouseReadinessObservation {
+			probes++
+			<-probeContext.Done()
+			return clickHouseReadinessObservation{
+				processErr: probeContext.Err(),
+			}
+		},
+	)
+	if err == nil ||
+		!errors.Is(err, context.DeadlineExceeded) ||
+		!strings.Contains(err.Error(), "inspect container PID 1: context deadline exceeded") {
+		t.Fatalf("deadline readiness error = %v", err)
+	}
+	if probes != 1 {
+		t.Fatalf("deadline readiness probes = %d, want 1", probes)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("blocked readiness probe canceled after %s, want no more than 2s", elapsed)
 	}
 }
 
