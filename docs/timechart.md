@@ -197,27 +197,61 @@ including compilation or a concurrently populated build cache in one side of
 the comparison.
 
 The following result uses Darwin arm64 on an Apple M4 Max. Each value is the
-median of seven paired samples from baseline `ebcf1554` and final candidate
-`a5701858`:
+median of seven paired samples from baseline `ebcf1554` and measured candidate
+`9c3b3f64043f1535f32316ef2b869fb35f6aa139`:
 
 | Case | Baseline ns/op | Final ns/op | Baseline B/op | Final B/op | Baseline allocs/op | Final allocs/op | SQL bytes, baseline → final |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Compile, fixed count | 42,325 | 49,550 | 85,256 | 103,191 | 521 | 545 | 2,147 → 2,147 |
-| Compile, automatic count | 41,208 | 44,650 | 85,246 | 92,154 | 520 | 544 | 2,147 → 2,147 |
-| Compile, calendar count | 42,334 | 47,785 | 86,439 | 109,464 | 527 | 566 | 2,411 → 3,776 |
-| Compile, split count | 47,584 | 59,546 | 100,571 | 138,069 | 555 | 602 | 5,989 → 8,927 |
-| Compile, split average | 56,323 | 68,419 | 133,841 | 175,402 | 638 | 684 | 10,029 → 12,921 |
-| Publish 100 buckets × 10 series | 48,795 | 49,556 | 229,029 | 229,279 | 629 | 630 | n/a |
-| Publish 1,000 buckets × 10 series | 447,548 | 456,647 | 2,246,127 | 2,246,365 | 6,029 | 6,030 | n/a |
+| Compile, fixed count | 46,116 | 53,973 | 85,262 | 103,190 | 521 | 545 | 2,147 → 2,147 |
+| Compile, automatic count | 46,114 | 48,913 | 85,247 | 92,154 | 520 | 544 | 2,147 → 2,147 |
+| Compile, calendar count | 47,206 | 52,939 | 86,441 | 109,464 | 527 | 566 | 2,411 → 3,776 |
+| Compile, split count | 51,893 | 65,316 | 100,569 | 138,070 | 555 | 602 | 5,989 → 8,927 |
+| Compile, split average | 62,514 | 75,337 | 133,844 | 175,398 | 638 | 684 | 10,029 → 12,921 |
+| Publish 100 buckets × 10 series | 50,965 | 51,618 | 229,039 | 229,268 | 629 | 630 | n/a |
+| Publish 1,000 buckets × 10 series | 474,925 | 484,307 | 2,246,128 | 2,246,378 | 6,029 | 6,030 | n/a |
 
 Every compiler sample reported one textual event-source reference at both
 commits. The opt-in ClickHouse integration test separately requires exactly one
 physical `ReadFromMergeTree` node. Split SQL grows because it carries the
 domain, dense-cell, and retained-byte guards and validates invalid labels and
 normalization collisions across the complete source, independent of the
-visible grid. Across these paired samples, publication medians rise by 1.6%
-and 2.0%; compiler medians rise by 8.4% to 25.1% depending on the path,
+visible grid. Across these paired samples, publication medians rise by 1.3%
+and 2.0%; compiler medians rise by 6.1% to 25.9% depending on the path,
 alongside the additional grid and series validation.
+
+The legacy publication benchmark uses a manually constructed descriptor, so it
+does not exercise the sealed timechart provenance or admitted logical row cap.
+`BenchmarkTimechartSingleStageRowLimit` measures that path separately on the
+measured candidate. It compiles an actual sealed split timechart before the
+timer, passes it through unfenced read admission and the full executor with an
+admitted policy, validates the dense native grid, applies the exact public row
+cap, and publishes to an in-memory sink. The 100-bucket cases used 500
+iterations per process; the 1,000-bucket cases used 100. Each value below is
+the median of seven fresh-process samples:
+
+| Sealed execution case | ns/op | B/op | allocs/op | Native rows | Published rows |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 100 buckets, dense | 170,743 | 192,809 | 1,248 | 100 | 100 |
+| 100 buckets, `cont=false` sparse | 195,896 | 225,316 | 1,439 | 100 | 10 |
+| 1,000 buckets, dense | 463,188 | 700,027 | 6,649 | 1,000 | 1,000 |
+| 1,000 buckets, `cont=false` sparse | 616,110 | 783,949 | 8,640 | 1,000 | 100 |
+
+Compile the candidate-only harness once, then run each benchmark-binary command
+seven times as a fresh process:
+
+```sh
+go test -c -o /tmp/timechart-queryexec.test ./internal/queryexec
+/tmp/timechart-queryexec.test -test.run='^$' \
+  -test.bench='^BenchmarkTimechartSingleStageRowLimit/buckets-00100/' \
+  -test.benchtime=500x -test.count=1 -test.benchmem
+/tmp/timechart-queryexec.test -test.run='^$' \
+  -test.bench='^BenchmarkTimechartSingleStageRowLimit/buckets-01000/' \
+  -test.benchtime=100x -test.count=1 -test.benchmem
+```
+
+There is no baseline value for this harness because the baseline does not have
+the sealed provenance and admitted-row path it measures. The benchmark uses a
+deterministic driver fixture and excludes ClickHouse and network execution.
 
 The exact-grid harness compares the pre-allocation-fix transport at `d5fe39c6`
 with the final candidate. At 10,000 buckets, transport allocation fell from
@@ -287,7 +321,17 @@ go test ./internal/queryexec -run '^$' \
   -benchtime=500ms -count=5 -benchmem
 ```
 
-Both publication harnesses use the production buffering and publication paths
-with in-memory driver fixtures. They exclude ClickHouse and network execution.
+The retained browser seed was measured separately with Node 26.7 and a valid
+3,880,588-byte response containing 5,000 rows and 64 series. Across five
+alternating fresh-process pairs, a second independent adaptation had a median
+47.273667 ms direct runtime and retained another 9,175,664 bytes. A shallow
+copy from the shared immutable seed had a median 0.002606045 ms direct runtime
+and retained 39,820.32 bytes per copy, measured over 200 retained copies. The
+direct timings exclude garbage collection and browser rendering; this local
+allocation contrast verifies removal of repeated full adaptation and is not a
+production speedup claim.
+
+The publication harnesses use production buffering and publication paths with
+in-memory driver fixtures. They exclude ClickHouse and network execution.
 These fixed samples are repeatable regression references; they are not
 production latency measurements or latency-parity claims about Splunk.
