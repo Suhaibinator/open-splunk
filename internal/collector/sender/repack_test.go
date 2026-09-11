@@ -3,6 +3,7 @@ package sender
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -125,6 +126,78 @@ func TestSenderLosslessRepackingAgainstRealService(t *testing.T) {
 	records := sink.snapshot()
 	if len(records) != 1 || records[0].Event.GetEventId() != "oversized" {
 		t.Fatalf("wrong durable dead letters: %+v", records)
+	}
+}
+
+func TestSenderRepacksAggregateValueBudgetWithoutDroppingEvents(t *testing.T) {
+	queue, err := wal.Open(wal.Options{Dir: t.TempDir(), Sync: wal.SyncAlways, CollectorID: "collector-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = queue.Close() })
+	// Five individually valid large events exceed the aggregate node budget.
+	// Four lightweight predecessors keep the ordinary byte/count limits valid
+	// while forcing repeated fallback bisection: 9 -> 4/5 -> 2/3.
+	events := make([]*opensplunk.LogEvent, 9)
+	for i := range events {
+		event := validLogEvent(fmt.Sprintf("event-%d", i), "main")
+		if i >= 4 {
+			values := make([]*opensplunk.TypedValue, ingest.HardMaxBatchValueNodes/5)
+			for j := range values {
+				values[j] = &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_BoolValue{}}
+			}
+			event.Fields = &opensplunk.TypedObject{Fields: []*opensplunk.TypedObjectField{{
+				Name: "items", Value: &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_ListValue{
+					ListValue: &opensplunk.TypedValueList{Values: values},
+				}},
+			}}}
+		}
+		events[i] = event
+	}
+	parent, err := queue.Append(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parent.GetUncompressedSizeBytes() >= ingest.HardMaxBatchBytes {
+		t.Fatal("aggregate test must remain under the advertised byte ceiling")
+	}
+	store := &repackServiceStore{states: make(map[ingest.StoreBatchIdentity]ingest.StoredBatchState), results: make(map[ingest.StoreBatchIdentity]ingest.StoreResult)}
+	authorization := ingest.Authorization{SubjectID: "subject", TenantID: "tenant", CollectorID: "collector-a", AuthorizedIndexes: []ingest.IndexPolicy{{Name: "main", Version: 1}}}
+	authorizer := ingest.AuthorizerFunc(func(context.Context, string) (ingest.Authorization, error) { return authorization, nil })
+	service, err := ingest.NewService(realServiceIngestConfig(authorization), authorizer, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := testOptions()
+	opts.Hello.Capabilities = []opensplunk.CollectorCapability{opensplunk.CollectorCapability_COLLECTOR_CAPABILITY_LOSSLESS_REPACKING}
+	sink := &memSink{}
+	sender := newTestSender(t, opts, queue, sink, nil, startServer(t, service))
+	cancel, done := runSender(t, sender)
+	defer func() { cancel(); <-done }()
+	// Race instrumentation makes the aggregate protobuf walk substantially
+	// slower, so keep its scheduling headroom local to this stress test.
+	waitForWithin(t, time.Minute, "aggregate repacking drained", func() bool {
+		return queue.Stats().QueuedBatches == 0
+	})
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.events) != len(events) || store.repackRejections != 2 {
+		t.Fatalf("stored %d events with %d fences; want 9 events/2 fences", len(store.events), store.repackRejections)
+	}
+	seen := make(map[string]bool)
+	for _, id := range store.events {
+		if seen[id] {
+			t.Fatalf("event %s stored more than once", id)
+		}
+		seen[id] = true
+	}
+	for _, event := range events {
+		if !seen[event.GetEventId()] {
+			t.Fatalf("event %s was lost", event.GetEventId())
+		}
+	}
+	if len(sink.snapshot()) != 0 {
+		t.Fatal("aggregate repacking dead-lettered valid events")
 	}
 }
 

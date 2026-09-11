@@ -140,6 +140,29 @@ failure. Constraint failures are permanent per-event rejections, reveal no
 value or pattern, do not consume quota, and never reach ClickHouse. Other valid
 events in the same batch may still commit.
 
+## Event complexity
+
+Fresh events may contain at most 16,384 `TypedValue` nodes in total across
+their structured fields. Every scalar, list, and object value counts once,
+including empty containers; list elements and nested object values share the
+same per-event budget. The existing object-field, nesting-depth, and encoded
+byte limits also apply. Exceeding the node budget permanently rejects the
+event with `VALUE_INVALID` and violation `too_many_values`, before cloning,
+redaction, or storage. Protobuf decoding and batch identity hashing still use
+the transport and batch byte ceilings. Previously committed batches retain
+their original replay disposition.
+
+A fresh batch or transport-neutral admission request may contain at most
+65,536 value nodes across all its events. The server checks this aggregate
+budget before cloning any event. An oversized native batch receives
+`BATCH_TOO_LARGE` with violation `batch_value_limit`; when lossless repacking
+is negotiated, a multi-event batch is instead durably fenced with
+`REPACK_REQUIRED`. The collector then splits its existing WAL batch, preserving
+event bytes and its checkpoint barrier, and retries smaller children. This can
+repeat even when the original fits Ready's byte/count limits. Peers without
+repacking support retain their existing terminal batch-rejection behavior.
+Transport-neutral admission rejects an oversized request atomically.
+
 ## Rate limits
 
 Every token and logical index may independently set

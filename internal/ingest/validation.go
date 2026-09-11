@@ -459,7 +459,7 @@ func (v *Validator) validateAndNormalizeEventWithSize(event *opensplunk.LogEvent
 	if err := validateEventStrings(event); err != nil {
 		return nil, err
 	}
-	if err := v.validateObject(event.GetFields(), "fields", 1, true, new(uint32)); err != nil {
+	if err := v.validateObject(event.GetFields(), "fields", 1, true, new(eventValidationBudget)); err != nil {
 		return nil, err
 	}
 
@@ -550,7 +550,19 @@ func (v *Validator) validateTimestamp(ts *timestamppb.Timestamp, now time.Time) 
 	return nil
 }
 
-func (v *Validator) validateObject(object *opensplunk.TypedObject, path string, depth uint32, root bool, count *uint32) *EventError {
+type eventValidationBudget struct {
+	fields uint32
+	values uint32
+}
+
+func tooManyValueNodes(path string) *EventError {
+	return eventFailure(
+		opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_VALUE_INVALID,
+		"typed values exceed the per-event node limit", path, "too_many_values",
+	)
+}
+
+func (v *Validator) validateObject(object *opensplunk.TypedObject, path string, depth uint32, root bool, budget *eventValidationBudget) *EventError {
 	if object == nil {
 		return nil
 	}
@@ -559,6 +571,11 @@ func (v *Validator) validateObject(object *opensplunk.TypedObject, path string, 
 			opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_NESTING_TOO_DEEP,
 			"typed value nesting exceeds the configured limit", path, "nesting_too_deep",
 		)
+	}
+	// Each member requires at least one value visit. Reject before allocating
+	// a duplicate-name map or constructing paths for an oversized container.
+	if uint64(len(object.GetFields())) > uint64(HardMaxEventValueNodes-budget.values) {
+		return tooManyValueNodes(path)
 	}
 	seen := make(map[string]struct{}, len(object.GetFields()))
 	for i, field := range object.GetFields() {
@@ -588,21 +605,25 @@ func (v *Validator) validateObject(object *opensplunk.TypedObject, path string, 
 				"dynamic field cannot override canonical event metadata", fieldPath, "canonical_field_reserved",
 			)
 		}
-		*count++
-		if *count > v.limits.MaxFields {
+		budget.fields++
+		if budget.fields > v.limits.MaxFields {
 			return eventFailure(
 				opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_TOO_MANY_FIELDS,
 				"typed object contains too many fields", fieldPath, "too_many_fields",
 			)
 		}
-		if err := v.validateValue(field.GetValue(), fieldPath, depth, count); err != nil {
+		if err := v.validateValue(field.GetValue(), fieldPath, depth, budget); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (v *Validator) validateValue(value *opensplunk.TypedValue, path string, depth uint32, count *uint32) *EventError {
+func (v *Validator) validateValue(value *opensplunk.TypedValue, path string, depth uint32, budget *eventValidationBudget) *EventError {
+	if budget.values >= HardMaxEventValueNodes {
+		return tooManyValueNodes(path)
+	}
+	budget.values++
 	if value == nil || value.GetKind() == nil {
 		return eventFailure(
 			opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_VALUE_INVALID,
@@ -643,8 +664,11 @@ func (v *Validator) validateValue(value *opensplunk.TypedValue, path string, dep
 				"typed value nesting exceeds the configured limit", path, "nesting_too_deep",
 			)
 		}
+		if uint64(len(kind.ListValue.GetValues())) > uint64(HardMaxEventValueNodes-budget.values) {
+			return tooManyValueNodes(path)
+		}
 		for i, item := range kind.ListValue.GetValues() {
-			if err := v.validateValue(item, fmt.Sprintf("%s[%d]", path, i), depth+1, count); err != nil {
+			if err := v.validateValue(item, fmt.Sprintf("%s[%d]", path, i), depth+1, budget); err != nil {
 				return err
 			}
 		}
@@ -652,7 +676,7 @@ func (v *Validator) validateValue(value *opensplunk.TypedValue, path string, dep
 		if kind.ObjectValue == nil {
 			return invalidTypedValue(path, "object_required")
 		}
-		return v.validateObject(kind.ObjectValue, path, depth+1, false, count)
+		return v.validateObject(kind.ObjectValue, path, depth+1, false, budget)
 	case *opensplunk.TypedValue_DecimalValue:
 		if kind.DecimalValue == nil || !decimalPattern.MatchString(kind.DecimalValue.GetValue()) {
 			return invalidTypedValue(path, "invalid_decimal")
