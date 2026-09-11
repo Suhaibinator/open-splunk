@@ -251,8 +251,9 @@ unchanged, and split-average SQL shrinks despite its 3,890-byte heap increase.
 These small compiler costs accompany the bounded query-tree structure; they
 are not native execution latency measurements. The final native plans also
 remove an unused numeric count aggregate. Subsequent relation and export fixes
-avoid repeated Dynamic-value and trusted-schema traversals; the historical
-publication measurements above were not rerun for those distinct paths.
+combine Dynamic type validation with retained-size accounting and reuse trusted
+export-schema measurements. The historical publication measurements above were
+not rerun for those distinct paths.
 
 The legacy publication benchmark uses a manually constructed descriptor, so it
 does not exercise the sealed timechart provenance or admitted logical row cap.
