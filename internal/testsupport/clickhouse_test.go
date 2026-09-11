@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/xml"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -20,6 +21,114 @@ func TestStartClickHouseRejectsNilContextWithoutCallingDocker(t *testing.T) {
 
 	if _, err := StartClickHouse(nilContext, ""); err == nil || !strings.Contains(err.Error(), "context is required") {
 		t.Fatalf("StartClickHouse(nil) error = %v", err)
+	}
+}
+
+func TestWaitForClickHouseReadinessRequiresStableFinalDaemon(t *testing.T) {
+	t.Parallel()
+
+	connectionRefused := errors.New("connection refused")
+	observations := []clickHouseReadinessObservation{
+		{
+			processName: "entrypoint.sh",
+			queryOutput: []byte("1\n"),
+		},
+		{
+			processName: clickHouseFinalProcessName,
+			queryOutput: []byte("1\n"),
+		},
+		{
+			processName: clickHouseFinalProcessName,
+			queryErr:    connectionRefused,
+		},
+		{
+			processName: clickHouseFinalProcessName,
+			queryOutput: []byte("1\n"),
+		},
+		{
+			processName: clickHouseFinalProcessName,
+			queryOutput: []byte("1\n"),
+		},
+		{
+			processName: clickHouseFinalProcessName,
+			queryOutput: []byte("1\n"),
+		},
+		{
+			processName: clickHouseFinalProcessName,
+			queryOutput: []byte("1\n"),
+		},
+	}
+	ticks := make(chan time.Time, len(observations))
+	for range observations {
+		ticks <- time.Time{}
+	}
+	deadline := make(chan time.Time)
+	probes := 0
+	err := waitForClickHouseReadiness(
+		context.Background(),
+		deadline,
+		ticks,
+		func(context.Context) clickHouseReadinessObservation {
+			observation := observations[probes]
+			probes++
+			return observation
+		},
+	)
+	if err != nil {
+		t.Fatalf("waitForClickHouseReadiness() error = %v", err)
+	}
+	if probes != len(observations) {
+		t.Fatalf(
+			"waitForClickHouseReadiness() used %d probes, want %d",
+			probes,
+			len(observations),
+		)
+	}
+}
+
+func TestWaitForClickHouseReadinessPreservesCancellationAndDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := waitForClickHouseReadiness(
+		ctx,
+		make(chan time.Time),
+		make(chan time.Time),
+		func(context.Context) clickHouseReadinessObservation {
+			return clickHouseReadinessObservation{
+				processName: "entrypoint.sh",
+			}
+		},
+	)
+	if err == nil ||
+		!errors.Is(err, context.Canceled) ||
+		!strings.Contains(err.Error(), "PID 1 is \"entrypoint.sh\"") {
+		t.Fatalf("canceled readiness error = %v", err)
+	}
+}
+
+func TestWaitForClickHouseReadinessReportsFinalDaemonFailure(t *testing.T) {
+	t.Parallel()
+
+	deadline := make(chan time.Time, 1)
+	deadline <- time.Time{}
+	err := waitForClickHouseReadiness(
+		context.Background(),
+		deadline,
+		make(chan time.Time),
+		func(context.Context) clickHouseReadinessObservation {
+			return clickHouseReadinessObservation{
+				processName: clickHouseFinalProcessName,
+				queryOutput: []byte("native endpoint unavailable"),
+				queryErr:    errors.New("connection refused"),
+			}
+		},
+	)
+	if err == nil ||
+		!strings.Contains(err.Error(), "query final ClickHouse daemon: connection refused") ||
+		!strings.Contains(err.Error(), "native endpoint unavailable") {
+		t.Fatalf("final-daemon readiness error = %v", err)
 	}
 }
 
