@@ -268,7 +268,7 @@ func singleStageRowsEvents(first time.Time) []semanticBytesLineageEvent {
 			raw:    []byte("x"),
 		})
 	}
-	for bucket := 0; bucket < 4; bucket++ {
+	for bucket := range 4 {
 		for member := 0; member <= bucket; member++ {
 			events = append(events, semanticBytesLineageEvent{
 				id:     fmt.Sprintf("single-stage-chart-%d-%d", bucket, member),
