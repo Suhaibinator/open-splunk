@@ -4,7 +4,7 @@
 -- output_fields: index, host, source, sourcetype, service, level, message, trace_id, span_id, event_id, fields
 -- sparse_fields: true subset=true
 -- atomic_result: false
--- execution_authority_digest: d88581fc7fb3a2ca1c93c72056e37ff52d59d5f24e653d797eab502ecdc84b05
+-- execution_authority_digest: da268da714394525314e614be0958424a59732c3e302cff8deca0e49528c4fb8
 -- args[0]: "(?s:\\A(?:_.*)\\z)"
 -- args[1]: "_indextime"
 -- args[2]: "_raw"

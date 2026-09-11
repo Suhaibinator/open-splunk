@@ -290,12 +290,12 @@ OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
 `browser_rendering_test.go` isolates browser rendering from ClickHouse and
 query latency. It runs the compiled backend UI and production protobuf HTTP
 handler against a deterministic executor that returns exactly 1,000 statistics
-rows at the browser's 64-column boundary. The test verifies the decoded
+rows across 70 columns. The test verifies the decoded
 response, exact total and page contract, bounded virtualized rows and cells at
 the first and last rows, fixed table width, ARIA row positions, sorting, table
-density changes, and browser/API safety.
-The browser rejects a result page that exceeds its requested row count or the
-explicit 64-column interactive-table limit before adapting or rendering it.
+density changes, column-page navigation, and browser/API safety. The browser
+rejects a result page that exceeds its requested row count, while wide schemas
+remain available through bounded 24-column table pages.
 
 Run it with the same pinned Chromium installation:
 

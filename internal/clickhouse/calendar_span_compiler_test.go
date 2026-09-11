@@ -33,23 +33,20 @@ func TestCompileCalendarTimechartUsesCivilKeyGridAndPrivateBoundary(t *testing.T
 		t.Fatalf("calendar timechart metadata = %#v", compiled.Timechart)
 	}
 	for _, fragment := range []string{
-		`toStartOfDay(toTimeZone("__os_tc_event_time", ?))`,
-		`arrayJoin(arrayMap(i -> (toUInt64(i), addDays(toTimeZone(toDateTime64(?, 9, 'UTC'), ?), i)), range(?)))`,
+		`ASOF LEFT JOIN (SELECT toUInt8(1) AS "__os_tc_calendar_matched", arrayJoin(?) AS "__os_tc_calendar_key")`,
+		`arrayElement(?, number + 1) AS "__os_tc_bucket_number" FROM numbers(?)`,
 		`AS "` + TimechartBucketColumn + `"`,
 	} {
 		if !strings.Contains(compiled.SQL, fragment) {
 			t.Fatalf("calendar timechart SQL missing %q:\n%s", fragment, compiled.SQL)
 		}
 	}
-	if strings.Contains(compiled.SQL, `FROM numbers(?)`) {
-		t.Fatalf("calendar timechart used the fixed ordinal grid:\n%s", compiled.SQL)
+	wantTicks := []int64{
+		time.Date(2026, time.March, 7, 5, 0, 0, 0, time.UTC).UnixNano(),
+		time.Date(2026, time.March, 8, 5, 0, 0, 0, time.UTC).UnixNano(),
+		time.Date(2026, time.March, 9, 4, 0, 0, 0, time.UTC).UnixNano(),
 	}
-	wantTail := []any{
-		timezone,
-		"2026-03-07 05:00:00.000000000",
-		timezone,
-		uint64(3),
-	}
+	wantTail := []any{wantTicks, wantTicks, uint64(3)}
 	if got := compiled.Args[len(compiled.Args)-len(wantTail):]; !reflect.DeepEqual(got, wantTail) {
 		t.Fatalf("calendar grid arguments = %#v, want %#v", got, wantTail)
 	}
@@ -78,12 +75,38 @@ func TestCompileCalendarWeekTimechartAlignsToSunday(t *testing.T) {
 		t.Fatalf("calendar week metadata = %#v", compiled.Timechart)
 	}
 	for _, fragment := range []string{
-		`toStartOfWeek(toTimeZone("__os_tc_event_time", ?), 0)`,
-		`toDateTime64(toStartOfWeek(toTimeZone("__os_tc_event_time", ?), 0), 9, ?)`,
-		`addWeeks(toTimeZone(toDateTime64(?, 9, 'UTC'), ?), i)`,
+		`ASOF LEFT JOIN`,
+		`toUnixTimestamp64Nano("__os_tc_event_time")`,
+		`arrayElement(?, number + 1)`,
 	} {
 		if !strings.Contains(compiled.SQL, fragment) {
 			t.Fatalf("calendar week SQL missing %q:\n%s", fragment, compiled.SQL)
+		}
+	}
+}
+
+func TestCompileCalendarMonthTimechartAlignsInSearchTimezone(t *testing.T) {
+	t.Parallel()
+
+	scope := testChartScope()
+	scope.SearchTimezone = "America/New_York"
+	scope.Earliest = time.Date(2026, time.February, 15, 5, 0, 0, 0, time.UTC)
+	scope.Latest = time.Date(2026, time.April, 15, 4, 0, 0, 0, time.UTC)
+	scope.SearchStart = scope.Latest.Add(time.Second)
+	scope.IndexTimeCutoff = scope.SearchStart
+	compiled := compileSPLWithScope(t, `index=gradethis | timechart span=1month count`, scope)
+	if compiled.Timechart == nil || !compiled.Timechart.Calendar ||
+		compiled.Timechart.FirstBucket != time.Date(2026, time.February, 1, 5, 0, 0, 0, time.UTC) ||
+		compiled.Timechart.BucketCount != 3 {
+		t.Fatalf("calendar month metadata = %#v", compiled.Timechart)
+	}
+	for _, fragment := range []string{
+		`ASOF LEFT JOIN`,
+		`toUnixTimestamp64Nano("__os_tc_event_time")`,
+		`arrayElement(?, number + 1)`,
+	} {
+		if !strings.Contains(compiled.SQL, fragment) {
+			t.Fatalf("calendar month SQL missing %q:\n%s", fragment, compiled.SQL)
 		}
 	}
 }
@@ -96,11 +119,17 @@ func TestCompileCalendarTimechartCoversEveryTransportMode(t *testing.T) {
 		spl  string
 		mode TimechartMode
 	}{
-		{name: "fixed count", spl: `index=gradethis | timechart span=1d count`, mode: TimechartModeFixedCount},
-		{name: "fixed field count", spl: `index=gradethis | timechart span=1d count(status)`, mode: TimechartModeFixedFieldCount},
-		{name: "fixed value", spl: `index=gradethis | timechart span=1d sum(status)`, mode: TimechartModeFixedValue},
-		{name: "wide count", spl: `index=gradethis | timechart span=1d count BY level`, mode: TimechartModeRuntimeWide},
-		{name: "wide value", spl: `index=gradethis | timechart span=1d avg(status) BY level`, mode: TimechartModeRuntimeWideValue},
+		{name: "day fixed count", spl: `index=gradethis | timechart span=1d count`, mode: TimechartModeFixedCount},
+		{name: "day fixed field count", spl: `index=gradethis | timechart span=1d count(status)`, mode: TimechartModeFixedFieldCount},
+		{name: "day fixed value", spl: `index=gradethis | timechart span=1d sum(status)`, mode: TimechartModeFixedValue},
+		{name: "day wide count", spl: `index=gradethis | timechart span=1d count BY level`, mode: TimechartModeRuntimeWide},
+		{name: "day wide value", spl: `index=gradethis | timechart span=1d avg(status) BY level`, mode: TimechartModeRuntimeWideValue},
+		{name: "month fixed count", spl: `index=gradethis | timechart span=1month count`, mode: TimechartModeFixedCount},
+		{name: "month fixed field count", spl: `index=gradethis | timechart span=1month count(status)`, mode: TimechartModeFixedFieldCount},
+		{name: "month fixed sum", spl: `index=gradethis | timechart span=1month sum(status)`, mode: TimechartModeFixedValue},
+		{name: "month fixed percentile", spl: `index=gradethis | timechart span=1month p95(status)`, mode: TimechartModeFixedValue},
+		{name: "month wide count", spl: `index=gradethis | timechart span=1month count BY level`, mode: TimechartModeRuntimeWide},
+		{name: "month wide average", spl: `index=gradethis | timechart span=1month avg(status) BY level`, mode: TimechartModeRuntimeWideValue},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -185,7 +214,7 @@ func TestCompileFixed24HourBinRemainsDistinctFromCalendarDay(t *testing.T) {
 	if calendarTimechart.Timechart == nil || !calendarTimechart.Timechart.Calendar ||
 		calendarTimechart.Timechart.Span != 0 ||
 		!strings.Contains(calendarTimechart.SQL, TimechartBucketColumn) ||
-		!strings.Contains(calendarTimechart.SQL, `toStartOfDay(`) {
+		!strings.Contains(calendarTimechart.SQL, `ASOF LEFT JOIN`) {
 		t.Fatalf("1d timechart did not retain calendar metadata/SQL: %#v\n%s", calendarTimechart.Timechart, calendarTimechart.SQL)
 	}
 }

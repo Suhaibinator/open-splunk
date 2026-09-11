@@ -50,6 +50,10 @@ func (c Compiler) compileWithFinalizerContext(
 	if err != nil {
 		return CompiledQuery{}, err
 	}
+	extractionBudget, err := accumulatedTimechartExtractionBudget(query.Operators[1+preparation.prefixLength:], c.continuationBudget.extraction, preparation.programCharges)
+	if err != nil {
+		return CompiledQuery{}, err
+	}
 	lookupPreparation, err := prepareLookupCompilationContext(
 		ctx,
 		query,
@@ -69,10 +73,18 @@ func (c Compiler) compileWithFinalizerContext(
 	if err != nil {
 		return CompiledQuery{}, err
 	}
+	if c.relationInput != nil {
+		fragment, state, args, err = compileRelationInput(c.relationInput, query)
+		c.continuationBudget.apply(state.context)
+		if err != nil {
+			return CompiledQuery{}, err
+		}
+	}
 	if state.context == nil {
 		return CompiledQuery{}, errors.New("compile ClickHouse query: compile context is unavailable")
 	}
 	state.context.operationContext = ctx
+	state.context.extractionBudget = extractionBudget
 	relation := newScanRelation(fragment, scan.Range)
 	knowledge, err := compileDeferredKnowledgeRelation(
 		relation,
@@ -95,7 +107,13 @@ func (c Compiler) compileWithFinalizerContext(
 		compiled CompiledQuery,
 		complexityRange spl.Range,
 	) (CompiledQuery, error) {
-		compiled.atomicResult = state.context != nil && state.context.atomicResult
+		compiled.hasTimechartStage = state.context.hasTimechartStage
+		compiled.logicalExtractionBudget = state.context.extractionBudget
+		compiled.relationInput = c.relationInput
+		if c.relationInput != nil {
+			compiled.timechartWorkFloor = c.relationInput.mvExpandRows
+		}
+		compiled.atomicResult = compiled.rangeDiscovery != nil || compiled.continuation != nil || (state.context != nil && state.context.atomicResult)
 		terminalWide := compiled.Chart != nil || compiled.Timechart != nil
 		if terminalWide && len(state.chronologicalBarriers) > 0 {
 			var wrapErr error
@@ -483,6 +501,7 @@ func (c Compiler) compileWithFinalizerContext(
 			relation = enriched
 			args = prependArguments(prefixArgs, args)
 			state = nextState
+			relation, state, args = retainTimechartExpansionWork(relation, state, args, operator, remainingOperators[operatorIndex+1:], aliasSequence)
 		case *plan.NoMultivalue:
 			presented, nextState, prefixArgs, compileErr := compileNoMultivalue(
 				relation,
@@ -971,24 +990,71 @@ func (c Compiler) compileWithFinalizerContext(
 			nextState, args = bindChronologicalBarrier(nextState, barrier, args)
 			state = nextState
 		case *plan.Timechart:
+			state.context.extractionBudget, err = accumulatedTimechartExtractionBudget(query.Operators[1+preparation.prefixLength:remainingStart+operatorIndex+1], c.continuationBudget.extraction, preparation.programCharges)
+			if err != nil {
+				return CompiledQuery{}, err
+			}
+			state.context.hasTimechartStage = true
 			if !permitTerminalWideOperators {
 				return CompiledQuery{}, errors.New("compile ClickHouse query: timechart is unavailable for event analysis")
 			}
-			if operatorIndex+1 != len(remainingOperators) {
-				return CompiledQuery{}, errors.New("compile ClickHouse timechart: operator must be terminal")
+			continuation, hasContinuation := query.TimechartContinuationAt(remainingStart + operatorIndex)
+			outputFields, dynamic := query.OutputFields, query.DynamicOutput
+			if hasContinuation {
+				outputFields, dynamic = timechartStageOutput(operator)
+			} else if operatorIndex+1 != len(remainingOperators) {
+				return CompiledQuery{}, errors.New("compile ClickHouse timechart: missing continuation authority")
 			}
+			if !operator.FixedRange && operator.BucketCount == 0 {
+				compiled, err := compileTimechartRangeSource(relation, state, args, operator, scan, aliasSequence)
+				if err != nil {
+					return CompiledQuery{}, err
+				}
+				var suffix *compiledTimechartContinuation
+				if hasContinuation {
+					suffix, err = c.prepareTimechartContinuation(ctx, continuation, scan, lookupPreparation, lookupStageIndex, state.context)
+					if err != nil {
+						return CompiledQuery{}, err
+					}
+				}
+				discoveryCompiler := c
+				discoveryCompiler.lookupResolutions = nil
+				discoveryCompiler.deferredLookupResolutions = nil
+				discoveryCompiler.continuationBudget = timechartContinuationBudget(state.context)
+				compiled.rangeDiscovery = newTimechartRangeDiscovery(operator, scan, query, discoveryCompiler, suffix)
+				return finishCompiled(compiled, operator.Range)
+			}
+			workInput := prepareTimechartWorkInput(state)
 			compiled, compileErr := compileTimechart(
 				relation,
 				state,
 				args,
 				operator,
-				query.OutputFields,
-				query.DynamicOutput,
+				outputFields,
+				dynamic,
 				scan,
 				alias,
 			)
 			if compileErr != nil {
 				return CompiledQuery{}, compileErr
+			}
+			compiled, compileErr = workInput.wrap(compiled)
+			if compileErr != nil {
+				return CompiledQuery{}, compileErr
+			}
+			// Every timechart transport is consumed completely before publication.
+			// Seal that atomic requirement so resource failures cannot expose a
+			// successful truncated prefix through any execution consumer.
+			state.context.atomicResult = true
+			if hasContinuation && operator.Split == nil {
+				relation, state, args = lowerStaticTimechartRelation(compiled, state, operator, aliasSequence)
+				continue
+			}
+			if hasContinuation {
+				compiled.continuation, compileErr = c.prepareTimechartContinuation(ctx, continuation, scan, lookupPreparation, lookupStageIndex, state.context)
+				if compileErr != nil {
+					return CompiledQuery{}, compileErr
+				}
 			}
 			return finishCompiled(compiled, operator.Range)
 		case *plan.Chart:
@@ -1111,6 +1177,7 @@ func (c Compiler) compileWithFinalizerContext(
 		)
 	}
 
+	state.context.extractionBudget = extractionBudget
 	compiled, err := finalize(relation, state, args, scan, aliasSequence)
 	if err != nil {
 		return CompiledQuery{}, err
@@ -1119,8 +1186,9 @@ func (c Compiler) compileWithFinalizerContext(
 }
 
 type authoredKnowledgeCompilation struct {
-	regexPrograms      uint32
-	regexWorkUnits     uint64
-	extractionOutputs  uint32
-	jsonEvaluationWork uint32
+	matchStyleWorkUnits uint64
+	regexPrograms       uint32
+	regexWorkUnits      uint64
+	extractionOutputs   uint32
+	jsonEvaluationWork  uint32
 }

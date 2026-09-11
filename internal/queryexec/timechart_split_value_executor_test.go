@@ -388,8 +388,11 @@ func splitValueTimechartQuery(first time.Time, bucketCount uint64, kind clickhou
 			FirstBucket:   first,
 			Span:          time.Minute,
 			BucketCount:   bucketCount,
+			SeriesLimit:   10,
 			MaxSeries:     12,
 			MaxLabelBytes: 256,
+			IncludeNull:   true,
+			IncludeOther:  true,
 			ValueKind:     kind,
 		},
 	}

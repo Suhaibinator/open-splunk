@@ -46,7 +46,6 @@ import {
   ResultSetKind,
   VisualizationStackMode,
   VisualizationType,
-  type ResultRow,
   type ResultSchema,
   type VisualizationSpec,
 } from "@/gen/ts/open_splunk/result";
@@ -88,7 +87,6 @@ import {
   compareWorkspaceStatisticValues,
   patternsFromEvents,
   resolveAbsoluteTimeRange,
-  timechartSpanMilliseconds,
   timechartRowsForExport,
   timechartValueFields,
   type AdaptedSearchResults,
@@ -219,6 +217,10 @@ import {
   serializeRawPageForClipboard,
 } from "./search-workspace/event-page-controls";
 import {
+  adaptAndApplyBackendResultPage,
+  seedBackendChartPoints,
+} from "./search-workspace/backend-result-bootstrap";
+import {
   BackendResultPages,
   equalResultSchemas,
   type BackendResultPage,
@@ -227,6 +229,7 @@ import {
   completeTimechartCoverage,
   describeTimechartStatisticsPage,
   loadTimechartBuckets,
+  sortTimechartRows,
   type TimechartCoverage,
 } from "./search-workspace/timechart-series";
 import {
@@ -280,9 +283,10 @@ import { summarizeByteQuantity } from "@/lib/byte-quantity";
 import { EventsPanel } from "./search-workspace/panels/events-panel";
 import { PatternsPanel } from "./search-workspace/panels/patterns-panel";
 import { StatisticsPanel } from "./search-workspace/panels/statistics-panel";
-import type { StatisticsColumnLayoutStore } from "./search-workspace/panels/statistics-column-layout";
+import { StatisticsColumnLayoutStore } from "./search-workspace/panels/statistics-column-layout";
 import { VisualizationPanel } from "./search-workspace/panels/visualization-panel";
 import {
+  authoritativeTimelineRange,
   backendJobPhase,
   demoTimechartSplitField,
   eventCountForQuery,
@@ -294,7 +298,6 @@ import {
   queryForPattern,
   resultTabForQuery,
   stateTone,
-  timelineBoundaryLabel,
   timelineIndexFromPointer,
 } from "./search-workspace/workspace-utils";
 import { useSearchSharing } from "./search-workspace/use-search-sharing";
@@ -881,7 +884,7 @@ export function SearchWorkspace({
   const [retainedJobRecovery, setRetainedJobRecovery] = useState<RetainedJobRecovery | null>(null);
   const [backendExpiresAt, setBackendExpiresAt] = useState<Date | null>(null);
   const [backendNotices, setBackendNotices] = useState<string[]>([]);
-  const statisticsColumnLayoutStoreRef = useRef<StatisticsColumnLayoutStore>(new Map());
+  const statisticsColumnLayoutStoreRef = useRef(new StatisticsColumnLayoutStore());
   const [searchFailure, setSearchFailure] = useState<ActiveSearchFailure | null>(null);
   const [backendInspection, setBackendInspection] = useState<ServerSearchJobInspectionState>({
     status: "idle",
@@ -1137,6 +1140,7 @@ export function SearchWorkspace({
   const cancelSearchRef = useRef<() => void>(() => undefined);
   const timelineZoomParentRef = useRef<TimeRange | null>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
+  const pendingEditorFocusRef = useRef<{ offset: number; query: string } | null>(null);
   const highlightRef = useRef<HTMLPreElement>(null);
   const gutterLinesRef = useRef<HTMLDivElement>(null);
   const timePickerRef = useRef<HTMLDivElement>(null);
@@ -1431,14 +1435,11 @@ export function SearchWorkspace({
     if (timelineStart === null || timelineEnd === null) return null;
     return [Math.min(timelineStart, timelineEnd), Math.max(timelineStart, timelineEnd)] as const;
   }, [timelineEnd, timelineStart]);
-  const timelineSelectionZoomable = useMemo(() => {
-    if (timelineSelection === null) return false;
-    const first = timelinePoints[timelineSelection[0]];
-    const last = timelinePoints[timelineSelection[1]];
-    const next = timelinePoints[timelineSelection[1] + 1];
-    return first?.earliest !== undefined
-      && (last?.latest !== undefined || next?.earliest !== undefined);
-  }, [timelinePoints, timelineSelection]);
+  const timelineSelectionRange = useMemo(
+    () => authoritativeTimelineRange(timelinePoints, timelineSelection),
+    [timelinePoints, timelineSelection],
+  );
+  const timelineSelectionZoomable = timelineSelectionRange !== null;
   const selectedTimelineCount = useMemo(() => {
     if (timelineSelection === null) return null;
     const points = timelinePoints.slice(timelineSelection[0], timelineSelection[1] + 1);
@@ -1816,11 +1817,10 @@ export function SearchWorkspace({
         update: { status: "idle" },
       },
     };
-  const sortedTimechartRows = useMemo(() => {
-    const rows = [...timelinePoints];
-    if (timechartSort.key === "count") rows.sort((left, right) => left.count - right.count);
-    return timechartSort.direction === "desc" ? rows.toReversed() : rows;
-  }, [timelinePoints, timechartSort]);
+  const sortedTimechartRows = useMemo(
+    () => sortTimechartRows(timelinePoints, timechartSort),
+    [timelinePoints, timechartSort],
+  );
   const patternRows = useMemo(() => {
     if (backendEnabled) return patternsFromEvents(resultEvents, baseEventCount, patternSensitivity);
     if (patternSensitivity === "Precise") {
@@ -2399,15 +2399,20 @@ export function SearchWorkspace({
     setBackendVerdict(null);
   }
 
-  function focusEditor(offset: number) {
-    window.requestAnimationFrame(() => {
-      const editor = editorRef.current;
-      if (editor === null) return;
-      const safeOffset = Math.max(0, Math.min(offset, editor.value.length));
-      editor.focus();
-      editor.setSelectionRange(safeOffset, safeOffset);
-      setEditorCaret(safeOffset);
-    });
+  function applyPendingEditorFocus() {
+    const request = pendingEditorFocusRef.current;
+    const editor = editorRef.current;
+    if (request === null || editor === null || editor.value !== request.query) return;
+    pendingEditorFocusRef.current = null;
+    const safeOffset = Math.max(0, Math.min(request.offset, editor.value.length));
+    editor.focus();
+    editor.setSelectionRange(safeOffset, safeOffset);
+    setEditorCaret(safeOffset);
+  }
+
+  function focusEditor(offset: number, expectedQuery = query) {
+    pendingEditorFocusRef.current = { offset, query: expectedQuery };
+    applyPendingEditorFocus();
   }
 
   async function copyText(text: string, successMessage: string) {
@@ -3115,6 +3120,13 @@ export function SearchWorkspace({
     editor.setSelectionRange(safeOffset, safeOffset);
   }, [query]);
 
+  // A controlled-value edit commits before the next browser input. Apply its
+  // requested caret in that commit instead of a later animation frame, which
+  // could otherwise interrupt the next typing sequence.
+  useLayoutEffect(() => {
+    applyPendingEditorFocus();
+  }, [query]);
+
   // Escape closes the topmost transient surface; with nothing open it
   // cancels the running search, so a stray run is a keystroke away from
   // stopping without reaching for the mouse.
@@ -3165,7 +3177,8 @@ export function SearchWorkspace({
       else if (event.key === "Escape") {
         event.preventDefault();
         setMenu(null);
-        window.requestAnimationFrame(() => menuReturnFocusRef.current?.focus());
+        // Restore the mounted trigger before deferred work can override a later intentional focus.
+        menuReturnFocusRef.current?.focus();
         return;
       } else return;
       event.preventDefault();
@@ -3258,15 +3271,8 @@ export function SearchWorkspace({
     replaceBackendNotices(job);
   }
 
-  function applyBackendResultPage(page: BackendResultPage) {
+  function applyBackendResultPage(page: BackendResultPage, adapted: AdaptedSearchResults) {
     const isTimeSeries = page.schema.resultKind === ResultSetKind.RESULT_SET_KIND_TIME_SERIES;
-    const adapted = adaptSearchResults(
-      page.schema,
-      page.rows,
-      timechartSpanMilliseconds(
-        runningSearch.jobSnapshot().job?.definition?.spl ?? submittedQuery,
-      ) ?? undefined,
-    );
     clearBackendPreview("disabled", "Authoritative search results loaded.");
     setBackendAuthoritativeResultsReady(true);
     setBackendEvents(adapted.events);
@@ -3330,7 +3336,8 @@ export function SearchWorkspace({
   function startBackendChartSeries(
     job: SearchJob,
     firstPage: BackendResultPage,
-    pageSize: number,
+    firstPagePoints: readonly TimelinePoint[],
+    bootstrap: BackendBootstrapState,
     generation: number,
   ) {
     backendChartSeriesAbortRef.current?.abort();
@@ -3342,17 +3349,27 @@ export function SearchWorkspace({
     }
     const controller = new AbortController();
     backendChartSeriesAbortRef.current = controller;
-    const bucketWidthMs = timechartSpanMilliseconds(job.definition?.spl ?? submittedQuery) ?? undefined;
     const isCurrent = () => !controller.signal.aborted
       && runningSearch.isCurrent(generation, job.searchJobId);
-    const publish = (rows: ResultRow[], coverage: TimechartCoverage) => {
+    const points = seedBackendChartPoints(firstPagePoints);
+    const publish = (coverage: TimechartCoverage) => {
       if (!isCurrent()) return;
       setBackendChartSeries({
         searchJobId: job.searchJobId,
-        points: adaptSearchResults(firstPage.schema, rows, bucketWidthMs).timeline,
+        points: [...points],
         coverage,
       });
     };
+    publish({
+      status: "loading",
+      plottedBuckets: firstPage.rows.length,
+      totalBuckets: firstPage.totalSize ?? null,
+      totalExact: firstPage.totalSize !== undefined && firstPage.totalSizeExact,
+    });
+    const continuationPageSize = normalizedBackendPageSize(
+      backendMaximumPageSize(bootstrap),
+      bootstrap,
+    );
     void loadTimechartBuckets({
       firstPage: {
         rows: firstPage.rows,
@@ -3362,7 +3379,7 @@ export function SearchWorkspace({
       },
       fetchPage: async (pageToken) => {
         const page = await requestBackendResultPage(job, {
-          pageSize,
+          pageSize: continuationPageSize,
           pageToken,
           includeTotalSize: false,
           signal: controller.signal,
@@ -3370,14 +3387,19 @@ export function SearchWorkspace({
         });
         return { rows: page.rows, nextPageToken: page.rawNextPageToken };
       },
-      onProgress: (load) => publish(load.rows, load.coverage),
+      onProgress: (batch) => {
+        if (batch.rows.length > 0) {
+          points.push(...adaptSearchResults(firstPage.schema, batch.rows).timeline);
+        }
+        publish(batch.coverage);
+      },
+      retainRows: false,
       signal: controller.signal,
     }).then((load) => {
-      publish(load.rows, load.coverage);
       if (load.error !== undefined && isCurrent()) {
         setBackendNotices((current) => appendUniqueMessage(
           current,
-          `The visualization stops at ${NUMBER_FORMAT.format(load.rows.length)} timechart buckets: ${
+          `The visualization stops at ${NUMBER_FORMAT.format(load.coverage.plottedBuckets)} timechart buckets: ${
             load.error instanceof Error ? load.error.message : "the remaining buckets could not be loaded."
           }`,
         ));
@@ -3405,6 +3427,7 @@ export function SearchWorkspace({
     // Intermediate pages of a cursor walk are fetched only to record the next cursor; rendering
     // them would flash every crossed page through the events table.
     apply = true,
+    onAppliedTimeline?: (points: readonly TimelinePoint[]) => void,
   ): Promise<BackendResultPage> {
     const pageSize = normalizedBackendPageSize(requestedPageSize, bootstrap);
     return backendResultPages.fetch({
@@ -3415,7 +3438,10 @@ export function SearchWorkspace({
       signal,
       isCurrent: () => runningSearch.isCurrent(generation, job.searchJobId),
       apply,
-      onApply: applyBackendResultPage,
+      onApply: (page) => {
+        const points = adaptAndApplyBackendResultPage(page, applyBackendResultPage);
+        onAppliedTimeline?.(points);
+      },
       onNotice: (message) => setBackendNotices((current) => appendUniqueMessage(current, message)),
     });
   }
@@ -3435,8 +3461,18 @@ export function SearchWorkspace({
     const pageSize = normalizedBackendPageSize(requestedPageSize, bootstrap);
     backendResultPages.prepareFirstPage(pageSize);
     setBackendResultPageSize(pageSize);
-    const firstPage = await fetchBackendResultPage(job, 1, pageSize, bootstrap, signal, generation);
-    startBackendChartSeries(job, firstPage, pageSize, generation);
+    let firstPagePoints: readonly TimelinePoint[] = [];
+    const firstPage = await fetchBackendResultPage(
+      job,
+      1,
+      pageSize,
+      bootstrap,
+      signal,
+      generation,
+      true,
+      (points) => { firstPagePoints = points; },
+    );
+    startBackendChartSeries(job, firstPage, firstPagePoints, bootstrap, generation);
   }
 
   async function fetchAuthoritativeBackendMetadata(
@@ -3798,13 +3834,7 @@ export function SearchWorkspace({
     }
 
     try {
-      const adapted = adaptSearchResults(
-        schema,
-        applied.snapshot.rows,
-        timechartSpanMilliseconds(
-          runningSearch.jobSnapshot().job?.definition?.spl ?? submittedQuery,
-        ) ?? undefined,
-      );
+      const adapted = adaptSearchResults(schema, applied.snapshot.rows);
       setBackendPreviewDisplay({ schema, snapshot: applied.snapshot, adapted });
       runningSearch.applyPreview(applied.snapshot, "live");
       setBackendResultSchema(schema);
@@ -4887,7 +4917,10 @@ export function SearchWorkspace({
         source: nextQuery,
         timeRange: rangeOverride,
       });
-      focusEditor(problem.diagnostic.range?.start ?? (nextQuery.trim().length === 0 ? 0 : nextQuery.length));
+      focusEditor(
+        problem.diagnostic.range?.start ?? (nextQuery.trim().length === 0 ? 0 : nextQuery.length),
+        preserveDraft ? query : nextQuery,
+      );
       return;
     }
     if (
@@ -5213,7 +5246,7 @@ export function SearchWorkspace({
     backendHistoryRerunRef.current = null;
     setEditorCaret(edited.caret);
     setCompletionOpen(false);
-    focusEditor(edited.caret);
+    focusEditor(edited.caret, edited.query);
   }
 
   // Commands from the reference pane go on the end of the pipeline; functions
@@ -5238,10 +5271,11 @@ export function SearchWorkspace({
     setEditorCaret(nextQuery.length);
     setCompletionOpen(false);
     showToast(`Loaded “${example.title}” into the editor. Run it when ready.`, "info");
-    focusEditor(nextQuery.length);
+    focusEditor(nextQuery.length, nextQuery);
   }
 
   function handleEditorChange(event: ChangeEvent<HTMLTextAreaElement>) {
+    pendingEditorFocusRef.current = null;
     const nextQuery = event.target.value;
     const caret = event.target.selectionStart;
     const context = completionContextAt(nextQuery, caret);
@@ -5271,7 +5305,7 @@ export function SearchWorkspace({
     setQuery(nextQuery);
     backendHistoryRerunRef.current = null;
     setCompletionOpen(false);
-    focusEditor(nextQuery.length);
+    focusEditor(nextQuery.length, nextQuery);
   }
 
   function applyPivot(field: string, value: DemoScalar, mode: PivotMode, runImmediately = false) {
@@ -5306,7 +5340,7 @@ export function SearchWorkspace({
       runSearch(nextQuery);
     }
     else showToast(mode === "exclude" ? `Excluded ${field}=${formatFieldValue(value)} from the draft.` : `Added ${field} to the draft.`, "success");
-    focusEditor(nextQuery.length);
+    focusEditor(nextQuery.length, nextQuery);
   }
 
   function toggleField(fieldName: string) {
@@ -5405,7 +5439,10 @@ export function SearchWorkspace({
         generation,
       );
       if (!runningSearch.isCurrent(generation, job.searchJobId)) return;
-      applyBackendResultPage(backendResultPages.display(pageSize, landedPage, landedResult));
+      adaptAndApplyBackendResultPage(
+        backendResultPages.display(pageSize, landedPage, landedResult),
+        applyBackendResultPage,
+      );
       setEventPage(landedPage);
       if (landedPage < requestedPage) {
         showToast(
@@ -5485,16 +5522,11 @@ export function SearchWorkspace({
       }
       return;
     }
-    const first = timelinePoints[timelineSelection[0]];
-    const last = timelinePoints[timelineSelection[1]];
-    if (first === undefined || last === undefined) return;
-    const intervalEndLabel = timelinePoints[timelineSelection[1] + 1]?.label ?? last.latest ?? timelineBoundaryLabel(timelineSelection[1] + 1);
-    const latest = last.latest ?? timelinePoints[timelineSelection[1] + 1]?.earliest;
-    if (first.earliest === undefined || latest === undefined) return;
+    if (timelineSelectionRange === null) return;
     const narrowedRange = {
-      label: `${first.label} – ${intervalEndLabel}`,
-      earliest: first.earliest,
-      latest,
+      label: `${timelineSelectionRange.earliest} – ${timelineSelectionRange.latest}`,
+      earliest: timelineSelectionRange.earliest,
+      latest: timelineSelectionRange.latest,
       timezone: submittedTimeRange.timezone,
     };
     timelineZoomParentRef.current = submittedTimeRange;
@@ -6028,7 +6060,7 @@ export function SearchWorkspace({
           : `Opened “${saved.name}” with the current workspace time range.`,
       presentationNotice ? "warning" : "info",
     );
-    if (!preserveDraft) focusEditor(saved.query.length);
+    if (!preserveDraft) focusEditor(saved.query.length, saved.query);
   }
 
   function openHistoryEntry(
@@ -6068,7 +6100,7 @@ export function SearchWorkspace({
     setModal(null);
     if (rerun) runSearch(entry.query, restoredRange, "keep", preserveDraft);
     else showToast("Search restored without running.", "info");
-    if (focusSearchEditor && !preserveDraft) focusEditor(entry.query.length);
+    if (focusSearchEditor && !preserveDraft) focusEditor(entry.query.length, entry.query);
     return true;
   }
 
@@ -6951,7 +6983,7 @@ export function SearchWorkspace({
       if (controller.signal.aborted || appSwitchEpochRef.current !== switchEpoch) return;
       const selected = response.apps.find((app) => app.appId === response.selectedAppId);
       showToast(`Switched to ${selected?.displayName || "the selected app"}.`, "success");
-      focusEditor(nextQuery.length);
+      focusEditor(nextQuery.length, nextQuery);
     } catch (error) {
       if (controller.signal.aborted || appSwitchEpochRef.current !== switchEpoch) return;
       if (!commitLocation) {
@@ -7934,6 +7966,7 @@ export function SearchWorkspace({
 
       {!resultViewUnavailable && searchFailure === null && hasResultData && activeTab === "statistics" ? (
         <StatisticsPanel
+          key={submittedQuery}
           columnLayoutStore={statisticsColumnLayoutStoreRef.current}
           elapsed={elapsed}
           genericStatisticsTable={genericStatisticsTable}
@@ -7989,6 +8022,9 @@ export function SearchWorkspace({
           onApplyPivot={(field, value, mode) => applyPivot(field, value, mode)}
           onChartStyleChange={setChartStyle}
           onChartTitleChange={setChartTitle}
+          onCopySeriesLabel={(label) => {
+            void copyShareText(label, `Copied series label “${label}”.`);
+          }}
           onLegendPositionChange={setLegendPosition}
           onShowDataLabelsChange={setShowDataLabels}
           onStackModeChange={setStackMode}

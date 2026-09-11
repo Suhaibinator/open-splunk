@@ -26,10 +26,8 @@ const (
 	maxFieldNameBytes                   = eventfields.MaximumNormalizedFieldNameBytes
 	maxFieldPathSegments                = 17
 	maxFieldPathSegmentBytes            = 256
-	maxTimechartBuckets                 = 10_000
-	maxTimechartSpan                    = 24 * time.Hour
-	timechartSeriesLimit                = spl.MaximumTimechartSeriesLimit
-	maxTimechartSeries                  = timechartSeriesLimit + 2
+	maxTimechartBuckets                 = spl.MaximumTimechartBins
+	timechartSeriesLimit                = spl.DefaultTimechartSeriesLimit
 	eventStatsSupportedAggregateMessage = "eventstats currently supports exactly one count, " +
 		"count(field), count(eval(predicate)), pN(field), percN(field), min(field), " +
 		"max(field), earliest(field), latest(field), sum(field), avg(field), " +
@@ -81,6 +79,18 @@ type Scope struct {
 
 // Build performs semantic analysis and emits a security-constrained plan.
 func Build(query *spl.Query, scope Scope) (*Query, error) {
+	return buildWithRelation(query, scope, nil)
+}
+
+func buildWithRelation(query *spl.Query, scope Scope, inputFields []string) (*Query, error) {
+	return buildWithRelationStart(query, scope, inputFields, 0)
+}
+
+func buildWithRelationStart(query *spl.Query, scope Scope, inputFields []string, commandStart int) (*Query, error) {
+	return buildWithRelationBudget(query, scope, inputFields, commandStart, timechartPlanBudget{})
+}
+
+func buildWithRelationBudget(query *spl.Query, scope Scope, inputFields []string, commandStart int, previous timechartPlanBudget) (*Query, error) {
 	if query == nil {
 		return nil, &Diagnostic{Code: "SPL_INVALID_QUERY", Message: "query is nil"}
 	}
@@ -134,7 +144,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 		VisibilityCutoff: *scope.VisibilityCutoff,
 		Range:            query.Range,
 	})
-	if query.Search != nil {
+	if query.Search != nil && inputFields == nil {
 		expression, convertErr := convertExpression(query.Search)
 		if convertErr != nil {
 			return nil, convertErr
@@ -142,12 +152,15 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 		result.Operators = append(result.Operators, &Filter{Expression: expression, Range: query.Search.SourceRange()})
 	}
 
-	outputSchemaKnown := false
-	canonicalTimeAvailable := true
-	extractionOutputCount := 0
-	spathEvaluationWorkUnits := 0
-	mvExpandOrdinal := 0
-	expressionBudget := splExpressionResourceBudget{}
+	outputSchemaKnown := inputFields != nil
+	if outputSchemaKnown {
+		result.OutputFields = slices.Clone(inputFields)
+	}
+	canonicalTimeAvailable := !outputSchemaKnown || slices.Contains(inputFields, "_time")
+	extractionOutputCount := previous.extractionOutputs
+	spathEvaluationWorkUnits := previous.jsonWork
+	mvExpandOrdinal := previous.mvExpandOrdinal
+	expressionBudget := previous.expressions
 	// publishOutputField records one command output in the exact output schema
 	// when that schema is still known.
 	publishOutputField := func(name string) {
@@ -163,7 +176,11 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			canonicalTimeAvailable = false
 		}
 	}
+commands:
 	for commandIndex, command := range query.Commands {
+		if commandIndex < commandStart {
+			continue
+		}
 		switch command := command.(type) {
 		case *spl.SearchCommand:
 			expression, convertErr := convertExpression(command.Expression)
@@ -804,6 +821,21 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				searchLocation,
 			); buildErr != nil {
 				return nil, buildErr
+			}
+			outputSchemaKnown = command.SplitBy == nil
+			canonicalTimeAvailable = true
+			if commandIndex+1 < len(query.Commands) {
+				continuation, err := newTimechartContinuation(query, scope, commandIndex+1, timechartPlanBudget{extractionOutputs: extractionOutputCount, jsonWork: spathEvaluationWorkUnits, mvExpandOrdinal: mvExpandOrdinal, expressions: expressionBudget})
+				if err != nil {
+					return nil, err
+				}
+				if result.timechartContinuations == nil {
+					result.timechartContinuations = make(map[int]TimechartContinuation)
+				}
+				result.timechartContinuations[len(result.Operators)-1] = continuation
+				if command.SplitBy != nil {
+					break commands
+				}
 			}
 		case *spl.ChartCommand:
 			if buildErr := buildChartCommand(

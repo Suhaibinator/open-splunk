@@ -2,21 +2,59 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { ResultRow } from "../../gen/ts/open_splunk/result";
+import type { TimelinePoint } from "../../lib/demo/search-data";
 import {
   MAXIMUM_CHART_BUCKETS,
+  TIMECHART_PROGRESS_BATCH_SIZE,
   completeTimechartCoverage,
   describeTimechartCoverage,
   describeTimechartStatisticsPage,
   loadTimechartBuckets,
+  sortTimechartRows,
   type TimechartCoverage,
   type TimechartPage,
 } from "./timechart-series";
+
+test("timechart row sorting compares exact nanosecond starts instead of input order", () => {
+  const origin = 1_788_220_800_000_000_000n;
+  const points: TimelinePoint[] = [
+    { id: "02", label: "02", count: 1, timeCoordinateNanoseconds: origin + 2n },
+    { id: "00", label: "00", count: 3, timeCoordinateNanoseconds: origin },
+    { id: "01", label: "01", count: 2, timeCoordinateNanoseconds: origin + 1n },
+  ];
+
+  assert.deepEqual(
+    sortTimechartRows(points, { key: "time", direction: "asc" }).map((point) => point.id),
+    ["00", "01", "02"],
+  );
+  assert.deepEqual(
+    sortTimechartRows(points, { key: "time", direction: "desc" }).map((point) => point.id),
+    ["02", "01", "00"],
+  );
+  assert.deepEqual(
+    sortTimechartRows(points, { key: "count", direction: "asc" }).map((point) => point.id),
+    ["02", "01", "00"],
+  );
+});
+
+test("timechart row sorting retains nanoseconds from timeValue-only rows", () => {
+  const points: TimelinePoint[] = [
+    { id: "later", label: "later", count: 1, timeValue: "2026-09-01T00:00:00.000000002+00:00" },
+    { id: "earlier", label: "earlier", count: 1, timeValue: "2026-09-01T00:00:00.000000001Z" },
+  ];
+
+  assert.deepEqual(
+    sortTimechartRows(points, { key: "time", direction: "asc" }).map((point) => point.id),
+    ["earlier", "later"],
+  );
+});
 
 function rows(start: number, count: number): ResultRow[] {
   return Array.from({ length: count }, (_, index) => ({
     rowId: `bucket-${start + index}`,
     ordinal: BigInt(start + index),
     cells: [],
+    timeBucket: undefined,
   }));
 }
 
@@ -43,7 +81,7 @@ function firstPage(pages: Map<string, TimechartPage>, totalRows: number, totalSi
 test("time-series pages concatenate in cursor order until the cursor ends", async () => {
   const pages = pagedResult(1_000, 2_017);
   const fetched: string[] = [];
-  const progress: TimechartCoverage[] = [];
+  const progress: Array<{ coverage: TimechartCoverage; rows: ResultRow[] }> = [];
 
   const load = await loadTimechartBuckets({
     firstPage: firstPage(pages, 2_017),
@@ -53,7 +91,7 @@ test("time-series pages concatenate in cursor order until the cursor ends", asyn
       assert.ok(page !== undefined, `unexpected cursor ${token}`);
       return page;
     },
-    onProgress: (partial) => progress.push(partial.coverage),
+    onProgress: (partial) => progress.push(partial),
   });
 
   assert.deepEqual(fetched, ["page-1000", "page-2000"]);
@@ -66,10 +104,58 @@ test("time-series pages concatenate in cursor order until the cursor ends", asyn
     totalBuckets: 2_017,
     totalExact: true,
   });
-  assert.deepEqual(progress.map((coverage) => [coverage.status, coverage.plottedBuckets]), [
-    ["loading", 1_000],
-    ["loading", 2_000],
+  assert.deepEqual(progress.map(({ coverage, rows: batch }) => [coverage.status, coverage.plottedBuckets, batch.length]), [
+    ["loading", 2_000, 1_000],
+    ["complete", 2_017, 17],
   ]);
+});
+
+test("short server pages publish bounded append-only batches", async () => {
+  const pages = pagedResult(20, 2_017);
+  const fetched: string[] = [];
+  const batches: Array<{ first: bigint | undefined; last: bigint | undefined; length: number; status: string }> = [];
+  const load = await loadTimechartBuckets({
+    firstPage: firstPage(pages, 2_017),
+    fetchPage: async (token) => {
+      fetched.push(token);
+      return pages.get(token) as TimechartPage;
+    },
+    onProgress: ({ coverage, rows: batch }) => batches.push({
+      first: batch[0]?.ordinal,
+      last: batch.at(-1)?.ordinal,
+      length: batch.length,
+      status: coverage.status,
+    }),
+  });
+
+  assert.equal(fetched.length, 100);
+  assert.equal(load.rows.length, 2_017);
+  assert.equal(TIMECHART_PROGRESS_BATCH_SIZE, 1_000);
+  assert.deepEqual(batches, [
+    { first: 20n, last: 1_019n, length: 1_000, status: "loading" },
+    { first: 1_020n, last: 2_016n, length: 997, status: "complete" },
+  ]);
+});
+
+test("streaming bucket loading publishes each continuation row once without retaining raw pages", async () => {
+  const pages = pagedResult(20, 2_017);
+  const published: ResultRow[][] = [];
+  const load = await loadTimechartBuckets({
+    firstPage: firstPage(pages, 2_017),
+    fetchPage: async (token) => pages.get(token) as TimechartPage,
+    onProgress: ({ rows: batch }) => published.push(batch),
+    retainRows: false,
+  });
+
+  assert.deepEqual(load.rows, []);
+  assert.equal(load.coverage.status, "complete");
+  assert.equal(load.coverage.plottedBuckets, 2_017);
+  assert.deepEqual(published.map((batch) => batch.length), [1_000, 997]);
+  const ordinals = published.flatMap((batch) => batch.map((row) => row.ordinal));
+  assert.equal(ordinals.length, 1_997);
+  assert.equal(new Set(ordinals).size, ordinals.length);
+  assert.equal(ordinals[0], 20n);
+  assert.equal(ordinals.at(-1), 2_016n);
 });
 
 test("a result that fits on the first page completes without following a cursor", async () => {
@@ -109,6 +195,70 @@ test("bucket loading stops at the cap and reports the truncation", async () => {
     loadTimechartBuckets({ firstPage: firstPage(pages, 3_500), fetchPage: async () => pages.get("") as TimechartPage, maximumBuckets: 0 }),
     RangeError,
   );
+});
+
+test("streaming bucket loading preserves capped and failed coverage without raw-row retention", async () => {
+  const pages = pagedResult(1_000, 3_500);
+  const cappedBatches: ResultRow[][] = [];
+  const capped = await loadTimechartBuckets({
+    firstPage: firstPage(pages, 3_500),
+    fetchPage: async (token) => pages.get(token) as TimechartPage,
+    maximumBuckets: 2_000,
+    onProgress: ({ rows: batch }) => cappedBatches.push(batch),
+    retainRows: false,
+  });
+  assert.deepEqual(capped.rows, []);
+  assert.equal(capped.coverage.status, "capped");
+  assert.equal(capped.coverage.plottedBuckets, 2_000);
+  assert.deepEqual(cappedBatches.map((batch) => batch.length), [1_000]);
+
+  const failure = new Error("stream failed");
+  const failedBatches: ResultRow[][] = [];
+  const failed = await loadTimechartBuckets({
+    firstPage: firstPage(pages, 3_500, false),
+    fetchPage: async (token) => {
+      if (token === "page-2000") throw failure;
+      return pages.get(token) as TimechartPage;
+    },
+    onProgress: ({ rows: batch }) => failedBatches.push(batch),
+    retainRows: false,
+  });
+  assert.deepEqual(failed.rows, []);
+  assert.equal(failed.error, failure);
+  assert.equal(failed.coverage.status, "failed");
+  assert.equal(failed.coverage.plottedBuckets, 2_000);
+  assert.deepEqual(failedBatches.map((batch) => batch.length), [1_000, 0]);
+});
+
+test("bucket cap reports every omitted row including an oversized terminal page", async () => {
+  const terminal = await loadTimechartBuckets({
+    firstPage: {
+      rows: rows(0, 20),
+      nextPageToken: "final",
+      totalSize: 1_020,
+      totalSizeExact: true,
+    },
+    fetchPage: async () => ({ rows: rows(20, 1_000), nextPageToken: null }),
+    maximumBuckets: 1_000,
+  });
+  assert.equal(terminal.rows.length, 1_000);
+  assert.equal(terminal.rows.at(-1)?.ordinal, 999n);
+  assert.equal(terminal.coverage.status, "capped");
+
+  const oversizedFirstPage = await loadTimechartBuckets({
+    firstPage: {
+      rows: rows(0, 1_200),
+      nextPageToken: null,
+      totalSize: 1_200,
+      totalSizeExact: true,
+    },
+    fetchPage: async () => {
+      throw new Error("an oversized terminal first page must not fetch");
+    },
+    maximumBuckets: 1_000,
+  });
+  assert.equal(oversizedFirstPage.rows.length, 1_000);
+  assert.equal(oversizedFirstPage.coverage.status, "capped");
 });
 
 test("a failing page keeps the buckets loaded before it and surfaces the error", async () => {
@@ -151,28 +301,32 @@ test("repeated cursors and empty continued pages stop the walk instead of loopin
 
 test("an aborted walk rejects rather than reporting partial coverage", async () => {
   const pages = pagedResult(1_000, 3_000);
-  const controller = new AbortController();
-  await assert.rejects(
-    loadTimechartBuckets({
-      firstPage: firstPage(pages, 3_000),
-      fetchPage: async (token) => {
-        controller.abort();
-        return pages.get(token) as TimechartPage;
-      },
-      signal: controller.signal,
-    }),
-    (error: unknown) => error instanceof DOMException && error.name === "AbortError",
-  );
-  const preAborted = new AbortController();
-  preAborted.abort();
-  await assert.rejects(
-    loadTimechartBuckets({
-      firstPage: firstPage(pages, 3_000),
-      fetchPage: async (token) => pages.get(token) as TimechartPage,
-      signal: preAborted.signal,
-    }),
-    (error: unknown) => error instanceof DOMException && error.name === "AbortError",
-  );
+  await Promise.all([true, false].map(async (retainRows) => {
+    const controller = new AbortController();
+    await assert.rejects(
+      loadTimechartBuckets({
+        firstPage: firstPage(pages, 3_000),
+        fetchPage: async (token) => {
+          controller.abort();
+          return pages.get(token) as TimechartPage;
+        },
+        retainRows,
+        signal: controller.signal,
+      }),
+      (error: unknown) => error instanceof DOMException && error.name === "AbortError",
+    );
+    const preAborted = new AbortController();
+    preAborted.abort();
+    await assert.rejects(
+      loadTimechartBuckets({
+        firstPage: firstPage(pages, 3_000),
+        fetchPage: async (token) => pages.get(token) as TimechartPage,
+        retainRows,
+        signal: preAborted.signal,
+      }),
+      (error: unknown) => error instanceof DOMException && error.name === "AbortError",
+    );
+  }));
 });
 
 test("coverage copy states which buckets are plotted", () => {

@@ -9,9 +9,57 @@ import (
 	"strings"
 	"time"
 
+	"fortio.org/safecast"
+
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
+
+const (
+	timechartCountCellRetainedBytes = uint64(8)
+	// A nullable Float64 is retained as a Float64 plus validity state and Go
+	// alignment. The executor verifies the matching concrete size.
+	timechartValueCellRetainedBytes = uint64(16)
+	timechartSeriesRetainedBytes    = uint64(80)
+	timechartBucketRetainedBytes    = uint64(48)
+	timechartBufferRetainedBytes    = uint64(64)
+)
+
+func timechartResourceParameter(name string) string {
+	switch name {
+	case TimechartDomainLimitParameter:
+		return TimechartDomainLimitSQLPlaceholder
+	case TimechartCellLimitParameter:
+		return TimechartCellLimitSQLPlaceholder
+	case TimechartRetainedBytesLimitParameter:
+		return TimechartRetainedBytesLimitSQLPlaceholder
+	default:
+		panic("unknown timechart resource placeholder")
+	}
+}
+
+func timechartResourceGuardPredicate(
+	resourceUsage string,
+	bucketCount uint64,
+	cellBytes uint64,
+) string {
+	domainCount := resourceUsage + "." + quoteIdentifier("__os_tc_domain_count")
+	labelBytes := resourceUsage + "." + quoteIdentifier("__os_tc_label_bytes")
+	buckets := strconv.FormatUint(bucketCount, 10)
+	cells := "toUInt128(" + domainCount + ") * toUInt128(" + buckets + ")"
+	retained := "toUInt128(" + strconv.FormatUint(timechartBufferRetainedBytes, 10) +
+		") + toUInt128(" + labelBytes + ") + toUInt128(" + domainCount + ") * toUInt128(" +
+		strconv.FormatUint(timechartSeriesRetainedBytes, 10) + ") + toUInt128(" + buckets +
+		") * toUInt128(" + strconv.FormatUint(timechartBucketRetainedBytes, 10) + ") + " +
+		cells + " * toUInt128(" + strconv.FormatUint(cellBytes, 10) + ")"
+	return "throwIf(toUInt8(" + domainCount + " > " +
+		timechartResourceParameter(TimechartDomainLimitParameter) + "), '" +
+		TimechartDomainLimitMarker + "') = 0 AND throwIf(toUInt8(" + cells +
+		" > toUInt128(" + timechartResourceParameter(TimechartCellLimitParameter) + ")), '" +
+		TimechartCellLimitMarker + "') = 0 AND throwIf(toUInt8(" + retained +
+		" > toUInt128(" + timechartResourceParameter(TimechartRetainedBytesLimitParameter) + ")), '" +
+		TimechartRetainedBytesLimitMarker + "') = 0"
+}
 
 func compileTimechart(
 	relation compiledRelation,
@@ -26,52 +74,37 @@ func compileTimechart(
 	if err := validateTimechartMeasure(operator, state); err != nil {
 		return CompiledQuery{}, err
 	}
-	if operator.FirstBucket.Nanosecond() != 0 || operator.FirstBucket.IsZero() ||
-		operator.BucketCount == 0 || operator.BucketCount > 10_000 || !operator.FixedRange ||
-		!operator.Continuous || !operator.IncludePartial {
-		return CompiledQuery{}, errors.New("compile ClickHouse timechart: bounded defaults are invalid")
+	if scan == nil || state.context == nil {
+		return CompiledQuery{}, errors.New("compile timechart: scan and context are required")
 	}
-	if scan == nil {
-		return CompiledQuery{}, errors.New("compile ClickHouse timechart: Scan snapshot is required")
+	if operator.BucketCount == 0 || operator.BucketCount > 10000 {
+		return CompiledQuery{}, errors.New("compile timechart: bucket count is invalid")
 	}
 	var gridSpec timechartGridSpec
 	var err error
-	switch operator.Calendar {
-	case plan.CalendarNone:
-		if operator.Span < time.Second || operator.Span > 24*time.Hour ||
-			operator.Span%time.Second != 0 {
-			return CompiledQuery{}, errors.New(
-				"compile ClickHouse timechart: fixed span is invalid",
-			)
+	enhanced := operator.Calendar != plan.CalendarNone || operator.Span < time.Second && operator.Calendar == plan.CalendarNone || operator.Span > 24*time.Hour || operator.CalendarMagnitude > 1 || !operator.Alignment.IsZero() || !operator.Continuous || !operator.IncludePartial || !operator.FixedRange
+	if enhanced {
+		gridSpec, err = exactTimechartGridSpec(operator, scan, state.context.searchTimezone)
+	} else {
+		switch operator.Calendar {
+		case plan.CalendarNone:
+			gridSpec, err = fixedTimechartGridSpec(operator, scan)
+		case plan.CalendarDay, plan.CalendarWeek, plan.CalendarMonth:
+			gridSpec, err = calendarTimechartGridSpec(operator, scan, state.context.searchTimezone)
+		default:
+			err = errors.New("compile timechart: calendar unit is invalid")
 		}
-		gridSpec, err = fixedTimechartGridSpec(operator, scan)
-	case plan.CalendarDay, plan.CalendarWeek:
-		if operator.Span != 0 || state.context == nil {
-			return CompiledQuery{}, errors.New(
-				"compile ClickHouse timechart: calendar span is invalid",
-			)
-		}
-		if err = validateCompileContextSearchTimezone(state.context); err == nil {
-			gridSpec, err = calendarTimechartGridSpec(
-				operator,
-				scan,
-				state.context.searchTimezone,
-			)
-		}
-	default:
-		return CompiledQuery{}, errors.New(
-			"compile ClickHouse timechart: calendar unit is invalid",
-		)
 	}
 	if err != nil {
 		return CompiledQuery{}, err
 	}
-	if !state.eventRows {
-		return CompiledQuery{}, &plan.Diagnostic{
-			Code:    "SPL_UNSUPPORTED_TIMECHART_INPUT",
-			Message: "timechart requires event rows with the canonical _time field",
-			Range:   operator.Range,
+	if !enhanced && len(operator.GridBoundaries) > 0 {
+		if validationErr := validateLegacyTimechartBoundaries(operator, state.context.searchTimezone); validationErr != nil {
+			return CompiledQuery{}, validationErr
 		}
+	}
+	if operator.Split != nil || gridSpec.exact {
+		state.context.requiresMaterializedValidationSettings = true
 	}
 	if err := validateCanonicalFieldRef("timechart", "time", operator.Time); err != nil {
 		return CompiledQuery{}, err
@@ -80,12 +113,24 @@ func compileTimechart(
 	if err != nil {
 		return CompiledQuery{}, err
 	}
-	if !ok || operator.Time.Name != "_time" || timeField.kind != fieldKindTime || !timeField.canonicalTime {
+	if !ok || operator.Time.Name != "_time" || timeField.kind != fieldKindTime {
 		return CompiledQuery{}, &plan.Diagnostic{
 			Code:    "SPL_UNSUPPORTED_TIMECHART_TIME_FIELD",
-			Message: "timechart requires the unmodified canonical _time field",
+			Message: "timechart requires a timestamp _time field",
 			Range:   operator.Range,
 		}
+	}
+
+	// Timestamp validation is part of the source bucket expression, before
+	// sparse grid joins or suffix filters can discard null-key groups. The
+	// non-null return type prevents join null elimination from bypassing it.
+	if !timeField.canonicalTime {
+		invalidTime := "isNull(" + timeField.valueSQL + ") OR NOT ifNull(" + timeField.existsSQL + ", 0)"
+		timeField.valueSQL = "addNanoseconds(assumeNotNull(" + timeField.valueSQL + "), toInt64(throwIf(toUInt8(" + invalidTime + "), 'open-splunk: timechart input timestamp is missing or null')))"
+	}
+
+	if gridSpec.calendar != plan.CalendarNone {
+		relation, args, timeField.valueSQL = gridSpec.assignCalendarSource(relation, args, timeField.valueSQL)
 	}
 
 	if valueKind, fixedValue := fixedTimechartValueKind(operator.Measure.Function); fixedValue && operator.Split == nil {
@@ -165,8 +210,6 @@ func compileTimechart(
 	}
 	if len(outputFields) != 0 || dynamic == nil ||
 		!slices.Equal(dynamic.FixedFields, []string{"_time"}) ||
-		operator.Split.SeriesLimit < 1 ||
-		operator.Split.SeriesLimit > spl.MaximumTimechartSeriesLimit ||
 		dynamic.MaxSeries != timechartSplitMaxSeries(operator.Split) ||
 		operator.Split.NullLabel != "NULL" || operator.Split.OtherLabel != "OTHER" {
 		return CompiledQuery{}, errors.New("compile ClickHouse timechart: dynamic output contract is invalid")
@@ -284,7 +327,7 @@ func compileTimechart(
 	scored := q("__os_timechart_scored")
 	ranked := q("__os_timechart_ranked")
 	collapsed := q("__os_timechart_collapsed")
-	domainRows := q("__os_timechart_domain_rows")
+	resourceUsage := q("__os_timechart_resource_usage")
 	domain := q("__os_timechart_domain")
 	bucketMaps := q("__os_timechart_bucket_maps")
 	grid := q("__os_timechart_grid")
@@ -309,7 +352,6 @@ func compileTimechart(
 	encoded := q("__os_tc_encoded")
 	collisionCardinality := q("__os_tc_collision_cardinality")
 	collision := q("__os_tc_collision")
-	sortLabel := q("__os_tc_sort_label")
 	countMap := q("__os_tc_count_map")
 	invalid := q("__os_tc_invalid")
 	ordinal := q(TimechartOrdinalColumn)
@@ -322,7 +364,7 @@ func compileTimechart(
 	sql.Grow(len(relation.sql) + 8_192)
 	sql.WriteString("WITH ")
 	sql.WriteString(source)
-	sql.WriteString(" AS (SELECT ")
+	sql.WriteString(" AS MATERIALIZED (SELECT ")
 	sql.WriteString(timeField.valueSQL)
 	sql.WriteString(" AS ")
 	sql.WriteString(eventTime)
@@ -523,7 +565,7 @@ func compileTimechart(
 	// usenull=false and useother=false drop their sentinel branch, so the
 	// affected rows collapse into the private empty encoding that never becomes
 	// a map key or a public series name.
-	seriesLimit := strconv.FormatUint(uint64(operator.Split.SeriesLimit), 10)
+	seriesLimit := strconv.FormatUint(operator.Split.SeriesLimit, 10)
 	sql.WriteString(collapsed)
 	sql.WriteString(" AS MATERIALIZED (SELECT ")
 	sql.WriteString(bucketNumber)
@@ -533,14 +575,17 @@ func compileTimechart(
 		sql.WriteString(" = 1, '1:', ")
 	}
 	sql.WriteString(kind)
-	sql.WriteString(" = 0 AND ")
-	sql.WriteString(seriesRank)
-	sql.WriteString(" <= ")
-	sql.WriteString(seriesLimit)
+	sql.WriteString(" = 0")
+	if operator.Split.SeriesLimit != 0 {
+		sql.WriteString(" AND ")
+		sql.WriteString(seriesRank)
+		sql.WriteString(" <= ")
+		sql.WriteString(seriesLimit)
+	}
 	sql.WriteString(", concat('0:', ")
 	sql.WriteString(label)
 	sql.WriteString("), ")
-	if operator.Split.IncludeOther {
+	if operator.Split.IncludeOther && operator.Split.SeriesLimit != 0 {
 		sql.WriteString(kind)
 		sql.WriteString(" = 0, '2:', ")
 	}
@@ -590,76 +635,29 @@ func compileTimechart(
 	sql.WriteString(encoded)
 	sql.WriteString("), ")
 
-	// Every domain member now comes from the sealed, already-collapsed relation.
-	// Empty encodings are private validation rows and never become map keys or
-	// public names.
 	domainFrequency := collapsedCount
 	if fieldOccurrenceCount {
 		domainFrequency = collapsedRowCount
 	}
-	rawEncodedLabel := "substring(" + encoded + ", 3)"
-	sql.WriteString(domainRows)
-	sql.WriteString(" AS (SELECT multiIf(")
-	sql.WriteString(encoded)
-	sql.WriteString(" = '1:', toUInt8(1), ")
-	sql.WriteString(encoded)
-	sql.WriteString(" = '2:', toUInt8(2), toUInt8(0)) AS sort_kind, ")
-	sql.WriteString("if(startsWith(")
-	sql.WriteString(encoded)
-	sql.WriteString(", '0:'), ")
-	sql.WriteString(splunkSeriesLabelSQL(rawEncodedLabel))
-	sql.WriteString(", CAST('' AS String)) AS ")
-	sql.WriteString(sortLabel)
-	sql.WriteString(", ")
-	sql.WriteString(encoded)
-	sql.WriteString(" FROM ")
-	sql.WriteString(collapsed)
-	sql.WriteString(" WHERE ")
-	sql.WriteString(encoded)
-	sql.WriteString(" != '' AND ")
-	sql.WriteString(domainFrequency)
-	sql.WriteString(" > 0 GROUP BY ")
-	sql.WriteString(encoded)
-	sql.WriteString("), ")
-
-	sql.WriteString(domain)
-	sql.WriteString(" AS (SELECT arrayMap(item -> item.3, arraySort(item -> (item.1, item.2), groupArray((sort_kind, ")
-	sql.WriteString(sortLabel)
-	sql.WriteString(", ")
-	sql.WriteString(encoded)
-	sql.WriteString(")))) AS names FROM ")
-	sql.WriteString(domainRows)
-	sql.WriteString("), ")
+	writeTimechartDomainCTEs(&sql, collapsed, resourceUsage, domain,
+		domainFrequency+" > 0", operator.BucketCount, timechartCountCellRetainedBytes)
 
 	sql.WriteString(bucketMaps)
-	mapValue := collapsedCount
-	// The empty String is outside the public encoded domain (0:/1:/2:) and is
-	// therefore a private per-bucket validation key. Carrying the combined flag
-	// in the existing map removes a third collapsed consumer without adding a
-	// second public projection or losing invalid-only buckets. The executor
-	// buffers the complete fixed grid before publishing, so any nonzero bucket
-	// still rejects the result atomically.
 	sql.WriteString(" AS (SELECT ")
 	sql.WriteString(bucketNumber)
-	sql.WriteString(", mapFromArrays(")
-	sql.WriteString("arrayPushBack(groupArrayIf(")
+	sql.WriteString(", mapFromArrays(groupArrayIf(")
 	sql.WriteString(encoded)
 	sql.WriteString(", ")
 	sql.WriteString(encoded)
-	sql.WriteString(" != ''), CAST('' AS String)), ")
-	sql.WriteString("arrayPushBack(groupArrayIf(")
-	sql.WriteString(mapValue)
+	sql.WriteString(" != ''), groupArrayIf(")
+	sql.WriteString(collapsedCount)
 	sql.WriteString(", ")
 	sql.WriteString(encoded)
-	sql.WriteString(" != ''), ")
-	sql.WriteString("toUInt64(max(")
-	sql.WriteString(invalid)
-	sql.WriteString(" != 0 OR ")
-	sql.WriteString(collision)
-	sql.WriteString(" != 0)))) AS ")
+	sql.WriteString(" != '')) AS ")
 	sql.WriteString(countMap)
 	sql.WriteString(" FROM ")
 	sql.WriteString(collapsed)
+	sql.WriteString(" CROSS JOIN " + domain + " WHERE " + timechartResourceGuardPredicate(domain, operator.BucketCount, timechartCountCellRetainedBytes))
 	sql.WriteString(" GROUP BY ")
 	sql.WriteString(bucketNumber)
 	sql.WriteString("), ")
@@ -695,11 +693,10 @@ func compileTimechart(
 	sql.WriteString(".names) AS ")
 	sql.WriteString(q(TimechartCountsColumn))
 	sql.WriteString(", ")
-	sql.WriteString("toUInt8(ifNull(")
-	sql.WriteString(bucketMaps)
+	sql.WriteString(domain)
 	sql.WriteString(".")
-	sql.WriteString(countMap)
-	sql.WriteString("[''], toUInt64(0)) != 0) AS ")
+	sql.WriteString(invalid)
+	sql.WriteString(" AS ")
 	sql.WriteString(q(TimechartInvalidColumn))
 	sql.WriteString(" FROM ")
 	sql.WriteString(grid)
@@ -732,8 +729,10 @@ func compileTimechart(
 	rankedDepth := relationalNodeDepth(scoredDepth)
 	collapsedDepth := relationalNodeDepth(rankedDepth)
 	domainRowsDepth := relationalNodeDepth(collapsedDepth)
-	domainDepth := relationalNodeDepth(domainRowsDepth)
-	bucketMapsDepth := relationalNodeDepth(collapsedDepth)
+	resourceUsageDepth := relationalNodeDepth(domainRowsDepth)
+	guardedDomainDepth := relationalNodeDepth(resourceUsageDepth)
+	domainDepth := relationalNodeDepth(guardedDomainDepth)
+	bucketMapsDepth := relationalNodeDepth(collapsedDepth, domainDepth)
 	gridDepth := gridSpec.relationalDepth()
 	resultDepth := relationalNodeDepth(
 		gridDepth,
@@ -746,14 +745,23 @@ func compileTimechart(
 		Args:         args,
 		OutputFields: slices.Clone(dynamic.FixedFields),
 		Timechart: &TimechartOutput{
-			Mode:          TimechartModeRuntimeWide,
-			FirstBucket:   operator.FirstBucket.UTC(),
-			Span:          operator.Span,
-			Calendar:      gridSpec.isCalendar(),
-			BucketCount:   operator.BucketCount,
-			MaxSeries:     dynamic.MaxSeries,
-			MaxLabelBytes: maxTimechartLabelBytes,
-			ValueKind:     TimechartValueKindInvalid,
+			Mode:           TimechartModeRuntimeWide,
+			FirstBucket:    operator.FirstBucket.UTC(),
+			Span:           operator.Span,
+			Calendar:       gridSpec.isCalendar(),
+			ExactGrid:      gridSpec.exact,
+			Boundaries:     slices.Clone(operator.GridBoundaries),
+			Continuous:     operator.Continuous,
+			IncludePartial: operator.IncludePartial,
+			SearchEarliest: operator.SearchEarliest,
+			SearchLatest:   operator.SearchLatest,
+			BucketCount:    operator.BucketCount,
+			SeriesLimit:    operator.Split.SeriesLimit,
+			IncludeNull:    operator.Split.IncludeNull,
+			IncludeOther:   operator.Split.IncludeOther,
+			MaxSeries:      dynamic.MaxSeries,
+			MaxLabelBytes:  maxTimechartLabelBytes,
+			ValueKind:      TimechartValueKindInvalid,
 		},
 	}
 	return withCompiledRelationalDepth(compiled, resultDepth, operator.Range), nil
@@ -793,13 +801,12 @@ func compileSplitValueTimechart(
 	canonicalized := q("__os_timechart_canonicalized")
 	numericGroups := q("__os_timechart_numeric_groups")
 	numericScores := q("__os_timechart_numeric_scores")
+	ranked := q("__os_timechart_numeric_ranked")
 	collapsed := q("__os_timechart_collapsed")
 	finalized := q("__os_timechart_finalized")
-	domainRows := q("__os_timechart_domain_rows")
+	resourceUsage := q("__os_timechart_resource_usage")
 	domain := q("__os_timechart_domain")
-	collisions := q("__os_timechart_normalization_collisions")
 	bucketMaps := q("__os_timechart_bucket_maps")
-	validation := q("__os_timechart_validation")
 	grid := q("__os_timechart_grid")
 
 	eventTime := q("__os_tc_event_time")
@@ -814,16 +821,15 @@ func compileSplitValueTimechart(
 	kind := q("__os_tc_kind")
 	numerator := q("__os_tc_numerator")
 	denominator := q("__os_tc_denominator")
-	frequency := q("__os_tc_count")
 	numericState := q("__os_tc_numeric_state")
 	percentileState := q("__os_tc_percentile_state")
 	percentileValues := q("__os_tc_percentile_values")
 	score := q("__os_tc_score")
 	encoded := q("__os_tc_encoded")
 	measureValue := q("__os_tc_measure_value")
-	normalized := q("__os_tc_normalized")
 	collision := q("__os_tc_collision")
-	sortLabel := q("__os_tc_sort_label")
+	collisionCardinality := q("__os_tc_collision_cardinality")
+	seriesRank := q("__os_tc_series_rank")
 	valueMap := q("__os_tc_value_map")
 	presentMap := q("__os_tc_present_map")
 	invalid := q("__os_tc_invalid")
@@ -864,7 +870,7 @@ func compileSplitValueTimechart(
 	sql.Grow(len(relation.sql) + len(measureInputSQL) + 12_288)
 	sql.WriteString("WITH ")
 	sql.WriteString(source)
-	sql.WriteString(" AS (SELECT ")
+	sql.WriteString(" AS MATERIALIZED (SELECT ")
 	sql.WriteString(timeField.valueSQL)
 	sql.WriteString(" AS ")
 	sql.WriteString(eventTime)
@@ -996,8 +1002,6 @@ func compileSplitValueTimechart(
 		sql.WriteString(eligibleValues)
 		sql.WriteString(") AS ")
 		sql.WriteString(percentileState)
-		sql.WriteString(", count() AS ")
-		sql.WriteString(frequency)
 		sql.WriteString(" FROM ")
 		sql.WriteString(canonicalized)
 		sql.WriteString(" GROUP BY ")
@@ -1024,8 +1028,6 @@ func compileSplitValueTimechart(
 		sql.WriteString(numericState)
 		sql.WriteString(", 2)) AS ")
 		sql.WriteString(denominator)
-		sql.WriteString(", ")
-		sql.WriteString(frequency)
 		sql.WriteString(" FROM (SELECT ")
 		sql.WriteString(bucketNumber)
 		sql.WriteString(", ")
@@ -1040,8 +1042,6 @@ func compileSplitValueTimechart(
 		sql.WriteString(measureValues)
 		sql.WriteString(") AS ")
 		sql.WriteString(numericState)
-		sql.WriteString(", count() AS ")
-		sql.WriteString(frequency)
 		sql.WriteString(" FROM ")
 		sql.WriteString(canonicalized)
 		sql.WriteString(" GROUP BY ")
@@ -1055,91 +1055,40 @@ func compileSplitValueTimechart(
 		sql.WriteString("), ")
 	}
 
-	sql.WriteString(numericScores)
-	sql.WriteString(" AS MATERIALIZED (SELECT ")
-	sql.WriteString(label)
-	sql.WriteString(", ")
-	sql.WriteString(scoreSQL)
-	sql.WriteString(" AS ")
-	sql.WriteString(score)
-	sql.WriteString(" FROM ")
-	sql.WriteString(numericGroups)
-	sql.WriteString(" WHERE ")
-	sql.WriteString(kind)
-	sql.WriteString(" = 0 GROUP BY ")
-	sql.WriteString(label)
-	sql.WriteString(" ORDER BY ")
-	// Splunk does not specify computed non-finite score ordering. Pin a stable
-	// boundary: +Inf, finite descending, -Inf, NaN, then raw label lexical order.
-	sql.WriteString("multiIf(isNaN(")
-	sql.WriteString(score)
-	sql.WriteString("), toUInt8(0), isInfinite(")
-	sql.WriteString(score)
-	sql.WriteString(") AND ")
-	sql.WriteString(score)
-	sql.WriteString(" < 0, toUInt8(1), isInfinite(")
-	sql.WriteString(score)
-	sql.WriteString("), toUInt8(3), toUInt8(2)) DESC, ")
-	sql.WriteString("if(isFinite(")
-	sql.WriteString(score)
-	sql.WriteString("), ")
-	sql.WriteString(score)
-	sql.WriteString(", toFloat64(0)) DESC, ")
-	sql.WriteString(label)
-	sql.WriteString(" ASC LIMIT ")
-	sql.WriteString(strconv.FormatUint(uint64(operator.Split.SeriesLimit), 10))
-	sql.WriteString("), ")
+	// Score and validate every raw label in one window chain, preserving the
+	// score ordering and raw-label tie break before collapsing excluded series.
+	sql.WriteString(numericScores + " AS (SELECT *, " + scoreSQL + " OVER (PARTITION BY " + kind + ", " + label + ") AS " + score)
+	sql.WriteString(", uniqExact(" + label + ") OVER (PARTITION BY " + kind + ", " + splunkSeriesLabelSQL(label) + ") AS " + collisionCardinality + " FROM " + numericGroups + "), ")
+	sql.WriteString(ranked + " AS (SELECT *, dense_rank() OVER (PARTITION BY " + kind + " ORDER BY ")
+	// Pin the established +Inf, finite, -Inf, NaN ordering, then raw label.
+	sql.WriteString("multiIf(isNaN(" + score + "), toUInt8(0), isInfinite(" + score + ") AND " + score + " < 0, toUInt8(1), isInfinite(" + score + "), toUInt8(3), toUInt8(2)) DESC, ")
+	sql.WriteString("if(isFinite(" + score + "), " + score + ", toFloat64(0)) DESC, " + label + " ASC) AS " + seriesRank + " FROM " + numericScores + "), ")
 
-	// usenull=false excludes the missing/null rows before they are collapsed;
-	// useother=false keeps only the selected ordinary labels, so neither
-	// sentinel encoding can appear.
-	selectedLabel := label + " IN (SELECT " + label + " FROM " + numericScores + ")"
-	collapsedKinds := kind + " IN (0, 1)"
-	if !operator.Split.IncludeNull {
-		collapsedKinds = kind + " = 0"
+	// Preserve excluded rows under an empty private encoding so their invalid
+	// labels and normalization collisions still reach the complete-source guard.
+	// Bucket maps and the public domain omit only the encoding, not its witness.
+	sql.WriteString(collapsed + " AS MATERIALIZED (SELECT " + bucketNumber + ", multiIf(")
+	if operator.Split.IncludeNull {
+		sql.WriteString(kind + " = 1, '1:', ")
 	}
-	if !operator.Split.IncludeOther {
-		collapsedKinds += " AND (" + kind + " != 0 OR " + selectedLabel + ")"
+	sql.WriteString(kind + " = 0")
+	if operator.Split.SeriesLimit != 0 {
+		sql.WriteString(" AND " + seriesRank + " <= " + strconv.FormatUint(operator.Split.SeriesLimit, 10))
 	}
-	sql.WriteString(collapsed)
-	sql.WriteString(" AS (SELECT ")
-	sql.WriteString(bucketNumber)
-	sql.WriteString(", multiIf(")
-	sql.WriteString(kind)
-	sql.WriteString(" = 1, '1:', ")
-	sql.WriteString(selectedLabel)
-	sql.WriteString(", concat('0:', ")
-	sql.WriteString(label)
-	sql.WriteString("), '2:') AS ")
-	sql.WriteString(encoded)
-	sql.WriteString(", ")
+	sql.WriteString(", concat('0:', " + label + "), ")
+	if operator.Split.IncludeOther && operator.Split.SeriesLimit != 0 {
+		sql.WriteString(kind + " = 0, '2:', ")
+	}
+	sql.WriteString("CAST('' AS String)) AS " + encoded + ", ")
 	if valueKind == TimechartValueKindPercentile {
 		level := statsPercentileLevelSQL(operator.Measure.Percentile)
-		sql.WriteString("quantilesGKOrNullArrayMerge(100, ")
-		sql.WriteString(level)
-		sql.WriteString(")(")
-		sql.WriteString(percentileState)
-		sql.WriteString(") AS ")
-		sql.WriteString(percentileValues)
+		sql.WriteString("quantilesGKOrNullArrayMerge(100, " + level + ")(" + percentileState + ") AS " + percentileValues)
 	} else {
-		sql.WriteString("sum(")
-		sql.WriteString(numerator)
-		sql.WriteString(") AS ")
-		sql.WriteString(numerator)
-		sql.WriteString(", sum(")
-		sql.WriteString(denominator)
-		sql.WriteString(") AS ")
-		sql.WriteString(denominator)
+		sql.WriteString("sum(" + numerator + ") AS " + numerator + ", sum(" + denominator + ") AS " + denominator)
 	}
-	sql.WriteString(" FROM ")
-	sql.WriteString(numericGroups)
-	sql.WriteString(" WHERE ")
-	sql.WriteString(collapsedKinds)
-	sql.WriteString(" GROUP BY ")
-	sql.WriteString(bucketNumber)
-	sql.WriteString(", ")
-	sql.WriteString(encoded)
-	sql.WriteString("), ")
+	sql.WriteString(", toUInt8(maxOrDefault(" + kind + " = 3)) AS " + invalid)
+	sql.WriteString(", toUInt8(maxIf(" + collisionCardinality + ", " + kind + " = 0) > 1) AS " + collision)
+	sql.WriteString(" FROM " + ranked + " GROUP BY " + bucketNumber + ", " + encoded + "), ")
 
 	sql.WriteString(finalized)
 	sql.WriteString(" AS (SELECT ")
@@ -1150,102 +1099,19 @@ func compileSplitValueTimechart(
 	sql.WriteString(publishSQL)
 	sql.WriteString(" AS ")
 	sql.WriteString(measureValue)
+	sql.WriteString(", " + invalid + ", " + collision)
 	sql.WriteString(" FROM ")
 	sql.WriteString(collapsed)
 	sql.WriteString("), ")
 
-	sql.WriteString(domainRows)
-	sql.WriteString(" AS (SELECT toUInt8(0) AS sort_kind, ")
-	sql.WriteString(splunkSeriesLabelSQL(label))
-	sql.WriteString(" AS ")
-	sql.WriteString(sortLabel)
-	sql.WriteString(", concat('0:', ")
-	sql.WriteString(label)
-	sql.WriteString(") AS ")
-	sql.WriteString(encoded)
-	sql.WriteString(" FROM ")
-	sql.WriteString(numericScores)
-	if operator.Split.IncludeNull {
-		sql.WriteString(" UNION ALL SELECT toUInt8(1), CAST('' AS String), CAST('1:' AS String) FROM (SELECT 1 FROM ")
-		sql.WriteString(numericGroups)
-		sql.WriteString(" WHERE ")
-		sql.WriteString(kind)
-		sql.WriteString(" = 1 LIMIT 1)")
-	}
-	if operator.Split.IncludeOther {
-		sql.WriteString(" UNION ALL SELECT toUInt8(2), CAST('' AS String), CAST('2:' AS String) FROM (SELECT 1 FROM ")
-		sql.WriteString(numericGroups)
-		sql.WriteString(" WHERE ")
-		sql.WriteString(kind)
-		sql.WriteString(" = 0 AND ")
-		sql.WriteString(label)
-		sql.WriteString(" NOT IN (SELECT ")
-		sql.WriteString(label)
-		sql.WriteString(" FROM ")
-		sql.WriteString(numericScores)
-		sql.WriteString(") LIMIT 1)")
-	}
-	sql.WriteString("), ")
+	writeTimechartDomainCTEs(&sql, finalized, resourceUsage, domain,
+		"1", operator.BucketCount, timechartValueCellRetainedBytes)
 
-	sql.WriteString(domain)
-	sql.WriteString(" AS (SELECT arrayMap(item -> item.3, arraySort(item -> (item.1, item.2), groupArray((sort_kind, ")
-	sql.WriteString(sortLabel)
-	sql.WriteString(", ")
-	sql.WriteString(encoded)
-	sql.WriteString(")))) AS names FROM ")
-	sql.WriteString(domainRows)
-	sql.WriteString("), ")
-
-	sql.WriteString(collisions)
-	sql.WriteString(" AS (SELECT toUInt8(count() > 0) AS ")
-	sql.WriteString(collision)
-	sql.WriteString(" FROM (")
-	sql.WriteString("SELECT ")
-	sql.WriteString(splunkSeriesLabelSQL(label))
-	sql.WriteString(" AS ")
-	sql.WriteString(normalized)
-	sql.WriteString(" FROM ")
-	sql.WriteString(numericGroups)
-	sql.WriteString(" WHERE ")
-	sql.WriteString(kind)
-	sql.WriteString(" = 0 GROUP BY ")
-	sql.WriteString(normalized)
-	sql.WriteString(" HAVING uniqExact(")
-	sql.WriteString(label)
-	sql.WriteString(") > 1 LIMIT 1)), ")
-
-	sql.WriteString(bucketMaps)
-	sql.WriteString(" AS (SELECT ")
-	sql.WriteString(bucketNumber)
-	sql.WriteString(", mapFromArrays(groupArray(")
-	sql.WriteString(encoded)
-	sql.WriteString("), groupArray(ifNull(")
-	sql.WriteString(measureValue)
-	sql.WriteString(", toFloat64(0)))) AS ")
-	sql.WriteString(valueMap)
-	sql.WriteString(", ")
-	sql.WriteString("mapFromArrays(groupArray(")
-	sql.WriteString(encoded)
-	sql.WriteString("), groupArray(toUInt8(isNotNull(")
-	sql.WriteString(measureValue)
-	sql.WriteString(")))) AS ")
-	sql.WriteString(presentMap)
-	sql.WriteString(" FROM ")
-	sql.WriteString(finalized)
-	sql.WriteString(" GROUP BY ")
-	sql.WriteString(bucketNumber)
-	sql.WriteString("), ")
-
-	sql.WriteString(validation)
-	sql.WriteString(" AS (SELECT toUInt8(sumIf(")
-	sql.WriteString(frequency)
-	sql.WriteString(", ")
-	sql.WriteString(kind)
-	sql.WriteString(" = 3) > 0) AS ")
-	sql.WriteString(invalid)
-	sql.WriteString(" FROM ")
-	sql.WriteString(numericGroups)
-	sql.WriteString("), ")
+	sql.WriteString(bucketMaps + " AS (SELECT " + bucketNumber)
+	sql.WriteString(", mapFromArrays(groupArrayIf(" + encoded + ", " + encoded + " != ''), groupArrayIf(ifNull(" + measureValue + ", toFloat64(0)), " + encoded + " != '')) AS " + valueMap)
+	sql.WriteString(", mapFromArrays(groupArrayIf(" + encoded + ", " + encoded + " != ''), groupArrayIf(toUInt8(isNotNull(" + measureValue + ")), " + encoded + " != '')) AS " + presentMap)
+	sql.WriteString(" FROM " + finalized + " CROSS JOIN " + domain + " WHERE " + timechartResourceGuardPredicate(domain, operator.BucketCount, timechartValueCellRetainedBytes))
+	sql.WriteString(" GROUP BY " + bucketNumber + "), ")
 
 	sql.WriteString(grid)
 	sql.WriteString(" AS (")
@@ -1287,24 +1153,12 @@ func compileSplitValueTimechart(
 	sql.WriteString(".names) AS ")
 	sql.WriteString(q(TimechartValuePresentColumn))
 	sql.WriteString(", ")
-	sql.WriteString("toUInt8(")
-	sql.WriteString(validation)
-	sql.WriteString(".")
-	sql.WriteString(invalid)
-	sql.WriteString(" != 0 OR ")
-	sql.WriteString(collisions)
-	sql.WriteString(".")
-	sql.WriteString(collision)
-	sql.WriteString(" != 0) AS ")
+	sql.WriteString(domain + "." + invalid + " AS ")
 	sql.WriteString(q(TimechartInvalidColumn))
 	sql.WriteString(" FROM ")
 	sql.WriteString(grid)
 	sql.WriteString(" CROSS JOIN ")
 	sql.WriteString(domain)
-	sql.WriteString(" CROSS JOIN ")
-	sql.WriteString(validation)
-	sql.WriteString(" CROSS JOIN ")
-	sql.WriteString(collisions)
 	sql.WriteString(" LEFT JOIN ")
 	sql.WriteString(bucketMaps)
 	sql.WriteString(" ON ")
@@ -1335,31 +1189,18 @@ func compileSplitValueTimechart(
 		numericGroupsDepth = relationalNodeDepth(numericStateDepth)
 	}
 	numericScoresDepth := relationalNodeDepth(numericGroupsDepth)
-	scoreMembershipDepth := relationalNodeDepth(numericScoresDepth)
-	collapsedDepth := relationalNodeDepth(numericGroupsDepth, scoreMembershipDepth)
+	rankedDepth := relationalNodeDepth(numericScoresDepth)
+	collapsedDepth := relationalNodeDepth(rankedDepth)
 	finalizedDepth := relationalNodeDepth(collapsedDepth)
-
-	domainScoreBranchDepth := relationalNodeDepth(numericScoresDepth)
-	domainNullInputDepth := relationalNodeDepth(numericGroupsDepth)
-	domainNullBranchDepth := relationalNodeDepth(domainNullInputDepth)
-	domainOtherInputDepth := relationalNodeDepth(numericGroupsDepth, scoreMembershipDepth)
-	domainOtherBranchDepth := relationalNodeDepth(domainOtherInputDepth)
-	domainRowsDepth := relationalNodeDepth(
-		domainScoreBranchDepth,
-		domainNullBranchDepth,
-		domainOtherBranchDepth,
-	)
-	domainDepth := relationalNodeDepth(domainRowsDepth)
-	collisionInputDepth := relationalNodeDepth(numericGroupsDepth)
-	collisionsDepth := relationalNodeDepth(collisionInputDepth)
-	bucketMapsDepth := relationalNodeDepth(finalizedDepth)
-	validationDepth := relationalNodeDepth(numericGroupsDepth)
+	domainRowsDepth := relationalNodeDepth(finalizedDepth)
+	resourceUsageDepth := relationalNodeDepth(domainRowsDepth)
+	guardedDomainDepth := relationalNodeDepth(resourceUsageDepth)
+	domainDepth := relationalNodeDepth(guardedDomainDepth)
+	bucketMapsDepth := relationalNodeDepth(finalizedDepth, domainDepth)
 	gridDepth := gridSpec.relationalDepth()
 	resultDepth := relationalNodeDepth(
 		gridDepth,
 		domainDepth,
-		validationDepth,
-		collisionsDepth,
 		bucketMapsDepth,
 	)
 
@@ -1368,14 +1209,23 @@ func compileSplitValueTimechart(
 		Args:         args,
 		OutputFields: slices.Clone(dynamic.FixedFields),
 		Timechart: &TimechartOutput{
-			Mode:          TimechartModeRuntimeWideValue,
-			FirstBucket:   operator.FirstBucket.UTC(),
-			Span:          operator.Span,
-			Calendar:      gridSpec.isCalendar(),
-			BucketCount:   operator.BucketCount,
-			MaxSeries:     dynamic.MaxSeries,
-			MaxLabelBytes: maxTimechartLabelBytes,
-			ValueKind:     valueKind,
+			Mode:           TimechartModeRuntimeWideValue,
+			FirstBucket:    operator.FirstBucket.UTC(),
+			Span:           operator.Span,
+			Calendar:       gridSpec.isCalendar(),
+			ExactGrid:      gridSpec.exact,
+			Boundaries:     slices.Clone(operator.GridBoundaries),
+			Continuous:     operator.Continuous,
+			IncludePartial: operator.IncludePartial,
+			SearchEarliest: operator.SearchEarliest,
+			SearchLatest:   operator.SearchLatest,
+			BucketCount:    operator.BucketCount,
+			SeriesLimit:    operator.Split.SeriesLimit,
+			IncludeNull:    operator.Split.IncludeNull,
+			IncludeOther:   operator.Split.IncludeOther,
+			MaxSeries:      dynamic.MaxSeries,
+			MaxLabelBytes:  maxTimechartLabelBytes,
+			ValueKind:      valueKind,
 		},
 	}
 	return withCompiledRelationalDepth(compiled, resultDepth, operator.Range), nil
@@ -1518,7 +1368,11 @@ func compileFixedCountTimechart(
 	sql.WriteString("WITH ")
 	sql.WriteString(source)
 	if gridSpec.isCalendar() {
-		sql.WriteString(" AS (SELECT ")
+		if gridSpec.exact {
+			sql.WriteString(" AS MATERIALIZED (SELECT ")
+		} else {
+			sql.WriteString(" AS (SELECT ")
+		}
 		sql.WriteString(timeField.valueSQL)
 		sql.WriteString(" AS ")
 		sql.WriteString(eventTime)
@@ -1559,13 +1413,19 @@ func compileFixedCountTimechart(
 		Args:         args,
 		OutputFields: slices.Clone(outputFields),
 		Timechart: &TimechartOutput{
-			Mode:          TimechartModeFixedCount,
-			FirstBucket:   operator.FirstBucket.UTC(),
-			Span:          operator.Span,
-			Calendar:      gridSpec.isCalendar(),
-			BucketCount:   operator.BucketCount,
-			MaxSeries:     1,
-			MaxLabelBytes: 0,
+			Mode:           TimechartModeFixedCount,
+			FirstBucket:    operator.FirstBucket.UTC(),
+			Span:           operator.Span,
+			Calendar:       gridSpec.isCalendar(),
+			ExactGrid:      gridSpec.exact,
+			Boundaries:     slices.Clone(operator.GridBoundaries),
+			Continuous:     operator.Continuous,
+			IncludePartial: operator.IncludePartial,
+			SearchEarliest: operator.SearchEarliest,
+			SearchLatest:   operator.SearchLatest,
+			BucketCount:    operator.BucketCount,
+			MaxSeries:      1,
+			MaxLabelBytes:  0,
 		},
 	}
 	return withCompiledRelationalDepth(compiled, resultDepth, operator.Range), nil
@@ -1600,7 +1460,11 @@ func compileFixedCountValueTimechart(
 	sql.WriteString("WITH ")
 	sql.WriteString(source)
 	if gridSpec.isCalendar() {
-		sql.WriteString(" AS (SELECT ")
+		if gridSpec.exact {
+			sql.WriteString(" AS MATERIALIZED (SELECT ")
+		} else {
+			sql.WriteString(" AS (SELECT ")
+		}
 		sql.WriteString(timeField.valueSQL)
 		sql.WriteString(" AS ")
 		sql.WriteString(eventTime)
@@ -1704,15 +1568,21 @@ func compileFixedCountValueTimechart(
 		Args:         args,
 		OutputFields: slices.Clone(outputFields),
 		Timechart: &TimechartOutput{
-			Mode:          TimechartModeFixedFieldCount,
-			FirstBucket:   operator.FirstBucket.UTC(),
-			Span:          operator.Span,
-			Calendar:      gridSpec.isCalendar(),
-			BucketCount:   operator.BucketCount,
-			MaxSeries:     1,
-			MaxLabelBytes: 0,
-			ValueField:    operator.Measure.Output,
-			ValueKind:     TimechartValueKindInvalid,
+			Mode:           TimechartModeFixedFieldCount,
+			FirstBucket:    operator.FirstBucket.UTC(),
+			Span:           operator.Span,
+			Calendar:       gridSpec.isCalendar(),
+			ExactGrid:      gridSpec.exact,
+			Boundaries:     slices.Clone(operator.GridBoundaries),
+			Continuous:     operator.Continuous,
+			IncludePartial: operator.IncludePartial,
+			SearchEarliest: operator.SearchEarliest,
+			SearchLatest:   operator.SearchLatest,
+			BucketCount:    operator.BucketCount,
+			MaxSeries:      1,
+			MaxLabelBytes:  0,
+			ValueField:     operator.Measure.Output,
+			ValueKind:      TimechartValueKindInvalid,
 		},
 	}
 	return withCompiledRelationalDepth(compiled, resultDepth, operator.Range), nil
@@ -1772,7 +1642,11 @@ func compileFixedValueTimechart(
 	sql.WriteString("WITH ")
 	sql.WriteString(source)
 	if gridSpec.isCalendar() {
-		sql.WriteString(" AS (SELECT ")
+		if gridSpec.exact {
+			sql.WriteString(" AS MATERIALIZED (SELECT ")
+		} else {
+			sql.WriteString(" AS (SELECT ")
+		}
 		sql.WriteString(timeField.valueSQL)
 		sql.WriteString(" AS ")
 		sql.WriteString(eventTime)
@@ -1873,15 +1747,21 @@ func compileFixedValueTimechart(
 		Args:         args,
 		OutputFields: slices.Clone(outputFields),
 		Timechart: &TimechartOutput{
-			Mode:          TimechartModeFixedValue,
-			FirstBucket:   operator.FirstBucket.UTC(),
-			Span:          operator.Span,
-			Calendar:      gridSpec.isCalendar(),
-			BucketCount:   operator.BucketCount,
-			MaxSeries:     1,
-			MaxLabelBytes: 0,
-			ValueField:    operator.Measure.Output,
-			ValueKind:     valueKind,
+			Mode:           TimechartModeFixedValue,
+			FirstBucket:    operator.FirstBucket.UTC(),
+			Span:           operator.Span,
+			Calendar:       gridSpec.isCalendar(),
+			ExactGrid:      gridSpec.exact,
+			Boundaries:     slices.Clone(operator.GridBoundaries),
+			Continuous:     operator.Continuous,
+			IncludePartial: operator.IncludePartial,
+			SearchEarliest: operator.SearchEarliest,
+			SearchLatest:   operator.SearchLatest,
+			BucketCount:    operator.BucketCount,
+			MaxSeries:      1,
+			MaxLabelBytes:  0,
+			ValueField:     operator.Measure.Output,
+			ValueKind:      valueKind,
 		},
 	}
 	return withCompiledRelationalDepth(compiled, resultDepth, operator.Range), nil
@@ -3305,7 +3185,7 @@ func compileCountChart(
 			RowKind:          rowKind,
 			RowDatabaseType:  rowDatabaseType,
 			RowLimit:         uint64(operator.RowLimit),
-			MaxSeries:        dynamic.MaxSeries,
+			MaxSeries:        safecast.MustConv[uint16](dynamic.MaxSeries),
 			MaxLabelBytes:    maxTimechartLabelBytes,
 			ValueKind:        ChartValueKindCount,
 			RowSemanticBytes: rowKind == ChartRowKindMixed,
@@ -4222,7 +4102,7 @@ func compileNumericChart(
 			RowKind:          rowKind,
 			RowDatabaseType:  rowDatabaseType,
 			RowLimit:         uint64(operator.RowLimit),
-			MaxSeries:        dynamic.MaxSeries,
+			MaxSeries:        safecast.MustConv[uint16](dynamic.MaxSeries),
 			MaxLabelBytes:    maxTimechartLabelBytes,
 			ValueKind:        valueKind,
 			RowSemanticBytes: rowKind == ChartRowKindMixed,
@@ -4282,6 +4162,9 @@ type compiledStatsSparklineMeasure struct {
 // copying each search-scoped constant into newly constructed compileState
 // values.
 type compileContext struct {
+	mvExpandWorkSQL                        string
+	extractionBudget                       authoredKnowledgeCompilation
+	hasTimechartStage                      bool
 	operationContext                       context.Context
 	patternBudgets                         compiledPatternBudgets
 	strftimeBudget                         compiledStrftimeBudget

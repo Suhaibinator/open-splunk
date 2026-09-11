@@ -19,10 +19,11 @@ const MaximumNumericBinSpan = uint64(1<<53 - 1)
 
 // Query is an ordered logical operator pipeline.
 type Query struct {
-	Operators        []Operator
-	EffectiveIndexes []string
-	OutputFields     []string
-	DynamicOutput    *DynamicSeriesOutput
+	timechartContinuations map[int]TimechartContinuation
+	Operators              []Operator
+	EffectiveIndexes       []string
+	OutputFields           []string
+	DynamicOutput          *DynamicSeriesOutput
 	// SearchStart is the immutable server-resolved admission timestamp used by
 	// search-scoped scalar functions such as now(). It is deliberately
 	// independent from Scan.IndexTimeCutoff, which controls storage visibility.
@@ -63,7 +64,10 @@ func (query *Query) AuthoredScalarPredicateCount() (uint32, bool) {
 // runtime values and must not exceed MaxSeries.
 type DynamicSeriesOutput struct {
 	FixedFields []string
-	MaxSeries   uint16
+	// MaxSeries is the greatest possible public runtime width. Zero is reserved
+	// for an explicitly unlimited timechart split whose actual width is bounded
+	// by the admitted execution resource policy.
+	MaxSeries uint64
 }
 
 // Operator is one logical pipeline stage.
@@ -149,13 +153,14 @@ func (*Extend) LogicalName() string       { return "Extend" }
 func (op *Extend) SourceRange() spl.Range { return op.Range }
 
 // CalendarUnit identifies civil-time bucket alignment. CalendarNone denotes a
-// fixed duration; day and week boundaries use the effective search timezone.
+// fixed duration; day, week, and month boundaries use the effective search timezone.
 type CalendarUnit uint8
 
 const (
 	CalendarNone CalendarUnit = iota
 	CalendarDay
 	CalendarWeek
+	CalendarMonth
 )
 
 // TimeBucket replaces or copies the canonical event time with the start of its
@@ -426,8 +431,9 @@ func (op *StreamAggregate) SourceRange() spl.Range { return op.Range }
 // count, percentile, sum, or average timechart BY field. A nil split selects a
 // fixed two-column form.
 type TimechartSplit struct {
-	Field        FieldRef
-	SeriesLimit  uint16
+	Field FieldRef
+	// SeriesLimit is the authored ordinary-series limit. Zero means all.
+	SeriesLimit  uint64
 	IncludeNull  bool
 	IncludeOther bool
 	NullLabel    string
@@ -440,13 +446,19 @@ type TimechartSplit struct {
 // describe the complete fixed range, including partial boundary buckets and
 // continuous gaps.
 type Timechart struct {
-	Time        FieldRef
-	Split       *TimechartSplit
-	Measure     AggregateMeasure
-	Span        time.Duration
-	Calendar    CalendarUnit
-	FirstBucket time.Time
-	BucketCount uint64
+	AuthoredSpan                 spl.TimeSpan
+	Axis                         spl.TimechartAxisOptions
+	CalendarMagnitude            uint64
+	Alignment                    time.Time
+	GridBoundaries               []time.Time
+	SearchEarliest, SearchLatest time.Time
+	Time                         FieldRef
+	Split                        *TimechartSplit
+	Measure                      AggregateMeasure
+	Span                         time.Duration
+	Calendar                     CalendarUnit
+	FirstBucket                  time.Time
+	BucketCount                  uint64
 
 	FixedRange     bool
 	Continuous     bool

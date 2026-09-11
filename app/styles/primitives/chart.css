@@ -18,6 +18,11 @@
   stroke: none;
 }
 
+.time-series-chart__columns {
+  fill: currentcolor;
+  stroke: none;
+}
+
 .time-series-chart__line.time-series-chart__series {
   stroke: currentcolor;
 }

@@ -2,6 +2,7 @@ package plan
 
 import (
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/spl"
@@ -9,8 +10,8 @@ import (
 
 func buildTimechartCommand(
 	result *Query,
-	query *spl.Query,
-	commandIndex int,
+	_ *spl.Query,
+	_ int,
 	command *spl.TimechartCommand,
 	outputSchemaKnown bool,
 	canonicalTimeAvailable bool,
@@ -24,20 +25,11 @@ func buildTimechartCommand(
 			Message: "timechart command is nil",
 		}
 	}
-	if commandIndex+1 != len(query.Commands) {
-		next := query.Commands[commandIndex+1]
-		return &Diagnostic{
-			Code:        "SPL_UNSUPPORTED_TIMECHART_PIPELINE",
-			Message:     "timechart must be the final pipeline command",
-			Range:       next.SourceRange(),
-			Suggestions: []string{"move timechart to the final pipeline stage"},
-		}
-	}
 	measure, measureErr := buildTimechartMeasure(command, outputSchemaKnown)
 	if measureErr != nil {
 		return measureErr
 	}
-	if !canonicalTimeAvailable {
+	if !canonicalTimeAvailable && (!outputSchemaKnown || !slices.Contains(result.OutputFields, "_time")) {
 		return &Diagnostic{
 			Code:        "SPL_UNSUPPORTED_TIMECHART_TIME_FIELD",
 			Message:     "timechart requires the unmodified canonical _time field",
@@ -45,20 +37,35 @@ func buildTimechartCommand(
 			Suggestions: []string{"run timechart before removing, replacing, or transforming _time"},
 		}
 	}
-	span, calendar, spanErr := timechartSpan(command.Span)
-	if spanErr != nil {
-		return spanErr
+	op := &Timechart{AuthoredSpan: command.Span, Axis: command.Axis, SearchEarliest: earliest, SearchLatest: latest, FixedRange: true, Continuous: true, IncludePartial: true, Range: command.Range}
+	if command.Axis.ContSpecified {
+		op.Continuous = command.Axis.Cont
 	}
-	firstBucket, bucketCount, bucketErr := timechartBuckets(
-		earliest,
-		latest,
-		span,
-		calendar,
-		searchLocation,
-		command.Span.Range,
-	)
-	if bucketErr != nil {
-		return bucketErr
+	if command.Axis.PartialSpecified {
+		op.IncludePartial = command.Axis.Partial
+	}
+	if command.Axis.FixedRangeSpecified {
+		op.FixedRange = command.Axis.FixedRange
+	}
+	alignment, alignmentErr := resolveTimechartAlignment(command.Axis, earliest, latest, result.SearchStart, searchLocation)
+	if alignmentErr != nil {
+		return &Diagnostic{Code: "SPL_UNSUPPORTED_TIMECHART_SYNTAX", Message: alignmentErr.Error(), Range: command.Axis.AlignTimeRange}
+	}
+	op.Alignment = alignment
+	if op.FixedRange {
+		if err := ResolveTimechartGrid(op, earliest, latest, result.SearchTimezone); err != nil {
+			return err
+		}
+	} else {
+		// Span selection is deferred until the post-filter source is materialized.
+		if _, err := validateTimechartAxisOptions(command.Axis, command.Range); err != nil {
+			return err
+		}
+		if command.Span != (spl.TimeSpan{}) {
+			if _, _, _, err := enhancedTimechartSpan(command.Span); err != nil {
+				return err
+			}
+		}
 	}
 	timeField, timeErr := ResolveField("_time", command.Range)
 	if timeErr != nil {
@@ -109,18 +116,7 @@ func buildTimechartCommand(
 		result.OutputFields = []string{"_time", measure.Output}
 		result.DynamicOutput = nil
 	}
-	result.Operators = append(result.Operators, &Timechart{
-		Time:           timeField,
-		Split:          split,
-		Measure:        measure,
-		Span:           span,
-		Calendar:       calendar,
-		FirstBucket:    firstBucket,
-		BucketCount:    bucketCount,
-		FixedRange:     true,
-		Continuous:     true,
-		IncludePartial: true,
-		Range:          command.Range,
-	})
+	op.Time, op.Split, op.Measure = timeField, split, measure
+	result.Operators = append(result.Operators, op)
 	return nil
 }

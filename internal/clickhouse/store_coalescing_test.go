@@ -24,6 +24,8 @@ func TestGroupedStoreStagesWaitsAndCoalescesOrderedLogicalBatches(t *testing.T) 
 	store.coalescing = true
 	store.writeGroupLimits.TargetRows = 2
 	store.writeGroupLimits.TargetDecodedBytes = visibility.MaxWriteGroupDecodedBytes
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
 	first := distinctStoreBatch("group-first", 1)
 	first.Events[0].Event.EventId = "event-first"
@@ -35,12 +37,12 @@ func TestGroupedStoreStagesWaitsAndCoalescesOrderedLogicalBatches(t *testing.T) 
 	}
 	results := make(chan outcome, 2)
 	go func() {
-		result, err := store.Store(context.Background(), first)
+		result, err := store.Store(ctx, first)
 		results <- outcome{result: result, err: err}
 	}()
 	waitForPendingReservations(t, sequencer, 1)
 	go func() {
-		result, err := store.Store(context.Background(), second)
+		result, err := store.Store(ctx, second)
 		results <- outcome{result: result, err: err}
 	}()
 	waitForPendingReservations(t, sequencer, 2)
@@ -48,14 +50,25 @@ func TestGroupedStoreStagesWaitsAndCoalescesOrderedLogicalBatches(t *testing.T) 
 	if got := store.commitWaiters.size(); got != 2 {
 		t.Fatalf("native waiter count = %d, want 2", got)
 	}
-	if err := store.ReconcilePending(context.Background()); err != nil {
+	// Waiters register before Store releases its durable attempt lease. This
+	// fixture has no background reconciler, so its single manual drain must
+	// wait for both staging operations to leave shared write admission.
+	if err := store.writeAdmission.freeze(ctx); err != nil {
+		t.Fatalf("wait for staging to finish: %v", err)
+	}
+	store.writeAdmission.releaseFreeze()
+	if err := store.ReconcilePending(ctx); err != nil {
 		t.Fatalf("ReconcilePending: %v", err)
 	}
 
 	for range 2 {
-		outcome := <-results
-		if outcome.err != nil || outcome.result.Accepted != 1 || outcome.result.Duplicate != 0 {
-			t.Fatalf("Store outcome = %+v error=%v", outcome.result, outcome.err)
+		select {
+		case outcome := <-results:
+			if outcome.err != nil || outcome.result.Accepted != 1 || outcome.result.Duplicate != 0 {
+				t.Fatalf("Store outcome = %+v error=%v", outcome.result, outcome.err)
+			}
+		case <-ctx.Done():
+			t.Fatalf("wait for grouped Store outcomes: %v", ctx.Err())
 		}
 	}
 	if connection.prepareCalls != 1 || connection.batch.sendCalls != 1 ||

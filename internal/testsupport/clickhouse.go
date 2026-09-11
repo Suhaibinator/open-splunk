@@ -105,8 +105,9 @@ type ClickHouseContainer struct {
 }
 
 // StartClickHouse starts a disposable ClickHouse container and waits for four
-// consecutive successful health probes. An empty image selects the pinned
-// release used by the repository integration suite.
+// consecutive successful health probes against its final daemon. An empty
+// image selects the pinned release used by the repository integration suite;
+// overrides must preserve the official image's PID 1 entrypoint contract.
 func StartClickHouse(ctx context.Context, image string) (*ClickHouseContainer, error) {
 	if ctx == nil {
 		return nil, errors.New("start ClickHouse test container: context is required")
@@ -565,19 +566,105 @@ func (container *ClickHouseContainer) waitReadyWithCredentials(
 	username string,
 	password string,
 ) error {
-	deadline := time.NewTimer(90 * time.Second)
-	defer deadline.Stop()
+	readinessContext, readinessCancel := context.WithTimeout(ctx, 90*time.Second)
+	defer readinessCancel()
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
+	return waitForClickHouseReadiness(
+		readinessContext,
+		ticker.C,
+		func(probeContext context.Context) clickHouseReadinessObservation {
+			processOutput, processErr := docker(
+				probeContext,
+				"exec",
+				container.Name,
+				"cat",
+				"/proc/1/comm",
+			)
+			observation := clickHouseReadinessObservation{
+				processOutput: processOutput,
+				processName:   strings.TrimSpace(string(processOutput)),
+				processErr:    processErr,
+			}
+			if processErr != nil || observation.processName != clickHouseFinalProcessName {
+				return observation
+			}
+			observation.queryOutput, observation.queryErr = docker(
+				probeContext,
+				"exec",
+				container.Name,
+				"clickhouse-client",
+				"--user",
+				username,
+				"--password",
+				password,
+				"--query",
+				"SELECT 1",
+			)
+			return observation
+		},
+	)
+}
+
+// Linux truncates the clickhouse-server task name to TASK_COMM_LEN. The
+// official image's entrypoint remains bash while its temporary initialization
+// server is accepting queries, then execs the long-lived server as PID 1.
+const clickHouseFinalProcessName = "clickhouse-serv"
+
+type clickHouseReadinessObservation struct {
+	processOutput []byte
+	processName   string
+	processErr    error
+	queryOutput   []byte
+	queryErr      error
+}
+
+func (observation clickHouseReadinessObservation) ready() bool {
+	return observation.processErr == nil &&
+		observation.processName == clickHouseFinalProcessName &&
+		observation.queryErr == nil &&
+		strings.TrimSpace(string(observation.queryOutput)) == "1"
+}
+
+func (observation clickHouseReadinessObservation) diagnostic() string {
+	if observation.processErr != nil {
+		return fmt.Sprintf(
+			"inspect container PID 1: %v: %s",
+			observation.processErr,
+			boundedOutput(observation.processOutput),
+		)
+	}
+	if observation.processName != clickHouseFinalProcessName {
+		return fmt.Sprintf(
+			"container PID 1 is %q, waiting for %q",
+			observation.processName,
+			clickHouseFinalProcessName,
+		)
+	}
+	return fmt.Sprintf(
+		"query final ClickHouse daemon: %v: %s",
+		observation.queryErr,
+		boundedOutput(observation.queryOutput),
+	)
+}
+
+func waitForClickHouseReadiness(
+	ctx context.Context,
+	ticks <-chan time.Time,
+	probe func(context.Context) clickHouseReadinessObservation,
+) error {
 	stable := 0
 	var last string
 	for {
-		output, err := docker(ctx, "exec", container.Name, "clickhouse-client",
-			"--user", username, "--password", password,
-			"--query", "SELECT 1",
-		)
-		last = fmt.Sprintf("%v: %s", err, boundedOutput(output))
-		if err == nil && strings.TrimSpace(string(output)) == "1" {
+		if err := ctx.Err(); err != nil {
+			return clickHouseReadinessContextError(err, last)
+		}
+		observation := probe(ctx)
+		last = observation.diagnostic()
+		if err := ctx.Err(); err != nil {
+			return clickHouseReadinessContextError(err, last)
+		}
+		if observation.ready() {
 			stable++
 			if stable == 4 {
 				return nil
@@ -587,12 +674,24 @@ func (container *ClickHouseContainer) waitReadyWithCredentials(
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("wait for ClickHouse test container: %w", ctx.Err())
-		case <-deadline.C:
-			return fmt.Errorf("wait for ClickHouse test container: timed out: %s", last)
-		case <-ticker.C:
+			return clickHouseReadinessContextError(ctx.Err(), last)
+		case <-ticks:
 		}
 	}
+}
+
+func clickHouseReadinessContextError(err error, last string) error {
+	if last == "" {
+		return fmt.Errorf(
+			"wait for ClickHouse test container: %w before first readiness probe",
+			err,
+		)
+	}
+	return fmt.Errorf(
+		"wait for ClickHouse test container: %w (last observation: %s)",
+		err,
+		last,
+	)
 }
 
 func (container *ClickHouseContainer) waitSecureReady(

@@ -55,8 +55,9 @@ const (
 	// TimechartBucketColumn is present only for a calendar timechart. Fixed
 	// grids keep their established ordinal-only transport, while calendar grids
 	// carry the exact UTC boundary produced by ClickHouse's timezone database.
-	TimechartBucketColumn = "__os_timechart_bucket"
-	TimechartCountColumn  = "__os_timechart_count"
+	TimechartBucketPresentColumn = "__os_timechart_bucket_present"
+	TimechartBucketColumn        = "__os_timechart_bucket"
+	TimechartCountColumn         = "__os_timechart_count"
 	// The fixed-value transport is deliberately distinct from the count
 	// transport. Its nullable value and repeated upstream-presence proof let the
 	// executor distinguish a real all-ineligible input (publish a null grid)
@@ -412,6 +413,27 @@ const (
 	// its bounded ceiling. The guard runs before the ordered result is
 	// produced, so the search fails atomically rather than truncating.
 	ChartRowLimitMarker = "open-splunk: chart row values exceed the supported limit"
+	// TimechartDomainLimitMarker classifies a runtime-wide timechart whose
+	// selected public series domain exceeds its admitted execution budget.
+	TimechartDomainLimitMarker = "open-splunk: timechart series domain exceeds the admitted limit"
+	// TimechartCellLimitMarker classifies a runtime-wide timechart whose dense
+	// bucket-by-series cell count exceeds its admitted execution budget.
+	TimechartCellLimitMarker = "open-splunk: timechart cells exceed the admitted limit"
+	// TimechartRetainedBytesLimitMarker classifies a runtime-wide timechart whose
+	// labels and dense cells exceed its admitted retained-result byte budget.
+	TimechartRetainedBytesLimitMarker = "open-splunk: timechart retained bytes exceed the admitted limit"
+	// These stable placeholder names are replaced only on the private execution
+	// SQL copy using the immutable policy snapshot attached to its context. They
+	// intentionally remain separate from authored selection and chart limits.
+	TimechartDomainLimitParameter        = "open_splunk_timechart_domain_limit"
+	TimechartCellLimitParameter          = "open_splunk_timechart_cell_limit"
+	TimechartRetainedBytesLimitParameter = "open_splunk_timechart_retained_bytes_limit"
+	// The three distinct near-MaxUint64 literals keep raw compiler SQL valid for
+	// diagnostic EXPLAIN while remaining unambiguous replacement sentinels on
+	// the private execution SQL copy.
+	TimechartDomainLimitSQLPlaceholder        = "toUInt64(/*open_splunk_timechart_domain_limit*/18446744073709551613)"
+	TimechartCellLimitSQLPlaceholder          = "toUInt64(/*open_splunk_timechart_cell_limit*/18446744073709551612)"
+	TimechartRetainedBytesLimitSQLPlaceholder = "toUInt64(/*open_splunk_timechart_retained_bytes_limit*/18446744073709551611)"
 )
 
 // ChartRowKind is the backend-neutral public value kind of a chart's row
@@ -466,21 +488,34 @@ var physicalIdentifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // SQL. Database and table are trusted configuration and still pass a strict
 // identifier allowlist; all user-authored values are query parameters.
 type Compiler struct {
-	Database string
-	Table    string
+	continuationBudget continuationBudget
+	relationInput      *compiledRelationInput
+	Database           string
+	Table              string
 
 	// lookupResolutions is an ordered, detached control-plane authority. It is
 	// populated only through WithLookupResolutions; ordinary struct literals
 	// cannot attach asset rows to authored definition names.
-	lookupResolutions []LookupResolution
+	lookupResolutions         []LookupResolution
+	deferredLookupResolutions []LookupResolution
 }
 
 // CompiledQuery is executable SQL plus ordered bind arguments and public
 // result fields. Internal helper columns never appear in OutputFields.
 type CompiledQuery struct {
-	SQL          string
-	Args         []any
-	OutputFields []string
+	timechartWorkReceipt    bool
+	timechartWorkFloor      uint64
+	logicalExtractionBudget authoredKnowledgeCompilation
+	emptyTimechartInput     bool
+	rangeDiscovery          *compiledTimechartRangeDiscovery
+	hasTimechartStage       bool
+	TimeBucket              *ResultTimeBucketOutput
+	continuationRoot        *compiledExecutionSeal
+	continuation            *compiledTimechartContinuation
+	relationInput           *compiledRelationInput
+	SQL                     string
+	Args                    []any
+	OutputFields            []string
 	// OutputPresentations, when nonempty, is aligned exactly by ordinal with
 	// OutputFields. Zero entries carry no presentation metadata. The compiler
 	// attaches a display-only flat multivalue delimiter to stats list/values and
@@ -593,12 +628,12 @@ const (
 	// distinct from row count prevents a public output name from selecting a
 	// physical transport protocol.
 	TimechartModeFixedFieldCount
-	// MaximumTimechartSeries bounds the runtime-selected ordinary and sentinel
-	// columns carried by either wide timechart transport.
-	MaximumTimechartSeries uint16 = 12
 	// MaximumTimechartLabelBytes bounds one raw runtime series label before its
 	// reserved-name normalization is applied.
 	MaximumTimechartLabelBytes uint16 = maxTimechartLabelBytes
+	// MaximumTimechartSeries is the default runtime-wide width retained for
+	// source compatibility. It is not an execution or authored-series ceiling.
+	MaximumTimechartSeries uint64 = spl.DefaultTimechartSeriesLimit + 2
 )
 
 // TimechartValueKind identifies the semantic policy carried by the shared
@@ -629,15 +664,24 @@ func (kind TimechartValueKind) Valid() bool {
 // results because their public fields are predetermined or selected by split
 // values.
 type TimechartOutput struct {
-	Mode        TimechartMode
-	FirstBucket time.Time
-	Span        time.Duration
+	ExactGrid                    bool
+	Boundaries                   []time.Time
+	Continuous, IncludePartial   bool
+	SearchEarliest, SearchLatest time.Time
+	Mode                         TimechartMode
+	FirstBucket                  time.Time
+	Span                         time.Duration
 	// Calendar selects the private exact-boundary transport. It is mutually
 	// exclusive with a positive fixed Span and is covered by the execution seal.
-	Calendar      bool
-	BucketCount   uint64
-	MaxSeries     uint16
+	Calendar    bool
+	BucketCount uint64
+	// SeriesLimit is the authored ordinary-series selection. Zero means all;
+	// MaxSeries is then also zero and execution policy bounds the actual domain.
+	SeriesLimit   uint64
+	MaxSeries     uint64
 	MaxLabelBytes uint16
+	IncludeNull   bool
+	IncludeOther  bool
 	// ValueKind is populated for both fixed and runtime-wide nullable values.
 	// Together ValueField and ValueKind bind each private transport to its
 	// aggregate validation policy instead of trusting mutable OutputFields alone.
@@ -647,7 +691,7 @@ type TimechartOutput struct {
 
 func validTimechartOutputSpanContract(output *TimechartOutput) bool {
 	return output != nil &&
-		((output.Calendar && output.Span == 0) ||
+		((output.ExactGrid && uint64(len(output.Boundaries)) == output.BucketCount+1) || (output.Calendar && output.Span == 0) ||
 			(!output.Calendar && output.Span > 0))
 }
 
@@ -655,12 +699,15 @@ func validTimechartOutputSpanContract(output *TimechartOutput) bool {
 // publishes: its ordinary series limit plus each enabled NULL and OTHER
 // sentinel series. The planner derives DynamicOutput.MaxSeries the same way,
 // so a forged plan whose allowance disagrees with its split is rejected.
-func timechartSplitMaxSeries(split *plan.TimechartSplit) uint16 {
+func timechartSplitMaxSeries(split *plan.TimechartSplit) uint64 {
+	if split == nil || split.SeriesLimit == 0 {
+		return 0
+	}
 	series := split.SeriesLimit
-	if split.IncludeNull {
+	if split.IncludeNull && series != math.MaxUint64 {
 		series++
 	}
-	if split.IncludeOther {
+	if split.IncludeOther && series != math.MaxUint64 {
 		series++
 	}
 	return series
@@ -669,8 +716,16 @@ func timechartSplitMaxSeries(split *plan.TimechartSplit) uint16 {
 // RuntimeWideBoundsValid reports whether the dynamic-series metadata is safe
 // for both the executor transport and the public search-job schema boundary.
 func (output TimechartOutput) RuntimeWideBoundsValid() bool {
-	return output.MaxSeries > 0 && output.MaxSeries <= MaximumTimechartSeries &&
-		output.MaxLabelBytes > 0 && output.MaxLabelBytes <= MaximumTimechartLabelBytes
+	if output.MaxLabelBytes == 0 ||
+		output.MaxLabelBytes > MaximumTimechartLabelBytes {
+		return false
+	}
+	split := &plan.TimechartSplit{
+		SeriesLimit:  output.SeriesLimit,
+		IncludeNull:  output.IncludeNull,
+		IncludeOther: output.IncludeOther,
+	}
+	return output.MaxSeries == timechartSplitMaxSeries(split)
 }
 
 // Compile compiles one plan without mutating it.
@@ -802,12 +857,16 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 }
 
 func validateCompiledExtractionBudgets(operators []plan.Operator) (authoredKnowledgeCompilation, error) {
-	var evidence authoredKnowledgeCompilation
+	return validateCompiledExtractionBudgetsWithPrior(operators, authoredKnowledgeCompilation{})
+}
+
+func validateCompiledExtractionBudgetsWithPrior(operators []plan.Operator, evidence authoredKnowledgeCompilation) (authoredKnowledgeCompilation, error) {
 	regexBudget := authoredRegexProgramBudget{
-		evidence: &evidence,
+		evidence:            &evidence,
+		matchStyleWorkUnits: evidence.matchStyleWorkUnits,
 	}
-	outputs := 0
-	spathWorkUnits := 0
+	outputs := int(evidence.extractionOutputs)
+	spathWorkUnits := int(evidence.jsonEvaluationWork)
 	for _, operator := range operators {
 		if err := regexBudget.visitOperator(operator); err != nil {
 			return authoredKnowledgeCompilation{}, err
@@ -880,8 +939,9 @@ func validateCompiledExtractionBudgets(operators []plan.Operator) (authoredKnowl
 			}
 		}
 	}
-	evidence.extractionOutputs = uint32(outputs)
-	evidence.jsonEvaluationWork = uint32(spathWorkUnits)
+	evidence.matchStyleWorkUnits = regexBudget.matchStyleWorkUnits
+	evidence.extractionOutputs = safecast.MustConv[uint32](outputs)
+	evidence.jsonEvaluationWork = safecast.MustConv[uint32](spathWorkUnits)
 	return evidence, nil
 }
 
@@ -993,6 +1053,10 @@ func finalizeOrdinaryQuery(
 	projection = append(projection, containerProjection...)
 	projection = append(projection, optionalMultivalueProjection...)
 	projection = append(projection, stringOrBytesProjection...)
+	timeBucket := resultTimeBucketOutput(state, outputFields)
+	if timeBucket != nil {
+		projection = append(projection, state.visible["_time"].timeBucketEndSQL+" AS "+quoteIdentifier(ResultTimeBucketEndColumn))
+	}
 	if len(state.chronologicalBarriers) > 0 {
 		return finalizeChronologicallyValidatedQuery(
 			relation,
@@ -1026,6 +1090,7 @@ func finalizeOrdinaryQuery(
 			Args:                      args,
 			OutputFields:              outputFields,
 			OutputPresentations:       outputPresentations,
+			TimeBucket:                resultTimeBucketOutput(state, outputFields),
 			ContainerOutputs:          containerOutputs,
 			OptionalMultivalueOutputs: optionalMultivalueOutputs,
 			StringOrBytesOutputs:      stringOrBytesOutputs,
@@ -1180,6 +1245,10 @@ func finalizeChronologicallyValidatedQuery(
 	for _, output := range stringOrBytesOutputs {
 		resultColumns = append(resultColumns, output.SemanticBytesColumn())
 	}
+	timeBucket := resultTimeBucketOutput(state, outputFields)
+	if timeBucket != nil {
+		resultColumns = append(resultColumns, ResultTimeBucketEndColumn)
+	}
 	dummyProjection, _ := ordinaryChronologicalDummyProjection(
 		state,
 		outputFields,
@@ -1188,6 +1257,9 @@ func finalizeChronologicallyValidatedQuery(
 		optionalMultivalueOutputs,
 		stringOrBytesOutputs,
 	)
+	if timeBucket != nil {
+		dummyProjection = append(dummyProjection, "toDateTime64(0, 9, 'UTC') AS "+quoteIdentifier(ResultTimeBucketEndColumn))
+	}
 	return wrapChronologicalValidation(
 		relation.sql,
 		relation.depth,
@@ -1201,6 +1273,7 @@ func finalizeChronologicallyValidatedQuery(
 			Args:                      args,
 			OutputFields:              outputFields,
 			OutputPresentations:       outputPresentations,
+			TimeBucket:                resultTimeBucketOutput(state, outputFields),
 			ContainerOutputs:          containerOutputs,
 			OptionalMultivalueOutputs: optionalMultivalueOutputs,
 			StringOrBytesOutputs:      stringOrBytesOutputs,
@@ -1314,6 +1387,9 @@ func wrapCompiledChronologicalValidation(
 				"compile ClickHouse query: timechart output mode is invalid",
 			)
 		}
+		if compiled.Timechart.ExactGrid {
+			resultColumns = slices.Insert(resultColumns, 1, TimechartBucketPresentColumn)
+		}
 		if compiled.Timechart.Calendar {
 			resultColumns = slices.Insert(
 				resultColumns,
@@ -1325,6 +1401,16 @@ func wrapCompiledChronologicalValidation(
 		return CompiledQuery{}, errors.New(
 			"compile ClickHouse query: chronological terminal output contract is invalid",
 		)
+	}
+	if compiled.timechartWorkReceipt {
+		resultColumns = append(resultColumns, TimechartWorkRowsColumn)
+	}
+	if compiled.Timechart != nil {
+		var err error
+		compiled.validationDummyProjection, err = timechartChronologicalDummyProjection(resultColumns)
+		if err != nil {
+			return CompiledQuery{}, err
+		}
 	}
 	projection := make([]string, 0, len(resultColumns))
 	for _, name := range resultColumns {
@@ -1339,7 +1425,7 @@ func wrapCompiledChronologicalValidation(
 		resultOrder = quoteIdentifier(ChartInvalidColumn) + " DESC, " +
 			quoteIdentifier(ChartOrdinalColumn) + " ASC"
 	}
-	return wrapChronologicalValidation(
+	wrapped, err := wrapChronologicalValidation(
 		compiled.SQL,
 		compiled.relationalDepth,
 		compiled.relationalDepthRange,
@@ -1351,6 +1437,10 @@ func wrapCompiledChronologicalValidation(
 		compiled,
 		aliasSequence,
 	)
+	if compiled.Timechart != nil {
+		wrapped.validationDummyProjection = nil
+	}
+	return wrapped, err
 }
 
 func wrapChronologicalValidation(
@@ -3304,6 +3394,9 @@ func unsupportedMultivalueUsage(operation string, sourceRange spl.Range) error {
 }
 
 type fieldState struct {
+	// timechartOccurrences marks an exact cardinality captured before observed-range materialization.
+	timechartOccurrences      bool
+	timeBucketEndSQL          string
 	valueSQL                  string
 	exactNumericKeySQL        string
 	dynamicNumericEligibleSQL string
@@ -6007,6 +6100,7 @@ func fieldStateReferencesPrivateColumn(field fieldState, column string) bool {
 		field.storedTypeSQL,
 		field.textEligibleSQL,
 		field.semanticBytesSQL,
+		field.timeBucketEndSQL,
 		field.descendantSQL,
 		field.relativeFieldNamesSQL,
 		field.relativeFieldTypesSQL,
@@ -7513,6 +7607,7 @@ func compileProjection(operator *plan.Project, state compileState, relationAlias
 			numberType:                   compiled.numberType,
 			numericSort:                  compiled.numericSort,
 			canonicalTime:                compiled.canonicalTime,
+			timeBucketEndSQL:             compiled.timeBucketEndSQL,
 			alwaysNull:                   compiled.alwaysNull,
 			materializeForPredicate:      compiled.materializeForPredicate,
 		}

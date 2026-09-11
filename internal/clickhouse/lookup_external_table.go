@@ -552,10 +552,35 @@ func materializeCompiledLookupExternalTables(
 	if len(tables) == 0 {
 		return nil, nil
 	}
-	if err := validateCompiledLookupExternalTablesContext(ctx, tables); err != nil {
+	nativeBytes, ok, err := lookupExternalTablesNativeMaterializationBytes(ctx, tables)
+	if err != nil {
 		return nil, err
 	}
+	if !ok {
+		return nil, errors.New("materialize ClickHouse lookup tables: native transport is invalid")
+	}
+	if maximum, limited := externalTableNativeMaximumBytes(ctx, false); limited &&
+		nativeBytes > maximum {
+		return nil, fmt.Errorf(
+			"%w: materialize ClickHouse lookup tables exceeds byte limit",
+			ErrTimechartResourceLimit,
+		)
+	}
 	result := make([]*ext.Table, len(tables))
+	if err := materializeValidatedCompiledLookupExternalTables(ctx, tables, result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func materializeValidatedCompiledLookupExternalTables(
+	ctx context.Context,
+	tables []compiledLookupExternalTable,
+	result []*ext.Table,
+) error {
+	if len(result) != len(tables) {
+		return errors.New("materialize ClickHouse lookup tables: result capacity is invalid")
+	}
 	for tableIndex, compiled := range tables {
 		definitions := make([]func(*ext.Table) error, 0, len(compiled.columns)+1)
 		definitions = append(definitions, ext.Column(compiled.matchedColumn, "UInt8"))
@@ -564,26 +589,26 @@ func materializeCompiledLookupExternalTables(
 		}
 		table, err := ext.NewTable(compiled.name, definitions...)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		row := make([]any, len(compiled.columns)+1)
 		row[0] = uint8(1)
 		for rowIndex := 0; rowIndex < compiled.backing.rowCount; rowIndex++ {
 			if rowIndex%lookupContextCheckRows == 0 {
 				if err := ctx.Err(); err != nil {
-					return nil, err
+					return err
 				}
 			}
 			for columnIndex := range compiled.columns {
 				row[columnIndex+1] = compiled.backing.values[columnIndex][rowIndex]
 			}
 			if err := table.Append(row...); err != nil {
-				return nil, err
+				return err
 			}
 		}
 		result[tableIndex] = table
 	}
-	return result, nil
+	return nil
 }
 
 // ExternalTablesForExecution materializes fresh native blocks for the exact
@@ -596,7 +621,7 @@ func (compiled CompiledQuery) ExternalTablesForExecution(
 	if ctx == nil {
 		return nil, errors.New("materialize ClickHouse lookup tables: context is nil")
 	}
-	if len(compiled.lookupTables) == 0 {
+	if len(compiled.lookupTables) == 0 && compiled.relationInput == nil {
 		return nil, ctx.Err()
 	}
 	valid, err := compiled.hasValidExecutionSealContext(ctx)
@@ -608,7 +633,56 @@ func (compiled CompiledQuery) ExternalTablesForExecution(
 			"materialize ClickHouse lookup tables: execution authority is invalid",
 		)
 	}
-	return materializeCompiledLookupExternalTables(ctx, compiled.lookupTables)
+	return materializeCompiledExternalTables(
+		ctx,
+		compiled.lookupTables,
+		compiled.relationInput,
+	)
+}
+
+func materializeCompiledExternalTables(
+	ctx context.Context,
+	lookupTables []compiledLookupExternalTable,
+	relationInput *compiledRelationInput,
+) ([]*ext.Table, error) {
+	nativeBytes, ok, err := externalTablesNativeMaterializationBytes(
+		ctx,
+		lookupTables,
+		relationInput,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, errors.New("materialize ClickHouse external tables: native transport is invalid")
+	}
+	if maximum, limited := externalTableNativeMaximumBytes(ctx, relationInput != nil); limited &&
+		nativeBytes > maximum {
+		return nil, fmt.Errorf(
+			"%w: materialize ClickHouse external tables exceeds byte limit",
+			ErrTimechartResourceLimit,
+		)
+	}
+	count := len(lookupTables)
+	if relationInput != nil {
+		count++
+	}
+	tables := make([]*ext.Table, count)
+	if err := materializeValidatedCompiledLookupExternalTables(
+		ctx,
+		lookupTables,
+		tables[:len(lookupTables)],
+	); err != nil {
+		return nil, err
+	}
+	if relationInput != nil {
+		table, err := materializeValidatedRelationInput(ctx, relationInput)
+		if err != nil {
+			return nil, err
+		}
+		tables[len(tables)-1] = table
+	}
+	return tables, nil
 }
 
 func materializeDerivedLookupExternalTables(

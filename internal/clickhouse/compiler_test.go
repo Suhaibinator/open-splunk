@@ -1286,8 +1286,13 @@ func TestCompileTimeBinRejectsForgedPlans(t *testing.T) {
 	bucketed.Operators = append(bucketed.Operators, timechart.Operators[len(timechart.Operators)-1])
 	bucketed.DynamicOutput = timechart.DynamicOutput
 	bucketed.OutputFields = nil
-	if _, err := (Compiler{}).Compile(bucketed); err == nil {
-		t.Fatal("Compile() accepted timechart after binned canonical time")
+	compiled, err := (Compiler{}).Compile(bucketed)
+	if err != nil {
+		t.Fatalf("Compile(timechart after typed time bin): %v", err)
+	}
+	if compiled.Timechart == nil || compiled.Timechart.Mode != TimechartModeRuntimeWide ||
+		strings.Count(compiled.SQL, `FROM "open_splunk"."events"`) != 1 {
+		t.Fatalf("typed-time timechart contract = %#v SQL %q", compiled.Timechart, compiled.SQL)
 	}
 }
 
@@ -1301,6 +1306,9 @@ func TestCompileTimechartUsesOneScopedScanAndPrivateWideTransport(t *testing.T) 
 	if compiled.Timechart == nil {
 		t.Fatal("compiled timechart metadata is missing")
 	}
+	if !compiled.RequiresAtomicResult() {
+		t.Fatal("terminal timechart did not require complete-result publication")
+	}
 	if compiled.Timechart.FirstBucket != time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC) ||
 		compiled.Timechart.Span != 5*time.Minute || compiled.Timechart.BucketCount != 288 ||
 		compiled.Timechart.MaxSeries != 12 || compiled.Timechart.MaxLabelBytes != 256 ||
@@ -1308,7 +1316,7 @@ func TestCompileTimechartUsesOneScopedScanAndPrivateWideTransport(t *testing.T) 
 		t.Fatalf("compiled timechart metadata = %#v", compiled.Timechart)
 	}
 	for _, required := range []string{
-		`"__os_timechart_source" AS (`,
+		`"__os_timechart_source" AS MATERIALIZED (`,
 		`"__os_timechart_prepared" AS (SELECT *, toUInt8(if("__os_tc_present" != 0, 0, arrayExists(`,
 		`"__os_timechart_classified" AS (`,
 		`"__os_timechart_canonicalized" AS (`,
@@ -1319,13 +1327,15 @@ func TestCompileTimechartUsesOneScopedScanAndPrivateWideTransport(t *testing.T) 
 		`"__os_timechart_ranked" AS (`,
 		`dense_rank() OVER (PARTITION BY "__os_tc_kind" ORDER BY "__os_tc_series_score" DESC, "__os_tc_label" ASC) AS "__os_tc_series_rank"`,
 		`"__os_timechart_collapsed" AS MATERIALIZED (`,
+		`"__os_timechart_resource_usage" AS (`,
+		`"__os_timechart_domain" AS MATERIALIZED (`,
 		`"__os_tc_series_rank" <= 10`,
 		`sumIf("__os_tc_count", "__os_tc_kind" = 3)`,
 		`maxIf("__os_tc_collision_cardinality", "__os_tc_kind" = 0) > 1`,
-		`arrayPushBack(groupArrayIf("__os_tc_encoded", "__os_tc_encoded" != ''), CAST('' AS String))`,
-		`toUInt8(ifNull("__os_timechart_bucket_maps"."__os_tc_count_map"[''], toUInt64(0)) != 0)`,
+		`mapFromArrays(groupArrayIf("__os_tc_encoded", "__os_tc_encoded" != ''), groupArrayIf("__os_tc_collapsed_count", "__os_tc_encoded" != ''))`,
+		`toUInt8(maxOrDefault("__os_tc_invalid" != 0 OR "__os_tc_collision" != 0)) AS "__os_tc_invalid" FROM "__os_timechart_collapsed"`,
 		`concat('VALUE', "__os_tc_label")`,
-		`"__os_tc_sort_label"`,
+		`groupArrayIf((multiIf(`,
 		`arrayMap(item -> item.3`,
 		`mapFromArrays(`,
 		`FROM numbers(?)`,
@@ -1356,14 +1366,10 @@ func TestCompileTimechartUsesOneScopedScanAndPrivateWideTransport(t *testing.T) 
 		`"__os_timechart_checks"`,
 		`"__os_timechart_top"`,
 		`"__os_timechart_normalization_collisions"`,
-		`"__os_timechart_validation"`,
 	} {
 		if strings.Contains(compiled.SQL, removed) {
 			t.Fatalf("timechart SQL retains removed graph node %q:\n%s", removed, compiled.SQL)
 		}
-	}
-	if got := strings.Count(compiled.SQL, ` AS MATERIALIZED (`); got != 1 {
-		t.Fatalf("timechart materialized CTE count = %d, want collapsed only:\n%s", got, compiled.SQL)
 	}
 	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
 		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
@@ -1681,10 +1687,9 @@ func TestCompileTimechartRevalidatesExactGridAndOutputContract(t *testing.T) {
 			},
 		},
 		{
-			name: "series limit raised past the maximum",
-			corrupt: func(query *plan.Query, operator *plan.Timechart) {
+			name: "series limit raised without widening output",
+			corrupt: func(_ *plan.Query, operator *plan.Timechart) {
 				operator.Split.SeriesLimit = 11
-				query.DynamicOutput.MaxSeries = 13
 			},
 		},
 		{
@@ -1724,16 +1729,13 @@ func TestCompileTimechartSeriesOptionsNarrowTheCollapsedSeries(t *testing.T) {
 	t.Parallel()
 
 	const (
-		nullBranch    = `"__os_tc_kind" = 1, '1:'`
-		countOther    = `"__os_tc_kind" = 0, '2:'`
-		valueOther    = ", '2:') AS"
-		nullSentinel  = "CAST('1:' AS String) FROM"
-		otherSentinel = "CAST('2:' AS String) FROM"
+		nullBranch = `"__os_tc_kind" = 1, '1:'`
+		countOther = `"__os_tc_kind" = 0, '2:'`
 	)
 	tests := []struct {
 		name      string
 		source    string
-		maxSeries uint16
+		maxSeries uint64
 		contains  []string
 		excludes  []string
 	}{
@@ -1758,24 +1760,64 @@ func TestCompileTimechartSeriesOptionsNarrowTheCollapsedSeries(t *testing.T) {
 			excludes:  []string{countOther, nullBranch},
 		},
 		{
+			name:      "count above default",
+			source:    `index=gradethis | timechart span=5m count BY level limit=20`,
+			maxSeries: 22,
+			contains:  []string{`__os_tc_series_rank" <= 20, concat('0:'`, nullBranch, countOther},
+		},
+		{
+			name:      "count unlimited",
+			source:    `index=gradethis | timechart span=5m count BY level limit=0`,
+			maxSeries: 0,
+			contains:  []string{`"__os_tc_kind" = 0, concat('0:'`, nullBranch},
+			excludes:  []string{`__os_tc_series_rank" <=`, countOther},
+		},
+		{
+			name:      "count maximum uint64",
+			source:    `index=gradethis | timechart span=5m count BY level limit=18446744073709551615`,
+			maxSeries: math.MaxUint64,
+			contains:  []string{`__os_tc_series_rank" <= 18446744073709551615`, nullBranch, countOther},
+		},
+		{
 			name:      "value defaults",
 			source:    `index=gradethis | timechart span=5m sum(bytes) BY level`,
 			maxSeries: 12,
-			contains:  []string{`ASC LIMIT 10), `, `__os_tc_kind" IN (0, 1) GROUP BY`, nullSentinel, otherSentinel, valueOther},
+			contains:  []string{`__os_tc_series_rank" <= 10, concat('0:'`, nullBranch, countOther},
 		},
 		{
 			name:      "value limit without null",
 			source:    `index=gradethis | timechart span=5m avg(bytes) BY level limit=2 usenull=false`,
 			maxSeries: 3,
-			contains:  []string{`ASC LIMIT 2), `, `__os_tc_kind" = 0 GROUP BY`, otherSentinel},
-			excludes:  []string{nullSentinel, `IN (0, 1) GROUP BY`},
+			contains:  []string{`__os_tc_series_rank" <= 2, concat('0:'`, countOther},
+			excludes:  []string{nullBranch, `IN (0, 1) GROUP BY`},
 		},
 		{
 			name:      "value ordinary series only",
 			source:    `index=gradethis | timechart span=5m useother=false p95(bytes) BY level limit=4 usenull=false`,
 			maxSeries: 4,
-			contains:  []string{`ASC LIMIT 4), `, `__os_tc_kind" = 0 AND ("__os_tc_kind" != 0 OR "__os_tc_label" IN (SELECT "__os_tc_label" FROM "__os_timechart_numeric_scores")) GROUP BY`},
-			excludes:  []string{nullSentinel, otherSentinel},
+			contains:  []string{`__os_tc_series_rank" <= 4, concat('0:'`},
+			excludes:  []string{nullBranch, countOther},
+		},
+		{
+			name:      "sum unlimited",
+			source:    `index=gradethis | timechart span=5m sum(bytes) BY level limit=0`,
+			maxSeries: 0,
+			contains:  []string{`ORDER BY multiIf(isNaN(`, nullBranch},
+			excludes:  []string{`ASC LIMIT`, countOther},
+		},
+		{
+			name:      "average unlimited",
+			source:    `index=gradethis | timechart span=5m avg(bytes) BY level limit=0`,
+			maxSeries: 0,
+			contains:  []string{`ORDER BY multiIf(isNaN(`, nullBranch},
+			excludes:  []string{`ASC LIMIT`, countOther},
+		},
+		{
+			name:      "percentile unlimited",
+			source:    `index=gradethis | timechart span=5m p95(bytes) BY level limit=0`,
+			maxSeries: 0,
+			contains:  []string{`ORDER BY multiIf(isNaN(`, nullBranch},
+			excludes:  []string{`ASC LIMIT`, countOther},
 		},
 	}
 	for _, test := range tests {
@@ -1792,6 +1834,12 @@ func TestCompileTimechartSeriesOptionsNarrowTheCollapsedSeries(t *testing.T) {
 			}
 			if compiled.Timechart == nil || compiled.Timechart.MaxSeries != test.maxSeries {
 				t.Fatalf("compiled timechart output = %#v, want max series %d", compiled.Timechart, test.maxSeries)
+			}
+			if compiled.Timechart == nil || !compiled.RequiresAtomicResult() {
+				t.Fatalf("compiled timechart atomic contract = %#v / %t", compiled.Timechart, compiled.RequiresAtomicResult())
+			}
+			if test.maxSeries == 0 && compiled.Timechart.SeriesLimit != 0 {
+				t.Fatalf("compiled unlimited timechart output = %#v", compiled.Timechart)
 			}
 			for _, fragment := range test.contains {
 				if !strings.Contains(compiled.SQL, fragment) {
@@ -5074,7 +5122,7 @@ func TestCompileWideOperatorsDeclareMaterializedCTEs(t *testing.T) {
 		if !strings.Contains(compiled.SQL, " AS MATERIALIZED (") {
 			t.Fatalf("Compile(%q) has no materialized aggregate:\n%s", source, compiled.SQL)
 		}
-		if !strings.HasSuffix(compiled.SQL, " SETTINGS enable_materialized_cte = 1") {
+		if strings.Count(compiled.SQL, " SETTINGS enable_materialized_cte = 1") != 1 {
 			t.Fatalf("Compile(%q) does not declare the materialized-CTE requirement:\n%s", source, compiled.SQL)
 		}
 	}

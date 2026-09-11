@@ -13,6 +13,7 @@ import (
 	"math"
 	"os"
 	"slices"
+	"strings"
 	"time"
 
 	"fortio.org/safecast"
@@ -729,8 +730,9 @@ func (reader *contextHashReader) Read(payload []byte) (int, error) {
 }
 
 type storedResultRow struct {
-	Ordinal uint64        `json:"ordinal"`
-	Values  []storedValue `json:"values"`
+	Ordinal    uint64                       `json:"ordinal"`
+	Values     []storedValue                `json:"values"`
+	TimeBucket *searchjobs.TimeBucketBounds `json:"time_bucket,omitempty"`
 }
 
 type storedObjectField struct {
@@ -791,7 +793,9 @@ func storedRow(row searchjobs.ResultRow) (storedResultRow, error) {
 		}
 		values[index] = encoded
 	}
-	return storedResultRow{Ordinal: row.Ordinal, Values: values}, nil
+	return storedResultRow{
+		Ordinal: row.Ordinal, Values: values, TimeBucket: cloneStoredTimeBucket(row.TimeBucket),
+	}, nil
 }
 
 func restoreRow(row storedResultRow) (searchjobs.ResultRow, error) {
@@ -803,7 +807,36 @@ func restoreRow(row storedResultRow) (searchjobs.ResultRow, error) {
 		}
 		values[index] = decoded
 	}
-	return searchjobs.ResultRow{Ordinal: row.Ordinal, Values: values}, nil
+	if row.TimeBucket != nil && !validStoredTimeBucket(*row.TimeBucket) {
+		return searchjobs.ResultRow{}, ErrCorrupt
+	}
+	return searchjobs.ResultRow{
+		Ordinal: row.Ordinal, Values: values, TimeBucket: cloneStoredTimeBucket(row.TimeBucket),
+	}, nil
+}
+
+func cloneStoredTimeBucket(source *searchjobs.TimeBucketBounds) *searchjobs.TimeBucketBounds {
+	if source == nil {
+		return nil
+	}
+	return &searchjobs.TimeBucketBounds{
+		Earliest: strings.Clone(source.Earliest),
+		Latest:   strings.Clone(source.Latest),
+	}
+}
+
+func validStoredTimeBucket(bounds searchjobs.TimeBucketBounds) bool {
+	if len(bounds.Earliest) < len("0000-00-00T00:00:00Z") ||
+		len(bounds.Earliest) > len("0000-00-00T00:00:00.000000000Z") ||
+		len(bounds.Latest) < len("0000-00-00T00:00:00Z") ||
+		len(bounds.Latest) > len("0000-00-00T00:00:00.000000000Z") {
+		return false
+	}
+	earliest, earliestErr := time.Parse(time.RFC3339Nano, bounds.Earliest)
+	latest, latestErr := time.Parse(time.RFC3339Nano, bounds.Latest)
+	return earliestErr == nil && latestErr == nil && earliest.Location() == time.UTC && latest.Location() == time.UTC &&
+		earliest.Format(time.RFC3339Nano) == bounds.Earliest && latest.Format(time.RFC3339Nano) == bounds.Latest &&
+		earliest.Before(latest)
 }
 
 func storeValue(value searchjobs.Value) (storedValue, error) {

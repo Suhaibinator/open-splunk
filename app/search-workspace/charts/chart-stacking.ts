@@ -8,13 +8,59 @@ export interface StackedChartValue {
 
 export type StackedChartRow = StackedChartValue[];
 
-function normalizedValue(
+export interface StackMagnitudeTotal {
+  maximum: number;
+  scaledTotal: number;
+}
+
+export function createStackMagnitudeTotal(): StackMagnitudeTotal {
+  return { maximum: 0, scaledTotal: 0 };
+}
+
+/** Accumulate finite same-sign magnitudes without overflowing or losing subnormals. */
+export function addStackMagnitude(total: StackMagnitudeTotal, value: number): void {
+  const magnitude = Math.abs(value);
+  if (!Number.isFinite(magnitude) || magnitude === 0) return;
+  if (total.maximum === 0) {
+    total.maximum = magnitude;
+    total.scaledTotal = 1;
+    return;
+  }
+  if (magnitude > total.maximum) {
+    total.scaledTotal = (total.scaledTotal * (total.maximum / magnitude)) + 1;
+    total.maximum = magnitude;
+    return;
+  }
+  total.scaledTotal += magnitude / total.maximum;
+}
+
+export function stackMagnitudeCoordinate(total: StackMagnitudeTotal): number {
+  if (total.maximum === 0 || total.scaledTotal === 0) return 0;
+  return total.maximum > Number.MAX_VALUE / total.scaledTotal
+    ? Number.MAX_VALUE
+    : total.maximum * total.scaledTotal;
+}
+
+export function stackMagnitudeIsApproximate(total: StackMagnitudeTotal): boolean {
+  return total.maximum !== 0 && total.maximum > Number.MAX_VALUE / total.scaledTotal;
+}
+
+/** Add a same-sign stack coordinate while keeping geometry finite. */
+export function addStackCoordinate(total: number, value: number): number {
+  const sum = total + value;
+  if (Number.isFinite(sum)) return sum;
+  return value < 0 ? -Number.MAX_VALUE : Number.MAX_VALUE;
+}
+
+export function normalizeStackValue(
   value: number,
-  positiveTotal: number,
-  negativeTotal: number,
+  positiveTotal: StackMagnitudeTotal,
+  negativeTotal: StackMagnitudeTotal,
 ): number {
-  if (value > 0) return positiveTotal === 0 ? 0 : (value / positiveTotal) * 100;
-  if (value < 0) return negativeTotal === 0 ? 0 : (value / negativeTotal) * 100;
+  const total = value > 0 ? positiveTotal : negativeTotal;
+  if (value !== 0 && total.maximum !== 0 && total.scaledTotal !== 0) {
+    return Math.sign(value) * ((Math.abs(value) / total.maximum) / total.scaledTotal) * 100;
+  }
   return 0;
 }
 
@@ -28,29 +74,27 @@ export function stackChartRows(
 ): StackedChartRow[] {
   return rows.map((row) => {
     const finite = row.map((value) => value !== null && Number.isFinite(value) ? value : null);
-    const positiveTotal = finite.reduce<number>(
-      (total, value) => total + (value !== null && value > 0 ? value : 0),
-      0,
-    );
-    const negativeTotal = finite.reduce<number>(
-      (total, value) => total + (value !== null && value < 0 ? Math.abs(value) : 0),
-      0,
-    );
+    const positiveTotal = createStackMagnitudeTotal();
+    const negativeTotal = createStackMagnitudeTotal();
+    for (const value of finite) {
+      if (value === null) continue;
+      addStackMagnitude(value < 0 ? negativeTotal : positiveTotal, value);
+    }
     let positive = 0;
     let negative = 0;
     return finite.map((raw): StackedChartValue => {
       if (raw === null) return { end: 0, raw: null, start: 0 };
       const value = mode === "stacked100"
-        ? normalizedValue(raw, positiveTotal, negativeTotal)
+        ? normalizeStackValue(raw, positiveTotal, negativeTotal)
         : raw;
       if (mode === "none") return { end: value, raw, start: 0 };
       if (value >= 0) {
         const start = positive;
-        positive += value;
+        positive = addStackCoordinate(positive, value);
         return { end: positive, raw, start };
       }
       const start = negative;
-      negative += value;
+      negative = addStackCoordinate(negative, value);
       return { end: negative, raw, start };
     });
   });

@@ -460,6 +460,59 @@ func (x *ResultSchema) GetColumns() []*ResultColumn {
 	return nil
 }
 
+// TimeBucketBounds is exact UTC RFC3339Nano metadata for one timechart row.
+type TimeBucketBounds struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Earliest      string                 `protobuf:"bytes,1,opt,name=earliest,proto3" json:"earliest,omitempty"`
+	Latest        string                 `protobuf:"bytes,2,opt,name=latest,proto3" json:"latest,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TimeBucketBounds) Reset() {
+	*x = TimeBucketBounds{}
+	mi := &file_open_splunk_result_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TimeBucketBounds) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TimeBucketBounds) ProtoMessage() {}
+
+func (x *TimeBucketBounds) ProtoReflect() protoreflect.Message {
+	mi := &file_open_splunk_result_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TimeBucketBounds.ProtoReflect.Descriptor instead.
+func (*TimeBucketBounds) Descriptor() ([]byte, []int) {
+	return file_open_splunk_result_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *TimeBucketBounds) GetEarliest() string {
+	if x != nil {
+		return x.Earliest
+	}
+	return ""
+}
+
+func (x *TimeBucketBounds) GetLatest() string {
+	if x != nil {
+		return x.Latest
+	}
+	return ""
+}
+
 // ResultRow cells correspond positionally to ResultSchema.columns. row_id is an
 // opaque stable identifier within one search snapshot.
 type ResultRow struct {
@@ -467,13 +520,14 @@ type ResultRow struct {
 	RowId         string                 `protobuf:"bytes,1,opt,name=row_id,json=rowId,proto3" json:"row_id,omitempty"`
 	Ordinal       uint64                 `protobuf:"varint,2,opt,name=ordinal,proto3" json:"ordinal,omitempty"`
 	Cells         []*TypedValue          `protobuf:"bytes,3,rep,name=cells,proto3" json:"cells,omitempty"`
+	TimeBucket    *TimeBucketBounds      `protobuf:"bytes,4,opt,name=time_bucket,json=timeBucket,proto3" json:"time_bucket,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ResultRow) Reset() {
 	*x = ResultRow{}
-	mi := &file_open_splunk_result_proto_msgTypes[2]
+	mi := &file_open_splunk_result_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -485,7 +539,7 @@ func (x *ResultRow) String() string {
 func (*ResultRow) ProtoMessage() {}
 
 func (x *ResultRow) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_result_proto_msgTypes[2]
+	mi := &file_open_splunk_result_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -498,7 +552,7 @@ func (x *ResultRow) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResultRow.ProtoReflect.Descriptor instead.
 func (*ResultRow) Descriptor() ([]byte, []int) {
-	return file_open_splunk_result_proto_rawDescGZIP(), []int{2}
+	return file_open_splunk_result_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *ResultRow) GetRowId() string {
@@ -522,6 +576,13 @@ func (x *ResultRow) GetCells() []*TypedValue {
 	return nil
 }
 
+func (x *ResultRow) GetTimeBucket() *TimeBucketBounds {
+	if x != nil {
+		return x.TimeBucket
+	}
+	return nil
+}
+
 type ResultPage struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	Schema           *ResultSchema          `protobuf:"bytes,1,opt,name=schema,proto3" json:"schema,omitempty"`
@@ -534,7 +595,7 @@ type ResultPage struct {
 
 func (x *ResultPage) Reset() {
 	*x = ResultPage{}
-	mi := &file_open_splunk_result_proto_msgTypes[3]
+	mi := &file_open_splunk_result_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -546,7 +607,7 @@ func (x *ResultPage) String() string {
 func (*ResultPage) ProtoMessage() {}
 
 func (x *ResultPage) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_result_proto_msgTypes[3]
+	mi := &file_open_splunk_result_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -559,7 +620,7 @@ func (x *ResultPage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResultPage.ProtoReflect.Descriptor instead.
 func (*ResultPage) Descriptor() ([]byte, []int) {
-	return file_open_splunk_result_proto_rawDescGZIP(), []int{3}
+	return file_open_splunk_result_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ResultPage) GetSchema() *ResultSchema {
@@ -601,7 +662,7 @@ type FieldValueCount struct {
 
 func (x *FieldValueCount) Reset() {
 	*x = FieldValueCount{}
-	mi := &file_open_splunk_result_proto_msgTypes[4]
+	mi := &file_open_splunk_result_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -613,7 +674,7 @@ func (x *FieldValueCount) String() string {
 func (*FieldValueCount) ProtoMessage() {}
 
 func (x *FieldValueCount) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_result_proto_msgTypes[4]
+	mi := &file_open_splunk_result_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -626,7 +687,7 @@ func (x *FieldValueCount) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FieldValueCount.ProtoReflect.Descriptor instead.
 func (*FieldValueCount) Descriptor() ([]byte, []int) {
-	return file_open_splunk_result_proto_rawDescGZIP(), []int{4}
+	return file_open_splunk_result_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *FieldValueCount) GetValue() *TypedValue {
@@ -669,7 +730,7 @@ type FieldProfile struct {
 
 func (x *FieldProfile) Reset() {
 	*x = FieldProfile{}
-	mi := &file_open_splunk_result_proto_msgTypes[5]
+	mi := &file_open_splunk_result_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -681,7 +742,7 @@ func (x *FieldProfile) String() string {
 func (*FieldProfile) ProtoMessage() {}
 
 func (x *FieldProfile) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_result_proto_msgTypes[5]
+	mi := &file_open_splunk_result_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -694,7 +755,7 @@ func (x *FieldProfile) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FieldProfile.ProtoReflect.Descriptor instead.
 func (*FieldProfile) Descriptor() ([]byte, []int) {
-	return file_open_splunk_result_proto_rawDescGZIP(), []int{5}
+	return file_open_splunk_result_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *FieldProfile) GetFieldName() string {
@@ -785,7 +846,7 @@ type FieldSummary struct {
 
 func (x *FieldSummary) Reset() {
 	*x = FieldSummary{}
-	mi := &file_open_splunk_result_proto_msgTypes[6]
+	mi := &file_open_splunk_result_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -797,7 +858,7 @@ func (x *FieldSummary) String() string {
 func (*FieldSummary) ProtoMessage() {}
 
 func (x *FieldSummary) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_result_proto_msgTypes[6]
+	mi := &file_open_splunk_result_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -810,7 +871,7 @@ func (x *FieldSummary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FieldSummary.ProtoReflect.Descriptor instead.
 func (*FieldSummary) Descriptor() ([]byte, []int) {
-	return file_open_splunk_result_proto_rawDescGZIP(), []int{6}
+	return file_open_splunk_result_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *FieldSummary) GetProfile() *FieldProfile {
@@ -846,7 +907,7 @@ type TimelineBucket struct {
 
 func (x *TimelineBucket) Reset() {
 	*x = TimelineBucket{}
-	mi := &file_open_splunk_result_proto_msgTypes[7]
+	mi := &file_open_splunk_result_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -858,7 +919,7 @@ func (x *TimelineBucket) String() string {
 func (*TimelineBucket) ProtoMessage() {}
 
 func (x *TimelineBucket) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_result_proto_msgTypes[7]
+	mi := &file_open_splunk_result_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -871,7 +932,7 @@ func (x *TimelineBucket) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TimelineBucket.ProtoReflect.Descriptor instead.
 func (*TimelineBucket) Descriptor() ([]byte, []int) {
-	return file_open_splunk_result_proto_rawDescGZIP(), []int{7}
+	return file_open_splunk_result_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *TimelineBucket) GetEarliest() *timestamppb.Timestamp {
@@ -919,7 +980,7 @@ type VisualizationSpec struct {
 
 func (x *VisualizationSpec) Reset() {
 	*x = VisualizationSpec{}
-	mi := &file_open_splunk_result_proto_msgTypes[8]
+	mi := &file_open_splunk_result_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -931,7 +992,7 @@ func (x *VisualizationSpec) String() string {
 func (*VisualizationSpec) ProtoMessage() {}
 
 func (x *VisualizationSpec) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_result_proto_msgTypes[8]
+	mi := &file_open_splunk_result_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -944,7 +1005,7 @@ func (x *VisualizationSpec) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VisualizationSpec.ProtoReflect.Descriptor instead.
 func (*VisualizationSpec) Descriptor() ([]byte, []int) {
-	return file_open_splunk_result_proto_rawDescGZIP(), []int{8}
+	return file_open_splunk_result_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *VisualizationSpec) GetType() VisualizationType {
@@ -1035,11 +1096,16 @@ const file_open_splunk_result_proto_rawDesc = "" +
 	"\brevision\x18\x02 \x01(\x04R\brevision\x12;\n" +
 	"\vresult_kind\x18\x03 \x01(\x0e2\x1a.open_splunk.ResultSetKindR\n" +
 	"resultKind\x123\n" +
-	"\acolumns\x18\x04 \x03(\v2\x19.open_splunk.ResultColumnR\acolumns\"k\n" +
+	"\acolumns\x18\x04 \x03(\v2\x19.open_splunk.ResultColumnR\acolumns\"F\n" +
+	"\x10TimeBucketBounds\x12\x1a\n" +
+	"\bearliest\x18\x01 \x01(\tR\bearliest\x12\x16\n" +
+	"\x06latest\x18\x02 \x01(\tR\x06latest\"\xab\x01\n" +
 	"\tResultRow\x12\x15\n" +
 	"\x06row_id\x18\x01 \x01(\tR\x05rowId\x12\x18\n" +
 	"\aordinal\x18\x02 \x01(\x04R\aordinal\x12-\n" +
-	"\x05cells\x18\x03 \x03(\v2\x17.open_splunk.TypedValueR\x05cells\"\xc7\x01\n" +
+	"\x05cells\x18\x03 \x03(\v2\x17.open_splunk.TypedValueR\x05cells\x12>\n" +
+	"\vtime_bucket\x18\x04 \x01(\v2\x1d.open_splunk.TimeBucketBoundsR\n" +
+	"timeBucket\"\xc7\x01\n" +
 	"\n" +
 	"ResultPage\x121\n" +
 	"\x06schema\x18\x01 \x01(\v2\x19.open_splunk.ResultSchemaR\x06schema\x12*\n" +
@@ -1146,7 +1212,7 @@ func file_open_splunk_result_proto_rawDescGZIP() []byte {
 }
 
 var file_open_splunk_result_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_open_splunk_result_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_open_splunk_result_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_open_splunk_result_proto_goTypes = []any{
 	(ResultSetKind)(0),            // 0: open_splunk.ResultSetKind
 	(ColumnSemanticType)(0),       // 1: open_splunk.ColumnSemanticType
@@ -1154,43 +1220,45 @@ var file_open_splunk_result_proto_goTypes = []any{
 	(VisualizationStackMode)(0),   // 3: open_splunk.VisualizationStackMode
 	(*ResultColumn)(nil),          // 4: open_splunk.ResultColumn
 	(*ResultSchema)(nil),          // 5: open_splunk.ResultSchema
-	(*ResultRow)(nil),             // 6: open_splunk.ResultRow
-	(*ResultPage)(nil),            // 7: open_splunk.ResultPage
-	(*FieldValueCount)(nil),       // 8: open_splunk.FieldValueCount
-	(*FieldProfile)(nil),          // 9: open_splunk.FieldProfile
-	(*FieldSummary)(nil),          // 10: open_splunk.FieldSummary
-	(*TimelineBucket)(nil),        // 11: open_splunk.TimelineBucket
-	(*VisualizationSpec)(nil),     // 12: open_splunk.VisualizationSpec
-	(ValueType)(0),                // 13: open_splunk.ValueType
-	(*TypedValue)(nil),            // 14: open_splunk.TypedValue
-	(*PageResponse)(nil),          // 15: open_splunk.PageResponse
-	(*timestamppb.Timestamp)(nil), // 16: google.protobuf.Timestamp
-	(*durationpb.Duration)(nil),   // 17: google.protobuf.Duration
+	(*TimeBucketBounds)(nil),      // 6: open_splunk.TimeBucketBounds
+	(*ResultRow)(nil),             // 7: open_splunk.ResultRow
+	(*ResultPage)(nil),            // 8: open_splunk.ResultPage
+	(*FieldValueCount)(nil),       // 9: open_splunk.FieldValueCount
+	(*FieldProfile)(nil),          // 10: open_splunk.FieldProfile
+	(*FieldSummary)(nil),          // 11: open_splunk.FieldSummary
+	(*TimelineBucket)(nil),        // 12: open_splunk.TimelineBucket
+	(*VisualizationSpec)(nil),     // 13: open_splunk.VisualizationSpec
+	(ValueType)(0),                // 14: open_splunk.ValueType
+	(*TypedValue)(nil),            // 15: open_splunk.TypedValue
+	(*PageResponse)(nil),          // 16: open_splunk.PageResponse
+	(*timestamppb.Timestamp)(nil), // 17: google.protobuf.Timestamp
+	(*durationpb.Duration)(nil),   // 18: google.protobuf.Duration
 }
 var file_open_splunk_result_proto_depIdxs = []int32{
-	13, // 0: open_splunk.ResultColumn.value_type:type_name -> open_splunk.ValueType
+	14, // 0: open_splunk.ResultColumn.value_type:type_name -> open_splunk.ValueType
 	1,  // 1: open_splunk.ResultColumn.semantic_type:type_name -> open_splunk.ColumnSemanticType
 	0,  // 2: open_splunk.ResultSchema.result_kind:type_name -> open_splunk.ResultSetKind
 	4,  // 3: open_splunk.ResultSchema.columns:type_name -> open_splunk.ResultColumn
-	14, // 4: open_splunk.ResultRow.cells:type_name -> open_splunk.TypedValue
-	5,  // 5: open_splunk.ResultPage.schema:type_name -> open_splunk.ResultSchema
-	6,  // 6: open_splunk.ResultPage.rows:type_name -> open_splunk.ResultRow
-	15, // 7: open_splunk.ResultPage.page:type_name -> open_splunk.PageResponse
-	14, // 8: open_splunk.FieldValueCount.value:type_name -> open_splunk.TypedValue
-	13, // 9: open_splunk.FieldProfile.value_type:type_name -> open_splunk.ValueType
-	13, // 10: open_splunk.FieldProfile.observed_value_types:type_name -> open_splunk.ValueType
-	9,  // 11: open_splunk.FieldSummary.profile:type_name -> open_splunk.FieldProfile
-	8,  // 12: open_splunk.FieldSummary.top_values:type_name -> open_splunk.FieldValueCount
-	16, // 13: open_splunk.TimelineBucket.earliest:type_name -> google.protobuf.Timestamp
-	16, // 14: open_splunk.TimelineBucket.latest:type_name -> google.protobuf.Timestamp
-	2,  // 15: open_splunk.VisualizationSpec.type:type_name -> open_splunk.VisualizationType
-	3,  // 16: open_splunk.VisualizationSpec.stack_mode:type_name -> open_splunk.VisualizationStackMode
-	17, // 17: open_splunk.VisualizationSpec.time_bucket_width:type_name -> google.protobuf.Duration
-	18, // [18:18] is the sub-list for method output_type
-	18, // [18:18] is the sub-list for method input_type
-	18, // [18:18] is the sub-list for extension type_name
-	18, // [18:18] is the sub-list for extension extendee
-	0,  // [0:18] is the sub-list for field type_name
+	15, // 4: open_splunk.ResultRow.cells:type_name -> open_splunk.TypedValue
+	6,  // 5: open_splunk.ResultRow.time_bucket:type_name -> open_splunk.TimeBucketBounds
+	5,  // 6: open_splunk.ResultPage.schema:type_name -> open_splunk.ResultSchema
+	7,  // 7: open_splunk.ResultPage.rows:type_name -> open_splunk.ResultRow
+	16, // 8: open_splunk.ResultPage.page:type_name -> open_splunk.PageResponse
+	15, // 9: open_splunk.FieldValueCount.value:type_name -> open_splunk.TypedValue
+	14, // 10: open_splunk.FieldProfile.value_type:type_name -> open_splunk.ValueType
+	14, // 11: open_splunk.FieldProfile.observed_value_types:type_name -> open_splunk.ValueType
+	10, // 12: open_splunk.FieldSummary.profile:type_name -> open_splunk.FieldProfile
+	9,  // 13: open_splunk.FieldSummary.top_values:type_name -> open_splunk.FieldValueCount
+	17, // 14: open_splunk.TimelineBucket.earliest:type_name -> google.protobuf.Timestamp
+	17, // 15: open_splunk.TimelineBucket.latest:type_name -> google.protobuf.Timestamp
+	2,  // 16: open_splunk.VisualizationSpec.type:type_name -> open_splunk.VisualizationType
+	3,  // 17: open_splunk.VisualizationSpec.stack_mode:type_name -> open_splunk.VisualizationStackMode
+	18, // 18: open_splunk.VisualizationSpec.time_bucket_width:type_name -> google.protobuf.Duration
+	19, // [19:19] is the sub-list for method output_type
+	19, // [19:19] is the sub-list for method input_type
+	19, // [19:19] is the sub-list for extension type_name
+	19, // [19:19] is the sub-list for extension extendee
+	0,  // [0:19] is the sub-list for field type_name
 }
 
 func init() { file_open_splunk_result_proto_init() }
@@ -1201,15 +1269,15 @@ func file_open_splunk_result_proto_init() {
 	file_open_splunk_common_proto_init()
 	file_open_splunk_value_proto_init()
 	file_open_splunk_result_proto_msgTypes[0].OneofWrappers = []any{}
-	file_open_splunk_result_proto_msgTypes[5].OneofWrappers = []any{}
-	file_open_splunk_result_proto_msgTypes[8].OneofWrappers = []any{}
+	file_open_splunk_result_proto_msgTypes[6].OneofWrappers = []any{}
+	file_open_splunk_result_proto_msgTypes[9].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_open_splunk_result_proto_rawDesc), len(file_open_splunk_result_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   9,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

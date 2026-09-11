@@ -154,6 +154,19 @@ type ResultSink interface {
 	AddRow([]Value) error
 }
 
+// TimeBucketResultSink is the optional result capability used by timechart
+// producers to attach an exact bucket interval without exposing it as an SPL
+// result column. Executors must continue to support sinks that implement only
+// ResultSink.
+type TimeBucketResultSink interface {
+	AddRowWithTimeBucket([]Value, TimeBucketBounds) error
+}
+
+// CompiledResultSink accepts an authenticated final descriptor before schema publication.
+type CompiledResultSink interface {
+	SetCompiledQuery(clickhouse.CompiledQuery) error
+}
+
 // ExecutionProgressDelta is one non-cumulative storage progress packet.
 // ScannedRows and ScannedBytes are exact values reported by the executor; the
 // manager never derives either counter from retained result rows.
@@ -2026,6 +2039,7 @@ func (manager *Manager) executeCompiled(
 	sink := &resultSink{
 		manager:        manager,
 		entry:          entry,
+		sourceCompiled: &retained,
 		expectedFields: cloneStrings(retained.OutputFields),
 		timechart:      timechart,
 		chart:          chart,
@@ -2612,6 +2626,8 @@ type resultSink struct {
 	manager           *Manager
 	entry             *jobEntry
 	ctx               context.Context
+	sourceCompiled    *clickhouse.CompiledQuery
+	resolvedCompiled  bool
 	expectedFields    []string
 	timechart         *clickhouse.TimechartOutput
 	chart             *clickhouse.ChartOutput
@@ -2625,6 +2641,36 @@ type resultSink struct {
 	firstErr          error
 	truncationErr     *retainedRowLimitError
 	limits            searchlimits.Policy
+}
+
+// SetCompiledQuery accepts the final descriptor of a compiler-authenticated
+// continuation before its public schema arrives. Keep only the small output
+// contract here; native intermediate rows belong to the executing query.
+func (sink *resultSink) SetCompiledQuery(compiled clickhouse.CompiledQuery) error {
+	sink.entry.mu.Lock()
+	defer sink.entry.mu.Unlock()
+	if err := sink.readyLocked(); err != nil {
+		return err
+	}
+	if sink.receivedSchema || sink.resolvedCompiled || sink.sourceCompiled == nil ||
+		!compiled.IsContinuationOf(*sink.sourceCompiled) {
+		return sink.rememberLocked(fmt.Errorf("%w: invalid continuation result authority", ErrInvalidResult))
+	}
+	sink.expectedFields = cloneStrings(compiled.OutputFields)
+	sink.timechart = nil
+	if compiled.Timechart != nil {
+		cloned := *compiled.Timechart
+		cloned.Boundaries = slices.Clone(compiled.Timechart.Boundaries)
+		sink.timechart = &cloned
+	}
+	sink.chart = nil
+	if compiled.Chart != nil {
+		cloned := *compiled.Chart
+		sink.chart = &cloned
+	}
+	sink.atomicResult = sink.atomicResult || compiled.RequiresAtomicResult()
+	sink.resolvedCompiled = true
+	return nil
 }
 
 // retainedRowLimitError is allocated once for the first overflow row of one
@@ -2791,6 +2837,16 @@ func (sink *resultSink) planRowGrowthLocked(
 }
 
 func (sink *resultSink) AddRow(values []Value) error {
+	return sink.addRow(values, nil)
+}
+
+// AddRowWithTimeBucket validates and retains exact timechart bucket metadata
+// separately from the positional result cells.
+func (sink *resultSink) AddRowWithTimeBucket(values []Value, bounds TimeBucketBounds) error {
+	return sink.addRow(values, &bounds)
+}
+
+func (sink *resultSink) addRow(values []Value, bounds *TimeBucketBounds) error {
 	entry := sink.entry
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
@@ -2802,7 +2858,7 @@ func (sink *resultSink) AddRow(values []Value) error {
 		return sink.rememberLocked(fmt.Errorf("%w: row was emitted before schema", ErrInvalidResult))
 	}
 	if sink.atomicResult {
-		return sink.stageAtomicRowLocked(values)
+		return sink.stageAtomicRowLocked(values, bounds)
 	}
 	if len(values) != len(entry.job.Schema.Columns) {
 		return sink.rememberLocked(fmt.Errorf("%w: row has %d cells for %d columns", ErrInvalidResult, len(values), len(entry.job.Schema.Columns)))
@@ -2813,6 +2869,12 @@ func (sink *resultSink) AddRow(values []Value) error {
 	payloadBytes, retainedBytes, measureErr := sink.measureRowCellsLocked(entry.job.Schema.Columns, values)
 	if measureErr != nil {
 		return sink.rememberLocked(measureErr)
+	}
+	payloadBytes, retainedBytes, boundsErr := measureTimeBucketBounds(
+		entry.job.Schema.Columns, values, bounds, payloadBytes, retainedBytes,
+	)
+	if boundsErr != nil {
+		return sink.rememberLocked(boundsErr)
 	}
 	// Validate an overflow row before recording truncation. A malformed row is
 	// not evidence that another valid result existed and must remain a failed
@@ -2842,7 +2904,9 @@ func (sink *resultSink) AddRow(values []Value) error {
 	cloned := cloneValues(values)
 
 	ordinal := safecast.MustConv[uint64](len(entry.rows))
-	entry.rows = append(entry.rows, ResultRow{Ordinal: ordinal, Values: cloned, retainedBytes: rowPageBytes})
+	entry.rows = append(entry.rows, ResultRow{
+		Ordinal: ordinal, Values: cloned, TimeBucket: cloneTimeBucketBounds(bounds), retainedBytes: rowPageBytes,
+	})
 	entry.job.RowCount++
 	entry.job.ResultBytes = nextBytes
 	incrementJobVersion(&entry.job)
@@ -2876,7 +2940,7 @@ func (sink *resultSink) stageAtomicSchemaLocked(schema Schema) error {
 // public limits as AddRow, but retains it only in the private sink transaction.
 // Atomic queries treat the configured row ceiling as a hard failure, never as
 // successful truncation.
-func (sink *resultSink) stageAtomicRowLocked(values []Value) error {
+func (sink *resultSink) stageAtomicRowLocked(values []Value, bounds *TimeBucketBounds) error {
 	schema := sink.atomicSchema
 	if schema == nil || len(values) != len(schema.Columns) {
 		columns := 0
@@ -2893,6 +2957,12 @@ func (sink *resultSink) stageAtomicRowLocked(values []Value) error {
 	payloadBytes, retainedBytes, measureErr := sink.measureRowCellsLocked(schema.Columns, values)
 	if measureErr != nil {
 		return sink.rememberLocked(measureErr)
+	}
+	payloadBytes, retainedBytes, boundsErr := measureTimeBucketBounds(
+		schema.Columns, values, bounds, payloadBytes, retainedBytes,
+	)
+	if boundsErr != nil {
+		return sink.rememberLocked(boundsErr)
 	}
 	if uint64(len(sink.atomicRows)) >= sink.effectiveLimits().MaxResultRows {
 		return sink.rememberLocked(ErrRowLimit)
@@ -2917,7 +2987,7 @@ func (sink *resultSink) stageAtomicRowLocked(values []Value) error {
 	}
 	ordinal := uint64(len(sink.atomicRows))
 	sink.atomicRows = append(sink.atomicRows, ResultRow{
-		Ordinal: ordinal, Values: cloneValues(values), retainedBytes: rowPageBytes,
+		Ordinal: ordinal, Values: cloneValues(values), TimeBucket: cloneTimeBucketBounds(bounds), retainedBytes: rowPageBytes,
 	})
 	sink.atomicResultBytes = nextBytes
 	return nil
@@ -3110,6 +3180,7 @@ func ValidateTimechartSchema(schema Schema, expected []string, output clickhouse
 	if output.Mode == clickhouse.TimechartModeFixedCount {
 		if output.MaxSeries != 1 ||
 			output.MaxLabelBytes != 0 ||
+			output.SeriesLimit != 0 || output.IncludeNull || output.IncludeOther ||
 			output.ValueField != "" ||
 			output.ValueKind != clickhouse.TimechartValueKindInvalid ||
 			!slices.Equal(expected, []string{"_time", "count"}) ||
@@ -3135,6 +3206,7 @@ func ValidateTimechartSchema(schema Schema, expected []string, output clickhouse
 		if resolveErr != nil || resolved.Name != output.ValueField ||
 			output.ValueField == "" || output.ValueField == "_time" ||
 			output.MaxSeries != 1 || output.MaxLabelBytes != 0 ||
+			output.SeriesLimit != 0 || output.IncludeNull || output.IncludeOther ||
 			output.ValueKind != clickhouse.TimechartValueKindInvalid ||
 			!slices.Equal(expected, []string{"_time", output.ValueField}) ||
 			len(schema.Columns) != 2 {
@@ -3157,6 +3229,7 @@ func ValidateTimechartSchema(schema Schema, expected []string, output clickhouse
 			spl.Range{},
 		)
 		if output.MaxSeries != 1 || output.MaxLabelBytes != 0 ||
+			output.SeriesLimit != 0 || output.IncludeNull || output.IncludeOther ||
 			output.ValueField == "" || output.ValueField == "_time" ||
 			valueFieldErr != nil || resolvedValueField.Name != output.ValueField ||
 			!output.ValueKind.Valid() ||
@@ -3197,7 +3270,8 @@ func ValidateTimechartSchema(schema Schema, expected []string, output clickhouse
 	}
 	if !output.RuntimeWideBoundsValid() || output.ValueField != "" ||
 		!slices.Equal(expected, []string{"_time"}) ||
-		len(schema.Columns) == 0 || len(schema.Columns)-1 > int(output.MaxSeries) {
+		len(schema.Columns) == 0 ||
+		(output.MaxSeries != 0 && safecast.MustConv[uint64](len(schema.Columns)-1) > output.MaxSeries) {
 		return fmt.Errorf("%w: timechart schema exceeds the compiled output", ErrInvalidResult)
 	}
 	seen := make(map[string]struct{}, len(schema.Columns))

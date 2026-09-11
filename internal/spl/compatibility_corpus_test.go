@@ -274,7 +274,7 @@ func validateCompatibilityCorpus(corpus compatibilityCorpus) error {
 		"audit": {}, "authorized_indexes": {}, "boolean": {}, "bound_arguments": {},
 		"compatibility": {}, "diagnostic": {}, "diagnostic_phase": {}, "explain": {},
 		"job_failure": {}, "parse": {}, "phase": {}, "range": {}, "range_text": {},
-		"relation": {}, "sql_literal_fragments": {}, "suggestion": {}, "surfaces": {},
+		"relation": {}, "search_range": {}, "sql_literal_fragments": {}, "suggestion": {}, "surfaces": {},
 		"value": {}, "atomic": {}, "command": {}, "commands": {}, "keys": {},
 		"mode": {}, "order": {}, "outputs": {}, "resource": {}, "type": {},
 	}
@@ -349,7 +349,7 @@ func requireExpressionCorpusCoverage(t *testing.T, corpus compatibilityCorpus) {
 		"SPL-EXPRESSION-LIMITS-001":      {"operator 256", "operator 257", "unary chain 33", "membership aggregate 257", "forged cycle", "node SQL 64KiB"},
 		"SPL-SECURITY-001":               {"calculated index does not widen", "bound literal", "no expansion"},
 		"SPL-EXPRESSION-DIAGNOSTICS-001": {"string plus", "unterminated field quote", "candidate overflow", "Boolean assignment"},
-		"SPL-CALENDAR-SPAN-001":          {"spring daylight-saving day", "fall daylight-saving day", "UTC day", "Sunday week across year", "multi-day rejected", "multi-week rejected"},
+		"SPL-CALENDAR-SPAN-001":          {"spring daylight-saving day", "fall daylight-saving day", "UTC day", "Sunday week across year", "multi-day timechart", "multi-week timechart", "quarter and year aliases", "subsecond exact divisor", "relative alignment", "split suffix and sparse controls"},
 	}
 
 	byRule := make(map[string]map[string]struct{}, len(corpus.Rules))

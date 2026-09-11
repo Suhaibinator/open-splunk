@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -38,11 +39,13 @@ func TestCalendarTimechartReexecutionExportPreservesIrregularUTCBoundaries(t *te
 		{Name: "count", Kind: searchjobs.ValueKindUnsigned},
 	}}
 	searches.pin.schema = schema
-	wantTimes := []time.Time{
+	wantBoundaries := []time.Time{
 		time.Date(2026, time.March, 7, 5, 0, 0, 0, time.UTC),
 		time.Date(2026, time.March, 8, 5, 0, 0, 0, time.UTC),
 		time.Date(2026, time.March, 9, 4, 0, 0, 0, time.UTC),
+		time.Date(2026, time.March, 10, 4, 0, 0, 0, time.UTC),
 	}
+	wantTimes := wantBoundaries[:len(wantBoundaries)-1]
 	wantCounts := []uint64{2, 0, 3}
 	compiledQueries := make(chan clickhouse.CompiledQuery, 1)
 	executor := reexecutionTestExecutor(func(
@@ -64,7 +67,7 @@ func TestCalendarTimechartReexecutionExportPreservesIrregularUTCBoundaries(t *te
 		}
 		return nil
 	})
-	source := newReexecutionTestSource(t, searches, executor, nil)
+	source := newRetainedTimechartTestSource(t, searches, executor)
 	manager := newExportTestManager(t, source, nil)
 	created, err := manager.Create(context.Background(), access, CreateRequest{
 		SearchJobID: searches.job.ID,
@@ -82,9 +85,12 @@ func TestCalendarTimechartReexecutionExportPreservesIrregularUTCBoundaries(t *te
 	compiled := <-compiledQueries
 	if !compiled.HasValidExecutionSeal() || compiled.Timechart == nil ||
 		compiled.Timechart.Mode != clickhouse.TimechartModeFixedCount ||
-		!compiled.Timechart.Calendar || compiled.Timechart.Span != 0 ||
+		!compiled.Timechart.ExactGrid || !compiled.Timechart.Calendar || compiled.Timechart.Span != 0 ||
 		compiled.Timechart.BucketCount != uint64(len(wantTimes)) ||
-		!compiled.Timechart.FirstBucket.Equal(wantTimes[0]) {
+		!compiled.Timechart.FirstBucket.Equal(wantTimes[0]) ||
+		!compiled.Timechart.SearchEarliest.Equal(resolvedRange.Earliest()) ||
+		!compiled.Timechart.SearchLatest.Equal(resolvedRange.Latest()) ||
+		!slices.Equal(compiled.Timechart.Boundaries, wantBoundaries) {
 		t.Fatalf("re-executed calendar contract = %#v", compiled.Timechart)
 	}
 	if !slices.Equal(compiled.OutputFields, []string{"_time", "count"}) {
@@ -95,15 +101,26 @@ func TestCalendarTimechartReexecutionExportPreservesIrregularUTCBoundaries(t *te
 			t.Fatalf("re-executed public fields leaked private name %q", field)
 		}
 	}
-	timezoneBound := false
+	wantTicks := make([]int64, len(wantTimes))
+	for index, boundary := range wantTimes {
+		wantTicks[index] = boundary.UnixNano()
+	}
+	boundaryBindings := 0
 	for _, argument := range compiled.Args {
-		if value, ok := argument.(string); ok && value == searchTimezone {
-			timezoneBound = true
-			break
+		if ticks, ok := argument.([]int64); ok {
+			boundaryBindings++
+			if !slices.Equal(ticks, wantTicks) {
+				t.Fatalf("re-executed calendar boundary binding %d = %v, want %v", boundaryBindings, ticks, wantTicks)
+			}
 		}
 	}
-	if !timezoneBound {
-		t.Fatalf("re-executed calendar query did not bind search timezone; args = %#v", compiled.Args)
+	if boundaryBindings != 2 {
+		t.Fatalf("re-executed calendar boundary bindings = %d, want 2; args = %#v", boundaryBindings, compiled.Args)
+	}
+	firstOutside := strconv.FormatInt(wantBoundaries[0].UnixNano()-1, 10)
+	finalEnd := strconv.FormatInt(wantBoundaries[len(wantBoundaries)-1].UnixNano(), 10)
+	if !strings.Contains(compiled.SQL, firstOutside) || !strings.Contains(compiled.SQL, finalEnd) {
+		t.Fatalf("re-executed calendar SQL does not seal grid endpoints %s and %s:\n%s", firstOutside, finalEnd, compiled.SQL)
 	}
 
 	contents, err := os.ReadFile(filepath.Join(manager.artifactDir, completed.Artifact.FileName))
@@ -121,5 +138,8 @@ func TestCalendarTimechartReexecutionExportPreservesIrregularUTCBoundaries(t *te
 	}
 	if got := wantTimes[2].Sub(wantTimes[1]); got != 23*time.Hour {
 		t.Fatalf("spring-forward UTC gap = %s, want 23h", got)
+	}
+	if got := wantBoundaries[3].Sub(wantBoundaries[2]); got != 24*time.Hour {
+		t.Fatalf("post-DST UTC gap = %s, want 24h", got)
 	}
 }

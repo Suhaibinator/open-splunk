@@ -5,7 +5,7 @@
 -- string_or_bytes_outputs: []clickhouse.ResultStringOrBytesOutput{clickhouse.ResultStringOrBytesOutput{OutputIndex:0x1, Nullable:false}}
 -- sparse_fields: false subset=false
 -- atomic_result: true
--- execution_authority_digest: 295504c8b0d796fb3c7ddec7eca859a56e05796019884ccdc4dfc2e0f0074c2c
+-- execution_authority_digest: a08546ea1db35bd7b16111adf191874ff2d3ee1e438810f6e24f75bde6db5b13
 -- args[0]: "price"
 -- args[1]: "quantity"
 -- args[2]: "tenant-1"

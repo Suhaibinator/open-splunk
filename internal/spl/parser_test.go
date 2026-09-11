@@ -2229,9 +2229,6 @@ func TestParseTimechartRejectsUnsupportedOrMalformedSyntax(t *testing.T) {
 		{"negative span", `index=main | timechart span=-5m count by level`, "SPL_INVALID_ARGUMENT", "-5m"},
 		{"duration overflow", `index=main | timechart span=2562048h count by level`, "SPL_NUMBER_OUT_OF_RANGE", "2562048h"},
 		{"integer overflow", `index=main | timechart span=18446744073709551616s count by level`, "SPL_NUMBER_OUT_OF_RANGE", "18446744073709551616s"},
-		{"multi-day calendar span", `index=main | timechart span=2d count by level`, "SPL_UNSUPPORTED_CALENDAR_SPAN", "2d"},
-		{"multi-week calendar span", `index=main | timechart span=2w count by level`, "SPL_UNSUPPORTED_CALENDAR_SPAN", "2w"},
-		{"subsecond", `index=main | timechart span=5ms count by level`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "5ms"},
 		{"log span keeps legacy diagnostic", `index=main | timechart span=2log10 count by level`, "SPL_INVALID_ARGUMENT", "2log10"},
 		{"compound span", `index=main | timechart span=1h30m count by level`, "SPL_INVALID_ARGUMENT", "1h30m"},
 		{"missing aggregate", `index=main | timechart span=5m`, "SPL_UNSUPPORTED_TIMECHART_AGGREGATE", ""},
@@ -2249,9 +2246,9 @@ func TestParseTimechartRejectsUnsupportedOrMalformedSyntax(t *testing.T) {
 		{"trailing span", `index=main | timechart span=5m count by level span=1h`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "span"},
 		{"limit without split", `index=main | timechart span=5m limit=5 count`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "limit=5"},
 		{"useother without split", `index=main | timechart span=5m useother=false count`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "useother=false"},
-		{"zero limit", `index=main | timechart span=5m limit=0 count by level`, "SPL_UNSUPPORTED_TIMECHART_LIMIT", "limit=0"},
-		{"limit above the series allowance", `index=main | timechart span=5m limit=11 count by level`, "SPL_UNSUPPORTED_TIMECHART_LIMIT", "limit=11"},
-		{"limit overflow", `index=main | timechart span=5m limit=18446744073709551616 count by level`, "SPL_UNSUPPORTED_TIMECHART_LIMIT", "limit=18446744073709551616"},
+		{name: "zero limit", source: `index=main | timechart span=5m limit=0 count by level`},
+		{name: "limit above the default", source: `index=main | timechart span=5m limit=11 count by level`},
+		{"limit overflow", `index=main | timechart span=5m limit=18446744073709551616 count by level`, "SPL_INVALID_ARGUMENT", "limit=18446744073709551616"},
 		{"negative limit", `index=main | timechart span=5m limit=-1 count by level`, "SPL_INVALID_ARGUMENT", "-1"},
 		{"missing limit value", `index=main | timechart span=5m count by level limit=`, "SPL_INVALID_ARGUMENT", "limit"},
 		{"non-boolean useother", `index=main | timechart span=5m count by level useother=maybe`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "maybe"},
@@ -2263,6 +2260,12 @@ func TestParseTimechartRejectsUnsupportedOrMalformedSyntax(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := Parse(test.source)
+			if test.code == "" {
+				if err != nil {
+					t.Fatalf("Parse: %v", err)
+				}
+				return
+			}
 			if err == nil {
 				t.Fatal("Parse succeeded")
 			}
@@ -2333,16 +2336,16 @@ func TestCalendarSpanSupportPreservesLegacyFixedSpanDiagnostics(t *testing.T) {
 			message: "timechart span must be a positive integer followed by s, m, or h",
 		},
 		{
-			name:    "subsecond timechart",
-			source:  `index=main | timechart span=500ms count`,
-			code:    "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
-			message: `timechart span unit in "500ms" is unsupported; use fixed seconds, minutes, or hours`,
+			name:    "nondividing subsecond timechart",
+			source:  `index=main | timechart span=3ms count`,
+			code:    "SPL_INVALID_ARGUMENT",
+			message: "timechart span must be a positive integer followed by s, m, or h",
 		},
 		{
 			name:    "unsupported timechart unit",
-			source:  `index=main | timechart span=1q count`,
+			source:  `index=main | timechart span=1fortnight count`,
 			code:    "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
-			message: `timechart span unit in "1q" is unsupported; use fixed seconds, minutes, or hours`,
+			message: `timechart span unit in "1fortnight" is unsupported; use fixed seconds, minutes, or hours`,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -2363,14 +2366,12 @@ func TestCalendarSpanSupportPreservesLegacyFixedSpanDiagnostics(t *testing.T) {
 	}
 }
 
-func TestParseRejectsMultiUnitCalendarSpansWithDaySuggestion(t *testing.T) {
+func TestParseCalendarSpanMagnitudeContracts(t *testing.T) {
 	t.Parallel()
 
 	for _, source := range []string{
 		`index=main | bin _time span=2d`,
 		`index=main | bucket _time span=2w`,
-		`index=main | timechart span=2d count`,
-		`index=main | timechart span=2w count`,
 	} {
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()
@@ -2387,6 +2388,27 @@ func TestParseRejectsMultiUnitCalendarSpansWithDaySuggestion(t *testing.T) {
 			got := source[diagnostic.Range.Start.Offset:diagnostic.Range.End.Offset]
 			if got != "2d" && got != "2w" {
 				t.Fatalf("diagnostic source = %q, want complete calendar span", got)
+			}
+		})
+	}
+
+	for _, test := range []struct {
+		source string
+		unit   TimeSpanUnit
+	}{
+		{source: `index=main | timechart span=2d count`, unit: TimeSpanUnitDay},
+		{source: `index=main | timechart span=2w count`, unit: TimeSpanUnitWeek},
+	} {
+		t.Run(test.source, func(t *testing.T) {
+			t.Parallel()
+
+			parsed, err := Parse(test.source)
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			command := parsed.Commands[0].(*TimechartCommand)
+			if command.Span.Magnitude != 2 || command.Span.Unit != test.unit {
+				t.Fatalf("timechart span = %#v, want magnitude 2 unit %v", command.Span, test.unit)
 			}
 		})
 	}
@@ -3206,6 +3228,12 @@ func TestParseTimechartSeriesOptionsInEitherPosition(t *testing.T) {
 			`index=main | timechart limit=10 span=1h sum(bytes) BY host USEOTHER=FALSE`,
 			TimechartOptions{Limit: 10, LimitSpecified: true, UseOtherSpecified: true},
 			"USEOTHER=FALSE",
+		},
+		{
+			"maximum uint64 limit",
+			`index=main | timechart span=1h count BY host limit=18446744073709551615`,
+			TimechartOptions{Limit: ^uint64(0), LimitSpecified: true},
+			"limit=18446744073709551615",
 		},
 		{"no options", `index=main | timechart span=1h count BY host`, TimechartOptions{}, "host"},
 	}

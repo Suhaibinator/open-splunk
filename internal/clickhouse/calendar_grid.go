@@ -13,6 +13,9 @@ import (
 // timechartGridSpec keeps the existing fixed ordinal grid byte-for-byte while
 // carrying the civil-time inputs needed by the calendar-only branch.
 type timechartGridSpec struct {
+	exact             bool
+	magnitude         uint64
+	boundaries        []time.Time
 	calendar          plan.CalendarUnit
 	spanNanoseconds   int64
 	firstBucketNumber int64
@@ -22,7 +25,7 @@ type timechartGridSpec struct {
 }
 
 func (spec timechartGridSpec) isCalendar() bool {
-	return spec.calendar != plan.CalendarNone
+	return spec.exact || spec.calendar != plan.CalendarNone
 }
 
 func (spec timechartGridSpec) relationalDepth() int {
@@ -36,6 +39,9 @@ func (spec timechartGridSpec) relationalDepth() int {
 }
 
 func (spec timechartGridSpec) bucketKeySQL(eventTime, ticks string) string {
+	if spec.exact {
+		return spec.exactBucketKeySQL(eventTime)
+	}
 	if !spec.isCalendar() {
 		return epochFloorBucketNumberSQL(ticks)
 	}
@@ -55,6 +61,10 @@ func calendarBucketKeySQL(eventTime string, calendar plan.CalendarUnit) string {
 		boundary := "toStartOfWeek(toTimeZone(" + eventTime + ", ?), 0)"
 		localMidnight := "toDateTime64(" + boundary + ", 9, ?)"
 		return "toDateTime64(toTimeZone(" + localMidnight + ", 'UTC'), 9, 'UTC')"
+	case plan.CalendarMonth:
+		boundary := "toStartOfMonth(toTimeZone(" + eventTime + ", ?))"
+		localMidnight := "toDateTime64(" + boundary + ", 9, ?)"
+		return "toDateTime64(toTimeZone(" + localMidnight + ", 'UTC'), 9, 'UTC')"
 	default:
 		panic("invalid calendar bucket unit")
 	}
@@ -66,19 +76,25 @@ func appendCalendarBucketKeyArgs(
 	searchTimezone string,
 ) []any {
 	args = append(args, searchTimezone)
-	if calendar == plan.CalendarWeek {
+	if calendar == plan.CalendarWeek || calendar == plan.CalendarMonth {
 		args = append(args, searchTimezone)
 	}
 	return args
 }
 
 func (spec timechartGridSpec) gridSQL(ordinal, bucketKey string) string {
+	if spec.exact {
+		return spec.exactGridSQL(ordinal, bucketKey)
+	}
 	if !spec.isCalendar() {
 		return ordinalGridSQL(ordinal, bucketKey)
 	}
 	add := "addDays"
-	if spec.calendar == plan.CalendarWeek {
+	switch spec.calendar {
+	case plan.CalendarWeek:
 		add = "addWeeks"
+	case plan.CalendarMonth:
+		add = "addMonths"
 	}
 	item := quoteIdentifier("__os_calendar_grid_item")
 	return "SELECT toUInt64(tupleElement(" + item + ", 1)) AS " + ordinal +
@@ -89,6 +105,9 @@ func (spec timechartGridSpec) gridSQL(ordinal, bucketKey string) string {
 }
 
 func (spec timechartGridSpec) appendArgs(args []any) []any {
+	if spec.exact {
+		return spec.exactGridArgs(args)
+	}
 	if !spec.isCalendar() {
 		return appendOrdinalGridArgs(
 			args,
@@ -112,6 +131,11 @@ func (spec timechartGridSpec) writeBucketProjection(
 	bucketKey string,
 ) {
 	if !spec.isCalendar() {
+		return
+	}
+	if spec.exact {
+		sql.WriteString(", fromUnixTimestamp64Nano(" + grid + "." + bucketKey + ", 'UTC') AS " + quoteIdentifier(TimechartBucketColumn))
+		sql.WriteString(", toUInt8(" + grid + "." + bucketKey + " IN (SELECT " + spec.exactBucketKeySQL(quoteIdentifier("__os_tc_event_time")) + " FROM " + quoteIdentifier("__os_timechart_source") + ")) AS " + quoteIdentifier(TimechartBucketPresentColumn))
 		return
 	}
 	sql.WriteString(", ")
@@ -279,8 +303,13 @@ func calendarBoundary(
 	boundary := time.Date(
 		local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, location,
 	)
-	if unit == plan.CalendarWeek {
+	switch unit {
+	case plan.CalendarWeek:
 		boundary = boundary.AddDate(0, 0, -int(boundary.Weekday()))
+	case plan.CalendarMonth:
+		boundary = time.Date(
+			boundary.Year(), boundary.Month(), 1, 0, 0, 0, 0, location,
+		)
 	}
 	return boundary
 }
@@ -291,6 +320,8 @@ func addCalendarUnit(value time.Time, unit plan.CalendarUnit) time.Time {
 		return value.AddDate(0, 0, 1)
 	case plan.CalendarWeek:
 		return value.AddDate(0, 0, 7)
+	case plan.CalendarMonth:
+		return value.AddDate(0, 1, 0)
 	default:
 		return time.Time{}
 	}

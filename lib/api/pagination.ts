@@ -5,15 +5,12 @@ export class RepeatedPageCursorError extends Error {
   }
 }
 
-export const MAXIMUM_BROWSER_RESULT_COLUMNS = 64;
-
 export function validateBrowserResultColumnCount(columnCount: number): string | null {
   if (
     !Number.isSafeInteger(columnCount)
     || columnCount <= 0
-    || columnCount > MAXIMUM_BROWSER_RESULT_COLUMNS
   ) {
-    return `Search results returned ${columnCount} columns; the browser supports 1–${MAXIMUM_BROWSER_RESULT_COLUMNS}.`;
+    return `Search results returned an invalid number of columns: ${columnCount}.`;
   }
   return null;
 }

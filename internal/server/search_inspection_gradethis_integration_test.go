@@ -867,11 +867,9 @@ func gradeThisInspectionRouteLogicalPlan(
 		Stages:           stages,
 		ReferencedFields: slices.Clone(logical.ReferencedFields),
 		Output: &opensplunk.SearchInspectionOutputShape{
-			Kind:   gradeThisInspectionRouteOutputKind(logical.Output.Kind),
-			Fields: slices.Clone(logical.Output.Fields),
-			MaxDynamicFields: uint32(
-				logical.Output.MaxDynamicFields,
-			),
+			Kind:             gradeThisInspectionRouteOutputKind(logical.Output.Kind),
+			Fields:           slices.Clone(logical.Output.Fields),
+			MaxDynamicFields: logical.Output.MaxDynamicFields,
 		},
 	}
 }

@@ -111,7 +111,6 @@ import {
   SearchWebSocketCommand,
   SearchWebSocketEvent,
 } from "../gen/ts/open_splunk/search_ws";
-import { MAXIMUM_BROWSER_RESULT_COLUMNS } from "../lib/api/pagination";
 import {
   BROWSER_DIAGNOSTIC_TRUNCATION_SUFFIX,
   BoundedObservationRegistry,
@@ -151,6 +150,7 @@ const renderingArtifactDirectory =
   process.env.OPEN_SPLUNK_E2E_RENDERING_ARTIFACT_DIRECTORY?.trim();
 const renderingMetricsPath = process.env.OPEN_SPLUNK_E2E_RENDERING_METRICS_PATH?.trim();
 const browserRenderingJobID = "browser-fixed-result-rendering";
+const maximumMaterializedColumns = 24;
 const sequenceExpirationTest = process.env.OPEN_SPLUNK_E2E_SEQUENCE_EXPIRATION_TEST === "1";
 const sequenceGapTest = process.env.OPEN_SPLUNK_E2E_SEQUENCE_GAP_TEST === "1";
 const sequenceGapRESTTerminalTest =
@@ -2964,9 +2964,9 @@ test("renders a fixed 1,000-row statistics result with bounded browser work", as
         const resultColumnNames = resultPage.schema.columns.map(
           (column) => column.fieldName,
         );
-        expect(resultColumnNames).toHaveLength(MAXIMUM_BROWSER_RESULT_COLUMNS);
+        expect(resultColumnNames).toHaveLength(70);
         expect(resultColumnNames.slice(0, 2)).toEqual(["group", "count"]);
-        expect(resultColumnNames.at(-1)).toBe("metric_63");
+        expect(resultColumnNames.at(-1)).toBe("metric_69");
         expect(resultPage.page.totalSize).toBe(BigInt(expectedRows));
         expect(resultPage.page.totalSizeExact).toBe(true);
         expect(resultPage.page.nextPageToken ?? "").toBe("");
@@ -3033,6 +3033,7 @@ test("renders a fixed 1,000-row statistics result with bounded browser work", as
     const table = page.getByRole("table", { name: "Backend search statistics" });
     await expect(table).toHaveAttribute("data-total-rows", "1000", { timeout });
     await expect(table).toHaveAttribute("aria-rowcount", "1001", { timeout });
+    await expect(page.getByText("Showing columns 1–24 of 70", { exact: true })).toBeVisible();
     const materializedRows = table.locator("tbody tr:not(.virtual-table-spacer)");
     const spacerRows = table.locator("tbody tr.virtual-table-spacer");
     const tableBodyRows = table.locator("tbody tr");
@@ -3056,7 +3057,7 @@ test("renders a fixed 1,000-row statistics result with bounded browser work", as
       () => materializedCells.count(),
       { timeout },
     ).toBeLessThanOrEqual(
-      MAXIMUM_BROWSER_RESULT_COLUMNS * (maximumMaterializedRows + 1),
+      maximumMaterializedColumns * (maximumMaterializedRows + 1),
     );
     await expect(
       materializedRows.filter({ hasText: "render-row-0000" }),
@@ -3076,7 +3077,13 @@ test("renders a fixed 1,000-row statistics result with bounded browser work", as
     expect(await table.evaluate((element) => getComputedStyle(element).tableLayout))
       .toBe("fixed");
     const tableScrollWidth = await table.evaluate((element) => element.scrollWidth);
-    expect(tableScrollWidth).toBeLessThanOrEqual(MAXIMUM_BROWSER_RESULT_COLUMNS * 168);
+    expect(tableScrollWidth).toBeLessThanOrEqual(maximumMaterializedColumns * 168);
+    await page.getByRole("button", { name: "Next columns" }).click();
+    await expect(page.getByText("Showing columns 25–48 of 70", { exact: true })).toBeVisible();
+    await expect(table.getByRole("columnheader", { name: /metric_24/u })).toBeVisible();
+    await expect(table.getByRole("columnheader", { name: /group/u })).toHaveCount(0);
+    await page.getByRole("button", { name: "Previous columns" }).click();
+    await expect(page.getByText("Showing columns 1–24 of 70", { exact: true })).toBeVisible();
     expect(renderingObservation.maximumMaterializedRows)
       .toBeLessThanOrEqual(maximumMaterializedRows);
     expect(renderingObservation.maximumTableBodyRows)

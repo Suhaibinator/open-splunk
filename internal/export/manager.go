@@ -813,8 +813,8 @@ func (manager *Manager) Create(ctx context.Context, access searchjobs.AccessScop
 	if lease.ResultsTruncated() {
 		return Job{}, abortLifecycle(ErrSourceTruncated)
 	}
-	schema := lease.Schema()
-	if !validSourceSchemaCardinality(schema) {
+	schema, trustedWideSchema := trustedSchemaForSelection(lease)
+	if !trustedWideSchema && !validSourceSchemaCardinality(schema) {
 		if len(schema.Columns) == 0 {
 			return Job{}, abort(ErrSourceUnavailable)
 		}
@@ -824,8 +824,11 @@ func (manager *Manager) Create(ctx context.Context, access searchjobs.AccessScop
 	if err != nil {
 		return Job{}, abort(ErrSourceUnavailable)
 	}
-	selection, err := selectColumns(schema, normalized.Columns)
+	selection, err := selectColumnsContext(jobContext, schema, normalized.Columns, trustedWideSchema)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return Job{}, abortLifecycle(err)
+		}
 		return Job{}, abort(err)
 	}
 	if err := validateResolvedColumns(selection.columns); err != nil {

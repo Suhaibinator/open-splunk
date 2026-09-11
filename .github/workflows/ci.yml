@@ -589,6 +589,7 @@ jobs:
           ./internal/clickhouse TestStatsMultivalueByExpansionLimitAgainstClickHouse
           ./internal/clickhouse TestStatsByUnsupportedCannotHideBehindMissingKeyAgainstClickHouse
           ./internal/clickhouse TestCalendarSpansAgainstClickHouse
+          ./internal/queryexec TestTimechartChronologicalValidationTransportAgainstClickHouse
           ./internal/queryexec TestStatsByFixedMultivalueStringOrBytesAgainstClickHouse
           ./internal/queryexec TestAuthoredSemanticBytesManagerAgainstClickHouse
           ./internal/queryexec TestSemanticBytesModeManagerAgainstClickHouse
@@ -633,8 +634,8 @@ jobs:
         env:
           OPEN_SPLUNK_CLICKHOUSE_INTEGRATION: "1"
         run: >-
-          go test ./internal/clickhouse
-          -run '^TestCalendarSpansAgainstClickHouse$'
+          go test ./internal/clickhouse ./internal/queryexec
+          -run '^(TestCalendarSpansAgainstClickHouse|TestTimechartChronologicalValidationTransportAgainstClickHouse)$'
           -count=1
           -timeout=8m
           -p=1

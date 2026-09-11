@@ -315,6 +315,12 @@ export interface ResultSchema {
   columns: ResultColumn[];
 }
 
+/** TimeBucketBounds is exact UTC RFC3339Nano metadata for one timechart row. */
+export interface TimeBucketBounds {
+  earliest: string;
+  latest: string;
+}
+
 /**
  * ResultRow cells correspond positionally to ResultSchema.columns. row_id is an
  * opaque stable identifier within one search snapshot.
@@ -323,6 +329,7 @@ export interface ResultRow {
   rowId: string;
   ordinal: bigint;
   cells: TypedValue[];
+  timeBucket: TimeBucketBounds | undefined;
 }
 
 export interface ResultPage {
@@ -742,8 +749,93 @@ export const ResultSchema: MessageFns<ResultSchema> = {
   },
 };
 
+function createBaseTimeBucketBounds(): TimeBucketBounds {
+  return { earliest: "", latest: "" };
+}
+
+export const TimeBucketBounds: MessageFns<TimeBucketBounds> = {
+  encode(message: TimeBucketBounds, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.earliest !== "") {
+      writer.uint32(10).string(message.earliest);
+    }
+    if (message.latest !== "") {
+      writer.uint32(18).string(message.latest);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): TimeBucketBounds {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseTimeBucketBounds();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.earliest = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.latest = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): TimeBucketBounds {
+    return {
+      earliest: isSet(object.earliest) ? globalThis.String(object.earliest) : "",
+      latest: isSet(object.latest) ? globalThis.String(object.latest) : "",
+    };
+  },
+
+  toJSON(message: TimeBucketBounds): unknown {
+    const obj: any = {};
+    if (message.earliest !== "") {
+      obj.earliest = message.earliest;
+    }
+    if (message.latest !== "") {
+      obj.latest = message.latest;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TimeBucketBounds>, I>>(base?: I): TimeBucketBounds {
+    return TimeBucketBounds.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TimeBucketBounds>, I>>(object: I): TimeBucketBounds {
+    const message = createBaseTimeBucketBounds();
+    message.earliest = object.earliest ?? "";
+    message.latest = object.latest ?? "";
+    return message;
+  },
+};
+
 function createBaseResultRow(): ResultRow {
-  return { rowId: "", ordinal: 0n, cells: [] };
+  return { rowId: "", ordinal: 0n, cells: [], timeBucket: undefined };
 }
 
 export const ResultRow: MessageFns<ResultRow> = {
@@ -759,6 +851,9 @@ export const ResultRow: MessageFns<ResultRow> = {
     }
     for (const v of message.cells) {
       TypedValue.encode(v!, writer.uint32(26).fork()).join();
+    }
+    if (message.timeBucket !== undefined) {
+      TimeBucketBounds.encode(message.timeBucket, writer.uint32(34).fork()).join();
     }
     return writer;
   },
@@ -800,6 +895,14 @@ export const ResultRow: MessageFns<ResultRow> = {
             message.cells.push(TypedValue.decode(reader, reader.uint32()));
             continue;
           }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+
+            message.timeBucket = TimeBucketBounds.decode(reader, reader.uint32());
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -821,6 +924,11 @@ export const ResultRow: MessageFns<ResultRow> = {
         : "",
       ordinal: isSet(object.ordinal) ? BigInt(object.ordinal) : 0n,
       cells: globalThis.Array.isArray(object?.cells) ? object.cells.map((e: any) => TypedValue.fromJSON(e)) : [],
+      timeBucket: isSet(object.timeBucket)
+        ? TimeBucketBounds.fromJSON(object.timeBucket)
+        : isSet(object.time_bucket)
+        ? TimeBucketBounds.fromJSON(object.time_bucket)
+        : undefined,
     };
   },
 
@@ -835,6 +943,9 @@ export const ResultRow: MessageFns<ResultRow> = {
     if (message.cells?.length) {
       obj.cells = message.cells.map((e) => TypedValue.toJSON(e));
     }
+    if (message.timeBucket !== undefined) {
+      obj.timeBucket = TimeBucketBounds.toJSON(message.timeBucket);
+    }
     return obj;
   },
 
@@ -846,6 +957,9 @@ export const ResultRow: MessageFns<ResultRow> = {
     message.rowId = object.rowId ?? "";
     message.ordinal = (object.ordinal !== undefined && object.ordinal !== null) ? BigInt(object.ordinal) : 0n;
     message.cells = object.cells?.map((e) => TypedValue.fromPartial(e)) || [];
+    message.timeBucket = (object.timeBucket !== undefined && object.timeBucket !== null)
+      ? TimeBucketBounds.fromPartial(object.timeBucket)
+      : undefined;
     return message;
   },
 };

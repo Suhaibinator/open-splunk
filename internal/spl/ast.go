@@ -1163,7 +1163,7 @@ func (*StreamStatsCommand) Name() string         { return "streamstats" }
 func (c *StreamStatsCommand) SourceRange() Range { return c.Range }
 
 // TimeSpanUnit identifies the duration and calendar units shared by bin and
-// timechart. Day and week are calendar units whose alignment is resolved by
+// timechart. Day, week, and month are calendar units whose alignment is resolved by
 // the planner in the effective search timezone.
 type TimeSpanUnit uint8
 
@@ -1174,11 +1174,30 @@ const (
 	TimeSpanUnitHour
 	TimeSpanUnitDay
 	TimeSpanUnitWeek
+	TimeSpanUnitMonth
+	TimeSpanUnitMicrosecond
+	TimeSpanUnitMillisecond
+	TimeSpanUnitCentisecond
+	TimeSpanUnitDecisecond
+	TimeSpanUnitQuarter
+	TimeSpanUnitYear
 )
 
 // String returns the canonical SPL suffix for unit.
 func (unit TimeSpanUnit) String() string {
 	switch unit {
+	case TimeSpanUnitMicrosecond:
+		return "us"
+	case TimeSpanUnitMillisecond:
+		return "ms"
+	case TimeSpanUnitCentisecond:
+		return "cs"
+	case TimeSpanUnitDecisecond:
+		return "ds"
+	case TimeSpanUnitQuarter:
+		return "q"
+	case TimeSpanUnitYear:
+		return "y"
 	case TimeSpanUnitSecond:
 		return "s"
 	case TimeSpanUnitMinute:
@@ -1189,6 +1208,8 @@ func (unit TimeSpanUnit) String() string {
 		return "d"
 	case TimeSpanUnitWeek:
 		return "w"
+	case TimeSpanUnitMonth:
+		return "month"
 	default:
 		return ""
 	}
@@ -1247,17 +1268,47 @@ func (c *BinCommand) SourceRange() Range { return c.Range }
 // transforming command.
 type TimechartCommand struct {
 	Span      TimeSpan
+	Axis      TimechartAxisOptions
 	Aggregate StatsAggregate
 	SplitBy   *StatsGroupField
 	Options   TimechartOptions
 	Range     Range
 }
 
-// MaximumTimechartSeriesLimit bounds timechart limit=N: the ordinary split
-// series a chart may retain before the remainder collapses into OTHER. It is
-// Splunk's default of 10 and, with the NULL and OTHER series, fills the
-// backend's runtime series allowance.
-const MaximumTimechartSeriesLimit = 10
+const (
+	// DefaultTimechartBins is Splunk's default maximum bucket count when span
+	// is omitted.
+	DefaultTimechartBins = 100
+	// MaximumTimechartBins preserves the backend's existing hard limit for a
+	// continuous timechart grid.
+	MaximumTimechartBins = 10_000
+	// DefaultTimechartSeriesLimit is Splunk's default number of ordinary split
+	// series. Authored limit values are uint64 and are not capped by this
+	// default; limit=0 selects every ordinary series that fits the execution
+	// resource policy.
+	DefaultTimechartSeriesLimit uint64 = 10
+	// MaximumTimechartSeriesLimit is retained as a source-compatibility alias
+	// for callers that used the former name as the default. It is not an
+	// authored limit ceiling.
+	MaximumTimechartSeriesLimit = DefaultTimechartSeriesLimit
+)
+
+// TimechartAxisOptions preserves automatic time-axis controls. Span remains
+// on TimechartCommand for compatibility with explicit spans; a zero Span
+// selects the automatic ladder. Bins is a maximum rather than a target.
+type TimechartAxisOptions struct {
+	Cont, Partial, FixedRange                            bool
+	ContSpecified, PartialSpecified, FixedRangeSpecified bool
+	ContRange, PartialRange, FixedRangeRange             Range
+	AlignTime                                            string
+	AlignTimeSpecified                                   bool
+	AlignTimeRange                                       Range
+	Bins                                                 uint64
+	BinsSpecified                                        bool
+	BinsRange                                            Range
+	MinSpan                                              TimeSpan
+	MinSpanSpecified                                     bool
+}
 
 // TimechartOptions preserves the authored split-series options and their
 // source locations. Unspecified options are zero-valued and distinct from an

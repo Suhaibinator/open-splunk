@@ -3,6 +3,7 @@ package plan
 import (
 	"fmt"
 	"math"
+	"math/big"
 	"strconv"
 	"time"
 
@@ -42,15 +43,7 @@ func buildTimechartSplit(
 		if options.LimitRange == (spl.Range{}) {
 			return invalid("timechart limit metadata is invalid", options.LimitRange)
 		}
-		if options.Limit == 0 || options.Limit > timechartSeriesLimit {
-			return nil, &Diagnostic{
-				Code:        "SPL_UNSUPPORTED_TIMECHART_LIMIT",
-				Message:     fmt.Sprintf("timechart limit must be from 1 through %d", timechartSeriesLimit),
-				Range:       options.LimitRange,
-				Suggestions: []string{fmt.Sprintf("limit=%d", timechartSeriesLimit)},
-			}
-		}
-		split.SeriesLimit = uint16(options.Limit)
+		split.SeriesLimit = options.Limit
 	} else if options.Limit != 0 || options.LimitRange != (spl.Range{}) {
 		return invalid("unspecified timechart limit contains authored metadata", options.LimitRange)
 	}
@@ -75,12 +68,15 @@ func buildTimechartSplit(
 
 // timechartMaxSeries is the runtime series allowance a split publishes: the
 // ordinary series limit plus each enabled NULL and OTHER sentinel series.
-func timechartMaxSeries(split *TimechartSplit) uint16 {
+func timechartMaxSeries(split *TimechartSplit) uint64 {
+	if split.SeriesLimit == 0 {
+		return 0
+	}
 	series := split.SeriesLimit
-	if split.IncludeNull {
+	if split.IncludeNull && series != math.MaxUint64 {
 		series++
 	}
-	if split.IncludeOther {
+	if split.IncludeOther && series != math.MaxUint64 {
 		series++
 	}
 	return series
@@ -184,7 +180,7 @@ func buildTimechartMeasure(
 	if aggregate.Sparkline != nil ||
 		aggregate.InputGlob != nil || aggregate.AliasGlob != nil ||
 		aggregate.Predicate != nil || aggregate.InputExpression != nil ||
-		aggregate.InputQuoted || aggregate.AliasQuoted ||
+		(aggregate.InputQuoted && !outputSchemaKnown) || aggregate.AliasQuoted ||
 		aggregate.AliasSourceDerived || aggregate.AliasWildcardDerived {
 		return AggregateMeasure{}, &Diagnostic{
 			Code:    "SPL_UNSUPPORTED_TIMECHART_AGGREGATE",
@@ -285,7 +281,7 @@ func buildTimechartFieldMeasure(
 			Range:   aggregate.InputRange,
 		}
 	}
-	input, inputErr := ResolveField(aggregate.Input, aggregate.InputRange)
+	input, inputErr := resolveStatsInputField(aggregate.Input, aggregate.InputRange, aggregate.InputQuoted)
 	if inputErr != nil {
 		return AggregateMeasure{}, inputErr
 	}
@@ -307,38 +303,145 @@ func buildTimechartFieldMeasure(
 	}, nil
 }
 
-func fixedTimechartSpan(span spl.TimeSpan) (time.Duration, error) {
-	duration, err := fixedDurationSpan(
-		span,
-		"SPL_UNSUPPORTED_TIMECHART_SYNTAX",
-		"timechart",
-	)
-	if err != nil {
-		return 0, err
-	}
-	if duration > maxTimechartSpan {
-		return 0, &Diagnostic{
-			Code:        "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
-			Message:     "timechart spans greater than 24 hours are not supported",
-			Range:       span.Range,
-			Suggestions: []string{"use a fixed span from 1s through 24h"},
+func validateTimechartAxisOptions(
+	axis spl.TimechartAxisOptions,
+	sourceRange spl.Range,
+) (uint64, error) {
+	for _, option := range []struct {
+		name             string
+		value, specified bool
+		location         spl.Range
+	}{
+		{"cont", axis.Cont, axis.ContSpecified, axis.ContRange},
+		{"partial", axis.Partial, axis.PartialSpecified, axis.PartialRange},
+		{"fixedrange", axis.FixedRange, axis.FixedRangeSpecified, axis.FixedRangeRange},
+	} {
+		if (option.specified && option.location == (spl.Range{})) || (!option.specified && (option.value || option.location != (spl.Range{}))) {
+			return 0, &Diagnostic{Code: "SPL_UNSUPPORTED_TIMECHART_SYNTAX", Message: "timechart " + option.name + " option metadata is invalid", Range: sourceRange}
 		}
 	}
-	return duration, nil
+	bins := uint64(spl.DefaultTimechartBins)
+	if axis.BinsSpecified {
+		if axis.Bins == 0 || axis.Bins > spl.MaximumTimechartBins ||
+			axis.BinsRange == (spl.Range{}) {
+			return 0, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_TIMECHART_BINS",
+				Message: fmt.Sprintf("timechart bins must be from 1 through %d", spl.MaximumTimechartBins),
+				Range:   axis.BinsRange,
+			}
+		}
+		bins = axis.Bins
+	} else if axis.Bins != 0 || axis.BinsRange != (spl.Range{}) {
+		return 0, &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
+			Message: "unspecified timechart bins contains authored metadata",
+			Range:   sourceRange,
+		}
+	}
+	if axis.MinSpanSpecified {
+		if axis.MinSpan == (spl.TimeSpan{}) || axis.MinSpan.Range == (spl.Range{}) {
+			return 0, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
+				Message: "timechart minspan metadata is invalid",
+				Range:   sourceRange,
+			}
+		}
+		if _, ok := nominalTimeSpanNanoseconds(axis.MinSpan); !ok {
+			return 0, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
+				Message: "timechart minspan is outside the automatic span range",
+				Range:   axis.MinSpan.Range,
+			}
+		}
+	} else if axis.MinSpan != (spl.TimeSpan{}) {
+		return 0, &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
+			Message: "unspecified timechart minspan contains authored metadata",
+			Range:   sourceRange,
+		}
+	}
+
+	return bins, nil
 }
 
-func timechartSpan(span spl.TimeSpan) (time.Duration, CalendarUnit, error) {
-	if calendar, ok := calendarUnit(span.Unit); ok {
-		if err := validateCalendarMagnitude(span.Magnitude, "timechart", span.Range); err != nil {
-			return 0, CalendarNone, err
+func automaticTimeSpanAsSPL(span AutomaticTimeSpan, sourceRange spl.Range) spl.TimeSpan {
+	unit := spl.TimeSpanUnitInvalid
+	switch span.Unit {
+	case AutomaticTimeSpanUnitSecond:
+		unit = spl.TimeSpanUnitSecond
+	case AutomaticTimeSpanUnitMinute:
+		unit = spl.TimeSpanUnitMinute
+	case AutomaticTimeSpanUnitHour:
+		unit = spl.TimeSpanUnitHour
+	case AutomaticTimeSpanUnitDay:
+		unit = spl.TimeSpanUnitDay
+	case AutomaticTimeSpanUnitMonth:
+		unit = spl.TimeSpanUnitMonth
+	}
+	return spl.TimeSpan{Magnitude: span.Magnitude, Unit: unit, Range: sourceRange}
+}
+
+func automaticTimeSpanAtLeast(candidate, minimum spl.TimeSpan) bool {
+	candidateUnits, candidateOK := nominalTimeSpanNanoseconds(candidate)
+	minimumUnits, minimumOK := nominalTimeSpanNanoseconds(minimum)
+	return candidateOK && minimumOK && candidateUnits.Cmp(minimumUnits) >= 0
+}
+
+func nominalTimeSpanNanoseconds(span spl.TimeSpan) (*big.Int, bool) {
+	magnitude := new(big.Int).SetUint64(span.Magnitude)
+	normalizedUnit := span.Unit
+	// Calendar aliases describe the same month grid. Normalize before the
+	// nominal duration comparison so a year cannot round up past twelve months.
+	switch normalizedUnit {
+	case spl.TimeSpanUnitQuarter:
+		magnitude.Mul(magnitude, big.NewInt(3))
+		normalizedUnit = spl.TimeSpanUnitMonth
+	case spl.TimeSpanUnitYear:
+		magnitude.Mul(magnitude, big.NewInt(12))
+		normalizedUnit = spl.TimeSpanUnitMonth
+	}
+	var unit uint64
+	switch normalizedUnit {
+	case spl.TimeSpanUnitMicrosecond:
+		unit = 1000
+	case spl.TimeSpanUnitMillisecond:
+		unit = 1_000_000
+	case spl.TimeSpanUnitCentisecond:
+		unit = 10_000_000
+	case spl.TimeSpanUnitDecisecond:
+		unit = 100_000_000
+	default:
+		seconds, ok := nominalTimeSpanSeconds(spl.TimeSpan{Magnitude: 1, Unit: normalizedUnit})
+		if !ok {
+			return nil, false
 		}
-		return 0, calendar, nil
+		unit = seconds * 1_000_000_000
 	}
-	duration, err := fixedTimechartSpan(span)
-	if err != nil {
-		return 0, CalendarNone, err
+	return magnitude.Mul(magnitude, new(big.Int).SetUint64(unit)), span.Magnitude > 0
+}
+
+func nominalTimeSpanSeconds(span spl.TimeSpan) (uint64, bool) {
+	var seconds uint64
+	switch span.Unit {
+	case spl.TimeSpanUnitSecond:
+		seconds = 1
+	case spl.TimeSpanUnitMinute:
+		seconds = 60
+	case spl.TimeSpanUnitHour:
+		seconds = 60 * 60
+	case spl.TimeSpanUnitDay:
+		seconds = 24 * 60 * 60
+	case spl.TimeSpanUnitWeek:
+		seconds = 7 * 24 * 60 * 60
+	case spl.TimeSpanUnitMonth:
+		seconds = 30 * 24 * 60 * 60
+	default:
+		return 0, false
 	}
-	return duration, CalendarNone, nil
+	if span.Magnitude == 0 || span.Magnitude > math.MaxUint64/seconds {
+		return 0, false
+	}
+	return span.Magnitude * seconds, true
 }
 
 func fixedNumericBinSpan(span spl.BinSpan) (uint64, error) {
@@ -403,7 +506,14 @@ func fixedBinSpan(span spl.BinSpan) (time.Duration, error) {
 
 func timeBucketSpan(span spl.BinSpan) (time.Duration, CalendarUnit, error) {
 	if span.Kind == spl.BinSpanKindTime {
-		if calendar, ok := calendarUnit(span.Unit); ok {
+		var calendar CalendarUnit
+		switch span.Unit {
+		case spl.TimeSpanUnitDay:
+			calendar = CalendarDay
+		case spl.TimeSpanUnitWeek:
+			calendar = CalendarWeek
+		}
+		if calendar != CalendarNone {
 			if err := validateCalendarMagnitude(span.Magnitude, "bin", span.Range); err != nil {
 				return 0, CalendarNone, err
 			}
@@ -423,6 +533,8 @@ func calendarUnit(unit spl.TimeSpanUnit) (CalendarUnit, bool) {
 		return CalendarDay, true
 	case spl.TimeSpanUnitWeek:
 		return CalendarWeek, true
+	case spl.TimeSpanUnitMonth:
+		return CalendarMonth, true
 	default:
 		return CalendarNone, false
 	}
@@ -477,104 +589,6 @@ func fixedDurationSpan(span spl.TimeSpan, syntaxCode, commandName string) (time.
 	}
 
 	return time.Duration(safecast.MustConv[int64](span.Magnitude)) * unit, nil
-}
-
-func fixedTimechartBuckets(earliest, latest time.Time, span time.Duration, sourceRange spl.Range) (time.Time, uint64, error) {
-	spanSeconds := int64(span / time.Second)
-	if spanSeconds <= 0 {
-		return time.Time{}, 0, &Diagnostic{
-			Code:    "SPL_INVALID_ARGUMENT",
-			Message: "timechart span must be at least one second",
-			Range:   sourceRange,
-		}
-	}
-	firstSeconds := floorInt64(earliest.Unix(), spanSeconds) * spanSeconds
-	deltaSeconds := latest.Unix() - firstSeconds
-	if deltaSeconds < 0 {
-		return time.Time{}, 0, &Diagnostic{
-			Code:    "SPL_INVALID_TIME_RANGE",
-			Message: "timechart range cannot be represented",
-			Range:   sourceRange,
-		}
-	}
-
-	bucketCount := safecast.MustConv[uint64](deltaSeconds / spanSeconds)
-	if deltaSeconds%spanSeconds != 0 || latest.Nanosecond() != 0 {
-		bucketCount++
-	}
-	if bucketCount == 0 {
-		// Build has already established a non-empty search interval; retain a
-		// defensive check so malformed plans cannot generate numbers(0).
-		return time.Time{}, 0, &Diagnostic{
-			Code:    "SPL_INVALID_TIME_RANGE",
-			Message: "timechart requires a non-empty bucket range",
-			Range:   sourceRange,
-		}
-	}
-	if bucketCount > maxTimechartBuckets {
-		return time.Time{}, 0, &Diagnostic{
-			Code:    "SPL_QUERY_TOO_COMPLEX",
-			Message: fmt.Sprintf("timechart produces more than %d fixed-range buckets", maxTimechartBuckets),
-			Range:   sourceRange,
-		}
-	}
-	return time.Unix(firstSeconds, 0).UTC(), bucketCount, nil
-}
-
-func timechartBuckets(
-	earliest, latest time.Time,
-	span time.Duration,
-	calendar CalendarUnit,
-	location *time.Location,
-	sourceRange spl.Range,
-) (time.Time, uint64, error) {
-	if calendar == CalendarNone {
-		return fixedTimechartBuckets(earliest, latest, span, sourceRange)
-	}
-	if span != 0 || (calendar != CalendarDay && calendar != CalendarWeek) || location == nil {
-		return time.Time{}, 0, &Diagnostic{
-			Code:    "SPL_INVALID_ARGUMENT",
-			Message: "timechart calendar span metadata is invalid",
-			Range:   sourceRange,
-		}
-	}
-
-	localEarliest := earliest.In(location)
-	firstBucket := time.Date(
-		localEarliest.Year(),
-		localEarliest.Month(),
-		localEarliest.Day(),
-		0,
-		0,
-		0,
-		0,
-		location,
-	)
-	daysPerBucket := 1
-	if calendar == CalendarWeek {
-		firstBucket = firstBucket.AddDate(0, 0, -int(firstBucket.Weekday()))
-		daysPerBucket = 7
-	}
-
-	var bucketCount uint64
-	for bucket := firstBucket; bucket.Before(latest); bucket = bucket.AddDate(0, 0, daysPerBucket) {
-		bucketCount++
-		if bucketCount > maxTimechartBuckets {
-			return time.Time{}, 0, &Diagnostic{
-				Code:    "SPL_QUERY_TOO_COMPLEX",
-				Message: fmt.Sprintf("timechart produces more than %d fixed-range buckets", maxTimechartBuckets),
-				Range:   sourceRange,
-			}
-		}
-	}
-	if bucketCount == 0 {
-		return time.Time{}, 0, &Diagnostic{
-			Code:    "SPL_INVALID_TIME_RANGE",
-			Message: "timechart requires a non-empty bucket range",
-			Range:   sourceRange,
-		}
-	}
-	return firstBucket.UTC(), bucketCount, nil
 }
 
 func floorInt64(value, divisor int64) int64 {

@@ -1,5 +1,14 @@
-import { linearTickScale } from "../charts/chart-scale";
-import { stackChartRows, stackedChartDomain } from "../charts/chart-stacking";
+import { linearTickScale, projectScaleValue } from "../charts/chart-scale";
+import {
+  addStackCoordinate,
+  addStackMagnitude,
+  createStackMagnitudeTotal,
+  normalizeStackValue,
+  stackMagnitudeCoordinate,
+  stackMagnitudeIsApproximate,
+  type StackedChartRow,
+  type StackMagnitudeTotal,
+} from "../charts/chart-stacking";
 import {
   type FocusEvent,
   type KeyboardEvent,
@@ -18,13 +27,13 @@ import type {
 import type { PivotMode } from "@/lib/search/query-pivots";
 
 import { AppIcon } from "../../_components/app-icon";
+import { Button } from "../../_components/button";
 
 import {
   TIME_SERIES_COLORS,
   TimeSeriesLineChart,
-  formatTimelineSeriesValue,
+  timelineChartModel,
   timelineSeriesDisplayName,
-  timelineSeriesNames,
 } from "../charts/time-series-line-chart";
 import { categoricalActivation } from "../categorical-interaction";
 import { COMPACT_NUMBER_FORMAT, NUMBER_FORMAT } from "../constants";
@@ -49,12 +58,15 @@ interface VisualizationPanelProps {
   onApplyPivot: (fieldName: string, fieldValue: DemoScalar, mode: PivotMode) => void;
   onChartStyleChange: (style: ChartStyle) => void;
   onChartTitleChange: (title: string) => void;
+  onCopySeriesLabel: (label: string) => void;
   onLegendPositionChange: (position: LegendPosition) => void;
   onShowDataLabelsChange: (show: boolean) => void;
   onStackModeChange: (mode: StackMode) => void;
   onVisualizationEdited: () => void;
   previewTruncated: boolean;
 }
+
+const TIMELINE_SERIES_WINDOW_SIZE = 24;
 
 interface StatisticSeriesDefinition {
   key: string;
@@ -70,8 +82,9 @@ interface ChartScale {
 interface CategoricalChartProps {
   dimension: string;
   horizontal: boolean;
-  rows: WorkspaceStatistic[];
-  series: StatisticSeriesDefinition[];
+  model: CategoricalChartModel;
+  seriesEnd: number;
+  seriesStart: number;
   showDataLabels: boolean;
   stackMode: StackMode;
   onApplyPivot: VisualizationPanelProps["onApplyPivot"];
@@ -83,10 +96,22 @@ const CATEGORY_COLORS = TIME_SERIES_COLORS.slice(0, 6);
 const MAX_CATEGORICAL_ROWS = 12;
 const LEGACY_SERIES_KEY = "__events__";
 
-function timeAxisLabels(points: TimelinePoint[]): TimelinePoint[] {
-  if (points.length <= 5) return points;
-  return Array.from(new Set([0, 0.25, 0.5, 0.75, 1].map((ratio) => Math.round(ratio * (points.length - 1)))))
-    .map((index) => points[index]);
+interface CategoricalChartRow {
+  hasFinite: boolean;
+  maximum: number;
+  minimum: number;
+  negativeTotal: StackMagnitudeTotal;
+  positiveTotal: StackMagnitudeTotal;
+  row: WorkspaceStatistic;
+  seriesByKey: Map<string, WorkspaceStatisticSeries>;
+}
+
+export interface CategoricalChartModel {
+  approximate: boolean;
+  backendSeries: boolean;
+  domains: Record<StackMode, number[]>;
+  rows: CategoricalChartRow[];
+  series: StatisticSeriesDefinition[];
 }
 
 function categoryColor(category: string, index: number): string {
@@ -111,66 +136,185 @@ function formatExactNumeric(value: string | undefined, coordinate: number, compa
   return formatExactNumericText(value);
 }
 
-function rowSeries(row: WorkspaceStatistic, definition: StatisticSeriesDefinition): WorkspaceStatisticSeries {
+function indexedRowSeries(
+  row: CategoricalChartRow,
+  definition: StatisticSeriesDefinition,
+): WorkspaceStatisticSeries {
   if (definition.key === LEGACY_SERIES_KEY) {
     return {
       key: definition.key,
       label: definition.label,
-      value: row.count,
-      exactValue: row.exactCount,
-      coordinateApproximate: row.coordinateApproximate,
+      value: row.row.count,
+      exactValue: row.row.exactCount,
+      coordinateApproximate: row.row.coordinateApproximate,
     };
   }
-  return row.series?.find((item) => item.key === definition.key) ?? {
+  return row.seriesByKey.get(definition.key) ?? {
     key: definition.key,
     label: definition.label,
     value: null,
   };
 }
 
-function categoricalSeriesDefinitions(rows: WorkspaceStatistic[]): StatisticSeriesDefinition[] {
+function extendCategoricalDomain(
+  domains: Record<StackMode, number[]>,
+  mode: StackMode,
+  minimum: number,
+  maximum: number,
+) {
+  const domain = domains[mode];
+  if (domain.length === 0) {
+    domain.push(minimum, maximum);
+    return;
+  }
+  domain[0] = Math.min(domain[0], minimum);
+  domain[1] = Math.max(domain[1], maximum);
+}
+
+/** Index each categorical row and derive stable full-series domains once. */
+export function categoricalChartModel(rows: WorkspaceStatistic[]): CategoricalChartModel {
   const definitions = new Map<string, StatisticSeriesDefinition>();
-  for (const row of rows) {
+  let approximate = false;
+  const indexedRows = rows.map((row): CategoricalChartRow => {
+    const seriesByKey = new Map<string, WorkspaceStatisticSeries>();
+    let hasFinite = false;
+    let maximum = 0;
+    let minimum = 0;
+    const negativeTotal = createStackMagnitudeTotal();
+    const positiveTotal = createStackMagnitudeTotal();
+    approximate ||= row.coordinateApproximate === true;
     for (const item of row.series ?? []) {
       if (!definitions.has(item.key)) {
         definitions.set(item.key, { key: item.key, label: item.label });
       }
+      if (seriesByKey.has(item.key)) continue;
+      seriesByKey.set(item.key, item);
+      approximate ||= item.coordinateApproximate === true;
+      if (item.value === null || !Number.isFinite(item.value)) continue;
+      hasFinite = true;
+      maximum = Math.max(maximum, item.value);
+      minimum = Math.min(minimum, item.value);
+      addStackMagnitude(item.value < 0 ? negativeTotal : positiveTotal, item.value);
+    }
+    return { hasFinite, maximum, minimum, negativeTotal, positiveTotal, row, seriesByKey };
+  });
+  if (definitions.size === 0 && rows.length > 0) {
+    definitions.set(LEGACY_SERIES_KEY, {
+      key: LEGACY_SERIES_KEY,
+      label: rows[0].measureLabel ?? "Events",
+    });
+    for (const indexed of indexedRows) {
+      const value = indexed.row.count;
+      indexed.hasFinite = Number.isFinite(value);
+      indexed.maximum = Number.isFinite(value) ? Math.max(0, value) : 0;
+      indexed.minimum = Number.isFinite(value) ? Math.min(0, value) : 0;
+      indexed.negativeTotal = createStackMagnitudeTotal();
+      indexed.positiveTotal = createStackMagnitudeTotal();
+      if (Number.isFinite(value)) {
+        addStackMagnitude(value < 0 ? indexed.negativeTotal : indexed.positiveTotal, value);
+      }
     }
   }
-  if (definitions.size > 0) return [...definitions.values()];
-  return rows.length > 0
-    ? [{ key: LEGACY_SERIES_KEY, label: rows[0].measureLabel ?? "Events" }]
-    : [];
+  const domains: Record<StackMode, number[]> = { none: [], stacked: [], stacked100: [] };
+  for (const row of indexedRows) {
+    if (!row.hasFinite) continue;
+    extendCategoricalDomain(domains, "none", row.minimum, row.maximum);
+    extendCategoricalDomain(
+      domains,
+      "stacked",
+      -stackMagnitudeCoordinate(row.negativeTotal),
+      stackMagnitudeCoordinate(row.positiveTotal),
+    );
+    extendCategoricalDomain(
+      domains,
+      "stacked100",
+      row.negativeTotal.maximum === 0 ? 0 : -100,
+      row.positiveTotal.maximum === 0 ? 0 : 100,
+    );
+  }
+  return {
+    approximate: approximate || indexedRows.some((row) =>
+      stackMagnitudeIsApproximate(row.negativeTotal)
+      || stackMagnitudeIsApproximate(row.positiveTotal)
+    ),
+    backendSeries: rows.some((row) => row.series !== undefined),
+    domains,
+    rows: indexedRows,
+    series: [...definitions.values()],
+  };
 }
 
 function statisticMagnitude(row: WorkspaceStatistic): number {
-  const values = row.series?.flatMap((series) =>
-    series.value === null || !Number.isFinite(series.value) ? [] : [Math.abs(series.value)],
-  );
-  return values !== undefined && values.length > 0
-    ? values.reduce((sum, value) => sum + value, 0)
-    : Math.abs(row.count);
+  if (row.series === undefined) return Math.abs(row.count);
+  let hasFinite = false;
+  let magnitude = 0;
+  for (const series of row.series) {
+    if (series.value === null || !Number.isFinite(series.value)) continue;
+    hasFinite = true;
+    magnitude += Math.abs(series.value);
+  }
+  return hasFinite ? magnitude : Math.abs(row.count);
 }
 
-function categoricalScale(stackedRows: ReturnType<typeof stackChartRows>): ChartScale {
-  return linearTickScale(stackedChartDomain(stackedRows));
+export function categoricalStackWindow(
+  model: CategoricalChartModel,
+  seriesStart: number,
+  seriesEnd: number,
+  stackMode: StackMode,
+): { domain: number[]; rows: StackedChartRow[] } {
+  const rows = model.rows.map((row) => {
+    let negative = 0;
+    let positive = 0;
+    const visible: StackedChartRow = [];
+    const scanStart = stackMode === "none" ? seriesStart : 0;
+    for (let seriesIndex = scanStart; seriesIndex < seriesEnd; seriesIndex += 1) {
+      const definition = model.series[seriesIndex];
+      if (definition === undefined) continue;
+      const raw = indexedRowSeries(row, definition).value;
+      if (raw === null || !Number.isFinite(raw)) {
+        if (seriesIndex >= seriesStart) visible.push({ end: 0, raw: null, start: 0 });
+        continue;
+      }
+      const value = stackMode === "stacked100"
+        ? normalizeStackValue(raw, row.positiveTotal, row.negativeTotal)
+        : raw;
+      let start = 0;
+      let end = value;
+      if (stackMode !== "none") {
+        if (value >= 0) {
+          start = positive;
+          positive = addStackCoordinate(positive, value);
+          end = positive;
+        } else {
+          start = negative;
+          negative = addStackCoordinate(negative, value);
+          end = negative;
+        }
+      }
+      if (seriesIndex >= seriesStart) visible.push({ end, raw, start });
+    }
+    return visible;
+  });
+  return { domain: model.domains[stackMode], rows };
 }
 
 function verticalGeometry(start: number, end: number, scale: ChartScale): { top: number; height: number } {
-  const range = scale.maximum - scale.minimum;
   const upper = Math.max(start, end);
   const lower = Math.min(start, end);
+  const projectedUpper = projectScaleValue(upper, scale);
+  const projectedLower = projectScaleValue(lower, scale);
   return {
-    top: ((scale.maximum - upper) / range) * 100,
-    height: ((upper - lower) / range) * 100,
+    top: (1 - projectedUpper) * 100,
+    height: (projectedUpper - projectedLower) * 100,
   };
 }
 
 function horizontalGeometry(start: number, end: number, scale: ChartScale): { left: number; width: number } {
-  const range = scale.maximum - scale.minimum;
+  const projectedStart = projectScaleValue(Math.min(start, end), scale);
+  const projectedEnd = projectScaleValue(Math.max(start, end), scale);
   return {
-    left: ((Math.min(start, end) - scale.minimum) / range) * 100,
-    width: (Math.abs(end - start) / range) * 100,
+    left: projectedStart * 100,
+    width: (projectedEnd - projectedStart) * 100,
   };
 }
 
@@ -197,8 +341,9 @@ function CategoricalTooltip({
   onPointerLeave,
   rowIndex,
   series,
+  seriesStart,
 }: {
-  activeRow: WorkspaceStatistic | null;
+  activeRow: CategoricalChartRow | null;
   dimension: string;
   inspectorId: string;
   onBlur: () => void;
@@ -207,17 +352,19 @@ function CategoricalTooltip({
   onPointerLeave: () => void;
   rowIndex: number;
   series: StatisticSeriesDefinition[];
+  seriesStart: number;
 }) {
   if (activeRow === null) return null;
-  const backendSeries = activeRow.series !== undefined;
+  const sourceRow = activeRow.row;
+  const backendSeries = sourceRow.series !== undefined;
   const approximatePosition = series.some((definition) =>
-    rowSeries(activeRow, definition).coordinateApproximate === true,
+    indexedRowSeries(activeRow, definition).coordinateApproximate === true,
   );
   return (
     <section
       className="visualization-tooltip"
       id={inspectorId}
-      aria-label={`Values for ${activeRow.level}`}
+      aria-label={`Values for ${sourceRow.level}`}
       data-categorical-inspector="true"
       data-testid="categorical-chart-tooltip"
       onBlurCapture={(event) => {
@@ -228,7 +375,7 @@ function CategoricalTooltip({
       onPointerLeave={onPointerLeave}
     >
       <div className="visualization-tooltip-header">
-        <strong title={activeRow.level}>{activeRow.level}</strong>
+        <strong title={sourceRow.level}>{sourceRow.level}</strong>
         <button
           type="button"
           aria-label="Close chart value inspector"
@@ -238,12 +385,12 @@ function CategoricalTooltip({
         </button>
       </div>
       {series.map((definition, seriesIndex) => {
-        const value = rowSeries(activeRow, definition);
+        const value = indexedRowSeries(activeRow, definition);
         return (
           <span key={definition.key}>
             <i
               aria-hidden="true"
-              style={{ backgroundColor: backendSeries ? seriesColor(seriesIndex) : categoryColor(activeRow.level, rowIndex) }}
+              style={{ backgroundColor: backendSeries ? seriesColor(seriesStart + seriesIndex) : categoryColor(sourceRow.level, rowIndex) }}
             />
             <span>{definition.label}</span>
             <b>{displaySeriesValue(value)}</b>
@@ -253,13 +400,13 @@ function CategoricalTooltip({
       {approximatePosition ? (
         <small className="visualization-tooltip-precision">Chart position is approximate; displayed server values are exact.</small>
       ) : null}
-      {activeRow.pivotable === false ? (
+      {sourceRow.pivotable === false ? (
         <small className="visualization-tooltip-unavailable">Drilldown is unavailable for this typed value.</small>
       ) : (
         <button
           className="visualization-tooltip-action"
           type="button"
-          onClick={() => onDrilldown(activeRow)}
+          onClick={() => onDrilldown(sourceRow)}
         >
           Add {dimension} value to search <AppIcon name="chevron-right" size="xs" />
         </button>
@@ -271,8 +418,9 @@ function CategoricalTooltip({
 function CategoricalChart({
   dimension,
   horizontal,
-  rows,
-  series,
+  model,
+  seriesEnd,
+  seriesStart,
   showDataLabels,
   stackMode,
   onApplyPivot,
@@ -283,23 +431,35 @@ function CategoricalChart({
   const lastPointerTypeRef = useRef<string | null>(null);
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const [pinnedIndex, setPinnedIndex] = useState<number | null>(null);
-  const [activeRowCount, setActiveRowCount] = useState(rows.length);
-  const stackedRows = useMemo(() => stackChartRows(
-    rows.map((row) => series.map((definition) => rowSeries(row, definition).value)),
-    stackMode,
-  ), [rows, series, stackMode]);
-  const scale = useMemo(() => categoricalScale(stackedRows), [stackedRows]);
-  const approximate = rows.some((row) =>
-    row.coordinateApproximate === true || row.series?.some((item) => item.coordinateApproximate) === true,
+  const rows = model.rows;
+  const boundedSeriesStart = Math.min(
+    Math.max(0, seriesStart),
+    Math.max(0, model.series.length - 1),
   );
+  const boundedSeriesEnd = Math.min(
+    model.series.length,
+    Math.max(boundedSeriesStart + 1, seriesEnd),
+  );
+  const series = useMemo(
+    () => model.series.slice(boundedSeriesStart, boundedSeriesEnd),
+    [boundedSeriesEnd, boundedSeriesStart, model.series],
+  );
+  const [activeRowCount, setActiveRowCount] = useState(rows.length);
+  const stackWindow = useMemo(
+    () => categoricalStackWindow(model, boundedSeriesStart, boundedSeriesEnd, stackMode),
+    [boundedSeriesEnd, boundedSeriesStart, model, stackMode],
+  );
+  const stackedRows = stackWindow.rows;
+  const scale = useMemo(() => linearTickScale(stackWindow.domain), [stackWindow.domain]);
+  const approximate = model.approximate;
   const activeRow = activeIndex === null ? null : rows[activeIndex] ?? null;
-  const backendSeries = rows.some((row) => row.series !== undefined);
+  const backendSeries = model.backendSeries;
   const inspectDescription = activeRow === null
     ? `Inspect ${dimension} categories. Use Left and Right arrow keys to move between categories.`
-    : `${activeRow.level}. ${series.map((definition) => {
-      const value = rowSeries(activeRow, definition);
+    : `${activeRow.row.level}. ${series.map((definition) => {
+      const value = indexedRowSeries(activeRow, definition);
       return `${definition.label} ${displaySeriesValue(value)}${value.coordinateApproximate ? "; displayed value exact, chart position approximate" : ""}`;
-    }).join(", ")}.${activeRow.pivotable === false ? " Drilldown is unavailable for this typed value." : ` Activate to add this ${dimension} value to the search.`}`;
+    }).join(", ")}.${activeRow.row.pivotable === false ? " Drilldown is unavailable for this typed value." : ` Activate to add this ${dimension} value to the search.`}`;
 
   if (activeRowCount !== rows.length) {
     setActiveRowCount(rows.length);
@@ -425,6 +585,7 @@ function CategoricalChart({
       onPointerLeave={handleInspectorPointerLeave}
       rowIndex={activeIndex ?? 0}
       series={series}
+      seriesStart={boundedSeriesStart}
     />
   );
 
@@ -453,7 +614,7 @@ function CategoricalChart({
                 <span
                   key={tick}
                   className={tick === 0 ? "visualization-grid-line--zero" : undefined}
-                  style={{ left: `${((tick - scale.minimum) / (scale.maximum - scale.minimum)) * 100}%` }}
+                  style={{ left: `${projectScaleValue(tick, scale) * 100}%` }}
                 />
               ))}
             </div>
@@ -463,22 +624,24 @@ function CategoricalChart({
             >
               {rows.map((row, rowIndex) => (
                 <button
-                  key={row.id ?? row.level}
-                  {...categoryButtonProps(row, rowIndex, "visualization-horizontal-group")}
+                  key={row.row.id ?? row.row.level}
+                  {...categoryButtonProps(row.row, rowIndex, "visualization-horizontal-group")}
                 >
-                  <strong title={row.level}>{row.level}</strong>
+                  <strong title={row.row.level}>{row.row.level}</strong>
                   <span
                     className={`visualization-horizontal-bars${stackMode === "none" ? "" : " is-stacked"}`}
                     aria-hidden="true"
                   >
                     {series.map((definition, seriesIndex) => {
-                      const item = rowSeries(row, definition);
+                      const item = indexedRowSeries(row, definition);
                       const stackedValue = stackedRows[rowIndex]?.[seriesIndex];
                       if (item.value === null || stackedValue === undefined || stackedValue.raw === null) {
                         return <span className="visualization-horizontal-slot" key={definition.key} />;
                       }
                       const geometry = horizontalGeometry(stackedValue.start, stackedValue.end, scale);
-                      const color = backendSeries ? seriesColor(seriesIndex) : categoryColor(row.level, rowIndex);
+                      const color = backendSeries
+                        ? seriesColor(boundedSeriesStart + seriesIndex)
+                        : categoryColor(row.row.level, rowIndex);
                       return (
                         <span className="visualization-horizontal-slot" key={definition.key}>
                           <i
@@ -540,7 +703,7 @@ function CategoricalChart({
               <span
                 key={tick}
                 className={tick === 0 ? "visualization-grid-line--zero" : undefined}
-                style={{ top: `${((scale.maximum - tick) / (scale.maximum - scale.minimum)) * 100}%` }}
+                style={{ top: `${(1 - projectScaleValue(tick, scale)) * 100}%` }}
               />
             ))}
           </div>
@@ -550,21 +713,23 @@ function CategoricalChart({
           >
             {rows.map((row, rowIndex) => (
               <button
-                key={row.id ?? row.level}
-                {...categoryButtonProps(row, rowIndex, "visualization-vertical-group")}
+                key={row.row.id ?? row.row.level}
+                {...categoryButtonProps(row.row, rowIndex, "visualization-vertical-group")}
               >
                 <span
                   className={`visualization-vertical-bars${stackMode === "none" ? "" : " is-stacked"}`}
                   aria-hidden="true"
                 >
                   {series.map((definition, seriesIndex) => {
-                    const item = rowSeries(row, definition);
+                    const item = indexedRowSeries(row, definition);
                     const stackedValue = stackedRows[rowIndex]?.[seriesIndex];
                     if (item.value === null || stackedValue === undefined || stackedValue.raw === null) {
                       return <span className="visualization-vertical-slot" key={definition.key} />;
                     }
                     const geometry = verticalGeometry(stackedValue.start, stackedValue.end, scale);
-                    const color = backendSeries ? seriesColor(seriesIndex) : categoryColor(row.level, rowIndex);
+                    const color = backendSeries
+                      ? seriesColor(boundedSeriesStart + seriesIndex)
+                      : categoryColor(row.row.level, rowIndex);
                     const dataLabelTop = item.value >= 0
                       ? `max(2px, calc(${geometry.top}% - 17px))`
                       : `calc(${geometry.top + geometry.height}% + 3px)`;
@@ -590,7 +755,7 @@ function CategoricalChart({
                     );
                   })}
                 </span>
-                <strong title={row.level}>{row.level}</strong>
+                <strong title={row.row.level}>{row.row.level}</strong>
               </button>
             ))}
           </div>
@@ -617,41 +782,62 @@ export function VisualizationPanel({
   onApplyPivot,
   onChartStyleChange,
   onChartTitleChange,
+  onCopySeriesLabel,
   onLegendPositionChange,
   onShowDataLabelsChange,
   onStackModeChange,
   onVisualizationEdited,
   previewTruncated,
 }: VisualizationPanelProps) {
-  const displayedStatisticsRows = statisticsRows.length > MAX_CATEGORICAL_ROWS
+  const displayedStatisticsRows = useMemo(() => statisticsRows.length > MAX_CATEGORICAL_ROWS
     ? statisticsRows
       .map((row, index) => ({ row, index, magnitude: statisticMagnitude(row) }))
       .toSorted((left, right) => right.magnitude - left.magnitude || left.index - right.index)
       .slice(0, MAX_CATEGORICAL_ROWS)
       .map(({ row }) => row)
-    : statisticsRows;
-  const categoricalSeries = categoricalSeriesDefinitions(displayedStatisticsRows);
-  const maxTimelineCount = Math.max(1, ...timelinePoints.map((point) => point.count));
-  const chartAxisMaximum = maxTimelineCount;
-  const timelineAxisLabels = timeAxisLabels(timelinePoints);
-  const timelineSeries = timelineSeriesNames(timelinePoints);
-  const hasApproximateCoordinates = isTimechartResult
-    ? timelinePoints.some((point) => point.coordinateApproximate === true)
-    : statisticsRows.some((row) =>
-      row.coordinateApproximate === true || row.series?.some((series) => series.coordinateApproximate) === true,
+    : statisticsRows, [statisticsRows]);
+  const categoricalModel = useMemo(
+    () => categoricalChartModel(displayedStatisticsRows),
+    [displayedStatisticsRows],
   );
+  const categoricalSeries = categoricalModel.series;
+  const timechartModel = useMemo(() => timelineChartModel(timelinePoints), [timelinePoints]);
+  const timelineSeries = timechartModel.series.names;
+  const [seriesOffset, setSeriesOffset] = useState(0);
+  const activeSeriesCount = isTimechartResult ? timelineSeries.length : categoricalSeries.length;
+  const maximumSeriesOffset = Math.floor(
+    Math.max(0, activeSeriesCount - 1) / TIMELINE_SERIES_WINDOW_SIZE,
+  ) * TIMELINE_SERIES_WINDOW_SIZE;
+  const boundedSeriesOffset = Math.min(
+    seriesOffset,
+    maximumSeriesOffset,
+  );
+  const activeSeriesEnd = Math.min(
+    activeSeriesCount,
+    boundedSeriesOffset + TIMELINE_SERIES_WINDOW_SIZE,
+  );
+  const visibleTimelineSeries = timelineSeries.slice(boundedSeriesOffset, activeSeriesEnd);
+  const visibleCategoricalSeries = categoricalSeries.slice(boundedSeriesOffset, activeSeriesEnd);
+  const seriesWindowed = activeSeriesCount > TIMELINE_SERIES_WINDOW_SIZE;
+  const hasApproximateCoordinates = isTimechartResult
+    ? timechartModel.hasApproximateCoordinates
+    : categoricalModel.approximate;
   const splitTimechart = isTimechartResult && timelineSeries.length > 1;
-  const isTimeSeriesChart = isTimechartResult
-    && (chartStyle === "line" || chartStyle === "area" || splitTimechart);
+  const isTimeSeriesChart = isTimechartResult;
   const effectiveChartStyle = isTimeSeriesChart
-    ? chartStyle === "area" ? "area" : "line"
+    ? chartStyle === "area"
+      ? "area"
+      : chartStyle === "column" && !splitTimechart
+        ? "column"
+        : "line"
     : chartStyle;
   const hasCategoricalChart = isTimechartResult
     ? timelinePoints.length > 0
     : displayedStatisticsRows.length > 0 && categoricalSeries.length > 0;
-  const backendCategoricalResult = statisticsRows.some((row) => row.series !== undefined);
+  const backendCategoricalResult = categoricalModel.backendSeries;
   const categoricalSeriesResult = !isTimechartResult
-    && statisticsRows.some((row) => (row.series?.length ?? 0) > 0);
+    && categoricalModel.backendSeries
+    && categoricalSeries.length > 0;
   const supportsStacking = splitTimechart || categoricalSeriesResult;
   const effectiveStackMode = supportsStacking ? stackMode : "none";
   const seriesSummary = categoricalSeries.length === 1
@@ -702,7 +888,7 @@ export function VisualizationPanel({
             : isTimechartResult
               ? `${timechartCoverage === null
                 ? "Timechart across the submitted search range."
-                : describeTimechartCoverage(timechartCoverage, timelinePoints.at(-1)?.label ?? null)}${hasApproximateCoordinates ? " The plotted scale is approximate for values beyond the browser’s exact integer range; hover or focus a point for its exact server value." : ""}`
+                : describeTimechartCoverage(timechartCoverage, timechartModel.points.at(-1)?.label ?? null)}${hasApproximateCoordinates ? " The plotted scale is approximate for values beyond the browser’s exact integer range; hover or focus a point for its exact server value." : ""}`
               : hasCategoricalChart
                 ? backendCategoricalResult
                   ? `${categoricalSeries.length === 1 ? categoricalSeries[0].label : `${categoricalSeries.length} complete series`} grouped by ${statisticsDimension}.${statisticsRows.length > displayedStatisticsRows.length ? ` Showing the top ${displayedStatisticsRows.length} of ${statisticsRows.length} categories.` : ""}${hasApproximateCoordinates ? " The plotted scale is approximate for values beyond the browser’s exact integer range; exact server values appear on hover or focus." : ""}`
@@ -732,49 +918,26 @@ export function VisualizationPanel({
           </output>
         ) : isTimeSeriesChart ? (
           <TimeSeriesLineChart
-            chartStyle={effectiveChartStyle === "area" ? "area" : "line"}
+            chartStyle={effectiveChartStyle === "area"
+              ? "area"
+              : effectiveChartStyle === "column"
+                ? "column"
+                : "line"}
+            model={timechartModel}
+            onCopySeriesLabel={onCopySeriesLabel}
             points={timelinePoints}
+            seriesEnd={activeSeriesEnd}
+            seriesStart={boundedSeriesOffset}
+            showDataLabels={showDataLabels}
             stackMode={effectiveStackMode}
           />
-        ) : isTimechartResult ? (
-          <>
-            <div className="chart-y-axis" aria-hidden="true">
-              {[1, 0.75, 0.5, 0.25, 0].map((ratio) => (
-                <span key={`time-${ratio}`}>
-                  {hasApproximateCoordinates ? "≈" : ""}{COMPACT_NUMBER_FORMAT.format(Math.round(chartAxisMaximum * ratio))}
-                </span>
-              ))}
-            </div>
-            <div className="chart-plot">
-              <div className="chart-grid" aria-hidden="true"><span /><span /><span /><span /></div>
-              <div className="timechart-columns" data-testid="timechart-columns">
-                <div className="timechart-column-bars">
-                  {timelinePoints.map((point, index) => (
-                    <button
-                      type="button"
-                      key={point.id}
-                      aria-label={`${point.label}: ${formatTimelineSeriesValue(point, "Events")} events${point.coordinateApproximate ? "; chart position approximate" : ""}`}
-                      title={`${point.label}\n${formatTimelineSeriesValue(point, "Events")} events${point.coordinateApproximate ? "\nChart position is approximate" : ""}`}
-                    >
-                      <span style={{ height: `${Math.max(3, (point.count / maxTimelineCount) * 100)}%` }} />
-                      {showDataLabels && (index % 12 === 0 || index === timelinePoints.length - 1)
-                        ? <b>{point.coordinateApproximate ? "≈" : ""}{formatTimelineSeriesValue(point, "Events", "Events", true)}</b>
-                        : null}
-                    </button>
-                  ))}
-                </div>
-                <div className="line-chart-axis" aria-hidden="true">
-                  {timelineAxisLabels.map((point) => <span key={point.id}>{point.label}</span>)}
-                </div>
-              </div>
-            </div>
-          </>
         ) : (
           <CategoricalChart
             dimension={statisticsDimension}
             horizontal={effectiveChartStyle === "horizontal"}
-            rows={displayedStatisticsRows}
-            series={categoricalSeries}
+            model={categoricalModel}
+            seriesEnd={activeSeriesEnd}
+            seriesStart={boundedSeriesOffset}
             showDataLabels={showDataLabels}
             stackMode={effectiveStackMode}
             onApplyPivot={onApplyPivot}
@@ -784,17 +947,30 @@ export function VisualizationPanel({
           <div className="chart-legend">
             {isTimechartResult
               ? isTimeSeriesChart
-                ? timelineSeries.map((name, index) => (
-                  <span key={name}>
-                    <i style={{ backgroundColor: seriesColor(index) }} />
-                    {timelineSeriesDisplayName(name)}
-                  </span>
-                ))
+                ? visibleTimelineSeries.map((name, index) => {
+                  const visibleLabel = timelineSeriesDisplayName(name);
+                  return (
+                    <span key={name}>
+                      <i style={{ backgroundColor: seriesColor(boundedSeriesOffset + index) }} />
+                      {visibleLabel}
+                      <Button
+                        aria-label={`Copy series label ${visibleLabel}`}
+                        icon
+                        onClick={() => onCopySeriesLabel(visibleLabel)}
+                        size="compact"
+                        title={`Copy ${visibleLabel}`}
+                        variant="ghost"
+                      >
+                        <AppIcon name="copy" size="xs" />
+                      </Button>
+                    </span>
+                  );
+                })
                 : <span><i className="legend-info" />Events</span>
               : backendCategoricalResult
-                ? categoricalSeries.map((series, index) => (
+                ? visibleCategoricalSeries.map((series, index) => (
                   <span key={series.key}>
-                    <i style={{ backgroundColor: seriesColor(index) }} />
+                    <i style={{ backgroundColor: seriesColor(boundedSeriesOffset + index) }} />
                     {series.label}
                   </span>
                 ))
@@ -824,7 +1000,15 @@ export function VisualizationPanel({
           }}><SelectOption value="none">None</SelectOption><SelectOption value="stacked">Stacked</SelectOption><SelectOption value="stacked100">100%</SelectOption></Select></label>
         ) : null}
         {isTimeSeriesChart ? (
-          <div className="visualization-interaction-note"><strong>Inspect values</strong><span>Hover, tap, or focus the plot and use the arrow keys.</span></div>
+          <>
+            {effectiveChartStyle === "column" ? (
+              <label><span>Data labels</span><input type="checkbox" checked={showDataLabels} onChange={(event) => {
+                onVisualizationEdited();
+                onShowDataLabelsChange(event.target.checked);
+              }} /></label>
+            ) : null}
+            <div className="visualization-interaction-note"><strong>Inspect values</strong><span>Hover, tap, or focus the plot and use the arrow keys.</span></div>
+          </>
         ) : (
           <>
             <label><span>Data labels</span><input type="checkbox" checked={showDataLabels} disabled={!hasCategoricalChart} onChange={(event) => {
@@ -839,6 +1023,30 @@ export function VisualizationPanel({
             ) : null}
           </>
         )}
+        {seriesWindowed ? (
+          <div className="visualization-interaction-note">
+            <strong>Rendered series</strong>
+            <span>Showing {NUMBER_FORMAT.format(boundedSeriesOffset + 1)}–{NUMBER_FORMAT.format(activeSeriesEnd)} of {NUMBER_FORMAT.format(activeSeriesCount)}. Every series remains available here and in Statistics.</span>
+            <div className="visualization-series-controls">
+              <button
+                className="button button--secondary button--compact"
+                type="button"
+                disabled={boundedSeriesOffset === 0}
+                onClick={() => setSeriesOffset(Math.max(0, boundedSeriesOffset - TIMELINE_SERIES_WINDOW_SIZE))}
+              >
+                Previous series
+              </button>
+              <button
+                className="button button--secondary button--compact"
+                type="button"
+                disabled={activeSeriesEnd === activeSeriesCount}
+                onClick={() => setSeriesOffset(activeSeriesEnd)}
+              >
+                Next series
+              </button>
+            </div>
+          </div>
+        ) : null}
       </aside>
     </section>
   );

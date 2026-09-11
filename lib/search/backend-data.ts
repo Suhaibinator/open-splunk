@@ -401,6 +401,44 @@ function chartNumericValue(value: TypedValue | undefined): ChartNumericValue | n
   }
 }
 
+function boundedChartCoordinateSum(values: readonly { value: ChartNumericValue }[]): {
+  approximate: boolean;
+  coordinate: number;
+} {
+  let compensation = 0;
+  let scale = 0;
+  let scaledSum = 0;
+  for (const { value: { coordinate } } of values) {
+    const magnitude = Math.abs(coordinate);
+    if (magnitude > scale) {
+      const factor = scale === 0 ? 0 : scale / magnitude;
+      scaledSum *= factor;
+      compensation *= factor;
+      scale = magnitude;
+    }
+    if (scale === 0) continue;
+    const normalized = coordinate / scale;
+    const next = scaledSum + normalized;
+    compensation += Math.abs(scaledSum) >= Math.abs(normalized)
+      ? (scaledSum - next) + normalized
+      : (normalized - next) + scaledSum;
+    scaledSum = next;
+  }
+  const normalizedTotal = scaledSum + compensation;
+  if (scale === 0 || normalizedTotal === 0) return { approximate: false, coordinate: 0 };
+  if (Math.abs(normalizedTotal) > Number.MAX_VALUE / scale) {
+    return {
+      approximate: true,
+      coordinate: Math.sign(normalizedTotal) * Number.MAX_VALUE,
+    };
+  }
+  const coordinate = normalizedTotal * scale;
+  return {
+    approximate: coordinate === 0,
+    coordinate,
+  };
+}
+
 function numericValueType(valueType: ValueType): boolean {
   return valueType === ValueType.VALUE_TYPE_SINT64
     || valueType === ValueType.VALUE_TYPE_UINT64
@@ -608,13 +646,62 @@ function statisticsFromRows(schema: ResultSchema, rows: ResultRow[]): { rows: Wo
   };
 }
 
+const RFC3339_NANO_UTC = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?Z$/u;
+
+function floorDivide(dividend: bigint, divisor: bigint): bigint {
+  const quotient = dividend / divisor;
+  return dividend < 0n && dividend % divisor !== 0n ? quotient - 1n : quotient;
+}
+
+function daysFromCivil(year: bigint, month: bigint, day: bigint): bigint {
+  const adjustedYear = month <= 2n ? year - 1n : year;
+  const era = floorDivide(adjustedYear, 400n);
+  const yearOfEra = adjustedYear - era * 400n;
+  const shiftedMonth = month > 2n ? month - 3n : month + 9n;
+  const dayOfYear = (153n * shiftedMonth + 2n) / 5n + day - 1n;
+  const dayOfEra = yearOfEra * 365n + yearOfEra / 4n - yearOfEra / 100n + dayOfYear;
+  return era * 146_097n + dayOfEra - 719_468n;
+}
+
+function leapYear(year: number): boolean {
+  return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+}
+
+/** Parse canonical UTC RFC3339Nano without routing exact bounds through Date. */
+export function timeBucketBoundaryNanoseconds(value: string): bigint | null {
+  const match = RFC3339_NANO_UTC.exec(value);
+  if (match === null || (match[7]?.endsWith("0") ?? false)) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const monthLengths = [31, leapYear(year) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (month < 1 || month > 12 || day < 1 || day > monthLengths[month - 1]
+    || hour > 23 || minute > 59 || second > 59) return null;
+  const days = daysFromCivil(BigInt(year), BigInt(month), BigInt(day));
+  const seconds = days * 86_400n + BigInt(hour * 3_600 + minute * 60 + second);
+  return seconds * 1_000_000_000n + BigInt((match[7] ?? "").padEnd(9, "0"));
+}
+
+function timechartTimeColumnIndex(schema: ResultSchema): number {
+  const canonical = schema.columns.findIndex((column) =>
+    column.fieldName === "_time" && column.valueType === ValueType.VALUE_TYPE_TIMESTAMP,
+  );
+  if (canonical >= 0) return canonical;
+  if (schema.columns.some((column) => column.fieldName === "_time")) return -1;
+  return schema.columns.findIndex((column) =>
+    /^_?time$/i.test(column.fieldName) && column.valueType === ValueType.VALUE_TYPE_TIMESTAMP,
+  );
+}
+
 function timelineFromRows(
   schema: ResultSchema,
   rows: ResultRow[],
   formatters: ResultDateTimeFormatters,
-  knownBucketWidthMs?: number,
 ): TimelinePoint[] {
-  const timeIndex = schema.columns.findIndex((column) => /^_?time$/i.test(column.fieldName));
+  const timeIndex = timechartTimeColumnIndex(schema);
   if (timeIndex < 0) return [];
   // Timechart columns after _time are independent runtime series. A split value
   // can itself be named "count", so preferring that spelling would discard all
@@ -632,29 +719,45 @@ function timelineFromRows(
   const points = rows.flatMap((row, index) => {
     const rawTime = typedValueToJSON(row.cells[timeIndex]);
     const date = typeof rawTime === "string" || typeof rawTime === "number" ? new Date(rawTime) : new Date(Number.NaN);
-    const chartValues = numericIndexes.flatMap((sourceIndex) => {
-      const value = chartNumericValue(row.cells[sourceIndex]);
-      return value === null
-        ? []
-        : [{ name: schema.columns[sourceIndex].fieldName, value }];
-    });
-    if (Number.isNaN(date.valueOf()) || chartValues.length === 0) return [];
-    const series = Object.fromEntries(chartValues.map(({ name, value }) => [name, value.coordinate]));
-    const exactSeries = Object.fromEntries(chartValues.flatMap(({ name, value }) =>
+    const chartValues = numericIndexes.map((sourceIndex) => ({
+      name: schema.columns[sourceIndex].fieldName,
+      value: chartNumericValue(row.cells[sourceIndex]),
+    }));
+    if (Number.isNaN(date.valueOf())) return [];
+    const presentChartValues = chartValues.flatMap(({ name, value }) =>
+      value === null ? [] : [{ name, value }],
+    );
+    const series = Object.fromEntries(chartValues.map(({ name, value }) => [
+      name,
+      value?.coordinate ?? null,
+    ]));
+    const exactSeries = Object.fromEntries(presentChartValues.flatMap(({ name, value }) =>
       value.exactText === undefined ? [] : [[name, value.exactText]],
     ));
-    const count = chartValues.reduce((sum, item) => sum + item.value.coordinate, 0);
-    if (!Number.isFinite(count)) return [];
-    const exactIntegers = chartValues.map((item) => item.value.exactInteger);
+    const countSummary = boundedChartCoordinateSum(presentChartValues);
+    const count = countSummary.coordinate;
+    const exactIntegers = presentChartValues.map((item) => item.value.exactInteger);
     const exactIntegerTotal = exactIntegers.every((value) => value !== undefined)
       ? exactIntegers.reduce((sum, value) => sum + (value ?? 0n), 0n)
       : undefined;
-    const coordinateApproximate = chartValues.some((item) => item.value.approximate)
+    const coordinateApproximate = countSummary.approximate
+      || presentChartValues.some((item) => item.value.approximate)
       || (exactIntegerTotal !== undefined && !Number.isSafeInteger(count));
     const formatter = formatters.timeline ??= new Intl.DateTimeFormat(
       "en-US",
       TIMELINE_TIME_FORMAT_OPTIONS,
     );
+    const exactEarliest = row.timeBucket?.earliest;
+    const exactLatest = row.timeBucket?.latest;
+    const earliestNanoseconds = exactEarliest === undefined
+      ? null
+      : timeBucketBoundaryNanoseconds(exactEarliest);
+    const latestNanoseconds = exactLatest === undefined
+      ? null
+      : timeBucketBoundaryNanoseconds(exactLatest);
+    const validTimeBucket = earliestNanoseconds !== null
+      && latestNanoseconds !== null
+      && earliestNanoseconds < latestNanoseconds;
     return [{
       id: row.rowId || `bucket-${index}`,
       label: formatter.format(date),
@@ -662,37 +765,19 @@ function timelineFromRows(
       series,
       exactCount: coordinateApproximate && exactIntegerTotal !== undefined
         ? exactIntegerTotal.toString()
-        : coordinateApproximate && chartValues.length === 1
-          ? chartValues[0].value.exactText
+        : coordinateApproximate && presentChartValues.length === 1
+          ? presentChartValues[0].value.exactText
           : undefined,
       exactSeries: Object.keys(exactSeries).length > 0 ? exactSeries : undefined,
       coordinateApproximate: coordinateApproximate || undefined,
-      earliest: date.toISOString(),
+      earliest: validTimeBucket ? exactEarliest : undefined,
+      latest: validTimeBucket ? exactLatest : undefined,
+      timeCoordinateNanoseconds: validTimeBucket ? earliestNanoseconds : undefined,
+      timeLatestCoordinateNanoseconds: validTimeBucket ? latestNanoseconds : undefined,
+      timeValue: typeof rawTime === "string" ? rawTime : date.toISOString(),
     } satisfies TimelinePoint];
   });
-  return points.map((point, index) => {
-    const currentTime = point.earliest ? new Date(point.earliest).valueOf() : Number.NaN;
-    const previousTime = points[index - 1]?.earliest ? new Date(points[index - 1].earliest as string).valueOf() : Number.NaN;
-    const inferredWidth = Number.isFinite(currentTime - previousTime)
-      ? currentTime - previousTime
-      : knownBucketWidthMs;
-    const nextEarliest = points[index + 1]?.earliest;
-    return {
-      id: point.id,
-      label: point.label,
-      count: point.count,
-      series: point.series,
-      exactCount: point.exactCount,
-      exactSeries: point.exactSeries,
-      coordinateApproximate: point.coordinateApproximate,
-      earliest: point.earliest,
-      latest: nextEarliest ?? (
-        inferredWidth !== undefined && Number.isFinite(inferredWidth) && inferredWidth > 0
-          ? new Date(currentTime + inferredWidth).toISOString()
-          : undefined
-      ),
-    };
-  });
+  return points;
 }
 
 /** Stable field order for a timechart table or export. */
@@ -702,7 +787,7 @@ export function timechartValueFields(
 ): string[] {
   if (schema !== undefined) {
     if (schema.resultKind !== ResultSetKind.RESULT_SET_KIND_TIME_SERIES) return [];
-    const timeIndex = schema.columns.findIndex((column) => /^_?time$/i.test(column.fieldName));
+    const timeIndex = timechartTimeColumnIndex(schema);
     if (timeIndex < 0) return [];
     return schema.columns.flatMap((column, index) =>
       index !== timeIndex && column.fieldName.length > 0 ? [column.fieldName] : []
@@ -718,9 +803,9 @@ export function timechartValueFields(
 /** Preserve every split-by series instead of exporting only the synthetic total. */
 export function timechartRowsForExport(points: TimelinePoint[]): Record<string, WorkspaceStatisticsValue>[] {
   const fields = timechartValueFields(points);
-  const hasExplicitSeries = points.some((point) => point.series !== undefined && Object.keys(point.series).length > 0);
+  const hasExplicitSeries = points.some((point) => point.series !== undefined);
   return points.map((point) => ({
-    _time: point.earliest ?? point.label,
+    _time: point.earliest ?? point.timeValue ?? point.label,
     ...Object.fromEntries(fields.map((field) => [
       field,
       hasExplicitSeries
@@ -730,23 +815,9 @@ export function timechartRowsForExport(points: TimelinePoint[]): Record<string, 
   }));
 }
 
-export function timechartSpanMilliseconds(spl: string): number | null {
-  const match = /(?:^|\|)\s*timechart\s+span\s*=\s*(\d+)(s|m|h)\b/i.exec(spl);
-  if (match === null) return null;
-  const magnitude = Number(match[1]);
-  const multiplier = match[2].toLowerCase() === "s"
-    ? 1_000
-    : match[2].toLowerCase() === "m"
-      ? 60_000
-      : 3_600_000;
-  const milliseconds = magnitude * multiplier;
-  return Number.isSafeInteger(milliseconds) && milliseconds > 0 ? milliseconds : null;
-}
-
 export function adaptSearchResults(
   schema: ResultSchema,
   rows: ResultRow[],
-  timechartBucketWidthMs?: number,
 ): AdaptedSearchResults {
   assertBrowserResultColumnCount(schema.columns.length);
   for (const column of schema.columns) {
@@ -793,7 +864,7 @@ export function adaptSearchResults(
         statistics: [],
         statisticsTable: null,
         statisticDimension: "level",
-        timeline: timelineFromRows(schema, rows, dateTimeFormatters, timechartBucketWidthMs),
+        timeline: timelineFromRows(schema, rows, dateTimeFormatters),
       };
     }
     default:

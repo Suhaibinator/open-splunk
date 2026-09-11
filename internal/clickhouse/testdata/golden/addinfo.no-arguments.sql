@@ -5,7 +5,7 @@
 -- string_or_bytes_outputs: []clickhouse.ResultStringOrBytesOutput{clickhouse.ResultStringOrBytesOutput{OutputIndex:0x1, Nullable:false}}
 -- sparse_fields: false subset=false
 -- atomic_result: false
--- execution_authority_digest: 70f96c30c879e9232113c5a7bcad3d89e66e2898704cfc9a9b2ddd0d2ac1091d
+-- execution_authority_digest: c9665fa7db68cd47c090a12171dc252163072bf6611f75b7dadb8699436ee055
 -- args[0]: 1.7846784005e+09
 -- args[1]: 1.7846784e+09
 -- args[2]: 1.784592e+09

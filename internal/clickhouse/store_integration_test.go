@@ -411,27 +411,39 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 		)
 	})
 	t.Run("twenty five logical batches become one ten thousand row insert", func(t *testing.T) {
-		before := store.HECReconciliationTelemetry()
 		const (
 			batchCount = 25
 			batchRows  = 400
 		)
-		for batchIndex := range batchCount {
-			batchID := fmt.Sprintf("coalesced-batch-%02d", batchIndex)
-			batch := distinctStoreBatch(batchID, uint64(batchIndex+10_000))
-			batch.OriginalEventCount = batchRows
-			batch.Events = make([]*ingest.StoredEvent, 0, batchRows)
-			for rowIndex := range batchRows {
-				eventID := fmt.Sprintf("coalesced-event-%02d-%03d", batchIndex, rowIndex)
-				event := testStoredEvent(eventID, "main", batch.ReceivedAt)
-				event.BatchID = batchID
-				batch.Events = append(batch.Events, event)
-			}
-			if result, stageErr := store.Stage(ctx, batch); stageErr != nil ||
-				result.State != ingest.StoredBatchPending {
-				t.Fatalf("Stage batch %d = %+v error=%v", batchIndex, result, stageErr)
-			}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("pause reconciliation before coalesced staging: %v", ctx.Err())
+		case <-store.reconcileSlot:
 		}
+		var before HECReconciliationSnapshot
+		func() {
+			// Open starts the ordinary reconciler. Keep it from observing a
+			// partially staged fixture, while leaving Stage's write admission
+			// and the production linger policy unchanged.
+			defer func() { store.reconcileSlot <- struct{}{} }()
+			before = store.HECReconciliationTelemetry()
+			for batchIndex := range batchCount {
+				batchID := fmt.Sprintf("coalesced-batch-%02d", batchIndex)
+				batch := distinctStoreBatch(batchID, uint64(batchIndex+10_000))
+				batch.OriginalEventCount = batchRows
+				batch.Events = make([]*ingest.StoredEvent, 0, batchRows)
+				for rowIndex := range batchRows {
+					eventID := fmt.Sprintf("coalesced-event-%02d-%03d", batchIndex, rowIndex)
+					event := testStoredEvent(eventID, "main", batch.ReceivedAt)
+					event.BatchID = batchID
+					batch.Events = append(batch.Events, event)
+				}
+				if result, stageErr := store.Stage(ctx, batch); stageErr != nil ||
+					result.State != ingest.StoredBatchPending {
+					t.Fatalf("Stage batch %d = %+v error=%v", batchIndex, result, stageErr)
+				}
+			}
+		}()
 		if err := store.ReconcilePending(ctx); err != nil {
 			t.Fatalf("ReconcilePending coalesced batches: %v", err)
 		}

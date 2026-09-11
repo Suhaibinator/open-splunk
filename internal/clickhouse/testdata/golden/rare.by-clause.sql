@@ -4,7 +4,7 @@
 -- output_fields: host, status, share
 -- sparse_fields: false subset=false
 -- atomic_result: true
--- execution_authority_digest: dd1586c8a9fdf80671ddd7b5d301324d932fb1c35f9a2a1d8d5685b9dfa4ec51
+-- execution_authority_digest: 906c47de0e0f3e1482110a7096ab827a3d2ca98e71fa25a323d9e65643fb0d98
 -- args[0]: "status"
 -- args[1]: "status."
 -- args[2]: "tenant-1"

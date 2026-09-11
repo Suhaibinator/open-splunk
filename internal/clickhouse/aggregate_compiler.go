@@ -6083,6 +6083,9 @@ func resolveCountValueInput(
 }
 
 func countValueInputSQL(field fieldState) (string, []any) {
+	if field.timechartOccurrences {
+		return field.valueSQL, nil
+	}
 	if field.kind == fieldKindStringArray {
 		// A fixed multivalue is physically non-null and its empty representation
 		// has cardinality zero, so its logical presence predicate is unnecessary.
