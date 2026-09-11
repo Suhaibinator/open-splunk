@@ -226,11 +226,14 @@ func newRelationInput(ctx context.Context, columns []RelationColumn, rows [][]an
 	return input, nil
 }
 
-func (walk *relationTraversal) valueValid(kind string, value any) bool {
-	if kind == "Dynamic" {
-		_, ok := walk.retainedValue(value, 0)
-		return ok
+func (walk *relationTraversal) retainedTypedValue(kind string, value any) (uint64, bool) {
+	if kind != "Dynamic" && !relationScalarValueValid(kind, value) {
+		return 0, false
 	}
+	return walk.retainedValue(value, 0)
+}
+
+func relationScalarValueValid(kind string, value any) bool {
 	if value == nil {
 		return strings.HasPrefix(kind, "Nullable(")
 	}

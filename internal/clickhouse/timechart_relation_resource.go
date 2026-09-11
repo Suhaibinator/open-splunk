@@ -93,17 +93,14 @@ func relationInputRetainedBytes(
 		}
 		for index, column := range columns {
 			value := row[index]
-			if !walk.valueValid(column.Type, value) {
-				if walk.err != nil {
-					return 0, walk.err
-				}
-				return 0, errors.New("materialize timechart: cell type is invalid")
-			}
-			size, ok := walk.retainedValue(value, 0)
+			size, ok := walk.retainedTypedValue(column.Type, value)
 			if walk.err != nil {
 				return 0, walk.err
 			}
-			if !ok || !charge(size) {
+			if !ok {
+				return 0, errors.New("materialize timechart: cell type is invalid")
+			}
+			if !charge(size) {
 				return 0, fmt.Errorf("%w: materialize timechart cells exceed byte limit", ErrTimechartResourceLimit)
 			}
 		}

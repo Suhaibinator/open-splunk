@@ -50,6 +50,70 @@ func TestRelationInputRetainedBytesHasExactNestedBoundary(t *testing.T) {
 	}
 }
 
+func TestRelationInputRetainedTypedValueWalksDynamicOnce(t *testing.T) {
+	t.Parallel()
+
+	items := make([]any, 4_096)
+	for index := range items {
+		items[index] = []any{uint64(index)}
+	}
+	walk := relationTraversal{ctx: context.Background()}
+	if _, ok := walk.retainedTypedValue("Dynamic", items); !ok {
+		t.Fatal("valid nested Dynamic value was rejected")
+	}
+	want := uint64(1 + 2*len(items))
+	if walk.nodes != want {
+		t.Fatalf("Dynamic preflight visits = %d, want %d", walk.nodes, want)
+	}
+}
+
+func TestRelationInputRetainedTypedValuePreservesValidation(t *testing.T) {
+	t.Parallel()
+
+	tooDeep := any(uint64(1))
+	for range 18 {
+		tooDeep = []any{tooDeep}
+	}
+	tests := []struct {
+		name  string
+		kind  string
+		value any
+		valid bool
+	}{
+		{name: "IEEE Float64", kind: "Float64", value: math.Inf(1), valid: true},
+		{name: "wrong scalar", kind: "UInt64", value: int64(1)},
+		{name: "invalid Dynamic member", kind: "Dynamic", value: []any{make(chan struct{})}},
+		{name: "too deeply nested Dynamic", kind: "Dynamic", value: tooDeep},
+		{name: "nullable nil", kind: "Nullable(Dynamic)", valid: true},
+		{name: "non-nil nullable Dynamic", kind: "Nullable(Dynamic)", value: uint64(1)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			walk := relationTraversal{ctx: context.Background()}
+			_, ok := walk.retainedTypedValue(test.kind, test.value)
+			if ok != test.valid || walk.err != nil {
+				t.Fatalf("retainedTypedValue(%q, %#v) = (%t, %v), want (%t, nil)", test.kind, test.value, ok, walk.err, test.valid)
+			}
+		})
+	}
+}
+
+func TestRelationInputRetainedBytesKeepsInvalidDynamicClassification(t *testing.T) {
+	t.Parallel()
+
+	_, err := relationInputRetainedBytes(
+		context.Background(),
+		[]RelationColumn{{Name: "value", Type: "Dynamic"}},
+		[][]any{{[]any{make(chan struct{})}}},
+		1,
+		math.MaxUint64,
+	)
+	if err == nil || errors.Is(err, ErrTimechartResourceLimit) ||
+		err.Error() != "materialize timechart: cell type is invalid" {
+		t.Fatalf("invalid Dynamic error = %v, want cell type classification", err)
+	}
+}
+
 func TestNewRelationInputUsesTheRemainingStageBudget(t *testing.T) {
 	t.Parallel()
 
