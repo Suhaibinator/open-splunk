@@ -18,10 +18,8 @@ func TestNestedRelationTraversalsPollWithinSingleCell(t *testing.T) {
 		name string
 		run  func(*relationTraversal)
 	}{
-		{"retained size", func(walk *relationTraversal) { _, _ = walk.retainedValue(items, 0) }},
-		{"clone", func(walk *relationTraversal) { _, _ = walk.cloneValue(items, 0) }},
-		{"commitment", func(walk *relationTraversal) { _ = walk.writeValue(sha256.New(), items, 0) }},
-		{"native size", func(walk *relationTraversal) { _, _ = walk.nativeDynamicBytes(items, true) }},
+		{"retained and native size", func(walk *relationTraversal) { _, _, _ = walk.preflightTypedValue("Dynamic", items) }},
+		{"clone and commitment", func(walk *relationTraversal) { _, _ = walk.cloneAndWriteValue(sha256.New(), items, 0) }},
 		{"native conversion", func(walk *relationTraversal) { _ = walk.nativeDynamic(items) }},
 	} {
 		t.Run(phase.name, func(t *testing.T) {
@@ -38,10 +36,21 @@ func TestNestedRelationTraversalsPollWithinSingleCell(t *testing.T) {
 	}
 }
 
+func TestRelationBucketEndCommitmentPollsWithinBounds(t *testing.T) {
+	ends := make([]time.Time, 4_096)
+	ctx := &cancelAfterLookupChecks{Context: context.Background(), cancelAt: 3}
+	if _, err := relationCommitmentWithBucketEnds(ctx, [sha256.Size]byte{}, ends); !errors.Is(err, context.Canceled) {
+		t.Fatalf("bucket-end commitment ignored cancellation: %v", err)
+	}
+	if ctx.calls > 4 {
+		t.Fatalf("bucket-end commitment continued after cancellation: checks=%d", ctx.calls)
+	}
+}
+
 func TestRelationMaterializationPhasesCheckCompletion(t *testing.T) {
 	columns := []RelationColumn{{Name: "value", Type: "Dynamic"}}
 	rows := [][]any{{[]any{uint64(1), "text", []any{true}}}}
-	input, err := newRelationInput(context.Background(), columns, rows, false)
+	input, err := newRelationInput(context.Background(), columns, rows)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,12 +59,16 @@ func TestRelationMaterializationPhasesCheckCompletion(t *testing.T) {
 		run  func(context.Context) error
 	}{
 		{"retained size", func(ctx context.Context) error {
-			_, err := relationInputRetainedBytes(ctx, columns, rows, 1, 1<<20)
+			_, err := relationInputRetainedBytesForTest(ctx, columns, rows, 1<<20)
 			return err
 		}},
-		{"clone and commitment", func(ctx context.Context) error { _, err := newRelationInput(ctx, columns, rows, false); return err }},
+		{"clone and commitment", func(ctx context.Context) error { _, err := newRelationInput(ctx, columns, rows); return err }},
 		{"native estimate", func(ctx context.Context) error {
 			_, _, err := relationInputNativeMaterializationBytes(ctx, input)
+			return err
+		}},
+		{"bucket-end commitment", func(ctx context.Context) error {
+			_, err := relationCommitmentWithBucketEnds(ctx, input.commitment, []time.Time{time.Unix(1, 0).UTC()})
 			return err
 		}},
 		{"native append", func(ctx context.Context) error { _, err := materializeValidatedRelationInput(ctx, input); return err }},

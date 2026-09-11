@@ -29,21 +29,19 @@ func TestRelationInputRetainedBytesHasExactNestedBoundary(t *testing.T) {
 		uint64(unsafe.Sizeof(any(nil))) +
 		uint64(len(columns[0].Name)+len(columns[0].Type)) + valueBytes
 
-	got, err := relationInputRetainedBytes(
+	got, err := relationInputRetainedBytesForTest(
 		context.Background(),
 		columns,
 		rows,
-		1,
 		want,
 	)
 	if err != nil || got != want {
 		t.Fatalf("relationInputRetainedBytes() = (%d, %v), want (%d, nil)", got, err, want)
 	}
-	if _, err := relationInputRetainedBytes(
+	if _, err := relationInputRetainedBytesForTest(
 		context.Background(),
 		columns,
 		rows,
-		1,
 		want-1,
 	); err == nil {
 		t.Fatal("nested relation fit below its exact retained boundary")
@@ -58,7 +56,7 @@ func TestRelationInputRetainedTypedValueWalksDynamicOnce(t *testing.T) {
 		items[index] = []any{uint64(index)}
 	}
 	walk := relationTraversal{ctx: context.Background()}
-	if _, ok := walk.retainedTypedValue("Dynamic", items); !ok {
+	if _, _, ok := walk.preflightTypedValue("Dynamic", items); !ok {
 		t.Fatal("valid nested Dynamic value was rejected")
 	}
 	want := uint64(1 + 2*len(items))
@@ -70,6 +68,7 @@ func TestRelationInputRetainedTypedValueWalksDynamicOnce(t *testing.T) {
 func TestRelationInputRetainedTypedValuePreservesValidation(t *testing.T) {
 	t.Parallel()
 
+	type namedUint64 uint64
 	tooDeep := any(uint64(1))
 	for range 18 {
 		tooDeep = []any{tooDeep}
@@ -83,6 +82,9 @@ func TestRelationInputRetainedTypedValuePreservesValidation(t *testing.T) {
 		{name: "IEEE Float64", kind: "Float64", value: math.Inf(1), valid: true},
 		{name: "wrong scalar", kind: "UInt64", value: int64(1)},
 		{name: "invalid Dynamic member", kind: "Dynamic", value: []any{make(chan struct{})}},
+		{name: "narrow Dynamic number", kind: "Dynamic", value: uint32(1)},
+		{name: "named Dynamic scalar", kind: "Dynamic", value: namedUint64(1)},
+		{name: "typed Dynamic slice", kind: "Dynamic", value: []string{"unsupported"}},
 		{name: "too deeply nested Dynamic", kind: "Dynamic", value: tooDeep},
 		{name: "nullable nil", kind: "Nullable(Dynamic)", valid: true},
 		{name: "non-nil nullable Dynamic", kind: "Nullable(Dynamic)", value: uint64(1)},
@@ -90,7 +92,7 @@ func TestRelationInputRetainedTypedValuePreservesValidation(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			walk := relationTraversal{ctx: context.Background()}
-			_, ok := walk.retainedTypedValue(test.kind, test.value)
+			_, _, ok := walk.preflightTypedValue(test.kind, test.value)
 			if ok != test.valid || walk.err != nil {
 				t.Fatalf("retainedTypedValue(%q, %#v) = (%t, %v), want (%t, nil)", test.kind, test.value, ok, walk.err, test.valid)
 			}
@@ -101,11 +103,10 @@ func TestRelationInputRetainedTypedValuePreservesValidation(t *testing.T) {
 func TestRelationInputRetainedBytesKeepsInvalidDynamicClassification(t *testing.T) {
 	t.Parallel()
 
-	_, err := relationInputRetainedBytes(
+	_, err := relationInputRetainedBytesForTest(
 		context.Background(),
 		[]RelationColumn{{Name: "value", Type: "Dynamic"}},
 		[][]any{{[]any{make(chan struct{})}}},
-		1,
 		math.MaxUint64,
 	)
 	if err == nil || errors.Is(err, ErrTimechartResourceLimit) ||
@@ -119,22 +120,21 @@ func TestNewRelationInputUsesTheRemainingStageBudget(t *testing.T) {
 
 	columns := []RelationColumn{{Name: "values", Type: "Dynamic"}}
 	rows := [][]any{{[]any{[]any{"payload", uint64(1)}}}}
-	retained, err := relationInputRetainedBytes(
+	retained, err := relationInputRetainedBytesForTest(
 		context.Background(),
 		columns,
 		rows,
-		1,
 		math.MaxUint64,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	below := searchlimits.WithRemainingExecutionBytes(context.Background(), retained-1)
-	if input, err := newRelationInput(below, columns, rows, false); !errors.Is(err, ErrTimechartResourceLimit) || input != nil {
+	if input, err := newRelationInput(below, columns, rows); !errors.Is(err, ErrTimechartResourceLimit) || input != nil {
 		t.Fatalf("below-boundary newRelationInput() = (%#v, %v)", input, err)
 	}
 	atLimit := searchlimits.WithRemainingExecutionBytes(context.Background(), retained)
-	input, err := newRelationInput(atLimit, columns, rows, false)
+	input, err := newRelationInput(atLimit, columns, rows)
 	if err != nil || input == nil || input.retainedBytes != retained {
 		t.Fatalf("exact-boundary newRelationInput() = (%#v, %v), retained=%d", input, err, retained)
 	}
@@ -148,7 +148,7 @@ func TestMaterializeRelationInputUsesExactNativeRepresentationBudget(t *testing.
 		{Name: "label", Type: "String"},
 	}
 	rows := [][]any{{[]any{[]any{"payload", uint64(1)}}, "series"}}
-	input, err := newRelationInput(context.Background(), columns, rows, false)
+	input, err := newRelationInput(context.Background(), columns, rows)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +189,7 @@ func TestNativeRelationNullableNilCellsIncludeBaseColumnAndCapacityFloor(t *test
 		{kind: "Nullable(Dynamic)", cellBytes: 34},
 	}
 	for _, test := range tests {
-		got, ok := nativeRelationCellBytes(test.kind, nil)
+		got, ok := nativeRelationCellBytesForTest(test.kind, nil)
 		if !ok || got != test.cellBytes {
 			t.Errorf("nativeRelationCellBytes(%q, nil) = (%d, %t), want (%d, true)", test.kind, got, ok, test.cellBytes)
 		}
@@ -219,7 +219,7 @@ func TestNativeRelationAllNullEstimateCoversActualDriverSliceCapacities(t *testi
 	for index := range rows {
 		rows[index] = make([]any, len(columns))
 	}
-	input, err := newRelationInput(context.Background(), columns, rows, false)
+	input, err := newRelationInput(context.Background(), columns, rows)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +238,7 @@ func TestNativeRelationAllNullEstimateCoversActualDriverSliceCapacities(t *testi
 	for index, nativeColumn := range table.Block().Columns {
 		actualColumnBytes := driverColumnSliceCapacityBytes(reflect.ValueOf(nativeColumn))
 		actualSliceBytes += actualColumnBytes
-		cellBytes, ok := nativeRelationCellBytes(columns[index].Type, nil)
+		cellBytes, ok := nativeRelationCellBytesForTest(columns[index].Type, nil)
 		if !ok {
 			t.Fatalf("nil cell estimate rejected %s", columns[index].Type)
 		}
@@ -305,7 +305,7 @@ func TestNewRelationInputRejectsOversizedNestedPayloadBeforeDeepCopy(t *testing.
 		result := testing.Benchmark(func(b *testing.B) {
 			b.ReportAllocs()
 			for range b.N {
-				input, err := newRelationInput(ctx, columns, rows, false)
+				input, err := newRelationInput(ctx, columns, rows)
 				got = err
 				if input != nil {
 					b.Fatal("oversized relation returned an input")
@@ -352,14 +352,33 @@ func TestRelationInputRetainedBytesHonorsCancellationBeforeRows(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err := relationInputRetainedBytes(
+	_, err := relationInputRetainedBytesForTest(
 		ctx,
 		[]RelationColumn{{Name: "values", Type: "Dynamic"}},
 		[][]any{{[]any{"value"}}},
-		1,
 		1<<20,
 	)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("relationInputRetainedBytes() error = %v, want context.Canceled", err)
 	}
+}
+
+func relationInputRetainedBytesForTest(
+	ctx context.Context,
+	columns []RelationColumn,
+	rows [][]any,
+	maximum uint64,
+) (uint64, error) {
+	result, err := preflightRelationInput(ctx, columns, rows, nil, uint64(len(rows)), maximum)
+	return result.retainedBytes, err
+}
+
+func newRelationInput(ctx context.Context, columns []RelationColumn, rows [][]any) (*compiledRelationInput, error) {
+	return newRelationInputWithTimeBuckets(ctx, columns, rows, nil, false)
+}
+
+func nativeRelationCellBytesForTest(kind string, value any) (uint64, bool) {
+	walk := relationTraversal{ctx: context.Background()}
+	_, native, ok := walk.preflightTypedValue(kind, value)
+	return native, ok
 }

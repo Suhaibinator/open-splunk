@@ -11,7 +11,7 @@ func BenchmarkTimechartRelationNativeRows10000(b *testing.B) {
 	for i := range rows {
 		rows[i] = []any{uint64(i), "row payload"}
 	}
-	input, err := newRelationInput(context.Background(), []RelationColumn{{Name: "ordinal", Type: "UInt64"}, {Name: "text", Type: "String"}}, rows, false)
+	input, err := newRelationInput(context.Background(), []RelationColumn{{Name: "ordinal", Type: "UInt64"}, {Name: "text", Type: "String"}}, rows)
 	if err != nil {
 		b.Fatal(err)
 	}

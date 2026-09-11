@@ -15,15 +15,15 @@ import (
 func TestRelationNativeScratchDoesNotAliasDriverRows(t *testing.T) {
 	first := time.Unix(0, 0).UTC()
 	rows := [][]any{
-		{uint64(1), "first", []any{uint64(11)}},
-		{uint64(2), "second", []any{uint64(22)}},
-		{uint64(3), "third", []any{uint64(33)}},
+		{first, "first", []any{uint64(11)}},
+		{first.Add(time.Second), "second", []any{uint64(22)}},
+		{first.Add(2 * time.Second), "third", []any{uint64(33)}},
 	}
-	input, err := newRelationInput(context.Background(), []RelationColumn{{Name: "ordinal", Type: "UInt64"}, {Name: "text", Type: "String"}, {Name: "nested", Type: "Dynamic"}}, rows, false)
+	ends := []time.Time{first.Add(time.Second), first.Add(2 * time.Second), first.Add(3 * time.Second)}
+	input, err := newRelationInputWithTimeBuckets(context.Background(), []RelationColumn{{Name: "_time", Type: "DateTime64(9, 'UTC')"}, {Name: "text", Type: "String"}, {Name: "nested", Type: "Dynamic"}}, rows, ends, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	input.bucketEnds = []time.Time{first.Add(time.Second), first.Add(2 * time.Second), first.Add(3 * time.Second)}
 	table, err := materializeRelationInput(context.Background(), input)
 	if err != nil {
 		t.Fatal(err)

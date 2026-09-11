@@ -96,7 +96,6 @@ func TestLookupAndRelationNativeMaterializationShareOneBudget(t *testing.T) {
 			{Name: "owner", Type: "String"},
 		},
 		[][]any{{time.Unix(0, 0).UTC(), "first"}},
-		false,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -208,7 +207,6 @@ func BenchmarkExternalTablesNativeMaterializationPreflight(b *testing.B) {
 		context.Background(),
 		[]RelationColumn{{Name: "count", Type: "UInt64"}, {Name: "owner", Type: "String"}},
 		rows,
-		false,
 	)
 	if err != nil {
 		b.Fatal(err)

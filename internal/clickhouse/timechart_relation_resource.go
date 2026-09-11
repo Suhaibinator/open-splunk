@@ -31,97 +31,158 @@ func relationInputMaximumBytes(ctx context.Context) uint64 {
 	return maximum
 }
 
-// relationInputRetainedBytes validates a closed timechart relation and returns
-// the complete backing allocated by newRelationInput. It allocates no cell
-// payload and rejects an over-budget shape before building its fixed-width
-// name index, so an oversized nested value is never deep-copied.
-func relationInputRetainedBytes(
+type relationInputPreflight struct {
+	retainedBytes      uint64
+	nativeBytes        uint64
+	dynamicColumnCount int
+}
+
+// preflightRelationInput validates and sizes every retained and native backing
+// before newRelationInput allocates cell payload.
+func preflightRelationInput(
 	ctx context.Context,
 	columns []RelationColumn,
 	rows [][]any,
+	ends []time.Time,
 	maxRows uint64,
 	maximum uint64,
-) (uint64, error) {
+) (relationInputPreflight, error) {
 	if ctx == nil {
-		return 0, errors.New("materialize timechart: context is nil")
+		return relationInputPreflight{}, errors.New("materialize timechart: context is nil")
 	}
 	if err := ctx.Err(); err != nil {
-		return 0, err
+		return relationInputPreflight{}, err
+	}
+	if ends != nil && (len(ends) != len(rows) || len(columns) == 0 || columns[0].Name != "_time") {
+		return relationInputPreflight{}, errors.New("continue timechart: invalid bucket bounds")
 	}
 	walk := relationTraversal{ctx: ctx}
 	if len(columns) == 0 {
-		return 0, errors.New("materialize timechart: empty schema")
+		return relationInputPreflight{}, errors.New("materialize timechart: empty schema")
 	}
 	if uint64(len(rows)) > maxRows {
-		return 0, fmt.Errorf("%w: materialize timechart row limit exceeded", ErrTimechartResourceLimit)
+		return relationInputPreflight{}, fmt.Errorf("%w: materialize timechart row limit exceeded", ErrTimechartResourceLimit)
 	}
 	retained := uint64(unsafe.Sizeof(compiledRelationInput{}))
-	charge := func(value uint64) bool {
+	chargeRetained := func(value uint64) bool {
 		if retained > maximum || value > maximum-retained {
 			return false
 		}
 		retained += value
 		return true
 	}
-	if !chargeProduct(uint64(len(columns)), uint64(unsafe.Sizeof(RelationColumn{})), charge) ||
-		!chargeProduct(uint64(len(rows)), uint64(unsafe.Sizeof([]any{})), charge) {
-		return 0, fmt.Errorf("%w: materialize timechart schema capacity exceeds byte limit", ErrTimechartResourceLimit)
+	if !chargeProduct(uint64(len(columns)), uint64(unsafe.Sizeof(RelationColumn{})), chargeRetained) ||
+		!chargeProduct(uint64(len(rows)), uint64(unsafe.Sizeof([]any{})), chargeRetained) {
+		return relationInputPreflight{}, fmt.Errorf("%w: materialize timechart schema capacity exceeds byte limit", ErrTimechartResourceLimit)
 	}
+	if ends != nil && !chargeProduct(uint64(len(ends)), uint64(unsafe.Sizeof(time.Time{})), chargeRetained) {
+		return relationInputPreflight{}, fmt.Errorf("%w: continue timechart bucket bounds exceed byte limit", ErrTimechartResourceLimit)
+	}
+
+	native := uint64(unsafe.Sizeof(ext.Table{})) +
+		uint64(unsafe.Sizeof(driverproto.Block{})) +
+		uint64(unsafe.Sizeof(column.ServerContext{}))
+	addNative := func(value uint64) bool {
+		var ok bool
+		native, ok = retainedAdd(native, value)
+		return ok
+	}
+	physicalColumns := len(columns)
+	if ends != nil {
+		physicalColumns++
+	}
+	perColumn := 2*uint64(unsafe.Sizeof("")) +
+		3*uint64(unsafe.Sizeof(any(nil))) +
+		uint64(unsafe.Sizeof((func(*ext.Table) error)(nil)))
+	if !chargeProduct(uint64(physicalColumns), perColumn, addNative) {
+		return relationInputPreflight{}, errors.New("materialize timechart: native relation is invalid")
+	}
+	dynamicColumns := 0
 	for _, column := range columns {
 		if !walk.step() {
-			return 0, walk.err
+			return relationInputPreflight{}, walk.err
 		}
 		if column.Name == "" || !utf8.ValidString(column.Name) {
-			return 0, errors.New("materialize timechart: invalid schema name")
+			return relationInputPreflight{}, errors.New("materialize timechart: invalid schema name")
 		}
 		if !relationColumnTypeSupported(column.Type) {
-			return 0, errors.New("materialize timechart: unsupported scalar type")
+			return relationInputPreflight{}, errors.New("materialize timechart: unsupported scalar type")
 		}
-		if !charge(uint64(len(column.Name))) || !charge(uint64(len(column.Type))) {
-			return 0, fmt.Errorf("%w: materialize timechart schema exceeds byte limit", ErrTimechartResourceLimit)
+		if !chargeRetained(uint64(len(column.Name))) || !chargeRetained(uint64(len(column.Type))) {
+			return relationInputPreflight{}, fmt.Errorf("%w: materialize timechart schema exceeds byte limit", ErrTimechartResourceLimit)
+		}
+		if !addNative(nativeColumnDescriptorBytes(column)) ||
+			!addNative(nativeColumnInitialCapacityBytes(column.Type, len(rows))) {
+			return relationInputPreflight{}, errors.New("materialize timechart: native relation is invalid")
+		}
+		if column.Type == "Dynamic" {
+			dynamicColumns++
 		}
 	}
-	for _, row := range rows {
+	if ends != nil && (!addNative(nativeColumnDescriptorBytes(
+		RelationColumn{Name: ResultTimeBucketEndColumn, Type: "DateTime64(9, 'UTC')"},
+	)) || !addNative(nativeColumnInitialCapacityBytes("DateTime64(9, 'UTC')", len(rows)))) {
+		return relationInputPreflight{}, errors.New("materialize timechart: native relation is invalid")
+	}
+	if !chargeProduct(uint64(dynamicColumns), uint64(unsafe.Sizeof(int(0))), addNative) {
+		return relationInputPreflight{}, errors.New("materialize timechart: native relation is invalid")
+	}
+	for rowIndex, row := range rows {
 		if err := ctx.Err(); err != nil {
-			return 0, err
+			return relationInputPreflight{}, err
 		}
 		if len(row) != len(columns) {
-			return 0, errors.New("materialize timechart: row width is invalid")
+			return relationInputPreflight{}, errors.New("materialize timechart: row width is invalid")
 		}
-		if !chargeProduct(uint64(len(row)), uint64(unsafe.Sizeof(any(nil))), charge) {
-			return 0, fmt.Errorf("%w: materialize timechart cell capacity exceeds byte limit", ErrTimechartResourceLimit)
+		if ends != nil {
+			start, ok := row[0].(time.Time)
+			if !ok || !start.Before(ends[rowIndex]) {
+				return relationInputPreflight{}, errors.New("continue timechart: invalid bucket interval")
+			}
+			if !addNative(2 * uint64(unsafe.Sizeof(time.Time{}))) {
+				return relationInputPreflight{}, errors.New("materialize timechart: native relation is invalid")
+			}
+		}
+		if !chargeProduct(uint64(len(row)), uint64(unsafe.Sizeof(any(nil))), chargeRetained) {
+			return relationInputPreflight{}, fmt.Errorf("%w: materialize timechart cell capacity exceeds byte limit", ErrTimechartResourceLimit)
 		}
 		for index, column := range columns {
-			value := row[index]
-			size, ok := walk.retainedTypedValue(column.Type, value)
+			retainedCell, nativeCell, ok := walk.preflightTypedValue(column.Type, row[index])
 			if walk.err != nil {
-				return 0, walk.err
+				return relationInputPreflight{}, walk.err
 			}
 			if !ok {
-				return 0, errors.New("materialize timechart: cell type is invalid")
+				return relationInputPreflight{}, errors.New("materialize timechart: cell type is invalid")
 			}
-			if !charge(size) {
-				return 0, fmt.Errorf("%w: materialize timechart cells exceed byte limit", ErrTimechartResourceLimit)
+			if !chargeRetained(retainedCell) {
+				return relationInputPreflight{}, fmt.Errorf("%w: materialize timechart cells exceed byte limit", ErrTimechartResourceLimit)
+			}
+			if !addNative(nativeCell) {
+				return relationInputPreflight{}, errors.New("materialize timechart: native relation is invalid")
 			}
 		}
 	}
 	names := make([]string, len(columns))
 	for index, column := range columns {
 		if !walk.step() {
-			return 0, walk.err
+			return relationInputPreflight{}, walk.err
 		}
 		names[index] = column.Name
 	}
 	slices.Sort(names)
 	for index := 1; index < len(names); index++ {
 		if names[index] == names[index-1] {
-			return 0, errors.New("materialize timechart: invalid schema name")
+			return relationInputPreflight{}, errors.New("materialize timechart: invalid schema name")
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		return 0, err
+		return relationInputPreflight{}, err
 	}
-	return retained, nil
+	return relationInputPreflight{
+		retainedBytes:      retained,
+		nativeBytes:        native,
+		dynamicColumnCount: dynamicColumns,
+	}, nil
 }
 
 // relationInputNativeMaterializationBytes returns the additional modeled heap
@@ -133,85 +194,14 @@ func relationInputNativeMaterializationBytes(
 	ctx context.Context,
 	input *compiledRelationInput,
 ) (uint64, bool, error) {
-	if ctx == nil || input == nil || len(input.columns) == 0 {
+	if ctx == nil || input == nil || len(input.columns) == 0 || input.nativeBytes == 0 ||
+		input.dynamicColumnCount < 0 || input.dynamicColumnCount > len(input.columns) {
 		return 0, false, nil
 	}
 	if err := ctx.Err(); err != nil {
 		return 0, false, err
 	}
-	walk := relationTraversal{ctx: ctx}
-	columnCount := len(input.columns)
-	if input.bucketEnds != nil {
-		if len(input.bucketEnds) != len(input.rows) {
-			return 0, false, nil
-		}
-		columnCount++
-	}
-	total := uint64(unsafe.Sizeof(ext.Table{})) +
-		uint64(unsafe.Sizeof(driverproto.Block{})) +
-		uint64(unsafe.Sizeof(column.ServerContext{}))
-	add := func(value uint64) bool {
-		var ok bool
-		total, ok = retainedAdd(total, value)
-		return ok
-	}
-	// NewTable retains its column names and interfaces. The definitions slice
-	// and one row conversion coexist with that block during construction.
-	if !chargeProduct(uint64(columnCount), 2*uint64(unsafe.Sizeof("")), add) ||
-		!chargeProduct(uint64(columnCount), 2*uint64(unsafe.Sizeof(any(nil))), add) ||
-		!chargeProduct(uint64(columnCount), uint64(unsafe.Sizeof((func(*ext.Table) error)(nil))), add) {
-		return 0, false, nil
-	}
-	for _, descriptor := range input.columns {
-		if !walk.step() {
-			return 0, false, walk.err
-		}
-		if !relationColumnTypeSupported(descriptor.Type) ||
-			!add(nativeColumnDescriptorBytes(descriptor)) {
-			return 0, false, nil
-		}
-	}
-	if input.bucketEnds != nil && !add(nativeColumnDescriptorBytes(
-		RelationColumn{Name: ResultTimeBucketEndColumn, Type: "DateTime64(9, 'UTC')"},
-	)) {
-		return 0, false, nil
-	}
-	// One reusable-width row conversion is live while native cells append.
-	if !chargeProduct(uint64(columnCount), uint64(unsafe.Sizeof(any(nil))), add) {
-		return 0, false, nil
-	}
-	for _, row := range input.rows {
-		if err := ctx.Err(); err != nil {
-			return 0, false, err
-		}
-		if len(row) != len(input.columns) {
-			return 0, false, nil
-		}
-		for columnIndex, value := range row {
-			bytes, ok := walk.nativeCellBytes(input.columns[columnIndex].Type, value)
-			if walk.err != nil {
-				return 0, false, walk.err
-			}
-			if !ok || !add(bytes) {
-				return 0, false, nil
-			}
-		}
-		if input.bucketEnds != nil && !add(2*uint64(unsafe.Sizeof(time.Time{}))) {
-			return 0, false, nil
-		}
-	}
-	for _, descriptor := range input.columns {
-		if !walk.step() {
-			return 0, false, walk.err
-		}
-		if !add(nativeColumnInitialCapacityBytes(descriptor.Type, len(input.rows))) {
-			return 0, false, nil
-		}
-	}
-	if err := ctx.Err(); err != nil {
-		return 0, false, err
-	}
-	return total, true, nil
+	return input.nativeBytes, true, nil
 }
 
 func nativeColumnInitialCapacityBytes(kind string, rows int) uint64 {
@@ -261,15 +251,25 @@ func nativeColumnDescriptorBytes(descriptor RelationColumn) uint64 {
 	return base + physicalNameBytes + uint64(len(descriptor.Type))
 }
 
-func nativeRelationCellBytes(kind string, value any) (uint64, bool) {
-	walk := relationTraversal{ctx: context.Background()}
-	return walk.nativeCellBytes(kind, value)
+func (walk *relationTraversal) preflightTypedValue(kind string, value any) (uint64, uint64, bool) {
+	if kind == "Dynamic" {
+		return walk.preflightDynamicValue(value, 0, true)
+	}
+	if !walk.step() {
+		return 0, 0, false
+	}
+	if !relationScalarValueValid(kind, value) {
+		return 0, 0, false
+	}
+	retained, ok := retainedCompiledArgument(value)
+	if !ok {
+		return 0, 0, false
+	}
+	native, ok := nativeScalarCellBytes(kind, value)
+	return retained, native, ok
 }
 
-func (walk *relationTraversal) nativeCellBytes(kind string, value any) (uint64, bool) {
-	if !walk.step() {
-		return 0, false
-	}
+func nativeScalarCellBytes(kind string, value any) (uint64, bool) {
 	nullable := strings.HasPrefix(kind, "Nullable(")
 	if value == nil {
 		if relationBaseType(kind) == "Dynamic" {
@@ -278,7 +278,7 @@ func (walk *relationTraversal) nativeCellBytes(kind string, value any) (uint64, 
 				// discriminator. No temporary chcol.Dynamic wrapper is built.
 				return 4*uint64(unsafe.Sizeof(int(0))) + 2, true
 			}
-			return uint64(unsafe.Sizeof(chcol.Dynamic{})) + 4*uint64(unsafe.Sizeof(int(0))), true
+			return 0, false
 		}
 		if !nullable {
 			return 0, false
@@ -312,8 +312,6 @@ func (walk *relationTraversal) nativeCellBytes(kind string, value any) (uint64, 
 			return 0, false
 		}
 		bytes = 2*uint64(len(text)) + positionBytes
-	case "Dynamic":
-		return walk.nativeDynamicBytes(value, true)
 	default:
 		return 0, false
 	}
@@ -323,58 +321,78 @@ func (walk *relationTraversal) nativeCellBytes(kind string, value any) (uint64, 
 	return bytes, true
 }
 
-func (walk *relationTraversal) nativeDynamicBytes(value any, root bool) (uint64, bool) {
+func (walk *relationTraversal) preflightDynamicValue(value any, depth int, root bool) (uint64, uint64, bool) {
 	if !walk.step() {
-		return 0, false
+		return 0, 0, false
 	}
-	var total uint64
+	if depth > 17 {
+		return 0, 0, false
+	}
+	var native uint64
 	if root {
-		total = uint64(unsafe.Sizeof(chcol.Dynamic{}))
+		native = uint64(unsafe.Sizeof(chcol.Dynamic{}))
 	}
 	// Both discriminator and offset columns grow by append. Charge twice the
 	// populated width for each, hence four machine integers per Dynamic node.
 	var ok bool
-	total, ok = retainedAdd(total, 4*uint64(unsafe.Sizeof(int(0))))
+	native, ok = retainedAdd(native, 4*uint64(unsafe.Sizeof(int(0))))
 	if !ok {
-		return 0, false
+		return 0, 0, false
 	}
 	if items, list := value.([]any); list {
+		retained := uint64(unsafe.Sizeof([]any{}))
+		if uint64(len(items)) > math.MaxUint64/uint64(unsafe.Sizeof(any(nil))) {
+			return 0, 0, false
+		}
+		retained, ok = retainedAdd(retained, uint64(len(items))*uint64(unsafe.Sizeof(any(nil))))
+		if !ok {
+			return 0, 0, false
+		}
 		// nativeRelationDynamic materializes one exact []Dynamic backing. The
 		// driver Array additionally retains an offset with append headroom.
 		if uint64(len(items)) > math.MaxUint64/uint64(unsafe.Sizeof(chcol.Dynamic{})) {
-			return 0, false
+			return 0, 0, false
 		}
-		total, ok = retainedAdd(total, uint64(len(items))*uint64(unsafe.Sizeof(chcol.Dynamic{})))
+		native, ok = retainedAdd(native, uint64(len(items))*uint64(unsafe.Sizeof(chcol.Dynamic{})))
 		if !ok {
-			return 0, false
+			return 0, 0, false
 		}
-		total, ok = retainedAdd(total, 2*uint64(unsafe.Sizeof(uint64(0))))
+		native, ok = retainedAdd(native, 2*uint64(unsafe.Sizeof(uint64(0))))
 		if !ok {
-			return 0, false
+			return 0, 0, false
 		}
 		for _, item := range items {
-			child, childOK := walk.nativeDynamicBytes(item, false)
+			childRetained, childNative, childOK := walk.preflightDynamicValue(item, depth+1, false)
 			if !childOK {
-				return 0, false
+				return 0, 0, false
 			}
-			total, ok = retainedAdd(total, child)
+			retained, ok = retainedAdd(retained, childRetained)
 			if !ok {
-				return 0, false
+				return 0, 0, false
+			}
+			native, ok = retainedAdd(native, childNative)
+			if !ok {
+				return 0, 0, false
 			}
 		}
-		return total, true
+		return retained, native, true
+	}
+	switch value.(type) {
+	case nil, string, int64, uint64, float64, bool, time.Time:
+	default:
+		return 0, 0, false
 	}
 	storage, supported := retainedCompiledArgument(value)
 	if !supported {
-		return 0, false
+		return 0, 0, false
 	}
 	// Primitive driver columns use append-backed storage. String payload and
 	// offsets are both covered by doubling the retained scalar representation.
 	if storage > math.MaxUint64/2 {
-		return 0, false
+		return 0, 0, false
 	}
-	total, ok = retainedAdd(total, 2*storage)
-	return total, ok
+	native, ok = retainedAdd(native, 2*storage)
+	return storage, native, ok
 }
 
 func relationColumnTypeSupported(kind string) bool {
