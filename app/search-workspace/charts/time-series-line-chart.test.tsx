@@ -53,6 +53,15 @@ Object.assign(window, {
   getBoundingClientRect: () => { left: number; top: number; width: number; height: number };
 }).getBoundingClientRect = () => ({ left: 0, top: 0, width: 1_000, height: 300 });
 
+function renderedPathData(markup: string, className: string): string[] {
+  const elements = markup.match(new RegExp(`<path[^>]+class="${className}"[^>]*>`, "gu")) ?? [];
+  return elements.map((element) => {
+    const path = /\sd="([^"]*)"/u.exec(element)?.[1];
+    assert.ok(path !== undefined, `missing path data for ${className}`);
+    return path;
+  });
+}
+
 test("area time series render fills before cumulative line strokes", () => {
   const markup = renderToStaticMarkup(
     <TimeSeriesLineChart chartStyle="area" points={splitPoints} stackMode="stacked100" />,
@@ -64,10 +73,10 @@ test("area time series render fills before cumulative line strokes", () => {
   assert.equal((markup.match(/class="time-series-chart__line time-series-chart__series"/gu) ?? []).length, 2);
   assert.ok(
     markup.indexOf("time-series-chart__area") < markup.indexOf("time-series-chart__line"),
-    "area polygons must paint before their line strokes",
+    "area paths must paint before their line strokes",
   );
-  assert.match(markup, /<polygon[^>]+data-series-color="1"/u);
-  assert.match(markup, /<polygon[^>]+data-series-color="2"/u);
+  assert.match(markup, /<path[^>]+time-series-chart__area[^>]+data-series-color="1"/u);
+  assert.match(markup, /<path[^>]+time-series-chart__area[^>]+data-series-color="2"/u);
   assert.match(markup, />100%<\/span>/u);
   assert.match(markup, />-100%<\/span>/u);
 });
@@ -82,8 +91,11 @@ test("missing series values split both area fills and line strokes", () => {
     <TimeSeriesLineChart chartStyle="area" points={points} />,
   );
 
-  assert.equal((markup.match(/class="time-series-chart__area time-series-chart__series"/gu) ?? []).length, 2);
-  assert.equal((markup.match(/class="time-series-chart__line time-series-chart__series"/gu) ?? []).length, 2);
+  const [areaPath] = renderedPathData(markup, "time-series-chart__area time-series-chart__series");
+  const [linePath] = renderedPathData(markup, "time-series-chart__line time-series-chart__series");
+  assert.equal((areaPath.match(/Z/gu) ?? []).length, 2);
+  assert.match(areaPath, /^M0\.00,[\d.]+L0\.00,[\d.]+ZM1000\.00,[\d.]+L1000\.00,[\d.]+Z$/u);
+  assert.match(linePath, /^M0\.00,[\d.]+M1000\.00,[\d.]+$/u);
 });
 
 test("pointer and keyboard inspection expose exact all-null buckets without markers", async () => {
@@ -151,7 +163,10 @@ test("explicit null Events values stay gaps instead of using the legacy count fa
   assert.deepEqual(model.series.domains.none, [0, 2]);
   assert.deepEqual(window.rows[1], [{ end: 0, raw: null, start: 0 }]);
   assert.equal(formatTimelineSeriesValue(points[1], "Events"), "No value");
-  assert.equal((markup.match(/class="time-series-chart__line time-series-chart__series"/gu) ?? []).length, 2);
+  assert.match(
+    renderedPathData(markup, "time-series-chart__line time-series-chart__series")[0],
+    /^M0\.00,[\d.]+M1000\.00,[\d.]+$/u,
+  );
 });
 
 test("time-series value formatting keeps exact raw server values", () => {
@@ -261,6 +276,34 @@ test("maximum-size column grids render one memoizable path and bounded labels", 
   assert.equal((markup.match(/time-series-chart__inspect/gu) ?? []).length, 1);
 });
 
+test("maximum-size gapped timecharts bound SVG paths to the visible series", () => {
+  const seriesNames = Array.from({ length: 24 }, (_value, index) => `series-${index + 1}`);
+  const points: TimelinePoint[] = Array.from({ length: 10_000 }, (_value, pointIndex) => ({
+    id: `point-${pointIndex}`,
+    label: `${pointIndex}`,
+    count: pointIndex % 2 === 0 ? 24 : 0,
+    series: Object.fromEntries(seriesNames.map((name, seriesIndex) => [
+      name,
+      pointIndex % 2 === 0 ? pointIndex + seriesIndex : null,
+    ])),
+    timeCoordinateNanoseconds: BigInt(pointIndex),
+  }));
+
+  for (const chartStyle of ["line", "area"] as const) {
+    const markup = renderToStaticMarkup(<TimeSeriesLineChart chartStyle={chartStyle} points={points} />);
+    const linePaths = renderedPathData(markup, "time-series-chart__line time-series-chart__series");
+    const areaPaths = renderedPathData(markup, "time-series-chart__area time-series-chart__series");
+    assert.equal(linePaths.length, 24);
+    assert.equal(areaPaths.length, chartStyle === "area" ? 24 : 0);
+    assert.equal((linePaths[0].match(/M/gu) ?? []).length, 5_000);
+    assert.equal((linePaths[0].match(/L/gu) ?? []).length, 0);
+    if (chartStyle === "area") {
+      assert.equal((areaPaths[0].match(/M/gu) ?? []).length, 5_000);
+      assert.equal((areaPaths[0].match(/Z/gu) ?? []).length, 5_000);
+    }
+  }
+});
+
 test("a single final column bucket spans its authoritative interval", () => {
   const point: TimelinePoint = {
     id: "final",
@@ -332,7 +375,7 @@ test("line and area geometry follow exact chronology without mutating server ord
   assert.equal(model.points[0], points[1], "chart sorting must preserve source point identity");
   for (const chartStyle of ["line", "area"] as const) {
     const markup = renderToStaticMarkup(<TimeSeriesLineChart chartStyle={chartStyle} points={points} />);
-    assert.match(markup, /<polyline[^>]+points="0\.00,[\d.]+ 500\.00,[\d.]+ 1000\.00,[\d.]+"/u);
+    assert.match(markup, /<path[^>]+d="M0\.00,[\d.]+L500\.00,[\d.]+L1000\.00,[\d.]+"/u);
     assert.ok(
       markup.indexOf("left:0%\">0") < markup.indexOf("left:50%\">1")
       && markup.indexOf("left:50%\">1") < markup.indexOf("left:100%\">2"),
@@ -351,8 +394,10 @@ test("chronological plotting keeps a reordered null bucket as a path gap", () =>
   const markup = renderToStaticMarkup(<TimeSeriesLineChart chartStyle="area" model={model} points={points} />);
 
   assert.deepEqual(model.points.map((point) => point.id), ["early", "gap", "late"]);
-  assert.equal((markup.match(/class="time-series-chart__area time-series-chart__series"/gu) ?? []).length, 2);
-  assert.equal((markup.match(/class="time-series-chart__line time-series-chart__series"/gu) ?? []).length, 2);
+  const [areaPath] = renderedPathData(markup, "time-series-chart__area time-series-chart__series");
+  const [linePath] = renderedPathData(markup, "time-series-chart__line time-series-chart__series");
+  assert.equal((areaPath.match(/Z/gu) ?? []).length, 2);
+  assert.match(linePath, /^M0\.00,[\d.]+M1000\.00,[\d.]+$/u);
 });
 
 test("chart model scans the full domain once and unstacked windows read only visible series", () => {
@@ -444,7 +489,7 @@ test("wide stacked windows retain global baselines while bounding rendered serie
   assert.match(markup, /data-series-name="series-25"/u);
   assert.match(markup, /data-series-name="series-30"/u);
   // The first visible series starts after the 24 hidden series, at 80% of the stack.
-  assert.match(markup, /data-series-name="series-25"[^>]*points="500\.00,50\.00"/u);
+  assert.match(markup, /data-series-name="series-25"[^>]*d="M500\.00,50\.00"/u);
 });
 
 test("extreme finite series keep chart paths and axes finite", () => {

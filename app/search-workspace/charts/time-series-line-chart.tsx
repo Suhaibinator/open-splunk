@@ -80,9 +80,9 @@ interface TimelineCoordinateIndexEntry {
 }
 
 interface TimeSeriesPathGeometry {
-  areaSegments: Array<{ key: string; points: string }>;
+  areaPath: string;
   columnPath: string;
-  lineSegments: Array<{ key: string; points: string }>;
+  linePath: string;
   name: string;
   seriesIndex: number;
 }
@@ -405,23 +405,43 @@ export function formatTimelineSeriesValue(
     : formatExactNumericText(exact, { compact, compactSuffix: "s" });
 }
 
-function contiguousSegments(
+function seriesStrokeAndAreaPaths(
   coordinates: readonly (TimeSeriesCoordinate | null)[],
-): TimeSeriesCoordinate[][] {
-  const segments: TimeSeriesCoordinate[][] = [];
-  let activeSegment: TimeSeriesCoordinate[] | null = null;
+  includeArea: boolean,
+): { areaPath: string; linePath: string } {
+  const areaCommands: string[] = [];
+  const baselineCommands: string[] = [];
+  const lineCommands: string[] = [];
+  let segmentOpen = false;
+  const closeAreaSegment = () => {
+    if (!includeArea || !segmentOpen) return;
+    for (let index = baselineCommands.length - 1; index >= 0; index -= 1) {
+      areaCommands.push(baselineCommands[index]);
+    }
+    areaCommands.push("Z");
+    baselineCommands.length = 0;
+  };
   for (const coordinate of coordinates) {
     if (coordinate === null) {
-      activeSegment = null;
+      closeAreaSegment();
+      segmentOpen = false;
       continue;
     }
-    if (activeSegment === null) {
-      activeSegment = [];
-      segments.push(activeSegment);
+    const x = coordinate.x.toFixed(2);
+    const y = coordinate.y.toFixed(2);
+    const command = `${segmentOpen ? "L" : "M"}${x},${y}`;
+    lineCommands.push(command);
+    if (includeArea) {
+      areaCommands.push(command);
+      baselineCommands.push(`L${x},${coordinate.startY.toFixed(2)}`);
     }
-    activeSegment.push(coordinate);
+    segmentOpen = true;
   }
-  return segments;
+  closeAreaSegment();
+  return {
+    areaPath: areaCommands.join(""),
+    linePath: lineCommands.join(""),
+  };
 }
 
 export function timelineTickIndices(length: number, targetCount: number): number[] {
@@ -531,15 +551,11 @@ export function TimeSeriesLineChart({
     };
   }), [boundedSeriesStart, chartPoints, interactionXCoordinates, renderedSeriesNames, scale, stackWindow.rows]);
   const seriesPathGeometry = useMemo<TimeSeriesPathGeometry[]>(() => seriesCoordinates.map((series) => {
-    const segments = contiguousSegments(series.points);
+    const paths = chartStyle === "column"
+      ? { areaPath: "", linePath: "" }
+      : seriesStrokeAndAreaPaths(series.points, chartStyle === "area");
     return {
-      areaSegments: chartStyle === "area" ? segments.map((segment) => ({
-        key: `${series.name}-area-${segment[0]?.x}`,
-        points: [
-          ...segment.map(({ x, y }) => `${x.toFixed(2)},${y.toFixed(2)}`),
-          ...segment.toReversed().map(({ startY, x }) => `${x.toFixed(2)},${startY.toFixed(2)}`),
-        ].join(" "),
-      })) : [],
+      areaPath: paths.areaPath,
       columnPath: chartStyle === "column" ? series.points.flatMap((coordinate, index) => {
         const column = columnCoordinates[index];
         if (coordinate === null || column === undefined) return [];
@@ -547,10 +563,7 @@ export function TimeSeriesLineChart({
         const right = ((column.leftPercent + column.widthPercent) / 100) * VIEWBOX_WIDTH;
         return [`M${left.toFixed(2)},${coordinate.startY.toFixed(2)}V${coordinate.y.toFixed(2)}H${right.toFixed(2)}V${coordinate.startY.toFixed(2)}Z`];
       }).join("") : "",
-      lineSegments: chartStyle === "column" ? [] : segments.map((segment) => ({
-        key: `${series.name}-line-${segment[0]?.x}`,
-        points: segment.map(({ x, y }) => `${x.toFixed(2)},${y.toFixed(2)}`).join(" "),
-      })),
+      linePath: paths.linePath,
       name: series.name,
       seriesIndex: series.seriesIndex,
     };
@@ -558,15 +571,15 @@ export function TimeSeriesLineChart({
   const seriesPaths = useMemo(() => (
     <>
       {chartStyle === "area" ? seriesPathGeometry.flatMap((series) => (
-        series.areaSegments.map((segment) => (
-          <polygon
+        series.areaPath.length === 0 ? [] : [
+          <path
             className="time-series-chart__area time-series-chart__series"
             data-series-color={seriesColorIndex(series.seriesIndex)}
             data-series-name={series.name}
-            key={segment.key}
-            points={segment.points}
-          />
-        ))
+            d={series.areaPath}
+            key={`${series.name}-area`}
+          />,
+        ]
       )) : null}
       {chartStyle === "column" ? seriesPathGeometry.map((series) => (
         <path
@@ -578,15 +591,15 @@ export function TimeSeriesLineChart({
         />
       )) : null}
       {seriesPathGeometry.flatMap((series) => (
-        series.lineSegments.map((segment) => (
-          <polyline
+        series.linePath.length === 0 ? [] : [
+          <path
             className="time-series-chart__line time-series-chart__series"
             data-series-color={seriesColorIndex(series.seriesIndex)}
             data-series-name={series.name}
-            key={segment.key}
-            points={segment.points}
-          />
-        ))
+            d={series.linePath}
+            key={`${series.name}-line`}
+          />,
+        ]
       ))}
     </>
   ), [chartStyle, seriesPathGeometry]);
