@@ -76,8 +76,10 @@ func (x *CreateExportJobRequest) GetClientRequestId() string {
 }
 
 type CreateExportJobResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ExportJob     *ExportJob             `protobuf:"bytes,1,opt,name=export_job,json=exportJob,proto3" json:"export_job,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	ExportJob *ExportJob             `protobuf:"bytes,1,opt,name=export_job,json=exportJob,proto3" json:"export_job,omitempty"`
+	// True when this request resolves an earlier accepted logical action.
+	Replayed      bool `protobuf:"varint,2,opt,name=replayed,proto3" json:"replayed,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -117,6 +119,13 @@ func (x *CreateExportJobResponse) GetExportJob() *ExportJob {
 		return x.ExportJob
 	}
 	return nil
+}
+
+func (x *CreateExportJobResponse) GetReplayed() bool {
+	if x != nil {
+		return x.Replayed
+	}
+	return false
 }
 
 // ExportDownloadGrant is a short-lived, single-purpose capability. It must not
@@ -512,10 +521,11 @@ const file_open_splunk_export_api_proto_rawDesc = "" +
 	"definition\x18\x01 \x01(\v2\x1d.open_splunk.ExportDefinitionR\n" +
 	"definition\x12/\n" +
 	"\x11client_request_id\x18\x02 \x01(\tH\x00R\x0fclientRequestId\x88\x01\x01B\x14\n" +
-	"\x12_client_request_id\"P\n" +
+	"\x12_client_request_id\"l\n" +
 	"\x17CreateExportJobResponse\x125\n" +
 	"\n" +
-	"export_job\x18\x01 \x01(\v2\x16.open_splunk.ExportJobR\texportJob\"\x9c\x01\n" +
+	"export_job\x18\x01 \x01(\v2\x16.open_splunk.ExportJobR\texportJob\x12\x1a\n" +
+	"\breplayed\x18\x02 \x01(\bR\breplayed\"\x9c\x01\n" +
 	"\x13ExportDownloadGrant\x12#\n" +
 	"\rdownload_path\x18\x01 \x01(\tR\fdownloadPath\x12%\n" +
 	"\x0edownload_token\x18\x02 \x01(\tR\rdownloadToken\x129\n" +

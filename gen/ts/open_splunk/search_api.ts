@@ -109,7 +109,11 @@ export interface CreateSearchJobRequest {
 }
 
 export interface CreateSearchJobResponse {
-  searchJob: SearchJob | undefined;
+  searchJob:
+    | SearchJob
+    | undefined;
+  /** True when this request resolves an earlier accepted logical action. */
+  replayed: boolean;
 }
 
 /** POST /api/search/jobs/get */
@@ -415,13 +419,16 @@ export const CreateSearchJobRequest: MessageFns<CreateSearchJobRequest> = {
 };
 
 function createBaseCreateSearchJobResponse(): CreateSearchJobResponse {
-  return { searchJob: undefined };
+  return { searchJob: undefined, replayed: false };
 }
 
 export const CreateSearchJobResponse: MessageFns<CreateSearchJobResponse> = {
   encode(message: CreateSearchJobResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     if (message.searchJob !== undefined) {
       SearchJob.encode(message.searchJob, writer.uint32(10).fork()).join();
+    }
+    if (message.replayed !== false) {
+      writer.uint32(16).bool(message.replayed);
     }
     return writer;
   },
@@ -447,6 +454,14 @@ export const CreateSearchJobResponse: MessageFns<CreateSearchJobResponse> = {
             message.searchJob = SearchJob.decode(reader, reader.uint32());
             continue;
           }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.replayed = reader.bool();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -466,6 +481,7 @@ export const CreateSearchJobResponse: MessageFns<CreateSearchJobResponse> = {
         : isSet(object.search_job)
         ? SearchJob.fromJSON(object.search_job)
         : undefined,
+      replayed: isSet(object.replayed) ? globalThis.Boolean(object.replayed) : false,
     };
   },
 
@@ -473,6 +489,9 @@ export const CreateSearchJobResponse: MessageFns<CreateSearchJobResponse> = {
     const obj: any = {};
     if (message.searchJob !== undefined) {
       obj.searchJob = SearchJob.toJSON(message.searchJob);
+    }
+    if (message.replayed !== false) {
+      obj.replayed = message.replayed;
     }
     return obj;
   },
@@ -485,6 +504,7 @@ export const CreateSearchJobResponse: MessageFns<CreateSearchJobResponse> = {
     message.searchJob = (object.searchJob !== undefined && object.searchJob !== null)
       ? SearchJob.fromPartial(object.searchJob)
       : undefined;
+    message.replayed = object.replayed ?? false;
     return message;
   },
 };

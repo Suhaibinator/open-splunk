@@ -70,7 +70,11 @@ export interface CreateSavedSearchRequest {
 }
 
 export interface CreateSavedSearchResponse {
-  savedSearch: SavedSearch | undefined;
+  savedSearch:
+    | SavedSearch
+    | undefined;
+  /** True when this request resolves an earlier accepted logical action. */
+  replayed: boolean;
 }
 
 /** POST /api/saved-searches/get */
@@ -118,7 +122,11 @@ export interface DuplicateSavedSearchRequest {
 }
 
 export interface DuplicateSavedSearchResponse {
-  savedSearch: SavedSearch | undefined;
+  savedSearch:
+    | SavedSearch
+    | undefined;
+  /** True when this request resolves an earlier accepted logical action. */
+  replayed: boolean;
 }
 
 /** POST /api/saved-searches/delete */
@@ -262,13 +270,16 @@ export const CreateSavedSearchRequest: MessageFns<CreateSavedSearchRequest> = {
 };
 
 function createBaseCreateSavedSearchResponse(): CreateSavedSearchResponse {
-  return { savedSearch: undefined };
+  return { savedSearch: undefined, replayed: false };
 }
 
 export const CreateSavedSearchResponse: MessageFns<CreateSavedSearchResponse> = {
   encode(message: CreateSavedSearchResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     if (message.savedSearch !== undefined) {
       SavedSearch.encode(message.savedSearch, writer.uint32(10).fork()).join();
+    }
+    if (message.replayed !== false) {
+      writer.uint32(16).bool(message.replayed);
     }
     return writer;
   },
@@ -294,6 +305,14 @@ export const CreateSavedSearchResponse: MessageFns<CreateSavedSearchResponse> = 
             message.savedSearch = SavedSearch.decode(reader, reader.uint32());
             continue;
           }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.replayed = reader.bool();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -313,6 +332,7 @@ export const CreateSavedSearchResponse: MessageFns<CreateSavedSearchResponse> = 
         : isSet(object.saved_search)
         ? SavedSearch.fromJSON(object.saved_search)
         : undefined,
+      replayed: isSet(object.replayed) ? globalThis.Boolean(object.replayed) : false,
     };
   },
 
@@ -320,6 +340,9 @@ export const CreateSavedSearchResponse: MessageFns<CreateSavedSearchResponse> = 
     const obj: any = {};
     if (message.savedSearch !== undefined) {
       obj.savedSearch = SavedSearch.toJSON(message.savedSearch);
+    }
+    if (message.replayed !== false) {
+      obj.replayed = message.replayed;
     }
     return obj;
   },
@@ -332,6 +355,7 @@ export const CreateSavedSearchResponse: MessageFns<CreateSavedSearchResponse> = 
     message.savedSearch = (object.savedSearch !== undefined && object.savedSearch !== null)
       ? SavedSearch.fromPartial(object.savedSearch)
       : undefined;
+    message.replayed = object.replayed ?? false;
     return message;
   },
 };
@@ -1110,13 +1134,16 @@ export const DuplicateSavedSearchRequest: MessageFns<DuplicateSavedSearchRequest
 };
 
 function createBaseDuplicateSavedSearchResponse(): DuplicateSavedSearchResponse {
-  return { savedSearch: undefined };
+  return { savedSearch: undefined, replayed: false };
 }
 
 export const DuplicateSavedSearchResponse: MessageFns<DuplicateSavedSearchResponse> = {
   encode(message: DuplicateSavedSearchResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     if (message.savedSearch !== undefined) {
       SavedSearch.encode(message.savedSearch, writer.uint32(10).fork()).join();
+    }
+    if (message.replayed !== false) {
+      writer.uint32(16).bool(message.replayed);
     }
     return writer;
   },
@@ -1142,6 +1169,14 @@ export const DuplicateSavedSearchResponse: MessageFns<DuplicateSavedSearchRespon
             message.savedSearch = SavedSearch.decode(reader, reader.uint32());
             continue;
           }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.replayed = reader.bool();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -1161,6 +1196,7 @@ export const DuplicateSavedSearchResponse: MessageFns<DuplicateSavedSearchRespon
         : isSet(object.saved_search)
         ? SavedSearch.fromJSON(object.saved_search)
         : undefined,
+      replayed: isSet(object.replayed) ? globalThis.Boolean(object.replayed) : false,
     };
   },
 
@@ -1168,6 +1204,9 @@ export const DuplicateSavedSearchResponse: MessageFns<DuplicateSavedSearchRespon
     const obj: any = {};
     if (message.savedSearch !== undefined) {
       obj.savedSearch = SavedSearch.toJSON(message.savedSearch);
+    }
+    if (message.replayed !== false) {
+      obj.replayed = message.replayed;
     }
     return obj;
   },
@@ -1180,6 +1219,7 @@ export const DuplicateSavedSearchResponse: MessageFns<DuplicateSavedSearchRespon
     message.savedSearch = (object.savedSearch !== undefined && object.savedSearch !== null)
       ? SavedSearch.fromPartial(object.savedSearch)
       : undefined;
+    message.replayed = object.replayed ?? false;
     return message;
   },
 };

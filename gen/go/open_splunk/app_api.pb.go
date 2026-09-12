@@ -128,8 +128,10 @@ func (x *CreateAppRequest) GetClientRequestId() string {
 }
 
 type CreateAppResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	App           *AppWorkspace          `protobuf:"bytes,1,opt,name=app,proto3" json:"app,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	App   *AppWorkspace          `protobuf:"bytes,1,opt,name=app,proto3" json:"app,omitempty"`
+	// True when this request resolves an earlier accepted logical action.
+	Replayed      bool `protobuf:"varint,2,opt,name=replayed,proto3" json:"replayed,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -169,6 +171,13 @@ func (x *CreateAppResponse) GetApp() *AppWorkspace {
 		return x.App
 	}
 	return nil
+}
+
+func (x *CreateAppResponse) GetReplayed() bool {
+	if x != nil {
+		return x.Replayed
+	}
+	return false
 }
 
 // POST /api/apps/get
@@ -722,9 +731,10 @@ const file_open_splunk_app_api_proto_rawDesc = "" +
 	"definition\x18\x01 \x01(\v2\x1a.open_splunk.AppDefinitionR\n" +
 	"definition\x12/\n" +
 	"\x11client_request_id\x18\x02 \x01(\tH\x00R\x0fclientRequestId\x88\x01\x01B\x14\n" +
-	"\x12_client_request_id\"@\n" +
+	"\x12_client_request_id\"\\\n" +
 	"\x11CreateAppResponse\x12+\n" +
-	"\x03app\x18\x01 \x01(\v2\x19.open_splunk.AppWorkspaceR\x03app\"E\n" +
+	"\x03app\x18\x01 \x01(\v2\x19.open_splunk.AppWorkspaceR\x03app\x12\x1a\n" +
+	"\breplayed\x18\x02 \x01(\bR\breplayed\"E\n" +
 	"\rGetAppRequest\x124\n" +
 	"\bselector\x18\x01 \x01(\v2\x18.open_splunk.AppSelectorR\bselector\"=\n" +
 	"\x0eGetAppResponse\x12+\n" +

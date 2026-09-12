@@ -156,8 +156,10 @@ func (x *CreateSearchJobRequest) GetClientRequestId() string {
 }
 
 type CreateSearchJobResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SearchJob     *SearchJob             `protobuf:"bytes,1,opt,name=search_job,json=searchJob,proto3" json:"search_job,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	SearchJob *SearchJob             `protobuf:"bytes,1,opt,name=search_job,json=searchJob,proto3" json:"search_job,omitempty"`
+	// True when this request resolves an earlier accepted logical action.
+	Replayed      bool `protobuf:"varint,2,opt,name=replayed,proto3" json:"replayed,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -197,6 +199,13 @@ func (x *CreateSearchJobResponse) GetSearchJob() *SearchJob {
 		return x.SearchJob
 	}
 	return nil
+}
+
+func (x *CreateSearchJobResponse) GetReplayed() bool {
+	if x != nil {
+		return x.Replayed
+	}
+	return false
 }
 
 // POST /api/search/jobs/get
@@ -1672,10 +1681,11 @@ const file_open_splunk_search_api_proto_rawDesc = "" +
 	"\x06source\x18\x02 \x01(\v2\x1c.open_splunk.SearchJobSourceR\x06source\x127\n" +
 	"\aoptions\x18\x03 \x01(\v2\x1d.open_splunk.SearchJobOptionsR\aoptions\x12/\n" +
 	"\x11client_request_id\x18\x04 \x01(\tH\x00R\x0fclientRequestId\x88\x01\x01B\x14\n" +
-	"\x12_client_request_id\"P\n" +
+	"\x12_client_request_id\"l\n" +
 	"\x17CreateSearchJobResponse\x125\n" +
 	"\n" +
-	"search_job\x18\x01 \x01(\v2\x16.open_splunk.SearchJobR\tsearchJob\"\x90\x01\n" +
+	"search_job\x18\x01 \x01(\v2\x16.open_splunk.SearchJobR\tsearchJob\x12\x1a\n" +
+	"\breplayed\x18\x02 \x01(\bR\breplayed\"\x90\x01\n" +
 	"\x13GetSearchJobRequest\x12\"\n" +
 	"\rsearch_job_id\x18\x01 \x01(\tR\vsearchJobId\x12!\n" +
 	"\finclude_plan\x18\x02 \x01(\bR\vincludePlan\x122\n" +

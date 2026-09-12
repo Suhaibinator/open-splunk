@@ -128,8 +128,10 @@ func (x *CreateSavedSearchRequest) GetClientRequestId() string {
 }
 
 type CreateSavedSearchResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SavedSearch   *SavedSearch           `protobuf:"bytes,1,opt,name=saved_search,json=savedSearch,proto3" json:"saved_search,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	SavedSearch *SavedSearch           `protobuf:"bytes,1,opt,name=saved_search,json=savedSearch,proto3" json:"saved_search,omitempty"`
+	// True when this request resolves an earlier accepted logical action.
+	Replayed      bool `protobuf:"varint,2,opt,name=replayed,proto3" json:"replayed,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -169,6 +171,13 @@ func (x *CreateSavedSearchResponse) GetSavedSearch() *SavedSearch {
 		return x.SavedSearch
 	}
 	return nil
+}
+
+func (x *CreateSavedSearchResponse) GetReplayed() bool {
+	if x != nil {
+		return x.Replayed
+	}
+	return false
 }
 
 // POST /api/saved-searches/get
@@ -580,8 +589,10 @@ func (x *DuplicateSavedSearchRequest) GetClientRequestId() string {
 }
 
 type DuplicateSavedSearchResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SavedSearch   *SavedSearch           `protobuf:"bytes,1,opt,name=saved_search,json=savedSearch,proto3" json:"saved_search,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	SavedSearch *SavedSearch           `protobuf:"bytes,1,opt,name=saved_search,json=savedSearch,proto3" json:"saved_search,omitempty"`
+	// True when this request resolves an earlier accepted logical action.
+	Replayed      bool `protobuf:"varint,2,opt,name=replayed,proto3" json:"replayed,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -621,6 +632,13 @@ func (x *DuplicateSavedSearchResponse) GetSavedSearch() *SavedSearch {
 		return x.SavedSearch
 	}
 	return nil
+}
+
+func (x *DuplicateSavedSearchResponse) GetReplayed() bool {
+	if x != nil {
+		return x.Replayed
+	}
+	return false
 }
 
 // POST /api/saved-searches/delete
@@ -1047,9 +1065,10 @@ const file_open_splunk_saved_search_api_proto_rawDesc = "" +
 	"definition\x18\x01 \x01(\v2\".open_splunk.SavedSearchDefinitionR\n" +
 	"definition\x12/\n" +
 	"\x11client_request_id\x18\x02 \x01(\tH\x00R\x0fclientRequestId\x88\x01\x01B\x14\n" +
-	"\x12_client_request_id\"X\n" +
+	"\x12_client_request_id\"t\n" +
 	"\x19CreateSavedSearchResponse\x12;\n" +
-	"\fsaved_search\x18\x01 \x01(\v2\x18.open_splunk.SavedSearchR\vsavedSearch\"?\n" +
+	"\fsaved_search\x18\x01 \x01(\v2\x18.open_splunk.SavedSearchR\vsavedSearch\x12\x1a\n" +
+	"\breplayed\x18\x02 \x01(\bR\breplayed\"?\n" +
 	"\x15GetSavedSearchRequest\x12&\n" +
 	"\x0fsaved_search_id\x18\x01 \x01(\tR\rsavedSearchId\"U\n" +
 	"\x16GetSavedSearchResponse\x12;\n" +
@@ -1083,9 +1102,10 @@ const file_open_splunk_saved_search_api_proto_rawDesc = "" +
 	"\x12destination_app_id\x18\x03 \x01(\tH\x00R\x10destinationAppId\x88\x01\x01\x12/\n" +
 	"\x11client_request_id\x18\x04 \x01(\tH\x01R\x0fclientRequestId\x88\x01\x01B\x15\n" +
 	"\x13_destination_app_idB\x14\n" +
-	"\x12_client_request_id\"[\n" +
+	"\x12_client_request_id\"w\n" +
 	"\x1cDuplicateSavedSearchResponse\x12;\n" +
-	"\fsaved_search\x18\x01 \x01(\v2\x18.open_splunk.SavedSearchR\vsavedSearch\"m\n" +
+	"\fsaved_search\x18\x01 \x01(\v2\x18.open_splunk.SavedSearchR\vsavedSearch\x12\x1a\n" +
+	"\breplayed\x18\x02 \x01(\bR\breplayed\"m\n" +
 	"\x18DeleteSavedSearchRequest\x12&\n" +
 	"\x0fsaved_search_id\x18\x01 \x01(\tR\rsavedSearchId\x12)\n" +
 	"\x10expected_version\x18\x02 \x01(\x04R\x0fexpectedVersion\"C\n" +
