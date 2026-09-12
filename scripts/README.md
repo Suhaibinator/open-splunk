@@ -40,6 +40,7 @@ npx --no-install playwright install chromium
 
 | Script | Role |
 | --- | --- |
+| `test-deployment-recovery.sh` | Explicitly opt-in disposable recovery/crash drill; see [integration instructions](../integration/README.md#disposable-deployment-recovery-drill). |
 | `compile-protos.sh` | Full deterministic protobuf generation behind `make proto`. |
 | `build-ui.mjs` / `build-ui-output.mjs` | Static Next.js export and embedded-asset manifest validation. |
 | `run-development.sh` | Sanitized native development-server launch. |

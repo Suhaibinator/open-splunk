@@ -57,39 +57,7 @@ type provisioningPublishHooks struct {
 // opens only the explicit resources it owns; no SQLite database or application
 // listener is opened.
 func runDeploymentSubcommand(arguments []string) (bool, error) {
-	if len(arguments) == 0 {
-		return false, nil
-	}
-	switch arguments[0] {
-	case "version":
-		return true, runVersionSubcommand(arguments[1:], os.Stdout)
-	case "healthcheck":
-		return true, runDeploymentHealthcheckSubcommand(arguments[1:])
-	case "migrate-clickhouse":
-		return true, runDeploymentClickHouseMigrationSubcommand(arguments[1:])
-	case "prepare-clickhouse-recovery-volume":
-		return true, runPrepareClickHouseRecoveryVolumeSubcommand(arguments[1:])
-	case "delete-deployment-recovery-archive":
-		return true, runDeleteDeploymentRecoveryArchiveSubcommand(arguments[1:])
-	case "backup-deployment-recovery-set":
-		return true, runBackupDeploymentRecoverySetSubcommand(arguments[1:])
-	case "verify-deployment-recovery-set":
-		return true, runVerifyDeploymentRecoverySetSubcommand(arguments[1:])
-	case "restore-deployment-recovery-set":
-		return true, runRestoreDeploymentRecoverySetSubcommand(arguments[1:])
-	case "reconcile-deployment-recovery-marker":
-		return true, runDeploymentRecoveryMarkerReconcileSubcommand(arguments[1:])
-	case "provision-administrator-token":
-		return true, runProvisionAdministratorTokenSubcommand(arguments[1:])
-	case "backup-control-plane":
-		return true, runBackupControlPlaneSubcommand(arguments[1:])
-	case "verify-control-plane-backup":
-		return true, runVerifyControlPlaneBackupSubcommand(arguments[1:])
-	case "restore-control-plane":
-		return true, runRestoreControlPlaneSubcommand(arguments[1:])
-	default:
-		return false, nil
-	}
+	return runDeploymentSubcommandWithOutput(arguments, os.Stdout)
 }
 
 func runVersionSubcommand(arguments []string, output io.Writer) error {
