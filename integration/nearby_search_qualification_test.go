@@ -427,6 +427,7 @@ func nearbyQualificationStartServer(
 	arguments := []string{
 		binary,
 		"-http-listen-address=" + httpAddress,
+		"-server-lock-file=" + filepath.Join(runtimeDirectory, "server.lock"),
 		"-control-database-file=" + filepath.Join(work, "control.sqlite"),
 		"-master-key-file=" + filepath.Join(work, "server.key"),
 		"-administrator-token-file=" + administratorTokenPath,
