@@ -67,9 +67,12 @@ import {
 import { ServerFeature } from "@/gen/ts/open_splunk/system_api";
 import {
   analyzeSPLIndexScope,
+  appCatalogKey,
+  appCatalogStore,
   SearchWebSocketClient,
   clearAdministratorBearerToken,
   createOpenSplunkApiClient,
+  currentAdministratorSessionRevision,
   getSystemBootstrap,
   isHttpError,
   isHttpStatus,
@@ -81,6 +84,7 @@ import {
   supportsServerFeature,
   type SystemBootstrapModel,
 } from "@/lib/api";
+import { useAppCatalog } from "@/app/_components/use-app-catalog";
 import { OPEN_SPLUNK_BUILD_LABEL } from "@/lib/build-identity";
 import {
   adaptSearchResults,
@@ -660,7 +664,7 @@ function currentBackendServerTime(bootstrap: BackendBootstrapState): Date {
 }
 
 function receivedBackendBootstrap(response: SystemBootstrapModel): BackendBootstrapState {
-  return { response, receivedAt: Date.now() };
+  return { response, receivedAt: response.receivedAt ?? Date.now() };
 }
 
 function newDemoObjectId(prefix: string): string {
@@ -821,6 +825,7 @@ export function SearchWorkspace({
     currentBackendAppId,
     () => undefined,
   );
+  const sharedAppCatalog = useAppCatalog(apiBaseUrl, preferredAppId, backendEnabled);
   const themePreference = useSyncExternalStore(
     subscribeToThemePreference,
     currentThemePreference,
@@ -1185,10 +1190,18 @@ export function SearchWorkspace({
       backendBootstrapModel,
       ServerFeature.SERVER_FEATURE_SEARCH_PREVIEW,
     );
+  const appCatalogActionsBlocked = backendEnabled && (
+    sharedAppCatalog.state !== "available"
+    || sharedAppCatalog.stale
+    || sharedAppCatalog.bootstrap !== backendBootstrapModel
+    || sharedAppCatalog.bootstrap?.selectedAppId == null
+  );
   const runDisabledReason = !isRunning && backendEnabled && backendConnectionState === "loading"
     ? "Search is disabled while the backend connection is loading."
     : !isRunning && backendEnabled && backendConnectionState === "error"
       ? "Retry the backend connection before running a search."
+      : !isRunning && appCatalogActionsBlocked
+        ? "Wait for the current app catalog before running a search."
       : !isRunning && backendHasNoSearchableIndexes
         ? "No searchable indexes are available in the current backend scope."
         : !isRunning && query.trim().length === 0
@@ -1971,6 +1984,68 @@ export function SearchWorkspace({
     setToast({ message, tone });
   }
 
+  const acceptSharedAppCatalog = useEffectEvent((response: SystemBootstrapModel) => {
+    if (appSwitchAbortRef.current !== null || backendObjectMutationRef.current || persistedLaunchPendingRef.current) return;
+    const previous = backendBootstrapRef.current;
+    if (previous?.response === response) return;
+    if (!supportsServerFeature(response, ServerFeature.SERVER_FEATURE_SEARCH)) {
+      setBackendConnectionState("error");
+      setBackendConnectionError("This server does not advertise browser search support.");
+      return;
+    }
+    const selectionChanged = previous !== null
+      && previous.response.selectedAppId !== response.selectedAppId;
+    const bootstrap = receivedBackendBootstrap(response);
+    backendBootstrapRef.current = bootstrap;
+    setBackendBootstrapModel(response);
+    setBackendConnectionState("ready");
+    setBackendConnectionError(null);
+    setDefaultSearchQuery(defaultQueryForBootstrap(response));
+    if (response.selectedAppId !== null && response.selectedAppId !== preferredAppId) {
+      observedBackendAppPreferenceRef.current = response.selectedAppId;
+      observedBackendAppPreferenceInitializedRef.current = true;
+      replaceBackendAppId(response.selectedAppId);
+    }
+    if (selectionChanged) {
+      // Catalog fallback changes future admission authority, while the current
+      // editor and retained job continue to describe their original search.
+      clearPersistedContextForAdHocSearch();
+      backendSavedSearchesRef.current.clear();
+      backendHistoryRef.current.clear();
+      setSavedSearches([]);
+      setHistory([]);
+      setSavedSearchesNextPageToken(null);
+      setHistoryNextPageToken(null);
+      if (response.selectedAppId !== null) {
+        void refreshBackendSavedSearches(bootstrap);
+        void refreshBackendHistory(bootstrap);
+      }
+      showToast("The app catalog changed. Your search draft and displayed results have been preserved.");
+    }
+  });
+
+  useEffect(() => {
+    if (
+      backendEnabled
+      && sharedAppCatalog.state === "available"
+      && !sharedAppCatalog.stale
+      && sharedAppCatalog.bootstrap !== null
+    ) {
+      acceptSharedAppCatalog(sharedAppCatalog.bootstrap);
+    }
+  }, [appSwitchingId, backendEnabled, objectMutation, persistedLaunchPending, sharedAppCatalog.bootstrap, sharedAppCatalog.stale, sharedAppCatalog.state]);
+
+  async function loadSharedWorkspaceBootstrap(requestedAppId: string | undefined, signal: AbortSignal) {
+    const key = appCatalogKey(apiBaseUrl, requestedAppId, currentAdministratorSessionRevision());
+    await appCatalogStore.load(key);
+    if (signal.aborted) throw new DOMException("The bootstrap request was canceled.", "AbortError");
+    const snapshot = appCatalogStore.getSnapshot(key);
+    if (snapshot.state !== "available" || snapshot.stale || snapshot.bootstrap === null) {
+      throw new Error(snapshot.error ?? "The current app catalog is unavailable.");
+    }
+    return snapshot.bootstrap;
+  }
+
   async function ensureBackendBootstrap(): Promise<BackendBootstrapState> {
     const existing = backendBootstrapRef.current;
     if (existing !== null) return existing;
@@ -1982,7 +2057,7 @@ export function SearchWorkspace({
     const request = requestCurrentBackendApp((requestedAppId, signal) => {
       observedBackendAppPreferenceRef.current = requestedAppId;
       observedBackendAppPreferenceInitializedRef.current = true;
-      return getSystemBootstrap(apiClient, requestedAppId, { signal });
+      return loadSharedWorkspaceBootstrap(requestedAppId, signal);
     })
       .then(({ preferredAppId: requestedAppId, value: response }) => {
         if (!supportsServerFeature(response, ServerFeature.SERVER_FEATURE_SEARCH)) {
@@ -4842,6 +4917,20 @@ export function SearchWorkspace({
 
   function backendWorkspaceTransitionBlocked(): boolean {
     if (!backendEnabled) return false;
+    const currentCatalog = appCatalogStore.getSnapshot(appCatalogKey(
+      apiBaseUrl,
+      preferredAppId,
+      currentAdministratorSessionRevision(),
+    ));
+    if (backendBootstrapRef.current !== null && (
+      currentCatalog.state !== "available"
+      || currentCatalog.stale
+      || currentCatalog.bootstrap !== backendBootstrapRef.current.response
+      || currentCatalog.bootstrap?.selectedAppId == null
+    )) {
+      showToast("Wait for an available app context before starting another action.", "warning");
+      return true;
+    }
     if (persistedLaunchPendingRef.current) {
       showToast("Wait for the persisted search to finish opening.", "warning");
       return true;
@@ -7208,6 +7297,11 @@ export function SearchWorkspace({
       {menu === "app" ? (
         <div className="floating-menu app-menu" role="menu">
           <span className="menu-label">{backendEnabled ? "Server apps" : "Your apps"}</span>
+          {backendEnabled && sharedAppCatalog.error !== null ? (
+            <button role="menuitem" type="button" onClick={() => { void sharedAppCatalog.refresh(); }}>
+              <span><strong>Retry app catalog</strong><small>{sharedAppCatalog.error}</small></span>
+            </button>
+          ) : null}
           {backendEnabled
             ? backendBootstrapModel === null
               ? backendConnectionState === "error"
@@ -7223,6 +7317,7 @@ export function SearchWorkspace({
                     aria-busy={appSwitchingId === app.appId}
                     disabled={
                       isRunning
+                      || appCatalogActionsBlocked
                       || appSwitchingId !== null
                       || objectMutation !== null
                       || historyClearBusy
@@ -7527,6 +7622,15 @@ export function SearchWorkspace({
     <ProductShell
       activeSection="search"
       apiBaseUrl={apiBaseUrl}
+      backendAppCatalog={backendEnabled ? {
+        actionsBlocked: appCatalogActionsBlocked,
+        apps: backendBootstrapModel?.apps ?? [],
+        error: sharedAppCatalog.error,
+        onRetry: () => { void sharedAppCatalog.refresh(); },
+        onSelect: (appId) => { void switchBackendApp(appId); },
+        selectedAppId: backendBootstrapModel?.selectedAppId ?? null,
+        state: sharedAppCatalog.state,
+      } : undefined}
       appName={workspaceAppName}
       appSwitcher={productAppSwitcher}
       dataMode={dataMode}

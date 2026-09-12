@@ -50,6 +50,8 @@ export interface SystemBootstrapModel {
   indexes: BrowserIndexModel[];
   selectedAppId: string | null;
   serverTime: Date;
+  /** Local receipt time, retained when the envelope is shared between views. */
+  receivedAt?: number;
   /** The instance palette the administrator chose; classic when the server names none. */
   palette: Palette;
 }
@@ -122,6 +124,7 @@ export function adaptSystemBootstrap(response: GetSystemBootstrapResponse): Syst
     indexes: response.indexes.map(adaptIndex),
     selectedAppId: response.selectedAppId?.trim() || null,
     serverTime,
+    receivedAt: Date.now(),
     palette: paletteFromProto(response.uiPalette),
   };
 }
