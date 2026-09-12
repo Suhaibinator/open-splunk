@@ -18,8 +18,8 @@ package integration_test
 // Compile/helper validation without Docker: go test ./integration -run '^TestNearbyQualification' -count=1
 
 import (
+	"bytes"
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -41,7 +41,9 @@ import (
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
+	"github.com/google/uuid"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -88,16 +90,16 @@ type nearbyQualificationSearch struct {
 
 type nearbyQualificationLane struct {
 	name        string
-	keyPrefix   string
+	newKey      func() string
 	keySequence uint64
 }
 
 func (lane *nearbyQualificationLane) requestKey(serverName string) *string {
-	if lane.keyPrefix == "" || serverName != "candidate" {
+	if lane.newKey == nil || serverName != "candidate" {
 		return nil
 	}
 	lane.keySequence++
-	return new(lane.keyPrefix + "-" + strconv.FormatUint(lane.keySequence, 10))
+	return new(lane.newKey())
 }
 
 type nearbyQualificationObservation struct {
@@ -282,7 +284,7 @@ func TestNearbyOrdinarySearchQualification(t *testing.T) {
 	}
 	for _, lane := range []*nearbyQualificationLane{
 		{name: "unkeyed"},
-		{name: "browser_behavior", keyPrefix: rand.Text()},
+		{name: "browser_behavior", newKey: uuid.NewString},
 	} {
 		// A failed lane must not suppress the other lane's measurements/report.
 		t.Run(lane.name, func(t *testing.T) {
@@ -302,7 +304,7 @@ func nearbyQualificationRunLane(
 	report.Lane = lane.name
 	report.BaselineAdmission = "unkeyed"
 	report.CandidateAdmission = "unkeyed"
-	if lane.keyPrefix != "" {
+	if lane.newKey != nil {
 		report.CandidateAdmission = "fresh_unique_client_request_id"
 	}
 	defer func() {
@@ -644,35 +646,62 @@ func nearbyQualificationWaitSearch(
 	jobID, name string,
 ) *opensplunk.SearchJob {
 	t.Helper()
-	deadline := time.NewTimer(60 * time.Second)
-	defer deadline.Stop()
+	job, err := nearbyQualificationWaitTerminal(ctx, server, jobID, false)
+	if err != nil {
+		t.Fatalf("%s wait for %s: %v", server.name, name, err)
+	}
+	if job.GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED {
+		t.Fatalf("%s %s terminated in %s: %+v", server.name, name, job.GetState(), job.GetFailure())
+	}
+	return job
+}
+
+func nearbyQualificationWaitTerminal(
+	ctx context.Context,
+	server *nearbyQualificationServer,
+	jobID string,
+	retained bool,
+) (*opensplunk.SearchJob, error) {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		var response opensplunk.GetSearchJobResponse
-		if _, err := postProtoRequest(
-			ctx, server.client, server.baseURL+"/api/search/jobs/get",
-			&opensplunk.GetSearchJobRequest{SearchJobId: jobID}, &response,
-		); err != nil {
-			t.Fatalf("%s get %s: %v", server.name, name, err)
+		job, err := nearbyQualificationReadJob(ctx, server, jobID, retained)
+		if err != nil {
+			return nil, err
 		}
-		job := response.GetSearchJob()
+		if job.GetSearchJobId() != jobID {
+			return nil, fmt.Errorf("polled job identity = %q, want %q", job.GetSearchJobId(), jobID)
+		}
 		switch job.GetState() {
-		case opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED:
-			return job
-		case opensplunk.SearchJobState_SEARCH_JOB_STATE_FAILED,
+		case opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
+			opensplunk.SearchJobState_SEARCH_JOB_STATE_FAILED,
 			opensplunk.SearchJobState_SEARCH_JOB_STATE_CANCELED,
 			opensplunk.SearchJobState_SEARCH_JOB_STATE_EXPIRED:
-			t.Fatalf("%s %s terminated in %s: %+v", server.name, name, job.GetState(), job.GetFailure())
+			return job, nil
 		}
 		select {
 		case <-ctx.Done():
-			t.Fatalf("%s wait for %s: %v", server.name, name, ctx.Err())
-		case <-deadline.C:
-			t.Fatalf("%s wait for %s: timed out", server.name, name)
+			return nil, ctx.Err()
 		case <-ticker.C:
 		}
 	}
+}
+
+func nearbyQualificationReadJob(ctx context.Context, server *nearbyQualificationServer, jobID string, retained bool) (*opensplunk.SearchJob, error) {
+	if retained {
+		// Settings reads the durable record directly; ordinary get overlays live
+		// manager state and can expose FAILED before journal finalization.
+		var response opensplunk.GetSearchJobSettingsResponse
+		_, err := postProtoRequest(ctx, server.client, server.baseURL+"/api/search/jobs/settings/get",
+			&opensplunk.GetSearchJobSettingsRequest{SearchJobId: jobID}, &response)
+		return response.GetSearchJob(), err
+	}
+	var response opensplunk.GetSearchJobResponse
+	_, err := postProtoRequest(ctx, server.client, server.baseURL+"/api/search/jobs/get",
+		&opensplunk.GetSearchJobRequest{SearchJobId: jobID}, &response)
+	return response.GetSearchJob(), err
 }
 
 type nearbyQualificationResults struct {
@@ -812,42 +841,97 @@ func nearbyQualificationRequireErrorParity(
 	lane *nearbyQualificationLane,
 ) string {
 	t.Helper()
-	earliest := nearbyQualificationFixtureStart.Format(time.RFC3339Nano)
-	latest := nearbyQualificationFixtureStart.Add(time.Second).Format(time.RFC3339Nano)
-	timezone := "UTC"
-	request := &opensplunk.CreateSearchJobRequest{Definition: &opensplunk.SearchDefinition{
-		Spl:        `index=nearby-qualification | where (`,
-		TimeRange:  &opensplunk.TimeRangeSpec{Earliest: &earliest, Latest: &latest, Timezone: &timezone},
-		IndexScope: []string{nearbyQualificationIndex},
-	}}
-	responses := make([]protoHTTPResponse, 2)
-	for index, server := range []*nearbyQualificationServer{baseline, candidate} {
-		request.ClientRequestId = lane.requestKey(server.name)
-		response, err := performProtoRequestWithBearer(
-			ctx, server.client, server.baseURL+"/api/search/jobs/create", "", request,
-		)
-		if err != nil {
-			t.Fatalf("%s malformed search request: %v", server.name, err)
-		}
-		responses[index] = response
+	baselineDigest, err := nearbyQualificationObserveError(ctx, baseline, lane)
+	if err != nil {
+		t.Fatalf("baseline malformed search: %v", err)
 	}
-	if responses[0].statusCode != responses[1].statusCode ||
-		responses[0].contentType != responses[1].contentType ||
-		!slices.Equal(responses[0].body, responses[1].body) {
-		t.Fatalf(
-			"malformed search error parity differs: baseline=%d/%q/%q candidate=%d/%q/%q",
-			responses[0].statusCode, responses[0].contentType, responses[0].body,
-			responses[1].statusCode, responses[1].contentType, responses[1].body,
-		)
+	candidateDigest, err := nearbyQualificationObserveError(ctx, candidate, lane)
+	if err != nil {
+		t.Fatalf("candidate malformed search: %v", err)
 	}
-	if responses[0].statusCode < 400 || responses[0].statusCode > 499 {
-		t.Fatalf("malformed search status = %d, want a client error", responses[0].statusCode)
+	if baselineDigest != candidateDigest {
+		t.Fatalf("malformed search error parity differs: baseline=%s candidate=%s", baselineDigest, candidateDigest)
+	}
+	return baselineDigest
+}
+
+// App-less malformed SPL is admitted before asynchronous parsing. An immediate
+// rejection, replay, or different terminal failure is a contract regression.
+func nearbyQualificationObserveError(
+	ctx context.Context,
+	server *nearbyQualificationServer,
+	lane *nearbyQualificationLane,
+) (string, error) {
+	request, _ := nearbyQualificationPrepareAdmission(server.name, lane,
+		nearbyQualificationSearch{spl: `index=nearby-qualification | where (`}, time.Now)
+	var created opensplunk.CreateSearchJobResponse
+	if _, err := postProtoRequest(ctx, server.client, server.baseURL+"/api/search/jobs/create", request, &created); err != nil {
+		return "", err
+	}
+	jobID, err := nearbyQualificationFreshAdmission(&created)
+	if err != nil {
+		return "", err
+	}
+	job, err := nearbyQualificationWaitTerminal(ctx, server, jobID, false)
+	if err != nil {
+		return "", err
+	}
+	if job.GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_FAILED ||
+		job.GetFailure().GetCode() != opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_INVALID_SPL {
+		return "", fmt.Errorf("live malformed search state/failure = %s/%v", job.GetState(), job.GetFailure())
+	}
+	retained, err := nearbyQualificationWaitTerminal(ctx, server, jobID, true)
+	if err != nil {
+		return "", err
+	}
+	if retained.GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_FAILED || !proto.Equal(job.GetFailure(), retained.GetFailure()) {
+		return "", fmt.Errorf("durable failure differs from live failure: live=%v durable=%s/%v", job.GetFailure(), retained.GetState(), retained.GetFailure())
+	}
+	results, err := performProtoRequestWithBearer(ctx, server.client, server.baseURL+"/api/search/jobs/results", "",
+		&opensplunk.GetSearchResultsRequest{SearchJobId: jobID, Page: &opensplunk.PageRequest{PageSize: new(uint32(1))}})
+	if err != nil {
+		return "", err
+	}
+	return nearbyQualificationFailureDigest(retained, results)
+}
+
+func nearbyQualificationFailureDigest(job *opensplunk.SearchJob, results protoHTTPResponse) (string, error) {
+	if job.GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_FAILED ||
+		job.GetFailure().GetCode() != opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_INVALID_SPL {
+		return "", fmt.Errorf("malformed search state/failure = %s/%v", job.GetState(), job.GetFailure())
+	}
+	if job.GetResultSchema() != nil || job.GetResultsTruncated() ||
+		job.GetProgress().GetProducedRows() != 0 || job.GetProgress().GetResultBytes() != 0 ||
+		job.GetRetainedResultStatus() == opensplunk.RetainedResultStatus_RETAINED_RESULT_STATUS_AVAILABLE ||
+		results.statusCode != http.StatusConflict {
+		return "", fmt.Errorf("malformed search exposed results: schema=%v progress=%v status=%d body=%q",
+			job.GetResultSchema(), job.GetProgress(), results.statusCode, results.body)
+	}
+	// Bind logical failure, diagnostics and result availability, excluding only
+	// per-job identity, publication versions, and wall-clock measurements.
+	projection := &opensplunk.SearchJob{
+		State: job.GetState(), Failure: job.GetFailure(), Diagnostics: job.GetDiagnostics(),
+		Warnings: job.GetWarnings(), ResultKind: job.GetResultKind(),
+		ResultSchema: job.GetResultSchema(), ResultsTruncated: job.GetResultsTruncated(),
+		RetainedResultStatus: job.GetRetainedResultStatus(),
+	}
+	if job.GetProgress() != nil {
+		projection.Progress = proto.CloneOf(job.GetProgress())
+		projection.Progress.Elapsed = nil
+		projection.Progress.QueueWait = nil
+		projection.Progress.UpdatedAt = nil
+		projection.Progress.StateVersion = 0
+	}
+	encoded, err := (proto.MarshalOptions{Deterministic: true}).Marshal(projection)
+	if err != nil {
+		return "", err
 	}
 	digest := sha256.New()
-	nearbyQualificationWritePart(digest, "status", []byte(strconv.Itoa(responses[0].statusCode)))
-	nearbyQualificationWritePart(digest, "content-type", []byte(responses[0].contentType))
-	nearbyQualificationWritePart(digest, "body", responses[0].body)
-	return hex.EncodeToString(digest.Sum(nil))
+	nearbyQualificationWritePart(digest, "terminal-failure", encoded)
+	nearbyQualificationWritePart(digest, "results-status", []byte(strconv.Itoa(results.statusCode)))
+	nearbyQualificationWritePart(digest, "results-content-type", []byte(results.contentType))
+	nearbyQualificationWritePart(digest, "results-body", results.body)
+	return hex.EncodeToString(digest.Sum(nil)), nil
 }
 
 func nearbyQualificationRequireParity(
@@ -1018,7 +1102,11 @@ func TestNearbyQualificationLaneKeysAreFreshAndPreparedBeforeTiming(t *testing.T
 	t.Parallel()
 	search := nearbyQualificationSearch{spl: "index=nearby-qualification"}
 	unkeyed := &nearbyQualificationLane{name: "unkeyed"}
-	browser := &nearbyQualificationLane{name: "browser_behavior", keyPrefix: "qualification-unique-prefix"}
+	generated := uint64(0)
+	browser := &nearbyQualificationLane{name: "browser_behavior", newKey: func() string {
+		generated++
+		return uuid.NewString()
+	}}
 	clockValue := time.Date(2026, time.September, 12, 12, 0, 0, 0, time.UTC)
 	for _, server := range []string{"baseline", "candidate"} {
 		request, started := nearbyQualificationPrepareAdmission(server, unkeyed, search, func() time.Time { return clockValue })
@@ -1034,13 +1122,14 @@ func TestNearbyQualificationLaneKeysAreFreshAndPreparedBeforeTiming(t *testing.T
 		}
 		candidate, started := nearbyQualificationPrepareAdmission("candidate", browser, search, func() time.Time {
 			// The measured interval must start after fresh-key allocation completes.
-			if browser.keySequence != attempt {
+			if browser.keySequence != attempt || generated != attempt {
 				t.Fatal("measurement clock started before candidate key was prepared")
 			}
 			return clockValue
 		})
 		key := candidate.GetClientRequestId()
-		if key == "" || len(key) < 16 || len(key) > 128 || !started.Equal(clockValue) {
+		parsedKey, parseErr := uuid.Parse(key)
+		if parseErr != nil || parsedKey.Version() != 4 || parsedKey.String() != key || !started.Equal(clockValue) {
 			t.Fatalf("browser candidate admission key/timing = %q/%s", key, started)
 		}
 		if _, duplicate := seen[key]; duplicate {
@@ -1068,5 +1157,223 @@ func TestNearbyQualificationRejectsReplayBeforeCollectingLatency(t *testing.T) {
 	response := &opensplunk.CreateSearchJobResponse{SearchJob: &opensplunk.SearchJob{SearchJobId: "fresh-job"}}
 	if jobID, err := nearbyQualificationFreshAdmission(response); err != nil || jobID != "fresh-job" {
 		t.Fatalf("fresh admission rejected: %q, %v", jobID, err)
+	}
+}
+
+func nearbyQualificationFailedJob(id string) *opensplunk.SearchJob {
+	return &opensplunk.SearchJob{
+		SearchJobId: id, State: opensplunk.SearchJobState_SEARCH_JOB_STATE_FAILED,
+		Failure: &opensplunk.SearchFailure{
+			Code:    opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_INVALID_SPL,
+			Message: "expected expression", Diagnostics: []*opensplunk.Diagnostic{{Code: "PARSE_EXPRESSION"}},
+		},
+		Progress: &opensplunk.SearchProgress{},
+	}
+}
+
+func TestNearbyQualificationFailureDigestBindsLogicalFailureAndUnavailableResults(t *testing.T) {
+	t.Parallel()
+	job := nearbyQualificationFailedJob("baseline-job")
+	results := protoHTTPResponse{statusCode: http.StatusConflict, contentType: "application/json", body: []byte(`{"error":"search results are not ready"}`)}
+	want, err := nearbyQualificationFailureDigest(job, results)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := proto.CloneOf(job)
+	candidate.SearchJobId = "candidate-job"
+	candidate.StateVersion = 900
+	candidate.CreatedAt = timestamppb.Now()
+	candidate.FinishedAt = timestamppb.Now()
+	candidate.Progress.UpdatedAt = timestamppb.Now()
+	candidate.Progress.StateVersion = 900
+	if got, err := nearbyQualificationFailureDigest(candidate, results); err != nil || got != want {
+		t.Fatalf("per-job identity/time affected logical error parity: %s, %v", got, err)
+	}
+	for name, mutate := range map[string]func(*opensplunk.SearchJob, *protoHTTPResponse){
+		"failure details":      func(job *opensplunk.SearchJob, _ *protoHTTPResponse) { job.Failure.Message += " changed" },
+		"failure diagnostic":   func(job *opensplunk.SearchJob, _ *protoHTTPResponse) { job.Failure.Diagnostics[0].Code += "_CHANGED" },
+		"failure retryability": func(job *opensplunk.SearchJob, _ *protoHTTPResponse) { job.Failure.Retryable = true },
+		"wrong failure code": func(job *opensplunk.SearchJob, _ *protoHTTPResponse) {
+			job.Failure.Code = opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_INTERNAL
+		},
+		"completed": func(job *opensplunk.SearchJob, _ *protoHTTPResponse) {
+			job.State = opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED
+		},
+		"result schema": func(job *opensplunk.SearchJob, _ *protoHTTPResponse) { job.ResultSchema = &opensplunk.ResultSchema{} },
+		"result rows":   func(job *opensplunk.SearchJob, _ *protoHTTPResponse) { job.Progress.ProducedRows = 1 },
+		"truncation":    func(job *opensplunk.SearchJob, _ *protoHTTPResponse) { job.ResultsTruncated = true },
+		"availability": func(job *opensplunk.SearchJob, _ *protoHTTPResponse) {
+			job.RetainedResultStatus = opensplunk.RetainedResultStatus_RETAINED_RESULT_STATUS_AVAILABLE
+		},
+		"result status": func(_ *opensplunk.SearchJob, response *protoHTTPResponse) { response.statusCode = http.StatusOK },
+		"result body": func(_ *opensplunk.SearchJob, response *protoHTTPResponse) {
+			response.body = []byte(`{"error":"changed"}`)
+		},
+		"result content type": func(_ *opensplunk.SearchJob, response *protoHTTPResponse) { response.contentType = "text/plain" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			changed, response := proto.CloneOf(job), results
+			mutate(changed, &response)
+			if got, err := nearbyQualificationFailureDigest(changed, response); err == nil && got == want {
+				t.Fatal("changed failure/result contract retained the baseline digest")
+			}
+		})
+	}
+}
+
+func TestNearbyQualificationAsyncErrorRequiresFreshAdmissionAndTerminalFailure(t *testing.T) {
+	t.Parallel()
+	var baselineDigest string
+	for _, serverName := range []string{"baseline", "candidate"} {
+		lane := &nearbyQualificationLane{name: "browser_behavior", newKey: uuid.NewString}
+		server, calls := nearbyQualificationErrorFixture(t, serverName, http.StatusOK, false, false)
+		digest, err := nearbyQualificationObserveError(t.Context(), server, lane)
+		if err != nil {
+			t.Fatalf("%s asynchronous error contract rejected: %v", serverName, err)
+		}
+		wantCalls := []string{"/api/search/jobs/create", "/api/search/jobs/get", "/api/search/jobs/get",
+			"/api/search/jobs/settings/get", "/api/search/jobs/settings/get", "/api/search/jobs/results"}
+		if !slices.Equal(*calls, wantCalls) {
+			t.Fatalf("%s observation paths = %v", serverName, *calls)
+		}
+		if baselineDigest != "" && baselineDigest != digest {
+			t.Fatal("matching asynchronous failures differed after excluding per-job identity")
+		}
+		baselineDigest = digest
+	}
+	for name, fixture := range map[string]struct {
+		status             int
+		replayed, wrongJob bool
+	}{
+		"immediate rejection": {status: http.StatusBadRequest},
+		"receipt replay":      {status: http.StatusOK, replayed: true},
+		"wrong polled job":    {status: http.StatusOK, wrongJob: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			server, calls := nearbyQualificationErrorFixture(t, "candidate", fixture.status, fixture.replayed, fixture.wrongJob)
+			if _, err := nearbyQualificationObserveError(t.Context(), server,
+				&nearbyQualificationLane{name: "browser_behavior", newKey: uuid.NewString}); err == nil {
+				t.Fatal("different admission/identity contract was accepted as an asynchronous parse failure")
+			}
+			if slices.Contains(*calls, "/api/search/jobs/results") {
+				t.Fatal("invalid admission/identity reached result parity collection")
+			}
+		})
+	}
+}
+
+func nearbyQualificationErrorFixture(
+	t *testing.T,
+	name string,
+	createStatus int,
+	replayed, wrongJob bool,
+) (*nearbyQualificationServer, *[]string) {
+	t.Helper()
+	calls := []string{}
+	jobID := name + "-job"
+	polls, durablePolls := 0, 0
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		calls = append(calls, request.URL.Path)
+		status, contentType := http.StatusOK, "application/x-protobuf"
+		var message proto.Message
+		var body []byte
+		switch request.URL.Path {
+		case "/api/search/jobs/create":
+			payload, err := io.ReadAll(request.Body)
+			if err != nil {
+				return nil, err
+			}
+			var input opensplunk.CreateSearchJobRequest
+			if err := proto.Unmarshal(payload, &input); err != nil {
+				return nil, err
+			}
+			if input.GetDefinition().GetAppId() != "" || input.GetDefinition().GetSpl() != `index=nearby-qualification | where (` ||
+				(name == "candidate") != (input.ClientRequestId != nil) {
+				return nil, fmt.Errorf("unexpected malformed search admission: %v", &input)
+			}
+			status = createStatus
+			message = &opensplunk.CreateSearchJobResponse{SearchJob: &opensplunk.SearchJob{SearchJobId: jobID}, Replayed: replayed}
+		case "/api/search/jobs/get":
+			polls++
+			job := nearbyQualificationFailedJob(jobID)
+			if polls == 1 {
+				job.State = opensplunk.SearchJobState_SEARCH_JOB_STATE_RUNNING
+				job.Failure = nil
+			}
+			if wrongJob {
+				job.SearchJobId = "different-job"
+			}
+			message = &opensplunk.GetSearchJobResponse{SearchJob: job}
+		case "/api/search/jobs/settings/get":
+			durablePolls++
+			job := nearbyQualificationFailedJob(jobID)
+			if durablePolls == 1 {
+				job.State = opensplunk.SearchJobState_SEARCH_JOB_STATE_RUNNING
+				job.Failure = nil
+			}
+			message = &opensplunk.GetSearchJobSettingsResponse{SearchJob: job}
+		case "/api/search/jobs/results":
+			if durablePolls < 2 {
+				return nil, fmt.Errorf("results read before durable failure publication")
+			}
+			status, contentType = http.StatusConflict, "application/json"
+			body = []byte(`{"error":"search results are not ready"}`)
+		default:
+			return nil, fmt.Errorf("unexpected qualification path %q", request.URL.Path)
+		}
+		if message != nil {
+			var err error
+			body, err = proto.Marshal(message)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{contentType}},
+			Body: io.NopCloser(bytes.NewReader(body)), Request: request}, nil
+	})}
+	return &nearbyQualificationServer{name: name, baseURL: "http://qualification.invalid", client: client}, &calls
+}
+
+func TestNearbyQualificationDurableFailureBarrierRejectsChangesAndCancellation(t *testing.T) {
+	t.Parallel()
+	for _, scenario := range []string{"changed failure", "completed", "cancellation"} {
+		t.Run(scenario, func(t *testing.T) {
+			t.Parallel()
+			server, calls := nearbyQualificationErrorFixture(t, "candidate", http.StatusOK, false, false)
+			transport := server.client.Transport
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			server.client.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				response, err := transport.RoundTrip(request)
+				if err != nil || request.URL.Path != "/api/search/jobs/settings/get" {
+					return response, err
+				}
+				if scenario == "cancellation" {
+					cancel()
+					return response, nil
+				}
+				if err := response.Body.Close(); err != nil {
+					return nil, err
+				}
+				job := nearbyQualificationFailedJob("candidate-job")
+				if scenario == "changed failure" {
+					job.Failure.Message += " changed after publication"
+				} else {
+					job.State = opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED
+				}
+				body, err := proto.Marshal(&opensplunk.GetSearchJobSettingsResponse{SearchJob: job})
+				response.Body = io.NopCloser(bytes.NewReader(body))
+				return response, err
+			})
+			if _, err := nearbyQualificationObserveError(ctx, server,
+				&nearbyQualificationLane{name: "browser_behavior", newKey: uuid.NewString}); err == nil {
+				t.Fatal("changed or canceled durable publication was accepted")
+			}
+			if slices.Contains(*calls, "/api/search/jobs/results") {
+				t.Fatal("unsettled or inconsistent durable publication reached results")
+			}
+		})
 	}
 }
