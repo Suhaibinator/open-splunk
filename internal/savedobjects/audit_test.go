@@ -89,6 +89,117 @@ func TestAuditedSavedSearchIdempotentCreateReplaysCurrentMetadata(t *testing.T) 
 	if calls := appender.snapshot(); len(calls) != 3 {
 		t.Fatalf("audit calls after duplicate replay = %d, want three", len(calls))
 	}
+	if err := store.Delete(
+		t.Context(), scope, created.GetSavedSearchId(), updated.GetVersion(),
+	); err != nil {
+		t.Fatalf("delete duplicate source: %v", err)
+	}
+	replayedCopy, replayed, err = store.DuplicateIdempotent(
+		t.Context(), scope, created.GetSavedSearchId(), "idempotent copy", nil, duplicateIntent,
+	)
+	if err != nil || !replayed || replayedCopy.GetSavedSearchId() != copy.GetSavedSearchId() {
+		t.Fatalf("duplicate replay after source deletion = (%+v, %t, %v)", replayedCopy, replayed, err)
+	}
+	changed := intent
+	changed.RequestSHA256[0] ^= 0xff
+	if _, _, err := store.CreateIdempotent(t.Context(), scope, definition, changed); !errors.Is(err, requestidempotency.ErrConflict) {
+		t.Fatalf("changed create intent error = %v", err)
+	}
+}
+
+func TestAuditedSavedSearchParallelIdempotentCreatesConverge(t *testing.T) {
+	database, _ := openTestStore(t)
+	dependencies := &savedSearchAuditDependencies{
+		base: time.Date(2026, time.September, 12, 13, 0, 0, 0, time.UTC),
+	}
+	raw := newSavedSearchAuditRawStore(t, database, dependencies.options())
+	appender := &recordingSavedSearchAuditAppender{}
+	store := newSavedSearchAuditStore(t, raw, appender)
+	scope := AccessScope{OwnerID: "owner-a"}
+	definition := savedSearchDefinition("parallel idempotent search", "")
+	intent, err := requestidempotency.NewIntent(
+		savedSearchAuditTestTenant, "browser", "owner-a",
+		requestidempotency.RouteCreateSavedSearch, "parallel saved create 01",
+		&opensplunk.CreateSavedSearchRequest{Definition: proto.Clone(definition).(*opensplunk.SavedSearchDefinition)},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertParallelSavedSearchMutation(t, appender, func() (*opensplunk.SavedSearch, bool, error) {
+		return store.CreateIdempotent(context.Background(), scope, definition, intent)
+	})
+}
+
+func TestAuditedSavedSearchParallelIdempotentDuplicatesConverge(t *testing.T) {
+	database, _ := openTestStore(t)
+	dependencies := &savedSearchAuditDependencies{
+		base: time.Date(2026, time.September, 12, 14, 0, 0, 0, time.UTC),
+		ids:  []string{"ss_parallel_source"},
+	}
+	raw := newSavedSearchAuditRawStore(t, database, dependencies.options())
+	scope := AccessScope{OwnerID: "owner-a"}
+	source, err := raw.Create(t.Context(), scope, savedSearchDefinition("parallel source", ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	appender := &recordingSavedSearchAuditAppender{}
+	store := newSavedSearchAuditStore(t, raw, appender)
+	intent, err := requestidempotency.NewIntent(
+		savedSearchAuditTestTenant, "browser", "owner-a",
+		requestidempotency.RouteDuplicateSavedSearch, "parallel saved duplicate 01",
+		&opensplunk.DuplicateSavedSearchRequest{SavedSearchId: source.GetSavedSearchId(), NewName: "parallel copy"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertParallelSavedSearchMutation(t, appender, func() (*opensplunk.SavedSearch, bool, error) {
+		return store.DuplicateIdempotent(
+			context.Background(), scope, source.GetSavedSearchId(), "parallel copy", nil, intent,
+		)
+	})
+}
+
+func assertParallelSavedSearchMutation(
+	t *testing.T,
+	appender *recordingSavedSearchAuditAppender,
+	mutate func() (*opensplunk.SavedSearch, bool, error),
+) {
+	t.Helper()
+	type outcome struct {
+		saved    *opensplunk.SavedSearch
+		replayed bool
+		err      error
+	}
+	start := make(chan struct{})
+	results := make(chan outcome, 8)
+	for range 8 {
+		go func() {
+			<-start
+			saved, replayed, err := mutate()
+			results <- outcome{saved: saved, replayed: replayed, err: err}
+		}()
+	}
+	close(start)
+	var targetID string
+	fresh := 0
+	for range 8 {
+		result := <-results
+		if result.err != nil {
+			t.Fatalf("parallel mutation error = %v", result.err)
+		}
+		if targetID == "" {
+			targetID = result.saved.GetSavedSearchId()
+		}
+		if result.saved.GetSavedSearchId() != targetID {
+			t.Fatalf("parallel target = %q, want %q", result.saved.GetSavedSearchId(), targetID)
+		}
+		if !result.replayed {
+			fresh++
+		}
+	}
+	if fresh != 1 || len(appender.snapshot()) != 1 {
+		t.Fatalf("parallel outcomes = %d fresh, %d audit calls", fresh, len(appender.snapshot()))
+	}
 }
 
 const savedSearchAuditTestTenant = "tenant-saved-search-audit"

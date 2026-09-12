@@ -15,6 +15,7 @@ import (
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"github.com/Suhaibinator/open-splunk/internal/searchlimits"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 )
@@ -2967,6 +2968,129 @@ func TestConcurrentInspectionPagingAndCancellation(t *testing.T) {
 			t.Fatalf("terminal state = %v", got.State)
 		}
 		assertValidHistory(t, stateHistory(t, manager, job.ID))
+	}
+}
+
+type convergingIdempotentSearchJournal struct {
+	mu             sync.Mutex
+	intent         requestidempotency.Intent
+	job            Job
+	admissionCount int
+}
+
+func (journal *convergingIdempotentSearchJournal) Admit(context.Context, Job) error {
+	return errors.New("non-idempotent admission was called")
+}
+
+func (journal *convergingIdempotentSearchJournal) AdmitIdempotent(
+	_ context.Context,
+	job Job,
+	intent requestidempotency.Intent,
+) error {
+	journal.mu.Lock()
+	defer journal.mu.Unlock()
+	if journal.admissionCount == 0 {
+		journal.intent = intent
+		journal.job = cloneJob(job)
+		journal.admissionCount = 1
+		return nil
+	}
+	if journal.intent == intent && journal.job.ID == job.ID {
+		return nil
+	}
+	return requestidempotency.ErrConflict
+}
+
+func (journal *convergingIdempotentSearchJournal) LookupIdempotent(
+	_ context.Context,
+	access AccessScope,
+	intent requestidempotency.Intent,
+) (Job, bool, error) {
+	journal.mu.Lock()
+	defer journal.mu.Unlock()
+	if journal.admissionCount == 0 {
+		return Job{}, false, nil
+	}
+	if journal.intent != intent {
+		return Job{}, true, requestidempotency.ErrConflict
+	}
+	if access.TenantID != journal.job.TenantID || access.OwnerID != journal.job.OwnerID {
+		return Job{}, true, requestidempotency.ErrUnavailable
+	}
+	return cloneJob(journal.job), true, nil
+}
+
+func (journal *convergingIdempotentSearchJournal) Finalize(_ context.Context, job Job) error {
+	journal.mu.Lock()
+	defer journal.mu.Unlock()
+	if journal.job.ID == job.ID {
+		journal.job = cloneJob(job)
+	}
+	return nil
+}
+
+func TestParallelIdempotentSearchCreatesConverge(t *testing.T) {
+	journal := &convergingIdempotentSearchJournal{}
+	var idCalls atomic.Int64
+	manager := newTestManager(t, Config{
+		Executor: executorFunc(func(ctx context.Context, _ clickhouse.CompiledQuery, _ ResultSink) error {
+			<-ctx.Done()
+			return ctx.Err()
+		}),
+		Journal: journal,
+		NewID: func() string {
+			return fmt.Sprintf("parallel-search-%d", idCalls.Add(1))
+		},
+		MaxConcurrent: 1,
+	})
+	request := validRequest()
+	intent, err := requestidempotency.NewIntent(
+		request.TenantID, "browser", request.OwnerID,
+		requestidempotency.RouteCreateSearchJob, "parallel search request 01",
+		&opensplunk.CreateSearchJobRequest{Definition: &opensplunk.SearchDefinition{Spl: request.SPL}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type outcome struct {
+		job      Job
+		replayed bool
+		err      error
+	}
+	start := make(chan struct{})
+	results := make(chan outcome, 8)
+	for range 8 {
+		go func() {
+			<-start
+			job, replayed, createErr := manager.CreateIdempotent(
+				context.Background(), request, intent,
+			)
+			results <- outcome{job: job, replayed: replayed, err: createErr}
+		}()
+	}
+	close(start)
+	var targetID string
+	fresh := 0
+	for range 8 {
+		result := <-results
+		if result.err != nil {
+			t.Fatalf("parallel create error = %v", result.err)
+		}
+		if targetID == "" {
+			targetID = result.job.ID
+		}
+		if result.job.ID != targetID {
+			t.Fatalf("parallel target = %q, want %q", result.job.ID, targetID)
+		}
+		if !result.replayed {
+			fresh++
+		}
+	}
+	journal.mu.Lock()
+	admissionCount := journal.admissionCount
+	journal.mu.Unlock()
+	if fresh != 1 || admissionCount != 1 {
+		t.Fatalf("parallel outcomes = %d fresh, %d durable admissions", fresh, admissionCount)
 	}
 }
 

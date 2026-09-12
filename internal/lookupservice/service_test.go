@@ -167,6 +167,71 @@ func TestCreateIdempotentReplaysAndRejectsChangedIntent(t *testing.T) {
 	}
 }
 
+func TestParallelIdempotentLookupCreatesConverge(t *testing.T) {
+	service, database := newTestServiceWithDatabase(t)
+	scope := Scope{TenantID: testTenant, OwnerID: testOwner}
+	requestID := "parallel lookup request 01"
+	input := &opensplunk.CreateLookupRequest{
+		ClientRequestId: &requestID,
+		Definition:      testDefinition("parallel-idempotent-services"),
+		CsvData:         []byte("service_id,owner\napi,alice\n"),
+	}
+	canonical := proto.Clone(input).(*opensplunk.CreateLookupRequest)
+	canonical.ClientRequestId = nil
+	intent, err := requestidempotency.NewIntent(
+		testTenant, "browser", testOwner, requestidempotency.RouteCreateLookup,
+		requestID, canonical,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type outcome struct {
+		response *opensplunk.CreateLookupResponse
+		err      error
+	}
+	start := make(chan struct{})
+	results := make(chan outcome, 8)
+	for range 8 {
+		go func() {
+			<-start
+			response, createErr := service.CreateIdempotent(
+				context.Background(), scope, input, intent,
+			)
+			results <- outcome{response: response, err: createErr}
+		}()
+	}
+	close(start)
+	var targetID string
+	fresh := 0
+	for range 8 {
+		result := <-results
+		if result.err != nil {
+			t.Fatalf("parallel create error = %v", result.err)
+		}
+		if targetID == "" {
+			targetID = result.response.GetLookup().GetLookupId()
+		}
+		if result.response.GetLookup().GetLookupId() != targetID {
+			t.Fatalf("parallel target = %q, want %q", result.response.GetLookup().GetLookupId(), targetID)
+		}
+		if !result.response.GetReplayed() {
+			fresh++
+		}
+	}
+	var lookupCount int64
+	if err := database.GORMDB().Table("knowledge_lookup_definitions").
+		Where("tenant_id = ? AND lookup_id = ?", testTenant, targetID).
+		Count(&lookupCount).Error; err != nil || fresh != 1 || lookupCount != 1 {
+		t.Fatalf("parallel outcomes = %d fresh, %d lookup rows, error %v", fresh, lookupCount, err)
+	}
+	var receiptCount int64
+	if err := database.GORMDB().Table("api_mutation_receipts").
+		Where("tenant_id = ? AND target_id = ?", testTenant, targetID).
+		Count(&receiptCount).Error; err != nil || receiptCount != 1 {
+		t.Fatalf("parallel receipt rows = %d, error %v", receiptCount, err)
+	}
+}
+
 func TestServiceCatalogConflictRollsBackPhysicalPublication(t *testing.T) {
 	service, database := newTestServiceWithDatabase(t)
 	scope := Scope{TenantID: testTenant, OwnerID: testOwner}
