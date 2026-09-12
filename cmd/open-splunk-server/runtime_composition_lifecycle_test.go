@@ -63,6 +63,7 @@ func TestRuntimeSearchLifecycleClosesInDependencyOrderOnceConcurrently(t *testin
 		closeWebSocket:        closeStep("websocket"),
 		closeAnalysis:         closeStep("analysis"),
 		closeExports:          closeStep("exports"),
+		closePatterns:         closeStep("patterns"),
 		closeInspection:       closeStep("inspection"),
 		closeSearchJobs:       closeStep("search jobs"),
 		closeScheduledReports: func() { closed = append(closed, "scheduled reports") },
@@ -72,7 +73,7 @@ func TestRuntimeSearchLifecycleClosesInDependencyOrderOnceConcurrently(t *testin
 	closeConcurrently(32, lifecycle.Close)
 
 	expected := []string{
-		"websocket", "analysis", "exports", "inspection", "search jobs", "scheduled reports", "artifacts",
+		"websocket", "analysis", "exports", "patterns", "inspection", "search jobs", "scheduled reports", "artifacts",
 	}
 	if !slices.Equal(closed, expected) {
 		t.Fatalf("search lifecycle close order = %v, want %v", closed, expected)

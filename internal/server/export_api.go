@@ -54,6 +54,13 @@ func (handler *apiHandler) createExportJob(request *http.Request, input *openspl
 	if err != nil {
 		return nil, badRequestError(err.Error())
 	}
+	if definition.Pattern != nil {
+		generation, err := handler.parseResultSnapshotRef(definition.SearchJobID, definition.Pattern.SnapshotRef)
+		if err != nil {
+			return nil, badRequestError("snapshot reference is invalid")
+		}
+		definition.Pattern.Generation = generation
+	}
 	var job exportjobs.Job
 	replayed := false
 	if intent == nil {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/patterns"
+	"github.com/Suhaibinator/open-splunk/internal/searchartifacts"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 )
 
@@ -69,8 +70,16 @@ func (manager *Manager) acquireSource(ctx context.Context, access searchjobs.Acc
 	default:
 		return nil, ErrInvalidRequest
 	}
-	if errors.Is(err, patterns.ErrCapacity) || errors.Is(err, patterns.ErrLimit) {
+	switch {
+	case errors.Is(err, patterns.ErrCapacity), errors.Is(err, patterns.ErrLimit), errors.Is(err, searchartifacts.ErrCapacity):
 		return lease, searchjobs.ErrCapacity
+	case errors.Is(err, searchartifacts.ErrExpired):
+		return lease, searchjobs.ErrExpired
+	case errors.Is(err, searchartifacts.ErrNotFound), errors.Is(err, patterns.ErrPatternNotFound):
+		return lease, searchjobs.ErrNotFound
+	case errors.Is(err, searchartifacts.ErrNotReady):
+		return lease, searchjobs.ErrResultsNotReady
+	default:
+		return lease, err
 	}
-	return lease, err
 }

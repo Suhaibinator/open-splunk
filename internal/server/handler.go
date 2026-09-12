@@ -620,6 +620,7 @@ type Config struct {
 	Logger                     *zap.Logger
 	SearchJobs                 SearchJobs
 	SearchArtifacts            SearchArtifacts
+	SearchPatterns             SearchPatterns
 	TrustedSearchAdmission     TrustedSearchAdmission
 	RuntimeReadiness           RuntimeReadiness
 	Indexes                    IndexCatalog
@@ -693,6 +694,7 @@ type apiHandler struct {
 	logger                     *zap.Logger
 	jobs                       SearchJobs
 	searchArtifacts            SearchArtifacts
+	searchPatterns             SearchPatterns
 	trustedSearchAdmission     TrustedSearchAdmission
 	indexes                    IndexCatalog
 	indexAdmin                 IndexAdministration
@@ -899,6 +901,10 @@ func NewHandler(config Config) (*Handler, error) {
 	if isNilDependency(searchArtifacts) {
 		searchArtifacts = nil
 	}
+	searchPatterns := config.SearchPatterns
+	if isNilDependency(searchPatterns) {
+		searchPatterns = nil
+	}
 	if config.WebUI == nil {
 		return nil, errors.New("create server handler: web UI filesystem is required")
 	}
@@ -915,6 +921,9 @@ func NewHandler(config Config) (*Handler, error) {
 	}
 	if pageSize > maximumTransportPageSize {
 		return nil, fmt.Errorf("create server handler: maximum page size cannot exceed %d", maximumTransportPageSize)
+	}
+	if searchPatterns != nil && (searchPatterns.MaximumPageSize() < 1 || uint64(searchPatterns.MaximumPageSize()) > uint64(pageSize)) {
+		return nil, errors.New("create server handler: pattern maximum page size cannot exceed browser maximum page size")
 	}
 	if maximumFieldPageSize > pageSize {
 		return nil, errors.New("create server handler: field catalog maximum page size cannot exceed browser maximum page size")
@@ -1046,6 +1055,7 @@ func NewHandler(config Config) (*Handler, error) {
 		logger:                     logger,
 		jobs:                       config.SearchJobs,
 		searchArtifacts:            searchArtifacts,
+		searchPatterns:             searchPatterns,
 		trustedSearchAdmission:     trustedSearchAdmission,
 		indexes:                    indexServices.catalog,
 		indexAdmin:                 indexAdmin,
@@ -1130,6 +1140,10 @@ func NewHandler(config Config) (*Handler, error) {
 		"/api/saved-searches/delete",
 	)
 	administratorRoutes := make(map[string]struct{}, 25)
+	if api.searchPatterns != nil {
+		apiRoutes[apiPathPrefix+searchPatternsListRoute] = http.MethodPost
+		apiRoutes[apiPathPrefix+searchPatternMembersRoute] = http.MethodPost
+	}
 	if api.searchArtifacts != nil {
 		for _, path := range []string{
 			"/api/search/jobs/settings/get",
@@ -1597,6 +1611,9 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 		Use(protobufMiddleware, requestMiddleware, deadlineMiddleware)
 
 	handler.registerCoreRoutes(protobufGroup, smallRequestBytes)
+	if handler.searchPatterns != nil {
+		(&patternAPI{handler: handler, service: handler.searchPatterns, parseSnapshot: handler.parseResultSnapshotRef}).register(protobufGroup, smallRequestBytes)
+	}
 	if handler.dashboards != nil {
 		handler.registerDashboardRoutes(protobufGroup, smallRequestBytes)
 	}
