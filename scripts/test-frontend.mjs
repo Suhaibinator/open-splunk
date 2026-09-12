@@ -10,6 +10,8 @@ const outputDirectory = await mkdtemp(path.join(tmpdir(), "open-splunk-frontend-
 const scriptTests = [
   "build-ui-output.test.mjs",
   "check-docs.test.mjs",
+  "help-content.test.mjs",
+  "help-security.test.mjs",
   "ci-workflow-policy.test.mjs",
   "compile-protos.test.mjs",
   "byte-formatting.test.mjs",
@@ -25,6 +27,9 @@ const scriptTests = [
   "build-oci.test.mjs",
 ];
 const testFiles = [
+  path.join("app", "_components", "product-shell-help.mount.test.tsx"),
+  path.join("app", "help", "help-data.test.tsx"),
+  path.join("app", "help", "help-document-security.test.tsx"),
   path.join("app", "search-workspace", "components", "nearby-context-editor.mount.test.tsx"),
   path.join("app", "search-workspace", "components", "nearby-context-editor.test.tsx"),
   path.join("lib", "search", "nearby-events.test.ts"),

@@ -4,10 +4,12 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 import { cleanUIOutput } from "./build-ui-output.mjs";
+import { writeHelpDocumentation } from "./build-help.mjs";
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const output = path.join(repository, "out");
 
+await writeHelpDocumentation({ root: repository });
 await cleanUIOutput(output);
 
 const nextExecutable = path.join(

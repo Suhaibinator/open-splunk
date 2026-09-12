@@ -60,7 +60,8 @@ is:
 | 31 | `app/reports/alerts.css` | alert management; `alerts-` namespace |
 | 32 | `app/search-workspace/components/workspace-dialogs.css` | workspace dialogs; `workspace-dialog-` namespace |
 | 33 | `app/search-workspace/panels/visualization-panel.css` | result visualizations; `visualization-` namespace |
-| 34 | `app/styles/interaction.css` | coarse-pointer and reduced-motion floors |
+| 34 | `app/help/help.css` | Help documentation, navigation, and search; `help-` namespace |
+| 35 | `app/styles/interaction.css` | coarse-pointer and reduced-motion floors |
 
 The five palette files must follow both base token files: a palette's light
 block is written as `:root:where([data-palette="…"])` so it keeps base light's

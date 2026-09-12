@@ -29,7 +29,7 @@ import { installModalSurface } from "./modal-surface";
 import { useAppCatalog } from "./use-app-catalog";
 import { Wordmark } from "./wordmark";
 
-type ProductSection = "home" | "search" | "analytics" | "datasets" | "reports" | "dashboards" | "activity" | "admin";
+type ProductSection = "home" | "search" | "analytics" | "datasets" | "reports" | "dashboards" | "activity" | "admin" | "help";
 
 interface ProductShellProps {
   activeSection: ProductSection;
@@ -430,7 +430,10 @@ export function ProductShell({
             <button type="button" aria-controls={productMenuControlId(menu, "help")} aria-haspopup="menu" aria-expanded={menu === "help"} onClick={(event) => { const opening = menu !== "help"; toggleMenu("help", event.currentTarget); if (opening && event.detail === 0) focusFirstMenuItem("help"); }} onKeyDown={(event) => openMenuFromKeyboard(event, "help")}>Help <AppIcon name="chevron-down" size="xs" /></button>
             {menu === "help" ? (
               <div className="suite-popover suite-utility-popover" id={PRODUCT_MENU_POPOVER_IDS.help} role="menu" data-suite-menu="help">
-                <span className="suite-menu-label">Documentation is not bundled in this frontend preview.</span>
+                <span className="suite-menu-label">Bundled documentation</span>
+                <a role="menuitem" href={productHref("/help/")}>Documentation</a>
+                <a role="menuitem" href={productHref("/help/spl/")}>SPL reference</a>
+                <a role="menuitem" href={productHref("/help/collector-configuration/")}>Collector configuration</a>
                 <span className="suite-menu-rule" />
                 <button role="menuitem" type="button" onClick={() => closeMenu(true)}>Close · Open Splunk {OPEN_SPLUNK_BUILD_LABEL}</button>
               </div>
@@ -471,7 +474,7 @@ export function ProductShell({
             </Link>
           ))}
         </div>
-        <div className="suite-app-identity"><span aria-hidden="true"><AppIcon name={activeSection === "admin" ? "settings" : "search"} size="md" /></span><strong>{appName}</strong></div>
+        <div className="suite-app-identity"><span aria-hidden="true"><AppIcon name={activeSection === "admin" ? "settings" : activeSection === "help" ? "file" : "search"} size="md" /></span><strong>{appName}</strong></div>
       </nav>
 
       {menu !== null ? <button className="suite-dismiss" type="button" aria-label="Close menu" onClick={() => closeMenu(true)} /> : null}
@@ -512,7 +515,8 @@ export function ProductShell({
           <span className="drawer-label">SYSTEM</span>
           <Link className={activeSection === "activity" ? "active" : undefined} aria-current={activeSection === "activity" ? "page" : undefined} href={productHref("/activity/jobs/")}><span aria-hidden="true"><AppIcon name="activity" size="md" /></span>Activity {dataMode === "demo" ? <b className="activity-count">1</b> : null}</Link>
           <Link className={activeSection === "admin" ? "active" : undefined} aria-current={activeSection === "admin" ? "page" : undefined} href={productHref("/admin/")}><span aria-hidden="true"><AppIcon name="settings" size="md" /></span>Administration</Link>
-          <span className="drawer-label">HELP DOCUMENTATION IS NOT INCLUDED IN THIS PREVIEW</span>
+          <span className="drawer-label">HELP</span>
+          <a className={activeSection === "help" ? "active" : undefined} aria-current={activeSection === "help" ? "page" : undefined} href={productHref("/help/")}><span aria-hidden="true"><AppIcon name="file" size="md" /></span>Documentation</a>
           <span className="drawer-rule" />
           <Link href="/signin/" onClick={onSignOut}><span aria-hidden="true"><AppIcon name={localSession ? "info" : "logout"} size="md" /></span>{localSession ? "About local access" : "Sign out"}</Link>
         </dialog>

@@ -3,56 +3,13 @@
 import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 
-const ownedMarkdownPaths = Object.freeze([
-  "README.md",
-  "AGENTS.md",
-  "CLAUDE.md",
-  "docs/README.md",
-  "docs/architecture.md",
-  "docs/api.md",
-  "docs/spl.md",
-  "docs/timechart.md",
-  "docs/patterns.md",
-  "docs/dashboards.md",
-  "docs/knowledge.md",
-  "docs/theming.md",
-  "docs/ingestion.md",
-  "docs/insert-coalescing.md",
-  "docs/collector-configuration.md",
-  "docs/hec.md",
-  "docs/auditing.md",
-  "docs/search-sharing-alerts.md",
-  "docs/roadmap.md",
-  "docs/releasing.md",
-  "deploy/README.md",
-  "integration/README.md",
-  "scripts/README.md",
-  "migrations/README.md",
-  "internal/hec/testdata/compatibility/README.md",
-  "gen/go/README.md",
-  "gen/ts/README.md",
-]);
-
-const canonicalDocumentationNames = Object.freeze([
-  "README.md",
-  "architecture.md",
-  "api.md",
-  "spl.md",
-  "timechart.md",
-  "patterns.md",
-  "dashboards.md",
-  "knowledge.md",
-  "theming.md",
-  "ingestion.md",
-  "insert-coalescing.md",
-  "collector-configuration.md",
-  "hec.md",
-  "auditing.md",
-  "search-sharing-alerts.md",
-  "roadmap.md",
-  "releasing.md",
-]);
+import {
+  CANONICAL_DOCUMENTATION_NAMES,
+  OWNED_MARKDOWN_PATHS,
+} from "../lib/help/documentation-registry.mjs";
+import { helpMarkdownHeadings } from "./build-help.mjs";
 
 async function forEachSequential(values, visit) {
   const iterator = values[Symbol.iterator]();
@@ -108,7 +65,7 @@ function usage() {
   return "usage: node scripts/check-docs.mjs [--root <repository-root>]";
 }
 
-function parseArguments(arguments_) {
+export function parseDocumentationArguments(arguments_) {
   if (arguments_.length === 0) return process.cwd();
   if (arguments_.length === 2 && arguments_[0] === "--root") {
     return path.resolve(arguments_[1]);
@@ -141,31 +98,8 @@ function markdownLinesOutsideFences(source) {
   return visible;
 }
 
-function headingSlug(heading) {
-  return heading
-    .replace(/<[^>]*>/gu, "")
-    .replace(/!\[([^\]]*)\]\([^)]*\)/gu, "$1")
-    .replace(/\[([^\]]+)\]\([^)]*\)/gu, "$1")
-    .replace(/[`*_~]/gu, "")
-    .trim()
-    .toLocaleLowerCase("en-US")
-    .replace(/[^\p{L}\p{M}\p{N}\s_-]/gu, "")
-    .replace(/\s+/gu, "-");
-}
-
 function markdownAnchors(source) {
-  const anchors = new Set();
-  const occurrences = new Map();
-  for (const { line } of markdownLinesOutsideFences(source)) {
-    const match = line.match(/^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/u);
-    if (match === null) continue;
-    const base = headingSlug(match[1]);
-    if (base.length === 0) continue;
-    const occurrence = occurrences.get(base) ?? 0;
-    occurrences.set(base, occurrence + 1);
-    anchors.add(occurrence === 0 ? base : `${base}-${occurrence}`);
-  }
-  return anchors;
+  return new Set(helpMarkdownHeadings(source).map((heading) => heading.id));
 }
 
 function markdownDestinations(source) {
@@ -261,10 +195,10 @@ async function validateLink(root, sourceFile, link, fileCache, failures) {
   }
 }
 
-async function checkDocumentation(root) {
+export async function checkDocumentation(root) {
   const failures = [];
   const fileCache = new Map();
-  const expectedDocumentationNames = new Set(canonicalDocumentationNames);
+  const expectedDocumentationNames = new Set(CANONICAL_DOCUMENTATION_NAMES);
   let documentationEntries;
   try {
     documentationEntries = await readdir(path.join(root, "docs"), { withFileTypes: true });
@@ -279,7 +213,7 @@ async function checkDocumentation(root) {
     }
   }
 
-  await forEachSequential(ownedMarkdownPaths, async (relativePath) => {
+  await forEachSequential(OWNED_MARKDOWN_PATHS, async (relativePath) => {
     const filename = path.join(root, relativePath);
     let source;
     try {
@@ -309,17 +243,20 @@ async function checkDocumentation(root) {
   return failures;
 }
 
-let root;
-try {
-  root = parseArguments(process.argv.slice(2));
-} catch (error) {
-  process.stderr.write(`${error.message}\n`);
-  process.exit(2);
-}
+const invokedPath = process.argv[1] === undefined ? undefined : path.resolve(process.argv[1]);
+if (invokedPath === fileURLToPath(import.meta.url)) {
+  let root;
+  try {
+    root = parseDocumentationArguments(process.argv.slice(2));
+  } catch (error) {
+    process.stderr.write(`${error.message}\n`);
+    process.exit(2);
+  }
 
-const failures = await checkDocumentation(root);
-if (failures.length > 0) {
-  process.stderr.write(`documentation check failed:\n${failures.map((failure) => `- ${failure}`).join("\n")}\n`);
-  process.exit(1);
+  const failures = await checkDocumentation(root);
+  if (failures.length > 0) {
+    process.stderr.write(`documentation check failed:\n${failures.map((failure) => `- ${failure}`).join("\n")}\n`);
+    process.exit(1);
+  }
+  process.stdout.write(`documentation check passed (${OWNED_MARKDOWN_PATHS.length} files)\n`);
 }
-process.stdout.write(`documentation check passed (${ownedMarkdownPaths.length} files)\n`);
