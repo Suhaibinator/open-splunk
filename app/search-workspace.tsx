@@ -2994,8 +2994,9 @@ export function SearchWorkspace({
       let launchTimer: number | null = null;
       persistedLaunchPendingRef.current = true;
       setPersistedLaunchPending(true);
-      setPhase("queued");
-      setProgress(1);
+      // Object hydration is not a running search. The dedicated pending flag
+      // blocks competing actions without making the saved/history open guards
+      // reject the hydrated definition as an active job.
       void ensureBackendBootstrap()
         .then(async (bootstrap) => {
           if (controller.signal.aborted || persistedLaunchEpochRef.current !== launchEpoch) return;
