@@ -16,6 +16,7 @@ const TERMINAL_SEARCH_JOB_STATES = new Set<SearchJobState>([
   SearchJobState.SEARCH_JOB_STATE_FAILED,
   SearchJobState.SEARCH_JOB_STATE_CANCELED,
   SearchJobState.SEARCH_JOB_STATE_EXPIRED,
+  SearchJobState.SEARCH_JOB_STATE_INTERRUPTED,
 ]);
 
 export type DashboardSearchJobGetter = (
