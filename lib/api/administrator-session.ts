@@ -8,6 +8,19 @@ export const MINIMUM_ADMINISTRATOR_BEARER_TOKEN_BYTES = 32;
 export const MAXIMUM_ADMINISTRATOR_BEARER_TOKEN_BYTES = 512;
 
 let administratorBearerToken: string | null = null;
+let administratorSessionRevision = 0;
+const administratorSessionListeners = new Set<() => void>();
+
+function announceAdministratorSessionChange(): void {
+  administratorSessionRevision += 1;
+  for (const listener of Array.from(administratorSessionListeners)) {
+    try {
+      listener();
+    } catch {
+      // A broken observer cannot keep later subscribers on the prior session.
+    }
+  }
+}
 
 const ADMINISTRATOR_ROUTE_PATHS: ReadonlySet<string> = new Set([
   "/api/alerts/create",
@@ -105,6 +118,7 @@ export function setAdministratorBearerToken(token: string): void {
     throw new TypeError("Administrator bearer token is invalid.");
   }
   administratorBearerToken = token;
+  announceAdministratorSessionChange();
 }
 
 /** Returns the current credential for protected transport calls only. */
@@ -114,11 +128,26 @@ export function getAdministratorBearerToken(): string | null {
 
 /** Removes the credential from the current JavaScript realm. */
 export function clearAdministratorBearerToken(): void {
+  if (administratorBearerToken === null) return;
   administratorBearerToken = null;
+  announceAdministratorSessionChange();
 }
 
 export function hasAdministratorBearerToken(): boolean {
   return administratorBearerToken !== null;
+}
+
+/** A credential-free identity for isolating browser caches across sign-in sessions. */
+export function currentAdministratorSessionRevision(): number {
+  return administratorSessionRevision;
+}
+
+/** Observes memory-only administrator session replacement and sign-out. */
+export function subscribeToAdministratorSessionRevision(listener: () => void): () => void {
+  administratorSessionListeners.add(listener);
+  return () => {
+    administratorSessionListeners.delete(listener);
+  };
 }
 
 /** Keeps bearer attachment on the backend's exact protected-route allowlist. */

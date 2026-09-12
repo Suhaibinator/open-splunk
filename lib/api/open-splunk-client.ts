@@ -85,6 +85,8 @@ export class OpenSplunkApiClient {
   };
 
   public readonly search = {
+    patterns: this.route(searchRoutes.patterns),
+    patternMembers: this.route(searchRoutes.patternMembers),
     validate: this.route(searchRoutes.validate),
     suggestions: this.route(searchRoutes.suggestions),
     create: this.route(searchRoutes.create),

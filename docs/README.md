@@ -15,6 +15,8 @@ a document explicitly says otherwise.
 - [SPL](spl.md) is the cumulative authored-search contract.
 - [Timechart](timechart.md) defines exact grids, split selection, pipeline
   composition, bucket metadata, and resource behavior.
+- [Event patterns](patterns.md) describes retained snapshot grouping, exact
+  members, exports, and resource bounds.
 - [Knowledge](knowledge.md) covers field knowledge, lookups, immutable
   snapshots, lifecycle, and security.
 - [Theming](theming.md) defines the two-tier colour token layer, the

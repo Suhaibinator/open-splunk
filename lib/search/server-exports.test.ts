@@ -137,6 +137,7 @@ function exportJob(
     stateVersion,
     definition: {
       searchJobId: "search-1",
+      source: undefined,
       columns: [],
       rowLimit: undefined,
       byteLimit: undefined,
