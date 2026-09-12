@@ -1140,17 +1140,61 @@ func configureProcessGroup(command *exec.Cmd) {
 	command.WaitDelay = 5 * time.Second
 }
 
-func unusedLoopbackAddress(t *testing.T) string {
+func unusedLoopbackAddressPair(t *testing.T) (string, string) {
 	t.Helper()
-	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	httpAddress, collectorAddress, err := unusedLoopbackAddressPairWith(
+		t.Context(),
+		(&net.ListenConfig{}).Listen,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	address := listener.Addr().String()
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
+	return httpAddress, collectorAddress
+}
+
+type loopbackListen func(context.Context, string, string) (net.Listener, error)
+
+// Hold both probes until the pair is known so the kernel cannot reuse the
+// first ephemeral port for the second. The child-process handoff still begins
+// after both reservations close and cannot exclude an unrelated local bind.
+func unusedLoopbackAddressPairWith(
+	ctx context.Context,
+	listen loopbackListen,
+) (string, string, error) {
+	httpListener, err := listen(ctx, "tcp4", "127.0.0.1:0")
+	if err != nil {
+		return "", "", fmt.Errorf("reserve HTTP loopback address: %w", err)
 	}
-	return address
+	collectorListener, err := listen(ctx, "tcp4", "127.0.0.1:0")
+	if err != nil {
+		return "", "", errors.Join(
+			fmt.Errorf("reserve collector loopback address: %w", err),
+			closeLoopbackReservation("HTTP", httpListener),
+		)
+	}
+	httpAddress := httpListener.Addr().String()
+	collectorAddress := collectorListener.Addr().String()
+	closeErr := errors.Join(
+		closeLoopbackReservation("HTTP", httpListener),
+		closeLoopbackReservation("collector", collectorListener),
+	)
+	if httpAddress == collectorAddress {
+		return "", "", errors.Join(
+			fmt.Errorf("loopback reservations returned duplicate address %q", httpAddress),
+			closeErr,
+		)
+	}
+	if closeErr != nil {
+		return "", "", closeErr
+	}
+	return httpAddress, collectorAddress, nil
+}
+
+func closeLoopbackReservation(name string, listener net.Listener) error {
+	if err := listener.Close(); err != nil {
+		return fmt.Errorf("close %s loopback reservation: %w", name, err)
+	}
+	return nil
 }
 
 func redactForFailure(value string, secrets ...string) string {

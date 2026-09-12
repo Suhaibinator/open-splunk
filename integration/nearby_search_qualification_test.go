@@ -419,8 +419,7 @@ func nearbyQualificationStartServer(
 		t.Fatalf("create %s runtime directory: %v", server.name, err)
 	}
 	administratorTokenPath, administratorToken := provisionAdministratorToken(t, work)
-	httpAddress := unusedLoopbackAddress(t)
-	collectorAddress := unusedLoopbackAddress(t)
+	httpAddress, collectorAddress := unusedLoopbackAddressPair(t)
 	environment := clickHouseServerEnvironment(os.Environ(), clickHouse)
 	environment = environmentWithValue(environment, "PATH", filepath.Join(runtimeDirectory, "no-external-runtime"))
 	arguments := []string{

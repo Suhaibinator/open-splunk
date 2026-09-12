@@ -94,8 +94,7 @@ func TestBackendIndexDataDeletionLifecycle(t *testing.T) {
 		}
 	})
 
-	httpAddress := unusedLoopbackAddress(t)
-	collectorAddress := unusedLoopbackAddress(t)
+	httpAddress, collectorAddress := unusedLoopbackAddressPair(t)
 	controlDBPath := filepath.Join(work, "control.sqlite")
 	administratorTokenPath, administratorToken := provisionAdministratorToken(
 		t,
