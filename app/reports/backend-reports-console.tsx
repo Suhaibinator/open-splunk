@@ -21,6 +21,7 @@ import {
   nextDuplicateSavedSearchName,
   savedSearchNameValidationError,
 } from "@/lib/search/saved-search-names";
+import { savedSearchScopeLabel } from "@/lib/search/saved-search-scope";
 import {
   deleteServerSavedSearch,
   duplicateServerSavedSearch,
@@ -45,12 +46,13 @@ import {
   type ReportsView,
 } from "./reports-view-state";
 import { ScheduledReportActions, ScheduledReportStatus } from "./scheduled-report-controls";
+import { SavedSearchScopeEditor } from "./saved-search-scope-editor";
 import { Select, SelectOption } from "../_components/select";
 
 type SavedSearchScope = "all" | "private" | "app" | "global";
 type SortOrder = "updated" | "name";
 type LoadState = "loading" | "available" | "unavailable" | "error";
-type SavedSearchAction = "rename" | "duplicate" | "delete";
+type SavedSearchAction = "rename" | "duplicate" | "sharing" | "delete";
 
 interface SavedSearchModal {
   action: SavedSearchAction;
@@ -64,13 +66,6 @@ interface BackendReportsConsoleProps {
 }
 
 const errorMessage = createErrorMessage("The server did not return a usable saved-search response.");
-
-function scopeLabel(scope: SharingScope): string {
-  if (scope === SharingScope.SHARING_SCOPE_GLOBAL) return "Global";
-  if (scope === SharingScope.SHARING_SCOPE_APP) return "App";
-  if (scope === SharingScope.SHARING_SCOPE_PRIVATE) return "Private";
-  return "Unknown";
-}
 
 function sharingScopeFilters(scope: SavedSearchScope): SharingScope[] {
   if (scope === "global") return [SharingScope.SHARING_SCOPE_GLOBAL];
@@ -630,7 +625,7 @@ export function BackendReportsConsole({ apiBaseUrl, onViewChange, view }: Backen
                         <td data-label="App">{savedSearch.search.appId === undefined
                           ? "No app"
                           : appNames[savedSearch.search.appId] ?? savedSearch.search.appId}</td>
-                        <td data-label="Sharing"><StatusLabel tone="neutral">{scopeLabel(savedSearch.sharingScope)}</StatusLabel></td>
+                        <td data-label="Sharing"><StatusLabel tone="neutral">{savedSearchScopeLabel(savedSearch.sharingScope)}</StatusLabel></td>
                         <td data-label="Owner">{savedSearch.ownerId || "Current user"}</td>
                         <td data-label="Time range"><code>{savedSearch.search.timeRange?.earliest ?? "Server default"} → {savedSearch.search.timeRange?.latest ?? "Server default"}</code></td>
                         <td data-label="Schedule">{schedulingAvailable ? <ScheduledReportStatus savedSearch={savedSearch} /> : "Unavailable"}</td>
@@ -638,6 +633,7 @@ export function BackendReportsConsole({ apiBaseUrl, onViewChange, view }: Backen
                         <td className="reports-open-cell reports-action-cell">
                           <Link href={launchHref(savedSearch)} aria-label={`Open ${savedSearch.name} in Search`}>Open <AppIcon name="chevron-right" size="xs" /></Link>
                           <button type="button" disabled={controlsPending} onClick={() => openAction("rename", savedSearch)} aria-label={`Rename ${savedSearch.name}`}>Rename</button>
+                          <button type="button" disabled={controlsPending} onClick={() => openAction("sharing", savedSearch)} aria-label={`Edit sharing for ${savedSearch.name}`}>Sharing</button>
                           <button type="button" disabled={controlsPending} onClick={() => openAction("duplicate", savedSearch)} aria-label={`Duplicate ${savedSearch.name}`}>Duplicate</button>
                           {schedulingAvailable && currentBootstrap !== null ? (
                             <ScheduledReportActions
@@ -723,6 +719,22 @@ export function BackendReportsConsole({ apiBaseUrl, onViewChange, view }: Backen
             <p className="reports-action-hint">The copy keeps the current SPL, time range, result preferences, sharing scope, and app. Future edits do not affect the original.</p>
           </form>
         </Modal>
+      ) : null}
+
+      {modal?.action === "sharing" && currentBootstrap !== null ? (
+        <SavedSearchScopeEditor
+          key={`${apiBaseUrl}:${modal.target.id}`}
+          bootstrap={currentBootstrap}
+          client={client}
+          savedSearch={modal.target}
+          onClose={closeAction}
+          onNotice={setActionNotice}
+          onUpdated={(updated) => {
+            setSavedSearches((current) => current.map((item) => item.id === updated.id ? updated : item));
+            invalidatePagingAfterMutation();
+            reload();
+          }}
+        />
       ) : null}
 
       {modal?.action === "delete" ? (
