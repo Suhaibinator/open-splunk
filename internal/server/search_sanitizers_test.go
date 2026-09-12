@@ -92,13 +92,13 @@ func TestSanitizeCreateSearchJobRequestRejectsUnsupportedOptions(t *testing.T) {
 		request     *opensplunk.CreateSearchJobRequest
 		wantMessage string
 	}{
-		"client request ID": {
+		"short client request ID": {
 			request:     &opensplunk.CreateSearchJobRequest{ClientRequestId: new("client-1")},
-			wantMessage: "client request idempotency is not supported",
+			wantMessage: "request idempotency input is invalid: client request ID must contain between 16 and 128 bytes",
 		},
 		"empty client request ID": {
 			request:     &opensplunk.CreateSearchJobRequest{ClientRequestId: new("")},
-			wantMessage: "client request idempotency is not supported",
+			wantMessage: "request idempotency input is invalid: client request ID must contain between 16 and 128 bytes",
 		},
 		"eager field discovery": {
 			request: &opensplunk.CreateSearchJobRequest{
@@ -128,6 +128,18 @@ func TestSanitizeCreateSearchJobRequestRejectsUnsupportedOptions(t *testing.T) {
 			_, err := sanitizeCreateSearchJobRequest(t.Context(), test.request)
 			assertSanitizerRejection(t, err, test.wantMessage)
 		})
+	}
+}
+
+func TestSanitizeCreateSearchJobRequestAcceptsClientRequestID(t *testing.T) {
+	t.Parallel()
+
+	request := &opensplunk.CreateSearchJobRequest{
+		ClientRequestId: new("search request 01"),
+		Definition:      &opensplunk.SearchDefinition{Spl: "index=main"},
+	}
+	if got, err := sanitizeCreateSearchJobRequest(t.Context(), request); err != nil || got != request {
+		t.Fatalf("sanitize = (%#v, %v)", got, err)
 	}
 }
 

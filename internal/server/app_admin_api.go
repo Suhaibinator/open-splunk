@@ -24,8 +24,18 @@ import (
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 )
+
+type idempotentAppAdministration interface {
+	CreateAppIdempotent(
+		context.Context,
+		AppAdministrationScope,
+		AppAdministrationDefinition,
+		requestidempotency.Intent,
+	) (AppAdministrationWorkspace, bool, error)
+}
 
 const (
 	defaultAppAdministrationPageSize     = 50
@@ -174,6 +184,17 @@ func (handler *apiHandler) createApp(
 	request *http.Request,
 	input *opensplunk.CreateAppRequest,
 ) (*serializedCreateAppResponse, error) {
+	canonical := proto.Clone(input).(*opensplunk.CreateAppRequest)
+	canonical.ClientRequestId = nil
+	intent, err := handler.mutationIntent(
+		request.Context(),
+		requestidempotency.RouteCreateApp,
+		input.ClientRequestId,
+		canonical,
+	)
+	if err != nil {
+		return nil, err
+	}
 	scope, err := handler.appAdministrationAccess(request)
 	if err != nil {
 		return nil, err
@@ -197,11 +218,29 @@ func (handler *apiHandler) createApp(
 	}()
 
 	expectedDefinition := cloneAppAdministrationDefinition(definition)
-	record, operationErr := handler.appAdmin.CreateApp(
-		request.Context(),
-		scope,
-		cloneAppAdministrationDefinition(definition),
-	)
+	var record AppAdministrationWorkspace
+	replayed := false
+	var operationErr error
+	if intent == nil {
+		record, operationErr = handler.appAdmin.CreateApp(
+			request.Context(),
+			scope,
+			cloneAppAdministrationDefinition(definition),
+		)
+	} else if idempotent, ok := handler.appAdmin.(idempotentAppAdministration); ok {
+		record, replayed, operationErr = idempotent.CreateAppIdempotent(
+			request.Context(),
+			scope,
+			cloneAppAdministrationDefinition(definition),
+			*intent,
+		)
+	} else {
+		return nil, unavailableError("app idempotency is unavailable")
+	}
+	if mapped := mapRequestIdempotencyError(operationErr); mapped != nil &&
+		isRequestIdempotencyError(operationErr) {
+		return nil, mapped
+	}
 	if mapped := mapAppAdministrationCallError(
 		request.Context(),
 		operationErr,
@@ -209,17 +248,17 @@ func (handler *apiHandler) createApp(
 		return nil, mapped
 	}
 	converted, err := handler.appAdministrationWorkspaceToProto(record)
-	if err != nil ||
-		converted.GetVersion() != 1 ||
-		record.State != AppAdministrationStateActive ||
-		!equalAppAdministrationDefinition(
-			record.Definition,
-			expectedDefinition,
-		) ||
-		!record.CreatedAt.Equal(record.UpdatedAt) {
+	if err != nil || converted.GetVersion() == 0 ||
+		(!replayed && (converted.GetVersion() != 1 ||
+			record.State != AppAdministrationStateActive ||
+			!equalAppAdministrationDefinition(
+				record.Definition,
+				expectedDefinition,
+			) ||
+			!record.CreatedAt.Equal(record.UpdatedAt))) {
 		return nil, internalError()
 	}
-	message := &opensplunk.CreateAppResponse{App: converted}
+	message := &opensplunk.CreateAppResponse{App: converted, Replayed: replayed}
 	if proto.Size(message) > maximumAppAdministrationResponse {
 		return nil, internalError()
 	}

@@ -13,6 +13,7 @@ import (
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 	"google.golang.org/protobuf/proto"
 )
@@ -429,6 +430,28 @@ type Job struct {
 type JobJournal interface {
 	Admit(context.Context, Job) error
 	Finalize(context.Context, Job) error
+}
+
+// IdempotentJobJournal extends durable admission with actor-scoped receipt
+// lookup. Lookup returns current authorized metadata from the durable target,
+// rather than a historical response projection stored in the receipt.
+type IdempotentJobJournal interface {
+	JobJournal
+	LookupIdempotent(context.Context, AccessScope, requestidempotency.Intent) (Job, bool, error)
+	AdmitIdempotent(context.Context, Job, requestidempotency.Intent) error
+}
+
+// IdempotencyReceiptJournal is the single journal projection that co-commits
+// a mutation receipt with its admission audit.
+type IdempotencyReceiptJournal interface {
+	LookupIdempotencyReceipt(context.Context, requestidempotency.Intent) (requestidempotency.Target, bool, error)
+	AdmitIdempotent(context.Context, Job, requestidempotency.Intent) error
+}
+
+// IdempotencyTargetJournal rehydrates the receipt target through the current
+// durable authorization boundary.
+type IdempotencyTargetJournal interface {
+	ReadIdempotencyTarget(context.Context, AccessScope, requestidempotency.Target) (Job, error)
 }
 
 // CompletedResultJournal is an optional extension implemented by journals

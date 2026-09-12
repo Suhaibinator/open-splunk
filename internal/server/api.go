@@ -11,12 +11,14 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/SRouter/pkg/router"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/buildmetadata"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"github.com/Suhaibinator/open-splunk/internal/searchartifacts"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobproto"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -192,10 +194,61 @@ func appCatalogSummariesToProto(
 }
 
 func (handler *apiHandler) createSearchJob(request *http.Request, input *opensplunk.CreateSearchJobRequest) (*opensplunk.CreateSearchJobResponse, error) {
+	canonical := proto.Clone(input).(*opensplunk.CreateSearchJobRequest)
+	canonical.ClientRequestId = nil
+	intent, err := handler.mutationIntent(
+		request.Context(),
+		requestidempotency.RouteCreateSearchJob,
+		input.ClientRequestId,
+		canonical,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if intent != nil {
+		var (
+			replayed searchjobs.Job
+			found    bool
+		)
+		if handler.trustedSearchAdmission != nil {
+			idempotent, ok := handler.trustedSearchAdmission.(idempotentTrustedSearchAdmission)
+			if !ok {
+				return nil, unavailableError("search job idempotency is unavailable")
+			}
+			replayed, found, err = idempotent.ReplayTrustedSearch(
+				request.Context(), handler.accessScope(), *intent,
+			)
+		} else {
+			idempotent, ok := handler.jobs.(idempotentSearchJobs)
+			if !ok {
+				return nil, unavailableError("search job idempotency is unavailable")
+			}
+			replayed, found, err = idempotent.ReplayIdempotent(
+				request.Context(), handler.accessScope(), *intent,
+			)
+		}
+		if isRequestIdempotencyError(err) {
+			return nil, mapRequestIdempotencyError(err)
+		}
+		if err != nil {
+			return nil, mapSearchJobError(err)
+		}
+		if found {
+			if !handler.validKnowledgeSearchJobProjection(replayed) {
+				return nil, internalError()
+			}
+			converted, convertErr := searchJobToProto(replayed, handler.now())
+			if convertErr != nil {
+				return nil, internalError()
+			}
+			return &opensplunk.CreateSearchJobResponse{
+				SearchJob: converted, Replayed: true,
+			}, nil
+		}
+	}
 	var (
 		resolved     resolvedSearchDefinition
 		source       searchjobs.JobSource
-		err          error
 		historyRerun = input.GetSource().GetOrigin() == opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN
 		savedLaunch  = input.GetSource().GetOrigin() == opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH
 	)
@@ -240,11 +293,18 @@ func (handler *apiHandler) createSearchJob(request *http.Request, input *openspl
 	}
 	var job searchjobs.Job
 	if handler.trustedSearchAdmission != nil {
-		job, err = handler.trustedSearchAdmission.AdmitTrustedSearch(request.Context(), TrustedSearchAdmissionRequest{
+		admissionRequest := TrustedSearchAdmissionRequest{
 			SPL: resolved.SPL, OwnerID: handler.ownerID, TenantID: handler.tenantID,
 			AppID: resolved.AppID, IndexScope: slices.Clone(resolved.IndexScope),
 			TimeRange: resolved.TimeRange, Source: source,
-		})
+		}
+		if intent == nil {
+			job, err = handler.trustedSearchAdmission.AdmitTrustedSearch(request.Context(), admissionRequest)
+		} else if idempotent, ok := handler.trustedSearchAdmission.(idempotentTrustedSearchAdmission); ok {
+			job, _, err = idempotent.AdmitTrustedSearchIdempotent(request.Context(), admissionRequest, *intent)
+		} else {
+			return nil, unavailableError("search job idempotency is unavailable")
+		}
 	} else {
 		var requestedIndexes []string
 		requestedIndexes, err = handler.resolveAuthorizedSearchIndexes(request.Context(), resolved.IndexScope)
@@ -254,11 +314,18 @@ func (handler *apiHandler) createSearchJob(request *http.Request, input *openspl
 			}
 			return nil, err
 		}
-		job, err = handler.jobs.Create(request.Context(), searchjobs.CreateRequest{
+		createRequest := searchjobs.CreateRequest{
 			SPL: resolved.SPL, OwnerID: handler.ownerID, TenantID: handler.tenantID,
 			AuthorizedIndexes: slices.Clone(requestedIndexes), RequestedIndexes: requestedIndexes,
 			TimeRange: resolved.TimeRange, AppID: resolved.AppID, Source: source,
-		})
+		}
+		if intent == nil {
+			job, err = handler.jobs.Create(request.Context(), createRequest)
+		} else if idempotent, ok := handler.jobs.(idempotentSearchJobs); ok {
+			job, _, err = idempotent.CreateIdempotent(request.Context(), createRequest, *intent)
+		} else {
+			return nil, unavailableError("search job idempotency is unavailable")
+		}
 	}
 	if err != nil {
 		if contextErr := historyRerunContextError(
@@ -270,6 +337,9 @@ func (handler *apiHandler) createSearchJob(request *http.Request, input *openspl
 		}
 		if contextErr := requestContextFailure(request.Context(), err); contextErr != nil {
 			return nil, contextErr
+		}
+		if isRequestIdempotencyError(err) {
+			return nil, mapRequestIdempotencyError(err)
 		}
 		switch {
 		case errors.Is(err, ErrTrustedSearchAppUnavailable), errors.Is(err, ErrTrustedSearchIndexUnavailable):
@@ -287,7 +357,7 @@ func (handler *apiHandler) createSearchJob(request *http.Request, input *openspl
 	if err != nil {
 		return nil, internalError()
 	}
-	return &opensplunk.CreateSearchJobResponse{SearchJob: converted}, nil
+	return &opensplunk.CreateSearchJobResponse{SearchJob: converted, Replayed: false}, nil
 }
 
 // resolveSavedSearchLaunch makes the persisted reusable definition—not a

@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobproto"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -39,6 +40,52 @@ func (journal *JobJournal) Admit(ctx context.Context, job searchjobs.Job) error 
 		return err
 	}
 	_, err = journal.store.BeginAttempt(ctx, jobScope(job), entry)
+	return err
+}
+
+// LookupIdempotencyReceipt reads only the immutable target identity. The
+// composite journal rehydrates that identity through its durable artifact
+// projection so replay observes current authorized metadata.
+func (journal *JobJournal) LookupIdempotencyReceipt(
+	ctx context.Context,
+	intent requestidempotency.Intent,
+) (requestidempotency.Target, bool, error) {
+	if journal == nil || journal.store == nil || journal.store.orm == nil {
+		return requestidempotency.Target{}, false, requestidempotency.ErrUnavailable
+	}
+	receipt, found, err := requestidempotency.Read(ctx, journal.store.orm, intent)
+	if err != nil || !found {
+		return requestidempotency.Target{}, found, err
+	}
+	if receipt.Target.Kind != requestidempotency.TargetSearchJob {
+		return requestidempotency.Target{}, true, requestidempotency.ErrCorrupt
+	}
+	return receipt.Target, true, nil
+}
+
+// AdmitIdempotent co-commits pending history, admission audit, and receipt.
+func (journal *JobJournal) AdmitIdempotent(
+	ctx context.Context,
+	job searchjobs.Job,
+	intent requestidempotency.Intent,
+) error {
+	if journal == nil || journal.store == nil {
+		return requestidempotency.ErrUnavailable
+	}
+	entry, err := journal.entry(job, false)
+	if err != nil {
+		return err
+	}
+	_, err = journal.store.beginAttempt(
+		ctx,
+		jobScope(job),
+		entry,
+		&intent,
+		&requestidempotency.Target{
+			Kind: requestidempotency.TargetSearchJob,
+			ID:   job.ID, Version: job.Version,
+		},
+	)
 	return err
 }
 

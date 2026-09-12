@@ -24,6 +24,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"github.com/Suhaibinator/open-splunk/internal/searchlimits"
 	"github.com/Suhaibinator/open-splunk/internal/searchretention"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
@@ -723,6 +724,62 @@ func (manager *Manager) LookupAdmissionEnabled() bool {
 // context is used only for admission; a successfully created job intentionally
 // outlives an HTTP request and is canceled through Cancel or Close.
 func (manager *Manager) Create(ctx context.Context, request CreateRequest) (Job, error) {
+	return manager.create(ctx, request, nil)
+}
+
+// CreateIdempotent replays an actor-scoped durable admission before any
+// dynamic visibility, time, authorization, or capacity resolution. Concurrent
+// first attempts converge through the receipt projection's database key.
+func (manager *Manager) CreateIdempotent(
+	ctx context.Context,
+	request CreateRequest,
+	intent requestidempotency.Intent,
+) (Job, bool, error) {
+	if ctx == nil || intent.Route != requestidempotency.RouteCreateSearchJob ||
+		intent.TenantID != request.TenantID || intent.CanonicalVersion != requestidempotency.CanonicalVersion {
+		return Job{}, false, requestidempotency.ErrInvalid
+	}
+	access := AccessScope{TenantID: request.TenantID, OwnerID: request.OwnerID}
+	if job, found, err := manager.ReplayIdempotent(ctx, access, intent); err != nil || found {
+		return job, found, err
+	}
+	job, err := manager.create(ctx, request, &intent)
+	if err == nil {
+		return job, false, nil
+	}
+	if replay, found, replayErr := manager.ReplayIdempotent(ctx, access, intent); replayErr != nil || found {
+		return replay, found, replayErr
+	}
+	return Job{}, false, err
+}
+
+// ReplayIdempotent resolves current durable metadata without applying any
+// caller-authored request defaults or consulting live mutation capacity.
+func (manager *Manager) ReplayIdempotent(
+	ctx context.Context,
+	access AccessScope,
+	intent requestidempotency.Intent,
+) (Job, bool, error) {
+	if ctx == nil || !validAccessScope(access) || intent.TenantID != access.TenantID ||
+		intent.Route != requestidempotency.RouteCreateSearchJob ||
+		intent.CanonicalVersion != requestidempotency.CanonicalVersion {
+		return Job{}, false, requestidempotency.ErrInvalid
+	}
+	if err := ctx.Err(); err != nil {
+		return Job{}, false, err
+	}
+	journal, ok := manager.journal.(IdempotentJobJournal)
+	if !ok {
+		return Job{}, false, requestidempotency.ErrUnavailable
+	}
+	return journal.LookupIdempotent(ctx, access, intent)
+}
+
+func (manager *Manager) create(
+	ctx context.Context,
+	request CreateRequest,
+	intent *requestidempotency.Intent,
+) (Job, error) {
 	if ctx == nil {
 		return Job{}, errors.New("create search job: context is nil")
 	}
@@ -882,7 +939,7 @@ func (manager *Manager) Create(ctx context.Context, request CreateRequest) (Job,
 	created := cloneJob(entry.job)
 	journalAdmitted := false
 	if manager.journal != nil {
-		if err := manager.admitJournal(ctx, created); err != nil {
+		if err := manager.admitJournal(ctx, created, intent); err != nil {
 			cancel()
 			return Job{}, err
 		}
@@ -1088,7 +1145,11 @@ func (manager *Manager) releaseJobID(id string) {
 	manager.mu.Unlock()
 }
 
-func (manager *Manager) admitJournal(ctx context.Context, job Job) error {
+func (manager *Manager) admitJournal(
+	ctx context.Context,
+	job Job,
+	intent *requestidempotency.Intent,
+) error {
 	journalParent, cancelForManager := context.WithCancel(ctx)
 	stopManagerCancellation := context.AfterFunc(manager.ctx, cancelForManager)
 	journalContext, cancelTimeout := context.WithTimeout(journalParent, manager.journalTimeout)
@@ -1098,6 +1159,13 @@ func (manager *Manager) admitJournal(ctx context.Context, job Job) error {
 		cancelForManager()
 	}()
 	err := invokeJournal(func() error {
+		if intent != nil {
+			journal, ok := manager.journal.(IdempotentJobJournal)
+			if !ok {
+				return requestidempotency.ErrUnavailable
+			}
+			return journal.AdmitIdempotent(journalContext, cloneJob(job), *intent)
+		}
 		return manager.journal.Admit(journalContext, cloneJob(job))
 	})
 	if err == nil {
@@ -1110,6 +1178,13 @@ func (manager *Manager) admitJournal(ctx context.Context, job Job) error {
 		return ErrClosed
 	}
 	manager.reportJournalError(JournalOperationAdmit, job, err)
+	if errors.Is(err, requestidempotency.ErrInvalid) ||
+		errors.Is(err, requestidempotency.ErrConflict) ||
+		errors.Is(err, requestidempotency.ErrCapacity) ||
+		errors.Is(err, requestidempotency.ErrUnavailable) ||
+		errors.Is(err, requestidempotency.ErrCorrupt) {
+		return err
+	}
 	return fmt.Errorf("create search job: %w", ErrJournalUnavailable)
 }
 

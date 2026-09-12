@@ -18,8 +18,26 @@ import (
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
 )
+
+type idempotentSavedSearches interface {
+	CreateIdempotent(
+		context.Context,
+		savedobjects.AccessScope,
+		*opensplunk.SavedSearchDefinition,
+		requestidempotency.Intent,
+	) (*opensplunk.SavedSearch, bool, error)
+	DuplicateIdempotent(
+		context.Context,
+		savedobjects.AccessScope,
+		string,
+		string,
+		*string,
+		requestidempotency.Intent,
+	) (*opensplunk.SavedSearch, bool, error)
+}
 
 const (
 	maximumSavedSearchIDBytes     = 128
@@ -51,11 +69,42 @@ var savedSearchUpdatePaths = map[string]struct{}{
 }
 
 func (handler *apiHandler) createSavedSearch(request *http.Request, input *opensplunk.CreateSavedSearchRequest) (*opensplunk.CreateSavedSearchResponse, error) {
+	canonical := proto.Clone(input).(*opensplunk.CreateSavedSearchRequest)
+	canonical.ClientRequestId = nil
+	intent, err := handler.mutationIntent(
+		request.Context(),
+		requestidempotency.RouteCreateSavedSearch,
+		input.ClientRequestId,
+		canonical,
+	)
+	if err != nil {
+		return nil, err
+	}
 	definition, err := handler.savedSearchDefinition(input.GetDefinition())
 	if err != nil {
 		return nil, badRequestError(err.Error())
 	}
-	record, err := handler.savedSearches.Create(request.Context(), handler.savedSearchScope(), definition)
+	var record *opensplunk.SavedSearch
+	replayed := false
+	if intent == nil {
+		record, err = handler.savedSearches.Create(
+			request.Context(), handler.savedSearchScope(), definition,
+		)
+	} else if idempotent, ok := handler.savedSearches.(idempotentSavedSearches); ok {
+		record, replayed, err = idempotent.CreateIdempotent(
+			request.Context(), handler.savedSearchScope(), definition, *intent,
+		)
+	} else {
+		return nil, unavailableError("saved search idempotency is unavailable")
+	}
+	if mapped := mapRequestIdempotencyError(err); mapped != nil &&
+		(errors.Is(err, requestidempotency.ErrInvalid) ||
+			errors.Is(err, requestidempotency.ErrConflict) ||
+			errors.Is(err, requestidempotency.ErrCapacity) ||
+			errors.Is(err, requestidempotency.ErrUnavailable) ||
+			errors.Is(err, requestidempotency.ErrCorrupt)) {
+		return nil, mapped
+	}
 	if err := mapSavedSearchCallError(request.Context(), err); err != nil {
 		return nil, err
 	}
@@ -63,10 +112,13 @@ func (handler *apiHandler) createSavedSearch(request *http.Request, input *opens
 	if err != nil {
 		return nil, internalError()
 	}
-	if converted.GetVersion() != 1 {
+	if converted.GetVersion() == 0 || (!replayed && converted.GetVersion() != 1) {
 		return nil, internalError()
 	}
-	return &opensplunk.CreateSavedSearchResponse{SavedSearch: converted}, nil
+	return &opensplunk.CreateSavedSearchResponse{
+		SavedSearch: converted,
+		Replayed:    replayed,
+	}, nil
 }
 
 func (handler *apiHandler) getSavedSearch(request *http.Request, input *opensplunk.GetSavedSearchRequest) (*opensplunk.GetSavedSearchResponse, error) {
@@ -219,10 +271,43 @@ func (handler *apiHandler) updateSavedSearch(request *http.Request, input *opens
 }
 
 func (handler *apiHandler) duplicateSavedSearch(request *http.Request, input *opensplunk.DuplicateSavedSearchRequest) (*opensplunk.DuplicateSavedSearchResponse, error) {
+	canonical := proto.Clone(input).(*opensplunk.DuplicateSavedSearchRequest)
+	canonical.ClientRequestId = nil
+	intent, err := handler.mutationIntent(
+		request.Context(),
+		requestidempotency.RouteDuplicateSavedSearch,
+		input.ClientRequestId,
+		canonical,
+	)
+	if err != nil {
+		return nil, err
+	}
 	id := input.GetSavedSearchId()
 	newName := input.GetNewName()
 	destinationAppID := input.DestinationAppId
-	record, err := handler.savedSearches.Duplicate(request.Context(), handler.savedSearchScope(), id, newName, destinationAppID)
+	var record *opensplunk.SavedSearch
+	replayed := false
+	if intent == nil {
+		record, err = handler.savedSearches.Duplicate(
+			request.Context(), handler.savedSearchScope(), id, newName,
+			destinationAppID,
+		)
+	} else if idempotent, ok := handler.savedSearches.(idempotentSavedSearches); ok {
+		record, replayed, err = idempotent.DuplicateIdempotent(
+			request.Context(), handler.savedSearchScope(), id, newName,
+			destinationAppID, *intent,
+		)
+	} else {
+		return nil, unavailableError("saved search idempotency is unavailable")
+	}
+	if mapped := mapRequestIdempotencyError(err); mapped != nil &&
+		(errors.Is(err, requestidempotency.ErrInvalid) ||
+			errors.Is(err, requestidempotency.ErrConflict) ||
+			errors.Is(err, requestidempotency.ErrCapacity) ||
+			errors.Is(err, requestidempotency.ErrUnavailable) ||
+			errors.Is(err, requestidempotency.ErrCorrupt)) {
+		return nil, mapped
+	}
 	if err := mapSavedSearchCallError(request.Context(), err); err != nil {
 		return nil, err
 	}
@@ -230,13 +315,20 @@ func (handler *apiHandler) duplicateSavedSearch(request *http.Request, input *op
 	if err != nil {
 		return nil, internalError()
 	}
-	if converted.GetSavedSearchId() == id || converted.GetVersion() != 1 || converted.GetDefinition().GetName() != newName {
+	if converted.GetSavedSearchId() == id || converted.GetVersion() == 0 ||
+		(!replayed && converted.GetVersion() != 1) {
 		return nil, internalError()
 	}
-	if destinationAppID != nil && savedSearchAppID(converted) != *destinationAppID {
+	if !replayed && converted.GetDefinition().GetName() != newName {
 		return nil, internalError()
 	}
-	return &opensplunk.DuplicateSavedSearchResponse{SavedSearch: converted}, nil
+	if !replayed && destinationAppID != nil && savedSearchAppID(converted) != *destinationAppID {
+		return nil, internalError()
+	}
+	return &opensplunk.DuplicateSavedSearchResponse{
+		SavedSearch: converted,
+		Replayed:    replayed,
+	}, nil
 }
 
 func (handler *apiHandler) deleteSavedSearch(request *http.Request, input *opensplunk.DeleteSavedSearchRequest) (*opensplunk.DeleteSavedSearchResponse, error) {

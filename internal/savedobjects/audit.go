@@ -2,12 +2,14 @@ package savedobjects
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"gorm.io/gorm"
 
@@ -110,6 +112,22 @@ func (store *AuditedStore) Create(
 	return store.store.create(ctx, scope, definition, store.publish)
 }
 
+// CreateIdempotent co-commits the saved search, successful audit event, and
+// actor-scoped receipt. An exact replay returns current owner-authorized
+// metadata without publishing another audit event.
+func (store *AuditedStore) CreateIdempotent(
+	ctx context.Context,
+	scope AccessScope,
+	definition *opensplunk.SavedSearchDefinition,
+	intent requestidempotency.Intent,
+) (*opensplunk.SavedSearch, bool, error) {
+	if intent.TenantID != store.tenantID ||
+		intent.Route != requestidempotency.RouteCreateSavedSearch {
+		return nil, false, requestidempotency.ErrInvalid
+	}
+	return store.createIdempotent(ctx, scope, definition, nil, intent)
+}
+
 // Get delegates an owner-scoped read without publishing an audit event.
 func (store *AuditedStore) Get(
 	ctx context.Context,
@@ -166,6 +184,98 @@ func (store *AuditedStore) Duplicate(
 		destinationAppID,
 		store.publish,
 	)
+}
+
+// DuplicateIdempotent co-commits a duplicated saved search with one receipt.
+func (store *AuditedStore) DuplicateIdempotent(
+	ctx context.Context,
+	scope AccessScope,
+	sourceID string,
+	newName string,
+	destinationAppID *string,
+	intent requestidempotency.Intent,
+) (*opensplunk.SavedSearch, bool, error) {
+	if intent.TenantID != store.tenantID ||
+		intent.Route != requestidempotency.RouteDuplicateSavedSearch {
+		return nil, false, requestidempotency.ErrInvalid
+	}
+	return store.createIdempotent(
+		ctx,
+		scope,
+		nil,
+		func(publisher savedSearchMutationAuditPublisher) (*opensplunk.SavedSearch, error) {
+			return store.store.duplicate(
+				ctx,
+				scope,
+				sourceID,
+				newName,
+				destinationAppID,
+				publisher,
+			)
+		},
+		intent,
+	)
+}
+
+func (store *AuditedStore) createIdempotent(
+	ctx context.Context,
+	scope AccessScope,
+	definition *opensplunk.SavedSearchDefinition,
+	operation func(savedSearchMutationAuditPublisher) (*opensplunk.SavedSearch, error),
+	intent requestidempotency.Intent,
+) (*opensplunk.SavedSearch, bool, error) {
+	replay := func() (*opensplunk.SavedSearch, bool, error) {
+		receipt, found, err := requestidempotency.Read(ctx, store.store.orm, intent)
+		if err != nil || !found {
+			return nil, found, err
+		}
+		if receipt.Target.Kind != requestidempotency.TargetSavedSearch {
+			return nil, true, requestidempotency.ErrCorrupt
+		}
+		current, err := store.store.Get(ctx, scope, receipt.Target.ID)
+		if errors.Is(err, control.ErrNotFound) {
+			return nil, true, requestidempotency.ErrUnavailable
+		}
+		return current, true, err
+	}
+	if current, found, err := replay(); err != nil || found {
+		return current, found, err
+	}
+	publish := func(
+		ctx context.Context,
+		tx *gorm.DB,
+		event SavedSearchMutationAuditEvent,
+	) error {
+		if err := store.publish(ctx, tx, event); err != nil {
+			return err
+		}
+		_, err := requestidempotency.AppendInTransaction(
+			ctx,
+			tx,
+			intent,
+			requestidempotency.Target{
+				Kind: requestidempotency.TargetSavedSearch,
+				ID:   event.SavedSearchID, Version: event.SavedSearchVersion,
+			},
+			nil,
+			event.OccurredAt,
+		)
+		return err
+	}
+	var created *opensplunk.SavedSearch
+	var err error
+	if operation == nil {
+		created, err = store.store.create(ctx, scope, definition, publish)
+	} else {
+		created, err = operation(publish)
+	}
+	if err == nil {
+		return created, false, nil
+	}
+	if current, found, replayErr := replay(); replayErr != nil || found {
+		return current, found, replayErr
+	}
+	return nil, false, err
 }
 
 // Delete removes and audits the last retained version of one owned saved

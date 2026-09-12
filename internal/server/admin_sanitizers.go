@@ -5,19 +5,20 @@ import (
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 )
 
-// sanitizeCreateIndexRequest rejects the idempotency envelope this API version
-// does not honor. The definition itself is converted, and validated against the
-// clock, by indexDefinitionFromProto.
+// sanitizeCreateIndexRequest bounds the optional idempotency envelope. The
+// definition itself is converted, and validated against the clock, by
+// indexDefinitionFromProto.
 func sanitizeCreateIndexRequest(
 	_ context.Context,
 	request *opensplunk.CreateIndexRequest,
 ) (*opensplunk.CreateIndexRequest, error) {
 	if request.ClientRequestId != nil {
-		return request, badRequestError(
-			"client request idempotency is not supported",
-		)
+		if err := requestidempotency.ValidateClientRequestID(request.GetClientRequestId()); err != nil {
+			return request, badRequestError(err.Error())
+		}
 	}
 	return request, nil
 }
@@ -190,16 +191,16 @@ func (handler *apiHandler) sanitizeListIndexFieldsRequest(
 }
 
 // sanitizeCreateIngestionTokenRequest mirrors sanitizeCreateIndexRequest: the
-// idempotency envelope is unsupported and the definition is converted by
+// optional idempotency envelope is bounded and the definition is converted by
 // tokenDefinitionFromProto.
 func sanitizeCreateIngestionTokenRequest(
 	_ context.Context,
 	request *opensplunk.CreateIngestionTokenRequest,
 ) (*opensplunk.CreateIngestionTokenRequest, error) {
 	if request.ClientRequestId != nil {
-		return request, badRequestError(
-			"client request idempotency is not supported",
-		)
+		if err := requestidempotency.ValidateClientRequestID(request.GetClientRequestId()); err != nil {
+			return request, badRequestError(err.Error())
+		}
 	}
 	return request, nil
 }

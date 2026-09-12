@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
@@ -76,7 +77,9 @@ func sanitizeCreateSavedSearchRequest(
 	request *opensplunk.CreateSavedSearchRequest,
 ) (*opensplunk.CreateSavedSearchRequest, error) {
 	if request.ClientRequestId != nil {
-		return request, badRequestError("client request idempotency is not supported")
+		if err := requestidempotency.ValidateClientRequestID(request.GetClientRequestId()); err != nil {
+			return request, badRequestError(err.Error())
+		}
 	}
 	if request.GetDefinition() == nil {
 		return request, badRequestError("saved search definition is required")
@@ -170,7 +173,9 @@ func sanitizeDuplicateSavedSearchRequest(
 	request *opensplunk.DuplicateSavedSearchRequest,
 ) (*opensplunk.DuplicateSavedSearchRequest, error) {
 	if request.ClientRequestId != nil {
-		return request, badRequestError("client request idempotency is not supported")
+		if err := requestidempotency.ValidateClientRequestID(request.GetClientRequestId()); err != nil {
+			return request, badRequestError(err.Error())
+		}
 	}
 	id, err := savedSearchID(request.GetSavedSearchId())
 	if err != nil {

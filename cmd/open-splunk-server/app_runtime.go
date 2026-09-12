@@ -9,6 +9,7 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"github.com/Suhaibinator/open-splunk/internal/server"
 )
 
@@ -182,6 +183,52 @@ func (adapter *runtimeAppCatalog) CreateApp(
 		return server.AppAdministrationWorkspace{}, mapRuntimeAppCatalogError(err)
 	}
 	return serverAppWorkspace(result)
+}
+
+func (adapter *runtimeAppCatalog) CreateAppIdempotent(
+	ctx context.Context,
+	scope server.AppAdministrationScope,
+	definition server.AppAdministrationDefinition,
+	intent requestidempotency.Intent,
+) (server.AppAdministrationWorkspace, bool, error) {
+	if err := adapter.validateMutationActor(ctx, scope); err != nil {
+		return server.AppAdministrationWorkspace{}, false, err
+	}
+	idempotent, ok := adapter.catalog.(interface {
+		CreateAppIdempotent(
+			context.Context,
+			control.AppAccessScope,
+			control.AppDefinition,
+			requestidempotency.Intent,
+		) (control.AppWorkspace, bool, error)
+	})
+	if !ok {
+		return server.AppAdministrationWorkspace{}, false,
+			requestidempotency.ErrUnavailable
+	}
+	result, replayed, err := idempotent.CreateAppIdempotent(
+		ctx,
+		controlAppScope(scope),
+		controlAppDefinition(definition),
+		intent,
+	)
+	if err != nil {
+		if isRuntimeRequestIdempotencyError(err) {
+			return server.AppAdministrationWorkspace{}, false, err
+		}
+		return server.AppAdministrationWorkspace{}, false,
+			mapRuntimeAppCatalogError(err)
+	}
+	converted, err := serverAppWorkspace(result)
+	return converted, replayed, err
+}
+
+func isRuntimeRequestIdempotencyError(err error) bool {
+	return errors.Is(err, requestidempotency.ErrInvalid) ||
+		errors.Is(err, requestidempotency.ErrConflict) ||
+		errors.Is(err, requestidempotency.ErrCapacity) ||
+		errors.Is(err, requestidempotency.ErrUnavailable) ||
+		errors.Is(err, requestidempotency.ErrCorrupt)
 }
 
 func (adapter *runtimeAppCatalog) GetApp(
