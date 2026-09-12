@@ -37,6 +37,8 @@ func TestDeploymentRecoveryDrillChild(t *testing.T) {
 		seedDeploymentRecoveryDrillPendingAttempt(t)
 	case "crash-restore":
 		crashDeploymentRecoveryDrillAfterReceipt(t)
+	case "pause-after-receipt":
+		t.Fatal(pauseDeploymentRecoveryDrillAfterReceipt(context.Background(), controlbackup.RestoreOptions{}))
 	case "assert-target-absent":
 		assertDeploymentRecoveryDrillTargetAbsent(t)
 	default:
@@ -151,16 +153,7 @@ func crashDeploymentRecoveryDrillAfterReceipt(t *testing.T) {
 		t.Fatalf("load drill recovery release: %v", err)
 	}
 	dependencies := defaultDeploymentRecoveryDependencies()
-	dependencies.restoreControlPlane = func(
-		ctx context.Context,
-		_ controlbackup.RestoreOptions,
-	) error {
-		if _, err := fmt.Fprintln(os.Stdout, "RECOVERY_RECEIPT_PUBLISHED"); err != nil {
-			return fmt.Errorf("report drill recovery receipt: %w", err)
-		}
-		<-ctx.Done()
-		return ctx.Err()
-	}
+	dependencies.restoreControlPlane = pauseDeploymentRecoveryDrillAfterReceipt
 	err = runRestoreDeploymentRecoverySetWithDependencies(
 		context.Background(),
 		deploymentRecoveryRestoreOptions{
@@ -182,4 +175,18 @@ func crashDeploymentRecoveryDrillAfterReceipt(t *testing.T) {
 		t.Fatal("crash drill restore returned before the parent terminated it")
 	}
 	t.Fatalf("crash drill restore ended before parent termination: %v", err)
+}
+
+func pauseDeploymentRecoveryDrillAfterReceipt(ctx context.Context, _ controlbackup.RestoreOptions) error {
+	// The native session has closed at this boundary. Keep a timer live while
+	// the parent inspects the receipt and sends SIGKILL: a static helper with
+	// only a nil Done channel can otherwise exit through Go's deadlock detector.
+	// Bound this test-only pause by the same budget as the parent drill.
+	ctx, cancel := context.WithTimeout(ctx, 12*time.Minute)
+	defer cancel()
+	if _, err := fmt.Fprintln(os.Stdout, "RECOVERY_RECEIPT_PUBLISHED"); err != nil {
+		return fmt.Errorf("report drill recovery receipt: %w", err)
+	}
+	<-ctx.Done()
+	return ctx.Err()
 }

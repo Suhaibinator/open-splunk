@@ -125,16 +125,17 @@ func TestDeploymentRecoveryDrill(t *testing.T) {
 	childDone := make(chan error, 1)
 	go func() { childDone <- child.Wait() }()
 	fixture.wait(t, ctx, "receipt publication boundary", func() bool {
-		contents, readErr := os.ReadFile(logFile.Name())
+		contents, readErr := fixture.readChildOutput()
 		if readErr != nil {
 			t.Fatal(readErr)
 		}
 		select {
 		case err := <-childDone:
-			t.Fatalf("crash helper exited before boundary: %v\n%s", err, contents)
+			t.Fatalf("crash helper exited before boundary: %v\n%s", err,
+				recoveryDrillDiagnosticTextWithTruncation(contents.contents, fixture.diagnosticSecrets, contents.truncated))
 		default:
 		}
-		return strings.Contains(string(contents), "RECOVERY_RECEIPT_PUBLISHED")
+		return bytes.Contains(contents.contents, []byte("RECOVERY_RECEIPT_PUBLISHED"))
 	})
 	before := fixture.restoreIdentity(t, ctx)
 	fixture.docker(t, ctx, "kill", "--signal", "KILL", childName)
@@ -725,6 +726,9 @@ func (fixture *recoveryDrill) close(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	for _, name := range fixture.children {
+		if t.Failed() && name == fixture.project+"-crash" {
+			fixture.reportChildDiagnostics(t, name)
+		}
 		output, err := exec.CommandContext(ctx, "docker", "rm", "--force", name).CombinedOutput()
 		if err != nil && !strings.Contains(string(output), "No such container") {
 			t.Errorf("remove owned recovery child %s: %v", name, err)

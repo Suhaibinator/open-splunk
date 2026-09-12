@@ -48,4 +48,4 @@ CGO_ENABLED=0 go test -p 2 -c \
   -o "$work/helper" ./cmd/open-splunk-server
 export OPEN_SPLUNK_RECOVERY_DRILL_HELPER_BINARY="$work/helper"
 cd -- "$repository/cmd/open-splunk-server"
-"$work/helper" -test.run '^TestDeploymentRecoveryDrill$' -test.timeout 15m -test.v
+"$work/helper" -test.run '^TestDeploymentRecoveryDrill(ReceiptPauseSurvivesUntilKilled)?$' -test.timeout 15m -test.v

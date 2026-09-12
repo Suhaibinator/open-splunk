@@ -7,7 +7,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -108,6 +110,41 @@ func (fixture *recoveryDrill) reportDiagnostics(t *testing.T) {
 		diagnostic.truncated,
 	)
 	t.Logf("recovery drill diagnostics:\n%s", output)
+}
+
+func (fixture *recoveryDrill) reportChildDiagnostics(t *testing.T, name string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	diagnostic := newRecoveryDrillDiagnosticBuffer(fixture.diagnosticSecrets)
+	diagnostic.writeString("[crash child state]\n")
+	process := exec.CommandContext(ctx, "docker", "inspect", "--format", "{{json .State}}", name)
+	process.Env = fixture.environment
+	process.Stdout, process.Stderr = diagnostic, diagnostic
+	if err := process.Run(); err != nil {
+		diagnostic.writeString("\ninspect child: " + err.Error() + "\n")
+	}
+	diagnostic.writeString("\n[crash child output]\n")
+	childOutput, err := fixture.readChildOutput()
+	if err != nil {
+		diagnostic.writeString("read child log: " + err.Error() + "\n")
+	} else {
+		_, _ = diagnostic.Write(childOutput.contents)
+		diagnostic.truncated = diagnostic.truncated || childOutput.truncated
+	}
+	t.Logf("recovery drill child diagnostics:\n%s", recoveryDrillDiagnosticTextWithTruncation(
+		diagnostic.contents, fixture.diagnosticSecrets, diagnostic.truncated))
+}
+
+func (fixture *recoveryDrill) readChildOutput() (*recoveryDrillDiagnosticBuffer, error) {
+	logFile, err := os.Open(filepath.Join(fixture.work, "crash.log"))
+	if err != nil {
+		return nil, err
+	}
+	defer logFile.Close()
+	diagnostic := newRecoveryDrillDiagnosticBuffer(fixture.diagnosticSecrets)
+	_, err = io.Copy(diagnostic, io.LimitReader(logFile, int64(diagnostic.limit)+1))
+	return diagnostic, err
 }
 
 func recoveryDrillDiagnosticText(output []byte, secrets []string) string {
