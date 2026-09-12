@@ -32,6 +32,8 @@ export * from "./open_splunk/index_api";
 export * from "./open_splunk/knowledge_api";
 export * from "./open_splunk/lookup";
 export * from "./open_splunk/lookup_api";
+export * from "./open_splunk/nearby_api";
+export * from "./open_splunk/patterns_api";
 export * from "./open_splunk/saved_search";
 export * from "./open_splunk/saved_search_api";
 export * from "./open_splunk/schedule_api";

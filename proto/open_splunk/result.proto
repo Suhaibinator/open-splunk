@@ -80,6 +80,9 @@ message ResultPage {
   repeated ResultRow rows = 2;
   PageResponse page = 3;
   bool snapshot_complete = 4;
+  // Opaque identity of the immutable retained result snapshot. Absent for
+  // previews and servers that do not support retained-result navigation.
+  string snapshot_ref = 5;
 }
 
 message FieldValueCount {

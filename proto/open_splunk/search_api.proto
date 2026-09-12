@@ -22,6 +22,8 @@ message CreateSearchJobRequest {
 
 message CreateSearchJobResponse {
   SearchJob search_job = 1;
+  // True when this request resolves an earlier accepted logical action.
+  bool replayed = 2;
 }
 
 // POST /api/search/jobs/get

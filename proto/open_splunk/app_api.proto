@@ -16,6 +16,8 @@ message CreateAppRequest {
 
 message CreateAppResponse {
   AppWorkspace app = 1;
+  // True when this request resolves an earlier accepted logical action.
+  bool replayed = 2;
 }
 
 // POST /api/apps/get

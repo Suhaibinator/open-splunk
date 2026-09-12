@@ -135,8 +135,10 @@ func (x *CreateLookupRequest) GetClientRequestId() string {
 }
 
 type CreateLookupResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Lookup        *Lookup                `protobuf:"bytes,1,opt,name=lookup,proto3" json:"lookup,omitempty"`
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Lookup *Lookup                `protobuf:"bytes,1,opt,name=lookup,proto3" json:"lookup,omitempty"`
+	// True when this request resolves an earlier accepted logical action.
+	Replayed      bool `protobuf:"varint,2,opt,name=replayed,proto3" json:"replayed,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -176,6 +178,13 @@ func (x *CreateLookupResponse) GetLookup() *Lookup {
 		return x.Lookup
 	}
 	return nil
+}
+
+func (x *CreateLookupResponse) GetReplayed() bool {
+	if x != nil {
+		return x.Replayed
+	}
+	return false
 }
 
 // POST /api/knowledge/lookups/get
@@ -951,9 +960,10 @@ const file_open_splunk_lookup_api_proto_rawDesc = "" +
 	"definition\x12\x19\n" +
 	"\bcsv_data\x18\x02 \x01(\fR\acsvData\x12/\n" +
 	"\x11client_request_id\x18\x03 \x01(\tH\x00R\x0fclientRequestId\x88\x01\x01B\x14\n" +
-	"\x12_client_request_id\"C\n" +
+	"\x12_client_request_id\"_\n" +
 	"\x14CreateLookupResponse\x12+\n" +
-	"\x06lookup\x18\x01 \x01(\v2\x13.open_splunk.LookupR\x06lookup\"Z\n" +
+	"\x06lookup\x18\x01 \x01(\v2\x13.open_splunk.LookupR\x06lookup\x12\x1a\n" +
+	"\breplayed\x18\x02 \x01(\bR\breplayed\"Z\n" +
 	"\x10GetLookupRequest\x12\x1b\n" +
 	"\tlookup_id\x18\x01 \x01(\tR\blookupId\x12\x1d\n" +
 	"\aversion\x18\x02 \x01(\x04H\x00R\aversion\x88\x01\x01B\n" +

@@ -269,7 +269,7 @@ function rowsToEvents(
   });
 }
 
-interface ChartNumericValue {
+export interface ChartNumericValue {
   coordinate: number;
   /** Exact source text when the coordinate is only an approximation. */
   exactText?: string;
@@ -366,7 +366,7 @@ function numericTextValue(source: string): ChartNumericValue | null {
  * discarding its authoritative representation. Tables continue to use
  * `typedValueToJSON`, so large integer cells remain exact strings.
  */
-function chartNumericValue(value: TypedValue | undefined): ChartNumericValue | null {
+export function chartNumericValue(value: TypedValue | undefined): ChartNumericValue | null {
   switch (value?.kind?.$case) {
     case "sint64Value":
     case "uint64Value": {
