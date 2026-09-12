@@ -411,8 +411,7 @@ export async function writeHelpDocumentation({ root, registry = DOCUMENTATION_RE
   return bundle;
 }
 
-const invokedPath = process.argv[1] === undefined ? undefined : path.resolve(process.argv[1]);
-if (invokedPath === fileURLToPath(import.meta.url)) {
+if (import.meta.main) {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const bundle = await writeHelpDocumentation({ root });
   process.stdout.write(`Help content generated (${bundle.documents.length} documents, ${bundle.contentRevision})\n`);

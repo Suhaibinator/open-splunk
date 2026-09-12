@@ -18,6 +18,7 @@ import path from "node:path";
 import process from "node:process";
 import { spawn, spawnSync } from "node:child_process";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 
 import { DOCUMENTATION_REGISTRY } from "../lib/help/documentation-registry.mjs";
 import { buildHelpDocumentation } from "./build-help.mjs";
@@ -1173,9 +1174,29 @@ test("the OCI UI stage can compile every canonical Help source from its filtered
   const bundle = await buildHelpDocumentation({ root });
   assert.equal(bundle.documents.length, DOCUMENTATION_REGISTRY.filter((entry) => entry.published).length);
   await symlink(path.join(workspace, "node_modules"), path.join(root, "node_modules"), "dir");
-  const generated = spawnSync(process.execPath, [path.join(root, "scripts/build-help.mjs")], { cwd: root, encoding: "utf8" });
-  assert.equal(generated.status, 0, generated.stderr);
-  const artifact = JSON.parse(await readFile(path.join(root, "app/help/help-content.generated.json"), "utf8"));
-  assert.equal(artifact.contentRevision, bundle.contentRevision);
-  assert.deepEqual(artifact.documents.map((document) => document.sourcePath), bundle.documents.map((document) => document.sourcePath));
+  const alias = `${root}-alias`;
+  await symlink(root, alias, "dir");
+  t.after(() => rm(alias, { force: true }));
+  const artifactPath = path.join(root, "app/help/help-content.generated.json");
+  const verifyInvocation = async (invocationRoot) => {
+    await rm(artifactPath, { force: true });
+    const imported = spawnSync(process.execPath, [
+      "--input-type=module", "--eval", "await import(process.argv[1]);",
+      pathToFileURL(path.join(invocationRoot, "scripts/build-help.mjs")).href,
+    ], { cwd: invocationRoot, encoding: "utf8" });
+    assert.equal(imported.status, 0, imported.stderr);
+    assert.equal(imported.stdout, "", "importing the compiler must not execute its CLI");
+    await assert.rejects(access(artifactPath, constants.F_OK), { code: "ENOENT" });
+    const generated = spawnSync(process.execPath, [path.join(invocationRoot, "scripts/build-help.mjs")], {
+      cwd: invocationRoot,
+      encoding: "utf8",
+    });
+    assert.equal(generated.status, 0, generated.stderr);
+    assert.match(generated.stdout, /Help content generated/u, `CLI did not run through ${invocationRoot}`);
+    const artifact = JSON.parse(await readFile(artifactPath, "utf8"));
+    assert.equal(artifact.contentRevision, bundle.contentRevision);
+    assert.deepEqual(artifact.documents.map((document) => document.sourcePath), bundle.documents.map((document) => document.sourcePath));
+  };
+  await verifyInvocation(root);
+  await verifyInvocation(alias);
 });
