@@ -402,6 +402,7 @@ export const hecOperationsRoutes = {
     "/api/hec/operations/get",
     HecAdminApi.GetHECOperationalSnapshotRequest,
     HecAdminApi.GetHECOperationalSnapshotResponse,
+    { maximumResponseBytes: 64 << 10 },
   ),
 } as const;
 

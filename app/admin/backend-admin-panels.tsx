@@ -42,6 +42,7 @@ import {
 import { PALETTE_OPTIONS } from "./appearance-form";
 import { APPEARANCE_DESCRIPTION, APPEARANCE_TITLE, AppearanceSettings } from "./appearance-settings";
 import { SearchLimitsSettings } from "./search-limits-settings";
+import { HECOperationalSnapshotPanel } from "./hec-operations";
 import {
   hecProfileSummary,
   tokenPurposeLabel,
@@ -73,15 +74,6 @@ export function formatDuration(seconds: bigint | undefined): string {
   const hours = seconds / 3_600n;
   if (hours > 0n && seconds % 3_600n === 0n) return `${hours.toLocaleString()} hours`;
   return `${seconds.toLocaleString()} seconds`;
-}
-
-function formatOperationalDuration(
-  duration: { seconds: bigint; nanos: number } | undefined,
-): string {
-  if (duration === undefined) return "Not reported";
-  if (duration.nanos === 0) return `${duration.seconds.toLocaleString()} seconds`;
-  const fractional = duration.nanos.toString().padStart(9, "0").replace(/0+$/, "");
-  return `${duration.seconds.toLocaleString()}.${fractional} seconds`;
 }
 
 function countLabel(
@@ -787,57 +779,7 @@ export function BackendServerSettings({
       ) : hecState === "error" || hecSnapshot === null ? (
         <BackendResourceState kind="error" title="HEC operations could not be loaded" message={hecError ?? "The operational snapshot was empty."} action={<button type="button" onClick={onReload}>Retry</button>} />
       ) : (
-        <>
-          <section className="suite-card settings-group">
-            <header><h3>HTTP Event Collector operations</h3><p>Process-wide counters observed {formatDate(hecSnapshot.observedAt)}.</p></header>
-            <dl className="backend-definition-list">
-              <div><dt>Requests</dt><dd>{hecSnapshot.request?.requests.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>Accepted requests</dt><dd>{hecSnapshot.request?.acceptedRequests.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>Events</dt><dd>{hecSnapshot.request?.events.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>Uncompressed bytes</dt><dd>{hecSnapshot.request?.uncompressedBytes.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>Authentication failures</dt><dd>{hecSnapshot.request?.authenticationFailures.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>Decode failures</dt><dd>{hecSnapshot.request?.decodeFailures.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>Event-policy failures</dt><dd>{hecSnapshot.request?.eventPolicyFailures.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>Rate-limited requests</dt><dd>{hecSnapshot.request?.rateLimitedRequests.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>Staging failures</dt><dd>{hecSnapshot.request?.stagingFailures.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>Staging duration</dt><dd>{formatOperationalDuration(hecSnapshot.request?.stagingDuration)}</dd></div>
-              <div><dt>Shutdown rejections</dt><dd>{hecSnapshot.request?.shutdownRejections.toLocaleString() ?? "Not reported"}</dd></div>
-            </dl>
-          </section>
-          <section className="suite-card settings-group">
-            <header><h3>Durability and acknowledgment</h3><p>Queue capacity, reconciliation, and indexer-acknowledgment health.</p></header>
-            <dl className="backend-definition-list">
-              <div><dt>Durable queue</dt><dd>{hecSnapshot.durable?.queueAvailable ? "Available" : "Unavailable"}</dd></div>
-              <div><dt>Request capacity</dt><dd>{hecSnapshot.durable?.requestCapacityAvailable ? "Available" : "Unavailable"}</dd></div>
-              <div><dt>Pending outbox reservations</dt><dd>{hecSnapshot.durable?.pendingOutboxReservations.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>Pending outbox bytes</dt><dd>{hecSnapshot.durable?.pendingOutboxBytes.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>Oldest pending age</dt><dd>{formatOperationalDuration(hecSnapshot.durable?.oldestPendingOutboxAge)}</dd></div>
-              <div><dt>Retained requests</dt><dd>{hecSnapshot.durable?.retainedRequests.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>Reconciliation</dt><dd>{hecSnapshot.reconciliation?.available ? "Available" : "Unavailable"}</dd></div>
-              <div><dt>Reconciliation successes</dt><dd>{hecSnapshot.reconciliation?.successes.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>Reconciliation retries</dt><dd>{hecSnapshot.reconciliation?.retries.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>Reconciliation ambiguities</dt><dd>{hecSnapshot.reconciliation?.ambiguities.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>ACK service</dt><dd>{hecSnapshot.acknowledgments?.available ? "Available" : "Unavailable"}</dd></div>
-              <div><dt>Active ACK channels</dt><dd>{hecSnapshot.acknowledgments?.activeChannels.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>Retained ACK channels</dt><dd>{hecSnapshot.acknowledgments?.retainedChannels.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>Pending ACK rows</dt><dd>{hecSnapshot.acknowledgments?.pendingRows.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>Indexed ACK rows</dt><dd>{hecSnapshot.acknowledgments?.indexedRows.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>Expired ACK rows</dt><dd>{hecSnapshot.acknowledgments?.expiredRows.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>Terminal failed requests</dt><dd>{hecSnapshot.acknowledgments?.terminalFailedRequests.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>ACK queries</dt><dd>{hecSnapshot.acknowledgments?.queries.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>ACK IDs queried</dt><dd>{hecSnapshot.acknowledgments?.idsQueried.toLocaleString() ?? "Not reported"}</dd></div>
-              <div><dt>ACK query misses</dt><dd>{hecSnapshot.acknowledgments?.misses.toLocaleString() ?? "Not reported"}</dd></div>
-            </dl>
-          </section>
-          <section className="suite-card settings-group">
-            <header><h3>HEC protocol failures</h3><p>Bounded non-success response codes reported by the HEC compatibility layer.</p></header>
-            {hecSnapshot.protocolFailures.length === 0 ? <p className="settings-group__empty">No protocol failures have been observed.</p> : (
-              <dl className="backend-definition-list">
-                {hecSnapshot.protocolFailures.map((metric) => <div key={metric.code}><dt>Response code {metric.code}</dt><dd>{metric.count.toLocaleString()}</dd></div>)}
-              </dl>
-            )}
-          </section>
-        </>
+        <HECOperationalSnapshotPanel snapshot={hecSnapshot} />
       )}
     </div>
   );
