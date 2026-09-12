@@ -1,6 +1,7 @@
 package deploy_test
 
 import (
+	"context"
 	"encoding/xml"
 	"os"
 	"os/exec"
@@ -8,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -20,6 +22,8 @@ type recoveryCompose struct {
 		Volumes     []string          `yaml:"volumes"`
 		Command     []string          `yaml:"command"`
 		Ports       []string          `yaml:"ports"`
+		CapAdd      []string          `yaml:"cap_add"`
+		CapDrop     []string          `yaml:"cap_drop"`
 	} `yaml:"services"`
 	Volumes map[string]struct {
 		Name string `yaml:"name"`
@@ -67,6 +71,17 @@ func TestRecoveryComposeSharesPersistentLockAndVerifiesTLS(t *testing.T) {
 		config.Services["prepare-recovery-volume"].User != "0:0" {
 		t.Fatal("volume preparation/deletion must use their exact required UIDs")
 	}
+	preparer := config.Services["prepare-recovery-volume"]
+	if !slices.Equal(preparer.CapDrop, []string{"ALL"}) ||
+		!slices.Equal(preparer.CapAdd, []string{"CHOWN", "FOWNER", "DAC_OVERRIDE", "FSETID"}) {
+		t.Fatalf("volume preparer must grant only ownership, access and setgid initialization capabilities: drop=%v add=%v", preparer.CapDrop, preparer.CapAdd)
+	}
+	for _, name := range []string{"server", "recovery", "delete-recovery-archive"} {
+		service := config.Services[name]
+		if !slices.Equal(service.CapDrop, []string{"ALL"}) || len(service.CapAdd) != 0 {
+			t.Errorf("%s must retain no Linux capabilities", name)
+		}
+	}
 	clickhouse := config.Services["clickhouse"]
 	if !strings.Contains(clickhouse.Image, ":26.7.5.10-alpine@sha256:") || len(clickhouse.Ports) != 0 {
 		t.Fatal("ClickHouse must be pinned and unpublished")
@@ -89,6 +104,44 @@ func TestRecoveryComposeSharesPersistentLockAndVerifiesTLS(t *testing.T) {
 	}
 	if _, exists := restore.Volumes["server-lock"]; exists {
 		t.Fatal("restore must preserve the lock volume")
+	}
+}
+
+// Linux can silently remove setgid from a successful chmod after chown to a
+// group the caller does not belong to. Exercise the shipped capability list on
+// a real isolated filesystem; this does not mount host paths or start services.
+func TestRecoveryComposePreparerRetainsSetgidOnFilesystem(t *testing.T) {
+	if os.Getenv("OPEN_SPLUNK_OCI_INTEGRATION") != "1" {
+		t.Skip("set OPEN_SPLUNK_OCI_INTEGRATION=1 for the cached-image capability probe")
+	}
+	contents, err := os.ReadFile("docker-compose.recovery.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config recoveryCompose
+	if err := yaml.Unmarshal(contents, &config); err != nil {
+		t.Fatal(err)
+	}
+	preparer := config.Services["prepare-recovery-volume"]
+	arguments := []string{"run", "--rm", "--pull=never", "--network", "none", "--read-only", "--user", preparer.User}
+	for _, capability := range preparer.CapDrop {
+		arguments = append(arguments, "--cap-drop", capability)
+	}
+	for _, capability := range preparer.CapAdd {
+		arguments = append(arguments, "--cap-add", capability)
+	}
+	arguments = append(arguments,
+		"--tmpfs", "/probe:rw,nosuid,nodev,mode=0755", "--entrypoint", "sh", config.Services["clickhouse"].Image,
+		"-ec", `chown 101:65532 /probe; chmod 2750 /probe; stat -c '%u:%g:%a' /probe; test "$(stat -c '%u:%g:%a' /probe)" = 101:65532:2750`,
+	)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, "docker", arguments...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("preparer capabilities failed to establish uid101 gid65532 mode02750: %v\n%s", err, output)
+	}
+	if strings.TrimSpace(string(output)) != "101:65532:2750" {
+		t.Fatalf("prepared filesystem identity/mode = %q", output)
 	}
 }
 

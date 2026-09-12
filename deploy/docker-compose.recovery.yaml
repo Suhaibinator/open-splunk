@@ -57,7 +57,8 @@ services:
     <<: *server
     profiles: [tools]
     user: "0:0"
-    cap_add: [CHOWN, FOWNER, DAC_OVERRIDE]
+    # Retain setgid after assigning the archive root to ClickHouse's group.
+    cap_add: [CHOWN, FOWNER, DAC_OVERRIDE, FSETID]
     command: [prepare-clickhouse-recovery-volume, -path, /var/lib/open-splunk-clickhouse-backups, -log-path, /var/log/clickhouse-server]
     volumes:
       - recovery-archives:/var/lib/open-splunk-clickhouse-backups
