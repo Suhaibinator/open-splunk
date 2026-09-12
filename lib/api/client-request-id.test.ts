@@ -27,3 +27,19 @@ test("binary intent and typed primitives cannot alias one another", () => {
   assert.notEqual(action.requestId({ csv: new Uint8Array([1, 3]), value: 1n }), first);
   assert.notEqual(action.requestId({ csv: [1, 2], value: "1" }), first);
 });
+
+test("late acceptance of an older action preserves the newer ambiguous retry identity", () => {
+  const action = new BrowserCreateAction();
+  const older = action.requestId({ query: "index=old" });
+  const newerIntent = { query: "index=new" };
+  const newer = action.requestId(newerIntent);
+  assert.notEqual(newer, older);
+  action.complete(older);
+  assert.equal(action.requestId(newerIntent), newer);
+  action.complete(newer);
+  const subsequent = action.requestId(newerIntent);
+  assert.notEqual(subsequent, newer);
+  // A duplicated completion is stale once a later logical action exists too.
+  action.complete(newer);
+  assert.equal(action.requestId(newerIntent), subsequent);
+});
