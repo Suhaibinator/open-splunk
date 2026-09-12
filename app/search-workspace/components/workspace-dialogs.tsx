@@ -1,4 +1,9 @@
+import { SharingScope } from "@/gen/ts/open_splunk/common";
 import type { DemoHistoryEntry, DemoSavedSearch } from "@/lib/demo/search-data";
+import {
+  SAVED_SEARCH_SCOPE_OPTIONS,
+  type EditableSavedSearchScope,
+} from "@/lib/search/saved-search-scope";
 import type {
   ServerInspectionKnowledgeView,
   ServerSearchJobInspectionState,
@@ -11,6 +16,7 @@ import {
   formatNonNegativeIntegerQuantity,
 } from "../formatters";
 import { Modal } from "../../_components/modal";
+import { Select, SelectOption } from "../../_components/select";
 import type {
   DialogActionState,
   ExportArtifactDetails,
@@ -166,8 +172,11 @@ interface WorkspaceDialogsProps {
   resultCountPrefix: string;
   saveDescription: string;
   saveDialogReturnFocus: HTMLElement | null;
+  saveAppAvailable: boolean;
   saveName: string;
   savePurpose: "report" | "search";
+  saveSharingAvailable: boolean;
+  saveSharingScope: EditableSavedSearchScope;
   saveState: DialogActionState;
   savedSearchFilter: string;
   savedSearchDeleteState: TargetedDialogActionState;
@@ -215,6 +224,7 @@ interface WorkspaceDialogsProps {
   onResetExport: () => void;
   onSaveDescriptionChange: (description: string) => void;
   onSaveNameChange: (name: string) => void;
+  onSaveSharingScopeChange: (scope: EditableSavedSearchScope) => void;
   onSaveSearch: () => void;
   onSavedSearchFilterChange: (filter: string) => void;
   onSavedSearchRenameNameChange: (name: string) => void;
@@ -250,8 +260,11 @@ export function WorkspaceDialogs({
   resultCountPrefix,
   saveDescription,
   saveDialogReturnFocus,
+  saveAppAvailable,
   saveName,
   savePurpose,
+  saveSharingAvailable,
+  saveSharingScope,
   saveState,
   savedSearchFilter,
   savedSearchDeleteState,
@@ -299,6 +312,7 @@ export function WorkspaceDialogs({
   onResetExport,
   onSaveDescriptionChange,
   onSaveNameChange,
+  onSaveSharingScopeChange,
   onSaveSearch,
   onSavedSearchFilterChange,
   onSavedSearchRenameNameChange,
@@ -323,6 +337,39 @@ export function WorkspaceDialogs({
           {saveState.status === "error" ? <p className="workspace-dialog-action-error" role="alert">{saveState.error}</p> : null}
           <label><span>Name</span><input value={saveName} disabled={saving} onChange={(event) => onSaveNameChange(event.target.value)} /></label>
           <label><span>Description <small>optional</small></span><textarea value={saveDescription} disabled={saving} onChange={(event) => onSaveDescriptionChange(event.target.value)} rows={3} /></label>
+          {saveSharingAvailable ? (
+            <>
+              <label htmlFor="save-search-sharing-scope">
+                <span>Sharing</span>
+                <Select
+                  id="save-search-sharing-scope"
+                  value={String(saveSharingScope)}
+                  disabled={saving}
+                  onValueChange={(value) => {
+                    const scope = Number(value) as SharingScope;
+                    if (scope === SharingScope.SHARING_SCOPE_PRIVATE
+                      || scope === SharingScope.SHARING_SCOPE_APP
+                      || scope === SharingScope.SHARING_SCOPE_GLOBAL) {
+                      onSaveSharingScopeChange(scope);
+                    }
+                  }}
+                >
+                  {SAVED_SEARCH_SCOPE_OPTIONS.map((option) => (
+                    <SelectOption
+                      disabled={option.value === SharingScope.SHARING_SCOPE_APP && !saveAppAvailable}
+                      key={option.value}
+                      value={String(option.value)}
+                    >
+                      {option.label}
+                    </SelectOption>
+                  ))}
+                </Select>
+              </label>
+              <p className="search-sharing-note">Sharing is organizational metadata in the current single-user model; it does not grant access.</p>
+            </>
+          ) : (
+            <p className="search-sharing-note">Sharing scope is persisted only when the workspace is connected to a backend.</p>
+          )}
           <div className="form-summary"><span>App</span><strong>{appName}</strong><span>Time range</span><strong>{timeRange.label}</strong><span>Result view</span><strong>{activeTab[0].toUpperCase() + activeTab.slice(1)}</strong></div>
         </div>
       </Modal>

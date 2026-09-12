@@ -20,7 +20,6 @@ import {
 } from "react";
 import Link from "next/link";
 
-import { SharingScope } from "@/gen/ts/open_splunk/common";
 import type { Diagnostic, ResolvedTimeRange } from "@/gen/ts/open_splunk/common";
 import {
   ExportJobState,
@@ -137,6 +136,10 @@ import {
   duplicateSavedSearchName,
   savedSearchNameWithSuffix,
 } from "@/lib/search/saved-search-names";
+import {
+  DEFAULT_SAVED_SEARCH_SCOPE,
+  type EditableSavedSearchScope,
+} from "@/lib/search/saved-search-scope";
 import { getExactRetainedSearchJob } from "@/lib/search/server-jobs";
 import {
   cancelServerExport,
@@ -156,6 +159,7 @@ import {
   listServerSavedSearches,
   listServerSearchHistory,
   renameServerSavedSearch,
+  savedSearchCreateIntent,
   savedSearchForDisplay,
   serverFieldToDemoField,
   updateServerSavedSearch,
@@ -974,6 +978,9 @@ export function SearchWorkspace({
   const [saveName, setSaveName] = useState("Production log investigation");
   const [saveDescription, setSaveDescription] = useState("");
   const [savePurpose, setSavePurpose] = useState<"report" | "search">("search");
+  const [saveSharingScope, setSaveSharingScope] = useState<EditableSavedSearchScope>(
+    DEFAULT_SAVED_SEARCH_SCOPE,
+  );
   const [saveAsNew, setSaveAsNew] = useState(false);
   const [activeSavedSearchId, setActiveSavedSearchId] = useState<string | null>(null);
   const [savedWorkspaceBaseline, setSavedWorkspaceBaseline] = useState<SavedWorkspaceBaseline | null>(null);
@@ -5761,6 +5768,7 @@ export function SearchWorkspace({
     const existing = savedSearches.find((item) => item.id === activeSavedSearchId);
     setSavePurpose(purpose);
     setSaveAsNew(forceNew);
+    setSaveSharingScope(DEFAULT_SAVED_SEARCH_SCOPE);
     setSaveName(existing === undefined
       ? "Production log investigation"
       : forceNew
@@ -5946,15 +5954,15 @@ export function SearchWorkspace({
       };
       const createSavedIntent = {
         name: trimmedName, description: trimmedDescription || undefined, search,
-        sharingScope: SharingScope.SHARING_SCOPE_PRIVATE,
+        sharingScope: saveSharingScope,
       };
       const result = existing === undefined
         ? await createServerSavedSearch(apiClient, bootstrap.response, {
           name: trimmedName,
           description: trimmedDescription,
           search,
-          sharingScope: SharingScope.SHARING_SCOPE_PRIVATE,
-          clientRequestId: savedCreateAction.requestId({ ...createSavedIntent, sessionRevision: currentAdministratorSessionRevision() }),
+          sharingScope: saveSharingScope,
+          clientRequestId: savedCreateAction.requestId({ definition: savedSearchCreateIntent(createSavedIntent), sessionRevision: currentAdministratorSessionRevision() }),
         })
         : await updateServerSavedSearch(apiClient, bootstrap.response, {
           id: existing.id,
@@ -7543,6 +7551,15 @@ export function SearchWorkspace({
     </nav>
   );
 
+  const saveDialogSource = activeSavedSearchId === null
+    ? undefined
+    : backendSavedSearchesRef.current.get(activeSavedSearchId);
+  const saveDialogAppId = saveDialogSource === undefined
+    ? backendHistoryRerunRef.current === null
+      ? backendBootstrapModel?.selectedAppId
+      : backendHistoryRerunRef.current.search.appId
+    : saveDialogSource.search.appId;
+
   const workspaceOverlays = (
     <>
       {menu !== null ? <button type="button" className="menu-dismiss" aria-label="Close menu" onClick={() => setMenu(null)} /> : null}
@@ -7651,10 +7668,13 @@ export function SearchWorkspace({
         phase={phase}
         resultCountLabel={backendEnabled ? backendPrimaryCountLabel : "events"}
         resultCountPrefix={visibleCountPrefix}
+        saveAppAvailable={Boolean(saveDialogAppId)}
         saveDescription={saveDescription}
         saveDialogReturnFocus={saveDialogReturnFocusRef.current}
         saveName={saveName}
         savePurpose={savePurpose}
+        saveSharingAvailable={backendEnabled}
+        saveSharingScope={saveSharingScope}
         saveState={objectMutation?.kind === "save"
           ? { status: "pending" }
           : saveError === null
@@ -7743,6 +7763,7 @@ export function SearchWorkspace({
         onResetExport={resetExport}
         onSaveDescriptionChange={setSaveDescription}
         onSaveNameChange={setSaveName}
+        onSaveSharingScopeChange={setSaveSharingScope}
         onSaveSearch={saveSearch}
         onSavedSearchFilterChange={setSavedSearchFilter}
         onSavedSearchRenameNameChange={setSavedSearchRenameName}

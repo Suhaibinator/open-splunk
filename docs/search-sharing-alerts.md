@@ -39,6 +39,23 @@ The interface explains when a rerun is needed. Preparing context reads the
 retained result; the new search uses current authorization, index visibility,
 and knowledge definitions.
 
+## Saved-search sharing scope
+
+Creating a saved search or using Save As offers Private, App, and Global
+sharing. New definitions start at Private; Save As also resets to Private so
+the operator must deliberately choose a broader label. Saving changes to an
+existing definition preserves its current sharing scope.
+
+The Saved Searches page can edit this label without changing the SPL, time
+range, app, owner, presentation, or schedule. The update uses the version that
+the editor loaded. If another editor changes the definition first, the page
+loads the latest version, keeps the proposed sharing value visible, and
+requires another explicit submission. If a response is lost, the page reads
+the current definition before deciding whether the update succeeded.
+
+Sharing scope is organizational metadata in the current single-user model. It
+does not grant access and is not a promise of role-based authorization.
+
 ## Scheduled searches
 
 A saved search may have a strict five-field cron schedule and an IANA

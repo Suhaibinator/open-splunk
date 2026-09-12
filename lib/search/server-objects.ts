@@ -432,7 +432,7 @@ export interface SaveServerSearchOptions extends BrowserCreateRequestOptions {
   ownerId?: string;
 }
 
-function savedSearchDefinition(options: SaveServerSearchOptions) {
+export function savedSearchCreateIntent(options: SaveServerSearchOptions) {
   const name = options.name.trim();
   if (name.length === 0) throw new TypeError("Saved search name is required.");
   return {
@@ -454,7 +454,7 @@ export async function createServerSavedSearch(
   }
   try {
     const response = await client.savedSearches.create({
-      definition: savedSearchDefinition(options),
+      definition: savedSearchCreateIntent(options),
       clientRequestId: options.clientRequestId ?? browserClientRequestId(),
     }, options);
     if (response.savedSearch === undefined) throw new TypeError("The server returned an empty saved search.");
@@ -488,7 +488,7 @@ export async function updateServerSavedSearch(
     const response = await client.savedSearches.update({
       savedSearchId: id,
       expectedVersion: options.expectedVersion,
-      definition: savedSearchDefinition(options),
+      definition: savedSearchCreateIntent(options),
       updateMask: [...new Set(options.updatePaths ?? ["name", "description", "search", "sharing_scope", "owner_id"])],
     }, options);
     if (response.savedSearch === undefined) throw new TypeError("The server returned an empty saved search.");

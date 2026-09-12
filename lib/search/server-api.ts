@@ -67,6 +67,7 @@ export {
   listServerSavedSearches,
   listServerSearchHistory,
   renameServerSavedSearch,
+  savedSearchCreateIntent,
   savedSearchForDisplay,
   savedSearchToDemo,
   historyEntryForDisplay,
