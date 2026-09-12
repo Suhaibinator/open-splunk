@@ -170,13 +170,13 @@ test("mutation audit requests preserve exact filters and opaque pagination", () 
 });
 
 test("mutation audit exposes the complete ordered taxonomy without correlating independent filters", () => {
-  assert.equal(mutationAuditActionOptions.length, 30);
+  assert.equal(mutationAuditActionOptions.length, 31);
   assert.deepEqual(
     mutationAuditActionOptions.map((option) => option.value),
     mutationActionContracts.map(([action]) => action),
   );
   assert.deepEqual(
-    mutationAuditActionOptions.slice(-6).map((option) => option.label),
+    mutationAuditActionOptions.slice(-7).map((option) => option.label),
     [
       "Server settings · update",
       "Lookup · create",
@@ -184,11 +184,12 @@ test("mutation audit exposes the complete ordered taxonomy without correlating i
       "Lookup · enable",
       "Lookup · disable",
       "Lookup · delete",
+      "Export · create",
     ],
   );
   assert.deepEqual(mutationAuditTargetOptions.at(-1), {
-    value: AuditTargetKind.AUDIT_TARGET_KIND_LOOKUP,
-    label: "Lookup",
+    value: AuditTargetKind.AUDIT_TARGET_KIND_EXPORT_JOB,
+    label: "Export job",
   });
 
   assert.deepEqual(buildMutationAuditRequest({
@@ -208,12 +209,12 @@ test("mutation adapter accepts every exact action-target contract and returns a 
   const firstSourceDate = sourceEvents[0]!.occurredAt!;
   Object.assign(sourceEvents[0]!, { arbitraryPayload: "must not cross the adapter" });
   const result = await listMutationAuditEvents(
-    mutationClient(sourceEvents, { totalSize: 30n, totalSizeExact: true }),
+    mutationClient(sourceEvents, { totalSize: 31n, totalSizeExact: true }),
     { actions: [] },
-    { pageSize: 30 },
+    { pageSize: 31 },
   );
 
-  assert.equal(result.items.length, 30);
+  assert.equal(result.items.length, 31);
   assert.notEqual(result.items[0], sourceEvents[0]);
   assert.notEqual(result.items[0]!.occurredAt, firstSourceDate);
   assert.doesNotMatch(JSON.stringify(Object.keys(result.items[0]!).toSorted()), /arbitraryPayload/);
@@ -261,6 +262,7 @@ test("mutation adapter enforces every action version boundary", async () => {
     AuditAction.AUDIT_ACTION_SAVED_SEARCH_DUPLICATE,
     AuditAction.AUDIT_ACTION_KNOWLEDGE_OBJECT_CREATE,
     AuditAction.AUDIT_ACTION_LOOKUP_CREATE,
+    AuditAction.AUDIT_ACTION_EXPORT_CREATE,
   ]);
   await Promise.all(mutationActionContracts.map(async ([action, targetKind]) => {
     const invalidVersion = exactOne.has(action)

@@ -103,8 +103,8 @@ func TestDurableExportAdmissionFailureNeverEnqueues(t *testing.T) {
 }
 
 func TestDurableExportRestartPreservesArtifactAndMissingFileFailsWithoutRerun(t *testing.T) {
-	for _, missing := range []bool{false, true} {
-		t.Run(map[bool]string{false: "retained", true: "missing"}[missing], func(t *testing.T) {
+	for _, outcome := range []string{"retained", "missing", "tampered"} {
+		t.Run(outcome, func(t *testing.T) {
 			journal := newMemoryExportJournal()
 			directory := t.TempDir()
 			source := &exportTestSource{datasets: map[string]exportTestDataset{"search-1": {schema: basicExportSchema(), rows: basicExportRows()}}}
@@ -117,8 +117,19 @@ func TestDurableExportRestartPreservesArtifactAndMissingFileFailsWithoutRerun(t 
 			if err := first.Close(); err != nil {
 				t.Fatal(err)
 			}
-			if missing {
+			if outcome == "missing" {
 				if err := os.Remove(filepath.Join(directory, "durable", completed.Artifact.FileName)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if outcome == "tampered" {
+				path := filepath.Join(directory, "durable", completed.Artifact.FileName)
+				contents, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				contents[0] ^= 1
+				if err := os.WriteFile(path, contents, 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -128,13 +139,13 @@ func TestDurableExportRestartPreservesArtifactAndMissingFileFailsWithoutRerun(t 
 				t.Fatal(err)
 			}
 			want := StateCompleted
-			if missing {
+			if outcome != "retained" {
 				want = StateFailed
 			}
 			if got.State != want {
 				t.Fatalf("restored state=%v want=%v", got.State, want)
 			}
-			if !missing {
+			if outcome == "retained" {
 				if got.Version != completed.Version || got.Artifact == nil {
 					t.Fatalf("restored metadata changed: %#v", got)
 				}

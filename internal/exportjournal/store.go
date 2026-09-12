@@ -191,6 +191,7 @@ func (store *Store) Get(ctx context.Context, access searchjobs.AccessScope, id s
 	}
 	if !retained.Job.ExpiresAt.IsZero() && !retained.Job.ExpiresAt.After(store.now()) && retained.Job.State != exportjobs.StateExpired {
 		retained.Job.State = exportjobs.StateExpired
+		retained.Job.Version++
 		retained.Job.Artifact = nil
 	}
 	return retained, nil

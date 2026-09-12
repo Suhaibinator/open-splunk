@@ -585,6 +585,9 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     switch (tokenRecoveryStartupSnapshot.kind) {
       case "idle":
       case "preflight":
+      case "owned":
+        // The lock callback owns the live recovery state; an acquisition
+        // snapshot must not overwrite its catalog transition or receipt result.
         break;
       case "storage-unavailable":
         setTokenCreateGuardStorageState("unavailable");
@@ -1723,9 +1726,20 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
   ) {
     if (tokenRecoveryCheckingRef.current) return;
     if (!requireTokenGuardOwnership(recovery)) return;
+    if (recovery.clientRequestId !== undefined && authoritativeServerNowMs() === undefined) {
+      setTokenRecoveryNextCheckAt(Date.now() + 1_000);
+      return;
+    }
     if (tokenCreateNeedsCatalogRecovery(recovery, authoritativeServerNowMs())) {
       if (normalizedApiBaseUrl === null) return;
-      const raw = readTokenCreateGuardRaw(normalizedApiBaseUrl);
+      let raw: string | null;
+      try {
+        raw = readTokenCreateGuardRaw(normalizedApiBaseUrl);
+      } catch (error) {
+        setTokenCreateGuardStorageState("unavailable");
+        setTokenCreateGuardStorageError(errorMessage(error));
+        return;
+      }
       if (raw === null) return;
       const review: UnreadableTokenCreateRecovery = {
         attemptId: recovery.attemptId, raw, observedServerTimeMs: null,
@@ -2956,6 +2970,12 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       void reconcileUnreadableTokenCreateRecovery(unreadableRecovery);
     }
   });
+
+  useEffect(() => {
+    if (serverClockAnchor !== null && tokenCreateRecoveryRef.current?.clientRequestId !== undefined) {
+      runScheduledTokenRecovery();
+    }
+  }, [serverClockAnchor]);
 
   useEffect(() => {
     if (

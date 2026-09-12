@@ -110,12 +110,12 @@ const ACTION_SPECS: ReadonlyMap<AuditAction, MutationAuditActionSpec> = new Map(
   [AuditAction.AUDIT_ACTION_KNOWLEDGE_OBJECT_DISABLE, { label: "Knowledge object · disable", targetKind: AuditTargetKind.AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT, versionPolicy: AT_LEAST_TWO }],
   [AuditAction.AUDIT_ACTION_KNOWLEDGE_OBJECT_DELETE, { label: "Knowledge object · delete", targetKind: AuditTargetKind.AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT, versionPolicy: AT_LEAST_TWO }],
   [AuditAction.AUDIT_ACTION_SERVER_SETTINGS_UPDATE, { label: "Server settings · update", targetKind: AuditTargetKind.AUDIT_TARGET_KIND_SERVER_SETTINGS, versionPolicy: AT_LEAST_ONE }],
-  [AuditAction.AUDIT_ACTION_EXPORT_CREATE, { label: "Export · create", targetKind: AuditTargetKind.AUDIT_TARGET_KIND_EXPORT_JOB, versionPolicy: EXACTLY_ONE }],
   [AuditAction.AUDIT_ACTION_LOOKUP_CREATE, { label: "Lookup · create", targetKind: AuditTargetKind.AUDIT_TARGET_KIND_LOOKUP, versionPolicy: EXACTLY_ONE }],
   [AuditAction.AUDIT_ACTION_LOOKUP_REPLACE, { label: "Lookup · replace", targetKind: AuditTargetKind.AUDIT_TARGET_KIND_LOOKUP, versionPolicy: AT_LEAST_TWO }],
   [AuditAction.AUDIT_ACTION_LOOKUP_ENABLE, { label: "Lookup · enable", targetKind: AuditTargetKind.AUDIT_TARGET_KIND_LOOKUP, versionPolicy: AT_LEAST_TWO }],
   [AuditAction.AUDIT_ACTION_LOOKUP_DISABLE, { label: "Lookup · disable", targetKind: AuditTargetKind.AUDIT_TARGET_KIND_LOOKUP, versionPolicy: AT_LEAST_TWO }],
   [AuditAction.AUDIT_ACTION_LOOKUP_DELETE, { label: "Lookup · delete", targetKind: AuditTargetKind.AUDIT_TARGET_KIND_LOOKUP, versionPolicy: AT_LEAST_TWO }],
+  [AuditAction.AUDIT_ACTION_EXPORT_CREATE, { label: "Export · create", targetKind: AuditTargetKind.AUDIT_TARGET_KIND_EXPORT_JOB, versionPolicy: EXACTLY_ONE }],
 ]);
 
 const TARGET_LABELS: ReadonlyMap<AuditTargetKind, string> = new Map([
@@ -125,8 +125,8 @@ const TARGET_LABELS: ReadonlyMap<AuditTargetKind, string> = new Map([
   [AuditTargetKind.AUDIT_TARGET_KIND_SAVED_SEARCH, "Saved search"],
   [AuditTargetKind.AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT, "Knowledge object"],
   [AuditTargetKind.AUDIT_TARGET_KIND_SERVER_SETTINGS, "Server settings"],
-  [AuditTargetKind.AUDIT_TARGET_KIND_EXPORT_JOB, "Export job"],
   [AuditTargetKind.AUDIT_TARGET_KIND_LOOKUP, "Lookup"],
+  [AuditTargetKind.AUDIT_TARGET_KIND_EXPORT_JOB, "Export job"],
 ]);
 
 const KNOWLEDGE_OBJECT_TYPE_LABELS: ReadonlyMap<KnowledgeObjectType, string> = new Map([

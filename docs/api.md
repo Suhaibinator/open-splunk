@@ -77,6 +77,45 @@ compare values returned by the same running source contract. Mutations that
 take `expected_version` fail on a stale value. Cursors, page tokens, download
 grants, and idempotency values are likewise opaque.
 
+## Create request retries
+
+App, index, ingestion-token, search-job, export-job, saved-search create,
+saved-search duplicate, and lookup create requests accept an optional
+`client_request_id`. Omitting it preserves ordinary create behavior. A supplied
+key contains 16–128 printable ASCII characters, including spaces, and is
+case-sensitive. Browser clients retain a UUID for one logical action and reuse
+both its key and definition after an ambiguous response.
+
+Receipts are scoped to the tenant, authenticated actor, and operation. A retry
+with the same canonical client intent returns the same resource ID, its current
+authorized metadata, and `replayed = true`. Reusing the key for different intent
+returns HTTP 409. Receipt lookup precedes dynamic defaults, source resolution,
+and create-only quota checks. A deleted or unavailable target is reported as
+unavailable; its receipt never recreates it. The resource mutation, receipt,
+accounting, and successful admission audit commit atomically.
+
+The receipt fence lasts seven days and extends while asynchronous work remains
+active. Each tenant has a limit of 100,000 retained receipts and 64 MiB of encoded
+receipt metadata, including receipts for deleted, failed, or expired outcomes.
+Unexpired receipts are not evicted to admit new work. Existing receipts can be
+replayed at capacity. Canonical fingerprint versions remain readable while their
+receipts are retained.
+
+Search and export acceptance is durable before work is enqueued. On restart,
+accepted export IDs and metadata survive; completed files are available only if
+the retained file identity, size, and digest are verified. Interrupted exports
+or missing files become unavailable under their existing IDs. Restart does not
+rerun the source query. Pattern exports retain the resolved snapshot generation
+along with their source selector so they never depend on decoding an old public
+snapshot reference after restart.
+
+An ingestion-token secret is returned only by its first successful issue.
+Receipt replay returns current token metadata with no plaintext secret. When the
+browser loses the first response, it retries the exact stored key and definition,
+then requires explicit revocation before generating a replacement with a new key.
+Legacy browser records without keys, or records beyond the retry fence, use a
+conservative token-catalog review without resubmitting the old create request.
+
 ## Collector gRPC
 
 The native service is
