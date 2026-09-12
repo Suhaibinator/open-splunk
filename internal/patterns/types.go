@@ -5,6 +5,7 @@ package patterns
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -86,6 +87,14 @@ type ListResult struct {
 	NextPageToken      string
 	TotalSize          *uint64
 	TotalSizeExact     bool
+	reservation        *resultReservation
+	responseBytes      uint64
+}
+
+func (result *ListResult) Close() {
+	if result != nil && result.reservation != nil {
+		result.reservation.Close()
+	}
 }
 
 type MemberRequest struct {
@@ -108,6 +117,25 @@ type MemberResult struct {
 	TotalSize        *uint64
 	TotalSizeExact   bool
 	SnapshotComplete bool
+	reservation      *resultReservation
+	responseBytes    uint64
+}
+
+func (result *MemberResult) Close() {
+	if result != nil && result.reservation != nil {
+		result.reservation.Close()
+	}
+}
+
+type resultReservation struct {
+	once    sync.Once
+	release func()
+}
+
+func (reservation *resultReservation) Close() {
+	if reservation != nil {
+		reservation.once.Do(reservation.release)
+	}
 }
 
 // ExportRequest is the durable semantic identity stored with a typed export.

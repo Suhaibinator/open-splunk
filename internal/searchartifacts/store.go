@@ -446,6 +446,32 @@ func (store *Store) Acquire(
 	access searchjobs.AccessScope,
 	jobID string,
 ) (ResultLease, error) {
+	return store.acquire(ctx, access, jobID, nil)
+}
+
+// AcquireBounded preserves Acquire's authorization, immutable pin, and
+// generation semantics while reserving conservative decode memory before any
+// artifact metadata or row payload is decoded. The callback must be
+// concurrency-safe. Its releases are invoked on every failed acquisition and
+// when the returned lease closes.
+func (store *Store) AcquireBounded(
+	ctx context.Context,
+	access searchjobs.AccessScope,
+	jobID string,
+	reserve func(uint64) (func(), bool),
+) (ResultLease, error) {
+	if reserve == nil {
+		return nil, ErrInvalid
+	}
+	return store.acquire(ctx, access, jobID, reserve)
+}
+
+func (store *Store) acquire(
+	ctx context.Context,
+	access searchjobs.AccessScope,
+	jobID string,
+	reserve func(uint64) (func(), bool),
+) (ResultLease, error) {
 	if ctx == nil || !validIdentity(access, jobID) {
 		return nil, ErrInvalid
 	}
@@ -509,6 +535,22 @@ func (store *Store) Acquire(
 		store.mu.Unlock()
 		return nil, ErrCorrupt
 	}
+	var releaseMemory func()
+	if reserve != nil {
+		charge, chargeErr := boundedArtifactAcquireBytes(file, record.ArtifactBytes)
+		if chargeErr != nil {
+			_ = file.Close()
+			store.mu.Unlock()
+			return nil, chargeErr
+		}
+		var reserved bool
+		releaseMemory, reserved = reserve(charge)
+		if !reserved || releaseMemory == nil {
+			_ = file.Close()
+			store.mu.Unlock()
+			return nil, ErrCapacity
+		}
+	}
 	store.pins[jobID]++
 	store.loads.Add(1)
 	load := store.load
@@ -525,17 +567,22 @@ func (store *Store) Acquire(
 	if loadErr != nil {
 		_ = file.Close()
 		store.releasePin(jobID)
+		if releaseMemory != nil {
+			releaseMemory()
+		}
 		return nil, loadErr
 	}
 	return &resultLease{
-		store:      store,
-		jobID:      jobID,
-		generation: metadata.Generation,
-		schema:     cloneSchema(metadata.Schema),
-		rowCount:   metadata.RowCount,
-		rowExact:   metadata.RowCountExact,
-		rows:       rows,
-		truncated:  metadata.ResultsTruncated,
+		store:         store,
+		jobID:         jobID,
+		generation:    metadata.Generation,
+		schema:        cloneSchema(metadata.Schema),
+		rowCount:      metadata.RowCount,
+		rowExact:      metadata.RowCountExact,
+		rows:          rows,
+		truncated:     metadata.ResultsTruncated,
+		reserve:       reserve,
+		releaseMemory: releaseMemory,
 	}, nil
 }
 
