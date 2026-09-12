@@ -107,6 +107,15 @@ type boundedSource interface {
 	) (searchjobs.ResultLease, error)
 }
 
+type publishedBoundedSource interface {
+	AcquirePublishedBounded(
+		context.Context,
+		searchjobs.AccessScope,
+		string,
+		func(uint64) (func(), bool),
+	) (searchjobs.ResultLease, error)
+}
+
 type boundedResultLease interface {
 	searchjobs.ResultLease
 	BoundedRead() bool
@@ -920,7 +929,9 @@ func (service *Service) acquire(
 		lease searchjobs.ResultLease
 		err   error
 	)
-	if source, ok := service.source.(boundedSource); ok {
+	if source, ok := service.source.(publishedBoundedSource); ok {
+		lease, err = source.AcquirePublishedBounded(ctx, access, jobID, readBudget.reserveWorking)
+	} else if source, ok := service.source.(boundedSource); ok {
 		lease, err = source.AcquireBounded(ctx, access, jobID, readBudget.reserveWorking)
 	} else {
 		lease, err = service.source.Acquire(ctx, access, jobID)
