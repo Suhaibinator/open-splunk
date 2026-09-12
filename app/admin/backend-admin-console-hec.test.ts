@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  IngestionToken,
   IngestionTokenPurpose,
   IngestionTokenState,
 } from "../../gen/ts/open_splunk/collector_admin";
@@ -12,6 +13,8 @@ import {
   serializeTokenCreateGuard,
   tokenPurposeLabel,
   validHECMetadataDefault,
+  validateTokenCreateResponse,
+  type TokenCreateDefinitionSnapshot,
 } from "./token-creation";
 import { tokenCanSetEnabled } from "./backend-admin-panels";
 import { tokenPatternsFromForm } from "./ingestion-policy-form";
@@ -180,6 +183,7 @@ test("token policy patterns preserve RE2 source text and enforce transport bound
 test("ambiguous-create guard round-trips HEC identity without a secret", () => {
   const apiBaseUrl = "https://splunk.example";
   const serialized = serializeTokenCreateGuard(apiBaseUrl, {
+    clientRequestId: "stored-logical-token-request",
     attemptId: "attempt-1",
     ownerId: "owner-1",
     definition: {
@@ -219,6 +223,7 @@ test("ambiguous-create guard round-trips HEC identity without a secret", () => {
   assert.equal(raw.includes("plaintext"), false);
   assert.equal(raw.includes("os_hec_secret"), false);
   const restored = parsePersistedTokenCreateGuard(raw, apiBaseUrl);
+  assert.equal(restored?.recovery.clientRequestId, "stored-logical-token-request");
   assert.equal(
     restored?.recovery.definition.purpose,
     IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_HEC,
@@ -302,4 +307,21 @@ test("malformed persisted HEC scope fails closed without throwing", () => {
   });
   assert.doesNotThrow(() => parsePersistedTokenCreateGuard(malformed, apiBaseUrl));
   assert.equal(parsePersistedTokenCreateGuard(malformed, apiBaseUrl), null);
+});
+
+test("token receipt replay accepts current metadata and rejects any repeated plaintext", () => {
+  const definition: TokenCreateDefinitionSnapshot = {
+    name: "original", description: "", boundCollectorId: "", allowedIndexNames: ["main"],
+    purpose: IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_HEC, hecProfile: undefined,
+    expiresAt: undefined, armedServerTimeMs: 1, dispatchedServerTimeMs: 1,
+    outcomeObservedServerTimeMs: null, requestRoundTripMs: null, requestTimeoutMs: 30_000,
+    clockUncertaintyMs: 0, outcomeKind: "ambiguous-failure",
+  };
+  const current = IngestionToken.fromPartial({
+    ingestionTokenId: "token-known", version: 4n, name: "renamed after create",
+    tokenPrefix: "prefix", state: IngestionTokenState.INGESTION_TOKEN_STATE_REVOKED,
+  });
+  assert.equal(validateTokenCreateResponse({ ingestionToken: current, replayed: true, plaintextToken: "" }, definition), current);
+  assert.throws(() => validateTokenCreateResponse({ ingestionToken: current, replayed: true, plaintextToken: "prefix-secret" }, definition), /receipt contract/);
+  assert.throws(() => validateTokenCreateResponse({ ingestionToken: current, replayed: false, plaintextToken: "" }, definition), /receipt contract/);
 });

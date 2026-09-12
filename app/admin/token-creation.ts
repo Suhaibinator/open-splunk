@@ -5,7 +5,7 @@ import {
   type IngestionToken,
   type IngestionTokenHecProfile,
 } from "@/gen/ts/open_splunk/collector_admin";
-import { IngestionTokenSortBy } from "@/gen/ts/open_splunk/collector_admin_api";
+import { type CreateIngestionTokenResponse, IngestionTokenSortBy } from "@/gen/ts/open_splunk/collector_admin_api";
 import { isHttpError, type OpenSplunkApiClient } from "@/lib/api";
 
 import {
@@ -42,6 +42,7 @@ export interface TokenCreateDefinitionSnapshot {
 }
 
 export interface TokenCreateRecovery {
+  clientRequestId?: string;
   attemptId: string;
   ownerId: string;
   definition: TokenCreateDefinitionSnapshot;
@@ -64,6 +65,7 @@ export interface UnreadableTokenCreateRecovery {
 }
 
 export interface PersistedTokenCreateGuard {
+  clientRequestId?: string;
   schemaVersion: 1;
   apiBaseUrl: string;
   attemptId: string;
@@ -306,6 +308,7 @@ export function serializeTokenCreateGuard(
 ): PersistedTokenCreateGuard {
   return {
     schemaVersion: 1,
+    clientRequestId: recovery.clientRequestId,
     apiBaseUrl: normalizedApiBaseUrl,
     attemptId: recovery.attemptId,
     ownerId: recovery.ownerId,
@@ -430,7 +433,9 @@ export function parsePersistedTokenCreateGuard(
     )
     && typeof persistedHECProfile.indexerAcknowledgment === "boolean";
   if (
-    record.schemaVersion !== 1
+    (record.clientRequestId !== undefined
+      && (typeof record.clientRequestId !== "string" || !/^[\x20-\x7e]{16,128}$/.test(record.clientRequestId)))
+    || record.schemaVersion !== 1
     || record.apiBaseUrl !== normalizedApiBaseUrl
     || typeof record.attemptId !== "string"
     || record.attemptId.length === 0
@@ -494,6 +499,7 @@ export function parsePersistedTokenCreateGuard(
   if (expiresAt !== undefined && Number.isNaN(expiresAt.valueOf())) return null;
   return {
     recovery: {
+      clientRequestId: record.clientRequestId,
       attemptId: record.attemptId,
       ownerId: record.ownerId,
       definition: {
@@ -695,4 +701,26 @@ export async function listTokensForCreateSafety(
     throw new Error("The token snapshot ended before its exact total was loaded.");
   }
   return tokens;
+}
+
+// Only the first committed issue can disclose a secret. Receipt replay carries
+// the current metadata, which may have been edited, disabled, or revoked.
+export function validateTokenCreateResponse(
+  response: CreateIngestionTokenResponse,
+  definition: TokenCreateDefinitionSnapshot,
+): IngestionToken {
+  const token = response.ingestionToken;
+  if (token === undefined || token.ingestionTokenId.length === 0 || token.version <= 0n
+    || token.tokenPrefix.length === 0
+    || token.state === IngestionTokenState.INGESTION_TOKEN_STATE_UNSPECIFIED
+    || token.state === IngestionTokenState.UNRECOGNIZED
+    || (response.replayed && response.plaintextToken.length !== 0)
+    || (!response.replayed && (token.version !== 1n
+      || token.state !== IngestionTokenState.INGESTION_TOKEN_STATE_ACTIVE
+      || response.plaintextToken.length === 0
+      || !response.plaintextToken.startsWith(token.tokenPrefix)
+      || !tokenMatchesCreateDefinition(token, definition)))) {
+    throw new Error("The server response did not satisfy the token receipt contract.");
+  }
+  return token;
 }
