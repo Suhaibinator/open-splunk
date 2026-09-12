@@ -234,12 +234,12 @@ func TestNearbyOrdinarySearchQualification(t *testing.T) {
 			t.Errorf("ClickHouse cleanup: %v", err)
 		}
 	})
-	baseline := nearbyQualificationStartServer(
-		t, ctx, clickHouse, "baseline", baselineBinary, false,
-	)
-	candidate := nearbyQualificationStartServer(
-		t, ctx, clickHouse, "candidate", candidateBinary, true,
-	)
+	// Fixture identity belongs to the comparison, independently of the runtime
+	// resources created from the configured binaries and ClickHouse image.
+	baseline := &nearbyQualificationServer{name: "baseline"}
+	candidate := &nearbyQualificationServer{name: "candidate", expectsRef: true}
+	nearbyQualificationStartServer(t, ctx, clickHouse, baseline, baselineBinary)
+	nearbyQualificationStartServer(t, ctx, clickHouse, candidate, candidateBinary)
 
 	connection, err := clickhousedriver.Open(&clickhousedriver.Options{
 		Addr: []string{clickHouse.Address},
@@ -409,14 +409,14 @@ func nearbyQualificationStartServer(
 	t *testing.T,
 	ctx context.Context,
 	clickHouse *testsupport.ClickHouseContainer,
-	name, binary string,
-	expectsRef bool,
-) *nearbyQualificationServer {
+	server *nearbyQualificationServer,
+	binary string,
+) {
 	t.Helper()
 	work := t.TempDir()
 	runtimeDirectory := filepath.Join(work, "runtime")
 	if err := os.Mkdir(runtimeDirectory, 0o700); err != nil {
-		t.Fatalf("create %s runtime directory: %v", name, err)
+		t.Fatalf("create %s runtime directory: %v", server.name, err)
 	}
 	administratorTokenPath, administratorToken := provisionAdministratorToken(t, work)
 	httpAddress := unusedLoopbackAddress(t)
@@ -436,17 +436,15 @@ func nearbyQualificationStartServer(
 	}
 	arguments = append(arguments, clickHouseServerArguments(clickHouse)...)
 	process := startProcess(t, runtimeDirectory, arguments, environment)
-	server := &nearbyQualificationServer{
-		name: name, baseURL: "http://" + httpAddress,
-		adminToken: administratorToken, client: &http.Client{Timeout: 15 * time.Second},
-		process: process, expectsRef: expectsRef,
-	}
+	server.baseURL = "http://" + httpAddress
+	server.adminToken = administratorToken
+	server.client = &http.Client{Timeout: 15 * time.Second}
+	server.process = process
 	waitForHealth(t, ctx, server.client, server.baseURL, process, administratorToken)
 	createBackendIndex(
 		t, ctx, server.client, server.baseURL, administratorToken,
 		nearbyQualificationIndex, "Nearby qualification fixture",
 	)
-	return server
 }
 
 func nearbyQualificationInsertFixture(
