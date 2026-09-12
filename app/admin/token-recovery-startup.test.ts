@@ -174,6 +174,7 @@ test("retry cancels the prior acquisition and ignores its stale lock callback", 
   assert.equal(controller.getSnapshot(), currentSnapshot);
   await attempts[1]?.callback({ name: "current" } as Lock);
   assert.deepEqual(owned, ["owned"]);
+  assert.equal(controller.getSnapshot().kind, "owned");
   stop();
   assert.equal(attempts[1]?.signal.aborted, true);
   assert.equal(cleanupCount, 2);

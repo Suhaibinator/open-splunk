@@ -6,7 +6,93 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 )
+
+type idempotencyReceiptTestJournal struct {
+	recordingJournal
+	target          requestidempotency.Target
+	idempotentCalls int
+	idempotentErr   error
+}
+
+func (journal *idempotencyReceiptTestJournal) LookupIdempotencyReceipt(
+	context.Context,
+	requestidempotency.Intent,
+) (requestidempotency.Target, bool, error) {
+	return journal.target, true, nil
+}
+
+func (journal *idempotencyReceiptTestJournal) AdmitIdempotent(
+	_ context.Context,
+	job Job,
+	_ requestidempotency.Intent,
+) error {
+	journal.idempotentCalls++
+	journal.admitted = append(journal.admitted, job.ID)
+	return journal.idempotentErr
+}
+
+func TestCompositeJournalReceiptConflictCompensatesOnlyEarlierProjection(t *testing.T) {
+	target := &recordingJournal{}
+	receipts := &idempotencyReceiptTestJournal{idempotentErr: requestidempotency.ErrConflict}
+	journal := NewCompositeJournal(target, receipts)
+	err := journal.AdmitIdempotent(
+		t.Context(),
+		Job{ID: "losing-job", State: StateQueued, Version: 1, CreatedAt: time.Now().UTC()},
+		requestidempotency.Intent{},
+	)
+	if !errors.Is(err, requestidempotency.ErrConflict) {
+		t.Fatalf("AdmitIdempotent error = %v", err)
+	}
+	if len(target.finalized) != 1 || len(receipts.finalized) != 0 {
+		t.Fatalf("compensation = target %v receipt %v", target.finalized, receipts.finalized)
+	}
+}
+
+type idempotencyTargetTestJournal struct {
+	recordingJournal
+	job Job
+}
+
+func (journal *idempotencyTargetTestJournal) ReadIdempotencyTarget(
+	_ context.Context,
+	_ AccessScope,
+	target requestidempotency.Target,
+) (Job, error) {
+	if target.ID != journal.job.ID {
+		return Job{}, requestidempotency.ErrUnavailable
+	}
+	return journal.job, nil
+}
+
+func TestCompositeJournalIdempotencyUsesOneReceiptAndCurrentDurableTarget(t *testing.T) {
+	target := &idempotencyTargetTestJournal{job: Job{
+		ID: "search-idempotent", TenantID: "tenant", OwnerID: "owner", Version: 4,
+	}}
+	receipts := &idempotencyReceiptTestJournal{target: requestidempotency.Target{
+		Kind: requestidempotency.TargetSearchJob, ID: target.job.ID, Version: 1,
+	}}
+	journal := NewCompositeJournal(target, receipts)
+	intent := requestidempotency.Intent{
+		TenantID: "tenant", ActorKind: "browser", ActorID: "owner",
+		Route:           requestidempotency.RouteCreateSearchJob,
+		ClientRequestID: "search request 01", CanonicalVersion: requestidempotency.CanonicalVersion,
+	}
+	current, found, err := journal.LookupIdempotent(
+		t.Context(), AccessScope{TenantID: "tenant", OwnerID: "owner"}, intent,
+	)
+	if err != nil || !found || current.Version != 4 {
+		t.Fatalf("lookup = (%+v, %t, %v)", current, found, err)
+	}
+	if err := journal.AdmitIdempotent(t.Context(), Job{ID: "new-job"}, intent); err != nil {
+		t.Fatal(err)
+	}
+	if receipts.idempotentCalls != 1 || len(target.admitted) != 1 || len(receipts.admitted) != 1 {
+		t.Fatalf("admission calls = target %v receipt %v/%d", target.admitted, receipts.admitted, receipts.idempotentCalls)
+	}
+}
 
 type recordingJournal struct {
 	mu        sync.Mutex

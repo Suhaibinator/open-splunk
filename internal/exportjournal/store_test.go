@@ -123,3 +123,27 @@ func TestJournalDeletedTargetNeverRecreatedFromReceipt(t *testing.T) {
 		t.Fatalf("deleted replay=%v,%v", found, err)
 	}
 }
+
+func TestJournalExpiredReplayHasStableCurrentRevision(t *testing.T) {
+	store, _ := openTestJournal(t)
+	ctx, access, job, intent := journalFixture(t)
+	if err := store.AdmitIdempotent(ctx, access, job, intent); err != nil {
+		t.Fatal(err)
+	}
+	job.State = exportjobs.StateCanceled
+	job.Version = 3
+	job.FinishedAt = job.CreatedAt
+	job.ExpiresAt = job.CreatedAt.Add(time.Hour)
+	if err := store.Update(ctx, exportjobs.DurableJob{Access: access, Job: job}); err != nil {
+		t.Fatal(err)
+	}
+	store.now = func() time.Time { return job.ExpiresAt.Add(time.Second) }
+	first, found, err := store.Lookup(ctx, access, intent)
+	if err != nil || !found || first.State != exportjobs.StateExpired || first.Version != 4 {
+		t.Fatalf("expired replay=%#v %v %v", first, found, err)
+	}
+	second, found, err := store.Lookup(ctx, access, intent)
+	if err != nil || !found || second.Version != first.Version || second.State != first.State {
+		t.Fatalf("unstable expired replay=%#v %v %v", second, found, err)
+	}
+}

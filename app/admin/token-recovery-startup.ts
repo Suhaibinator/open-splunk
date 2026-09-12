@@ -26,7 +26,7 @@ export type TokenRecoveryStartupSnapshot =
       readonly record: TokenRecoveryStartupRecord;
     }
   | {
-      readonly kind: "lock-unavailable" | "acquiring" | "contended";
+      readonly kind: "lock-unavailable" | "acquiring" | "owned" | "contended";
       readonly lockAvailable: boolean;
       readonly record: TokenRecoveryStartupRecord;
     }
@@ -156,6 +156,7 @@ export class TokenRecoveryStartupController {
           publish({ kind: "contended", lockAvailable, record });
           return;
         }
+        publish({ kind: "owned", lockAvailable, record });
         await handlers.onOwned(record, { isCurrent, signal: controller.signal });
       },
     ).catch((error: unknown) => {

@@ -113,7 +113,18 @@ func (journal *CompositeJournal) admit(
 			// Compensate known-successful targets before the ambiguously failed
 			// target. In the production ordering this guarantees the artifact
 			// record cannot be stranded even if a later projection is unhealthy.
-			for admitted := 0; admitted <= index; admitted++ {
+			lastCompensation := index
+			if errors.Is(err, requestidempotency.ErrInvalid) ||
+				errors.Is(err, requestidempotency.ErrConflict) ||
+				errors.Is(err, requestidempotency.ErrCapacity) ||
+				errors.Is(err, requestidempotency.ErrUnavailable) ||
+				errors.Is(err, requestidempotency.ErrCorrupt) {
+				// Receipt errors are definitive transaction rollbacks. Compensate
+				// preceding projections, but do not synthesize terminal metadata
+				// through the receipt projection that rejected this admission.
+				lastCompensation--
+			}
+			for admitted := 0; admitted <= lastCompensation; admitted++ {
 				compensationContext, cancel := context.WithTimeout(
 					context.WithoutCancel(ctx),
 					compositeAdmissionCompensationTimeout,
