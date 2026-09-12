@@ -1587,7 +1587,22 @@ func (handler *apiHandler) setIngestionTokenEnabled(
 			if errors.As(err, &databaseErr) {
 				code = databaseErr.Code()
 			}
+			phase := "other"
+			for _, candidate := range []struct{ prefix, phase string }{
+				{"begin collector token state update:", "begin"},
+				{"read collector token for state update:", "read_before"},
+				{"set collector token enabled state:", "update"},
+				{"read state-updated collector token:", "read_after"},
+				{"append collector token state update audit event:", "audit"},
+				{"commit collector token state update:", "commit"},
+			} {
+				if strings.HasPrefix(err.Error(), candidate.prefix) {
+					phase = candidate.phase
+					break
+				}
+			}
 			handler.logger.Error("ingestion token state update unavailable",
+				zap.String("mutation_phase", phase),
 				zap.Bool("database_contention", control.IsDatabaseContention(err)),
 				zap.Int("database_error_code", code),
 			)
