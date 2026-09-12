@@ -14,6 +14,13 @@ An expired or unavailable snapshot produces an error; it does not silently
 switch to a new search. The server still checks access to the retained job on
 every request.
 
+Public snapshot references are signed with a process-scoped key. After a server
+restart, reopen or refresh the final result page to obtain a new reference;
+the retained generation, pattern identifiers, and group/member cursor relation
+remain unchanged. Retrying an already accepted export with the same request ID
+and intent returns its durable receipt before validating the old public
+reference, using the generation resolved at acceptance.
+
 A result retention limit can make the snapshot smaller than the full search.
 For example, a search with 10,001 events can retain 10,000 rows. Patterns covers
 those 10,000 rows and explicitly discloses truncation. An ordinary full-search

@@ -82,6 +82,7 @@ func newQualificationFixture(t *testing.T) qualificationFixture {
 	job.FinishedAt = now
 	job.ExpiresAt = now.Add(time.Hour)
 	job.RowCount = qualificationFixtureRows
+	job.ResultsTruncated = true
 	if err := store.Finalize(ctx, job); err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +144,7 @@ type qualificationInputLease struct {
 func (lease *qualificationInputLease) Schema() searchjobs.Schema { return lease.schema }
 func (lease *qualificationInputLease) RowCount() uint64          { return uint64(len(lease.rows)) }
 func (*qualificationInputLease) RowCountExact() bool             { return true }
-func (*qualificationInputLease) ResultsTruncated() bool          { return false }
+func (*qualificationInputLease) ResultsTruncated() bool          { return true }
 func (lease *qualificationInputLease) Generation() uint64        { return lease.generation }
 func (*qualificationInputLease) Close() error                    { return nil }
 func (lease *qualificationInputLease) Next(ctx context.Context) (searchjobs.ResultRow, bool, error) {
