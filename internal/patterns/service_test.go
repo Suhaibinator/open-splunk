@@ -88,6 +88,34 @@ func TestServiceGroupsFinalRawStringsAndConservesCounts(t *testing.T) {
 	}
 }
 
+func TestServiceTreatsSchemaWithoutRawAsEntirelyExcluded(t *testing.T) {
+	t.Parallel()
+	source := &testSource{
+		schema: searchjobs.Schema{Columns: []searchjobs.Column{{Name: "message", Kind: searchjobs.ValueKindString}}},
+		rows: []searchjobs.ResultRow{
+			{Ordinal: 0, Values: []searchjobs.Value{searchjobs.StringValue("first")}},
+			{Ordinal: 1, Values: []searchjobs.Value{searchjobs.StringValue("second")}},
+		},
+		generation: 3,
+	}
+	service, err := New(Config{Source: source, CursorKey: []byte("patterns-missing-raw-key")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = service.Close(context.Background()) })
+	result, err := service.List(context.Background(), searchjobs.AccessScope{
+		TenantID: "tenant", OwnerID: "owner",
+	}, ListRequest{SearchJobID: "job", Generation: 3, Sensitivity: Precise, IncludeTotal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer result.Close()
+	if result.RetainedEventCount != 2 || result.EligibleEventCount != 0 || result.ExcludedEventCount != 2 ||
+		len(result.Patterns) != 0 || result.TotalSize == nil || *result.TotalSize != 0 {
+		t.Fatalf("missing _raw result = %+v", result)
+	}
+}
+
 type switchingPatternSource struct {
 	mu      sync.Mutex
 	acquire func() searchjobs.ResultLease
