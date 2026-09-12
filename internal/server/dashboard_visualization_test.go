@@ -19,7 +19,7 @@ import (
 // the same backend with identical SPL, time, indexes, and trusted provenance.
 func TestDashboardVisualizationPreservesSearchAdmissionAndRoundTrip(t *testing.T) {
 	ownerID, tenantID, appID := "owner-1", "tenant-1", "app-main"
-	record := dashboardAPITestRecord(ownerID, appID)
+	record := dashboardAPITestRecord(ownerID)
 	storedSearch := proto.Clone(record.Definition.Panels[0].Search).(*opensplunk.SearchDefinition)
 	created := completeJobForApp("job-dashboard", appID)
 	created.OwnerID, created.TenantID = ownerID, tenantID

@@ -57,7 +57,8 @@ func (fake *fakeDashboards) Delete(ctx context.Context, scope dashboards.AccessS
 	return fake.deleteFn(ctx, scope, id, version)
 }
 
-func dashboardAPITestRecord(ownerID, appID string) *opensplunk.Dashboard {
+func dashboardAPITestRecord(ownerID string) *opensplunk.Dashboard {
+	appID := "app-main"
 	earliest, latest, timezone := "-24h", "now", "UTC"
 	return &opensplunk.Dashboard{
 		DashboardId: "dash-1", Version: 1,
@@ -79,7 +80,7 @@ func dashboardAPITestRecord(ownerID, appID string) *opensplunk.Dashboard {
 
 func TestRunDashboardPanelUsesOnlyStoredDefinitionAndSealsProvenance(t *testing.T) {
 	ownerID, tenantID, appID := "owner-1", "tenant-1", "app-main"
-	record := dashboardAPITestRecord(ownerID, appID)
+	record := dashboardAPITestRecord(ownerID)
 	store := &fakeDashboards{getFn: func(_ context.Context, scope dashboards.AccessScope, id string) (*opensplunk.Dashboard, error) {
 		if scope.OwnerID != ownerID || id != record.GetDashboardId() {
 			t.Fatalf("dashboard lookup = %+v %q", scope, id)
@@ -122,7 +123,7 @@ func TestRunDashboardPanelUsesOnlyStoredDefinitionAndSealsProvenance(t *testing.
 }
 
 func TestRunDashboardPanelRejectsUnknownPanelBeforeCreatingJob(t *testing.T) {
-	record := dashboardAPITestRecord("owner-1", "app-main")
+	record := dashboardAPITestRecord("owner-1")
 	jobs := &fakeSearchJobs{createJob: completeJob("must-not-create")}
 	handler := newTestHandler(t, Config{
 		SearchJobs: jobs,
@@ -148,7 +149,7 @@ func TestCreateDashboardRejectsUnavailablePanelIndexBeforePersistence(t *testing
 		Indexes: fakeIndexCatalog{}, OwnerID: ownerID, WebUI: testUI(),
 		Bootstrap: BootstrapConfig{Apps: []*opensplunk.AppSummary{{AppId: appID, Slug: "main", DisplayName: "Main", State: opensplunk.AppState_APP_STATE_ACTIVE}}},
 	})
-	definition := dashboardAPITestRecord(ownerID, appID).GetDefinition()
+	definition := dashboardAPITestRecord(ownerID).GetDefinition()
 	response := postProto(t, handler, "/api/dashboards/create", &opensplunk.CreateDashboardRequest{Definition: definition})
 	if response.Code != http.StatusForbidden {
 		t.Fatalf("create status = %d, body = %s", response.Code, response.Body.String())
