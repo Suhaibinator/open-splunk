@@ -291,7 +291,10 @@ func (handler *apiHandler) createSearchJob(request *http.Request, input *openspl
 			return nil, err
 		}
 	}
-	var job searchjobs.Job
+	var (
+		job               searchjobs.Job
+		replayedAdmission bool
+	)
 	if handler.trustedSearchAdmission != nil {
 		admissionRequest := TrustedSearchAdmissionRequest{
 			SPL: resolved.SPL, OwnerID: handler.ownerID, TenantID: handler.tenantID,
@@ -301,7 +304,7 @@ func (handler *apiHandler) createSearchJob(request *http.Request, input *openspl
 		if intent == nil {
 			job, err = handler.trustedSearchAdmission.AdmitTrustedSearch(request.Context(), admissionRequest)
 		} else if idempotent, ok := handler.trustedSearchAdmission.(idempotentTrustedSearchAdmission); ok {
-			job, _, err = idempotent.AdmitTrustedSearchIdempotent(request.Context(), admissionRequest, *intent)
+			job, replayedAdmission, err = idempotent.AdmitTrustedSearchIdempotent(request.Context(), admissionRequest, *intent)
 		} else {
 			return nil, unavailableError("search job idempotency is unavailable")
 		}
@@ -322,7 +325,7 @@ func (handler *apiHandler) createSearchJob(request *http.Request, input *openspl
 		if intent == nil {
 			job, err = handler.jobs.Create(request.Context(), createRequest)
 		} else if idempotent, ok := handler.jobs.(idempotentSearchJobs); ok {
-			job, _, err = idempotent.CreateIdempotent(request.Context(), createRequest, *intent)
+			job, replayedAdmission, err = idempotent.CreateIdempotent(request.Context(), createRequest, *intent)
 		} else {
 			return nil, unavailableError("search job idempotency is unavailable")
 		}
@@ -350,14 +353,14 @@ func (handler *apiHandler) createSearchJob(request *http.Request, input *openspl
 			return nil, mapSearchJobError(err)
 		}
 	}
-	if job.AppID != resolved.AppID || !handler.validKnowledgeSearchJobProjection(job) {
+	if (!replayedAdmission && job.AppID != resolved.AppID) || !handler.validKnowledgeSearchJobProjection(job) {
 		return nil, internalError()
 	}
 	converted, err := searchJobToProto(job, handler.now())
 	if err != nil {
 		return nil, internalError()
 	}
-	return &opensplunk.CreateSearchJobResponse{SearchJob: converted, Replayed: false}, nil
+	return &opensplunk.CreateSearchJobResponse{SearchJob: converted, Replayed: replayedAdmission}, nil
 }
 
 // resolveSavedSearchLaunch makes the persisted reusable definition—not a

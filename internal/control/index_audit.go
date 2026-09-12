@@ -145,7 +145,7 @@ func (administration *AuditedIndexAdministration) CreateIndexIdempotent(
 		intent.Route != requestidempotency.RouteCreateIndex {
 		return Index{}, false, requestidempotency.ErrInvalid
 	}
-	replay := func() (Index, bool, error) {
+	replay := func(ctx context.Context) (Index, bool, error) {
 		receipt, found, err := requestidempotency.Read(ctx, administration.db.orm, intent)
 		if err != nil || !found {
 			return Index{}, found, err
@@ -159,7 +159,7 @@ func (administration *AuditedIndexAdministration) CreateIndexIdempotent(
 		}
 		return current, true, err
 	}
-	if current, found, err := replay(); err != nil || found {
+	if current, found, err := replay(ctx); err != nil || found {
 		return current, found, err
 	}
 	publish := func(
@@ -192,7 +192,11 @@ func (administration *AuditedIndexAdministration) CreateIndexIdempotent(
 	if err == nil {
 		return created, false, nil
 	}
-	if current, found, replayErr := replay(); replayErr != nil || found {
+	// A commit can succeed before its acknowledgement or request cancellation.
+	// Reconcile the receipt with the same authority and a bounded independent read.
+	reconcileCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if current, found, replayErr := replay(reconcileCtx); replayErr != nil || found {
 		return current, found, replayErr
 	}
 	return Index{}, false, err

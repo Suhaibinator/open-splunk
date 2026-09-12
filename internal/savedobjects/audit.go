@@ -224,7 +224,7 @@ func (store *AuditedStore) createIdempotent(
 	operation func(savedSearchMutationAuditPublisher) (*opensplunk.SavedSearch, error),
 	intent requestidempotency.Intent,
 ) (*opensplunk.SavedSearch, bool, error) {
-	replay := func() (*opensplunk.SavedSearch, bool, error) {
+	replay := func(ctx context.Context) (*opensplunk.SavedSearch, bool, error) {
 		receipt, found, err := requestidempotency.Read(ctx, store.store.orm, intent)
 		if err != nil || !found {
 			return nil, found, err
@@ -238,7 +238,7 @@ func (store *AuditedStore) createIdempotent(
 		}
 		return current, true, err
 	}
-	if current, found, err := replay(); err != nil || found {
+	if current, found, err := replay(ctx); err != nil || found {
 		return current, found, err
 	}
 	publish := func(
@@ -272,7 +272,11 @@ func (store *AuditedStore) createIdempotent(
 	if err == nil {
 		return created, false, nil
 	}
-	if current, found, replayErr := replay(); replayErr != nil || found {
+	// A commit can succeed before its acknowledgement or request cancellation.
+	// Reconcile the receipt with the same authority and a bounded independent read.
+	reconcileCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if current, found, replayErr := replay(reconcileCtx); replayErr != nil || found {
 		return current, found, replayErr
 	}
 	return nil, false, err
