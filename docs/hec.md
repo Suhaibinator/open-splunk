@@ -342,6 +342,18 @@ overflow bucket, count, sum, and maximum. The same snapshot reports current and
 peak native waiters and publishes the fixed latency-bucket bounds in
 microseconds; none of these metrics carries request-derived labels.
 
+The Administration Server page presents the complete snapshot, including
+durable grouping states, fill reasons, native waiter outcomes, the three
+latency distributions, and all five shape histograms. Each distribution uses
+fixed validated bounds and a captioned, horizontally scrollable table. Counters
+remain exact unsigned 64-bit values in the browser, so a reported zero is
+distinct from a metric the server did not report. The observations are sampled
+from concurrent counters and are not one atomic transaction: bucket totals may
+temporarily differ from a histogram count. Process counters reset when the
+server restarts, while durable queue and retained acknowledgment state can
+survive a restart; compare snapshots with those boundaries in mind rather than
+inferring rates from one sample.
+
 ## Load, soak, and slow-client gates
 
 The always-on real TLS transport gate is:
