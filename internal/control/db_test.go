@@ -39,8 +39,8 @@ func TestOpenConfiguresSQLiteAndAppliesMigrations(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema migrations: %v", err)
 	}
-	if migrationCount != 14 {
-		t.Fatalf("schema migration count = %d, want 14", migrationCount)
+	if migrationCount != 12 {
+		t.Fatalf("schema migration count = %d, want 12", migrationCount)
 	}
 
 	// Foreign keys are connection-local in SQLite. Force database/sql to open
@@ -88,8 +88,8 @@ func TestOpenConfiguresSQLiteAndAppliesMigrations(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema migrations after reopen: %v", err)
 	}
-	if migrationCount != 14 {
-		t.Fatalf("schema migration count after reopen = %d, want 14", migrationCount)
+	if migrationCount != 12 {
+		t.Fatalf("schema migration count after reopen = %d, want 12", migrationCount)
 	}
 }
 
@@ -498,7 +498,7 @@ func TestApplyMigrationsAdoptsFoldedIngestBaseline(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, entry := range entries {
-		if entry.IsDir() || entry.Name() >= "0014_" {
+		if entry.IsDir() || entry.Name() >= "0012_" {
 			continue
 		}
 		data, readErr := fs.ReadFile(migrations.SQLite(), entry.Name())
@@ -513,10 +513,6 @@ func TestApplyMigrationsAdoptsFoldedIngestBaseline(t *testing.T) {
 	// The folded release predates appearance, principal, and rejection accounting.
 	if _, err := raw.ExecContext(ctx, `
 		DROP TABLE server_appearance_settings;
-		DROP TABLE ingest_rejection_buckets;
-		DROP TRIGGER ingest_visibility_principal_is_immutable;
-		DROP INDEX ingest_visibility_principal_pending_idx;
-		ALTER TABLE ingest_visibility_reservations DROP COLUMN principal_sha256;
 		DELETE FROM schema_migrations WHERE version >= 9;
 		UPDATE schema_migrations
 		SET checksum = X'23e85b8b288addf86eda7f848e2b087a40194f8c5281459a9f0f8c1d215e1d64'
@@ -531,8 +527,8 @@ func TestApplyMigrationsAdoptsFoldedIngestBaseline(t *testing.T) {
 	if err := raw.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatal(err)
 	}
-	if migrationCount != 14 {
-		t.Fatalf("folded migration count = %d, want 14", migrationCount)
+	if migrationCount != 12 {
+		t.Fatalf("folded migration count = %d, want 12", migrationCount)
 	}
 	var storedBaselineSHA256 string
 	if err := raw.QueryRowContext(ctx, `
@@ -648,9 +644,7 @@ func TestServerSettingsMigrationPreservesExistingAuditLedger(t *testing.T) {
 		"0009_ingest_reservation_accounting.sql",
 		"0010_ingest_write_groups.sql",
 		"0011_server_appearance_settings.sql",
-		"0012_ingest_principal_backlog.sql",
-		"0013_ingest_rejection_budget.sql",
-		"0014_api_mutation_receipts.sql",
+		"0012_ingest_budgets_and_api_receipts.sql",
 	}
 	if strings.Join(ledger, ",") != strings.Join(wantLedger, ",") {
 		t.Fatalf("post-upgrade migration ledger = %v, want %v", ledger, wantLedger)
@@ -994,8 +988,8 @@ func TestConcurrentOpenSerializesMigrationStartup(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatalf("count schema migrations: %v", err)
 	}
-	if count != 14 {
-		t.Fatalf("schema migration count = %d, want 14", count)
+	if count != 12 {
+		t.Fatalf("schema migration count = %d, want 12", count)
 	}
 }
 
