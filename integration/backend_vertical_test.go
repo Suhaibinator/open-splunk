@@ -116,8 +116,7 @@ func TestBackendVertical(t *testing.T) {
 	buildBinary(t, ctx, stagedBackendRepository, serverBinary, "./cmd/open-splunk-server")
 	buildBinary(t, ctx, repository, collectorBinary, "./cmd/open-splunk-collector")
 
-	httpAddress := unusedLoopbackAddress(t)
-	collectorAddress := unusedLoopbackAddress(t)
+	httpAddress, collectorAddress := unusedLoopbackAddressPair(t)
 	httpTLSIdentity, err := testsupport.WriteServerTLSIdentity(
 		filepath.Join(work, "http-tls"),
 		"127.0.0.1",

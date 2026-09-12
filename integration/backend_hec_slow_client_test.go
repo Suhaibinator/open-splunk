@@ -116,8 +116,7 @@ func TestBackendHECSlowCompressedReadDeadline(t *testing.T) {
 	serverBinary := filepath.Join(buildDir, "open-splunk-server")
 	buildBinary(t, ctx, stagedBackendRepository, serverBinary, "./cmd/open-splunk-server")
 
-	httpAddress := unusedLoopbackAddress(t)
-	collectorAddress := unusedLoopbackAddress(t)
+	httpAddress, collectorAddress := unusedLoopbackAddressPair(t)
 	httpTLSIdentity, err := testsupport.WriteServerTLSIdentity(
 		filepath.Join(work, "http-tls"),
 		"127.0.0.1",

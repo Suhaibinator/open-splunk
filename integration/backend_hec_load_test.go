@@ -619,8 +619,7 @@ func runBackendHECDurableLoad(t *testing.T, plan backendHECLoadPlan) {
 	buildBinary(t, ctx, repository, collectorBinary, "./cmd/open-splunk-collector")
 	buildBinary(t, ctx, repository, loggenBinary, "./cmd/open-splunk-loggen")
 
-	httpAddress := unusedLoopbackAddress(t)
-	collectorAddress := unusedLoopbackAddress(t)
+	httpAddress, collectorAddress := unusedLoopbackAddressPair(t)
 	httpTLSIdentity, err := testsupport.WriteServerTLSIdentity(
 		filepath.Join(work, "http-tls"),
 		"127.0.0.1",

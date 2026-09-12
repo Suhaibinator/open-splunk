@@ -53,7 +53,7 @@ func TestBackendNativeFormats(t *testing.T) {
 	collectorBinary := filepath.Join(work, "collector")
 	buildBinary(t, ctx, buildBackendFrontend(t, ctx, repository), serverBinary, "./cmd/open-splunk-server")
 	buildBinary(t, ctx, repository, collectorBinary, "./cmd/open-splunk-collector")
-	httpAddress, collectorAddress := unusedLoopbackAddress(t), unusedLoopbackAddress(t)
+	httpAddress, collectorAddress := unusedLoopbackAddressPair(t)
 	identity, err := testsupport.WriteServerTLSIdentity(filepath.Join(work, "tls"), "127.0.0.1")
 	if err != nil {
 		t.Fatal(err)
