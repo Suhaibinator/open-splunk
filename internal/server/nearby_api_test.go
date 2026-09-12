@@ -204,8 +204,8 @@ func (artifacts *nearbyDurableArtifacts) Acquire(
 	_ string,
 ) (searchartifacts.ResultLease, error) {
 	artifacts.acquireScope = access
-	copy := *artifacts.lease
-	return &copy, nil
+	lease := *artifacts.lease
+	return &lease, nil
 }
 
 func (*nearbyDurableArtifacts) ShareExpected(context.Context, searchjobs.AccessScope, string, uint64) (searchartifacts.Record, error) {

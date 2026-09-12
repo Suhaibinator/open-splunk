@@ -3,6 +3,8 @@ package clickhouse
 import (
 	"math"
 	"slices"
+
+	"fortio.org/safecast"
 )
 
 // NearbyEventOutput binds the four unchanged physical event fields needed to
@@ -58,11 +60,19 @@ func nearbyEventOutput(state compileState, outputFields []string) *NearbyEventOu
 	if slices.Contains(indexes[:], -1) {
 		return nil
 	}
+	var ordinals [len(nearbyEventFieldNames)]uint16
+	for index, outputIndex := range indexes {
+		ordinal, err := safecast.Conv[uint16](outputIndex)
+		if err != nil {
+			return nil
+		}
+		ordinals[index] = ordinal
+	}
 	return &NearbyEventOutput{
-		TimeIndex:   uint16(indexes[0]),
-		IndexIndex:  uint16(indexes[1]),
-		HostIndex:   uint16(indexes[2]),
-		SourceIndex: uint16(indexes[3]),
+		TimeIndex:   ordinals[0],
+		IndexIndex:  ordinals[1],
+		HostIndex:   ordinals[2],
+		SourceIndex: ordinals[3],
 	}
 }
 

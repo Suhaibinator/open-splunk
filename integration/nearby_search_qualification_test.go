@@ -12,12 +12,14 @@ package integration_test
 //
 // Build baseline da8415f3 and candidate with the same release toolchain before
 // entering the controlled idle slot. This test does not build either binary.
-// It emits one NEARBY_SEARCH_QUALIFICATION JSON report containing all seven
-// alternating pairs, immutable fixture/result digests, versions and thresholds.
+// It emits separate NEARBY_SEARCH_QUALIFICATION JSON reports for unkeyed and
+// browser-behavior lanes, each with seven alternating pairs and exact parity.
+// Baseline rejects keys; the browser lane keys only fresh candidate admissions.
 // Compile/helper validation without Docker: go test ./integration -run '^TestNearbyQualification' -count=1
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -31,7 +33,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -85,21 +86,44 @@ type nearbyQualificationSearch struct {
 	truncated    bool
 }
 
+type nearbyQualificationLane struct {
+	name        string
+	keyPrefix   string
+	keySequence uint64
+}
+
+func (lane *nearbyQualificationLane) requestKey(serverName string) *string {
+	if lane.keyPrefix == "" || serverName != "candidate" {
+		return nil
+	}
+	lane.keySequence++
+	return new(lane.keyPrefix + "-" + strconv.FormatUint(lane.keySequence, 10))
+}
+
 type nearbyQualificationObservation struct {
-	duration  time.Duration
-	digest    string
-	rows      uint64
-	truncated bool
+	clientRequestID string
+	duration        time.Duration
+	digest          string
+	rows            uint64
+	truncated       bool
 }
 
 type nearbyQualificationPairReport struct {
-	Pair        int      `json:"pair"`
-	Order       []string `json:"order"`
-	BaselineNS  int64    `json:"baseline_ns"`
-	CandidateNS int64    `json:"candidate_ns"`
+	BaselineResultSHA256     string   `json:"baseline_result_sha256"`
+	CandidateResultSHA256    string   `json:"candidate_result_sha256"`
+	CandidateClientRequestID string   `json:"candidate_client_request_id,omitempty"`
+	Pair                     int      `json:"pair"`
+	Order                    []string `json:"order"`
+	BaselineNS               int64    `json:"baseline_ns"`
+	CandidateNS              int64    `json:"candidate_ns"`
 }
 
 type nearbyQualificationReport struct {
+	Lane                  string                          `json:"lane"`
+	BaselineAdmission     string                          `json:"baseline_admission"`
+	CandidateAdmission    string                          `json:"candidate_admission"`
+	WarmupPairs           int                             `json:"warmup_pairs"`
+	Completed             bool                            `json:"completed"`
 	BaselineBinarySHA256  string                          `json:"baseline_binary_sha256"`
 	CandidateBinarySHA256 string                          `json:"candidate_binary_sha256"`
 	NumCPU                int                             `json:"num_cpu"`
@@ -243,6 +267,54 @@ func TestNearbyOrdinarySearchQualification(t *testing.T) {
 		t.Fatalf("read qualification ClickHouse version: %v", err)
 	}
 
+	metadata := nearbyQualificationReport{
+		BaselineBinarySHA256:  baselineBinaryDigest,
+		CandidateBinarySHA256: candidateBinaryDigest,
+		NumCPU:                runtime.NumCPU(), FormatVersion: 2,
+		BaselineRevision:  nearbyQualificationBaselineRevision,
+		CandidateRevision: candidateRevision,
+		ClickHouseImage:   clickHouse.Image, ClickHouseVersion: clickHouseVersion,
+		FixtureSHA256: fixtureDigest, FixtureRows: nearbyQualificationRows,
+		RetainedRows:    nearbyQualificationRetainedRows,
+		RegressionLimit: nearbyQualificationRegressionLimit,
+		GoVersion:       runtime.Version(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
+		GOMAXPROCS: runtime.GOMAXPROCS(0),
+	}
+	for _, lane := range []*nearbyQualificationLane{
+		{name: "unkeyed"},
+		{name: "browser_behavior", keyPrefix: rand.Text()},
+	} {
+		// A failed lane must not suppress the other lane's measurements/report.
+		t.Run(lane.name, func(t *testing.T) {
+			nearbyQualificationRunLane(t, ctx, baseline, candidate, lane, metadata)
+		})
+	}
+}
+
+func nearbyQualificationRunLane(
+	t *testing.T,
+	ctx context.Context,
+	baseline, candidate *nearbyQualificationServer,
+	lane *nearbyQualificationLane,
+	report nearbyQualificationReport,
+) {
+	t.Helper()
+	report.Lane = lane.name
+	report.BaselineAdmission = "unkeyed"
+	report.CandidateAdmission = "unkeyed"
+	if lane.keyPrefix != "" {
+		report.CandidateAdmission = "fresh_unique_client_request_id"
+	}
+	defer func() {
+		// Preserve partial observations even if a parity/admission check fails.
+		report.Passed = report.Passed && !t.Failed()
+		encoded, err := json.Marshal(report)
+		if err != nil {
+			t.Errorf("encode %s qualification report: %v", lane.name, err)
+			return
+		}
+		t.Logf("NEARBY_SEARCH_QUALIFICATION %s", encoded)
+	}()
 	paritySearches := []nearbyQualificationSearch{
 		{
 			name:         "bounded ordinary events",
@@ -257,12 +329,12 @@ func TestNearbyOrdinarySearchQualification(t *testing.T) {
 	}
 	parity := sha256.New()
 	for _, search := range paritySearches {
-		baselineObservation := nearbyQualificationRunSearch(t, ctx, baseline, search)
-		candidateObservation := nearbyQualificationRunSearch(t, ctx, candidate, search)
+		baselineObservation := nearbyQualificationRunSearch(t, ctx, baseline, lane, search)
+		candidateObservation := nearbyQualificationRunSearch(t, ctx, candidate, lane, search)
 		nearbyQualificationRequireParity(t, search.name, baselineObservation, candidateObservation)
 		nearbyQualificationWritePart(parity, search.name, []byte(baselineObservation.digest))
 	}
-	errorDigest := nearbyQualificationRequireErrorParity(t, ctx, baseline, candidate)
+	report.ErrorSHA256 = nearbyQualificationRequireErrorParity(t, ctx, baseline, candidate, lane)
 
 	performance := nearbyQualificationSearch{
 		name:         "truncated ordinary events",
@@ -270,14 +342,16 @@ func TestNearbyOrdinarySearchQualification(t *testing.T) {
 		expectedRows: nearbyQualificationRetainedRows,
 		truncated:    true,
 	}
-	baselineWarm := nearbyQualificationRunSearch(t, ctx, baseline, performance)
-	candidateWarm := nearbyQualificationRunSearch(t, ctx, candidate, performance)
+	baselineWarm := nearbyQualificationRunSearch(t, ctx, baseline, lane, performance)
+	candidateWarm := nearbyQualificationRunSearch(t, ctx, candidate, lane, performance)
 	nearbyQualificationRequireParity(t, "performance warmup", baselineWarm, candidateWarm)
 	nearbyQualificationWritePart(parity, performance.name, []byte(baselineWarm.digest))
+	report.WarmupPairs = 1
+	report.ParitySHA256 = hex.EncodeToString(parity.Sum(nil))
 
 	baselineSamples := make([]time.Duration, 0, nearbyQualificationPairs)
 	candidateSamples := make([]time.Duration, 0, nearbyQualificationPairs)
-	pairs := make([]nearbyQualificationPairReport, 0, nearbyQualificationPairs)
+	report.Pairs = make([]nearbyQualificationPairReport, 0, nearbyQualificationPairs)
 	for pair := range nearbyQualificationPairs {
 		order := []*nearbyQualificationServer{baseline, candidate}
 		if pair%2 == 1 {
@@ -285,22 +359,26 @@ func TestNearbyOrdinarySearchQualification(t *testing.T) {
 		}
 		observations := make(map[string]nearbyQualificationObservation, 2)
 		for _, server := range order {
-			observations[server.name] = nearbyQualificationRunSearch(t, ctx, server, performance)
+			observations[server.name] = nearbyQualificationRunSearch(t, ctx, server, lane, performance)
 		}
 		baselineObservation := observations[baseline.name]
 		candidateObservation := observations[candidate.name]
+		report.Pairs = append(report.Pairs, nearbyQualificationPairReport{
+			CandidateClientRequestID: candidateObservation.clientRequestID,
+			BaselineResultSHA256:     baselineObservation.digest,
+			CandidateResultSHA256:    candidateObservation.digest,
+			Pair:                     pair + 1,
+			Order:                    []string{order[0].name, order[1].name},
+			BaselineNS:               baselineObservation.duration.Nanoseconds(),
+			CandidateNS:              candidateObservation.duration.Nanoseconds(),
+		})
 		nearbyQualificationRequireParity(t, fmt.Sprintf("performance pair %d", pair+1), baselineObservation, candidateObservation)
 		if baselineObservation.digest != baselineWarm.digest {
 			t.Fatalf("performance pair %d changed immutable fixture result digest", pair+1)
 		}
 		baselineSamples = append(baselineSamples, baselineObservation.duration)
 		candidateSamples = append(candidateSamples, candidateObservation.duration)
-		pairs = append(pairs, nearbyQualificationPairReport{
-			Pair:        pair + 1,
-			Order:       []string{order[0].name, order[1].name},
-			BaselineNS:  baselineObservation.duration.Nanoseconds(),
-			CandidateNS: candidateObservation.duration.Nanoseconds(),
-		})
+
 	}
 
 	baselineMedian := nearbyQualificationPercentile(baselineSamples, 50)
@@ -309,36 +387,14 @@ func TestNearbyOrdinarySearchQualification(t *testing.T) {
 	candidateP95 := nearbyQualificationPercentile(candidateSamples, 95)
 	medianPass := nearbyQualificationWithinLimit(baselineMedian, candidateMedian)
 	p95Pass := nearbyQualificationWithinLimit(baselineP95, candidateP95)
-	report := nearbyQualificationReport{
-		BaselineBinarySHA256:  baselineBinaryDigest,
-		CandidateBinarySHA256: candidateBinaryDigest,
-		NumCPU:                runtime.NumCPU(),
-		FormatVersion:         1,
-		BaselineRevision:      nearbyQualificationBaselineRevision,
-		CandidateRevision:     candidateRevision,
-		ClickHouseImage:       clickHouse.Image,
-		ClickHouseVersion:     clickHouseVersion,
-		FixtureSHA256:         fixtureDigest,
-		FixtureRows:           nearbyQualificationRows,
-		RetainedRows:          nearbyQualificationRetainedRows,
-		Pairs:                 pairs,
-		ParitySHA256:          hex.EncodeToString(parity.Sum(nil)),
-		ErrorSHA256:           errorDigest,
-		BaselineMedianNS:      baselineMedian.Nanoseconds(),
-		CandidateMedianNS:     candidateMedian.Nanoseconds(),
-		MedianRatio:           nearbyQualificationRatio(candidateMedian, baselineMedian),
-		BaselineP95NS:         baselineP95.Nanoseconds(),
-		CandidateP95NS:        candidateP95.Nanoseconds(),
-		P95Ratio:              nearbyQualificationRatio(candidateP95, baselineP95),
-		RegressionLimit:       nearbyQualificationRegressionLimit,
-		GoVersion:             runtime.Version(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
-		GOMAXPROCS: runtime.GOMAXPROCS(0), Passed: medianPass && p95Pass,
-	}
-	encoded, err := json.Marshal(report)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("NEARBY_SEARCH_QUALIFICATION %s", encoded)
+	report.BaselineMedianNS = baselineMedian.Nanoseconds()
+	report.CandidateMedianNS = candidateMedian.Nanoseconds()
+	report.MedianRatio = nearbyQualificationRatio(candidateMedian, baselineMedian)
+	report.BaselineP95NS = baselineP95.Nanoseconds()
+	report.CandidateP95NS = candidateP95.Nanoseconds()
+	report.P95Ratio = nearbyQualificationRatio(candidateP95, baselineP95)
+	report.Completed = true
+	report.Passed = medianPass && p95Pass
 	if !report.Passed {
 		t.Fatalf(
 			"candidate regression exceeds %.0f%%: median %.4fx, p95 %.4fx",
@@ -512,14 +568,12 @@ func nearbyQualificationVerifyFixture(
 	}
 }
 
-func nearbyQualificationRunSearch(
-	t *testing.T,
-	ctx context.Context,
-	server *nearbyQualificationServer,
+func nearbyQualificationPrepareAdmission(
+	serverName string,
+	lane *nearbyQualificationLane,
 	search nearbyQualificationSearch,
-) nearbyQualificationObservation {
-	t.Helper()
-	started := time.Now()
+	now func() time.Time,
+) (*opensplunk.CreateSearchJobRequest, time.Time) {
 	earliest := nearbyQualificationFixtureStart.Format(time.RFC3339Nano)
 	latest := nearbyQualificationFixtureStart.Add(time.Duration(nearbyQualificationRows) * time.Microsecond).Format(time.RFC3339Nano)
 	timezone := "UTC"
@@ -528,15 +582,40 @@ func nearbyQualificationRunSearch(
 		TimeRange:  &opensplunk.TimeRangeSpec{Earliest: &earliest, Latest: &latest, Timezone: &timezone},
 		IndexScope: []string{nearbyQualificationIndex},
 	}}
+	request.ClientRequestId = lane.requestKey(serverName)
+	// Key generation and request construction never contribute to measured latency.
+	return request, now()
+}
+
+func nearbyQualificationFreshAdmission(response *opensplunk.CreateSearchJobResponse) (string, error) {
+	if response.GetReplayed() {
+		return "", fmt.Errorf("fresh qualification admission unexpectedly replayed a receipt")
+	}
+	jobID := response.GetSearchJob().GetSearchJobId()
+	if jobID == "" {
+		return "", fmt.Errorf("fresh qualification admission has no job ID")
+	}
+	return jobID, nil
+}
+
+func nearbyQualificationRunSearch(
+	t *testing.T,
+	ctx context.Context,
+	server *nearbyQualificationServer,
+	lane *nearbyQualificationLane,
+	search nearbyQualificationSearch,
+) nearbyQualificationObservation {
+	t.Helper()
+	request, started := nearbyQualificationPrepareAdmission(server.name, lane, search, time.Now)
 	var created opensplunk.CreateSearchJobResponse
 	if _, err := postProtoRequest(
 		ctx, server.client, server.baseURL+"/api/search/jobs/create", request, &created,
 	); err != nil {
 		t.Fatalf("%s create %s: %v", server.name, search.name, err)
 	}
-	jobID := created.GetSearchJob().GetSearchJobId()
-	if jobID == "" {
-		t.Fatalf("%s created %s without a job ID", server.name, search.name)
+	jobID, err := nearbyQualificationFreshAdmission(&created)
+	if err != nil {
+		t.Fatalf("%s create %s: %v", server.name, search.name, err)
 	}
 	job := nearbyQualificationWaitSearch(t, ctx, server, jobID, search.name)
 	results := nearbyQualificationFetchResults(t, ctx, server, jobID, search)
@@ -556,7 +635,8 @@ func nearbyQualificationRunSearch(
 		)
 	}
 	return nearbyQualificationObservation{
-		duration: duration, digest: digest, rows: rows, truncated: job.GetResultsTruncated(),
+		clientRequestID: request.GetClientRequestId(),
+		duration:        duration, digest: digest, rows: rows, truncated: job.GetResultsTruncated(),
 	}
 }
 
@@ -624,9 +704,9 @@ func nearbyQualificationFetchResults(
 		seenTokens  = make(map[string]struct{})
 	)
 	for pageNumber := 1; ; pageNumber++ {
-		requestPage := &opensplunk.PageRequest{PageSize: new(uint32(pageSize)), IncludeTotalSize: true}
+		requestPage := &opensplunk.PageRequest{PageSize: new(pageSize), IncludeTotalSize: true}
 		if nextToken != "" {
-			requestPage.PageToken = new(string(nextToken))
+			requestPage.PageToken = new(nextToken)
 		}
 		var response opensplunk.GetSearchResultsResponse
 		if _, err := postProtoRequest(
@@ -732,6 +812,7 @@ func nearbyQualificationRequireErrorParity(
 	t *testing.T,
 	ctx context.Context,
 	baseline, candidate *nearbyQualificationServer,
+	lane *nearbyQualificationLane,
 ) string {
 	t.Helper()
 	earliest := nearbyQualificationFixtureStart.Format(time.RFC3339Nano)
@@ -744,6 +825,7 @@ func nearbyQualificationRequireErrorParity(
 	}}
 	responses := make([]protoHTTPResponse, 2)
 	for index, server := range []*nearbyQualificationServer{baseline, candidate} {
+		request.ClientRequestId = lane.requestKey(server.name)
 		response, err := performProtoRequestWithBearer(
 			ctx, server.client, server.baseURL+"/api/search/jobs/create", "", request,
 		)
@@ -792,7 +874,7 @@ func nearbyQualificationPercentile(samples []time.Duration, percentile int) time
 		return 0
 	}
 	ordered := slices.Clone(samples)
-	sort.Slice(ordered, func(left, right int) bool { return ordered[left] < ordered[right] })
+	slices.Sort(ordered)
 	index := (len(ordered)*percentile + 99) / 100
 	return ordered[index-1]
 }
@@ -932,5 +1014,62 @@ func TestNearbyQualificationResultDigestBindsOrderAndBucketMetadata(t *testing.T
 	bucketed, err := nearbyQualificationResultDigest(schema, rows, 2, true, false)
 	if err != nil || first == bucketed {
 		t.Fatalf("bucket metadata was not bound: %s/%s, %v", first, bucketed, err)
+	}
+}
+
+func TestNearbyQualificationLaneKeysAreFreshAndPreparedBeforeTiming(t *testing.T) {
+	t.Parallel()
+	search := nearbyQualificationSearch{spl: "index=nearby-qualification"}
+	unkeyed := &nearbyQualificationLane{name: "unkeyed"}
+	browser := &nearbyQualificationLane{name: "browser_behavior", keyPrefix: "qualification-unique-prefix"}
+	clockValue := time.Date(2026, time.September, 12, 12, 0, 0, 0, time.UTC)
+	for _, server := range []string{"baseline", "candidate"} {
+		request, started := nearbyQualificationPrepareAdmission(server, unkeyed, search, func() time.Time { return clockValue })
+		if request.ClientRequestId != nil || !started.Equal(clockValue) {
+			t.Fatalf("unkeyed %s admission = %v at %s", server, request, started)
+		}
+	}
+	seen := make(map[string]struct{})
+	for attempt := uint64(1); attempt <= nearbyQualificationPairs+4; attempt++ {
+		baseline, _ := nearbyQualificationPrepareAdmission("baseline", browser, search, func() time.Time { return clockValue })
+		if baseline.ClientRequestId != nil || browser.keySequence != attempt-1 {
+			t.Fatal("browser baseline received a key or consumed candidate key authority")
+		}
+		candidate, started := nearbyQualificationPrepareAdmission("candidate", browser, search, func() time.Time {
+			// The measured interval must start after fresh-key allocation completes.
+			if browser.keySequence != attempt {
+				t.Fatal("measurement clock started before candidate key was prepared")
+			}
+			return clockValue
+		})
+		key := candidate.GetClientRequestId()
+		if key == "" || len(key) < 16 || len(key) > 128 || !started.Equal(clockValue) {
+			t.Fatalf("browser candidate admission key/timing = %q/%s", key, started)
+		}
+		if _, duplicate := seen[key]; duplicate {
+			t.Fatalf("candidate reused admission key %q", key)
+		}
+		seen[key] = struct{}{}
+		candidate.ClientRequestId = nil
+		if !proto.Equal(baseline, candidate) {
+			t.Fatal("browser lane changed search intent in addition to the supported request-key difference")
+		}
+	}
+}
+
+func TestNearbyQualificationRejectsReplayBeforeCollectingLatency(t *testing.T) {
+	t.Parallel()
+	for _, response := range []*opensplunk.CreateSearchJobResponse{
+		nil,
+		{},
+		{SearchJob: &opensplunk.SearchJob{SearchJobId: "old-job"}, Replayed: true},
+	} {
+		if jobID, err := nearbyQualificationFreshAdmission(response); err == nil || jobID != "" {
+			t.Fatalf("invalid/replayed admission entered measurement: %q, %v", jobID, err)
+		}
+	}
+	response := &opensplunk.CreateSearchJobResponse{SearchJob: &opensplunk.SearchJob{SearchJobId: "fresh-job"}}
+	if jobID, err := nearbyQualificationFreshAdmission(response); err != nil || jobID != "fresh-job" {
+		t.Fatalf("fresh admission rejected: %q, %v", jobID, err)
 	}
 }

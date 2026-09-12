@@ -133,7 +133,7 @@ func TestPrepareNearbyContextFailsClosedWithoutExactProvenance(t *testing.T) {
 func TestManagerPersistsCompilerProvenanceAndBindsGeneration(t *testing.T) {
 	anchor := time.Date(2026, 9, 12, 10, 11, 12, 987654321, time.UTC)
 	clock := &fakeClock{now: anchor.Add(time.Minute)}
-	executor := executorFunc(func(ctx context.Context, query clickhouse.CompiledQuery, sink ResultSink) error {
+	executor := executorFunc(func(_ context.Context, query clickhouse.CompiledQuery, sink ResultSink) error {
 		columns := make([]Column, len(query.OutputFields))
 		values := make([]Value, len(query.OutputFields))
 		for index, name := range query.OutputFields {
