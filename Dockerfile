@@ -13,11 +13,19 @@ WORKDIR /workspace
 COPY package.json package-lock.json ./
 RUN npm ci --include=dev
 COPY app ./app
+COPY README.md AGENTS.md CLAUDE.md ./
+COPY docs ./docs
+COPY configs/examples ./configs/examples
+COPY deploy ./deploy
+COPY gen/go/README.md ./gen/go/README.md
 COPY gen/ts ./gen/ts
+COPY integration/README.md ./integration/README.md
+COPY internal/hec/testdata/compatibility/README.md ./internal/hec/testdata/compatibility/README.md
 COPY internal/spl/completion_catalog.json ./internal/spl/completion_catalog.json
 COPY lib ./lib
+COPY migrations/README.md ./migrations/README.md
 COPY public ./public
-COPY scripts/build-ui.mjs scripts/build-ui-output.mjs ./scripts/
+COPY scripts/README.md scripts/build-ui.mjs scripts/build-ui-output.mjs scripts/build-help.mjs ./scripts/
 COPY next-env.d.ts next.config.ts tsconfig.json ./
 RUN env \
       CI=1 \

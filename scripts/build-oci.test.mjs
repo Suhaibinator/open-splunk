@@ -9,6 +9,7 @@ import {
   readFile,
   readdir,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { constants } from "node:fs";
@@ -17,6 +18,9 @@ import path from "node:path";
 import process from "node:process";
 import { spawn, spawnSync } from "node:child_process";
 import test from "node:test";
+
+import { DOCUMENTATION_REGISTRY } from "../lib/help/documentation-registry.mjs";
+import { buildHelpDocumentation } from "./build-help.mjs";
 
 const workspace = process.cwd();
 const removedProductIdentityPattern = new RegExp([
@@ -1119,4 +1123,59 @@ test("OCI build rejects unsafe identity, platform, and image references", async 
     assert.match(result.stderr, fixtureCase.message);
   }
   await assert.rejects(access(docker.log, constants.F_OK));
+});
+
+// Materialize the Help compiler's real inputs through the Dockerfile's literal
+// UI COPY instructions and the context allowlist, without running an OCI build.
+// Checking the staged compiler output catches missing docs as well as missing
+// build-only modules; checking repository files alone would miss this boundary.
+test("the OCI UI stage can compile every canonical Help source from its filtered context", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "open-splunk-oci-help-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const dockerfile = await readFile(path.join(workspace, "Dockerfile"), "utf8");
+  const uiStage = dockerfile.split(/^FROM /mu).find((stage) => stage.split("\n", 1)[0].endsWith(" AS ui"));
+  assert.ok(uiStage, "Dockerfile must declare its UI stage");
+  const copies = uiStage.split("\n").filter((line) => line.startsWith("COPY ")).map((line) => {
+    const parts = line.slice("COPY ".length).trim().split(/\s+/u);
+    return { sources: parts.slice(0, -1), destination: parts.at(-1) };
+  });
+  const rules = (await readFile(path.join(workspace, ".dockerignore"), "utf8"))
+    .split("\n").map((line) => line.trim()).filter((line) => line && !line.startsWith("#"));
+  const allowed = (filename) => {
+    let excluded = false;
+    for (const rule of rules) {
+      const include = rule.startsWith("!");
+      if (path.matchesGlob(filename, include ? rule.slice(1) : rule)) excluded = !include;
+    }
+    return !excluded;
+  };
+  const sourcePaths = [
+    "scripts/build-ui.mjs", "scripts/build-ui-output.mjs", "scripts/build-help.mjs",
+    "lib/help/documentation-registry.mjs", ...DOCUMENTATION_REGISTRY.map((entry) => entry.sourcePath),
+  ];
+  await Promise.all(sourcePaths.map(async (sourcePath) => {
+    const components = sourcePath.split("/");
+    const ancestors = components.slice(0, -1).map((_, index) => `${components.slice(0, index + 1).join("/")}/`);
+    if (!allowed(sourcePath) || !ancestors.every(allowed)) return;
+    const destinations = copies.flatMap((copy) => copy.sources.flatMap((source) => {
+        const prefix = `${source.replace(/\/$/u, "")}/`;
+        let relative;
+        if (sourcePath.startsWith(prefix)) relative = sourcePath.slice(prefix.length);
+        else if (sourcePath === source) relative = copy.sources.length > 1 || copy.destination.endsWith("/") ? path.posix.basename(sourcePath) : "";
+        else return [];
+        return [path.join(root, copy.destination, relative)];
+      }));
+    await Promise.all(destinations.map(async (destination) => {
+      await mkdir(path.dirname(destination), { recursive: true });
+      await copyFile(path.join(workspace, sourcePath), destination);
+    }));
+  }));
+  const bundle = await buildHelpDocumentation({ root });
+  assert.equal(bundle.documents.length, DOCUMENTATION_REGISTRY.filter((entry) => entry.published).length);
+  await symlink(path.join(workspace, "node_modules"), path.join(root, "node_modules"), "dir");
+  const generated = spawnSync(process.execPath, [path.join(root, "scripts/build-help.mjs")], { cwd: root, encoding: "utf8" });
+  assert.equal(generated.status, 0, generated.stderr);
+  const artifact = JSON.parse(await readFile(path.join(root, "app/help/help-content.generated.json"), "utf8"));
+  assert.equal(artifact.contentRevision, bundle.contentRevision);
+  assert.deepEqual(artifact.documents.map((document) => document.sourcePath), bundle.documents.map((document) => document.sourcePath));
 });
