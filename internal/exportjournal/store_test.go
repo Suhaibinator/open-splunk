@@ -142,6 +142,7 @@ func TestJournalExpiredReplayHasStableCurrentRevision(t *testing.T) {
 	if err != nil || !found || first.State != exportjobs.StateExpired || first.Version != 4 {
 		t.Fatalf("expired replay=%#v %v %v", first, found, err)
 	}
+	store.now = func() time.Time { return job.CreatedAt.Add(-time.Hour) }
 	second, found, err := store.Lookup(ctx, access, intent)
 	if err != nil || !found || second.Version != first.Version || second.State != first.State {
 		t.Fatalf("unstable expired replay=%#v %v %v", second, found, err)

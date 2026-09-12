@@ -75,11 +75,12 @@ collectors may reconnect; disabled collectors continue to fail as disabled.
 ### Browser recovery for one-time token creation
 
 The Administration page stores a non-secret recovery guard before sending a
-token-create request. The guard contains the requested definition, baseline
-token identities, server-clock timing, and an attempt identity; it never
-contains the plaintext token. This lets the browser reconcile a timeout,
-connection loss, reload, or tab closure without silently creating a second
-live credential.
+token-create request. The guard contains the exact requested definition, a UUID
+`client_request_id`, server-clock timing, and a browser ownership identity; it
+never contains plaintext. After a timeout, connection loss, reload, or tab
+closure, the browser resubmits the same definition and key to obtain the exact
+server receipt. Names, creation times, and similar metadata do not identify the
+outcome of a keyed request.
 
 An unresolved guard pauses only **Generate token**. It does not block links,
 browser navigation, authentication, or other administration work. A persistent
@@ -88,38 +89,33 @@ restoring a guard does not change the current section or open a dialog. Only a
 plaintext token currently visible in memory prevents navigation, because
 leaving would permanently discard that one-time secret.
 
-One tab owns recovery through an exact API-base Web Lock. That tab polls a
-complete, stable, exact-total, name-filtered token snapshot immediately and
-with 1, 2, 4, 8, then at most 10 second delays. Polling pauses while its
-document is hidden or offline and resumes immediately. Other tabs report lock
-contention directly and can use **Try again** after the owner closes. When the
-owner safely resolves and removes the exact guard, matching tabs unlock
-without a reload.
+One tab owns recovery through an exact API-base Web Lock. It waits for the
+authoritative server clock before checking the seven-day retry fence, and keeps
+the same lock and request identity during asynchronous retries. Checks pause
+while the document is hidden or offline. Other tabs report lock contention and
+can use **Try again** after the owner closes. Safely resolving and removing the
+exact guard unlocks matching tabs without a reload.
 
-For an ambiguous request with no matching token, the browser waits until the
-server-clock deadline calculated as two request timeouts plus clock
-uncertainty—about 60 seconds with the current 30-second request timeout. It
-then requires two complete zero-result snapshots at least two seconds apart
-before concluding that no token was created. A matching token cancels that
-completion; an attributable live token whose plaintext was lost must be
-revoked. This bounded policy has a small residual risk if a reverse proxy
-delivers the original create request more than 60 seconds late.
+Only the first successful issue returns plaintext. A receipt replay returns the
+same token ID and current metadata, which may have changed or been revoked,
+with no secret. When an active or disabled token is identified but its secret
+was lost, the dialog requires explicit revocation before a replacement is
+created under a new key. A confirmed revoked or expired token is safe to clear.
+A changed definition under the same key conflicts instead of creating another
+token. Authentication failures preserve the durable guard while the user signs
+in again.
 
-An exact Open Splunk `408` response with `administrative request was canceled`
-or `429` with `ingestion token capacity is exhausted` is a definite no-create
-outcome. A proxy-generated 408/429, browser timeout, connection failure,
-malformed response, or incomplete/unstable listing remains ambiguous. If a
-check requires authentication, use the recovery dialog's sign-in route; the
-durable guard remains in place while the recovery lock is released.
-
-If the saved guard is unreadable, the owning tab records its first observation
-against the authoritative server clock and performs complete unfiltered token
-snapshots. With no trustworthy attribution data, every nonterminal token is
-treated as potentially related and must become revoked or expired. The same
-quiescence period and two zero-nonterminal snapshots are required before the
-damaged record can be removed. Never delete or edit a token recovery guard in
-browser developer tools: an unmatched removal remains fail-closed and can
-leave the browser unable to prove the create outcome safely.
+Legacy records without a request key, records past the seven-day fence, and
+unreadable guards use a conservative fallback without resubmitting the old
+create. The owning tab reviews complete, stable, exact-total, unfiltered token
+snapshots. Every nonterminal token must become revoked or expired; matching a
+name or timestamp never authorizes recovery. Before clearing the record, the
+browser waits two request timeouts plus clock uncertainty from its first
+server-clock observation, then requires two complete zero-nonterminal snapshots
+at least two seconds apart. This fallback cannot identify a historical token
+exactly and can require manual review of unrelated live tokens. The browser
+retains ownership throughout that review. Editing or deleting the guard outside
+the recovery flow cannot establish a safe create outcome.
 
 ## Host and source constraints
 
