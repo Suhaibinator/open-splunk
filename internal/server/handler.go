@@ -63,6 +63,8 @@ const (
 	searchTimelinePath                = "/api/search/jobs/timeline"
 	searchInspectionRoute             = "/search/jobs/inspect"
 	searchInspectionPath              = apiPathPrefix + searchInspectionRoute
+	nearbyContextRoute                = "/search/jobs/nearby/prepare"
+	nearbyContextPath                 = apiPathPrefix + nearbyContextRoute
 	auditEventsListRoute              = "/audit/events/list"
 	auditEventsListPath               = apiPathPrefix + auditEventsListRoute
 	searchWebSocketPath               = "/api/search/ws"
@@ -1036,10 +1038,8 @@ func NewHandler(config Config) (*Handler, error) {
 		}
 	}
 	var searchArtifactCursorKey [32]byte
-	if searchArtifacts != nil {
-		if _, err := rand.Read(searchArtifactCursorKey[:]); err != nil {
-			return nil, errors.New("create server handler: secure randomness unavailable for retained-result cursors")
-		}
+	if _, err := rand.Read(searchArtifactCursorKey[:]); err != nil {
+		return nil, errors.New("create server handler: secure randomness unavailable for retained-result cursors")
 	}
 
 	api := &apiHandler{
@@ -1120,6 +1120,7 @@ func NewHandler(config Config) (*Handler, error) {
 		"/api/search/jobs/get",
 		searchJobsListPath,
 		"/api/search/jobs/results",
+		nearbyContextPath,
 		"/api/search/jobs/cancel",
 		"/api/saved-searches/create",
 		"/api/saved-searches/get",
@@ -1691,6 +1692,7 @@ func (handler *apiHandler) registerCoreRoutes(group *apiRouteGroup, smallRequest
 		sizedProtoPostRoute("/search/jobs/get", smallRequestBytes, handler.getSearchJob, sanitizeGetSearchJobRequest),
 		sizedPostRoute(searchJobsListRoute, smallRequestBytes, newSerializedSearchJobListCodec(), handler.listSearchJobs, handler.sanitizeListSearchJobsRequest),
 		sizedPostRoute("/search/jobs/results", smallRequestBytes, newSerializedSearchResultsCodec(), handler.getSearchResults, handler.sanitizeGetSearchResultsRequest),
+		sizedPostRoute(nearbyContextRoute, smallRequestBytes, newSerializedNearbyContextCodec(), handler.prepareNearbyContext, sanitizePrepareNearbyContextRequest),
 		sizedProtoPostRoute("/search/jobs/cancel", smallRequestBytes, handler.cancelSearchJob, sanitizeCancelSearchJobRequest),
 		protoPostRoute("/saved-searches/create", handler.createSavedSearch, sanitizeCreateSavedSearchRequest),
 		sizedProtoPostRoute("/saved-searches/get", smallRequestBytes, handler.getSavedSearch, sanitizeGetSavedSearchRequest),

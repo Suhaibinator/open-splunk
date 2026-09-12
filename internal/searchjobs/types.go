@@ -395,6 +395,10 @@ type Job struct {
 	KnowledgeSnapshot *opensplunk.KnowledgeSnapshotSummary
 	State             State
 	Schema            *Schema
+	// NearbyEventProvenance is a compiler-authenticated binding from the final
+	// result schema to unchanged physical event fields. Nil is the compatible
+	// representation for legacy and transformed results.
+	NearbyEventProvenance *NearbyEventProvenance
 	// ScannedRows and ScannedBytes are the exact executor-reported progress
 	// received so far. A terminal job may contain only the prefix reported
 	// before cancellation or failure; the manager never extrapolates a total.
@@ -797,6 +801,7 @@ type ResultPage struct {
 	NextCursor string
 	TotalRows  uint64
 	Complete   bool
+	Generation uint64
 }
 
 func cloneJob(source Job) Job {
@@ -807,6 +812,10 @@ func cloneJob(source Job) Job {
 	if source.Schema != nil {
 		schema := cloneSchema(*source.Schema)
 		result.Schema = &schema
+	}
+	if source.NearbyEventProvenance != nil {
+		provenance := *source.NearbyEventProvenance
+		result.NearbyEventProvenance = &provenance
 	}
 	if source.Failure != nil {
 		failure := cloneFailure(*source.Failure)
@@ -823,6 +832,7 @@ func cloneJobSummary(source Job) Job {
 	result.EffectiveIndexes = nil
 	result.KnowledgeSnapshot = nil
 	result.Schema = nil
+	result.NearbyEventProvenance = nil
 	if source.Failure != nil {
 		failure := *source.Failure
 		failure.Diagnostics = nil
@@ -1012,7 +1022,9 @@ func retainedJobMetadataReservation(id string, request CreateRequest) (uint64, e
 func retainedNormalizedJobMetadataReservation(id string, request CreateRequest) (uint64, error) {
 	var err error
 	intent := request.TimeRange.Intent()
-	total := uint64(unsafe.Sizeof(jobEntry{})) + metadataContextAllowance + metadataDiagnosticAllowance
+	total := uint64(unsafe.Sizeof(jobEntry{})) +
+		uint64(unsafe.Sizeof(NearbyEventProvenance{})) +
+		metadataContextAllowance + metadataDiagnosticAllowance
 	for _, value := range []string{
 		id,
 		request.OwnerID,

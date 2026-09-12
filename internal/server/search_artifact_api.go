@@ -198,7 +198,10 @@ func (handler *apiHandler) durableResultPage(ctx context.Context, id string, lim
 		rows = append(rows, row)
 	}
 	nextOffset := offset + uint64(len(rows))
-	page := searchjobs.ResultPage{Schema: lease.Schema(), Rows: rows, TotalRows: lease.RowCount(), Complete: nextOffset >= lease.RowCount()}
+	page := searchjobs.ResultPage{
+		Schema: lease.Schema(), Rows: rows, TotalRows: lease.RowCount(),
+		Complete: nextOffset >= lease.RowCount(), Generation: lease.Generation(),
+	}
 	if !page.Complete {
 		page.NextCursor, err = cursorcodec.Encode(handler.searchArtifactCursorKey[:], searchArtifactCursorDomain, searchArtifactCursorVersion, searchArtifactCursorBytes, searchArtifactCursor{JobID: id, Generation: lease.Generation(), Offset: nextOffset})
 		if err != nil {

@@ -516,6 +516,9 @@ type CompiledQuery struct {
 	SQL                     string
 	Args                    []any
 	OutputFields            []string
+	// NearbyEvent is compiler-authenticated output provenance for unchanged
+	// physical event context. It is absent for transformed or incomplete rows.
+	NearbyEvent *NearbyEventOutput
 	// OutputPresentations, when nonempty, is aligned exactly by ordinal with
 	// OutputFields. Zero entries carry no presentation metadata. The compiler
 	// attaches a display-only flat multivalue delimiter to stats list/values and
@@ -1089,6 +1092,7 @@ func finalizeOrdinaryQuery(
 			eventResultLimit:          eventResultLimitProof{ordinaryEventRows: state.eventRows},
 			Args:                      args,
 			OutputFields:              outputFields,
+			NearbyEvent:               nearbyEventOutput(state, outputFields),
 			OutputPresentations:       outputPresentations,
 			TimeBucket:                resultTimeBucketOutput(state, outputFields),
 			ContainerOutputs:          containerOutputs,
@@ -1272,6 +1276,7 @@ func finalizeChronologicallyValidatedQuery(
 		CompiledQuery{
 			Args:                      args,
 			OutputFields:              outputFields,
+			NearbyEvent:               nearbyEventOutput(state, outputFields),
 			OutputPresentations:       outputPresentations,
 			TimeBucket:                resultTimeBucketOutput(state, outputFields),
 			ContainerOutputs:          containerOutputs,
@@ -3462,6 +3467,7 @@ type fieldState struct {
 	flatMultivalueDelimiter    string
 	hasFlatMultivalueDelimiter bool
 	statsSparkline             bool
+	originalEventField         originalEventField
 }
 
 type compiledSortKey struct {
@@ -3596,7 +3602,10 @@ func canonicalState(field string) fieldState {
 	// Canonical columns exist in the event schema even when their value is
 	// nullable. This preserves explicit-null comparisons; field=* separately
 	// requires a non-null value.
-	state := fieldState{valueSQL: value, existsSQL: "1", kind: kind, caseSensitive: field == "index"}
+	state := fieldState{
+		valueSQL: value, existsSQL: "1", kind: kind, caseSensitive: field == "index",
+		originalEventField: originalEventFieldForName(field),
+	}
 	state.normalizedIDIndexEligible = field == "event_id" || field == "trace_id" || field == "span_id"
 	if field == "severity" {
 		state.numberType = "UInt8"
@@ -7610,6 +7619,7 @@ func compileProjection(operator *plan.Project, state compileState, relationAlias
 			timeBucketEndSQL:             compiled.timeBucketEndSQL,
 			alwaysNull:                   compiled.alwaysNull,
 			materializeForPredicate:      compiled.materializeForPredicate,
+			originalEventField:           compiled.originalEventField,
 		}
 		if _, hidden := hiddenNames[name]; !hidden {
 			next.publicOrder = append(next.publicOrder, name)

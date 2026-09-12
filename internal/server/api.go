@@ -730,6 +730,12 @@ func (handler *apiHandler) getSearchResults(request *http.Request, input *opensp
 		}
 		return nil, internalError()
 	}
+	if page.Generation != 0 {
+		converted.SnapshotRef, err = handler.resultSnapshotRef(id, page.Generation)
+		if err != nil {
+			return nil, internalError()
+		}
+	}
 	if err := request.Context().Err(); err != nil {
 		return nil, err
 	}

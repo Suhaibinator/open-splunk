@@ -1642,10 +1642,11 @@ func (manager *Manager) resultsEntry(id string, entry *jobEntry, limit int, curs
 		return ResultPage{}, ErrByteLimit
 	}
 	page := ResultPage{
-		Schema:    cloneSchema(*entry.resultSchema),
-		Rows:      cloneRows(entry.rows[start:end]),
-		TotalRows: total,
-		Complete:  end == len(entry.rows),
+		Schema:     cloneSchema(*entry.resultSchema),
+		Rows:       cloneRows(entry.rows[start:end]),
+		TotalRows:  total,
+		Complete:   end == len(entry.rows),
+		Generation: entry.resultGeneration,
 	}
 	if end < len(entry.rows) {
 
@@ -2111,6 +2112,10 @@ func (manager *Manager) executeCompiled(
 		cloned := *retained.Chart
 		chart = &cloned
 	}
+	var nearbyEvent *clickhouse.NearbyEventOutput
+	if output, available := retained.NearbyEventOutput(); available {
+		nearbyEvent = &output
+	}
 	sink := &resultSink{
 		manager:        manager,
 		entry:          entry,
@@ -2118,6 +2123,7 @@ func (manager *Manager) executeCompiled(
 		expectedFields: cloneStrings(retained.OutputFields),
 		timechart:      timechart,
 		chart:          chart,
+		nearbyEvent:    nearbyEvent,
 		atomicResult:   retained.RequiresAtomicResult(),
 		limits:         entry.limits,
 	}
@@ -2181,7 +2187,7 @@ func (manager *Manager) executeCompiled(
 		)
 		return
 	}
-	manager.finishCompleted(entry, manager.nowUTC(), resultsTruncated)
+	manager.finishCompleted(entry, manager.nowUTC(), resultsTruncated, sink.nearbyEventProvenance())
 }
 
 func (entry *jobEntry) hasPreparedExecution() bool {
@@ -2423,12 +2429,23 @@ func (manager *Manager) runFailureReporter(
 	}
 }
 
-func (manager *Manager) finishCompleted(entry *jobEntry, now time.Time, resultsTruncated bool) {
+func (manager *Manager) finishCompleted(
+	entry *jobEntry,
+	now time.Time,
+	resultsTruncated bool,
+	nearbyProvenance *NearbyEventProvenance,
+) {
 	entry.mu.Lock()
 	if entry.job.State == StateRunning {
 		if entry.ctx.Err() != nil {
 			manager.finishCanceledLocked(entry, now)
 		} else {
+			if nearbyProvenance != nil {
+				cloned := *nearbyProvenance
+				entry.job.NearbyEventProvenance = &cloned
+			} else {
+				entry.job.NearbyEventProvenance = nil
+			}
 			entry.job.State = StateCompleted
 			incrementJobVersion(&entry.job)
 			entry.job.FinishedAt = now
@@ -2706,6 +2723,8 @@ type resultSink struct {
 	expectedFields    []string
 	timechart         *clickhouse.TimechartOutput
 	chart             *clickhouse.ChartOutput
+	nearbyEvent       *clickhouse.NearbyEventOutput
+	nearbyProvenance  *NearbyEventProvenance
 	atomicResult      bool
 	atomicSchema      *Schema
 	atomicRows        []ResultRow
@@ -2742,6 +2761,10 @@ func (sink *resultSink) SetCompiledQuery(compiled clickhouse.CompiledQuery) erro
 	if compiled.Chart != nil {
 		cloned := *compiled.Chart
 		sink.chart = &cloned
+	}
+	sink.nearbyEvent = nil
+	if output, available := compiled.NearbyEventOutput(); available {
+		sink.nearbyEvent = &output
 	}
 	sink.atomicResult = sink.atomicResult || compiled.RequiresAtomicResult()
 	sink.resolvedCompiled = true
@@ -2813,6 +2836,14 @@ func (sink *resultSink) SetSchema(schema Schema) error {
 	}
 	if schemaErr != nil {
 		return sink.rememberLocked(schemaErr)
+	}
+	sink.nearbyProvenance = nil
+	if sink.nearbyEvent != nil {
+		provenance, valid := nearbyEventProvenance(*sink.nearbyEvent, schema)
+		if !valid {
+			return sink.rememberLocked(fmt.Errorf("%w: nearby-event provenance does not match schema", ErrInvalidResult))
+		}
+		sink.nearbyProvenance = provenance
 	}
 	if sink.atomicResult {
 		return sink.stageAtomicSchemaLocked(schema)
@@ -3163,6 +3194,16 @@ func (sink *resultSink) schemaReceived() bool {
 	sink.entry.mu.RLock()
 	defer sink.entry.mu.RUnlock()
 	return sink.receivedSchema
+}
+
+func (sink *resultSink) nearbyEventProvenance() *NearbyEventProvenance {
+	sink.entry.mu.RLock()
+	defer sink.entry.mu.RUnlock()
+	if sink.nearbyProvenance == nil {
+		return nil
+	}
+	cloned := *sink.nearbyProvenance
+	return &cloned
 }
 
 // errorWrapsOnly accepts ordinary single-error wrapping and rejects joined
