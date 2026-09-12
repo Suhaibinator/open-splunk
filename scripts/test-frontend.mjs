@@ -97,6 +97,7 @@ const testFiles = [
   path.join("app", "search-workspace", "editor-history-recall.test.ts"),
   path.join("app", "search-workspace", "event-page-controls.test.ts"),
   path.join("app", "search-workspace", "components", "export-presentation.test.tsx"),
+  path.join("app", "search-workspace", "components", "workspace-dialogs-export-limit.test.tsx"),
   path.join("app", "search-workspace", "panels", "events-table-columns.test.ts"),
   path.join("app", "search-workspace", "panels", "events-table.test.tsx"),
   path.join("app", "search-workspace", "components", "search-failure-panel.test.tsx"),

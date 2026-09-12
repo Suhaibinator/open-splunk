@@ -1742,7 +1742,9 @@ export function SearchWorkspace({
       maximumRows: backendEnabled
         ? bootstrap?.limits.maximumExportRows || null
         : displayedRowsForTab(exportSourceTab),
-      maximumBytes: backendEnabled ? bootstrap?.limits.maximumExportBytes || null : null,
+      byteLimit: backendEnabled
+        ? serverExportJob?.definition?.byteLimit ?? "server-default"
+        : null,
     } as const;
     if (exportStage === "configure") {
       const available = !backendEnabled || (featureSupported && jobReady && !appCatalogActionsBlocked);
@@ -6837,12 +6839,8 @@ export function SearchWorkspace({
         rowLimit: bootstrap.response.limits.maximumExportRows > 0n
           ? bootstrap.response.limits.maximumExportRows
           : undefined,
-        byteLimit: bootstrap.response.limits.maximumExportBytes > 0n
-          ? bootstrap.response.limits.maximumExportBytes
-          : undefined,
         csvHeaderMode: "field-names",
         jsonIntegerEncoding: "string",
-
       } as const;
       const clientRequestId = exportCreateAction.requestId({ ...exportIntent, sessionRevision: currentAdministratorSessionRevision() });
       const created = await createServerExport(apiClient, bootstrap.response, {

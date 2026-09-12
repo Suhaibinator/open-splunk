@@ -298,11 +298,16 @@ test("Patterns opens exact retained members and exports the captured relation wi
   await expect(page.getByTestId("search-input")).toHaveValue(oldQuery);
   expect(model.creates).toHaveLength(1);
   await page.getByRole("button", { name: "Export", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "Export events" }).locator(".export-limit"))
+    .toContainText("Byte limit: Server default");
   await page.getByRole("button", { name: "Create export", exact: true }).click();
   await expect(page.getByRole("button", { name: "Retry export", exact: true })).toBeEnabled();
   expect(model.exportRequests[0].definition?.source).toEqual({ $case: "patternMembers", value: {
     searchJobId: "review-job-1", snapshotRef: "snapshot-review-job-1", sensitivity: PatternSensitivity.PATTERN_SENSITIVITY_BALANCED, patternId: "exact-retained-group",
   } });
+  // The advertised maximum is a ceiling, not the default reservation for
+  // every artifact. Leave the optional byte limit to the server's default.
+  expect(model.exportRequests[0].definition?.byteLimit).toBeUndefined();
   await page.getByRole("button", { name: "Retry export", exact: true }).click();
   await expect.poll(() => model.exportRequests.length).toBe(2);
   expect(model.exportRequests[1]).toEqual(model.exportRequests[0]);

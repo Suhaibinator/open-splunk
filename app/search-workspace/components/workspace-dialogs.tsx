@@ -50,6 +50,12 @@ function formatExpiry(date: Date): string | null {
   }).format(date);
 }
 
+export function ExportByteLimitValue({ byteLimit }: { byteLimit: ExportDialogState["byteLimit"] }) {
+  if (byteLimit === "server-default") return "Server default";
+  if (byteLimit === null || byteLimit === undefined) return "Not advertised";
+  return formatDecimalBytes(byteLimit);
+}
+
 function formatHistoryResultCount(entry: DemoHistoryEntry): string {
   return entry.eventsExact === undefined
     ? NUMBER_FORMAT.format(entry.events)
@@ -700,9 +706,6 @@ export function WorkspaceDialogs({
     const maximumRows = exportState.maximumRows === null || exportState.maximumRows === undefined
       ? "Not advertised"
       : formatNonNegativeIntegerQuantity(exportState.maximumRows);
-    const maximumBytes = exportState.maximumBytes === null || exportState.maximumBytes === undefined
-      ? null
-      : formatDecimalBytes(exportState.maximumBytes);
     const exportFormatLabel = exportState.format === "csv" ? "CSV" : "JSON Lines";
     const readyStatusTone = getExportStatusTone({
       expired: artifactExpired,
@@ -792,7 +795,7 @@ export function WorkspaceDialogs({
                 <div><dt>Size</dt><dd>{formatDecimalBytes(artifact.sizeBytes)}</dd></div>
                 <div><dt>Expires</dt><dd>{expiry ?? "No expiry advertised"}</dd></div>
                 <div><dt>Maximum rows</dt><dd>{maximumRows}</dd></div>
-                <div><dt>Byte limit</dt><dd>{maximumBytes ?? "Not advertised"}</dd></div>
+                <div><dt>Byte limit</dt><dd><ExportByteLimitValue byteLimit={exportState.byteLimit} /></dd></div>
                 <div className="workspace-dialog-export-columns-row">
                   <dt>Columns</dt>
                   <dd><span>{exportFields.length} selected</span><code>{exportFields.map((field) => exportFieldLabels[field] ?? field).join(", ")}</code></dd>
@@ -819,7 +822,9 @@ export function WorkspaceDialogs({
                 <strong>{maximumRows}</strong>
                 <small>
                   {NUMBER_FORMAT.format(displayedExportRows)} displayed {exportState.sourceTab === "events" ? "events" : "rows"}
-                  {maximumBytes === null ? null : <> · {maximumBytes} byte limit</>}
+                  {exportState.byteLimit === null || exportState.byteLimit === undefined
+                    ? null
+                    : <> · Byte limit: <ExportByteLimitValue byteLimit={exportState.byteLimit} /></>}
                 </small>
               </div>
               <p className="workspace-dialog-clipboard-hint"><AppIcon name="copy" size="sm" /> Copy page uses the displayed rows and selected columns, formatted as {exportState.format === "jsonl" ? "JSON Lines" : "a tab-separated table"}.</p>

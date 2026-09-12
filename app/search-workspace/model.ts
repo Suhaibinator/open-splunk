@@ -79,6 +79,7 @@ export type TargetedDialogActionState =
   | { status: "error"; error: string; targetId?: string | null };
 
 export type ExportQuantity = number | bigint;
+export type ExportByteLimit = ExportQuantity | "server-default" | null;
 
 export interface ExportArtifactDetails {
   /** Opaque value passed back to the owner when this exact artifact is downloaded. */
@@ -95,7 +96,7 @@ interface ExportDialogStateBase {
   sourceTab: ResultTab;
   format: ExportFormatChoice;
   maximumRows?: ExportQuantity | null;
-  maximumBytes?: ExportQuantity | null;
+  byteLimit?: ExportByteLimit;
 }
 
 export type ExportDialogState =
