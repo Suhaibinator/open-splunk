@@ -56,27 +56,20 @@ checkpoints, and migration history are not retained here.
 
 ## Authorization and governance
 
-- Multi-user RBAC, role grants, cross-app permissions, and current-policy
-  disclosure checks throughout the browser and retained-product surfaces.
+- Multi-user RBAC, role grants, and cross-app permissions, with those policies
+  enforced throughout the browser and retained-product surfaces.
 - Authentication activity, export activity, terminal search outcomes, and
   external audit archival. Search admission attempts already have a durable
   bounded journal.
 - Secret rotation and workload identity integrations beyond local bearer-token
   administration.
-- Add client-generated ingestion-token IDs as the exact create fence. The
-  browser will persist a validated UUID in its recovery guard, supply that UUID
-  on create and retry, fetch an existing ID for exact definition comparison,
-  and revoke it when its one-time plaintext was lost. This replaces fuzzy
-  metadata/timing recovery without requiring `client_request_id` to replay a
-  one-time secret response; any future idempotency contract must define that
-  outcome separately.
 
 ## Scale and availability
 
 - Multi-node control-plane and ingestion coordination.
 - Horizontally scalable search admission/execution with immutable snapshot and
   cursor semantics.
-- Automated backup scheduling, retention, restore verification, and disaster-
-  recovery exercises.
-- Capacity planning, telemetry, and operators for catalogs, queues, journals,
-  ClickHouse, and collector fleets.
+- Automated backup scheduling, retention, and recurring disaster-recovery
+  exercises beyond the manual recovery topology and executable restore drill.
+- Published capacity planning and fleet management for catalogs, queues,
+  journals, ClickHouse, and collectors.
