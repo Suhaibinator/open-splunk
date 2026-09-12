@@ -354,11 +354,13 @@ func (service *Service) Members(ctx context.Context, access searchjobs.AccessSco
 			}
 			continue
 		}
-		normalized, err := service.normalizeOperation(operation, budget, raw, request.Sensitivity)
+		normalized, releaseNormalized, err := service.normalizeOperation(operation, budget, raw, request.Sensitivity)
 		if err != nil {
 			return MemberResult{}, err
 		}
-		if patternID(request.SearchJobID, request.Generation, request.Sensitivity, normalized.canonical) != request.PatternID {
+		matches := patternID(request.SearchJobID, request.Generation, request.Sensitivity, normalized.canonical) == request.PatternID
+		releaseNormalized()
+		if !matches {
 			if releaseRow != nil {
 				releaseRow()
 			}
@@ -499,7 +501,7 @@ func (service *Service) buildCatalog(
 			}
 			continue
 		}
-		normalized, err := service.normalizeOperation(ctx, budget, raw, sensitivity)
+		normalized, releaseNormalized, err := service.normalizeOperation(ctx, budget, raw, sensitivity)
 		if err != nil {
 			return nil, err
 		}
@@ -515,14 +517,15 @@ func (service *Service) buildCatalog(
 			}
 			group = &groupBuilder{pattern: Pattern{
 				ID:        patternID(jobID, lease.Generation(), sensitivity, normalized.canonical),
-				Signature: normalized.display,
+				Signature: strings.Clone(normalized.display),
 			}}
-			groups[normalized.canonical] = group
+			groups[strings.Clone(normalized.canonical)] = group
 		}
 		if err := addWorkingAnalysisBytes(budget, &workingBytes, ordinalWorkingBytes, service.maximumWorkingBytes); err != nil {
 			return nil, err
 		}
 		group.pattern.EventCount++
+		releaseNormalized()
 		if releaseRow != nil {
 			releaseRow()
 		}
@@ -725,7 +728,7 @@ func (service *Service) normalizeOperation(
 	budget *operationBudget,
 	raw string,
 	sensitivity Sensitivity,
-) (normalizedPattern, error) {
+) (normalizedPattern, func(), error) {
 	return normalizeWithBudget(
 		ctx, budget, raw, sensitivity, service.maximumSignatureBytes, service.maximumWorkingBytes,
 	)
@@ -738,26 +741,39 @@ func normalizeWithBudget(
 	sensitivity Sensitivity,
 	maximumSignatureBytes int,
 	maximumWorkingBytes uint64,
-) (normalizedPattern, error) {
+) (normalizedPattern, func(), error) {
 	const (
 		fixedBytes = uint64(64 << 10)
 		multiplier = uint64(12)
 	)
 	rawBytes := uint64(len(raw))
 	if rawBytes > (^uint64(0)-fixedBytes)/multiplier {
-		return normalizedPattern{}, ErrLimit
+		return normalizedPattern{}, nil, ErrLimit
 	}
 	working := rawBytes*multiplier + fixedBytes
 	if working > maximumWorkingBytes {
-		return normalizedPattern{}, ErrLimit
+		return normalizedPattern{}, nil, ErrLimit
 	}
 	if err := budget.addWorking(working); err != nil {
-		return normalizedPattern{}, err
+		return normalizedPattern{}, nil, err
 	}
-	defer budget.releaseWorkingBytes(working)
-	return normalizePatternContextWithWorking(
+	normalized, err := normalizePatternContextWithWorking(
 		ctx, raw, sensitivity, maximumSignatureBytes, int(maximumWorkingBytes),
 	)
+	if err != nil {
+		budget.releaseWorkingBytes(working)
+		return normalizedPattern{}, nil, err
+	}
+	outputBytes := uint64(len(normalized.display) + len(normalized.canonical) + 128)
+	if err := budget.addWorking(outputBytes); err != nil {
+		budget.releaseWorkingBytes(working)
+		return normalizedPattern{}, nil, err
+	}
+	budget.releaseWorkingBytes(working)
+	var once sync.Once
+	return normalized, func() {
+		once.Do(func() { budget.releaseWorkingBytes(outputBytes) })
+	}, nil
 }
 
 func (budget *operationBudget) add(bytes uint64) error {
