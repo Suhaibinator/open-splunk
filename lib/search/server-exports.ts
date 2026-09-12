@@ -320,6 +320,7 @@ export async function createServerExport(
     const response = await client.exports.create({
       definition: {
         searchJobId,
+        source: undefined,
         columns: [...new Set(options.columns?.map((column) => column.trim()).filter(Boolean) ?? [])],
         rowLimit: options.rowLimit,
         byteLimit: options.byteLimit,
