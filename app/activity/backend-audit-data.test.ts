@@ -127,6 +127,7 @@ const mutationActionContracts: ReadonlyArray<readonly [
   [AuditAction.AUDIT_ACTION_LOOKUP_ENABLE, AuditTargetKind.AUDIT_TARGET_KIND_LOOKUP, 2n],
   [AuditAction.AUDIT_ACTION_LOOKUP_DISABLE, AuditTargetKind.AUDIT_TARGET_KIND_LOOKUP, 2n],
   [AuditAction.AUDIT_ACTION_LOOKUP_DELETE, AuditTargetKind.AUDIT_TARGET_KIND_LOOKUP, 2n],
+  [AuditAction.AUDIT_ACTION_EXPORT_CREATE, AuditTargetKind.AUDIT_TARGET_KIND_EXPORT_JOB, 1n],
 ];
 
 function eventForContract(

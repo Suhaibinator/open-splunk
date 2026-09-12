@@ -8,6 +8,8 @@ import {
 } from "@/gen/ts/open_splunk/knowledge";
 import { Lookup, LookupState } from "@/gen/ts/open_splunk/lookup";
 import {
+  CreateLookupRequest,
+  CreateLookupResponse,
   DeleteLookupResponse,
   GetLookupResponse,
   ListLookupsRequest,
@@ -268,4 +270,28 @@ test("lookup manager validates every nested definition authority before UI use",
   const definition = managedLookup("lookup-a", "a").definition!;
   (definition as { automatic: unknown }).automatic = "true";
   assert.equal(isBoundedCanonicalLookupDefinition(definition, ["key", "value"]), false);
+});
+
+test("lookup create sends the retained logical key and accepts authorized current replay metadata", async () => {
+  const current = managedLookup("lookup-existing", "renamed");
+  current.version = 7n;
+  current.state = LookupState.LOOKUP_STATE_DISABLED;
+  current.disabledAt = current.updatedAt;
+  const keys: Array<string | undefined> = [];
+  const client = createLookupManagerClient({ fetch: async (_url, init) => {
+    keys.push(CreateLookupRequest.decode(init?.body as Uint8Array).clientRequestId);
+    return new Response(CreateLookupResponse.encode({ lookup: current, replayed: true }).finish(), {
+      headers: { "Content-Type": PROTOBUF_CONTENT_TYPE },
+    });
+  } });
+  const definition = managedLookup("new", "original").definition!;
+  const options = { clientRequestId: "logical-lookup-request" };
+  const csv = new TextEncoder().encode("key,value\na,b\n");
+  const first = await client.create(definition, csv, options);
+  const second = await client.create(definition, csv, options);
+  for (const replay of [first, second]) {
+    assert.equal(replay.version, 7n);
+    assert.equal(replay.state, LookupState.LOOKUP_STATE_DISABLED);
+  }
+  assert.deepEqual(keys, [options.clientRequestId, options.clientRequestId]);
 });

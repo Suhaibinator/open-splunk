@@ -136,6 +136,7 @@ func newRuntimeKnowledgeManagement(
 		Assets:    lookupAssets,
 		Catalog:   lookupCatalog,
 		CursorKey: lookupCursorKey,
+		ReceiptDB: database.GORMDB(),
 	})
 	if err != nil {
 		return runtimeKnowledgeManagement{}, fmt.Errorf(

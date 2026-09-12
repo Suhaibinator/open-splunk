@@ -10,6 +10,7 @@ import (
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/alerts"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"github.com/Suhaibinator/open-splunk/internal/scheduledreports"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
@@ -75,16 +76,44 @@ func (admission *runtimeTrustedSearchAdmission) admit(ctx context.Context, defin
 }
 
 func (admission *runtimeTrustedSearchAdmission) AdmitTrustedSearch(ctx context.Context, request server.TrustedSearchAdmissionRequest) (searchjobs.Job, error) {
+	job, _, err := admission.admitTrustedSearch(ctx, request, nil)
+	return job, err
+}
+
+func (admission *runtimeTrustedSearchAdmission) ReplayTrustedSearch(
+	ctx context.Context,
+	access searchjobs.AccessScope,
+	intent requestidempotency.Intent,
+) (searchjobs.Job, bool, error) {
+	if admission == nil || admission.jobs == nil {
+		return searchjobs.Job{}, false, requestidempotency.ErrUnavailable
+	}
+	return admission.jobs.ReplayIdempotent(ctx, access, intent)
+}
+
+func (admission *runtimeTrustedSearchAdmission) AdmitTrustedSearchIdempotent(
+	ctx context.Context,
+	request server.TrustedSearchAdmissionRequest,
+	intent requestidempotency.Intent,
+) (searchjobs.Job, bool, error) {
+	return admission.admitTrustedSearch(ctx, request, &intent)
+}
+
+func (admission *runtimeTrustedSearchAdmission) admitTrustedSearch(
+	ctx context.Context,
+	request server.TrustedSearchAdmissionRequest,
+	intent *requestidempotency.Intent,
+) (searchjobs.Job, bool, error) {
 	if admission == nil || admission.jobs == nil || admission.indexes == nil || admission.apps == nil {
-		return searchjobs.Job{}, server.ErrTrustedSearchAuthorityUnavailable
+		return searchjobs.Job{}, false, server.ErrTrustedSearchAuthorityUnavailable
 	}
 	appID := strings.TrimSpace(request.AppID)
 	if appID != request.AppID {
-		return searchjobs.Job{}, server.ErrTrustedSearchAppUnavailable
+		return searchjobs.Job{}, false, server.ErrTrustedSearchAppUnavailable
 	}
 	if appID != "" {
 		if err := authorizeRuntimeSearchApp(ctx, admission.apps, request.TenantID, appID); err != nil {
-			return searchjobs.Job{}, err
+			return searchjobs.Job{}, false, err
 		}
 	}
 	requested := make([]string, 0, len(request.IndexScope))
@@ -92,7 +121,7 @@ func (admission *runtimeTrustedSearchAdmission) AdmitTrustedSearch(ctx context.C
 	for _, raw := range request.IndexScope {
 		name, normalizeErr := control.NormalizeIndexName(raw)
 		if normalizeErr != nil {
-			return searchjobs.Job{}, server.ErrTrustedSearchIndexUnavailable
+			return searchjobs.Job{}, false, server.ErrTrustedSearchIndexUnavailable
 		}
 		if _, duplicate := seen[name]; !duplicate {
 			seen[name] = struct{}{}
@@ -100,29 +129,34 @@ func (admission *runtimeTrustedSearchAdmission) AdmitTrustedSearch(ctx context.C
 		}
 	}
 	if len(requested) == 0 {
-		return searchjobs.Job{}, server.ErrTrustedSearchIndexUnavailable
+		return searchjobs.Job{}, false, server.ErrTrustedSearchIndexUnavailable
 	}
 	indexes, err := admission.indexes.GetIndexesByNames(ctx, requested)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return searchjobs.Job{}, err
+			return searchjobs.Job{}, false, err
 		}
-		return searchjobs.Job{}, server.ErrTrustedSearchAuthorityUnavailable
+		return searchjobs.Job{}, false, server.ErrTrustedSearchAuthorityUnavailable
 	}
 	if len(indexes) != len(requested) {
-		return searchjobs.Job{}, server.ErrTrustedSearchAuthorityUnavailable
+		return searchjobs.Job{}, false, server.ErrTrustedSearchAuthorityUnavailable
 	}
 	for index, record := range indexes {
 		if record.Definition.Name != requested[index] || record.State != control.IndexStateActive || !record.Definition.SearchEnabled {
-			return searchjobs.Job{}, server.ErrTrustedSearchIndexUnavailable
+			return searchjobs.Job{}, false, server.ErrTrustedSearchIndexUnavailable
 		}
 	}
-	return admission.jobs.Create(ctx, searchjobs.CreateRequest{
+	create := searchjobs.CreateRequest{
 		SPL: request.SPL, OwnerID: request.OwnerID, TenantID: request.TenantID,
 		AuthorizedIndexes: slices.Clone(requested), RequestedIndexes: requested,
 		TimeRange: request.TimeRange, AppID: appID, Source: request.Source,
 		RetentionLifetime: request.RetentionLifetime,
-	})
+	}
+	if intent != nil {
+		return admission.jobs.CreateIdempotent(ctx, create, *intent)
+	}
+	job, err := admission.jobs.Create(ctx, create)
+	return job, false, err
 }
 
 func authorizeRuntimeSearchApp(ctx context.Context, apps *runtimeAppCatalog, tenantID, appID string) error {

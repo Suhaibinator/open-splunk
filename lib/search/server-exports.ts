@@ -1,3 +1,4 @@
+import { browserClientRequestId, type BrowserCreateRequestOptions } from "@/lib/api/client-request-id";
 import {
   CsvHeaderMode,
   ExportJobState,
@@ -242,7 +243,7 @@ function reconcileAuthoritativeExportSnapshot(
   };
 }
 
-export interface CreateServerExportOptions extends ProtobufRequestOptions {
+export interface CreateServerExportOptions extends BrowserCreateRequestOptions {
   source?: ExportDefinition["source"];
   searchJobId: string;
   format: ServerExportFormat;
@@ -290,6 +291,9 @@ export async function createServerExport(
   }
   const searchJobId = options.searchJobId.trim();
   if (searchJobId.length === 0) throw new TypeError("Search job ID is required.");
+  if (options.source !== undefined && options.source.value.searchJobId !== searchJobId) {
+    throw new TypeError("Pattern export source must belong to the selected search job.");
+  }
   assertPositiveLimit(options.rowLimit, "Export row limit");
   assertPositiveLimit(options.byteLimit, "Export byte limit");
   if (
@@ -328,8 +332,7 @@ export async function createServerExport(
         byteLimit: options.byteLimit,
         formatOptions,
       },
-      // The current handler explicitly rejects client-generated idempotency IDs.
-      clientRequestId: undefined,
+      clientRequestId: options.clientRequestId ?? browserClientRequestId(),
     }, options);
     if (response.exportJob === undefined) {
       throw new TypeError("The server returned an empty export job.");

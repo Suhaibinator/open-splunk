@@ -2,10 +2,12 @@ package control
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"gorm.io/gorm"
 )
 
@@ -91,6 +93,72 @@ func (catalog *AuditedAppCatalog) CreateApp(
 	definition AppDefinition,
 ) (AppWorkspace, error) {
 	return catalog.catalog.createApp(ctx, scope, definition, catalog.publish)
+}
+
+// CreateAppIdempotent creates and audits one app together with its durable
+// mutation receipt. Exact replays return current tenant-authorized metadata
+// and never append another audit event.
+func (catalog *AuditedAppCatalog) CreateAppIdempotent(
+	ctx context.Context,
+	scope AppAccessScope,
+	definition AppDefinition,
+	intent requestidempotency.Intent,
+) (AppWorkspace, bool, error) {
+	if intent.TenantID != scope.TenantID ||
+		intent.Route != requestidempotency.RouteCreateApp {
+		return AppWorkspace{}, false, requestidempotency.ErrInvalid
+	}
+	replay := func() (AppWorkspace, bool, error) {
+		receipt, found, err := requestidempotency.Read(ctx, catalog.catalog.orm, intent)
+		if err != nil || !found {
+			return AppWorkspace{}, found, err
+		}
+		if receipt.Target.Kind != requestidempotency.TargetApp {
+			return AppWorkspace{}, true, requestidempotency.ErrCorrupt
+		}
+		current, err := catalog.catalog.GetApp(
+			ctx,
+			scope,
+			AppSelector{AppID: receipt.Target.ID},
+		)
+		if errors.Is(err, ErrNotFound) {
+			return AppWorkspace{}, true, requestidempotency.ErrUnavailable
+		}
+		return current, true, err
+	}
+	if current, found, err := replay(); err != nil || found {
+		return current, found, err
+	}
+	publish := func(
+		ctx context.Context,
+		tx *gorm.DB,
+		tenantID string,
+		event AppMutationAuditEvent,
+	) error {
+		if err := catalog.publish(ctx, tx, tenantID, event); err != nil {
+			return err
+		}
+		_, err := requestidempotency.AppendInTransaction(
+			ctx,
+			tx,
+			intent,
+			requestidempotency.Target{
+				Kind: requestidempotency.TargetApp, ID: event.AppID,
+				Version: event.AppVersion,
+			},
+			nil,
+			event.OccurredAt,
+		)
+		return err
+	}
+	created, err := catalog.catalog.createApp(ctx, scope, definition, publish)
+	if err == nil {
+		return created, false, nil
+	}
+	if current, found, replayErr := replay(); replayErr != nil || found {
+		return current, found, replayErr
+	}
+	return AppWorkspace{}, false, err
 }
 
 // GetApp delegates one tenant-scoped read without publishing an audit event.

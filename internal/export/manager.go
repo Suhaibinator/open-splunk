@@ -26,6 +26,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/privatefs"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 )
 
@@ -105,7 +106,9 @@ var errArtifactStorage = errors.New("export artifact storage operation failed")
 // select safe defaults. A negative CleanupInterval disables the background
 // cleanup loop for deterministic tests; Cleanup remains available explicitly.
 type Config struct {
-	Source ResultSource
+	Source        ResultSource
+	Journal       Journal
+	PatternSource PatternResultSource
 
 	// ArtifactDir is an application-private base directory. New exclusively
 	// locks it, removes narrowly named sessions left by a crashed prior owner,
@@ -159,6 +162,9 @@ type Config struct {
 
 // Manager owns a bounded worker pool and temporary export artifacts.
 type Manager struct {
+	clockMu             sync.Mutex
+	clockHighWater      time.Time
+	idempotencyMu       sync.Mutex
 	mu                  sync.RWMutex
 	jobs                map[string]*jobEntry
 	jobsByScope         map[searchjobs.AccessScope]*exportListIndexNode
@@ -177,8 +183,10 @@ type Manager struct {
 	capacityCleanupSnapshotValid   bool
 	capacityCleanupRetryFloor      bool
 
-	source ResultSource
-	queue  chan *jobEntry
+	source        ResultSource
+	journal       Journal
+	patternSource PatternResultSource
+	queue         chan *jobEntry
 
 	maxWorkers int
 	maxQueued  int
@@ -397,7 +405,7 @@ func New(config Config) (*Manager, error) {
 		return nil, errors.New("create export manager: generate transient list cursor epoch")
 	}
 
-	artifactDirectory, err := prepareArtifactDirectory(config.ArtifactDir)
+	artifactDirectory, err := prepareArtifactDirectoryMode(config.ArtifactDir, config.Journal != nil)
 	if err != nil {
 		return nil, err
 	}
@@ -426,6 +434,8 @@ func New(config Config) (*Manager, error) {
 		jobsByScope:          make(map[searchjobs.AccessScope]*exportListIndexNode),
 		reservedIDs:          make(map[string]admissionReservation),
 		source:               config.Source,
+		journal:              config.Journal,
+		patternSource:        config.PatternSource,
 		queue:                make(chan *jobEntry, maxQueued),
 		maxWorkers:           maxWorkers,
 		maxQueued:            maxQueued,
@@ -463,6 +473,12 @@ func New(config Config) (*Manager, error) {
 		pathExists:           fileExists,
 		removePath:           removeFile,
 	}
+	if err := manager.restoreJournal(context.Background()); err != nil {
+		cancel()
+		_ = artifactRoot.Close()
+		_ = artifactDirectory.Close()
+		return nil, err
+	}
 	manager.cleanupGate <- struct{}{}
 	for range maxWorkers {
 		manager.workers.Add(1)
@@ -489,6 +505,7 @@ type preparedArtifactDirectory struct {
 	base       string
 	session    string
 	removeBase bool
+	persistent bool
 	lock       *artifactDirectoryLock
 	closeOnce  sync.Once
 	closeErr   error
@@ -499,6 +516,13 @@ type artifactDirectoryLock struct {
 }
 
 func prepareArtifactDirectory(configured string) (*preparedArtifactDirectory, error) {
+	return prepareArtifactDirectoryMode(configured, false)
+}
+
+func prepareArtifactDirectoryMode(configured string, persistent bool) (*preparedArtifactDirectory, error) {
+	if persistent && configured == "" {
+		return nil, errors.New("durable export journal requires a configured artifact directory")
+	}
 	base := ""
 	removeBase := false
 	if configured == "" {
@@ -543,7 +567,17 @@ func prepareArtifactDirectory(configured string) (*preparedArtifactDirectory, er
 		}
 		return nil, err
 	}
-	prepared := &preparedArtifactDirectory{base: base, removeBase: removeBase, lock: lock}
+	prepared := &preparedArtifactDirectory{base: base, removeBase: removeBase, lock: lock, persistent: persistent}
+	if persistent {
+		prepared.session = filepath.Join(base, "durable")
+		if err := os.MkdirAll(prepared.session, 0o700); err != nil {
+			return nil, errors.Join(err, prepared.Close())
+		}
+		if err := validateArtifactBasePath(prepared.session); err != nil {
+			return nil, errors.Join(err, prepared.Close())
+		}
+		return prepared, nil
+	}
 	if err := removeStaleArtifactSessions(base); err != nil {
 		return nil, errors.Join(fmt.Errorf("clean stale export artifact sessions: %w", err), prepared.Close())
 	}
@@ -705,7 +739,7 @@ func (prepared *preparedArtifactDirectory) Close() error {
 		return nil
 	}
 	prepared.closeOnce.Do(func() {
-		if prepared.session != "" {
+		if prepared.session != "" && !prepared.persistent {
 			prepared.closeErr = errors.Join(prepared.closeErr, os.RemoveAll(prepared.session))
 		}
 		prepared.closeErr = errors.Join(prepared.closeErr, prepared.lock.Close())
@@ -728,6 +762,10 @@ func randomID() string {
 // job becomes visible or queued. The request context only governs admission;
 // after successful admission, Cancel or Manager.Close controls the job.
 func (manager *Manager) Create(ctx context.Context, access searchjobs.AccessScope, request CreateRequest) (Job, error) {
+	return manager.create(ctx, access, request, nil)
+}
+
+func (manager *Manager) create(ctx context.Context, access searchjobs.AccessScope, request CreateRequest, intent *requestidempotency.Intent) (Job, error) {
 	if ctx == nil {
 		return Job{}, errors.New("create export job: context is nil")
 	}
@@ -742,6 +780,7 @@ func (manager *Manager) Create(ctx context.Context, access searchjobs.AccessScop
 		return Job{}, err
 	}
 	metadataReservation, err := requestedMetadataBytes(manager.artifactDir, access, normalized.SearchJobID, normalized.Columns)
+	metadataReservation += patternMetadataBytes(normalized.Pattern)
 	if err != nil {
 		return Job{}, err
 	}
@@ -786,7 +825,7 @@ func (manager *Manager) Create(ctx context.Context, access searchjobs.AccessScop
 		}
 		return cause
 	}
-	lease, acquireErr := manager.source.AcquireResultsFor(jobContext, access, normalized.SearchJobID)
+	lease, acquireErr := manager.acquireSource(jobContext, access, normalized)
 	if acquireErr != nil {
 		stopRequestCancellation()
 		jobCancel()
@@ -846,6 +885,7 @@ func (manager *Manager) Create(ctx context.Context, access searchjobs.AccessScop
 	if !ok {
 		return Job{}, abort(ErrCapacity)
 	}
+	resolvedMetadata += patternMetadataBytes(normalized.Pattern)
 	if err := manager.reconcileAdmissionMetadata(id, resolvedMetadata); err != nil {
 		return Job{}, abort(err)
 	}
@@ -871,7 +911,8 @@ func (manager *Manager) Create(ctx context.Context, access searchjobs.AccessScop
 		accountedBytes:    normalized.ByteLimit,
 		accountedMetadata: resolvedMetadata,
 		job: Job{
-			ID:                id,
+			SourceKind: normalized.SourceKind,
+			Pattern:    normalized.Pattern, ID: id,
 			Version:           1,
 			SearchJobID:       strings.Clone(normalized.SearchJobID),
 			Format:            normalized.Format,
@@ -900,6 +941,13 @@ func (manager *Manager) Create(ctx context.Context, access searchjobs.AccessScop
 		manager.mu.Unlock()
 		jobCancel()
 		return Job{}, fmt.Errorf("%w: admission generation space is exhausted", ErrCapacity)
+	}
+	if manager.journal != nil {
+		if err := manager.admitJournal(ctx, entry.access, cloneJob(entry.job), intent); err != nil {
+			manager.mu.Unlock()
+			jobCancel()
+			return Job{}, err
+		}
 	}
 	manager.nextGeneration++
 	entry.generation = manager.nextGeneration
@@ -1060,6 +1108,9 @@ func checkedAddUint64(left, right uint64) (uint64, bool) {
 }
 
 func (manager *Manager) normalizeRequest(request CreateRequest) (CreateRequest, error) {
+	if err := normalizePatternSource(&request); err != nil {
+		return CreateRequest{}, err
+	}
 	request.SearchJobID = strings.Clone(request.SearchJobID)
 	request.Columns = append([]string(nil), request.Columns...)
 	if !validExportMetadataIdentifier(request.SearchJobID, maximumSearchIDBytes) {
@@ -1275,6 +1326,10 @@ func (manager *Manager) Get(ctx context.Context, access searchjobs.AccessScope, 
 	entry := manager.jobs[id]
 	if entry == nil {
 		manager.mu.RUnlock()
+		if manager.journal != nil {
+			retained, err := manager.journal.Get(ctx, access, id)
+			return retained.Job, err
+		}
 		return Job{}, ErrNotFound
 	}
 	entry.mu.Lock()
@@ -1390,6 +1445,7 @@ func (manager *Manager) Cancel(ctx context.Context, access searchjobs.AccessScop
 	entry.job.FinishedAt = now
 	entry.job.ExpiresAt = now.Add(manager.artifactTTL)
 	entry.job.Progress.UpdatedAt = now
+	manager.persistEntryLocked(entry)
 	result := cloneJob(entry.job)
 	cancel := entry.cancel
 	entry.mu.Unlock()
@@ -1437,6 +1493,7 @@ func (manager *Manager) run(entry *jobEntry) {
 	entry.job.Version++
 	entry.job.StartedAt = now
 	entry.job.Progress.UpdatedAt = now
+	manager.persistEntryLocked(entry)
 	rowLimit := entry.job.RowLimit
 	byteLimit := entry.job.ByteLimit
 	format := entry.job.Format
@@ -1552,6 +1609,19 @@ func (manager *Manager) run(entry *jobEntry) {
 	entry.artifactPath = finalPath
 	entry.mu.Unlock()
 	cleanupTemp()
+	if manager.journal != nil {
+		directory, err := manager.artifactRoot.Open(".")
+		if err != nil {
+			fail(err)
+			return
+		}
+		syncErr := directory.Sync()
+		closeErr := directory.Close()
+		if err := errors.Join(syncErr, closeErr); err != nil {
+			fail(err)
+			return
+		}
+	}
 	manager.finishCompleted(entry, finalPath, artifactIdentity, rows, limited.written)
 }
 
@@ -1599,6 +1669,7 @@ func (manager *Manager) updateProgress(entry *jobEntry, rows, bytes uint64) {
 		entry.job.Progress.BytesWritten = bytes
 		entry.job.Progress.UpdatedAt = manager.nowUTC()
 		entry.job.Version++
+		manager.persistEntryLocked(entry)
 	}
 	entry.mu.Unlock()
 }
@@ -1633,6 +1704,7 @@ func (manager *Manager) finishCompleted(entry *jobEntry, path string, identity o
 	}
 	entry.job.Failure = nil
 	manager.reconcileEntryBytesLocked(entry, bytes)
+	manager.persistEntryLocked(entry)
 	entry.mu.Unlock()
 }
 
@@ -1650,6 +1722,7 @@ func (manager *Manager) finishCanceled(entry *jobEntry) {
 		entry.job.ExpiresAt = now.Add(manager.artifactTTL)
 		entry.job.Progress.UpdatedAt = now
 	}
+	manager.persistEntryLocked(entry)
 	entry.mu.Unlock()
 	manager.releaseEntryBytesIfUnbacked(entry)
 }
@@ -1673,6 +1746,7 @@ func (manager *Manager) finishFailure(entry *jobEntry, cause error) {
 	entry.job.ExpiresAt = now.Add(manager.artifactTTL)
 	entry.job.Progress.UpdatedAt = now
 	entry.job.Failure = &failure
+	manager.persistEntryLocked(entry)
 	entry.mu.Unlock()
 	manager.releaseEntryBytesIfUnbacked(entry)
 }
@@ -1784,7 +1858,7 @@ func removeFile(path string) error {
 }
 
 func (manager *Manager) nowUTC() time.Time {
-	return manager.now().UTC().Round(0)
+	return manager.observeTime(manager.now().UTC().Round(0))
 }
 
 func (manager *Manager) cleanupLoop() {
@@ -2080,6 +2154,7 @@ func (manager *Manager) expireLocked(entry *jobEntry, now time.Time) (artifactPa
 		entry.job.State = StateExpired
 		entry.job.Version++
 		entry.job.Progress.UpdatedAt = now
+		manager.persistEntryLocked(entry)
 		entry.expiredAt = now
 	}
 	if entry.job.State == StateExpired {
@@ -2210,6 +2285,9 @@ func (manager *Manager) Close() error {
 			entry.mu.Unlock()
 			if err := manager.removePath(tempPath); err != nil {
 				manager.closeErr = errors.Join(manager.closeErr, fmt.Errorf("remove export partial: %w", err))
+			}
+			if manager.journal != nil {
+				artifactPath = ""
 			}
 			if err := manager.removePath(artifactPath); err != nil {
 				manager.closeErr = errors.Join(manager.closeErr, fmt.Errorf("remove export artifact: %w", err))

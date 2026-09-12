@@ -16,12 +16,12 @@ func TestSanitizeCreateSavedSearchRequest(t *testing.T) {
 		request     *opensplunk.CreateSavedSearchRequest
 		wantMessage string
 	}{
-		"client request ID": {
+		"short client request ID": {
 			request: &opensplunk.CreateSavedSearchRequest{
 				ClientRequestId: new("client-1"),
 				Definition:      &opensplunk.SavedSearchDefinition{Name: "Errors"},
 			},
-			wantMessage: "client request idempotency is not supported",
+			wantMessage: "request idempotency input is invalid: client request ID must contain between 16 and 128 bytes",
 		},
 		"missing definition": {
 			request:     &opensplunk.CreateSavedSearchRequest{},
@@ -42,6 +42,23 @@ func TestSanitizeCreateSavedSearchRequest(t *testing.T) {
 	got, err := sanitizeCreateSavedSearchRequest(t.Context(), request)
 	if err != nil || got != request {
 		t.Fatalf("sanitize = %v, %v", got, err)
+	}
+}
+
+func TestSanitizeCreateSavedSearchRequestAcceptsSupportedClientRequestID(t *testing.T) {
+	t.Parallel()
+
+	requestID := "saved create 0001"
+	request := &opensplunk.CreateSavedSearchRequest{
+		ClientRequestId: &requestID,
+		Definition:      &opensplunk.SavedSearchDefinition{Name: "Errors"},
+	}
+	got, err := sanitizeCreateSavedSearchRequest(t.Context(), request)
+	if err != nil {
+		t.Fatalf("sanitize request with supported client request ID: %v", err)
+	}
+	if got != request || got.GetClientRequestId() != requestID {
+		t.Fatalf("sanitize request = %#v, want original request", got)
 	}
 }
 
@@ -357,13 +374,13 @@ func TestSanitizeDuplicateSavedSearchRequest(t *testing.T) {
 		request     *opensplunk.DuplicateSavedSearchRequest
 		wantMessage string
 	}{
-		"client request ID": {
+		"short client request ID": {
 			request: &opensplunk.DuplicateSavedSearchRequest{
 				ClientRequestId: new("client-1"),
 				SavedSearchId:   "saved-1",
 				NewName:         "Copy",
 			},
-			wantMessage: "client request idempotency is not supported",
+			wantMessage: "request idempotency input is invalid: client request ID must contain between 16 and 128 bytes",
 		},
 		"missing ID": {
 			request:     &opensplunk.DuplicateSavedSearchRequest{NewName: "Copy"},

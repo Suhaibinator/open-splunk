@@ -27,6 +27,7 @@ import (
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgepreview"
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
 	"github.com/Suhaibinator/open-splunk/internal/scheduledreports"
 	"github.com/Suhaibinator/open-splunk/internal/searchanalysis"
@@ -104,6 +105,11 @@ type SearchJobs interface {
 	CancelFor(searchjobs.AccessScope, string) error
 }
 
+type idempotentSearchJobs interface {
+	ReplayIdempotent(context.Context, searchjobs.AccessScope, requestidempotency.Intent) (searchjobs.Job, bool, error)
+	CreateIdempotent(context.Context, searchjobs.CreateRequest, requestidempotency.Intent) (searchjobs.Job, bool, error)
+}
+
 var (
 	ErrTrustedSearchAppUnavailable       = errors.New("trusted search app is unavailable")
 	ErrTrustedSearchIndexUnavailable     = errors.New("trusted search index is unavailable")
@@ -127,6 +133,11 @@ type TrustedSearchAdmissionRequest struct {
 // production so none of them can drift around current app/index authority.
 type TrustedSearchAdmission interface {
 	AdmitTrustedSearch(context.Context, TrustedSearchAdmissionRequest) (searchjobs.Job, error)
+}
+
+type idempotentTrustedSearchAdmission interface {
+	ReplayTrustedSearch(context.Context, searchjobs.AccessScope, requestidempotency.Intent) (searchjobs.Job, bool, error)
+	AdmitTrustedSearchIdempotent(context.Context, TrustedSearchAdmissionRequest, requestidempotency.Intent) (searchjobs.Job, bool, error)
 }
 
 // SearchArtifacts is the durable retained-result surface. It is deliberately

@@ -1,7 +1,9 @@
 "use client";
 
 import type { FormEvent } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { BrowserCreateAction } from "@/lib/api/client-request-id";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 
 import {
@@ -491,12 +493,17 @@ export function LookupManagerPanel({
     }
   }
 
+  const createAction = useRef(new BrowserCreateAction());
+
   async function createLookup(
     definition: LookupDefinition,
     csvData: Uint8Array | undefined,
   ): Promise<void> {
     if (csvData === undefined) throw new TypeError("Choose a CSV file before creating a lookup.");
-    const created = await client.create(definition, csvData);
+    const created = await client.create(definition, csvData, {
+      clientRequestId: createAction.current.requestId({ definition, csvData }),
+    });
+    createAction.current.complete();
     setModal(null);
     setNotice({ kind: "success", message: `Lookup “${created.definition?.name ?? definition.name}” was created.` });
     reload();
@@ -574,6 +581,7 @@ export function LookupManagerPanel({
           onClick={() => {
             setTarget(null);
             setNotice(null);
+            createAction.current.complete();
             setModal("create");
           }}
         ><AppIcon name="plus" size="sm" /> Create lookup</button>

@@ -103,6 +103,7 @@ const testFiles = [
   path.join("lib", "byte-quantity.test.ts"),
   path.join("lib", "theme-preference.test.ts"),
   path.join("lib", "view-navigation.test.ts"),
+  path.join("lib", "api", "client-request-id.test.ts"),
   path.join("lib", "api", "pagination.test.ts"),
   path.join("lib", "api", "cursor-pages.test.ts"),
   path.join("lib", "api", "open-splunk-client-routes.test.ts"),

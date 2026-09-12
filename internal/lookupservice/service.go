@@ -19,6 +19,7 @@ import (
 
 	"fortio.org/safecast"
 	"google.golang.org/protobuf/proto"
+	"gorm.io/gorm"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/cursorcodec"
@@ -26,6 +27,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/lookupcatalog"
 	"github.com/Suhaibinator/open-splunk/internal/lookupdefinition"
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 )
 
 const (
@@ -74,6 +76,7 @@ type Config struct {
 	Assets    AssetRepository
 	Catalog   CatalogRepository
 	CursorKey []byte
+	ReceiptDB *gorm.DB
 }
 
 // Service owns all seven lookup-management operations as one all-or-none
@@ -82,6 +85,7 @@ type Service struct {
 	assets    AssetRepository
 	catalog   CatalogRepository
 	cursorKey [sha256.Size]byte
+	receiptDB *gorm.DB
 	ready     bool
 }
 
@@ -99,7 +103,9 @@ func New(config Config) (*Service, error) {
 	if len(key) != sha256.Size {
 		return nil, fmt.Errorf("%w: cursor key must contain exactly %d bytes", ErrInvalid, sha256.Size)
 	}
-	service := &Service{assets: config.Assets, catalog: config.Catalog}
+	service := &Service{
+		assets: config.Assets, catalog: config.Catalog, receiptDB: config.ReceiptDB,
+	}
 	copy(service.cursorKey[:], key)
 	service.ready = true
 	return service, nil
@@ -113,8 +119,11 @@ func (service *Service) Create(ctx context.Context, scope Scope, input *opensplu
 	if err := service.validate(ctx, scope); err != nil {
 		return nil, err
 	}
-	if input == nil || input.ClientRequestId != nil || len(input.GetCsvData()) == 0 {
-		return nil, fmt.Errorf("%w: definition and nonempty csv_data are required; idempotency keys are not supported", ErrInvalid)
+	if input == nil || len(input.GetCsvData()) == 0 {
+		return nil, fmt.Errorf("%w: definition and nonempty csv_data are required", ErrInvalid)
+	}
+	if input.ClientRequestId != nil {
+		return nil, fmt.Errorf("%w: client request ID requires idempotent create", ErrInvalid)
 	}
 	asset, definition, err := prepareAssetDefinition(ctx, input.GetCsvData(), input.GetDefinition())
 	if err != nil {
@@ -125,6 +134,72 @@ func (service *Service) Create(ctx context.Context, scope Scope, input *opensplu
 		return nil, classify(err)
 	}
 	return &opensplunk.CreateLookupResponse{Lookup: cloneLookup(lookup)}, nil
+}
+
+// CreateIdempotent checks an existing receipt before create-only validation or
+// CSV parsing, then co-commits physical publication, logical definition,
+// successful audit and receipt in one SQLite transaction.
+func (service *Service) CreateIdempotent(
+	ctx context.Context,
+	scope Scope,
+	input *opensplunk.CreateLookupRequest,
+	intent requestidempotency.Intent,
+) (*opensplunk.CreateLookupResponse, error) {
+	if err := service.validate(ctx, scope); err != nil {
+		return nil, err
+	}
+	if service.receiptDB == nil || intent.TenantID != scope.TenantID ||
+		intent.Route != requestidempotency.RouteCreateLookup {
+		return nil, fmt.Errorf("%w: lookup idempotency authority is unavailable", ErrUnavailable)
+	}
+	replay := func() (*opensplunk.CreateLookupResponse, bool, error) {
+		receipt, found, err := requestidempotency.Read(ctx, service.receiptDB, intent)
+		if err != nil || !found {
+			return nil, found, err
+		}
+		if receipt.Target.Kind != requestidempotency.TargetLookup {
+			return nil, true, requestidempotency.ErrCorrupt
+		}
+		lookup, err := service.catalog.Get(ctx, lookupcatalog.GetRequest{
+			TenantID: scope.TenantID, OwnerID: scope.OwnerID,
+			LookupID: receipt.Target.ID,
+		})
+		if errors.Is(err, lookupcatalog.ErrNotFound) {
+			return nil, true, requestidempotency.ErrUnavailable
+		}
+		if err != nil {
+			return nil, true, classify(err)
+		}
+		return &opensplunk.CreateLookupResponse{
+			Lookup: cloneLookup(lookup), Replayed: true,
+		}, true, nil
+	}
+	if response, found, err := replay(); err != nil || found {
+		return response, err
+	}
+	if input == nil || input.ClientRequestId == nil ||
+		requestidempotency.ValidateClientRequestID(input.GetClientRequestId()) != nil ||
+		len(input.GetCsvData()) == 0 {
+		return nil, fmt.Errorf("%w: definition, request ID, and nonempty csv_data are required", ErrInvalid)
+	}
+	asset, definition, err := prepareAssetDefinition(
+		ctx, input.GetCsvData(), input.GetDefinition(),
+	)
+	if err != nil {
+		return nil, classify(err)
+	}
+	lookup, err := service.createPublishedIdempotent(
+		ctx, scope, asset, definition, intent,
+	)
+	if err == nil {
+		return &opensplunk.CreateLookupResponse{
+			Lookup: cloneLookup(lookup), Replayed: false,
+		}, nil
+	}
+	if response, found, replayErr := replay(); replayErr != nil || found {
+		return response, replayErr
+	}
+	return nil, classify(err)
 }
 
 func (service *Service) Get(ctx context.Context, scope Scope, input *opensplunk.GetLookupRequest) (*opensplunk.GetLookupResponse, error) {
@@ -401,6 +476,63 @@ func (service *Service) createPublished(
 				},
 			)
 			return createErr
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	if lookup == nil {
+		return nil, ErrUnavailable
+	}
+	return lookup, nil
+}
+
+func (service *Service) createPublishedIdempotent(
+	ctx context.Context,
+	scope Scope,
+	asset *lookupasset.Asset,
+	definition *opensplunk.LookupDefinition,
+	intent requestidempotency.Intent,
+) (*opensplunk.Lookup, error) {
+	var lookup *opensplunk.Lookup
+	err := service.publishStaged(
+		ctx,
+		scope,
+		asset,
+		lookupasset.PublishRequest{},
+		func(
+			finalizeContext context.Context,
+			transaction lookupasset.PublicationTransaction,
+			published lookupasset.Version,
+		) error {
+			var createErr error
+			lookup, createErr = service.catalog.CreatePublished(
+				finalizeContext,
+				transaction,
+				lookupcatalog.CreateRequest{
+					TenantID: scope.TenantID, OwnerID: scope.OwnerID,
+					Definition: definition, Asset: published,
+				},
+			)
+			if createErr != nil {
+				return createErr
+			}
+			createdAt := lookup.GetCreatedAt()
+			if createdAt == nil || createdAt.CheckValid() != nil {
+				return ErrUnavailable
+			}
+			_, receiptErr := requestidempotency.AppendInSQLTransaction(
+				finalizeContext,
+				transaction,
+				intent,
+				requestidempotency.Target{
+					Kind: requestidempotency.TargetLookup,
+					ID:   lookup.GetLookupId(), Version: lookup.GetVersion(),
+				},
+				nil,
+				createdAt.AsTime(),
+			)
+			return receiptErr
 		},
 	)
 	if err != nil {
@@ -727,6 +859,13 @@ func previewViolation(path string, err error) *opensplunk.FieldViolation {
 func classify(err error) error {
 	if err == nil {
 		return nil
+	}
+	if errors.Is(err, requestidempotency.ErrInvalid) ||
+		errors.Is(err, requestidempotency.ErrConflict) ||
+		errors.Is(err, requestidempotency.ErrCapacity) ||
+		errors.Is(err, requestidempotency.ErrUnavailable) ||
+		errors.Is(err, requestidempotency.ErrCorrupt) {
+		return err
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
