@@ -13,6 +13,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/lookupasset"
 	"github.com/Suhaibinator/open-splunk/internal/lookupcatalog"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -122,6 +123,47 @@ func TestServiceLifecycleBindsImmutableAssetsAndDetaches(t *testing.T) {
 		LookupId: lookupID, ExpectedVersion: 5, Definition: metadata,
 	}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("deleted replacement = %v", err)
+	}
+}
+
+func TestCreateIdempotentReplaysAndRejectsChangedIntent(t *testing.T) {
+	service := newTestService(t)
+	scope := Scope{TenantID: testTenant, OwnerID: testOwner}
+	requestID := "lookup request 01"
+	input := &opensplunk.CreateLookupRequest{
+		ClientRequestId: &requestID,
+		Definition:      testDefinition("idempotent-services"),
+		CsvData:         []byte("service_id,owner\napi,alice\n"),
+	}
+	canonical := proto.Clone(input).(*opensplunk.CreateLookupRequest)
+	canonical.ClientRequestId = nil
+	intent, err := requestidempotency.NewIntent(
+		testTenant, "browser", testOwner, requestidempotency.RouteCreateLookup,
+		requestID, canonical,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := service.CreateIdempotent(t.Context(), scope, input, intent)
+	if err != nil || created.GetReplayed() {
+		t.Fatalf("first create = (%+v, %v)", created, err)
+	}
+	replayed, err := service.CreateIdempotent(t.Context(), scope, input, intent)
+	if err != nil || !replayed.GetReplayed() ||
+		replayed.GetLookup().GetLookupId() != created.GetLookup().GetLookupId() {
+		t.Fatalf("replay = (%+v, %v)", replayed, err)
+	}
+	changed := proto.Clone(canonical).(*opensplunk.CreateLookupRequest)
+	changed.Definition.Name = "changed-intent"
+	conflict, err := requestidempotency.NewIntent(
+		testTenant, "browser", testOwner, requestidempotency.RouteCreateLookup,
+		requestID, changed,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateIdempotent(t.Context(), scope, input, conflict); !errors.Is(err, requestidempotency.ErrConflict) {
+		t.Fatalf("changed replay error = %v", err)
 	}
 }
 
@@ -427,7 +469,10 @@ func newTestServiceWithDatabase(t *testing.T) (*Service, *control.DB) {
 	if err != nil {
 		t.Fatalf("lookupcatalog.New(): %v", err)
 	}
-	service, err := New(Config{Assets: assets, Catalog: catalog, CursorKey: make([]byte, 32)})
+	service, err := New(Config{
+		Assets: assets, Catalog: catalog, CursorKey: make([]byte, 32),
+		ReceiptDB: database.GORMDB(),
+	})
 	if err != nil {
 		t.Fatalf("New(): %v", err)
 	}

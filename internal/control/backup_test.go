@@ -370,7 +370,7 @@ func TestVerifyCurrentMigrationsRequiresExactLedgerAndStableIdentity(t *testing.
 	tooNew := open("too-new")
 	if _, err := tooNew.SQLDB().ExecContext(ctx, `
 		INSERT INTO schema_migrations (version, name, checksum, applied_at_unix_micro)
-			VALUES (14, '0014_future.sql', zeroblob(32), 1)`); err != nil {
+			VALUES (15, '0015_future.sql', zeroblob(32), 1)`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := tooNew.VerifyCurrentMigrations(ctx, migrations.SQLite()); !errors.Is(err, ErrDatabaseTooNew) {

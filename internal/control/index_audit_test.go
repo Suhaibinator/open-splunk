@@ -11,10 +11,48 @@ import (
 	"testing"
 	"time"
 
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"gorm.io/gorm"
 )
 
 var errTestIndexAuditAppend = errors.New("test index audit append failure")
+
+func TestAuditedIndexAdministrationIdempotentCreateReplaysCurrentMetadata(t *testing.T) {
+	db := openTestDB(t)
+	appender := &recordingIndexMutationAuditAppender{}
+	administration := newTestAuditedIndexAdministration(t, db, appender)
+	definition := enabledIndex("idempotent-index")
+	requestID := "index request 001"
+	intent, err := requestidempotency.NewIntent(
+		"tenant-a", "browser", "owner-a", requestidempotency.RouteCreateIndex,
+		requestID,
+		&opensplunk.CreateIndexRequest{Definition: &opensplunk.IndexDefinition{Name: "idempotent-index"}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, replayed, err := administration.CreateIndexIdempotent(t.Context(), definition, intent)
+	if err != nil || replayed {
+		t.Fatalf("first create = (%+v, %t, %v)", created, replayed, err)
+	}
+	replacement := created.Definition
+	replacement.DisplayName = "Current index metadata"
+	updated, err := administration.UpdateIndex(
+		t.Context(), created.ID, created.Version, replacement,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, replayed, err := administration.CreateIndexIdempotent(t.Context(), definition, intent)
+	if err != nil || !replayed || current.Version != updated.Version ||
+		current.Definition.DisplayName != updated.Definition.DisplayName {
+		t.Fatalf("replay = (%+v, %t, %v), want current %+v", current, replayed, err, updated)
+	}
+	if calls := appender.snapshot(); len(calls) != 2 {
+		t.Fatalf("audit calls after replay = %d, want create and update only", len(calls))
+	}
+}
 
 type recordedIndexMutationAudit struct {
 	tenantID string

@@ -16,9 +16,51 @@ import (
 	"testing"
 	"time"
 
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"gorm.io/gorm"
 )
+
+func TestCollectorTokenIdempotentCreateNeverReplaysPlaintext(t *testing.T) {
+	db := openControlDB(t)
+	if _, err := db.CreateIndex(t.Context(), activeIndex("idempotent-token")); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(db, []byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestID := "token request 001"
+	canonical := &opensplunk.CreateIngestionTokenRequest{
+		Definition: &opensplunk.IngestionTokenDefinition{Name: "idempotent collector"},
+	}
+	intent, err := requestidempotency.NewIntent(
+		"default", "system", "open-splunk-server",
+		requestidempotency.RouteCreateIngestionToken, requestID, canonical,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := CreateCollectorTokenRequest{
+		Name: "idempotent collector", AllowedIndexNames: []string{"idempotent-token"},
+		BoundCollectorID: testCollectorID,
+	}
+	issued, replayed, err := store.CreateCollectorTokenIdempotent(t.Context(), request, intent)
+	if err != nil || replayed || issued.Secret.Plaintext() == "" {
+		t.Fatalf("first create = (%+v, %t, %v)", issued.Token, replayed, err)
+	}
+	current, replayed, err := store.CreateCollectorTokenIdempotent(t.Context(), request, intent)
+	if err != nil || !replayed || current.Token.ID != issued.Token.ID || current.Secret.Plaintext() != "" {
+		t.Fatalf("replay = (%+v, secret %q, %t, %v)", current.Token, current.Secret.Plaintext(), replayed, err)
+	}
+	var auditCount int64
+	if err := db.GORMDB().Table("audit_events").
+		Where("action = ? AND target_id = ?", "ingestion_token.create", issued.Token.ID).
+		Count(&auditCount).Error; err != nil || auditCount != 1 {
+		t.Fatalf("create audit count = %d, error %v", auditCount, err)
+	}
+}
 
 func TestCollectorTokenLifecycleStoresOnlyKeyedDigest(t *testing.T) {
 	t.Parallel()

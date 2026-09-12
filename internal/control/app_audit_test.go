@@ -13,10 +13,56 @@ import (
 	"testing"
 	"time"
 
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"gorm.io/gorm"
 )
 
 var errTestAppAuditAppend = errors.New("test app audit append failure")
+
+func TestAuditedAppCatalogIdempotentCreateReplaysCurrentMetadata(t *testing.T) {
+	db := openTestDB(t)
+	base := time.Date(2026, time.September, 12, 12, 0, 0, 0, time.UTC)
+	var clockCalls atomic.Int64
+	catalog := newAppAuditTestCatalog(
+		t, db,
+		func() time.Time { return base.Add(time.Duration(clockCalls.Add(1)) * time.Microsecond) },
+		func() (string, error) { return appAuditTestID(90), nil },
+	)
+	appender := &recordingAppMutationAuditAppender{}
+	audited := newTestAuditedAppCatalog(t, catalog, appender)
+	scope := AppAccessScope{TenantID: "tenant-a"}
+	definition := appDefinitionWithIndexes("idempotent-app")
+	requestID := "app request 0001"
+	intent, err := requestidempotency.NewIntent(
+		"tenant-a", "browser", "owner-a", requestidempotency.RouteCreateApp,
+		requestID,
+		&opensplunk.CreateAppRequest{Definition: &opensplunk.AppDefinition{Slug: "idempotent-app"}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, replayed, err := audited.CreateAppIdempotent(t.Context(), scope, definition, intent)
+	if err != nil || replayed {
+		t.Fatalf("first create = (%+v, %t, %v)", created, replayed, err)
+	}
+	updatedDefinition := created.Definition
+	updatedDefinition.DisplayName = "Current idempotent app"
+	updated, err := audited.UpdateApp(
+		t.Context(), scope, AppSelector{AppID: created.ID}, created.Version, updatedDefinition,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, replayed, err := audited.CreateAppIdempotent(t.Context(), scope, definition, intent)
+	if err != nil || !replayed || current.Version != updated.Version ||
+		current.Definition.DisplayName != updated.Definition.DisplayName {
+		t.Fatalf("replay = (%+v, %t, %v), want current %+v", current, replayed, err, updated)
+	}
+	if calls := appender.snapshot(); len(calls) != 2 {
+		t.Fatalf("audit calls after replay = %d, want create and update only", len(calls))
+	}
+}
 
 type recordedAppMutationAudit struct {
 	tenantID       string

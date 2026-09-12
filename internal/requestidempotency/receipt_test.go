@@ -119,6 +119,13 @@ func TestReceiptCoCommitReplayConflictAndClockRollback(t *testing.T) {
 	if err != nil || !found || replayed.Target != target {
 		t.Fatalf("Read(exact) = (%#v, %t, %v)", replayed, found, err)
 	}
+	otherActor := intent
+	otherActor.ActorID = "other-owner"
+	if _, found, err := requestidempotency.Read(
+		t.Context(), database.GORMDB(), otherActor,
+	); err != nil || found {
+		t.Fatalf("Read(other actor) = found %t error %v", found, err)
+	}
 
 	changed := proto.Clone(canonical).(*opensplunk.CreateSavedSearchRequest)
 	changed.Definition.Name = "Warnings"
