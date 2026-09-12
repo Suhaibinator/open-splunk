@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"fortio.org/safecast"
 	"google.golang.org/protobuf/proto"
 	"gorm.io/gorm"
 )
@@ -159,7 +160,7 @@ func NewIntent(
 	var number [4]byte
 	binary.BigEndian.PutUint32(number[:], CanonicalVersion)
 	_, _ = hash.Write(number[:])
-	binary.BigEndian.PutUint32(number[:], uint32(len(route)))
+	binary.BigEndian.PutUint32(number[:], safecast.MustConv[uint32](len(route)))
 	_, _ = hash.Write(number[:])
 	_, _ = hash.Write([]byte(route))
 	_, _ = hash.Write(encoded)
@@ -642,7 +643,7 @@ func recordFromReceiptInput(
 		if *auditSequence == 0 || *auditSequence > MaximumReceipts {
 			return receiptRecord{}, ErrInvalid
 		}
-		value := int64(*auditSequence)
+		value := safecast.MustConv[int64](*auditSequence)
 		storedAudit = &value
 	}
 	encodedBytes := receiptFixedBytes + uint64(len(intent.TenantID)) +
@@ -664,9 +665,9 @@ func recordFromReceiptInput(
 		CanonicalVersion: int64(intent.CanonicalVersion),
 		RequestSHA256:    append([]byte(nil), intent.RequestSHA256[:]...),
 		TargetKind:       target.Kind, TargetID: target.ID,
-		TargetVersion: int64(target.Version), AuditSequence: storedAudit,
+		TargetVersion: safecast.MustConv[int64](target.Version), AuditSequence: storedAudit,
 		CreatedAtUnixMicro: createdAt, RetainUntilUnixMicro: retainUntil,
-		TargetTerminalUnixMicro: terminalAt, EncodedBytes: int64(encodedBytes),
+		TargetTerminalUnixMicro: terminalAt, EncodedBytes: safecast.MustConv[int64](encodedBytes),
 	}, nil
 }
 

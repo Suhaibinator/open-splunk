@@ -35,7 +35,9 @@ func TestMutationIntentUsesStableActorAcrossCredentialRotation(t *testing.T) {
 	}
 	intents := make([]requestidempotency.Intent, 0, len(credentials))
 	for _, credential := range credentials {
-		request := httptest.NewRequest(http.MethodPost, "/api/apps/create", nil)
+		request := httptest.NewRequestWithContext(
+			context.Background(), http.MethodPost, "/api/apps/create", nil,
+		)
 		request.Header.Set("Authorization", "Bearer "+credential)
 		response := httptest.NewRecorder()
 		authenticated, _, ok := handler.authenticateBrowser(response, request)

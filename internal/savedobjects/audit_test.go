@@ -74,16 +74,16 @@ func TestAuditedSavedSearchIdempotentCreateReplaysCurrentMetadata(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	copy, replayed, err := store.DuplicateIdempotent(
+	duplicated, replayed, err := store.DuplicateIdempotent(
 		t.Context(), scope, created.GetSavedSearchId(), "idempotent copy", nil, duplicateIntent,
 	)
 	if err != nil || replayed {
-		t.Fatalf("first duplicate = (%+v, %t, %v)", copy, replayed, err)
+		t.Fatalf("first duplicate = (%+v, %t, %v)", duplicated, replayed, err)
 	}
 	replayedCopy, replayed, err := store.DuplicateIdempotent(
 		t.Context(), scope, created.GetSavedSearchId(), "idempotent copy", nil, duplicateIntent,
 	)
-	if err != nil || !replayed || replayedCopy.GetSavedSearchId() != copy.GetSavedSearchId() {
+	if err != nil || !replayed || replayedCopy.GetSavedSearchId() != duplicated.GetSavedSearchId() {
 		t.Fatalf("duplicate replay = (%+v, %t, %v)", replayedCopy, replayed, err)
 	}
 	if calls := appender.snapshot(); len(calls) != 3 {
@@ -97,7 +97,7 @@ func TestAuditedSavedSearchIdempotentCreateReplaysCurrentMetadata(t *testing.T) 
 	replayedCopy, replayed, err = store.DuplicateIdempotent(
 		t.Context(), scope, created.GetSavedSearchId(), "idempotent copy", nil, duplicateIntent,
 	)
-	if err != nil || !replayed || replayedCopy.GetSavedSearchId() != copy.GetSavedSearchId() {
+	if err != nil || !replayed || replayedCopy.GetSavedSearchId() != duplicated.GetSavedSearchId() {
 		t.Fatalf("duplicate replay after source deletion = (%+v, %t, %v)", replayedCopy, replayed, err)
 	}
 	changed := intent
