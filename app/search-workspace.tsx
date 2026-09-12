@@ -4903,8 +4903,8 @@ export function SearchWorkspace({
       });
       let job = response.searchJob;
       if (job === undefined || job.searchJobId.length === 0) throw new Error("The server did not return a search job ID.");
-      searchCreateAction.complete();
-      pendingSearchCreateIdRef.current = null;
+      searchCreateAction.complete(clientRequestId);
+      if (pendingSearchCreateIdRef.current === clientRequestId) pendingSearchCreateIdRef.current = null;
       if (backendHistoryRerunRef.current?.id === launchHistoryEntry?.id) {
         backendHistoryRerunRef.current = null;
       }
@@ -6844,15 +6844,16 @@ export function SearchWorkspace({
         jsonIntegerEncoding: "string",
 
       } as const;
+      const clientRequestId = exportCreateAction.requestId({ ...exportIntent, sessionRevision: currentAdministratorSessionRevision() });
       const created = await createServerExport(apiClient, bootstrap.response, {
         ...exportIntent,
-        clientRequestId: exportCreateAction.requestId({ ...exportIntent, sessionRevision: currentAdministratorSessionRevision() }),
+        clientRequestId,
         signal: controller.signal,
       });
       if (created.status === "unavailable") {
         throw new Error("The selected export format is not available from this server.");
       }
-      exportCreateAction.complete();
+      exportCreateAction.complete(clientRequestId);
       if (controller.signal.aborted || exportEpochRef.current !== exportEpoch) return;
       serverExportJobRef.current = created.value;
       setServerExportJob(created.value);

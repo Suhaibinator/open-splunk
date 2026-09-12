@@ -23,7 +23,8 @@ export class BrowserCreateAction {
     return this.id;
   }
 
-  complete(): void {
+  complete(expectedId?: string): void {
+    if (expectedId !== undefined && this.id !== expectedId) return;
     this.intent = undefined;
     this.id = undefined;
   }

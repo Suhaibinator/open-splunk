@@ -17,6 +17,8 @@ const ownedMarkdownPaths = [
   "docs/api.md",
   "docs/spl.md",
   "docs/timechart.md",
+  "docs/patterns.md",
+  "docs/dashboards.md",
   "docs/knowledge.md",
   "docs/theming.md",
   "docs/ingestion.md",

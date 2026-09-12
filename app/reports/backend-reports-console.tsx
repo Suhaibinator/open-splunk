@@ -589,7 +589,7 @@ export function BackendReportsConsole({ apiBaseUrl, onViewChange, view }: Backen
             <div className="reports-toolbar reports-toolbar--backend">
               <label className="reports-search-field">
                 <span className="sr-only">Filter saved searches</span><i aria-hidden="true"><AppIcon name="search" size="sm" /></i>
-                <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find by name, SPL, app, or owner" />
+                <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find by name" />
               </label>
               <label htmlFor="backend-reports-console-choice-595" className="reports-select-field">
                 <span>App</span>

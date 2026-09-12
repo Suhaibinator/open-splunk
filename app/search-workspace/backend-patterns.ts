@@ -196,14 +196,17 @@ export class BackendPatterns {
 
   async selectPattern(pattern: PatternRow, pageSize = this.state.pageSize): Promise<void> {
     validatePageSize(pageSize);
-    if (!pattern.patternId || !this.state.rows.some((row) => row.patternId === pattern.patternId)) {
+    const selectedPattern = this.state.members?.pattern;
+    const retainedPattern = this.state.rows.find((row) => row.patternId === pattern.patternId)
+      ?? (selectedPattern?.patternId === pattern.patternId ? selectedPattern : undefined);
+    if (!pattern.patternId || retainedPattern === undefined) {
       throw new Error("Select a pattern from this retained result snapshot.");
     }
     this.memberRequest?.abort();
     this.memberTokens = new Map([[1, undefined]]);
     this.memberStarts = new Map([[1, 1]]);
     this.memberLastOrdinals.clear();
-    this.update({ members: { pattern, page: null, pageNumber: 1, pageSize, pageStart: 1, hasNextPage: false, loading: false, error: null } });
+    this.update({ members: { pattern: retainedPattern, page: null, pageNumber: 1, pageSize, pageStart: 1, hasNextPage: false, loading: false, error: null } });
     await this.loadMembers(1);
   }
 

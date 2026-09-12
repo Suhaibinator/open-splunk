@@ -78,6 +78,7 @@ const testFiles = [
   path.join("app", "search-workspace", "backend-result-bootstrap.test.ts"),
   path.join("app", "search-workspace", "backend-result-pages.test.ts"),
   path.join("app", "search-workspace", "backend-patterns.test.ts"),
+  path.join("app", "search-workspace", "backend-pattern-members-review.test.ts"),
   path.join("app", "search-workspace", "pattern-export-source.test.ts"),
   path.join("app", "search-workspace", "panels", "patterns-panel.test.tsx"),
   path.join("app", "search-workspace", "components", "pattern-filter-chip.test.tsx"),
