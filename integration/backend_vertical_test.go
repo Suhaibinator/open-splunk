@@ -487,6 +487,7 @@ func TestBackendVertical(t *testing.T) {
 		"Backend vertical bulk export",
 	)
 	bulkStart := insertBulkEvents(t, ctx, storage, visibilityCutoff)
+	assertBrowserFeatureCompletion(t, ctx, repository, baseURL, fixtureStart, bulkStart, persistedSavedSearch.GetSavedSearchId(), lookupFixture.appID, administratorToken, serverProcess)
 	serverSecrets = append(serverSecrets, assertTruncatedPreviewExportsAllRows(
 		t, ctx, httpClient, storage, baseURL, bulkStart, visibilityCutoff,
 	))
