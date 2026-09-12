@@ -575,6 +575,11 @@ the pending attempt Interrupted. The source and restore volume names are
 tracked separately so cleanup also removes source volumes displaced by the
 overlay, without pruning unrelated resources.
 
+CI runs this drill in the release OCI job after building the native images and
+backend UI from the same commit. It compares the image's embedded UI identity
+and digest with the prepared manifest before compiling the helper. The separate
+ARM64 image reproducibility checks run afterward.
+
 The lower-level native recovery privilege/archive/state-machine qualification
 remains independently available:
 

@@ -865,6 +865,7 @@ jobs:
         env:
           OPEN_SPLUNK_BACKEND_INTEGRATION: "1"
           OPEN_SPLUNK_CLICKHOUSE_INTEGRATION: "1"
+          OPEN_SPLUNK_FEATURE_COMPLETION_INTEGRATION: "1"
         # The Store lifecycle reserves 5m setup + 20m compiler + 2m deletion
         # and 30s cleanup headroom beneath this process deadline.
         run: >-
@@ -921,6 +922,7 @@ jobs:
           name: backend-vertical-browser-failure
           path: |
             test-results/backend-vertical
+            test-results/feature-completion
             test-results/browser-search-cancellation
             test-results/browser-sequence-expired
             test-results/browser-sequence-gap
@@ -941,7 +943,9 @@ jobs:
   release-oci:
     name: Release OCI contract
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    # Preserve the existing 50-minute ARM64 build/reproducibility budget and
+    # add 40 minutes for the native image, matching UI, and 15-minute drill.
+    timeout-minutes: 90
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -958,15 +962,62 @@ jobs:
         with:
           node-version-file: .node-version
 
-      - name: Build and test release images with production Compose
+      - name: Verify native release recovery with production Compose
+        timeout-minutes: 40
         env:
-          OPEN_SPLUNK_OCI_INTEGRATION: "1"
-        run: >-
-          go test ./integration
-          -run '^TestReleaseOCIComposeContract$'
-          -count=1
-          -timeout=25m
-          -v
+          CI: "1"
+          NODE_ENV: production
+          OPEN_SPLUNK_SOURCE_REVISION: ${{ github.sha }}
+          OPEN_SPLUNK_OCI_PLATFORM: linux/amd64
+          OPEN_SPLUNK_SERVER_IMAGE: open-splunk-ci/server-recovery:${{ github.sha }}
+          OPEN_SPLUNK_COLLECTOR_IMAGE: open-splunk-ci/collector-recovery:${{ github.sha }}
+          OPEN_SPLUNK_DEPLOYMENT_RECOVERY_DRILL: "1"
+        run: |
+          set -euo pipefail
+          recovery_proof_root="$(mktemp -d)"
+          cleanup() {
+            docker image rm \
+              "$OPEN_SPLUNK_SERVER_IMAGE" \
+              "$OPEN_SPLUNK_COLLECTOR_IMAGE" >/dev/null 2>&1 || true
+            rm -rf -- "$recovery_proof_root"
+          }
+          trap cleanup EXIT
+
+          # OCI builds only the committed source; the drill pins its immutable
+          # image identity before creating its exact owned Compose resources.
+          make oci
+          recovery_image="$(docker image inspect --format '{{.Id}}' "$OPEN_SPLUNK_SERVER_IMAGE")"
+          test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$recovery_image")" = "linux/amd64"
+
+          # proto-tools installs the locked npm dependencies, including build
+          # tools. Match the OCI UI environment and deterministic source epoch.
+          export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          make proto-tools
+          make build-ui OPEN_SPLUNK_DATA_MODE=backend
+          git restore --source=HEAD -- AGENTS.md next-env.d.ts
+          git diff --exit-code HEAD -- .
+
+          # A source revision alone cannot prove that the helper embeds the
+          # release UI. Compare its complete UI identity to the actual image.
+          node --input-type=module > "$recovery_proof_root/expected.txt" <<'NODE'
+          import { readFileSync } from "node:fs";
+          const manifest = JSON.parse(readFileSync("out/asset-manifest.json", "utf8"));
+          if (manifest.source_revision !== process.env.OPEN_SPLUNK_SOURCE_REVISION ||
+              typeof manifest.ui_build_id !== "string" || !manifest.ui_build_id ||
+              /[\r\n]/u.test(manifest.ui_build_id) ||
+              !/^[a-f0-9]{64}$/u.test(manifest.ui?.sha256 ?? "")) {
+            throw new Error("prepared recovery UI has an invalid release identity");
+          }
+          console.log(`source_revision=${manifest.source_revision}`);
+          if (manifest.product_version) console.log(`product_version=${manifest.product_version}`);
+          console.log(`ui_build_id=${manifest.ui_build_id}`);
+          console.log(`ui_sha256=${manifest.ui.sha256}`);
+          NODE
+          docker run --rm --network none "$recovery_image" \
+            -verify-embedded-release > "$recovery_proof_root/actual.txt"
+          cmp "$recovery_proof_root/expected.txt" "$recovery_proof_root/actual.txt"
+          OPEN_SPLUNK_RECOVERY_DRILL_SERVER_IMAGE="$recovery_image" \
+            scripts/test-deployment-recovery.sh
 
       - name: Cross-build exact release images for Linux ARM64
         env:
