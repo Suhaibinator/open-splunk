@@ -53,7 +53,7 @@ export function NearbyContextEditor({ draft, onChange, onApply, onDetach, busy =
       {comparison && <div className="nearby-context-comparison form-stack">
         <label><span>Field</span><input aria-label="Context field" value={comparison.field} onChange={(event) => updateComparison({ field: event.target.value })} /></label>
         <label htmlFor={`${id}-operator-select`}><span id={`${id}-operator`}>Comparison</span><Select id={`${id}-operator-select`} aria-labelledby={`${id}-operator`} value={comparison.operator} onValueChange={(value) => updateComparison({ operator: value as NearbyOperator })}>
-          {NEARBY_OPERATORS.map((operator) => <SelectOption key={operator} value={operator}>{operator}</SelectOption>)}
+          {NEARBY_OPERATORS.map((operator) => <SelectOption key={operator} value={operator} disabled={comparison.scalar.kind === "boolean" && operator !== "=" && operator !== "!="}>{operator}</SelectOption>)}
         </Select></label>
         <label htmlFor={`${id}-type-select`}><span id={`${id}-type`}>Value type</span><Select id={`${id}-type-select`} aria-labelledby={`${id}-type`} value={comparison.scalar.kind} onValueChange={(value) => updateComparison({ scalar: { ...comparison.scalar, kind: value as NearbyScalarKind } })}>
           <SelectOption value="string">Text</SelectOption><SelectOption value="number">Number</SelectOption><SelectOption value="boolean">Boolean</SelectOption>

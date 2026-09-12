@@ -87,6 +87,12 @@ export function nearbyScalarLiteral(scalar: NearbyScalar): string {
     return scalar.value;
   }
   if (!NUMERIC.test(scalar.value) || !Number.isFinite(Number(scalar.value))) throw new Error("Enter a supported finite number for the comparison.");
+  const [coefficient, exponent = "0"] = scalar.value.split(/[eE]/u);
+  const significant = coefficient.replace(/[-.]/gu, "").replace(/^0+/u, "");
+  const exponentMagnitude = exponent.replace(/^[+-]/u, "").replace(/^0+/u, "") || "0";
+  if (significant.length > 4_097 || exponentMagnitude.length > 5 || BigInt(exponentMagnitude) > 10_000n) {
+    throw new Error("The number exceeds the supported exact comparison range.");
+  }
   // Authored integer literals stop at int64/uint64. A decimal suffix retains
   // the exact source digits while using the compiler's exact decimal comparison.
   if (/^-?\d+$/u.test(scalar.value)) {
@@ -150,6 +156,7 @@ export function nearbySearch(draft: NearbyDraft): { query: string; timeRange: { 
   if (index === undefined || !index.scalar.value || /[*?]/u.test(index.scalar.value)) throw new Error("Keep an exact index comparison enabled.");
   const clauses = active.map(({ field, operator, scalar }) => {
     if (!NEARBY_OPERATORS.includes(operator)) throw new Error("Choose a supported comparison operator.");
+    if (scalar.kind === "boolean" && operator !== "=" && operator !== "!=") throw new Error("Boolean comparisons support only = and !=.");
     return `${nearbyFieldReference(field)} ${operator} ${nearbyScalarLiteral(scalar)}`;
   });
   const range = resolveAbsoluteTimeRange(draft.earliest, draft.latest);

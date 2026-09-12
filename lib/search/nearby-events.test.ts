@@ -176,3 +176,14 @@ test("nearby adapter rejects duplicate fields and excludes unsupported scalar pa
   assert.throws(() => adaptNearbyContext({ ...response, fields: [field, field] }, "job", "job:2"), /unavailable/u);
   assert.deepEqual(adaptNearbyContext({ ...response, fields: [{ ...field, fieldName: "wild*field" }, { ...field, fieldName: "empty", value: undefined }] }, "job", "job:2").fields, []);
 });
+
+
+test("nearby comparisons reject unsupported boolean order and exact decimal bounds", () => {
+  const draft = createNearbyDraft(context);
+  const comparison = { id: "extra", field: "ready", operator: "<" as const, scalar: { kind: "boolean" as const, value: "true" }, enabled: true };
+  assert.throws(() => nearbySearch({ ...draft, comparisons: [...draft.comparisons, comparison] }), /Boolean comparisons/u);
+  assert.match(nearbySearch({ ...draft, comparisons: [...draft.comparisons, { ...comparison, operator: "!=" }] }).query, /'ready' != true$/u);
+  assert.equal(nearbyScalarLiteral({ kind: "number", value: "1e-400" }), "1e-400");
+  assert.throws(() => nearbyScalarLiteral({ kind: "number", value: "1e-10001" }), /exact comparison range/u);
+  assert.throws(() => nearbyScalarLiteral({ kind: "number", value: `0.${"1".repeat(4_098)}` }), /exact comparison range/u);
+});
