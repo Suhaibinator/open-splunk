@@ -1139,6 +1139,10 @@ jobs:
         with:
           node-version-file: .node-version
 
+      - name: Install frontend dependencies for macOS launcher tests
+        if: runner.os == 'macOS'
+        run: npm ci --include=dev
+
       - name: Verify OCI launcher portability on macOS Bash
         if: runner.os == 'macOS'
         run: node --test scripts/build-oci.test.mjs
