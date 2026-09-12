@@ -102,6 +102,22 @@ OPEN_SPLUNK_BACKEND_INTEGRATION=1 go test ./integration -run '^TestBackendVertic
 Set `OPEN_SPLUNK_BROWSER_EXECUTABLE` to use a specific Chromium-family browser
 instead of Playwright's pinned download.
 
+Enable the completed-feature browser flow against the same compiled server and
+real ClickHouse fixture, and repeat the complete vertical three times:
+
+```sh
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_FEATURE_COMPLETION_INTEGRATION=1 \
+  go test ./integration -run '^TestBackendVertical$' -count=3 -timeout=25m -v
+```
+
+This additionally checks the 10,000-row retained Patterns relation and its exact
+summary/member exports, Nearby search and Back navigation, Private/Global/App
+saved-search scope persistence, the HEC settings surface, and bundled Help
+navigation/search. It uses the production APIs without mocked responses. The
+separate HEC vertical and offline Help browser suite cover enabled ingestion
+and Help with backend requests blocked.
+
 The default image is
 `clickhouse/clickhouse-server:26.7.5.10-alpine@sha256:0a45b864c73322d4360dea1973ee9b77f29c51af1242ad2d47409908071fa56e`.
 Set `OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE` to exercise another digest-pinned image
@@ -196,6 +212,37 @@ OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
     -run '^(TestSPLSemanticInvariantsAgainstClickHouse|TestGradeThisCorpusAgainstClickHouse|TestPipelineCommandsPreserveUntouchedSemanticBytesThroughManagerAgainstClickHouse)$' \
     -count=1 -timeout=15m -v
 ```
+
+The controlled ordinary-search qualification accepts two already-built server
+binaries from the same pinned release toolchain. Build the baseline at
+`da8415f3bf4ad115da0a0b3941e5c333392ae3b9` and the clean candidate before reserving
+an idle host. It verifies their identities, uses one immutable 10,001-row
+ClickHouse fixture, and records seven alternating pairs with exact output and
+error parity. Median and p95 regressions must each remain below 10%:
+
+```sh
+OPEN_SPLUNK_NEARBY_SEARCH_QUALIFICATION=1 \
+OPEN_SPLUNK_NEARBY_BASELINE_SERVER=/absolute/baseline/open-splunk-server \
+OPEN_SPLUNK_NEARBY_CANDIDATE_SERVER=/absolute/candidate/open-splunk-server \
+OPEN_SPLUNK_NEARBY_CANDIDATE_REVISION="$(git rev-parse HEAD)" \
+  go test ./integration -run '^TestNearbyOrdinarySearchQualification$' \
+    -count=1 -timeout=15m -v
+```
+
+The output includes one `NEARBY_SEARCH_QUALIFICATION` JSON report with raw
+samples, fixture/output digests, binary hashes, and toolchain metadata. The
+separate retained-Patterns qualification records seven cold/cached pairs,
+resource accounting and process RSS, with cold p95 at most 2 seconds, cached
+p95 at most 100 milliseconds, and cancellation at most 250 milliseconds:
+
+```sh
+OPEN_SPLUNK_PATTERNS_QUALIFICATION=1 \
+OPEN_SPLUNK_PATTERNS_QUALIFICATION_OUTPUT=/absolute/patterns-qualification.json \
+  go test ./internal/patterns -run '^TestPatternQualification$' -count=1 -v
+```
+
+Both timing gates are opt-in controlled-host qualification; ordinary unit tests
+do not enforce machine-dependent latency targets.
 
 For arithmetic and membership aggregation baselines, the existing
 `BenchmarkAuthoredExpressionExecution` uses 100,000 ingested events by default:
