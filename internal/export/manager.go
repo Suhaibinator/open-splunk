@@ -845,7 +845,9 @@ func (manager *Manager) create(ctx context.Context, access searchjobs.AccessScop
 			_ = lease.Close()
 		}
 	}()
-	if lease.ResultsTruncated() {
+	// Pattern sources intentionally export their exact retained relation. Its
+	// truncation flag describes the original search, not missing export rows.
+	if normalized.SourceKind == SourceOrdinary && lease.ResultsTruncated() {
 		return Job{}, abortLifecycle(ErrSourceTruncated)
 	}
 	schema, trustedWideSchema := trustedSchemaForSelection(lease)
