@@ -160,7 +160,7 @@ func TestDeploymentCommandHelpIsSideEffectFreeAcrossProcesses(t *testing.T) {
 		t.Run(commandName, func(t *testing.T) {
 			root := t.TempDir()
 			forbidden := filepath.Join(root, "must-not-exist")
-			process := exec.Command(os.Args[0], "-test.run=^TestDeploymentCommandHelpIsSideEffectFreeAcrossProcesses$")
+			process := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestDeploymentCommandHelpIsSideEffectFreeAcrossProcesses$")
 			process.Env = append(os.Environ(),
 				"OPEN_SPLUNK_TEST_HELP_COMMAND="+commandName,
 				"OPEN_SPLUNK_SERVER_SINGLETON_LOCK_PATH="+filepath.Join(forbidden, "legacy.lock"),

@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -116,7 +117,7 @@ func TestRecoveryXMLGrantsMatchQualifiedPrincipals(t *testing.T) {
 			t.Fatalf("%s grants missing", role)
 		}
 		want := 0
-		for _, line := range strings.Split(string(fixture), "\n") {
+		for line := range strings.SplitSeq(string(fixture), "\n") {
 			if strings.Contains(line, `"GRANT `) && strings.HasSuffix(strings.TrimSpace(line), "deploymentRecovery"+role+"Username,") {
 				want++
 			}
@@ -133,12 +134,7 @@ func TestRecoveryXMLGrantsMatchQualifiedPrincipals(t *testing.T) {
 }
 
 func containsMount(mounts []string, want string) bool {
-	for _, mount := range mounts {
-		if mount == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(mounts, want)
 }
 
 // The wrapper executes a compiled test binary directly; unlike `go test`, that

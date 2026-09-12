@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 )
 
@@ -231,10 +232,8 @@ func runDeploymentSubcommandWithOutput(arguments []string, output io.Writer) (bo
 	if !found {
 		return false, nil
 	}
-	for _, argument := range arguments[1:] {
-		if isDeploymentHelpFlag(argument) {
-			return true, writeDeploymentCommandHelp(output, command)
-		}
+	if slices.ContainsFunc(arguments[1:], isDeploymentHelpFlag) {
+		return true, writeDeploymentCommandHelp(output, command)
 	}
 	return true, command.run(arguments[1:], output)
 }

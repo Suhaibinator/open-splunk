@@ -61,8 +61,8 @@ func TestDeploymentRecoveryDrill(t *testing.T) {
 		&opensplunk.CreateAppRequest{Definition: &opensplunk.AppDefinition{
 			Slug: "recovery-drill", DisplayName: "Recovery drill", DefaultIndexNames: []string{"recovery-drill"},
 		}}, &app)
-	definition := &opensplunk.SearchDefinition{Spl: "index=recovery-drill | sort _raw | table _raw", AppId: proto.String(app.GetApp().GetAppId()),
-		TimeRange: &opensplunk.TimeRangeSpec{Earliest: proto.String("-24h"), Latest: proto.String("now")}}
+	definition := &opensplunk.SearchDefinition{Spl: "index=recovery-drill | sort _raw | table _raw", AppId: new(app.GetApp().GetAppId()),
+		TimeRange: &opensplunk.TimeRangeSpec{Earliest: new("-24h"), Latest: new("now")}}
 	var saved opensplunk.CreateSavedSearchResponse
 	fixture.post(t, ctx, "/api/saved-searches/create", fixture.administrator,
 		&opensplunk.CreateSavedSearchRequest{Definition: &opensplunk.SavedSearchDefinition{
@@ -73,7 +73,7 @@ func TestDeploymentRecoveryDrill(t *testing.T) {
 		&opensplunk.CreateIngestionTokenRequest{Definition: &opensplunk.IngestionTokenDefinition{
 			Name: "Recovery HEC", Purpose: opensplunk.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_HEC,
 			Constraints: &opensplunk.IngestionTokenConstraints{AllowedIndexNames: []string{"recovery-drill"}},
-			HecProfile:  &opensplunk.IngestionTokenHecProfile{DefaultIndexName: proto.String("recovery-drill"), IndexerAcknowledgment: true},
+			HecProfile:  &opensplunk.IngestionTokenHecProfile{DefaultIndexName: new("recovery-drill"), IndexerAcknowledgment: true},
 		}}, &token)
 	if token.GetPlaintextToken() == "" {
 		t.Fatal("token creation returned no credential")
