@@ -2,6 +2,34 @@ import { readFile } from "node:fs/promises";
 
 import { expect, test } from "@playwright/test";
 
+test("documentation search waits for its client handler before accepting input", async ({ page }) => {
+  let releaseScripts!: () => void;
+  const scriptsReady = new Promise<void>((resolve) => { releaseScripts = resolve; });
+  let scriptRequested!: () => void;
+  const scriptRequest = new Promise<void>((resolve) => { scriptRequested = resolve; });
+  await page.route("**/_next/static/**/*.js", async (route) => {
+    scriptRequested();
+    await scriptsReady;
+    await route.continue();
+  });
+  try {
+    await page.goto("/help/", { waitUntil: "commit" });
+    await scriptRequest;
+    const search = page.getByRole("searchbox", { name: "Search documentation" });
+    await expect(search).toBeVisible();
+    await expect(search).toBeDisabled();
+    releaseScripts();
+    await expect(search).toBeEnabled();
+    await search.fill("saved search");
+    await expect(search).toHaveValue("saved search");
+    const results = page.getByRole("region", { name: "Documentation search results" });
+    await expect(results.getByRole("status")).toHaveText(/[1-9][0-9]* documentation results?\./u);
+    await expect(results.getByRole("link").first()).toBeVisible();
+  } finally {
+    releaseScripts();
+  }
+});
+
 test("bundled documentation navigates and searches with external networking blocked", async ({ page, baseURL }) => {
   const externalRequests: string[] = [];
   await page.route("**/*", async (route) => {

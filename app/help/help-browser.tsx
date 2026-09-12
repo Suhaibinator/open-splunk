@@ -14,6 +14,18 @@ import { ProductShell } from "../_components/product-shell";
 import { HELP_CONTENT, HELP_DOCUMENTS, helpDocumentForSlug } from "./help-data";
 import { HelpDocumentContent } from "./help-document";
 
+function subscribeToHydrationReadiness(): () => void {
+  return () => undefined;
+}
+
+function browserHydrationReady(): boolean {
+  return true;
+}
+
+function serverHydrationReady(): boolean {
+  return false;
+}
+
 function searchWords(query: string): string[] {
   return query
     .trim()
@@ -30,6 +42,11 @@ export function matchingHelpDocuments(query: string) {
 
 export function HelpBrowser({ apiBaseUrl, dataMode, initialSlug }: { apiBaseUrl: string; dataMode: SearchDataMode; initialSlug: string }) {
   const [query, setQuery] = useState("");
+  const searchReady = useSyncExternalStore(
+    subscribeToHydrationReadiness,
+    browserHydrationReady,
+    serverHydrationReady,
+  );
   const backendAppId = useSyncExternalStore(subscribeToBackendAppId, currentBackendAppId, () => undefined);
   const document = helpDocumentForSlug(initialSlug);
   const matches = useMemo(() => matchingHelpDocuments(query), [query]);
@@ -44,7 +61,7 @@ export function HelpBrowser({ apiBaseUrl, dataMode, initialSlug }: { apiBaseUrl:
     <div className="help-page">
       <header className="help-header">
         <div><span className="suite-eyebrow">Offline reference</span><p>Browse the documentation and linked examples bundled with this build.</p></div>
-        <div className="form-stack help-search"><label><span>Search documentation</span><input aria-label="Search documentation" type="search" value={query} onChange={(event) => setQuery(event.target.value)} /></label></div>
+        <div className="form-stack help-search"><label><span>Search documentation</span><input aria-label="Search documentation" disabled={!searchReady} type="search" value={query} onChange={(event) => setQuery(event.target.value)} /></label></div>
       </header>
       {searching ? <section aria-label="Documentation search results" className="help-search-results">
         <h2>Search results</h2>
