@@ -793,11 +793,12 @@ func (budget *operationBudget) add(bytes uint64) error {
 }
 
 func (budget *operationBudget) addWorking(bytes uint64) error {
-	if !budget.working.add(bytes) {
-		return ErrLimit
-	}
 	service := budget.service
 	service.mu.Lock()
+	if !budget.working.add(bytes) {
+		service.mu.Unlock()
+		return ErrLimit
+	}
 	service.evictForGlobalLocked(bytes)
 	if service.globalBytes > service.maximumGlobalBytes || bytes > service.maximumGlobalBytes-service.globalBytes {
 		service.mu.Unlock()
@@ -970,14 +971,21 @@ func (service *Service) cachedCatalog(key catalogKey, budget *operationBudget) *
 	service.cacheClock++
 	entry.lastUsed = service.cacheClock
 	catalog := entry.catalog
+	charge := catalog.inputBytes + catalog.bytes
+	if charge < catalog.inputBytes || !budget.working.add(catalog.bytes) {
+		service.mu.Unlock()
+		return nil
+	}
+	service.evictForGlobalLocked(charge)
+	if service.globalBytes > service.maximumGlobalBytes || charge > service.maximumGlobalBytes-service.globalBytes {
+		service.mu.Unlock()
+		budget.working.release(catalog.bytes)
+		return nil
+	}
+	service.globalBytes += charge
+	budget.bytes += charge
+	budget.workingBytes += catalog.bytes
 	service.mu.Unlock()
-	if err := budget.add(catalog.inputBytes); err != nil {
-		return nil
-	}
-	if err := budget.addWorking(catalog.bytes); err != nil {
-		budget.releaseBytes(catalog.inputBytes)
-		return nil
-	}
 	return catalog
 }
 
