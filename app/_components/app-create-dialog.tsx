@@ -3,7 +3,7 @@
 import { type FormEvent, useMemo, useState } from "react";
 
 import type { AppWorkspace } from "@/gen/ts/open_splunk/app";
-import { createOpenSplunkApiClient } from "@/lib/api";
+import { createOpenSplunkApiClient, invalidateAppCatalog } from "@/lib/api";
 import { createErrorMessage } from "@/lib/error-message";
 import { AppFields } from "./app-fields";
 import { blankAppForm, definitionFromForm } from "../admin/admin-resource-data";
@@ -31,6 +31,7 @@ export function AppCreateDialog({ apiBaseUrl, onClose, onCreated }: AppCreateDia
     try {
       const response = await client.apps.create({ definition, clientRequestId: undefined });
       if (response.app === undefined) throw new Error("The server returned an empty app workspace.");
+      invalidateAppCatalog(apiBaseUrl);
       onCreated(response.app);
     } catch (requestError) {
       setError(appCreateError(requestError));
