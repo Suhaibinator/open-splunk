@@ -43,3 +43,13 @@ Schema bootstrap, migration-ledger, and database recovery invariants live in
 and coordinated recovery procedures live in
 [`deploy/README.md`](../deploy/README.md); executable integration instructions
 live in [`integration/README.md`](../integration/README.md).
+
+## Bundled Help
+
+The static `/help/` site includes these guides and their linked configuration
+examples in every UI build. Navigation and full-text search need neither
+internet access nor a working backend API while the local static asset server
+remains reachable. Local Markdown and example links are validated and rewritten
+to Help routes during the build. Code samples and Markdown HTML are rendered as
+text; they are never executed. The footer identifies the source revision used
+to build the documentation.
