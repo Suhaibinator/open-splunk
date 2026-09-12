@@ -353,7 +353,7 @@ func (lease *memberExportLease) Next(ctx context.Context) (searchjobs.ResultRow,
 			}
 			continue
 		}
-		normalized, err := normalizeWithBudget(
+		normalized, releaseNormalized, err := normalizeWithBudget(
 			nextContext, lease.readBudget, raw, lease.sensitivity, lease.maximumSignatureBytes, lease.maximumWorkingBytes,
 		)
 		stop()
@@ -367,7 +367,9 @@ func (lease *memberExportLease) Next(ctx context.Context) (searchjobs.ResultRow,
 			}
 			return searchjobs.ResultRow{}, false, err
 		}
-		if patternID(lease.jobID, lease.generation, lease.sensitivity, normalized.canonical) != lease.patternID {
+		matches := patternID(lease.jobID, lease.generation, lease.sensitivity, normalized.canonical) == lease.patternID
+		releaseNormalized()
+		if !matches {
 			if releaseRow != nil {
 				releaseRow()
 			}
