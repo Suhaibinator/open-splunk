@@ -9,17 +9,21 @@ import (
 	"testing"
 	"time"
 
-	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/controlbackup"
+	"github.com/Suhaibinator/open-splunk/internal/searchartifacts"
+	"github.com/Suhaibinator/open-splunk/internal/searchaudit"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
-	"google.golang.org/protobuf/types/known/timestamppb"
+	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 )
 
 const (
 	deploymentRecoveryDrillArchiveRoot    = "/var/lib/open-splunk-clickhouse-backups"
 	deploymentRecoveryDrillPrivateRoot    = "/var/lib/open-splunk/state/private"
 	deploymentRecoveryDrillRecoverySource = "/var/lib/open-splunk/recovery/private/rehearsal-001"
+	deploymentRecoveryDrillPendingJobID   = "recovery-pending"
+	deploymentRecoveryDrillTenantID       = "default"
 )
 
 // TestDeploymentRecoveryDrillChild is an opt-in subprocess entry point for the
@@ -67,48 +71,77 @@ func seedDeploymentRecoveryDrillPendingAttempt(t *testing.T) {
 			t.Errorf("close drill control plane: %v", err)
 		}
 	}()
-	store, err := searchhistory.New(database, searchhistory.Options{
-		CursorKey: []byte("deployment-recovery-drill-cursor-key-v1"),
-	})
-	if err != nil {
-		t.Fatalf("open drill search history: %v", err)
-	}
-	now := time.Now().UTC().Round(0)
-	appID := "search"
-	earliest := "-15m"
-	latest := "now"
-	if _, err := store.BeginAttempt(
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	if err := admitDeploymentRecoveryDrillPendingAttempt(
 		ctx,
-		searchhistory.AccessScope{TenantID: "default", OwnerID: defaultOwnerID},
-		&opensplunk.SearchHistoryEntry{
-			SearchJobId: "recovery-pending",
-			Definition: &opensplunk.SearchDefinition{
-				Spl:        "index=main | head 1",
-				AppId:      &appID,
-				IndexScope: []string{"main"},
-				TimeRange: &opensplunk.TimeRangeSpec{
-					Earliest: &earliest,
-					Latest:   &latest,
-				},
-			},
-			Source: &opensplunk.SearchJobSource{
-				Origin: opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_AD_HOC,
-			},
-			EffectiveIndexScope: []string{"main"},
-			ResolvedTimeRange: &opensplunk.ResolvedTimeRange{
-				Earliest: timestamppb.New(now.Add(-15 * time.Minute)),
-				Latest:   timestamppb.New(now),
-				Timezone: "UTC",
-			},
-			FinalState: opensplunk.SearchJobState_SEARCH_JOB_STATE_QUEUED,
-			CreatedAt:  timestamppb.New(now),
-		},
+		database,
+		deploymentRecoveryDrillPrivateRoot+"/search-artifacts",
+		now,
 	); err != nil {
 		t.Fatalf("seed drill pending search attempt: %v", err)
 	}
 	if _, err := fmt.Fprintln(os.Stdout, "RECOVERY_PENDING_SEEDED"); err != nil {
 		t.Fatalf("report drill pending search attempt: %v", err)
 	}
+}
+
+func admitDeploymentRecoveryDrillPendingAttempt(
+	ctx context.Context,
+	database *control.DB,
+	artifactDirectory string,
+	now time.Time,
+) error {
+	auditEvents, err := searchaudit.New(database, searchaudit.Options{
+		CursorKey: []byte("deployment-recovery-drill-audit-cursor-key-v1"),
+	})
+	if err != nil {
+		return fmt.Errorf("open drill search-attempt audit: %w", err)
+	}
+	history, err := searchhistory.New(database, searchhistory.Options{
+		AuditAppender:             auditEvents,
+		RequireSearchAttemptAudit: true,
+		CursorKey:                 []byte("deployment-recovery-drill-cursor-key-v1"),
+	})
+	if err != nil {
+		return fmt.Errorf("open drill search history: %w", err)
+	}
+	historyJournal, err := searchhistory.NewJobJournal(history)
+	if err != nil {
+		return fmt.Errorf("open drill search-history journal: %w", err)
+	}
+	artifacts, err := searchartifacts.New(ctx, searchartifacts.Config{
+		DB:              database.SQLDB(),
+		Directory:       artifactDirectory,
+		Clock:           func() time.Time { return now },
+		CleanupInterval: -1,
+	})
+	if err != nil {
+		return fmt.Errorf("open drill search artifacts: %w", err)
+	}
+	timeRange := searchtime.Intent{
+		Earliest: "-15m",
+		Latest:   "now",
+		Timezone: "UTC",
+	}
+	job := searchjobs.Job{
+		ID:               deploymentRecoveryDrillPendingJobID,
+		Version:          1,
+		OwnerID:          defaultOwnerID,
+		SPL:              "index=main | head 1",
+		TenantID:         deploymentRecoveryDrillTenantID,
+		RequestedIndexes: []string{"main"},
+		EffectiveIndexes: []string{"main"},
+		TimeRange:        timeRange,
+		AppID:            "search",
+		Source:           searchjobs.JobSource{Origin: searchjobs.JobOriginAdHoc},
+		Earliest:         now.Add(-15 * time.Minute),
+		Latest:           now,
+		IndexTimeCutoff:  now,
+		State:            searchjobs.StateQueued,
+		CreatedAt:        now,
+	}
+	admitErr := searchjobs.NewCompositeJournal(artifacts, historyJournal).Admit(ctx, job)
+	return errors.Join(admitErr, artifacts.Close())
 }
 
 func crashDeploymentRecoveryDrillAfterReceipt(t *testing.T) {

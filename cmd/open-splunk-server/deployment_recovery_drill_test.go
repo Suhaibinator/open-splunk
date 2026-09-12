@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -210,12 +211,53 @@ func TestDeploymentRecoveryDrill(t *testing.T) {
 			t.Fatal("restored authoritative event bytes differ from the source retained result")
 		}
 	}
-	var history opensplunk.GetSearchHistoryEntryResponse
-	fixture.post(t, ctx, "/api/search/history/get", "", &opensplunk.GetSearchHistoryEntryRequest{SearchJobId: "recovery-pending"}, &history)
-	if history.GetHistoryEntry().GetFinalState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_INTERRUPTED {
-		t.Fatal("restored pending attempt was not Interrupted")
+	var pending opensplunk.GetSearchJobResponse
+	fixture.post(t, ctx, "/api/search/jobs/get", "", &opensplunk.GetSearchJobRequest{SearchJobId: deploymentRecoveryDrillPendingJobID}, &pending)
+	pendingJob := pending.GetSearchJob()
+	if pendingJob.GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_INTERRUPTED ||
+		pendingJob.GetFailure().GetCode() != opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_INTERNAL ||
+		pendingJob.GetFailure().GetMessage() != "search was interrupted by server restart" ||
+		!pendingJob.GetFailure().GetRetryable() {
+		t.Fatalf("restored pending job: state=%s failure=%s retryable=%t reason=%s",
+			pendingJob.GetState(), pendingJob.GetFailure().GetCode(), pendingJob.GetFailure().GetRetryable(),
+			recoveryDrillDiagnosticText([]byte(pendingJob.GetFailure().GetMessage()), fixture.diagnosticSecrets))
 	}
-	t.Log("verified recovered administrator and HEC authentication, catalog identities, retained rows, authoritative event query, and Interrupted pending attempt")
+	if pendingJob.GetSearchJobId() != deploymentRecoveryDrillPendingJobID || pendingJob.GetStateVersion() != 1 ||
+		pendingJob.GetDefinition().GetAppId() != "search" || pendingJob.GetDefinition().GetSpl() != "index=main | head 1" ||
+		!slices.Equal(pendingJob.GetDefinition().GetIndexScope(), []string{"main"}) ||
+		!slices.Equal(pendingJob.GetEffectiveIndexScope(), []string{"main"}) ||
+		pendingJob.GetSource().GetOrigin() != opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_AD_HOC {
+		t.Fatal("restored pending job lost its admitted identity or provenance")
+	}
+	if pendingJob.GetStartedAt() != nil || pendingJob.GetResultSchema() != nil ||
+		pendingJob.GetRetainedResultStatus() != opensplunk.RetainedResultStatus_RETAINED_RESULT_STATUS_MISSING ||
+		pendingJob.GetProgress().GetScannedRows() != 0 || pendingJob.GetProgress().GetScannedBytes() != 0 ||
+		pendingJob.GetProgress().GetMatchedEvents() != 0 || pendingJob.GetProgress().GetProducedRows() != 0 ||
+		pendingJob.GetProgress().GetResultBytes() != 0 {
+		t.Fatal("restored pending job executed or acquired results without an explicit rerun")
+	}
+	var history opensplunk.GetSearchHistoryEntryResponse
+	fixture.post(t, ctx, "/api/search/history/get", "", &opensplunk.GetSearchHistoryEntryRequest{SearchJobId: deploymentRecoveryDrillPendingJobID}, &history)
+	pendingHistory := history.GetHistoryEntry()
+	if pendingHistory.GetFinalState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_FAILED ||
+		pendingHistory.GetFailure().GetCode() != opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_INTERNAL ||
+		pendingHistory.GetFailure().GetMessage() != "search interrupted by server restart" ||
+		!pendingHistory.GetFailure().GetRetryable() {
+		t.Fatalf("restored pending history: state=%s failure=%s retryable=%t reason=%s",
+			pendingHistory.GetFinalState(), pendingHistory.GetFailure().GetCode(), pendingHistory.GetFailure().GetRetryable(),
+			recoveryDrillDiagnosticText([]byte(pendingHistory.GetFailure().GetMessage()), fixture.diagnosticSecrets))
+	}
+	if pendingHistory.GetSearchJobId() != pendingJob.GetSearchJobId() ||
+		!proto.Equal(pendingHistory.GetDefinition(), pendingJob.GetDefinition()) ||
+		!proto.Equal(pendingHistory.GetSource(), pendingJob.GetSource()) ||
+		len(pendingHistory.GetEffectiveIndexScope()) != 0 ||
+		pendingHistory.GetScannedRows() != 0 || pendingHistory.GetScannedBytes() != 0 || pendingHistory.GetProducedRows() != 0 ||
+		pendingHistory.GetMatchedEvents() != 0 || pendingHistory.GetDuration().AsDuration() != 0 ||
+		!proto.Equal(pendingHistory.GetResolvedTimeRange(), pendingJob.GetResolvedTimeRange()) ||
+		!proto.Equal(pendingHistory.GetCreatedAt(), pendingJob.GetCreatedAt()) || pendingHistory.GetStartedAt() != nil {
+		t.Fatal("restored pending history does not preserve the unexecuted admitted job identity")
+	}
+	t.Log("verified recovered administrator and HEC authentication, catalog identities, retained rows, authoritative event query, Interrupted durable job, and retryable restart history")
 	connection := fixture.connection(t, ctx)
 	var recoverySetID string
 	if err := connection.QueryRow(ctx, "SELECT any(recovery_set_id) FROM open_splunk.recovery_sets").Scan(&recoverySetID); err != nil {
