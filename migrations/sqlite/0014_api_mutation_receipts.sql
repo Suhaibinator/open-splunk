@@ -517,7 +517,7 @@ CREATE TABLE api_mutation_receipt_tenant_state (
 CREATE TABLE api_mutation_receipts (
     tenant_id TEXT NOT NULL COLLATE BINARY,
     actor_kind TEXT NOT NULL COLLATE BINARY CHECK (
-        actor_kind IN ('system', 'browser')
+        actor_kind IN ('system', 'browser', 'public')
     ),
     actor_id TEXT NOT NULL COLLATE BINARY,
     route TEXT NOT NULL COLLATE BINARY CHECK (
@@ -568,6 +568,14 @@ CREATE TABLE api_mutation_receipts (
     ),
     PRIMARY KEY (
         tenant_id, actor_kind, actor_id, route, client_request_id
+    ),
+    CONSTRAINT api_mutation_receipt_public_actor_route CHECK (
+        actor_kind <> 'public' OR route IN (
+            '/api/search/jobs/create',
+            '/api/search/exports/create',
+            '/api/saved-searches/create',
+            '/api/saved-searches/duplicate'
+        )
     ),
     CONSTRAINT api_mutation_receipt_actor_id_bounded CHECK (
         length(CAST(actor_id AS BLOB)) BETWEEN 1 AND 255

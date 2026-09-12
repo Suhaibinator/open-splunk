@@ -26,13 +26,19 @@ func (handler *apiHandler) mutationIntent(
 		return nil, nil
 	}
 	actor, ok := audit.ActorFromContext(ctx)
+	actorKind, actorID := string(actor.Kind), actor.ID
 	if !ok || !actor.Valid() {
-		return nil, internalError()
+		if !requestidempotency.AllowsPublicActor(route) {
+			return nil, internalError()
+		}
+		// These routes already authorize the configured single-user namespace.
+		// Record that public authority honestly without inventing authentication.
+		actorKind, actorID = requestidempotency.ActorKindPublic, handler.ownerID
 	}
 	intent, err := requestidempotency.NewIntent(
 		handler.tenantID,
-		string(actor.Kind),
-		actor.ID,
+		actorKind,
+		actorID,
 		route,
 		*clientRequestID,
 		canonical,

@@ -86,8 +86,11 @@ key contains 16–128 printable ASCII characters, including spaces, and is
 case-sensitive. Browser clients retain a UUID for one logical action and reuse
 both its key and definition after an ambiguous response.
 
-Receipts are scoped to the tenant, authenticated actor, and operation. A retry
-with the same canonical client intent returns the same resource ID, its current
+Receipts are scoped to the tenant and operation, plus the authenticated actor
+for administrative creates or the configured single-user owner for public
+search, export, saved-search create, and saved-search duplicate routes. Public
+receipts do not add a sign-in requirement or treat the owner as an authenticated
+administrator. A retry with the same canonical client intent returns the same resource ID, its current
 authorized metadata, and `replayed = true`. Reusing the key for different intent
 returns HTTP 409. Receipt lookup precedes dynamic defaults, source resolution,
 and create-only quota checks. A deleted or unavailable target is reported as

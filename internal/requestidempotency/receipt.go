@@ -20,6 +20,7 @@ import (
 )
 
 const (
+	ActorKindPublic  = "public"
 	CanonicalVersion = uint32(1)
 	MaximumReceipts  = uint64(100_000)
 	MaximumBytes     = uint64(64 << 20)
@@ -63,7 +64,7 @@ var (
 )
 
 // Intent is the immutable identity of one caller-authored logical mutation.
-// ActorID is a stable authenticated principal identity and never a credential.
+// ActorID is a stable authenticated principal or configured public owner, never a credential.
 type Intent struct {
 	TenantID         string
 	ActorKind        string
@@ -557,7 +558,8 @@ func ExtendRetentionInTransaction(
 func validateIntentIdentity(intent Intent) error {
 	if intent.CanonicalVersion == 0 || intent.CanonicalVersion > math.MaxUint16 ||
 		!validIdentity(intent.TenantID, 255) ||
-		(intent.ActorKind != "system" && intent.ActorKind != "browser") ||
+		(intent.ActorKind != "system" && intent.ActorKind != "browser" && intent.ActorKind != ActorKindPublic) ||
+		(intent.ActorKind == ActorKindPublic && !AllowsPublicActor(intent.Route)) ||
 		!validIdentity(intent.ActorID, 255) || !validRoute(intent.Route) ||
 		ValidateClientRequestID(intent.ClientRequestID) != nil {
 		return ErrInvalid
@@ -571,6 +573,17 @@ func validateTarget(route string, target Target) error {
 		return ErrInvalid
 	}
 	return nil
+}
+
+// AllowsPublicActor identifies existing trusted single-user create routes.
+// Administrative routes always require their authenticated mutation actor.
+func AllowsPublicActor(route string) bool {
+	switch route {
+	case RouteCreateSearchJob, RouteCreateExportJob, RouteCreateSavedSearch, RouteDuplicateSavedSearch:
+		return true
+	default:
+		return false
+	}
 }
 
 func validRoute(route string) bool { return routeTargetKind(route) != "" }

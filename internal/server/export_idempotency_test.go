@@ -62,9 +62,10 @@ func TestExportReceiptPrecedesCreateOnlyConversionAndReturnsCurrentMetadata(t *t
 	if calls != 1 || service.createCalls != 0 {
 		t.Fatal("replay invoked create")
 	}
-	// Missing authenticated identity never reaches receipt lookup.
+	// Missing configured public ownership never reaches receipt lookup.
+	handler.ownerID = ""
 	if _, err := handler.createExportJob(httptest.NewRequestWithContext(t.Context(), "POST", "/", nil), input); err == nil || calls != 1 {
-		t.Fatalf("unauthenticated receipt disclosure: %v calls=%d", err, calls)
+		t.Fatalf("unscoped receipt disclosure: %v calls=%d", err, calls)
 	}
 }
 func TestExportReceiptConflictDoesNotReachAdmission(t *testing.T) {
