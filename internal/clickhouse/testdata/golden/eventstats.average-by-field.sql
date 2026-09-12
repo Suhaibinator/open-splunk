@@ -5,7 +5,7 @@
 -- string_or_bytes_outputs: []clickhouse.ResultStringOrBytesOutput{clickhouse.ResultStringOrBytesOutput{OutputIndex:0x1, Nullable:false}}
 -- sparse_fields: false subset=false
 -- atomic_result: false
--- execution_authority_digest: a403d407cfccfff0f27fd4a2e9b00ad41322f03c0c6b02a9f4f84d0f0bbed6ac
+-- execution_authority_digest: c036fccee4b427f6942c60b8091abbc8ef764f8c33f34f0cd1b0a44a68fb95af
 -- args[0]: "duration"
 -- args[1]: "tenant-1"
 -- args[2]: "main"

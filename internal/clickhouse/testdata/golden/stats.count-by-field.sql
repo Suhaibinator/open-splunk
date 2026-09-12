@@ -5,7 +5,7 @@
 -- sparse_fields: false subset=false
 -- atomic_result: false
 -- stats_partitions_max_threads: 1
--- execution_authority_digest: a4dda554f716c807a09e7804d75bbd1c891b164ad1b7048ef1f24fc5e374d4df
+-- execution_authority_digest: 0774cc76880433cddceba6eb27105cb12358863fe84669fd236774a9ab784817
 -- args[0]: "tenant-1"
 -- args[1]: "main"
 -- args[2]: "2026-07-21 00:00:00.000000000"

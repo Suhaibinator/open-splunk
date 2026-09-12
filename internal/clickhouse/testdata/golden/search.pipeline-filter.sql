@@ -5,7 +5,7 @@
 -- string_or_bytes_outputs: []clickhouse.ResultStringOrBytesOutput{clickhouse.ResultStringOrBytesOutput{OutputIndex:0x1, Nullable:false}}
 -- sparse_fields: true subset=false
 -- atomic_result: false
--- execution_authority_digest: 507c5f3c7a0889ffac092c26d01cc0ccce2bc1d7650f957a418b4b096505ffe1
+-- execution_authority_digest: 158d51e08ba324ef36083e9193c319eb1eddf1640ea0b3336a9123f501720403
 -- args[0]: "tenant-1"
 -- args[1]: "main"
 -- args[2]: "2026-07-21 00:00:00.000000000"
