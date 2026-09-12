@@ -570,6 +570,9 @@ var backendFrontendBuild struct {
 }
 
 var backendFrontendStageRootFiles = []string{
+	"AGENTS.md",
+	"CLAUDE.md",
+	"README.md",
 	"go.mod",
 	"go.sum",
 	"next-env.d.ts",
@@ -584,8 +587,12 @@ var backendFrontendStageDirectories = []string{
 	"app",
 	filepath.Join("cmd", "open-splunk-manifest"),
 	filepath.Join("cmd", "open-splunk-server"),
+	filepath.Join("configs", "examples"),
+	"deploy",
+	"docs",
 	filepath.Join("gen", "go"),
 	filepath.Join("gen", "ts"),
+	"integration",
 	"internal",
 	"lib",
 	"migrations",
