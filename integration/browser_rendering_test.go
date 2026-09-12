@@ -140,10 +140,19 @@ func TestBrowserFixedResultRendering(t *testing.T) {
 	}
 
 	anchor := time.Date(2026, time.July, 26, 18, 0, 0, 0, time.UTC)
+	controlPlane := newBrowserSearchControlPlane(
+		t,
+		ctx,
+		controlDB,
+		"browser-rendering-tenant",
+		"main",
+		anchor,
+	)
 	executor := &browserRenderingExecutor{}
 	manager, err := searchjobs.New(searchjobs.Config{
 		Executor:        executor,
 		Snapshotter:     browserRenderingSnapshotter{},
+		Journal:         controlPlane.journal,
 		Compiler:        clickhouse.Compiler{Database: "open_splunk", Table: "events"},
 		MaxConcurrent:   1,
 		MaxRows:         browserRenderingRowCount,
@@ -169,13 +178,16 @@ func TestBrowserFixedResultRendering(t *testing.T) {
 	handler, err := server.NewHandler(server.Config{
 		SearchJobs:      manager,
 		Indexes:         browserSearchOnlyCatalog(controlDB),
+		AppCatalog:      controlPlane.appCatalog,
 		SavedSearches:   savedSearches,
+		SearchHistory:   controlPlane.history,
 		WebUI:           os.DirFS(filepath.Join(stagedBackendRepository, "out")),
 		OwnerID:         "browser-rendering-owner",
 		TenantID:        "browser-rendering-tenant",
 		MaximumPageSize: browserRenderingRowCount,
 		Now:             func() time.Time { return anchor },
 		Bootstrap: server.BootstrapConfig{
+			SelectedAppID: browserSearchAppID,
 			Features: []opensplunk.ServerFeature{
 				opensplunk.ServerFeature_SERVER_FEATURE_SEARCH,
 			},
