@@ -240,7 +240,24 @@ export function createAppCatalogStore(options: CreateAppCatalogStoreOptions = {}
   const onStorage = (event: StorageEvent): void => {
     if (event.key === APP_CATALOG_INVALIDATION_STORAGE_KEY) invalidateEntries();
   };
-  eventTarget?.addEventListener("storage", onStorage);
+  let listeningForStorage = false;
+  let subscriptionEpoch = 0;
+  function synchronizeStorageSubscription(): void {
+    const epoch = ++subscriptionEpoch;
+    const active = [...entries.values()].some((entry) => entry.listeners.size > 0);
+    if (active && !listeningForStorage) {
+      eventTarget?.addEventListener("storage", onStorage);
+      listeningForStorage = true;
+    } else if (!active && listeningForStorage) {
+      eventTarget?.removeEventListener("storage", onStorage);
+      listeningForStorage = false;
+    }
+    if (!active) {
+      // Keep a synchronous preference-key transition coalesced. Once no view
+      // remains, the next mount must refetch changes made while unobserved.
+      queueMicrotask(() => { if (epoch === subscriptionEpoch) invalidateEntries(); });
+    }
+  }
 
   return {
     clear() {
@@ -254,7 +271,9 @@ export function createAppCatalogStore(options: CreateAppCatalogStoreOptions = {}
       }
     },
     dispose() {
+      subscriptionEpoch += 1;
       eventTarget?.removeEventListener("storage", onStorage);
+      listeningForStorage = false;
       this.clear();
       entries.clear();
     },
@@ -278,8 +297,10 @@ export function createAppCatalogStore(options: CreateAppCatalogStoreOptions = {}
     subscribe(key, listener) {
       const entry = entryFor(key);
       entry.listeners.add(listener);
+      synchronizeStorageSubscription();
       return () => {
         entry.listeners.delete(listener);
+        synchronizeStorageSubscription();
         if (entry.listeners.size !== 0 || entry.inFlight === null) return;
         entry.epoch += 1;
         entry.controller?.abort();

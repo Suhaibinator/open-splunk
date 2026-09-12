@@ -372,3 +372,54 @@ test("fallback cannot replace a canonical app request that already has newer aut
     assert.equal(store.getSnapshot(key).bootstrap, current);
   } finally { store.dispose(); }
 });
+
+
+test("catalog storage listeners follow mounted views and unseen changes require a fresh load", async () => {
+  const listeners = new Set<EventListenerOrEventListenerObject>();
+  const { requests, store } = harness({ eventTarget: {
+    addEventListener: (_type: string, listener: EventListenerOrEventListenerObject) => { listeners.add(listener); },
+    removeEventListener: (_type: string, listener: EventListenerOrEventListenerObject) => { listeners.delete(listener); },
+  } });
+  try {
+    assert.equal(listeners.size, 0);
+    const stopFirst = store.subscribe(key, () => undefined);
+    const stopSecond = store.subscribe(key, () => undefined);
+    assert.equal(listeners.size, 1);
+    const loading = store.load(key);
+    requests[0].response.resolve(bootstrap(["app-a"]));
+    await loading;
+    stopFirst();
+    assert.equal(listeners.size, 1);
+    stopSecond();
+    assert.equal(listeners.size, 0);
+    await settle();
+    assert.equal(store.getSnapshot(key).stale, true);
+    const stopRemount = store.subscribe(key, () => undefined);
+    const reload = store.load(key);
+    assert.equal(requests.length, 2);
+    requests[1].response.resolve(bootstrap(["app-a", "app-b"]));
+    await reload;
+    stopRemount();
+  } finally { store.dispose(); }
+  assert.equal(listeners.size, 0);
+});
+
+test("changing catalog preference subscriptions preserves the freshly seeded canonical snapshot", async () => {
+  const { requests, store } = harness();
+  try {
+    const initial = { ...key, preferredAppId: undefined };
+    const stopInitial = store.subscribe(initial, () => undefined);
+    const loading = store.load(initial);
+    const response = bootstrap(["app-a"]);
+    requests[0].response.resolve(response);
+    await loading;
+    stopInitial();
+    const stopCanonical = store.subscribe(key, () => undefined);
+    await settle();
+    assert.equal(store.getSnapshot(key).bootstrap, response);
+    assert.equal(store.getSnapshot(key).stale, false);
+    await store.load(key);
+    assert.equal(requests.length, 1);
+    stopCanonical();
+  } finally { store.dispose(); }
+});
