@@ -486,3 +486,47 @@ them to be consolidated.
 `scripts/safety-net.test.mjs` guards the net itself: every unit test file must
 appear in the hardcoded list in `scripts/test-frontend.mjs`, and every listed
 test file must still exist.
+
+## Disposable deployment recovery drill
+
+The opt-in `TestDeploymentRecoveryDrill` runs the actual server image using
+[`docker-compose.recovery.yaml`](../deploy/docker-compose.recovery.yaml) and its
+[restore overlay](../deploy/docker-compose.recovery-restore.yaml). It owns a
+unique Compose project, temporary credentials, TLS identities and fresh target
+volumes, and removes only its exact owned resources. It requires Linux, Docker
+Compose v2, the repository Go/Node toolchains, a prepared backend `out/` release
+manifest, and a server image built from that same clean committed source/release identity.
+The wrapper rejects the ambiguous `development` identity and uncommitted source.
+Run this after building the backend UI and local server image using the release
+or OCI workflows described in [releasing](../docs/releasing.md):
+
+```sh
+OPEN_SPLUNK_DEPLOYMENT_RECOVERY_DRILL=1 \
+OPEN_SPLUNK_RECOVERY_DRILL_SERVER_IMAGE=open-splunk-server:recovery-test \
+  scripts/test-deployment-recovery.sh
+```
+
+The wrapper compares the image and source release identities, builds a static
+**test-only** helper with the same embedded manifest, and runs the drill. The
+pinned ClickHouse image is the one in the shipped recovery Compose file. No
+production crash flag is added. It seeds an app, index, saved search, HEC token,
+three events and a retained terminal result through the real HTTPS APIs, then
+uses the real pending-attempt store for a stopped-server pending fixture.
+It executes the production backup and offline verify commands, switches to
+fresh SQLite/ClickHouse volumes with a shared read-only archive, and kills a
+helper process after canonical receipt publication but before control-plane
+publication. The identical production restore retry must preserve both the
+receipt/physical identity and the count of native RESTORE operations. Restart
+must preserve authenticated catalog/event/retained-result readback and mark
+the pending attempt Interrupted. The source and restore volume names are
+tracked separately so cleanup also removes source volumes displaced by the
+overlay, without pruning unrelated resources.
+
+The lower-level native recovery privilege/archive/state-machine qualification
+remains independently available:
+
+```sh
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  go test ./cmd/open-splunk-server \
+  -run '^TestDeploymentNativeRecoveryClickHouseLifecycle$' -count=1 -timeout=12m -v
+```

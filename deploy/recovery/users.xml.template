@@ -1,0 +1,47 @@
+<clickhouse>
+  <users>
+    <default remove="remove"/>
+    <open_splunk_operator>
+      <password_sha256_hex>@OPERATOR_SHA256@</password_sha256_hex>
+      <networks><ip>::/0</ip></networks>
+      <profile>default</profile>
+      <quota>default</quota>
+      <grants>
+        <query>GRANT ALL ON *.*</query>
+      </grants>
+    </open_splunk_operator>
+    <open_splunk_backup>
+      <password_sha256_hex>@BACKUP_SHA256@</password_sha256_hex>
+      <networks><ip>::/0</ip></networks>
+      <profile>default</profile>
+      <quota>default</quota>
+      <grants>
+        <query>GRANT BACKUP, SHOW TABLES ON open_splunk.*</query>
+        <query>GRANT SELECT ON open_splunk.schema_migrations</query>
+        <query>GRANT SELECT(visibility_seq) ON open_splunk.events</query>
+        <query>GRANT INSERT, SELECT, TRUNCATE ON open_splunk.recovery_archive_markers</query>
+        <query>GRANT SELECT ON system.databases</query>
+        <query>GRANT SELECT ON system.mutations</query>
+        <query>GRANT SELECT ON system.tables</query>
+      </grants>
+    </open_splunk_backup>
+    <open_splunk_restore>
+      <password_sha256_hex>@RESTORE_SHA256@</password_sha256_hex>
+      <networks><ip>::/0</ip></networks>
+      <profile>default</profile>
+      <quota>default</quota>
+      <grants>
+        <query>GRANT CREATE DATABASE, SHOW TABLES ON open_splunk.*</query>
+        <query>GRANT CREATE TABLE, INSERT, SELECT(visibility_seq) ON open_splunk.events</query>
+        <query>GRANT CREATE TABLE, INSERT, SELECT(name, version) ON open_splunk.schema_migrations</query>
+        <query>GRANT CREATE TABLE, INSERT, SELECT, TRUNCATE ON open_splunk.recovery_archive_markers</query>
+        <query>GRANT CREATE TABLE, INSERT, SELECT(database_uuid, deployment_manifest_sha256, events_table_uuid, recovery_archive_markers_table_uuid, recovery_set_id, recovery_sets_table_uuid, restored_at, schema_migrations_table_uuid, slot), TRUNCATE ON open_splunk.recovery_sets</query>
+        <query>GRANT SELECT ON system.databases</query>
+        <query>GRANT SELECT ON system.disks</query>
+        <query>GRANT SELECT ON system.mutations</query>
+        <query>GRANT SELECT ON system.tables</query>
+        <query>GRANT SHOW DATABASES ON *.*</query>
+      </grants>
+    </open_splunk_restore>
+  </users>
+</clickhouse>
