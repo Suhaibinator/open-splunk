@@ -187,6 +187,16 @@ export function createAppCatalogStore(options: CreateAppCatalogStoreOptions = {}
         stale: false,
         state: "available",
       });
+      // The server-selected app is also the authoritative answer for its
+      // canonical preference key. Reuse it when that key has never loaded,
+      // so canonicalizing a fallback cannot open a second loading window.
+      if (bootstrap.selectedAppId !== null && bootstrap.selectedAppId !== entry.key.preferredAppId) {
+        const canonical = entryFor(appCatalogKey(entry.key.apiBaseUrl, bootstrap.selectedAppId, entry.key.sessionRevision));
+        if (canonical.epoch === 0 && canonical.snapshot.state === "idle") {
+          canonical.snapshot = entry.snapshot;
+          notify(canonical);
+        }
+      }
       notify(entry);
     }, (error: unknown) => {
       if (controller.signal.aborted || requestEpoch !== entry.epoch) return;

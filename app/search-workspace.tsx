@@ -84,6 +84,7 @@ import {
   supportsServerFeature,
   type SystemBootstrapModel,
 } from "@/lib/api";
+import { BrowserCreateAction } from "@/lib/api/client-request-id";
 import { useAppCatalog } from "@/app/_components/use-app-catalog";
 import { OPEN_SPLUNK_BUILD_LABEL } from "@/lib/build-identity";
 import {
@@ -1018,6 +1019,12 @@ export function SearchWorkspace({
   const [showAllFields, setShowAllFields] = useState(false);
   const [globalFind, setGlobalFind] = useState("");
   const [runningSearch] = useState(() => new RunningSearchController());
+  const [searchCreateAction] = useState(() => new BrowserCreateAction());
+  const [exportCreateAction] = useState(() => new BrowserCreateAction());
+  const [savedCreateAction] = useState(() => new BrowserCreateAction());
+  const [savedDuplicateAction] = useState(() => new BrowserCreateAction());
+  const pendingSearchCreateIdRef = useRef<string | null>(null);
+  const pendingDuplicateRef = useRef<{ sourceId: string; candidate: string } | null>(null);
   const backendPageAbortRef = useRef<AbortController | null>(null);
   const backendChartSeriesAbortRef = useRef<AbortController | null>(null);
   const backendMetadataAbortRef = useRef<AbortController | null>(null);
@@ -1731,13 +1738,15 @@ export function SearchWorkspace({
       maximumBytes: backendEnabled ? bootstrap?.limits.maximumExportBytes || null : null,
     } as const;
     if (exportStage === "configure") {
-      const available = !backendEnabled || (featureSupported && jobReady);
+      const available = !backendEnabled || (featureSupported && jobReady && !appCatalogActionsBlocked);
       return {
         ...common,
         status: "configure",
         available,
         unavailableReason: available
           ? null
+          : appCatalogActionsBlocked
+            ? "Wait for the current app catalog before creating an export."
           : !featureSupported
             ? `The server does not advertise ${exportFormat === "csv" ? "CSV" : "JSON Lines"} exports.`
             : exportSourceTab === "patterns"
@@ -2075,13 +2084,20 @@ export function SearchWorkspace({
 
   async function loadSharedWorkspaceBootstrap(requestedAppId: string | undefined, signal: AbortSignal) {
     const key = appCatalogKey(apiBaseUrl, requestedAppId, currentAdministratorSessionRevision());
-    await appCatalogStore.load(key);
-    if (signal.aborted) throw new DOMException("The bootstrap request was canceled.", "AbortError");
-    const snapshot = appCatalogStore.getSnapshot(key);
-    if (snapshot.state !== "available" || snapshot.stale || snapshot.bootstrap === null) {
+    async function awaitCurrentCatalog(): Promise<SystemBootstrapModel> {
+      if (signal.aborted) throw new DOMException("The bootstrap request was canceled.", "AbortError");
+      await appCatalogStore.load(key);
+      if (signal.aborted) throw new DOMException("The bootstrap request was canceled.", "AbortError");
+      const snapshot = appCatalogStore.getSnapshot(key);
+      if (snapshot.state === "available" && !snapshot.stale && snapshot.bootstrap !== null) {
+        return snapshot.bootstrap;
+      }
+      // Subscription replay or a concurrent catalog invalidation can supersede
+      // the awaited request. Join the replacement rather than failing launch.
+      if (snapshot.state === "loading" || snapshot.state === "idle") return awaitCurrentCatalog();
       throw new Error(snapshot.error ?? "The current app catalog is unavailable.");
     }
-    return snapshot.bootstrap;
+    return awaitCurrentCatalog();
   }
 
   async function ensureBackendBootstrap(): Promise<BackendBootstrapState> {
@@ -3204,8 +3220,16 @@ export function SearchWorkspace({
       return;
     }
     abandonDisplayedJobRef.current(timeRange);
+    if (decision.kind === "open-job" && restoredState !== null) {
+      const restoredDraft = restoredTimeRange(restoredState);
+      setQuery(restoredState.q);
+      setEditorCaret(restoredState.q.length);
+      setTimeRange(restoredDraft);
+      setDraftTimeRange(restoredDraft);
+    }
     historyLaunchCleanupRef.current = applyUrlLaunch({
       initial: false,
+      preserveDraft: decision.kind === "open-job" && restoredState !== null,
       launch: decision.kind === "open-job"
         ? { source: "searchJobId", value: decision.searchJobId, run: false }
         : undefined,
@@ -4816,7 +4840,31 @@ export function SearchWorkspace({
             visualization: undefined,
           }
         : undefined;
-      if (definition !== undefined) {
+      const createIntent = {
+        definition,
+        source: savedExecution !== undefined
+          ? {
+            origin: SearchJobOrigin.SEARCH_JOB_ORIGIN_SAVED_SEARCH,
+            savedSearchId: savedExecution.id,
+            historySearchId: undefined,
+            dashboardId: undefined,
+          }
+          : launchHistoryEntry === null
+            ? undefined
+            : {
+              origin: SearchJobOrigin.SEARCH_JOB_ORIGIN_HISTORY_RERUN,
+              savedSearchId: undefined,
+              historySearchId: launchHistoryEntry.id,
+              dashboardId: undefined,
+            },
+        options: undefined,
+
+      };
+      const clientRequestId = searchCreateAction.requestId({
+        ...createIntent,
+        sessionRevision: currentAdministratorSessionRevision(),
+      });
+      if (definition !== undefined && pendingSearchCreateIdRef.current !== clientRequestId) {
         const validation = await apiClient.search.validate(
           { definition },
           { signal: controller.signal, timeoutMs: 10_000 },
@@ -4839,25 +4887,8 @@ export function SearchWorkspace({
         }
       }
       if (!runningSearch.isCurrent(generation) || controller.signal.aborted) return;
-      const response = await apiClient.search.create({
-        definition,
-        source: savedExecution !== undefined
-          ? {
-            origin: SearchJobOrigin.SEARCH_JOB_ORIGIN_SAVED_SEARCH,
-            savedSearchId: savedExecution.id,
-            historySearchId: undefined,
-            dashboardId: undefined,
-          }
-          : launchHistoryEntry === null
-            ? undefined
-            : {
-              origin: SearchJobOrigin.SEARCH_JOB_ORIGIN_HISTORY_RERUN,
-              savedSearchId: undefined,
-              historySearchId: launchHistoryEntry.id,
-              dashboardId: undefined,
-            },
-        options: undefined,
-      }).catch((error: unknown) => {
+      pendingSearchCreateIdRef.current = clientRequestId;
+      const response = await apiClient.search.create({ ...createIntent, clientRequestId }).catch((error: unknown) => {
         if (launchHistoryEntry !== null && isHttpStatus(error, 404)) {
           removeBackendHistoryEntryLocally(launchHistoryEntry.id);
         }
@@ -4865,6 +4896,8 @@ export function SearchWorkspace({
       });
       let job = response.searchJob;
       if (job === undefined || job.searchJobId.length === 0) throw new Error("The server did not return a search job ID.");
+      searchCreateAction.complete();
+      pendingSearchCreateIdRef.current = null;
       if (backendHistoryRerunRef.current?.id === launchHistoryEntry?.id) {
         backendHistoryRerunRef.current = null;
       }
@@ -5868,6 +5901,7 @@ export function SearchWorkspace({
     descriptionOverride = saveDescription,
     purpose: "report" | "search" = "search",
   ) {
+    if (backendWorkspaceTransitionBlocked()) return;
     const trimmedName = nameOverride.trim();
     const trimmedDescription = descriptionOverride.trim();
     if (trimmedName.length === 0 || objectMutation !== null) return;
@@ -5910,12 +5944,17 @@ export function SearchWorkspace({
         visualization,
         base: source?.search ?? backendHistoryRerunRef.current?.search,
       };
+      const createSavedIntent = {
+        name: trimmedName, description: trimmedDescription || undefined, search,
+        sharingScope: SharingScope.SHARING_SCOPE_PRIVATE,
+      };
       const result = existing === undefined
         ? await createServerSavedSearch(apiClient, bootstrap.response, {
           name: trimmedName,
           description: trimmedDescription,
           search,
           sharingScope: SharingScope.SHARING_SCOPE_PRIVATE,
+          clientRequestId: savedCreateAction.requestId({ ...createSavedIntent, sessionRevision: currentAdministratorSessionRevision() }),
         })
         : await updateServerSavedSearch(apiClient, bootstrap.response, {
           id: existing.id,
@@ -5935,6 +5974,7 @@ export function SearchWorkspace({
         setSavedSearchesAvailable(false);
         throw new Error("Saved searches are not available from this server.");
       }
+      if (existing === undefined) savedCreateAction.complete();
       backendSavedSearchesRef.current.set(result.value.id, result.value);
       backendHistoryRerunRef.current = null;
       activeSavedSearchIdRef.current = result.value.id;
@@ -6311,6 +6351,7 @@ export function SearchWorkspace({
   }
 
   async function duplicateSavedSearch(id: string) {
+    if (backendWorkspaceTransitionBlocked()) return;
     const displaySearch = savedSearches.find((savedSearch) => savedSearch.id === id);
     if (displaySearch === undefined) return;
     const initialName = nextDuplicateSavedSearchName(displaySearch.name);
@@ -6354,7 +6395,9 @@ export function SearchWorkspace({
       ): Promise<Awaited<ReturnType<typeof duplicateServerSavedSearch>> | null> {
         if (attempt >= duplicateNameAttempts) return null;
         let candidate: string;
-        if (attempt < MAXIMUM_READABLE_DUPLICATE_NAME_ATTEMPTS) {
+        if (attempt === 0 && pendingDuplicateRef.current?.sourceId === id) {
+          candidate = pendingDuplicateRef.current.candidate;
+        } else if (attempt < MAXIMUM_READABLE_DUPLICATE_NAME_ATTEMPTS) {
           candidate = nextDuplicateSavedSearchName(sourceName, attemptedNames);
         } else {
           candidate = randomDuplicateSavedSearchName(sourceName);
@@ -6363,6 +6406,7 @@ export function SearchWorkspace({
           }
         }
         attemptedNames.add(candidate);
+        pendingDuplicateRef.current = { sourceId: id, candidate };
         try {
           return await duplicateServerSavedSearch(
             apiClient,
@@ -6370,9 +6414,11 @@ export function SearchWorkspace({
             id,
             candidate,
             savedAppId,
+            { clientRequestId: savedDuplicateAction.requestId({ id: id.trim(), candidate: candidate.trim(), appId: savedAppId?.trim(), sessionRevision: currentAdministratorSessionRevision() }) },
           );
         } catch (error) {
           if (!isHttpStatus(error, 409)) throw error;
+          pendingDuplicateRef.current = null;
           return attemptDuplicate(attempt + 1);
         }
       }
@@ -6384,6 +6430,8 @@ export function SearchWorkspace({
         throw new Error("Saved-search duplication is not available from this server.");
       }
       backendSavedSearchesRef.current.set(result.value.id, result.value);
+      savedDuplicateAction.complete();
+      pendingDuplicateRef.current = null;
       const duplicate = savedSearchForDisplay(result.value);
       setSavedSearches((current) => [duplicate, ...current.filter((item) => item.id !== duplicate.id)]);
       showToast(`Duplicated as “${result.value.name}”.`, "success");
@@ -6680,6 +6728,7 @@ export function SearchWorkspace({
       setModal("export");
       return;
     }
+    if (backendWorkspaceTransitionBlocked()) return;
     setExportPatternSource(backendEnabled && retainedPatternContext !== null
       && (sourceTab === "patterns" || (sourceTab === "events" && patternMembers !== null))
       ? patternExportSource(retainedPatternContext, sourceTab === "patterns" ? null : patternMembers!.pattern)
@@ -6738,6 +6787,7 @@ export function SearchWorkspace({
   }
 
   async function prepareExport() {
+    if (backendWorkspaceTransitionBlocked()) return;
     const exportEpoch = ++exportEpochRef.current;
     const requestId = `export-${Date.now()}-${runningSearch.generationSnapshot()}`;
     setExportRequestId(requestId);
@@ -6771,7 +6821,7 @@ export function SearchWorkspace({
     setServerExportJob(null);
     setExportStage("pending");
     try {
-      const created = await createServerExport(apiClient, bootstrap.response, {
+      const exportIntent = {
         searchJobId: exportPatternSource?.value.searchJobId ?? job.searchJobId,
         source: exportPatternSource,
         format: exportFormat === "csv" ? "csv" : "json-lines",
@@ -6784,11 +6834,17 @@ export function SearchWorkspace({
           : undefined,
         csvHeaderMode: "field-names",
         jsonIntegerEncoding: "string",
+
+      } as const;
+      const created = await createServerExport(apiClient, bootstrap.response, {
+        ...exportIntent,
+        clientRequestId: exportCreateAction.requestId({ ...exportIntent, sessionRevision: currentAdministratorSessionRevision() }),
         signal: controller.signal,
       });
       if (created.status === "unavailable") {
         throw new Error("The selected export format is not available from this server.");
       }
+      exportCreateAction.complete();
       if (controller.signal.aborted || exportEpochRef.current !== exportEpoch) return;
       serverExportJobRef.current = created.value;
       setServerExportJob(created.value);

@@ -338,3 +338,37 @@ test("server app ordering and fallback selection remain authoritative", async ()
     assert.equal(store.getSnapshot(key).bootstrap?.selectedAppId, "apple");
   } finally { store.dispose(); }
 });
+
+
+test("server fallback seeds an unused canonical app key without a second loading window", async () => {
+  const { requests, store } = harness();
+  try {
+    const initial = { ...key, preferredAppId: undefined };
+    const loading = store.load(initial);
+    const response = bootstrap(["app-a"]);
+    requests[0].response.resolve(response);
+    await loading;
+    assert.equal(store.getSnapshot(key).bootstrap, response);
+    assert.equal(store.getSnapshot(key).state, "available");
+    await store.load(key);
+    assert.equal(requests.length, 1);
+    assert.equal(store.getSnapshot(key).bootstrap?.receivedAt, response.receivedAt);
+  } finally { store.dispose(); }
+});
+
+test("fallback cannot replace a canonical app request that already has newer authority", async () => {
+  const { requests, store } = harness();
+  try {
+    const initial = { ...key, preferredAppId: undefined };
+    const fallback = store.load(initial);
+    const canonical = store.load(key);
+    requests[0].response.resolve(bootstrap(["app-a"]));
+    await fallback;
+    assert.equal(store.getSnapshot(key).state, "loading");
+    assert.equal(store.getSnapshot(key).bootstrap, null);
+    const current = bootstrap(["app-a", "app-b"]);
+    requests[1].response.resolve(current);
+    await canonical;
+    assert.equal(store.getSnapshot(key).bootstrap, current);
+  } finally { store.dispose(); }
+});
