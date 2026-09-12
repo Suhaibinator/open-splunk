@@ -217,8 +217,12 @@ The controlled ordinary-search qualification accepts two already-built server
 binaries from the same pinned release toolchain. Build the baseline at
 `da8415f3bf4ad115da0a0b3941e5c333392ae3b9` and the clean candidate before reserving
 an idle host. It verifies their identities, uses one immutable 10,001-row
-ClickHouse fixture, and records seven alternating pairs with exact output and
-error parity. Median and p95 regressions must each remain below 10%:
+ClickHouse fixture, and records seven alternating pairs per admission mode with
+exact output and error parity. The `unkeyed` mode omits request keys on both
+binaries. The `browser_behavior` mode compares the baseline's unkeyed browser
+admission with a fresh unique request key on every candidate admission; key
+generation occurs outside the timer and replayed receipts fail qualification.
+Median and p95 regressions must each remain below 10% in both modes:
 
 ```sh
 OPEN_SPLUNK_NEARBY_SEARCH_QUALIFICATION=1 \
@@ -229,8 +233,8 @@ OPEN_SPLUNK_NEARBY_CANDIDATE_REVISION="$(git rev-parse HEAD)" \
     -count=1 -timeout=15m -v
 ```
 
-The output includes one `NEARBY_SEARCH_QUALIFICATION` JSON report with raw
-samples, fixture/output digests, binary hashes, and toolchain metadata. The
+The output includes a `NEARBY_SEARCH_QUALIFICATION` JSON report for each mode,
+with raw samples, fixture/output digests, binary hashes, and toolchain metadata. The
 separate retained-Patterns qualification records seven cold/cached pairs,
 resource accounting and process RSS, with cold p95 at most 2 seconds, cached
 p95 at most 100 milliseconds, and cancellation at most 250 milliseconds:

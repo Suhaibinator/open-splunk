@@ -156,6 +156,14 @@ Export download is a raw `GET` response, not protobuf. The short-lived path and
 bearer grant are returned by the export API. The token belongs in the
 `Authorization` header, never a query string.
 
+Workspace exports use the server's default byte limit (currently 256 MiB),
+which the admitted job returns in its definition. The dialog displays that
+effective limit after admission. The API also accepts an explicit positive
+`byte_limit` up to the advertised maximum (currently 4 GiB). In-flight exports
+reserve their full byte limit against the shared budget; retained artifacts
+continue to consume their actual size. An export that exceeds its limit fails
+explicitly instead of publishing a partial artifact.
+
 HEC is bounded JSON rather than protobuf and is documented in [HEC](hec.md).
 
 ## Process probes

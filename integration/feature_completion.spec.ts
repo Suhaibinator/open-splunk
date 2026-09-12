@@ -281,6 +281,9 @@ async function verifyPatterns(page: Page, observation: BrowserObservation): Prom
   assertExactBulkMembers(memberRows);
 
   expect(observation.exportCreates).toHaveLength(2);
+  for (const request of observation.exportCreates) {
+    expect(request.definition?.byteLimit, "workspace exports use the server default reservation").toBeUndefined();
+  }
   const summarySource = observation.exportCreates[0]?.definition?.source;
   const memberSource = observation.exportCreates[1]?.definition?.source;
   expect(summarySource?.$case).toBe("patternSummary");
