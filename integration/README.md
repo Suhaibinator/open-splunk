@@ -116,7 +116,9 @@ summary/member exports, Nearby search and Back navigation, Private/Global/App
 saved-search scope persistence, the HEC settings surface, and bundled Help
 navigation/search. It uses the production APIs without mocked responses. The
 separate HEC vertical and offline Help browser suite cover enabled ingestion
-and Help with backend requests blocked.
+and Help with backend requests blocked. CI enables this flow in its backend
+vertical job and retains its failure screenshots alongside the other browser
+artifacts; administrator-session traces are disabled.
 
 The default image is
 `clickhouse/clickhouse-server:26.7.5.10-alpine@sha256:0a45b864c73322d4360dea1973ee9b77f29c51af1242ad2d47409908071fa56e`.

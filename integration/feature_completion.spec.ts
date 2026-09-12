@@ -8,7 +8,8 @@ import {
   CreateSavedSearchRequest,
   UpdateSavedSearchRequest,
 } from "../gen/ts/open_splunk/saved_search_api";
-import { SearchDefinition } from "../gen/ts/open_splunk/search";
+import { SearchDefinition, SearchJobOrigin } from "../gen/ts/open_splunk/search";
+import { CreateSearchJobRequest } from "../gen/ts/open_splunk/search_api";
 
 const baseURL = loopbackOrigin(requiredEnvironment("OPEN_SPLUNK_FEATURE_COMPLETION_BASE_URL"));
 const appID = requiredEnvironment("OPEN_SPLUNK_FEATURE_COMPLETION_APP_ID");
@@ -29,6 +30,7 @@ interface BrowserObservation {
   failedRequests: string[];
   pageErrors: string[];
   searchCreates: number;
+  searchRequests: CreateSearchJobRequest[];
   exportCreates: CreateExportJobRequest[];
   savedCreates: CreateSavedSearchRequest[];
   savedUpdates: UpdateSavedSearchRequest[];
@@ -98,6 +100,7 @@ function observeBrowser(page: Page): BrowserObservation {
     failedRequests: [],
     pageErrors: [],
     searchCreates: 0,
+    searchRequests: [],
     exportCreates: [],
     savedCreates: [],
     savedUpdates: [],
@@ -130,7 +133,9 @@ function observeRequest(request: Request, observation: BrowserObservation): void
   const body = request.postDataBuffer();
   if (url.pathname === "/api/search/jobs/create") observation.searchCreates += 1;
   if (body === null) return;
-  if (url.pathname === "/api/search/exports/create") {
+  if (url.pathname === "/api/search/jobs/create") {
+    observation.searchRequests.push(CreateSearchJobRequest.decode(body));
+  } else if (url.pathname === "/api/search/exports/create") {
     observation.exportCreates.push(CreateExportJobRequest.decode(body));
   } else if (url.pathname === "/api/saved-searches/create") {
     observation.savedCreates.push(CreateSavedSearchRequest.decode(body));
@@ -146,11 +151,11 @@ async function chooseOption(control: Locator, name: string): Promise<void> {
   await control.page().locator(`[id="${listboxID}"]`).getByRole("option", { name, exact: true }).click();
 }
 
-async function waitForCompletedSearch(page: Page, rows: number): Promise<void> {
+async function waitForCompletedSearch(page: Page, rows: number, unit: "events" | "rows" = "events"): Promise<void> {
   const strip = page.getByTestId("job-strip");
   await expect(strip).toHaveAttribute("aria-busy", "false", { timeout });
   await expect(strip).toContainText("Completed", { timeout });
-  await expect(strip).toContainText(`${rows.toLocaleString("en-US")} events`, { timeout });
+  await expect(strip).toContainText(`${rows.toLocaleString("en-US")} ${unit}`, { timeout });
 }
 
 async function openAndRunSearch(page: Page, query: string, earliest: Date, latest: Date, rows: number): Promise<void> {
@@ -175,7 +180,17 @@ async function createJSONLinesExport(page: Page, expectedRows: number): Promise<
   const dialog = page.getByRole("dialog", { name: /^Export /u });
   await expect(dialog).toBeVisible({ timeout });
   await dialog.getByLabel("Export as JSON Lines").check();
-  await dialog.getByRole("button", { name: "Create export" }).click();
+  const [created] = await Promise.all([
+    page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return url.origin === baseURL && url.pathname === "/api/search/exports/create"
+        && response.request().method() === "POST";
+    }, { timeout }),
+    dialog.getByRole("button", { name: "Create export" }).click(),
+  ]);
+  expect(created.status(), created.ok() ? "export admission" : await created.text()).toBe(200);
+  await expect(dialog.getByTestId("export-dialog")).toHaveAttribute("aria-busy", "false", { timeout });
+  expect(await dialog.getByRole("alert").allTextContents(), "export preparation errors").toEqual([]);
   await expect(dialog.locator(".workspace-dialog-export-summary")).toContainText(
     `Rows${expectedRows.toLocaleString("en-US")}`,
     { timeout },
@@ -327,13 +342,21 @@ async function verifyNearbyBack(page: Page, observation: BrowserObservation): Pr
 }
 
 async function verifySavedSearchScope(page: Page, observation: BrowserObservation): Promise<void> {
+  const searchesBefore = observation.searchCreates;
   await page.goto(featureURL("/search/events/", { savedSearchId: savedSearchID, run: "1" }), {
     waitUntil: "domcontentloaded",
     timeout,
   });
   await expect(page.getByTestId("search-workspace")).toBeVisible({ timeout });
-  await waitForCompletedSearch(page, 4);
+  await waitForCompletedSearch(page, 4, "rows");
+  await expect(page.getByRole("heading", { name: "SPL persisted lookup vertical", exact: true })).toBeVisible();
   const originalSearch = await page.getByTestId("search-input").inputValue();
+  expect(observation.searchCreates).toBe(searchesBefore + 1);
+  const savedRun = observation.searchRequests.at(-1);
+  expect(savedRun?.source?.origin).toBe(SearchJobOrigin.SEARCH_JOB_ORIGIN_SAVED_SEARCH);
+  expect(savedRun?.source?.savedSearchId).toBe(savedSearchID);
+  expect(savedRun?.definition?.spl).toBe(originalSearch);
+  expect(savedRun?.clientRequestId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u);
 
   await page.getByRole("button", { name: /^Save As/u }).click();
   await page.getByRole("menuitem", { name: /Saved search/u }).click();
