@@ -15,6 +15,7 @@ import (
 	"math"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"fortio.org/safecast"
@@ -152,7 +153,7 @@ func (service *Service) CreateIdempotent(
 		intent.Route != requestidempotency.RouteCreateLookup {
 		return nil, fmt.Errorf("%w: lookup idempotency authority is unavailable", ErrUnavailable)
 	}
-	replay := func() (*opensplunk.CreateLookupResponse, bool, error) {
+	replay := func(ctx context.Context) (*opensplunk.CreateLookupResponse, bool, error) {
 		receipt, found, err := requestidempotency.Read(ctx, service.receiptDB, intent)
 		if err != nil || !found {
 			return nil, found, err
@@ -174,7 +175,7 @@ func (service *Service) CreateIdempotent(
 			Lookup: cloneLookup(lookup), Replayed: true,
 		}, true, nil
 	}
-	if response, found, err := replay(); err != nil || found {
+	if response, found, err := replay(ctx); err != nil || found {
 		return response, err
 	}
 	if input == nil || input.ClientRequestId == nil ||
@@ -196,7 +197,10 @@ func (service *Service) CreateIdempotent(
 			Lookup: cloneLookup(lookup), Replayed: false,
 		}, nil
 	}
-	if response, found, replayErr := replay(); replayErr != nil || found {
+	// Reconcile an ambiguous commit even when the caller has disconnected.
+	reconcileCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if response, found, replayErr := replay(reconcileCtx); replayErr != nil || found {
 		return response, replayErr
 	}
 	return nil, classify(err)

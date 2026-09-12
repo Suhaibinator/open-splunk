@@ -747,7 +747,10 @@ func (manager *Manager) CreateIdempotent(
 	if err == nil {
 		return job, false, nil
 	}
-	if replay, found, replayErr := manager.ReplayIdempotent(ctx, access, intent); replayErr != nil || found {
+	// Admission may have committed even when cancellation loses its acknowledgement.
+	reconcileCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), manager.journalTimeout)
+	defer cancel()
+	if replay, found, replayErr := manager.ReplayIdempotent(reconcileCtx, access, intent); replayErr != nil || found {
 		return replay, found, replayErr
 	}
 	return Job{}, false, err

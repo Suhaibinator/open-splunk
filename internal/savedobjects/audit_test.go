@@ -906,3 +906,42 @@ func readSavedSearchAuditPersistence(t *testing.T, database *control.DB) []saved
 	}
 	return records
 }
+
+func TestSavedSearchReceiptReconcilesCommittedCancellation(t *testing.T) {
+	database, _ := openTestStore(t)
+	dependencies := &savedSearchAuditDependencies{
+		base: time.Date(2026, time.September, 12, 12, 0, 0, 0, time.UTC),
+		ids:  []string{"ss_committed_cancellation"},
+	}
+	raw := newSavedSearchAuditRawStore(t, database, dependencies.options())
+	appender := &recordingSavedSearchAuditAppender{}
+	store := newSavedSearchAuditStore(t, raw, appender)
+	scope := AccessScope{OwnerID: "owner-a"}
+	definition := savedSearchDefinition("committed cancellation", "")
+	intent, err := requestidempotency.NewIntent(savedSearchAuditTestTenant, "browser", scope.OwnerID,
+		requestidempotency.RouteCreateSavedSearch, "committed-cancellation-request",
+		&opensplunk.CreateSavedSearchRequest{Definition: definition})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	operations := 0
+	operation := func(publish savedSearchMutationAuditPublisher) (*opensplunk.SavedSearch, error) {
+		operations++
+		_, createErr := raw.create(ctx, scope, definition, publish)
+		if createErr != nil {
+			return nil, createErr
+		}
+		// Lose the acknowledgement only after the target, audit and receipt committed.
+		cancel()
+		return nil, context.Canceled
+	}
+	current, replayed, err := store.createIdempotent(ctx, scope, definition, operation, intent)
+	if err != nil || !replayed || current.GetSavedSearchId() != "ss_committed_cancellation" || operations != 1 || len(appender.snapshot()) != 1 {
+		t.Fatalf("committed cancellation replay = %v, %t, %v; operations=%d audits=%d", current, replayed, err, operations, len(appender.snapshot()))
+	}
+	if _, _, err := store.CreateIdempotent(ctx, scope, definition, intent); !errors.Is(err, context.Canceled) {
+		t.Fatalf("initial reads must still respect cancellation: %v", err)
+	}
+}

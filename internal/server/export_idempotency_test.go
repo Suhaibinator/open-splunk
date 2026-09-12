@@ -36,7 +36,7 @@ func exportReceiptContext(t *testing.T) context.Context {
 	return ctx
 }
 func TestExportReceiptPrecedesCreateOnlyConversionAndReturnsCurrentMetadata(t *testing.T) {
-	input := &opensplunk.CreateExportJobRequest{ClientRequestId: proto.String("logical-export-request")}
+	input := &opensplunk.CreateExportJobRequest{ClientRequestId: new("logical-export-request")}
 	current := testExportJob("accepted-export", exportjobs.FormatCSV, exportjobs.StateCanceled)
 	current.Version = 9
 	calls := 0
@@ -54,7 +54,7 @@ func TestExportReceiptPrecedesCreateOnlyConversionAndReturnsCurrentMetadata(t *t
 		return current, true, nil
 	}}
 	handler := &apiHandler{exports: service, tenantID: "tenant", ownerID: "owner", now: func() time.Time { return testNow }}
-	request := httptest.NewRequest("POST", "/api/search/exports/create", nil).WithContext(exportReceiptContext(t))
+	request := httptest.NewRequestWithContext(exportReceiptContext(t), "POST", "/api/search/exports/create", nil)
 	response, err := handler.createExportJob(request, input)
 	if err != nil || !response.GetReplayed() || response.GetExportJob().GetStateVersion() != 9 || response.GetExportJob().GetState() != opensplunk.ExportJobState_EXPORT_JOB_STATE_CANCELED || response.GetExportJob().GetExportJobId() != current.ID {
 		t.Fatalf("replay=%v %v", response, err)
@@ -63,7 +63,7 @@ func TestExportReceiptPrecedesCreateOnlyConversionAndReturnsCurrentMetadata(t *t
 		t.Fatal("replay invoked create")
 	}
 	// Missing authenticated identity never reaches receipt lookup.
-	if _, err := handler.createExportJob(httptest.NewRequest("POST", "/", nil), input); err == nil || calls != 1 {
+	if _, err := handler.createExportJob(httptest.NewRequestWithContext(t.Context(), "POST", "/", nil), input); err == nil || calls != 1 {
 		t.Fatalf("unauthenticated receipt disclosure: %v calls=%d", err, calls)
 	}
 }
@@ -72,8 +72,8 @@ func TestExportReceiptConflictDoesNotReachAdmission(t *testing.T) {
 		return exportjobs.Job{}, true, requestidempotency.ErrConflict
 	}}
 	handler := &apiHandler{exports: service, tenantID: "tenant", ownerID: "owner"}
-	request := httptest.NewRequest("POST", "/", nil).WithContext(exportReceiptContext(t))
-	_, err := handler.createExportJob(request, &opensplunk.CreateExportJobRequest{ClientRequestId: proto.String("logical-export-request")})
+	request := httptest.NewRequestWithContext(exportReceiptContext(t), "POST", "/", nil)
+	_, err := handler.createExportJob(request, &opensplunk.CreateExportJobRequest{ClientRequestId: new("logical-export-request")})
 	if err == nil || err.Error() != mapRequestIdempotencyError(requestidempotency.ErrConflict).Error() {
 		t.Fatalf("conflict=%v", err)
 	}
@@ -95,7 +95,7 @@ func TestExportAcceptanceWinsConcurrentRequestCancellation(t *testing.T) {
 		},
 	}
 	handler := &apiHandler{exports: service, tenantID: "tenant", ownerID: "owner", now: func() time.Time { return testNow }}
-	response, err := handler.createExportJob(httptest.NewRequest("POST", "/", nil).WithContext(ctx), &opensplunk.CreateExportJobRequest{ClientRequestId: proto.String("logical-export-request"), Definition: csvExportDefinition("search-1")})
+	response, err := handler.createExportJob(httptest.NewRequestWithContext(ctx, "POST", "/", nil), &opensplunk.CreateExportJobRequest{ClientRequestId: new("logical-export-request"), Definition: csvExportDefinition("search-1")})
 	if err != nil || response.GetReplayed() || response.GetExportJob().GetExportJobId() != accepted.ID {
 		t.Fatalf("committed cancellation=%v %v", response, err)
 	}

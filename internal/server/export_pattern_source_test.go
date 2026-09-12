@@ -1,10 +1,11 @@
 package server
 
 import (
+	"testing"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"google.golang.org/protobuf/proto"
-	"testing"
 )
 
 func TestExportPatternSourceRoundTripsExactClientIdentity(t *testing.T) {
