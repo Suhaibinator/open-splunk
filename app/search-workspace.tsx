@@ -89,7 +89,6 @@ import { OPEN_SPLUNK_BUILD_LABEL } from "@/lib/build-identity";
 import {
   adaptSearchResults,
   compareWorkspaceStatisticValues,
-  patternsFromEvents,
   resolveAbsoluteTimeRange,
   timechartRowsForExport,
   timechartValueFields,
@@ -285,6 +284,11 @@ import {
 } from "./search-workspace/running-search-controller";
 import { summarizeByteQuantity } from "@/lib/byte-quantity";
 import { EventsPanel } from "./search-workspace/panels/events-panel";
+import { useBackendPatterns } from "./search-workspace/use-backend-patterns";
+import { patternExportSource } from "./search-workspace/pattern-export-source";
+import { PatternFilterChip } from "./search-workspace/components/pattern-filter-chip";
+import { NearbyContextEditor } from "./search-workspace/components/nearby-context-editor";
+import { adaptNearbyContext, createNearbyDraft, createNearbyPreparationGate, nearbyBuilderAttached, nearbySearch, type NearbyDraft } from "@/lib/search/nearby-events";
 import { PatternsPanel } from "./search-workspace/panels/patterns-panel";
 import { StatisticsPanel } from "./search-workspace/panels/statistics-panel";
 import { StatisticsColumnLayoutStore } from "./search-workspace/panels/statistics-column-layout";
@@ -570,7 +574,7 @@ function workspaceStackMode(mode: VisualizationStackMode): StackMode | null {
 }
 
 function resultTabCompatibleWithKind(tab: ResultTab, kind: ResultSetKind): boolean {
-  if (kind === ResultSetKind.RESULT_SET_KIND_EVENTS) return tab === "events";
+  if (kind === ResultSetKind.RESULT_SET_KIND_EVENTS) return tab === "events" || tab === "patterns";
   if (
     kind === ResultSetKind.RESULT_SET_KIND_STATISTICS
     || kind === ResultSetKind.RESULT_SET_KIND_TIME_SERIES
@@ -883,6 +887,7 @@ export function SearchWorkspace({
   const [backendResultTotalRows, setBackendResultTotalRows] = useState<number | null>(null);
   const [backendResultTotalExact, setBackendResultTotalExact] = useState(false);
   const [backendHasNextPage, setBackendHasNextPage] = useState(false);
+  const [backendSnapshotRef, setBackendSnapshotRef] = useState("");
   const [backendSnapshotComplete, setBackendSnapshotComplete] = useState(true);
   const [backendResultsTruncated, setBackendResultsTruncated] = useState(false);
   const [backendResultsExpired, setBackendResultsExpired] = useState(false);
@@ -984,6 +989,7 @@ export function SearchWorkspace({
   const [demoExportSize, setDemoExportSize] = useState(0);
   const [exportClockTick, setExportClockTick] = useState(0);
   const [exportFields, setExportFields] = useState<string[]>(EVENT_EXPORT_FIELDS);
+  const [exportPatternSource, setExportPatternSource] = useState<ReturnType<typeof patternExportSource> | undefined>(undefined);
   const [exportSourceTab, setExportSourceTab] = useState<ResultTab>("events");
   const [chartStyle, setChartStyle] = useState<ChartStyle>("column");
   const [chartTitle, setChartTitle] = useState("Event volume by level");
@@ -991,6 +997,10 @@ export function SearchWorkspace({
   const [showDataLabels, setShowDataLabels] = useState(true);
   const [stackMode, setStackMode] = useState<StackMode>("none");
   const [statsDensity, setStatsDensity] = useState<StatsDensity>("compact");
+  const [nearbyPreparation] = useState(createNearbyPreparationGate);
+  const [nearbyDraft, setNearbyDraft] = useState<NearbyDraft | null>(null);
+  const [nearbyAppliedDraft, setNearbyAppliedDraft] = useState<NearbyDraft | null>(null);
+  const [nearbyPreparing, setNearbyPreparing] = useState(false);
   const [patternSensitivity, setPatternSensitivity] = useState<PatternSensitivity>("Balanced");
   const [eventDisplay, setEventDisplay] = useState<EventDisplay>("List");
   const [eventPageSize, setEventPageSize] = useState(20);
@@ -1366,6 +1376,18 @@ export function SearchWorkspace({
       controller.abort();
     };
   }, [apiClient, backendBootstrapModel, backendCompletionEnabled, editorCaret, query, timeRange]);
+  const retainedPatternContext = backendEnabled && backendAuthoritativeResultsReady
+    && !backendResultsExpired && backendResultKind === ResultSetKind.RESULT_SET_KIND_EVENTS
+    && phase === "completed" && backendSnapshotRef && runningSearch.jobSnapshot().id
+    ? { searchJobId: runningSearch.jobSnapshot().id!, snapshotRef: backendSnapshotRef, sensitivity: patternSensitivity }
+    : null;
+  const backendPatterns = useBackendPatterns(backendEnabled ? apiClient.search : null, retainedPatternContext, activeTab === "patterns");
+  const patternMembers = backendPatterns.members;
+  const patternMemberEvents = useMemo(() => {
+    const page = patternMembers?.page;
+    return page?.schema ? adaptSearchResults(page.schema, page.rows).events : [];
+  }, [patternMembers?.page]);
+
   const displayedBackendResults = backendDisplayingPreview
     ? backendPreviewDisplay.adapted
     : null;
@@ -1373,9 +1395,9 @@ export function SearchWorkspace({
     () => searchIsClosed
       ? []
       : backendEnabled
-        ? displayedBackendResults?.events ?? backendEvents
+        ? patternMembers !== null ? patternMemberEvents : displayedBackendResults?.events ?? backendEvents
         : filteredDemoEvents(submittedQuery),
-    [backendEnabled, backendEvents, displayedBackendResults?.events, searchIsClosed, submittedQuery],
+    [backendEnabled, backendEvents, displayedBackendResults?.events, patternMemberEvents, patternMembers, searchIsClosed, submittedQuery],
   );
   const timelinePoints = useMemo(() => backendEnabled
     ? backendDisplayingPreview
@@ -1689,13 +1711,13 @@ export function SearchWorkspace({
     const featureSupported = !backendEnabled
       || (bootstrap !== undefined && supportsServerFeature(bootstrap, feature));
     const resultMatchesSource = backendResultKind === ResultSetKind.RESULT_SET_KIND_EVENTS
-      ? exportSourceTab === "events"
+      ? exportSourceTab === "events" || (exportSourceTab === "patterns" && exportPatternSource !== undefined)
       : exportSourceTab === "statistics" || exportSourceTab === "visualization";
     const jobReady = phase === "completed"
       && runningSearch.jobSnapshot().job !== null
       && backendAuthoritativeResultsReady
       && !backendResultsExpired
-      && exportSourceTab !== "patterns"
+      && (exportSourceTab !== "patterns" || exportPatternSource !== undefined)
       && resultMatchesSource;
     const common = {
       description: backendEnabled
@@ -1719,7 +1741,7 @@ export function SearchWorkspace({
           : !featureSupported
             ? `The server does not advertise ${exportFormat === "csv" ? "CSV" : "JSON Lines"} exports.`
             : exportSourceTab === "patterns"
-              ? "Patterns are derived in this browser and are not a server export result."
+              ? "Patterns export requires a retained event snapshot. Rerun this search to enable it."
               : !resultMatchesSource
                 ? "This browser-derived view does not match the authoritative server result."
                 : backendResultsExpired
@@ -1834,8 +1856,21 @@ export function SearchWorkspace({
     () => sortTimechartRows(timelinePoints, timechartSort),
     [timelinePoints, timechartSort],
   );
+  if (nearbyAppliedDraft !== null && (
+    !nearbyBuilderAttached(nearbyAppliedDraft, query)
+    || nearbyAppliedDraft.earliest !== timeRange.earliest
+    || nearbyAppliedDraft.latest !== timeRange.latest
+  )) {
+    setNearbyDraft(null);
+    setNearbyAppliedDraft(null);
+  }
+  useEffect(() => {
+    nearbyPreparation.invalidate();
+  }, [nearbyPreparation, query, timeRange.earliest, timeRange.latest]);
+  useEffect(() => () => nearbyPreparation.invalidate(), [nearbyPreparation]);
+
   const patternRows = useMemo(() => {
-    if (backendEnabled) return patternsFromEvents(resultEvents, baseEventCount, patternSensitivity);
+    if (backendEnabled) return backendPatterns.rows;
     if (patternSensitivity === "Precise") {
       return [
         { signature: "Request metrics status=200 duration_ms=*", count: 4932, percent: 38.4 },
@@ -1851,7 +1886,7 @@ export function SearchWorkspace({
       ];
     }
     return DEMO_PATTERNS;
-  }, [backendEnabled, baseEventCount, patternSensitivity, resultEvents]);
+  }, [backendEnabled, backendPatterns.rows, patternSensitivity]);
   const backendRuntimeNotices = useMemo(() => {
     if (!backendEnabled) return [];
     return uniqueMessages([
@@ -2031,7 +2066,10 @@ export function SearchWorkspace({
       && !sharedAppCatalog.stale
       && sharedAppCatalog.bootstrap !== null
     ) {
-      acceptSharedAppCatalog(sharedAppCatalog.bootstrap);
+      let canceled = false;
+      const response = sharedAppCatalog.bootstrap;
+      queueMicrotask(() => { if (!canceled) acceptSharedAppCatalog(response); });
+      return () => { canceled = true; };
     }
   }, [appSwitchingId, backendEnabled, objectMutation, persistedLaunchPending, sharedAppCatalog.bootstrap, sharedAppCatalog.stale, sharedAppCatalog.state]);
 
@@ -2457,6 +2495,7 @@ export function SearchWorkspace({
     setBackendFieldSummaryError(null);
     setBackendResultKind(ResultSetKind.RESULT_SET_KIND_UNSPECIFIED);
     setBackendResultSchema(null);
+    setBackendSnapshotRef("");
     runningSearch.resetPreview();
     setBackendPreviewDisplay(null);
     setBackendPreviewStatus("disabled");
@@ -3114,6 +3153,10 @@ export function SearchWorkspace({
   // and remembered state say what to show; nothing here adds history, so a
   // run triggered from here refines the entry it lands on.
   const followHistoryEntry = useEffectEvent((event: PopStateEvent) => {
+    nearbyPreparation.invalidate();
+    setNearbyPreparing(false);
+    setNearbyDraft(null);
+    setNearbyAppliedDraft(null);
     const url = new URL(window.location.href);
     const restoredView = searchResultViewFromPathname(url.pathname) ?? "events";
     const restoredState = readSearchLaunchState(event.state);
@@ -3373,6 +3416,7 @@ export function SearchWorkspace({
     }
     setBackendHasNextPage(page.nextPageToken !== undefined);
     setBackendSnapshotComplete(page.snapshotComplete);
+    setBackendSnapshotRef(page.snapshotRef ?? "");
   }
 
   async function requestBackendResultPage(
@@ -4981,6 +5025,8 @@ export function SearchWorkspace({
   ) {
     if (runningSearch.launchIsLocked()) return;
     if (backendWorkspaceTransitionBlocked()) return;
+    nearbyPreparation.invalidate();
+    setNearbyPreparing(false);
     if (resultViewUnavailable) {
       pendingUrlResultViewRef.current = null;
       setResultViewUnavailable(false);
@@ -5430,6 +5476,42 @@ export function SearchWorkspace({
     }
     else showToast(mode === "exclude" ? `Excluded ${field}=${formatFieldValue(value)} from the draft.` : `Added ${field} to the draft.`, "success");
     focusEditor(nextQuery.length, nextQuery);
+  }
+
+  function applyNearbyDraft(draft: NearbyDraft) {
+    if (runningSearch.launchIsLocked() || backendWorkspaceTransitionBlocked()) return;
+    const next = nearbySearch(draft);
+    // Save the old job together with the current unsaved editor before the
+    // new query creates its history entry. Back reopens that retained job.
+    stampSearchLaunchState(currentLaunchState());
+    clearPersistedContextForAdHocSearch();
+    timelineZoomParentRef.current = null;
+    setNearbyDraft(draft);
+    setNearbyAppliedDraft(draft);
+    setTimeRange(next.timeRange);
+    setDraftTimeRange(next.timeRange);
+    runSearch(next.query, next.timeRange);
+    applyResultView("events");
+    commitRoutedView(window, SEARCH_BASE_PATH, "events", "replace", { ...window.history.state, resultView: "events" });
+  }
+
+  async function findNearbyEvent(event: DemoEvent) {
+    if (backendWorkspaceTransitionBlocked() || runningSearch.launchIsLocked()) return;
+    const searchJobId = runningSearch.jobSnapshot().id;
+    const snapshotRef = backendSnapshotRef;
+    const generation = runningSearch.generationSnapshot();
+    if (!searchJobId || !snapshotRef || !backendAuthoritativeResultsReady || backendResultsExpired || phase !== "completed") return;
+    setNearbyPreparing(true);
+    try {
+      await nearbyPreparation.prepare(
+        async (signal) => adaptNearbyContext(await apiClient.search.prepareNearby({ searchJobId, snapshotRef, rowId: event.id }, { signal }), searchJobId, event.id),
+        (context) => { if (runningSearch.isCurrent(generation)) applyNearbyDraft(createNearbyDraft(context)); },
+      );
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Nearby context is unavailable. Rerun this search.", "warning");
+    } finally {
+      setNearbyPreparing(false);
+    }
   }
 
   function toggleField(fieldName: string) {
@@ -6030,6 +6112,8 @@ export function SearchWorkspace({
   }
 
   function navigateResultView(nextView: ResultTab) {
+    nearbyPreparation.invalidate();
+    setNearbyPreparing(false);
     if (nextView === activeTabRef.current && !resultViewUnavailable) return;
     const currentState = currentLaunchState();
     stampSearchLaunchState({ ...currentState, resultView: activeTabRef.current });
@@ -6596,6 +6680,10 @@ export function SearchWorkspace({
       setModal("export");
       return;
     }
+    setExportPatternSource(backendEnabled && retainedPatternContext !== null
+      && (sourceTab === "patterns" || (sourceTab === "events" && patternMembers !== null))
+      ? patternExportSource(retainedPatternContext, sourceTab === "patterns" ? null : patternMembers!.pattern)
+      : undefined);
     setExportSourceTab(sourceTab);
     setExportFields(exportFieldsForTab(sourceTab));
     setExportStage("configure");
@@ -6667,7 +6755,7 @@ export function SearchWorkspace({
       || job === null
       || phase !== "completed"
       || backendResultsExpired
-      || exportSourceTab === "patterns"
+      || (exportSourceTab === "patterns" && exportPatternSource === undefined)
     ) {
       setExportError("Complete a retained backend result before creating this export.");
       setExportRetryable(false);
@@ -6684,7 +6772,8 @@ export function SearchWorkspace({
     setExportStage("pending");
     try {
       const created = await createServerExport(apiClient, bootstrap.response, {
-        searchJobId: job.searchJobId,
+        searchJobId: exportPatternSource?.value.searchJobId ?? job.searchJobId,
+        source: exportPatternSource,
         format: exportFormat === "csv" ? "csv" : "json-lines",
         columns: exportFields,
         rowLimit: bootstrap.response.limits.maximumExportRows > 0n
@@ -6991,6 +7080,8 @@ export function SearchWorkspace({
   }
 
   async function switchBackendApp(appId: string | undefined, commitLocation = true) {
+    nearbyPreparation.invalidate();
+    setNearbyPreparing(false);
     if (!backendEnabled || isRunning) {
       if (isRunning) showToast("Cancel the active search before switching apps.", "warning");
       return;
@@ -7154,6 +7245,7 @@ export function SearchWorkspace({
   }
 
   function resultTabAvailable(tab: ResultTab): boolean {
+    if (backendEnabled && tab === "patterns") return retainedPatternContext !== null;
     if (!backendEnabled || !hasResultData) return true;
     return resultTabCompatibleWithKind(tab, backendResultKind);
   }
@@ -7298,7 +7390,7 @@ export function SearchWorkspace({
         <div className="floating-menu app-menu" role="menu">
           <span className="menu-label">{backendEnabled ? "Server apps" : "Your apps"}</span>
           {backendEnabled && sharedAppCatalog.error !== null ? (
-            <button role="menuitem" type="button" onClick={() => { void sharedAppCatalog.refresh(); }}>
+            <button aria-label="Retry app catalog" role="menuitem" type="button" onClick={() => { void sharedAppCatalog.refresh(); }}>
               <span><strong>Retry app catalog</strong><small>{sharedAppCatalog.error}</small></span>
             </button>
           ) : null}
@@ -7750,6 +7842,15 @@ export function SearchWorkspace({
         onTimeRangeChange={handleManualTimeRangeChange}
       />
 
+      {nearbyDraft !== null ? <NearbyContextEditor
+        draft={nearbyDraft}
+        onChange={setNearbyDraft}
+        onApply={applyNearbyDraft}
+        onDetach={() => { setNearbyDraft(null); setNearbyAppliedDraft(null); focusEditor(query.length); }}
+        busy={isRunning || nearbyPreparing || appCatalogActionsBlocked}
+      /> : null}
+      {nearbyPreparing ? <p role="status">Preparing nearby event context…</p> : null}
+
       <section className={`job-strip${searchIsClosed ? " is-closed" : ""}`} data-testid="job-strip" aria-label="Search job status" aria-busy={isRunning}>
         <div className="job-primary">
           <span className={statusClassName("icon", stateTone(phase))} aria-hidden="true"><AppIcon name={phase === "completed" ? "check" : phase === "failed" || phase === "interrupted" ? "warning" : phase === "canceled" ? "close" : phase === "expired" ? "hourglass" : "loading"} size="xs" spin={isRunning} /></span>
@@ -7872,7 +7973,7 @@ export function SearchWorkspace({
       <div className={`result-tabs${searchIsClosed ? " is-closed" : ""}`} role="tablist" aria-label="Search result views">
         {([
           ["events", "Events", backendEnabled && backendResultKind !== ResultSetKind.RESULT_SET_KIND_EVENTS ? "0" : `${visibleCountPrefix}${NUMBER_FORMAT.format(visibleEventCount)}`],
-          ["patterns", "Patterns", backendEnabled ? "0" : hasResultData ? String(patternRows.length) : "0"],
+          ["patterns", "Patterns", backendEnabled ? String(backendPatterns.coverage?.totalGroups ?? 0) : hasResultData ? String(patternRows.length) : "0"],
           ["statistics", "Statistics", backendEnabled && backendResultKind === ResultSetKind.RESULT_SET_KIND_EVENTS
             ? "0"
             : hasResultData
@@ -7979,20 +8080,27 @@ export function SearchWorkspace({
         </section>
       ) : null}
 
+      {!resultViewUnavailable && searchFailure === null && hasResultData && activeTab === "events" && patternMembers !== null ? (
+        <>
+          <PatternFilterChip pattern={patternMembers.pattern} onClear={() => { backendPatterns.controller?.clearPattern(); setExpandedEvents(new Set()); }} />
+          {patternMembers.error ? <p role="alert">{patternMembers.error} <button className="button button--link" type="button" onClick={() => { void backendPatterns.controller?.loadMembers(); }}>Retry pattern events</button></p> : null}
+        </>
+      ) : null}
+
       {!resultViewUnavailable && searchFailure === null && hasResultData && activeTab === "events" ? (
         <EventsPanel
           activeField={activeField}
           backendEnabled={backendEnabled}
-          backendHasNextPage={backendHasNextPage}
-          backendResultTotalExact={!backendEnabled || backendResultTotalExact}
-          backendResultTotalRows={backendEnabled ? backendResultTotalRows : pageableEventCount}
+          backendHasNextPage={patternMembers?.hasNextPage ?? backendHasNextPage}
+          backendResultTotalExact={patternMembers !== null || !backendEnabled || backendResultTotalExact}
+          backendResultTotalRows={patternMembers?.pattern.count ?? (backendEnabled ? backendResultTotalRows : pageableEventCount)}
           defaultQuery={defaultSearchQuery}
           draggingTimeline={draggingTimeline}
           eventDisplay={eventDisplay}
-          eventPage={eventPage}
-          eventPageLoading={eventPageLoading}
-          eventPageStart={eventPageStart}
-          eventPageSize={currentResultPageSize}
+          eventPage={patternMembers?.pageNumber ?? eventPage}
+          eventPageLoading={patternMembers?.loading ?? eventPageLoading}
+          eventPageStart={patternMembers?.pageStart ?? eventPageStart}
+          eventPageSize={patternMembers?.pageSize ?? currentResultPageSize}
           eventSortDirection={eventSortDirection}
           expandedEvents={expandedEvents}
           fieldFilter={fieldFilter}
@@ -8008,7 +8116,7 @@ export function SearchWorkspace({
           maximumEventPageSize={backendEnabled && backendBootstrapRef.current !== null
             ? backendMaximumPageSize(backendBootstrapRef.current)
             : null}
-          pageCount={eventPageCount}
+          pageCount={patternMembers ? Math.max(patternMembers.pageNumber, Math.ceil(patternMembers.pattern.count / patternMembers.pageSize)) : eventPageCount}
           pagedResultEvents={pagedResultEvents}
           previewTruncated={backendPreviewDisplay?.snapshot.truncated === true}
           resultEvents={resultEvents}
@@ -8026,11 +8134,15 @@ export function SearchWorkspace({
           onCollapsePage={collapseCurrentEventPage}
           onCopyPageRaw={() => void copyCurrentEventPageRaw()}
           onExpandPage={expandCurrentEventPage}
+          onFindNearby={backendEnabled ? (event) => { void findNearbyEvent(event); } : undefined}
+          nearbyUnavailableReason={backendEnabled && (!backendSnapshotRef || !backendAuthoritativeResultsReady || phase !== "completed")
+            ? "Nearby events require a completed retained snapshot. Rerun this search to enable them."
+            : nearbyPreparing ? "Preparing nearby context…" : null}
           onLoadMoreFields={() => void loadMoreBackendFields()}
           setActiveField={setActiveField}
           setEventDisplay={setEventDisplay}
-          setEventPage={changeEventPage}
-          setEventPageSize={changeEventPageSize}
+          setEventPage={patternMembers ? (page) => { setExpandedEvents(new Set()); void backendPatterns.controller?.loadMembers(typeof page === "function" ? page(patternMembers.pageNumber) : page); } : changeEventPage}
+          setEventPageSize={patternMembers ? (size) => { setExpandedEvents(new Set()); void backendPatterns.controller?.selectPattern(patternMembers.pattern, size); } : changeEventPageSize}
           setEventSortDirection={setEventSortDirection}
           setFieldFilter={setFieldFilter}
           setFieldsCollapsed={setFieldsCollapsed}
@@ -8054,6 +8166,21 @@ export function SearchWorkspace({
       {!resultViewUnavailable && searchFailure === null && hasResultData && activeTab === "patterns" ? (
         <PatternsPanel
           menu={menu}
+          coverage={backendEnabled ? backendPatterns.coverage : undefined}
+          loading={backendEnabled && backendPatterns.loading}
+          error={backendEnabled ? backendPatterns.error ?? (retainedPatternContext === null ? "Patterns require a completed retained event snapshot. Rerun this search to enable them." : null) : undefined}
+          pageNumber={backendEnabled ? backendPatterns.pageNumber : undefined}
+          pageSize={backendEnabled ? backendPatterns.pageSize : undefined}
+          hasNextPage={backendEnabled && backendPatterns.hasNextPage}
+          onPageChange={backendEnabled ? (page) => { void backendPatterns.controller?.loadGroups(page); } : undefined}
+          onRetry={backendEnabled ? () => { void backendPatterns.controller?.loadGroups(); } : undefined}
+          onViewPattern={backendEnabled ? (pattern) => {
+            if (backendWorkspaceTransitionBlocked()) return;
+            setExpandedEvents(new Set());
+            void backendPatterns.controller?.selectPattern(pattern);
+            navigateResultView("events");
+          } : undefined}
+          onExport={backendEnabled ? () => openExportDialog("patterns") : undefined}
           patternRows={patternRows}
           patternSensitivity={patternSensitivity}
           onMenuChange={setMenu}

@@ -2,6 +2,7 @@ import {
   CsvHeaderMode,
   ExportJobState,
   JsonIntegerEncoding,
+  type ExportDefinition,
   type ExportJob,
   type ExportProgress,
 } from "@/gen/ts/open_splunk/export";
@@ -242,6 +243,7 @@ function reconcileAuthoritativeExportSnapshot(
 }
 
 export interface CreateServerExportOptions extends ProtobufRequestOptions {
+  source?: ExportDefinition["source"];
   searchJobId: string;
   format: ServerExportFormat;
   columns?: readonly string[];
@@ -320,7 +322,7 @@ export async function createServerExport(
     const response = await client.exports.create({
       definition: {
         searchJobId,
-        source: undefined,
+        source: options.source,
         columns: [...new Set(options.columns?.map((column) => column.trim()).filter(Boolean) ?? [])],
         rowLimit: options.rowLimit,
         byteLimit: options.byteLimit,
