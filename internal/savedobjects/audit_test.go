@@ -15,11 +15,192 @@ import (
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"google.golang.org/protobuf/proto"
 	"gorm.io/gorm"
 )
 
 var errTestSavedSearchAuditAppend = errors.New("test saved-search audit append failure")
+
+func TestAuditedSavedSearchIdempotentCreateReplaysCurrentMetadata(t *testing.T) {
+	database, _ := openTestStore(t)
+	dependencies := &savedSearchAuditDependencies{
+		base: time.Date(2026, time.September, 12, 12, 0, 0, 0, time.UTC),
+		ids:  []string{"ss_idempotent_create"},
+	}
+	raw := newSavedSearchAuditRawStore(t, database, dependencies.options())
+	appender := &recordingSavedSearchAuditAppender{}
+	store := newSavedSearchAuditStore(t, raw, appender)
+	scope := AccessScope{OwnerID: "owner-a"}
+	definition := savedSearchDefinition("idempotent search", "")
+	requestID := "saved request 001"
+	intent, err := requestidempotency.NewIntent(
+		savedSearchAuditTestTenant, "browser", "owner-a",
+		requestidempotency.RouteCreateSavedSearch, requestID,
+		&opensplunk.CreateSavedSearchRequest{Definition: proto.Clone(definition).(*opensplunk.SavedSearchDefinition)},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, replayed, err := store.CreateIdempotent(t.Context(), scope, definition, intent)
+	if err != nil || replayed {
+		t.Fatalf("first create = (%+v, %t, %v)", created, replayed, err)
+	}
+	replacement := proto.Clone(created.GetDefinition()).(*opensplunk.SavedSearchDefinition)
+	replacement.Description = new("current metadata")
+	updated, err := store.Update(
+		t.Context(), scope, created.GetSavedSearchId(), created.GetVersion(), replacement, nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, replayed, err := store.CreateIdempotent(t.Context(), scope, definition, intent)
+	if err != nil || !replayed || current.GetVersion() != updated.GetVersion() ||
+		current.GetDefinition().GetDescription() != updated.GetDefinition().GetDescription() {
+		t.Fatalf("replay = (%+v, %t, %v), want current %+v", current, replayed, err, updated)
+	}
+	if calls := appender.snapshot(); len(calls) != 2 {
+		t.Fatalf("audit calls after replay = %d, want create and update only", len(calls))
+	}
+
+	duplicateID := "duplicate request"
+	duplicateIntent, err := requestidempotency.NewIntent(
+		savedSearchAuditTestTenant, "browser", "owner-a",
+		requestidempotency.RouteDuplicateSavedSearch, duplicateID,
+		&opensplunk.DuplicateSavedSearchRequest{
+			SavedSearchId: created.GetSavedSearchId(), NewName: "idempotent copy",
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	duplicated, replayed, err := store.DuplicateIdempotent(
+		t.Context(), scope, created.GetSavedSearchId(), "idempotent copy", nil, duplicateIntent,
+	)
+	if err != nil || replayed {
+		t.Fatalf("first duplicate = (%+v, %t, %v)", duplicated, replayed, err)
+	}
+	replayedCopy, replayed, err := store.DuplicateIdempotent(
+		t.Context(), scope, created.GetSavedSearchId(), "idempotent copy", nil, duplicateIntent,
+	)
+	if err != nil || !replayed || replayedCopy.GetSavedSearchId() != duplicated.GetSavedSearchId() {
+		t.Fatalf("duplicate replay = (%+v, %t, %v)", replayedCopy, replayed, err)
+	}
+	if calls := appender.snapshot(); len(calls) != 3 {
+		t.Fatalf("audit calls after duplicate replay = %d, want three", len(calls))
+	}
+	if err := store.Delete(
+		t.Context(), scope, created.GetSavedSearchId(), updated.GetVersion(),
+	); err != nil {
+		t.Fatalf("delete duplicate source: %v", err)
+	}
+	replayedCopy, replayed, err = store.DuplicateIdempotent(
+		t.Context(), scope, created.GetSavedSearchId(), "idempotent copy", nil, duplicateIntent,
+	)
+	if err != nil || !replayed || replayedCopy.GetSavedSearchId() != duplicated.GetSavedSearchId() {
+		t.Fatalf("duplicate replay after source deletion = (%+v, %t, %v)", replayedCopy, replayed, err)
+	}
+	changed := intent
+	changed.RequestSHA256[0] ^= 0xff
+	if _, _, err := store.CreateIdempotent(t.Context(), scope, definition, changed); !errors.Is(err, requestidempotency.ErrConflict) {
+		t.Fatalf("changed create intent error = %v", err)
+	}
+}
+
+func TestAuditedSavedSearchParallelIdempotentCreatesConverge(t *testing.T) {
+	database, _ := openTestStore(t)
+	dependencies := &savedSearchAuditDependencies{
+		base: time.Date(2026, time.September, 12, 13, 0, 0, 0, time.UTC),
+	}
+	raw := newSavedSearchAuditRawStore(t, database, dependencies.options())
+	appender := &recordingSavedSearchAuditAppender{}
+	store := newSavedSearchAuditStore(t, raw, appender)
+	scope := AccessScope{OwnerID: "owner-a"}
+	definition := savedSearchDefinition("parallel idempotent search", "")
+	intent, err := requestidempotency.NewIntent(
+		savedSearchAuditTestTenant, "browser", "owner-a",
+		requestidempotency.RouteCreateSavedSearch, "parallel saved create 01",
+		&opensplunk.CreateSavedSearchRequest{Definition: proto.Clone(definition).(*opensplunk.SavedSearchDefinition)},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertParallelSavedSearchMutation(t, appender, func() (*opensplunk.SavedSearch, bool, error) {
+		return store.CreateIdempotent(context.Background(), scope, definition, intent)
+	})
+}
+
+func TestAuditedSavedSearchParallelIdempotentDuplicatesConverge(t *testing.T) {
+	database, _ := openTestStore(t)
+	dependencies := &savedSearchAuditDependencies{
+		base: time.Date(2026, time.September, 12, 14, 0, 0, 0, time.UTC),
+		ids:  []string{"ss_parallel_source"},
+	}
+	raw := newSavedSearchAuditRawStore(t, database, dependencies.options())
+	scope := AccessScope{OwnerID: "owner-a"}
+	source, err := raw.Create(t.Context(), scope, savedSearchDefinition("parallel source", ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	appender := &recordingSavedSearchAuditAppender{}
+	store := newSavedSearchAuditStore(t, raw, appender)
+	intent, err := requestidempotency.NewIntent(
+		savedSearchAuditTestTenant, "browser", "owner-a",
+		requestidempotency.RouteDuplicateSavedSearch, "parallel saved duplicate 01",
+		&opensplunk.DuplicateSavedSearchRequest{SavedSearchId: source.GetSavedSearchId(), NewName: "parallel copy"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertParallelSavedSearchMutation(t, appender, func() (*opensplunk.SavedSearch, bool, error) {
+		return store.DuplicateIdempotent(
+			context.Background(), scope, source.GetSavedSearchId(), "parallel copy", nil, intent,
+		)
+	})
+}
+
+func assertParallelSavedSearchMutation(
+	t *testing.T,
+	appender *recordingSavedSearchAuditAppender,
+	mutate func() (*opensplunk.SavedSearch, bool, error),
+) {
+	t.Helper()
+	type outcome struct {
+		saved    *opensplunk.SavedSearch
+		replayed bool
+		err      error
+	}
+	start := make(chan struct{})
+	results := make(chan outcome, 8)
+	for range 8 {
+		go func() {
+			<-start
+			saved, replayed, err := mutate()
+			results <- outcome{saved: saved, replayed: replayed, err: err}
+		}()
+	}
+	close(start)
+	var targetID string
+	fresh := 0
+	for range 8 {
+		result := <-results
+		if result.err != nil {
+			t.Fatalf("parallel mutation error = %v", result.err)
+		}
+		if targetID == "" {
+			targetID = result.saved.GetSavedSearchId()
+		}
+		if result.saved.GetSavedSearchId() != targetID {
+			t.Fatalf("parallel target = %q, want %q", result.saved.GetSavedSearchId(), targetID)
+		}
+		if !result.replayed {
+			fresh++
+		}
+	}
+	if fresh != 1 || len(appender.snapshot()) != 1 {
+		t.Fatalf("parallel outcomes = %d fresh, %d audit calls", fresh, len(appender.snapshot()))
+	}
+}
 
 const savedSearchAuditTestTenant = "tenant-saved-search-audit"
 
@@ -724,4 +905,43 @@ func readSavedSearchAuditPersistence(t *testing.T, database *control.DB) []saved
 		records[index].DefinitionProto = slices.Clone(records[index].DefinitionProto)
 	}
 	return records
+}
+
+func TestSavedSearchReceiptReconcilesCommittedCancellation(t *testing.T) {
+	database, _ := openTestStore(t)
+	dependencies := &savedSearchAuditDependencies{
+		base: time.Date(2026, time.September, 12, 12, 0, 0, 0, time.UTC),
+		ids:  []string{"ss_committed_cancellation"},
+	}
+	raw := newSavedSearchAuditRawStore(t, database, dependencies.options())
+	appender := &recordingSavedSearchAuditAppender{}
+	store := newSavedSearchAuditStore(t, raw, appender)
+	scope := AccessScope{OwnerID: "owner-a"}
+	definition := savedSearchDefinition("committed cancellation", "")
+	intent, err := requestidempotency.NewIntent(savedSearchAuditTestTenant, "browser", scope.OwnerID,
+		requestidempotency.RouteCreateSavedSearch, "committed-cancellation-request",
+		&opensplunk.CreateSavedSearchRequest{Definition: definition})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	operations := 0
+	operation := func(publish savedSearchMutationAuditPublisher) (*opensplunk.SavedSearch, error) {
+		operations++
+		_, createErr := raw.create(ctx, scope, definition, publish)
+		if createErr != nil {
+			return nil, createErr
+		}
+		// Lose the acknowledgement only after the target, audit and receipt committed.
+		cancel()
+		return nil, context.Canceled
+	}
+	current, replayed, err := store.createIdempotent(ctx, scope, definition, operation, intent)
+	if err != nil || !replayed || current.GetSavedSearchId() != "ss_committed_cancellation" || operations != 1 || len(appender.snapshot()) != 1 {
+		t.Fatalf("committed cancellation replay = %v, %t, %v; operations=%d audits=%d", current, replayed, err, operations, len(appender.snapshot()))
+	}
+	if _, _, err := store.CreateIdempotent(ctx, scope, definition, intent); !errors.Is(err, context.Canceled) {
+		t.Fatalf("initial reads must still respect cancellation: %v", err)
+	}
 }

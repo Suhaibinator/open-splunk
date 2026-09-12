@@ -313,6 +313,8 @@ func auditActorKindToProto(
 
 func auditActionFromProto(value opensplunk.AuditAction) (audit.Action, bool) {
 	switch value {
+	case opensplunk.AuditAction_AUDIT_ACTION_EXPORT_CREATE:
+		return audit.ActionExportCreate, true
 	case opensplunk.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_CREATE:
 		return audit.ActionIngestionTokenCreate, true
 	case opensplunk.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_UPDATE:
@@ -380,6 +382,8 @@ func auditActionFromProto(value opensplunk.AuditAction) (audit.Action, bool) {
 
 func auditActionToProto(value audit.Action) (opensplunk.AuditAction, bool) {
 	switch value {
+	case audit.ActionExportCreate:
+		return opensplunk.AuditAction_AUDIT_ACTION_EXPORT_CREATE, true
 	case audit.ActionIngestionTokenCreate:
 		return opensplunk.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_CREATE, true
 	case audit.ActionIngestionTokenUpdate:
@@ -449,6 +453,8 @@ func auditTargetKindFromProto(
 	value opensplunk.AuditTargetKind,
 ) (audit.TargetKind, bool) {
 	switch value {
+	case opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_EXPORT_JOB:
+		return audit.TargetKindExportJob, true
 	case opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_INGESTION_TOKEN:
 		return audit.TargetKindIngestionToken, true
 	case opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_INDEX:
@@ -472,6 +478,8 @@ func auditTargetKindToProto(
 	value audit.TargetKind,
 ) (opensplunk.AuditTargetKind, bool) {
 	switch value {
+	case audit.TargetKindExportJob:
+		return opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_EXPORT_JOB, true
 	case audit.TargetKindIngestionToken:
 		return opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_INGESTION_TOKEN, true
 	case audit.TargetKindIndex:

@@ -337,6 +337,11 @@ export interface ResultPage {
   rows: ResultRow[];
   page: PageResponse | undefined;
   snapshotComplete: boolean;
+  /**
+   * Opaque identity of the immutable retained result snapshot. Absent for
+   * previews and servers that do not support retained-result navigation.
+   */
+  snapshotRef: string;
 }
 
 export interface FieldValueCount {
@@ -965,7 +970,7 @@ export const ResultRow: MessageFns<ResultRow> = {
 };
 
 function createBaseResultPage(): ResultPage {
-  return { schema: undefined, rows: [], page: undefined, snapshotComplete: false };
+  return { schema: undefined, rows: [], page: undefined, snapshotComplete: false, snapshotRef: "" };
 }
 
 export const ResultPage: MessageFns<ResultPage> = {
@@ -981,6 +986,9 @@ export const ResultPage: MessageFns<ResultPage> = {
     }
     if (message.snapshotComplete !== false) {
       writer.uint32(32).bool(message.snapshotComplete);
+    }
+    if (message.snapshotRef !== "") {
+      writer.uint32(42).string(message.snapshotRef);
     }
     return writer;
   },
@@ -1030,6 +1038,14 @@ export const ResultPage: MessageFns<ResultPage> = {
             message.snapshotComplete = reader.bool();
             continue;
           }
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+
+            message.snapshotRef = reader.string();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -1052,6 +1068,11 @@ export const ResultPage: MessageFns<ResultPage> = {
         : isSet(object.snapshot_complete)
         ? globalThis.Boolean(object.snapshot_complete)
         : false,
+      snapshotRef: isSet(object.snapshotRef)
+        ? globalThis.String(object.snapshotRef)
+        : isSet(object.snapshot_ref)
+        ? globalThis.String(object.snapshot_ref)
+        : "",
     };
   },
 
@@ -1069,6 +1090,9 @@ export const ResultPage: MessageFns<ResultPage> = {
     if (message.snapshotComplete !== false) {
       obj.snapshotComplete = message.snapshotComplete;
     }
+    if (message.snapshotRef !== "") {
+      obj.snapshotRef = message.snapshotRef;
+    }
     return obj;
   },
 
@@ -1085,6 +1109,7 @@ export const ResultPage: MessageFns<ResultPage> = {
       ? PageResponse.fromPartial(object.page)
       : undefined;
     message.snapshotComplete = object.snapshotComplete ?? false;
+    message.snapshotRef = object.snapshotRef ?? "";
     return message;
   },
 };

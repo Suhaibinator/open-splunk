@@ -16,9 +16,141 @@ import (
 	"testing"
 	"time"
 
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"gorm.io/gorm"
 )
+
+func TestCollectorTokenIdempotentCreateNeverReplaysPlaintext(t *testing.T) {
+	db := openControlDB(t)
+	if _, err := db.CreateIndex(t.Context(), activeIndex("idempotent-token")); err != nil {
+		t.Fatal(err)
+	}
+	digestKey := []byte("0123456789abcdef0123456789abcdef")
+	store, err := NewStore(db, digestKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestID := "token request 001"
+	canonical := &opensplunk.CreateIngestionTokenRequest{
+		Definition: &opensplunk.IngestionTokenDefinition{Name: "idempotent collector"},
+	}
+	intent, err := requestidempotency.NewIntent(
+		"default", "system", "open-splunk-server",
+		requestidempotency.RouteCreateIngestionToken, requestID, canonical,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := CreateCollectorTokenRequest{
+		Name: "idempotent collector", AllowedIndexNames: []string{"idempotent-token"},
+		BoundCollectorID: testCollectorID,
+	}
+	issued, replayed, err := store.CreateCollectorTokenIdempotent(t.Context(), request, intent)
+	if err != nil || replayed || issued.Secret.Plaintext() == "" {
+		t.Fatalf("first create = (%+v, %t, %v)", issued.Token, replayed, err)
+	}
+	current, replayed, err := store.CreateCollectorTokenIdempotent(t.Context(), request, intent)
+	if err != nil || !replayed || current.Token.ID != issued.Token.ID || current.Secret.Plaintext() != "" {
+		t.Fatalf("replay = (%+v, secret %q, %t, %v)", current.Token, current.Secret.Plaintext(), replayed, err)
+	}
+	var auditCount int64
+	if err := db.GORMDB().Table("audit_events").
+		Where("action = ? AND target_id = ?", "ingestion_token.create", issued.Token.ID).
+		Count(&auditCount).Error; err != nil || auditCount != 1 {
+		t.Fatalf("create audit count = %d, error %v", auditCount, err)
+	}
+	changed := intent
+	changed.RequestSHA256[0] ^= 0xff
+	if _, _, err := store.CreateCollectorTokenIdempotent(t.Context(), request, changed); !errors.Is(err, requestidempotency.ErrConflict) {
+		t.Fatalf("changed intent error = %v", err)
+	}
+	revoked, err := store.RevokeCollectorToken(t.Context(), issued.Token.ID, issued.Token.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := NewStore(db, digestKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, replayed, err = restarted.CreateCollectorTokenIdempotent(t.Context(), request, intent)
+	if err != nil || !replayed || current.Token.ID != revoked.ID ||
+		current.Token.Version != revoked.Version || current.Token.State != CollectorTokenStateRevoked ||
+		current.Secret.Plaintext() != "" {
+		t.Fatalf("replay after store restart = (%+v, secret %q, %t, %v), want revoked %+v", current.Token, current.Secret.Plaintext(), replayed, err, revoked)
+	}
+}
+
+func TestCollectorTokenParallelIdempotentCreatesConverge(t *testing.T) {
+	db := openControlDB(t)
+	if _, err := db.CreateIndex(t.Context(), activeIndex("parallel-idempotent-token")); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(db, []byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := CreateCollectorTokenRequest{
+		Name: "parallel idempotent collector", AllowedIndexNames: []string{"parallel-idempotent-token"},
+		BoundCollectorID: testCollectorID,
+	}
+	intent, err := requestidempotency.NewIntent(
+		"default", "system", "open-splunk-server", requestidempotency.RouteCreateIngestionToken,
+		"parallel token request 01",
+		&opensplunk.CreateIngestionTokenRequest{Definition: &opensplunk.IngestionTokenDefinition{Name: request.Name}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type outcome struct {
+		issued   IssuedCollectorToken
+		replayed bool
+		err      error
+	}
+	start := make(chan struct{})
+	results := make(chan outcome, 8)
+	for range 8 {
+		go func() {
+			<-start
+			issued, replayed, createErr := store.CreateCollectorTokenIdempotent(
+				context.Background(), request, intent,
+			)
+			results <- outcome{issued: issued, replayed: replayed, err: createErr}
+		}()
+	}
+	close(start)
+	var targetID string
+	fresh := 0
+	for range 8 {
+		result := <-results
+		if result.err != nil {
+			t.Fatalf("parallel create error = %v", result.err)
+		}
+		if targetID == "" {
+			targetID = result.issued.Token.ID
+		}
+		if result.issued.Token.ID != targetID {
+			t.Fatalf("parallel target = %q, want %q", result.issued.Token.ID, targetID)
+		}
+		if result.replayed {
+			if result.issued.Secret.Plaintext() != "" {
+				t.Fatal("parallel replay returned token plaintext")
+			}
+		} else {
+			fresh++
+			if result.issued.Secret.Plaintext() == "" {
+				t.Fatal("fresh parallel response omitted token plaintext")
+			}
+		}
+	}
+	var auditCount int64
+	if err := db.GORMDB().Table("audit_events").
+		Where("action = ? AND target_id = ?", "ingestion_token.create", targetID).
+		Count(&auditCount).Error; err != nil || fresh != 1 || auditCount != 1 {
+		t.Fatalf("parallel outcomes = %d fresh, %d audit rows, error %v", fresh, auditCount, err)
+	}
+}
 
 func TestCollectorTokenLifecycleStoresOnlyKeyedDigest(t *testing.T) {
 	t.Parallel()

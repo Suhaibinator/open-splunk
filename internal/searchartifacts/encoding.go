@@ -29,7 +29,56 @@ const (
 	maximumArtifactHeaderBytes  = uint32(2 << 20)
 	maximumArtifactRowBytes     = uint32(64 << 20)
 	artifactIndexStride         = uint32(256)
+	// The multiplier bounds both decoded storedValue nodes and the separately
+	// cloned immutable searchjobs.Value tree. The smallest JSON spelling that
+	// can introduce a node is much larger than 1/32 of their combined Go
+	// storage, including slice capacity and allocator rounding.
+	boundedJSONDecodeMultiplier = uint64(32)
+	boundedRowFixedBytes        = uint64(256 << 10)
+	boundedHeaderFixedBytes     = uint64(1 << 20)
 )
+
+func boundedJSONDecodeBytes(encoded, fixed uint64) (uint64, bool) {
+	if encoded > (math.MaxUint64-fixed)/boundedJSONDecodeMultiplier {
+		return 0, false
+	}
+	return encoded*boundedJSONDecodeMultiplier + fixed, true
+}
+
+// boundedArtifactAcquireBytes inspects only the fixed framing prefix. Framed
+// artifacts reserve from their actual encoded header length; legacy artifacts
+// reserve from the complete file because json.Decoder may buffer beyond the
+// current row. The caller must reserve the returned amount before verification
+// or metadata decoding begins.
+func boundedArtifactAcquireBytes(file *os.File, artifactBytes uint64) (uint64, error) {
+	if file == nil || artifactBytes == 0 {
+		return 0, ErrCorrupt
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return 0, ErrCorrupt
+	}
+	var prefix [len(artifactMagic) + 4]byte
+	read, err := io.ReadFull(file, prefix[:])
+	if err != nil && err != io.ErrUnexpectedEOF {
+		return 0, ErrCorrupt
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return 0, ErrCorrupt
+	}
+	encoded := artifactBytes
+	if read == len(prefix) && bytes.Equal(prefix[:len(artifactMagic)], artifactMagic[:]) {
+		length := binary.BigEndian.Uint32(prefix[len(artifactMagic):])
+		if length == 0 || length > maximumArtifactHeaderBytes {
+			return 0, ErrCorrupt
+		}
+		encoded = uint64(length)
+	}
+	charge, ok := boundedJSONDecodeBytes(encoded, boundedHeaderFixedBytes)
+	if !ok {
+		return 0, ErrCapacity
+	}
+	return charge, nil
+}
 
 var artifactMagic = [8]byte{'O', 'S', 'R', 'E', 'S', 'U', 'L', 'T'}
 var artifactIndexMagic = [8]byte{'O', 'S', 'I', 'N', 'D', 'E', 'X', '2'}
@@ -70,6 +119,12 @@ type artifactRowSource interface {
 	Next(context.Context) (searchjobs.ResultRow, bool, error)
 	Seek(context.Context, uint64) error
 	Close() error
+}
+
+type boundedArtifactRowSource interface {
+	artifactRowSource
+	NextBounded(context.Context, func(uint64) (func(), bool)) (searchjobs.ResultRow, bool, uint64, func(), error)
+	SeekBounded(context.Context, uint64, func(uint64) (func(), bool)) error
 }
 
 type framedRowSource struct {
@@ -378,6 +433,58 @@ func (source *framedRowSource) Next(ctx context.Context) (searchjobs.ResultRow, 
 	return row, true, nil
 }
 
+// NextBounded reserves the encoded frame and a conservative upper bound for
+// encoding/json's stored tree, the immutable result tree restored from it,
+// and their container backing arrays before allocating the frame. Callers own
+// the returned release function for as long as they retain the row.
+func (source *framedRowSource) NextBounded(
+	ctx context.Context,
+	reserve func(uint64) (func(), bool),
+) (searchjobs.ResultRow, bool, uint64, func(), error) {
+	if err := ctx.Err(); err != nil {
+		return searchjobs.ResultRow{}, false, 0, nil, err
+	}
+	if reserve == nil {
+		return searchjobs.ResultRow{}, false, 0, nil, ErrInvalid
+	}
+	if source.next >= source.rowCount {
+		return searchjobs.ResultRow{}, false, 0, nil, nil
+	}
+	length, err := readArtifactLength(source.reader, maximumArtifactRowBytes)
+	if err != nil {
+		return searchjobs.ResultRow{}, false, 0, nil, err
+	}
+	charge, ok := boundedJSONDecodeBytes(uint64(length), boundedRowFixedBytes)
+	if !ok {
+		return searchjobs.ResultRow{}, false, 0, nil, ErrCapacity
+	}
+	release, ok := reserve(charge)
+	if !ok || release == nil {
+		return searchjobs.ResultRow{}, false, 0, nil, ErrCapacity
+	}
+	owned := true
+	defer func() {
+		if owned {
+			release()
+		}
+	}()
+	payload := make([]byte, length)
+	if _, err := io.ReadFull(source.reader, payload); err != nil {
+		return searchjobs.ResultRow{}, false, 0, nil, ErrCorrupt
+	}
+	var stored storedResultRow
+	if err := decodeExactJSON(payload, &stored); err != nil {
+		return searchjobs.ResultRow{}, false, 0, nil, ErrCorrupt
+	}
+	row, err := restoreRow(stored)
+	if err != nil || row.Ordinal != source.next {
+		return searchjobs.ResultRow{}, false, 0, nil, ErrCorrupt
+	}
+	source.next++
+	owned = false
+	return row, true, charge, release, nil
+}
+
 func (source *framedRowSource) Seek(ctx context.Context, offset uint64) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -412,6 +519,56 @@ func (source *framedRowSource) Seek(ctx context.Context, offset uint64) error {
 	return nil
 }
 
+func (source *framedRowSource) SeekBounded(
+	ctx context.Context,
+	offset uint64,
+	reserve func(uint64) (func(), bool),
+) error {
+	if err := source.seekCheckpoint(ctx, offset); err != nil {
+		return err
+	}
+	for source.next < offset {
+		_, ok, _, release, err := source.NextBounded(ctx, reserve)
+		if release != nil {
+			release()
+		}
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return ErrCorrupt
+		}
+	}
+	return nil
+}
+
+func (source *framedRowSource) seekCheckpoint(ctx context.Context, offset uint64) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if offset > source.rowCount {
+		return ErrInvalid
+	}
+	if offset == source.rowCount {
+		source.next = offset
+		return nil
+	}
+	checkpoint := offset / uint64(artifactIndexStride)
+	if checkpoint >= uint64(len(source.offsets)) {
+		return ErrCorrupt
+	}
+	position, err := safecast.Conv[int64](source.offsets[checkpoint])
+	if err != nil {
+		return ErrCorrupt
+	}
+	if _, err := source.file.Seek(position, io.SeekStart); err != nil {
+		return ErrCorrupt
+	}
+	source.reader.Reset(source.file)
+	source.next = checkpoint * uint64(artifactIndexStride)
+	return nil
+}
+
 func (source *framedRowSource) Close() error {
 	if source == nil || source.file == nil {
 		return nil
@@ -441,6 +598,25 @@ func (source *legacyRowSource) Next(ctx context.Context) (searchjobs.ResultRow, 
 	}
 	source.next++
 	return row, true, nil
+}
+
+// A bounded legacy lease reserves a conservative expansion of the complete
+// legacy artifact during AcquireBounded, before json.Decoder can buffer or
+// decode any row. No additional per-row reservation is therefore necessary.
+func (source *legacyRowSource) NextBounded(
+	ctx context.Context,
+	_ func(uint64) (func(), bool),
+) (searchjobs.ResultRow, bool, uint64, func(), error) {
+	row, ok, err := source.Next(ctx)
+	return row, ok, 0, nil, err
+}
+
+func (source *legacyRowSource) SeekBounded(
+	ctx context.Context,
+	offset uint64,
+	_ func(uint64) (func(), bool),
+) error {
+	return source.Seek(ctx, offset)
 }
 
 func (source *legacyRowSource) Seek(ctx context.Context, offset uint64) error {

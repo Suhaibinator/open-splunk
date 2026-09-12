@@ -1,0 +1,12 @@
+# Append to docker-compose.recovery.yaml before starting a fresh restore target.
+# Keep the same project, lock inode, recovery sets and archive volume.
+services:
+  clickhouse:
+    volumes:
+      - recovery-archives:/var/lib/open-splunk-clickhouse-backups:ro
+
+volumes:
+  server-state:
+    name: "${OPEN_SPLUNK_RECOVERY_TARGET_STATE_VOLUME:?name a new empty server state volume}"
+  clickhouse-data:
+    name: "${OPEN_SPLUNK_RECOVERY_TARGET_CLICKHOUSE_VOLUME:?name a new empty ClickHouse data volume}"

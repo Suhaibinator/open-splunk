@@ -20,6 +20,7 @@ import { SortDirection } from "@/gen/ts/open_splunk/common";
 import { ServerFeature } from "@/gen/ts/open_splunk/system_api";
 import {
   createOpenSplunkApiClient,
+  invalidateAppCatalog,
   isOptionalRouteUnavailable,
   type SystemBootstrapModel,
 } from "@/lib/api";
@@ -216,6 +217,7 @@ export function AppsAdminPanel({ apiBaseUrl, bootstrap }: PanelProps) {
         updateMask,
       });
       if (response.app === undefined) throw new Error("The server returned an empty app workspace.");
+      invalidateAppCatalog(apiBaseUrl);
       setModal(null);
       setNotice(`App “${definition.displayName}” was updated.`);
       load();
@@ -233,6 +235,7 @@ export function AppsAdminPanel({ apiBaseUrl, bootstrap }: PanelProps) {
     try {
       const response = await client.apps.setState({ selector: appSelector(app), expectedVersion: app.version, state: nextState });
       if (response.app === undefined) throw new Error("The server returned an empty app workspace.");
+      invalidateAppCatalog(apiBaseUrl);
       setNotice(`App “${app.definition?.displayName || app.appId}” is now ${appStateLabel(nextState).toLowerCase()}.`);
       load();
     } catch (mutationError) {
@@ -250,6 +253,7 @@ export function AppsAdminPanel({ apiBaseUrl, bootstrap }: PanelProps) {
     setNotice(null);
     try {
       await client.apps.delete({ selector: appSelector(target), expectedVersion: target.version, confirmationSlug: confirmation });
+      invalidateAppCatalog(apiBaseUrl);
       setModal(null);
       setTarget(null);
       setConfirmation("");

@@ -16,7 +16,11 @@ export interface CreateExportJobRequest {
 }
 
 export interface CreateExportJobResponse {
-  exportJob: ExportJob | undefined;
+  exportJob:
+    | ExportJob
+    | undefined;
+  /** True when this request resolves an earlier accepted logical action. */
+  replayed: boolean;
 }
 
 /**
@@ -162,13 +166,16 @@ export const CreateExportJobRequest: MessageFns<CreateExportJobRequest> = {
 };
 
 function createBaseCreateExportJobResponse(): CreateExportJobResponse {
-  return { exportJob: undefined };
+  return { exportJob: undefined, replayed: false };
 }
 
 export const CreateExportJobResponse: MessageFns<CreateExportJobResponse> = {
   encode(message: CreateExportJobResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     if (message.exportJob !== undefined) {
       ExportJob.encode(message.exportJob, writer.uint32(10).fork()).join();
+    }
+    if (message.replayed !== false) {
+      writer.uint32(16).bool(message.replayed);
     }
     return writer;
   },
@@ -194,6 +201,14 @@ export const CreateExportJobResponse: MessageFns<CreateExportJobResponse> = {
             message.exportJob = ExportJob.decode(reader, reader.uint32());
             continue;
           }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.replayed = reader.bool();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -213,6 +228,7 @@ export const CreateExportJobResponse: MessageFns<CreateExportJobResponse> = {
         : isSet(object.export_job)
         ? ExportJob.fromJSON(object.export_job)
         : undefined,
+      replayed: isSet(object.replayed) ? globalThis.Boolean(object.replayed) : false,
     };
   },
 
@@ -220,6 +236,9 @@ export const CreateExportJobResponse: MessageFns<CreateExportJobResponse> = {
     const obj: any = {};
     if (message.exportJob !== undefined) {
       obj.exportJob = ExportJob.toJSON(message.exportJob);
+    }
+    if (message.replayed !== false) {
+      obj.replayed = message.replayed;
     }
     return obj;
   },
@@ -232,6 +251,7 @@ export const CreateExportJobResponse: MessageFns<CreateExportJobResponse> = {
     message.exportJob = (object.exportJob !== undefined && object.exportJob !== null)
       ? ExportJob.fromPartial(object.exportJob)
       : undefined;
+    message.replayed = object.replayed ?? false;
     return message;
   },
 };

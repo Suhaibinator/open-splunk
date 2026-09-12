@@ -40,10 +40,12 @@ npx --no-install playwright install chromium
 
 | Script | Role |
 | --- | --- |
+| `test-deployment-recovery.sh` | Explicitly opt-in disposable recovery/crash drill; see [integration instructions](../integration/README.md#disposable-deployment-recovery-drill). |
 | `compile-protos.sh` | Full deterministic protobuf generation behind `make proto`. |
 | `build-ui.mjs` / `build-ui-output.mjs` | Static Next.js export and embedded-asset manifest validation. |
 | `run-development.sh` | Sanitized native development-server launch. |
 | `check-docs.mjs` | Owned-document, link, anchor, and wording validation. |
+| `build-help.mjs` | Validate and compile the canonical documentation registry into the static Help AST. |
 | `test-frontend.mjs` | Explicit frontend/unit/style test dispatcher. |
 | `style-inventory.mjs` | Shared CSS parser/inventory used by styling tests. |
 | `palette-gallery.mjs` | Screenshot gallery of every palette in light and dark from the demo export; see [Theming](../docs/theming.md#guardrails-what-holds-this-in-place). |

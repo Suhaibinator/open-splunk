@@ -1,5 +1,7 @@
 "use client";
 
+import { BrowserCreateAction } from "@/lib/api/client-request-id";
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 
@@ -381,17 +383,22 @@ export function BackendLiveJobs({ apiBaseUrl }: BackendLiveJobsProps) {
     }
   }, [client, focusRefreshControl, jobAction, reload]);
 
+  const rerunAction = useRef(new BrowserCreateAction());
+
   const rerunJob = useCallback(async (job: ServerSearchJob) => {
     const bootstrap = bootstrapRef.current;
     if (bootstrap === null || jobAction !== null) return;
     setJobAction({ id: job.id, kind: "rerun" });
     setActionNotice(null);
     try {
-      const result = await rerunServerSearchJob(client, bootstrap, job);
+      const result = await rerunServerSearchJob(client, bootstrap, job, {
+        clientRequestId: rerunAction.current.requestId({ id: job.id, definition: job.definition }),
+      });
       if (result.status === "unavailable") {
         setActionNotice({ kind: "error", message: "Rerunning searches is unavailable on this backend." });
         return;
       }
+      rerunAction.current.complete();
       setActionNotice({ kind: "success", message: `Started a new ad hoc job ${result.value.id} from ${job.id}.` });
       reload();
       focusRefreshControl();

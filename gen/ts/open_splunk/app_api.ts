@@ -61,7 +61,11 @@ export interface CreateAppRequest {
 }
 
 export interface CreateAppResponse {
-  app: AppWorkspace | undefined;
+  app:
+    | AppWorkspace
+    | undefined;
+  /** True when this request resolves an earlier accepted logical action. */
+  replayed: boolean;
 }
 
 /** POST /api/apps/get */
@@ -213,13 +217,16 @@ export const CreateAppRequest: MessageFns<CreateAppRequest> = {
 };
 
 function createBaseCreateAppResponse(): CreateAppResponse {
-  return { app: undefined };
+  return { app: undefined, replayed: false };
 }
 
 export const CreateAppResponse: MessageFns<CreateAppResponse> = {
   encode(message: CreateAppResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     if (message.app !== undefined) {
       AppWorkspace.encode(message.app, writer.uint32(10).fork()).join();
+    }
+    if (message.replayed !== false) {
+      writer.uint32(16).bool(message.replayed);
     }
     return writer;
   },
@@ -245,6 +252,14 @@ export const CreateAppResponse: MessageFns<CreateAppResponse> = {
             message.app = AppWorkspace.decode(reader, reader.uint32());
             continue;
           }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.replayed = reader.bool();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -258,13 +273,19 @@ export const CreateAppResponse: MessageFns<CreateAppResponse> = {
   },
 
   fromJSON(object: any): CreateAppResponse {
-    return { app: isSet(object.app) ? AppWorkspace.fromJSON(object.app) : undefined };
+    return {
+      app: isSet(object.app) ? AppWorkspace.fromJSON(object.app) : undefined,
+      replayed: isSet(object.replayed) ? globalThis.Boolean(object.replayed) : false,
+    };
   },
 
   toJSON(message: CreateAppResponse): unknown {
     const obj: any = {};
     if (message.app !== undefined) {
       obj.app = AppWorkspace.toJSON(message.app);
+    }
+    if (message.replayed !== false) {
+      obj.replayed = message.replayed;
     }
     return obj;
   },
@@ -275,6 +296,7 @@ export const CreateAppResponse: MessageFns<CreateAppResponse> = {
   fromPartial<I extends Exact<DeepPartial<CreateAppResponse>, I>>(object: I): CreateAppResponse {
     const message = createBaseCreateAppResponse();
     message.app = (object.app !== undefined && object.app !== null) ? AppWorkspace.fromPartial(object.app) : undefined;
+    message.replayed = object.replayed ?? false;
     return message;
   },
 };

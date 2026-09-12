@@ -24,6 +24,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"github.com/Suhaibinator/open-splunk/internal/searchlimits"
 	"github.com/Suhaibinator/open-splunk/internal/searchretention"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
@@ -723,6 +724,65 @@ func (manager *Manager) LookupAdmissionEnabled() bool {
 // context is used only for admission; a successfully created job intentionally
 // outlives an HTTP request and is canceled through Cancel or Close.
 func (manager *Manager) Create(ctx context.Context, request CreateRequest) (Job, error) {
+	return manager.create(ctx, request, nil)
+}
+
+// CreateIdempotent replays an actor-scoped durable admission before any
+// dynamic visibility, time, authorization, or capacity resolution. Concurrent
+// first attempts converge through the receipt projection's database key.
+func (manager *Manager) CreateIdempotent(
+	ctx context.Context,
+	request CreateRequest,
+	intent requestidempotency.Intent,
+) (Job, bool, error) {
+	if ctx == nil || intent.Route != requestidempotency.RouteCreateSearchJob ||
+		intent.TenantID != request.TenantID || intent.CanonicalVersion != requestidempotency.CanonicalVersion {
+		return Job{}, false, requestidempotency.ErrInvalid
+	}
+	access := AccessScope{TenantID: request.TenantID, OwnerID: request.OwnerID}
+	if job, found, err := manager.ReplayIdempotent(ctx, access, intent); err != nil || found {
+		return job, found, err
+	}
+	job, err := manager.create(ctx, request, &intent)
+	if err == nil {
+		return job, false, nil
+	}
+	// Admission may have committed even when cancellation loses its acknowledgement.
+	reconcileCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), manager.journalTimeout)
+	defer cancel()
+	if replay, found, replayErr := manager.ReplayIdempotent(reconcileCtx, access, intent); replayErr != nil || found {
+		return replay, found, replayErr
+	}
+	return Job{}, false, err
+}
+
+// ReplayIdempotent resolves current durable metadata without applying any
+// caller-authored request defaults or consulting live mutation capacity.
+func (manager *Manager) ReplayIdempotent(
+	ctx context.Context,
+	access AccessScope,
+	intent requestidempotency.Intent,
+) (Job, bool, error) {
+	if ctx == nil || !validAccessScope(access) || intent.TenantID != access.TenantID ||
+		intent.Route != requestidempotency.RouteCreateSearchJob ||
+		intent.CanonicalVersion != requestidempotency.CanonicalVersion {
+		return Job{}, false, requestidempotency.ErrInvalid
+	}
+	if err := ctx.Err(); err != nil {
+		return Job{}, false, err
+	}
+	journal, ok := manager.journal.(IdempotentJobJournal)
+	if !ok {
+		return Job{}, false, requestidempotency.ErrUnavailable
+	}
+	return journal.LookupIdempotent(ctx, access, intent)
+}
+
+func (manager *Manager) create(
+	ctx context.Context,
+	request CreateRequest,
+	intent *requestidempotency.Intent,
+) (Job, error) {
 	if ctx == nil {
 		return Job{}, errors.New("create search job: context is nil")
 	}
@@ -882,7 +942,7 @@ func (manager *Manager) Create(ctx context.Context, request CreateRequest) (Job,
 	created := cloneJob(entry.job)
 	journalAdmitted := false
 	if manager.journal != nil {
-		if err := manager.admitJournal(ctx, created); err != nil {
+		if err := manager.admitJournal(ctx, created, intent); err != nil {
 			cancel()
 			return Job{}, err
 		}
@@ -1088,7 +1148,11 @@ func (manager *Manager) releaseJobID(id string) {
 	manager.mu.Unlock()
 }
 
-func (manager *Manager) admitJournal(ctx context.Context, job Job) error {
+func (manager *Manager) admitJournal(
+	ctx context.Context,
+	job Job,
+	intent *requestidempotency.Intent,
+) error {
 	journalParent, cancelForManager := context.WithCancel(ctx)
 	stopManagerCancellation := context.AfterFunc(manager.ctx, cancelForManager)
 	journalContext, cancelTimeout := context.WithTimeout(journalParent, manager.journalTimeout)
@@ -1098,6 +1162,13 @@ func (manager *Manager) admitJournal(ctx context.Context, job Job) error {
 		cancelForManager()
 	}()
 	err := invokeJournal(func() error {
+		if intent != nil {
+			journal, ok := manager.journal.(IdempotentJobJournal)
+			if !ok {
+				return requestidempotency.ErrUnavailable
+			}
+			return journal.AdmitIdempotent(journalContext, cloneJob(job), *intent)
+		}
 		return manager.journal.Admit(journalContext, cloneJob(job))
 	})
 	if err == nil {
@@ -1110,6 +1181,13 @@ func (manager *Manager) admitJournal(ctx context.Context, job Job) error {
 		return ErrClosed
 	}
 	manager.reportJournalError(JournalOperationAdmit, job, err)
+	if errors.Is(err, requestidempotency.ErrInvalid) ||
+		errors.Is(err, requestidempotency.ErrConflict) ||
+		errors.Is(err, requestidempotency.ErrCapacity) ||
+		errors.Is(err, requestidempotency.ErrUnavailable) ||
+		errors.Is(err, requestidempotency.ErrCorrupt) {
+		return err
+	}
 	return fmt.Errorf("create search job: %w", ErrJournalUnavailable)
 }
 
@@ -1567,10 +1645,11 @@ func (manager *Manager) resultsEntry(id string, entry *jobEntry, limit int, curs
 		return ResultPage{}, ErrByteLimit
 	}
 	page := ResultPage{
-		Schema:    cloneSchema(*entry.resultSchema),
-		Rows:      cloneRows(entry.rows[start:end]),
-		TotalRows: total,
-		Complete:  end == len(entry.rows),
+		Schema:     cloneSchema(*entry.resultSchema),
+		Rows:       cloneRows(entry.rows[start:end]),
+		TotalRows:  total,
+		Complete:   end == len(entry.rows),
+		Generation: entry.resultGeneration,
 	}
 	if end < len(entry.rows) {
 
@@ -2036,6 +2115,10 @@ func (manager *Manager) executeCompiled(
 		cloned := *retained.Chart
 		chart = &cloned
 	}
+	var nearbyEvent *clickhouse.NearbyEventOutput
+	if output, available := retained.NearbyEventOutput(); available {
+		nearbyEvent = &output
+	}
 	sink := &resultSink{
 		manager:        manager,
 		entry:          entry,
@@ -2043,6 +2126,7 @@ func (manager *Manager) executeCompiled(
 		expectedFields: cloneStrings(retained.OutputFields),
 		timechart:      timechart,
 		chart:          chart,
+		nearbyEvent:    nearbyEvent,
 		atomicResult:   retained.RequiresAtomicResult(),
 		limits:         entry.limits,
 	}
@@ -2106,7 +2190,7 @@ func (manager *Manager) executeCompiled(
 		)
 		return
 	}
-	manager.finishCompleted(entry, manager.nowUTC(), resultsTruncated)
+	manager.finishCompleted(entry, manager.nowUTC(), resultsTruncated, sink.nearbyEventProvenance())
 }
 
 func (entry *jobEntry) hasPreparedExecution() bool {
@@ -2348,12 +2432,23 @@ func (manager *Manager) runFailureReporter(
 	}
 }
 
-func (manager *Manager) finishCompleted(entry *jobEntry, now time.Time, resultsTruncated bool) {
+func (manager *Manager) finishCompleted(
+	entry *jobEntry,
+	now time.Time,
+	resultsTruncated bool,
+	nearbyProvenance *NearbyEventProvenance,
+) {
 	entry.mu.Lock()
 	if entry.job.State == StateRunning {
 		if entry.ctx.Err() != nil {
 			manager.finishCanceledLocked(entry, now)
 		} else {
+			if nearbyProvenance != nil {
+				cloned := *nearbyProvenance
+				entry.job.NearbyEventProvenance = &cloned
+			} else {
+				entry.job.NearbyEventProvenance = nil
+			}
 			entry.job.State = StateCompleted
 			incrementJobVersion(&entry.job)
 			entry.job.FinishedAt = now
@@ -2631,6 +2726,8 @@ type resultSink struct {
 	expectedFields    []string
 	timechart         *clickhouse.TimechartOutput
 	chart             *clickhouse.ChartOutput
+	nearbyEvent       *clickhouse.NearbyEventOutput
+	nearbyProvenance  *NearbyEventProvenance
 	atomicResult      bool
 	atomicSchema      *Schema
 	atomicRows        []ResultRow
@@ -2667,6 +2764,10 @@ func (sink *resultSink) SetCompiledQuery(compiled clickhouse.CompiledQuery) erro
 	if compiled.Chart != nil {
 		cloned := *compiled.Chart
 		sink.chart = &cloned
+	}
+	sink.nearbyEvent = nil
+	if output, available := compiled.NearbyEventOutput(); available {
+		sink.nearbyEvent = &output
 	}
 	sink.atomicResult = sink.atomicResult || compiled.RequiresAtomicResult()
 	sink.resolvedCompiled = true
@@ -2738,6 +2839,14 @@ func (sink *resultSink) SetSchema(schema Schema) error {
 	}
 	if schemaErr != nil {
 		return sink.rememberLocked(schemaErr)
+	}
+	sink.nearbyProvenance = nil
+	if sink.nearbyEvent != nil {
+		provenance, valid := nearbyEventProvenance(*sink.nearbyEvent, schema)
+		if !valid {
+			return sink.rememberLocked(fmt.Errorf("%w: nearby-event provenance does not match schema", ErrInvalidResult))
+		}
+		sink.nearbyProvenance = provenance
 	}
 	if sink.atomicResult {
 		return sink.stageAtomicSchemaLocked(schema)
@@ -3088,6 +3197,16 @@ func (sink *resultSink) schemaReceived() bool {
 	sink.entry.mu.RLock()
 	defer sink.entry.mu.RUnlock()
 	return sink.receivedSchema
+}
+
+func (sink *resultSink) nearbyEventProvenance() *NearbyEventProvenance {
+	sink.entry.mu.RLock()
+	defer sink.entry.mu.RUnlock()
+	if sink.nearbyProvenance == nil {
+		return nil
+	}
+	cloned := *sink.nearbyProvenance
+	return &cloned
 }
 
 // errorWrapsOnly accepts ordinary single-error wrapping and rejects joined

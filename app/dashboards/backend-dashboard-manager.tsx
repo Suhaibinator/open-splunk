@@ -19,7 +19,7 @@ import {
 } from "@/gen/ts/open_splunk/dashboard";
 import { SearchJobState, searchJobStateToJSON } from "@/gen/ts/open_splunk/search";
 import { ServerFeature } from "@/gen/ts/open_splunk/system_api";
-import type { TypedValue } from "@/gen/ts/open_splunk/value";
+import { type ResultRow, type ResultSchema, VisualizationSpec, VisualizationType } from "@/gen/ts/open_splunk/result";
 import { createOpenSplunkApiClient, getSystemBootstrap } from "@/lib/api";
 import { preferredBackendAppId, replaceBackendAppId } from "@/lib/search/app-navigation";
 import { ProductShell } from "../_components/product-shell";
@@ -43,6 +43,13 @@ import {
   waitForDashboardSearchJob,
 } from "./dashboard-panel-runner";
 
+import {
+  acquireDashboardPanelPipeline,
+  awaitDashboardOperation,
+  DashboardResultLoader,
+} from "./dashboard-result-loader";
+import { DashboardVisualization, DashboardVisualizationEditor } from "./dashboard-visualization";
+
 interface BackendDashboardManagerProps {
   apiBaseUrl: string;
 }
@@ -50,14 +57,25 @@ interface BackendDashboardManagerProps {
 interface PanelResult {
   state: SearchJobState;
   jobId?: string;
-  columns?: Array<{ key: string; label: string }>;
-  rows?: Array<{ id: string; cells: string[] }>;
+  schema?: ResultSchema;
+  rows?: ResultRow[];
+  spec?: VisualizationSpec;
+  capped?: boolean;
+  complete?: boolean;
+  retainedTruncated?: boolean;
+  pageNumber?: number;
+  nextPageToken?: string;
+  paging?: boolean;
+  stale?: boolean;
   error?: string;
 }
 
 interface ActivePanelRun {
+  busy: boolean;
   controller: AbortController;
   jobId?: string;
+  loader?: DashboardResultLoader;
+  terminal: boolean;
 }
 
 const MAXIMUM_DASHBOARD_PANELS = 24;
@@ -114,25 +132,6 @@ function newPanel(appId: string, indexName: string, row: number): DashboardPanel
   };
 }
 
-function formatValue(value: TypedValue | undefined): string {
-  switch (value?.kind?.$case) {
-    case "nullValue": return "null";
-    case "missingValue": return "";
-    case "stringValue": return value.kind.value;
-    case "sint64Value":
-    case "uint64Value": return value.kind.value.toString();
-    case "doubleValue": return Number.isFinite(value.kind.value) ? String(value.kind.value) : "";
-    case "boolValue": return value.kind.value ? "true" : "false";
-    case "timestampValue": return value.kind.value.toISOString();
-    case "durationValue": return `${value.kind.value.seconds.toString()}.${String(value.kind.value.nanos).padStart(9, "0")}s`;
-    case "decimalValue": return value.kind.value.value;
-    case "bytesValue": return `[${value.kind.value.byteLength} bytes]`;
-    case "listValue": return `[${value.kind.value.values.map(formatValue).join(", ")}]`;
-    case "objectValue": return JSON.stringify(Object.fromEntries(value.kind.value.fields.map((field) => [field.name, formatValue(field.value)])));
-    default: return "";
-  }
-}
-
 function stateLabel(state: SearchJobState): string {
   return searchJobStateToJSON(state)
     .replace("SEARCH_JOB_STATE_", "")
@@ -162,6 +161,7 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
   const [error, setError] = useState<DashboardManagerError | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [panelResults, setPanelResults] = useState<Record<string, PanelResult>>({});
+  const [invalidPanelIDs, setInvalidPanelIDs] = useState<ReadonlySet<string>>(() => new Set());
   const loadGeneration = useRef(0);
   const loadRequests = useRef(new Set<AbortController>());
   const activePanelRuns = useRef(new Map<string, ActivePanelRun>());
@@ -175,6 +175,7 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
     && !dashboardDefinitionsEqual(draft, selected.definition)
   ), [draft, selected]);
   const workspaceBusy = saving || refreshing || switchingAppID !== null;
+  const invalidVisualization = draft?.panels.some((panel) => invalidPanelIDs.has(panel.panelId)) ?? false;
   const viewState = dashboardViewState({
     appCount: apps.length,
     available,
@@ -189,7 +190,7 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
     if (!active) return;
     activePanelRuns.current.delete(panelIdValue);
     active.controller.abort(new DOMException(reason, "AbortError"));
-    if (active.jobId) {
+    if (active.jobId && !active.terminal) {
       void client.search.cancel({ searchJobId: active.jobId, reason }).catch(() => undefined);
     }
   }, [client]);
@@ -232,6 +233,7 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
         setSelectedID("");
         setDraft(null);
         setPanelResults({});
+        setInvalidPanelIDs(new Set());
         return true;
       }
       const retainedID = mode === "switch" ? "" : selectedIDRef.current;
@@ -249,6 +251,7 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
       setSelectedID(selectedIDRef.current);
       setDraft(nextSelected?.definition ? cloneDashboardDefinition(nextSelected.definition) : null);
       setPanelResults({});
+      setInvalidPanelIDs(new Set());
       replaceBackendAppId(result.selectedApp.appId);
       return true;
     } catch (requestError) {
@@ -299,6 +302,7 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
         setSelectedID("");
         setDraft(null);
         setPanelResults({});
+        setInvalidPanelIDs(new Set());
         return;
       }
       const nextSelected = result.dashboards.find((dashboard) => dashboard.dashboardId === selectedIDRef.current)
@@ -315,6 +319,7 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
       setSelectedID(selectedIDRef.current);
       setDraft(nextSelected?.definition ? cloneDashboardDefinition(nextSelected.definition) : null);
       setPanelResults({});
+      setInvalidPanelIDs(new Set());
     }).catch((requestError: unknown) => {
       if (!controller.signal.aborted && generation === loadGeneration.current) {
         setError(dashboardLoadError(errorMessage(requestError), "initial", preferredAppId));
@@ -329,7 +334,7 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
       requests.clear();
       for (const active of runs.values()) {
         active.controller.abort(new DOMException("Dashboard closed", "AbortError"));
-        if (active.jobId) {
+        if (active.jobId && !active.terminal) {
           void client.search.cancel({ searchJobId: active.jobId, reason: "Dashboard closed" }).catch(() => undefined);
         }
       }
@@ -375,6 +380,7 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
       setSelectedID(response.dashboard.dashboardId);
       setDraft(cloneDashboardDefinition(response.dashboard.definition));
       setPanelResults({});
+      setInvalidPanelIDs(new Set());
       setNewName("");
       setNotice("Dashboard created.");
     } catch (requestError) {
@@ -387,7 +393,7 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
   function saveDashboard(): Promise<Dashboard | null> {
     const activeSave = savePromiseRef.current;
     if (activeSave !== null) return activeSave;
-    if (!selected || !draft) return Promise.resolve(null);
+    if (!selected || !draft || invalidVisualization) return Promise.resolve(null);
     if (!dirty) return Promise.resolve(selected);
     const dashboardID = selected.dashboardId;
     const submittedDraft = cloneDashboardDefinition(draft);
@@ -442,6 +448,7 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
       setSelectedID(selectedIDRef.current);
       setDraft(nextSelected?.definition ? cloneDashboardDefinition(nextSelected.definition) : null);
       setPanelResults({});
+      setInvalidPanelIDs(new Set());
       setNotice("Dashboard deleted.");
     } catch (requestError) {
       setError(dashboardActionError(errorMessage(requestError)));
@@ -451,33 +458,49 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
   }
 
   async function runPanel(panel: DashboardPanel) {
-    if (!selected || refreshing || switchingAppID !== null) return;
-    const persisted = dirty ? await saveDashboard() : selected;
-    if (!persisted) return;
+    if (!selected || refreshing || switchingAppID !== null || invalidVisualization) return;
+    const dashboardID = selected.dashboardId;
     stopPanelRun(panel.panelId, "A newer panel run started");
     const controller = new AbortController();
-    const active: ActivePanelRun = { controller };
-    const waitTimeoutMs = dashboardPanelWaitTimeoutMs(defaultSearchTimeoutMs);
-    let terminalJobObserved = false;
+    const active: ActivePanelRun = { busy: true, controller, terminal: false };
+    const current = () => selectedIDRef.current === dashboardID && dashboardPanelRunCanPublish(
+      active,
+      activePanelRuns.current.get(panel.panelId),
+      controller.signal.aborted,
+    );
     activePanelRuns.current.set(panel.panelId, active);
-    setPanelResults((current) => ({ ...current, [panel.panelId]: { state: SearchJobState.SEARCH_JOB_STATE_QUEUED } }));
+    setPanelResults((results) => ({ ...results, [panel.panelId]: { state: SearchJobState.SEARCH_JOB_STATE_QUEUED } }));
+    let release: (() => void) | undefined;
     try {
-      const response = await client.dashboards.runPanel(
+      const persisted = dirty
+        ? await awaitDashboardOperation(saveDashboard(), controller.signal)
+        : selected;
+      if (!current()) return;
+      if (!persisted) throw new Error("The dashboard could not be saved. Save it successfully before running this panel.");
+      const savedPanel = persisted.definition?.panels.find((candidate) => candidate.panelId === panel.panelId);
+      if (!savedPanel?.search) throw new Error("The saved dashboard no longer contains this panel search.");
+      const spec = savedPanel.search.visualization === undefined
+        ? undefined
+        : VisualizationSpec.fromPartial(savedPanel.search.visualization);
+      release = await acquireDashboardPanelPipeline(controller.signal);
+      if (!current()) return;
+      const admission = client.dashboards.runPanel(
         { dashboardId: persisted.dashboardId, panelId: panel.panelId },
         { signal: controller.signal },
       );
+      // A canceled transport may still admit a job. Cancel its late identity
+      // even after the local pipeline has released its concurrency slot.
+      void admission.then((response) => {
+        if (!current() && response.searchJob) {
+          void client.search.cancel({ searchJobId: response.searchJob.searchJobId, reason: "Panel run superseded" }).catch(() => undefined);
+        }
+      }).catch(() => undefined);
+      const response = await awaitDashboardOperation(admission, controller.signal);
       const initialJob = response.searchJob;
       if (!initialJob) throw new Error("The server returned an empty search job.");
-      if (!dashboardPanelRunCanPublish(
-        active,
-        activePanelRuns.current.get(panel.panelId),
-        controller.signal.aborted,
-      )) {
-        void client.search.cancel({ searchJobId: initialJob.searchJobId, reason: "Panel run superseded" }).catch(() => undefined);
-        return;
-      }
+      if (!current()) return;
       active.jobId = initialJob.searchJobId;
-      setPanelResults((current) => ({ ...current, [panel.panelId]: { state: initialJob.state, jobId: initialJob.searchJobId } }));
+      setPanelResults((results) => ({ ...results, [panel.panelId]: { state: initialJob.state, jobId: initialJob.searchJobId, spec } }));
       const job = await waitForDashboardSearchJob(initialJob, {
         defaultSearchTimeoutMs,
         signal: controller.signal,
@@ -488,70 +511,106 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
           );
           const nextJob = polled.searchJob;
           if (!nextJob) throw new Error("The server returned an empty search job.");
-          if (nextJob.searchJobId !== searchJobId) {
-            throw new Error("The server returned a different search job.");
-          }
-          if (dashboardPanelRunCanPublish(
-            active,
-            activePanelRuns.current.get(panel.panelId),
-            signal.aborted,
-          )) {
-            setPanelResults((current) => ({
-              ...current,
-              [panel.panelId]: { state: nextJob.state, jobId: nextJob.searchJobId },
+          if (nextJob.searchJobId !== searchJobId) throw new Error("The server returned a different search job.");
+          if (current()) {
+            setPanelResults((results) => ({
+              ...results,
+              [panel.panelId]: { state: nextJob.state, jobId: nextJob.searchJobId, spec },
             }));
           }
           return nextJob;
         },
       });
-      if (!dashboardPanelRunCanPublish(
-        active,
-        activePanelRuns.current.get(panel.panelId),
-        controller.signal.aborted,
-      )) return;
-      terminalJobObserved = true;
+      if (!current()) return;
+      active.terminal = true;
       if (job.state !== SearchJobState.SEARCH_JOB_STATE_COMPLETED) {
         throw new Error(job.failure?.message || `Panel search ${stateLabel(job.state)}.`);
       }
-      const result = await client.search.results({
-        searchJobId: job.searchJobId,
-        page: { pageSize: 20, pageToken: undefined, includeTotalSize: false },
-        columns: [],
-        allowPartialResults: false,
-      }, { signal: controller.signal });
-      if (!dashboardPanelRunCanPublish(
-        active,
-        activePanelRuns.current.get(panel.panelId),
-        controller.signal.aborted,
-      )) return;
-      const columns = result.resultPage?.schema?.columns.map((column) => ({ key: column.fieldName, label: column.displayName || column.fieldName })) ?? [];
-      const rows = result.resultPage?.rows.map((row) => ({ id: row.rowId, cells: row.cells.map(formatValue) })) ?? [];
-      setPanelResults((current) => ({ ...current, [panel.panelId]: { state: job.state, jobId: job.searchJobId, columns, rows } }));
+      const loader = new DashboardResultLoader({ client, isCurrent: current, job, signal: controller.signal });
+      active.loader = loader;
+      const table = spec === undefined || spec.type === VisualizationType.VISUALIZATION_TYPE_TABLE;
+      if (table) {
+        const page = await loader.firstTablePage();
+        if (!current()) return;
+        setPanelResults((results) => ({
+          ...results,
+          [panel.panelId]: {
+            state: job.state, jobId: job.searchJobId, spec,
+            schema: page.schema, rows: page.rows, pageNumber: page.pageNumber,
+            nextPageToken: page.nextPageToken, complete: page.snapshotComplete, retainedTruncated: job.resultsTruncated,
+          },
+        }));
+      } else {
+        const collected = await loader.collectChartRows();
+        if (!current()) return;
+        setPanelResults((results) => ({
+          ...results,
+          [panel.panelId]: {
+            state: job.state, jobId: job.searchJobId, spec,
+            schema: collected.schema, rows: collected.rows,
+            capped: collected.capped, complete: collected.complete, retainedTruncated: job.resultsTruncated,
+          },
+        }));
+      }
     } catch (requestError) {
-      if (dashboardPanelRunCanPublish(
-        active,
-        activePanelRuns.current.get(panel.panelId),
-        controller.signal.aborted,
-      )) {
-        if (active.jobId && !terminalJobObserved) {
+      if (current()) {
+        if (active.jobId && !active.terminal) {
+          const waitTimeoutMs = dashboardPanelWaitTimeoutMs(defaultSearchTimeoutMs);
           void client.search.cancel({
             searchJobId: active.jobId,
             reason: `Dashboard panel wait stopped before its ${waitTimeoutMs}ms limit`,
           }).catch(() => undefined);
         }
-        setPanelResults((current) => ({
-          ...current,
+        active.loader = undefined;
+        setPanelResults((results) => ({
+          ...results,
           [panel.panelId]: {
-            state: current[panel.panelId]?.state ?? SearchJobState.SEARCH_JOB_STATE_FAILED,
-            jobId: current[panel.panelId]?.jobId,
+            state: results[panel.panelId]?.state ?? SearchJobState.SEARCH_JOB_STATE_FAILED,
+            jobId: active.jobId,
             error: errorMessage(requestError),
           },
         }));
       }
     } finally {
-      if (activePanelRuns.current.get(panel.panelId) === active) {
-        activePanelRuns.current.delete(panel.panelId);
+      release?.();
+      active.busy = false;
+    }
+  }
+
+  async function pagePanel(panelIdValue: string, direction: "next" | "previous") {
+    const active = activePanelRuns.current.get(panelIdValue);
+    if (!active?.loader || active.busy || active.controller.signal.aborted) return;
+    active.busy = true;
+    const current = () => dashboardPanelRunCanPublish(
+      active,
+      activePanelRuns.current.get(panelIdValue),
+      active.controller.signal.aborted,
+    );
+    setPanelResults((results) => ({ ...results, [panelIdValue]: { ...results[panelIdValue], paging: true, error: undefined } }));
+    let release: (() => void) | undefined;
+    try {
+      release = await acquireDashboardPanelPipeline(active.controller.signal);
+      if (!current()) return;
+      const page = direction === "previous"
+        ? active.loader.previousTablePage()
+        : await active.loader.nextTablePage();
+      if (!page || !current()) return;
+      setPanelResults((results) => ({
+        ...results,
+        [panelIdValue]: {
+          ...results[panelIdValue], schema: page.schema, rows: page.rows,
+          pageNumber: page.pageNumber, nextPageToken: page.nextPageToken,
+          complete: page.snapshotComplete, paging: false,
+        },
+      }));
+    } catch (requestError) {
+      if (current()) {
+        setPanelResults((results) => ({ ...results, [panelIdValue]: { ...results[panelIdValue], error: errorMessage(requestError), paging: false } }));
       }
+    } finally {
+      release?.();
+      active.busy = false;
+      if (current()) setPanelResults((results) => ({ ...results, [panelIdValue]: { ...results[panelIdValue], paging: false } }));
     }
   }
 
@@ -585,6 +644,7 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
     setSelectedID(nextDashboardID);
     setDraft(cloneDashboardDefinition(nextSelected.definition));
     setPanelResults({});
+    setInvalidPanelIDs(new Set());
   }
 
   function retryDashboardLoad() {
@@ -602,6 +662,12 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
   }
 
   function updatePanel(panelIdValue: string, update: (panel: DashboardPanel) => DashboardPanel) {
+    stopPanelRun(panelIdValue, "Dashboard panel settings changed");
+    setPanelResults((results) => {
+      const previous = results[panelIdValue];
+      if (!previous) return results;
+      return { ...results, [panelIdValue]: { state: previous.state, schema: previous.schema, stale: true } };
+    });
     setDraft((current) => current ? {
       ...current,
       panels: current.panels.map((panel) => panel.panelId === panelIdValue ? update(panel) : panel),
@@ -679,7 +745,7 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
           {!selected || !draft ? null : (
             <>
               <section className="suite-card operations-definition-editor">
-                <header className="suite-card-header"><div><h2>Dashboard settings</h2><p>Changes use optimistic versioning.</p></div><div className="operations-editor-actions"><button className="button button--primary" type="button" onClick={() => void saveDashboard()} disabled={workspaceBusy || !dirty || !draft.name.trim()}>Save</button><button className="button button--danger" type="button" onClick={() => void deleteDashboard()} disabled={workspaceBusy}>Delete</button></div></header>
+                <header className="suite-card-header"><div><h2>Dashboard settings</h2><p>Changes use optimistic versioning.</p></div><div className="operations-editor-actions"><button className="button button--primary" type="button" onClick={() => void saveDashboard()} disabled={workspaceBusy || invalidVisualization || !dirty || !draft.name.trim()}>Save</button><button className="button button--danger" type="button" onClick={() => void deleteDashboard()} disabled={workspaceBusy}>Delete</button></div></header>
                 <div className="operations-settings-grid">
                   <label><span>Name</span><input value={draft.name} disabled={workspaceBusy} maxLength={255} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
                   <label><span>Description</span><input value={draft.description ?? ""} disabled={workspaceBusy} maxLength={16384} onChange={(event) => setDraft({ ...draft, description: event.target.value || undefined })} /></label>
@@ -693,7 +759,7 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
                 const result = panelResults[panel.panelId];
                 return (
                   <section className="suite-card dashboard-panel operations-live-panel" key={panel.panelId}>
-                    <header className="suite-card-header"><div><h2>{panel.title || "Untitled panel"}</h2><p>{panel.search?.spl || "No SPL configured"}</p></div><div className="operations-editor-actions"><button className="button button--primary" type="button" onClick={() => void runPanel(panel)} disabled={workspaceBusy}>Run</button><button className="button button--danger" type="button" onClick={() => removePanel(panel.panelId)} disabled={workspaceBusy}>Remove</button></div></header>
+                    <header className="suite-card-header"><div><h2>{panel.title || "Untitled panel"}</h2><p>{panel.search?.spl || "No SPL configured"}</p></div><div className="operations-editor-actions"><button className="button button--primary" type="button" onClick={() => void runPanel(panel)} disabled={workspaceBusy || invalidVisualization}>Run</button><button className="button button--danger" type="button" onClick={() => removePanel(panel.panelId)} disabled={workspaceBusy}>Remove</button></div></header>
                     <div className="operations-panel-fields">
                       <label><span>Title</span><input value={panel.title} disabled={workspaceBusy} maxLength={255} onChange={(event) => updatePanel(panel.panelId, (current) => ({ ...current, title: event.target.value }))} /></label>
                       <label className="operations-spl-field"><span>SPL</span><textarea value={panel.search?.spl ?? ""} disabled={workspaceBusy} rows={3} onChange={(event) => updatePanel(panel.panelId, (current) => ({ ...current, search: current.search ? { ...current.search, spl: event.target.value } : current.search }))} /></label>
@@ -701,10 +767,46 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
                       <label><span>Latest</span><input value={panel.search?.timeRange?.latest ?? ""} disabled={workspaceBusy} onChange={(event) => updatePanel(panel.panelId, (current) => ({ ...current, search: current.search ? { ...current.search, timeRange: { ...current.search.timeRange, earliest: current.search.timeRange?.earliest, latest: event.target.value, timezone: current.search.timeRange?.timezone } } : current.search }))} /></label>
                       <label><span>Indexes</span><input value={panel.search?.indexScope.join(", ") ?? ""} disabled={workspaceBusy} onChange={(event) => updatePanel(panel.panelId, (current) => ({ ...current, search: current.search ? { ...current.search, indexScope: event.target.value.split(",").map((value) => value.trim()).filter(Boolean) } : current.search }))} /></label>
                     </div>
-                    {result ? <div className="operations-panel-result">
-                      <p className={result.error ? "operations-result-error" : "operations-result-status"}>{result.error ?? `Search ${stateLabel(result.state)}${result.jobId ? ` · ${result.jobId}` : ""}`}</p>
-                      {result.columns && result.columns.length > 0 ? <div className="table-wrap"><table className="table"><thead><tr>{result.columns.map((column) => <th key={column.key} scope="col">{column.label}</th>)}</tr></thead><tbody>{result.rows?.map((row) => <tr key={row.id}>{result.columns!.map((column, columnIndex) => <td key={column.key}>{row.cells[columnIndex] ?? ""}</td>)}</tr>)}</tbody></table></div> : null}
-                      {result.rows && result.rows.length === 0 ? <p className="operations-state-message">The search completed with no rows.</p> : null}
+                    <DashboardVisualizationEditor
+                      disabled={workspaceBusy}
+                      fields={result?.schema?.columns.map((column) => ({ fieldName: column.fieldName, label: column.displayName || column.fieldName })) ?? []}
+                      value={panel.search?.visualization}
+                      onValidityChange={(valid) => {
+                        setInvalidPanelIDs((current) => {
+                          if (current.has(panel.panelId) === !valid) return current;
+                          const next = new Set(current);
+                          if (valid) next.delete(panel.panelId);
+                          else next.add(panel.panelId);
+                          return next;
+                        });
+                        if (!valid) {
+                          stopPanelRun(panel.panelId, "Dashboard visualization became invalid");
+                          setPanelResults((results) => {
+                            const previous = results[panel.panelId];
+                            if (!previous || previous.stale) return results;
+                            return { ...results, [panel.panelId]: { state: previous.state, schema: previous.schema, stale: true } };
+                          });
+                        }
+                      }}
+                      onChange={(visualization) => updatePanel(panel.panelId, (currentPanel) => ({
+                        ...currentPanel,
+                        search: currentPanel.search ? { ...currentPanel.search, visualization } : undefined,
+                      }))}
+                    />
+                    {result ? <div className="operations-panel-result" aria-busy={result.paging === true}>
+                      <p className={result.error ? "operations-result-error" : "operations-result-status"} role={result.error ? "alert" : "status"}>{result.error ?? (result.stale ? "Panel settings changed. Run the panel to update its results." : result.paging ? "Loading results page…" : `Search ${stateLabel(result.state)}${result.jobId ? ` · ${result.jobId}` : ""}`)}</p>
+                      {result.schema && result.rows ? <DashboardVisualization
+                        panelTitle={panel.title}
+                        spec={result.spec}
+                        schema={result.schema}
+                        rows={result.rows}
+                        capped={result.capped}
+                        complete={result.complete}
+                        retainedTruncated={result.retainedTruncated}
+                        pageNumber={result.pageNumber}
+                        onNextPage={result.nextPageToken === undefined ? undefined : () => void pagePanel(panel.panelId, "next")}
+                        onPreviousPage={(result.pageNumber ?? 1) <= 1 ? undefined : () => void pagePanel(panel.panelId, "previous")}
+                      /> : null}
                     </div> : null}
                   </section>
                 );

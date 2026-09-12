@@ -20,6 +20,7 @@ export interface BackendResultPage {
   totalSize: number | undefined;
   totalSizeExact: boolean;
   snapshotComplete: boolean;
+  snapshotRef?: string;
 }
 
 interface BackendResultPageResponse {
@@ -29,6 +30,7 @@ interface BackendResultPageResponse {
   totalSize: number | undefined;
   totalSizeExact: boolean;
   snapshotComplete: boolean;
+  snapshotRef?: string;
 }
 
 interface ResultPageRequest {
@@ -56,6 +58,7 @@ export function equalResultSchemas(left: ResultSchema, right: ResultSchema): boo
 }
 
 export class BackendResultPages {
+  private authoritativeSnapshotRef: string | null = null;
   private authoritativeSchema: ResultSchema | null = null;
   private displayedKey: string | null = null;
   private readonly pageStarts = new Map<string, number>();
@@ -67,6 +70,7 @@ export class BackendResultPages {
 
   resetForJob(pageSize: number) {
     this.authoritativeSchema = null;
+    this.authoritativeSnapshotRef = null;
     this.resetPages(pageSize);
   }
 
@@ -157,6 +161,11 @@ export class BackendResultPages {
         throw new Error("The search result schema mutated without changing its identity or revision.");
       }
     }
+    const snapshotRef = resultPage.snapshotRef ?? "";
+    if (this.authoritativeSnapshotRef !== null && this.authoritativeSnapshotRef !== snapshotRef) {
+      throw new Error("The retained result snapshot changed while paging. Reopen the search job.");
+    }
+    this.authoritativeSnapshotRef = snapshotRef;
     this.authoritativeSchema = schema;
     const totalSize = resultPage.page?.totalSize;
     return {
@@ -167,6 +176,7 @@ export class BackendResultPages {
       totalSizeExact: (resultPage.page?.totalSizeExact ?? false)
         && (totalSize === undefined || totalSize <= BigInt(Number.MAX_SAFE_INTEGER)),
       snapshotComplete: resultPage.snapshotComplete,
+      snapshotRef,
     };
   }
 
@@ -249,6 +259,7 @@ export class BackendResultPages {
       totalSize,
       totalSizeExact: response.totalSizeExact,
       snapshotComplete: response.snapshotComplete,
+      snapshotRef: response.snapshotRef,
     };
     this.pages.set(cacheKey, page);
     while (this.pages.size > MAX_CACHED_RESULT_PAGES) {

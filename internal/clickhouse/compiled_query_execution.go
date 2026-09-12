@@ -21,11 +21,11 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
-// v12 additionally binds the minimum automatic-lookup replay descriptor.
+// v13 additionally binds exact original-event output provenance.
 // Lookup blocks can therefore cross the driver boundary only as part of the
 // same immutable executable authority as their SQL, and derived compilation
 // can restore exact automatic placement without consulting mutable state.
-const compiledExecutionSealDomain = "open-splunk-compiled-query-execution-v12"
+const compiledExecutionSealDomain = "open-splunk-compiled-query-execution-v13"
 
 var timeType = reflect.TypeFor[time.Time]()
 
@@ -607,7 +607,8 @@ func compiledExecutionDigestContext(
 	if err != nil {
 		return compiledExecutionSeal{}, false, err
 	}
-	if !validResultTimeBucketOutput(compiled) || !validResultContainerOutputs(compiled) ||
+	if !validResultTimeBucketOutput(compiled) || !validNearbyEventOutput(compiled) ||
+		!validResultContainerOutputs(compiled) ||
 		!validResultOptionalMultivalueOutputs(compiled) ||
 		!validResultStringOrBytesOutputs(compiled) ||
 		!validResultFieldPresentations(compiled) ||
@@ -634,6 +635,13 @@ func compiledExecutionDigestContext(
 	}
 	writeTokenPart(digest, compiled.SQL)
 	writeStringSlice(digest, compiled.OutputFields)
+	writeBool(digest, compiled.NearbyEvent != nil)
+	if compiled.NearbyEvent != nil {
+		writeUint64(digest, uint64(compiled.NearbyEvent.TimeIndex))
+		writeUint64(digest, uint64(compiled.NearbyEvent.IndexIndex))
+		writeUint64(digest, uint64(compiled.NearbyEvent.HostIndex))
+		writeUint64(digest, uint64(compiled.NearbyEvent.SourceIndex))
+	}
 	writeBool(digest, compiled.OutputPresentations == nil)
 	writeUint64(digest, uint64(len(compiled.OutputPresentations)))
 	for _, presentation := range compiled.OutputPresentations {
@@ -967,6 +975,10 @@ func (compiled CompiledQuery) CloneForExecutionContext(
 	}
 	cloned.SQL = strings.Clone(compiled.SQL)
 	cloned.OutputFields = cloneStrings(compiled.OutputFields)
+	if compiled.NearbyEvent != nil {
+		output := *compiled.NearbyEvent
+		cloned.NearbyEvent = &output
+	}
 	cloned.OutputPresentations = cloneResultFieldPresentations(
 		compiled.OutputPresentations,
 	)
@@ -1120,6 +1132,12 @@ func (compiled CompiledQuery) RetainedBytesContext(
 	total, ok = retainedStringSlice(total, compiled.OutputFields)
 	if !ok {
 		return 0, false, nil
+	}
+	if compiled.NearbyEvent != nil {
+		total, ok = retainedAdd(total, uint64(unsafe.Sizeof(*compiled.NearbyEvent)))
+		if !ok {
+			return 0, false, nil
+		}
 	}
 	total, ok = retainedAdd(
 		total,

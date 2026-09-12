@@ -27,6 +27,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
 	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"github.com/Suhaibinator/open-splunk/internal/tokenconstraint"
 )
 
@@ -403,6 +404,57 @@ func (store *Store) validateTokenMutationActor(ctx context.Context) error {
 // CreateCollectorToken generates a cryptographically random token, persists
 // only its HMAC-SHA-256 digest, and returns the plaintext exactly once.
 func (store *Store) CreateCollectorToken(ctx context.Context, request CreateCollectorTokenRequest) (issued IssuedCollectorToken, err error) {
+	return store.createCollectorToken(ctx, request, nil)
+}
+
+// CreateCollectorTokenIdempotent co-commits the token digest, successful audit
+// event, and actor-scoped receipt. Replay returns current safe metadata and no
+// plaintext token.
+func (store *Store) CreateCollectorTokenIdempotent(
+	ctx context.Context,
+	request CreateCollectorTokenRequest,
+	intent requestidempotency.Intent,
+) (IssuedCollectorToken, bool, error) {
+	if intent.TenantID != store.auditTenantID ||
+		intent.Route != requestidempotency.RouteCreateIngestionToken {
+		return IssuedCollectorToken{}, false, requestidempotency.ErrInvalid
+	}
+	replay := func(ctx context.Context) (IssuedCollectorToken, bool, error) {
+		receipt, found, err := requestidempotency.Read(ctx, store.orm, intent)
+		if err != nil || !found {
+			return IssuedCollectorToken{}, found, err
+		}
+		if receipt.Target.Kind != requestidempotency.TargetIngestionToken {
+			return IssuedCollectorToken{}, true, requestidempotency.ErrCorrupt
+		}
+		current, err := store.GetCollectorToken(ctx, receipt.Target.ID)
+		if errors.Is(err, control.ErrNotFound) {
+			return IssuedCollectorToken{}, true, requestidempotency.ErrUnavailable
+		}
+		return IssuedCollectorToken{Token: current}, true, err
+	}
+	if current, found, err := replay(ctx); err != nil || found {
+		return current, found, err
+	}
+	issued, err := store.createCollectorToken(ctx, request, &intent)
+	if err == nil {
+		return issued, false, nil
+	}
+	// A commit can succeed before its acknowledgement or request cancellation.
+	// Reconcile the receipt with the same authority and a bounded independent read.
+	reconcileCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if current, found, replayErr := replay(reconcileCtx); replayErr != nil || found {
+		return current, found, replayErr
+	}
+	return IssuedCollectorToken{}, false, err
+}
+
+func (store *Store) createCollectorToken(
+	ctx context.Context,
+	request CreateCollectorTokenRequest,
+	intent *requestidempotency.Intent,
+) (issued IssuedCollectorToken, err error) {
 	if err := store.validateTokenMutationActor(ctx); err != nil {
 		return IssuedCollectorToken{}, err
 	}
@@ -552,7 +604,7 @@ func (store *Store) CreateCollectorToken(ctx context.Context, request CreateColl
 			)
 		}
 	}
-	if _, err := store.auditAppender.AppendInTransaction(
+	auditEvent, err := store.auditAppender.AppendInTransaction(
 		ctx,
 		tx,
 		store.auditTenantID,
@@ -563,11 +615,32 @@ func (store *Store) CreateCollectorToken(ctx context.Context, request CreateColl
 			TargetID:      tokenID,
 			TargetVersion: 1,
 		},
-	); err != nil {
+	)
+	if err != nil {
 		return IssuedCollectorToken{}, fmt.Errorf(
 			"append collector token creation audit event: %w",
 			err,
 		)
+	}
+	if intent != nil {
+		auditSequence := auditEvent.Sequence
+		if _, err := requestidempotency.AppendInTransaction(
+			ctx,
+			tx,
+			*intent,
+			requestidempotency.Target{
+				Kind:    requestidempotency.TargetIngestionToken,
+				ID:      tokenID,
+				Version: 1,
+			},
+			&auditSequence,
+			now,
+		); err != nil {
+			return IssuedCollectorToken{}, fmt.Errorf(
+				"append collector token request receipt: %w",
+				err,
+			)
+		}
 	}
 	commitErr := tx.Commit().Error
 	transactionFinished = true

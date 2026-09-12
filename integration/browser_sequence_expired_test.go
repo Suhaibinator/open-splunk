@@ -384,10 +384,19 @@ func runBrowserRecoveryFixture(
 	}
 
 	anchor := time.Date(2026, time.July, 25, 18, 0, 0, 0, time.UTC)
+	controlPlane := newBrowserSearchControlPlane(
+		t,
+		ctx,
+		controlDB,
+		browserSequenceExpiredTenant,
+		browserSequenceExpiredIndex,
+		anchor,
+	)
 	executor := newBrowserRecoveryExecutor(spec.appendBeforeCompletion)
 	manager, err := searchjobs.New(searchjobs.Config{
 		Executor:        executor,
 		Snapshotter:     browserRecoverySnapshotter(17),
+		Journal:         controlPlane.journal,
 		Compiler:        clickhouse.Compiler{Database: "open_splunk", Table: "events"},
 		MaxConcurrent:   1,
 		RetentionTTL:    time.Hour,
@@ -424,11 +433,16 @@ func runBrowserRecoveryFixture(
 		SearchJobs:      manager,
 		SearchWebSocket: searchSocket,
 		Indexes:         browserSearchOnlyCatalog(controlDB),
+		AppCatalog:      controlPlane.appCatalog,
 		SavedSearches:   savedSearches,
+		SearchHistory:   controlPlane.history,
 		WebUI:           os.DirFS(filepath.Join(stagedBackendRepository, "out")),
 		OwnerID:         browserSequenceExpiredOwner,
 		TenantID:        browserSequenceExpiredTenant,
 		Now:             func() time.Time { return anchor },
+		Bootstrap: server.BootstrapConfig{
+			SelectedAppID: browserSearchAppID,
+		},
 	})
 	if err != nil {
 		closeContext, closeCancel := context.WithTimeout(context.Background(), 2*time.Second)

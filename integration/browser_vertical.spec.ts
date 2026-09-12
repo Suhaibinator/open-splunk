@@ -2772,16 +2772,16 @@ test("history Run again delegates persisted intent with source-only rerun proven
 
   expect(historyRerunCreateRequests).toHaveLength(1);
   expect(ordinaryValidateRequests).toHaveLength(1);
-  expect(historyRerunCreateRequests[0]).toEqual({
-    definition: undefined,
+  const historyRerunIntent = CreateSearchJobRequest.fromPartial({
     source: {
       origin: SearchJobOrigin.SEARCH_JOB_ORIGIN_HISTORY_RERUN,
-      savedSearchId: undefined,
       historySearchId,
-      dashboardId: undefined,
     },
-    options: undefined,
-    clientRequestId: undefined,
+  });
+  const browserRequestID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+  expect(historyRerunCreateRequests[0]).toEqual({
+    ...historyRerunIntent,
+    clientRequestId: expect.stringMatching(browserRequestID),
   });
 
   await expect(page.getByTestId("job-strip")).toContainText("Canceled", { timeout });
@@ -2807,7 +2807,11 @@ test("history Run again delegates persisted intent with source-only rerun proven
   await refreshedHistoryRow.getByRole("button", { name: /^Run history search from .* again$/ }).click();
   await missingRerunResponse;
   await expect.poll(() => historyRerunCreateRequests.length, { timeout }).toBe(2);
-  expect(historyRerunCreateRequests[1]).toEqual(historyRerunCreateRequests[0]);
+  expect(historyRerunCreateRequests[1]).toEqual({
+    ...historyRerunIntent,
+    clientRequestId: expect.stringMatching(browserRequestID),
+  });
+  expect(historyRerunCreateRequests[1]?.clientRequestId).not.toBe(historyRerunCreateRequests[0]?.clientRequestId);
 
   await page.getByRole("button", { name: "History", exact: true }).click();
   await expect(page.getByTestId("history-list").getByRole("row").filter({

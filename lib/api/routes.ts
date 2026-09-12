@@ -11,7 +11,9 @@ import * as KnowledgeApi from "@/gen/ts/open_splunk/knowledge_api";
 import * as LookupApi from "@/gen/ts/open_splunk/lookup_api";
 import * as SavedSearchApi from "@/gen/ts/open_splunk/saved_search_api";
 import * as ScheduleApi from "@/gen/ts/open_splunk/schedule_api";
+import * as NearbyApi from "@/gen/ts/open_splunk/nearby_api";
 import * as SearchApi from "@/gen/ts/open_splunk/search_api";
+import * as PatternsApi from "@/gen/ts/open_splunk/patterns_api";
 import * as SearchAttemptAuditApi from "@/gen/ts/open_splunk/search_attempt_audit_api";
 import * as SearchInspectionApi from "@/gen/ts/open_splunk/search_inspection_api";
 import * as ServerSettingsApi from "@/gen/ts/open_splunk/server_settings_api";
@@ -400,10 +402,23 @@ export const hecOperationsRoutes = {
     "/api/hec/operations/get",
     HecAdminApi.GetHECOperationalSnapshotRequest,
     HecAdminApi.GetHECOperationalSnapshotResponse,
+    { maximumResponseBytes: 64 << 10 },
   ),
 } as const;
 
 export const searchRoutes = {
+  patterns: defineProtobufRoute(
+    "/api/search/jobs/patterns/list",
+    PatternsApi.ListSearchPatternsRequest,
+    PatternsApi.ListSearchPatternsResponse,
+    { maximumResponseBytes: 8 << 20 },
+  ),
+  patternMembers: defineProtobufRoute(
+    "/api/search/jobs/patterns/members",
+    PatternsApi.ListSearchPatternMembersRequest,
+    PatternsApi.ListSearchPatternMembersResponse,
+    { maximumResponseBytes: 8 << 20 },
+  ),
   validate: defineProtobufRoute(
     "/api/search/validate",
     SearchApi.ValidateSearchRequest,
@@ -433,6 +448,12 @@ export const searchRoutes = {
     "/api/search/jobs/results",
     SearchApi.GetSearchResultsRequest,
     SearchApi.GetSearchResultsResponse,
+  ),
+  prepareNearby: defineProtobufRoute(
+    "/api/search/jobs/nearby/prepare",
+    NearbyApi.PrepareNearbyContextRequest,
+    NearbyApi.PrepareNearbyContextResponse,
+    { maximumResponseBytes: 8 << 20 },
   ),
   fields: defineProtobufRoute(
     "/api/search/jobs/fields/list",

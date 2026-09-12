@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 )
 
 const compositeAdmissionCompensationTimeout = 10 * time.Second
@@ -38,13 +40,71 @@ func NewCompositeJournal(journals ...JobJournal) *CompositeJournal {
 }
 
 func (journal *CompositeJournal) Admit(ctx context.Context, job Job) error {
+	return journal.admit(ctx, job, nil)
+}
+
+// LookupIdempotent resolves the immutable receipt through the one receipt
+// projection, then asks a durable job projection for current scoped metadata.
+func (journal *CompositeJournal) LookupIdempotent(
+	ctx context.Context,
+	access AccessScope,
+	intent requestidempotency.Intent,
+) (Job, bool, error) {
+	receipts := journal.idempotencyReceiptJournals()
+	if len(receipts) != 1 {
+		return Job{}, false, requestidempotency.ErrUnavailable
+	}
+	target, found, err := receipts[0].LookupIdempotencyReceipt(ctx, intent)
+	if err != nil || !found {
+		return Job{}, found, err
+	}
+	for _, candidate := range journal.journals {
+		reader, ok := candidate.(IdempotencyTargetJournal)
+		if !ok {
+			continue
+		}
+		job, readErr := reader.ReadIdempotencyTarget(ctx, access, target)
+		if readErr == nil {
+			return cloneJob(job), true, nil
+		}
+		if !errors.Is(readErr, requestidempotency.ErrUnavailable) {
+			return Job{}, true, readErr
+		}
+	}
+	return Job{}, true, requestidempotency.ErrUnavailable
+}
+
+// AdmitIdempotent fans out normal projections while the receipt projection
+// commits the receipt and successful admission audit in its own transaction.
+func (journal *CompositeJournal) AdmitIdempotent(
+	ctx context.Context,
+	job Job,
+	intent requestidempotency.Intent,
+) error {
+	if len(journal.idempotencyReceiptJournals()) != 1 {
+		return requestidempotency.ErrUnavailable
+	}
+	return journal.admit(ctx, job, &intent)
+}
+
+func (journal *CompositeJournal) admit(
+	ctx context.Context,
+	job Job,
+	intent *requestidempotency.Intent,
+) error {
 	if journal == nil || len(journal.journals) == 0 {
 		return errors.New("search job journal is unavailable")
 	}
 	for index, target := range journal.journals {
-		if err := invokeJournal(func() error {
+		err := invokeJournal(func() error {
+			if intent != nil {
+				if idempotent, ok := target.(IdempotencyReceiptJournal); ok {
+					return idempotent.AdmitIdempotent(ctx, cloneJob(job), *intent)
+				}
+			}
 			return target.Admit(ctx, cloneJob(job))
-		}); err != nil {
+		})
+		if err != nil {
 			// A journal may have committed before returning an ambiguous error.
 			// Compensate it and every earlier successful projection so a partial
 			// fan-out cannot strand an indefinitely queued durable record.
@@ -53,7 +113,18 @@ func (journal *CompositeJournal) Admit(ctx context.Context, job Job) error {
 			// Compensate known-successful targets before the ambiguously failed
 			// target. In the production ordering this guarantees the artifact
 			// record cannot be stranded even if a later projection is unhealthy.
-			for admitted := 0; admitted <= index; admitted++ {
+			lastCompensation := index
+			if errors.Is(err, requestidempotency.ErrInvalid) ||
+				errors.Is(err, requestidempotency.ErrConflict) ||
+				errors.Is(err, requestidempotency.ErrCapacity) ||
+				errors.Is(err, requestidempotency.ErrUnavailable) ||
+				errors.Is(err, requestidempotency.ErrCorrupt) {
+				// Receipt errors are definitive transaction rollbacks. Compensate
+				// preceding projections, but do not synthesize terminal metadata
+				// through the receipt projection that rejected this admission.
+				lastCompensation--
+			}
+			for admitted := 0; admitted <= lastCompensation; admitted++ {
 				compensationContext, cancel := context.WithTimeout(
 					context.WithoutCancel(ctx),
 					compositeAdmissionCompensationTimeout,
@@ -67,6 +138,19 @@ func (journal *CompositeJournal) Admit(ctx context.Context, job Job) error {
 		}
 	}
 	return nil
+}
+
+func (journal *CompositeJournal) idempotencyReceiptJournals() []IdempotencyReceiptJournal {
+	if journal == nil {
+		return nil
+	}
+	result := make([]IdempotencyReceiptJournal, 0, 1)
+	for _, candidate := range journal.journals {
+		if idempotent, ok := candidate.(IdempotencyReceiptJournal); ok {
+			result = append(result, idempotent)
+		}
+	}
+	return result
 }
 
 func admissionCompensation(job Job) Job {

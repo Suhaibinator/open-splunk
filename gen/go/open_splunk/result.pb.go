@@ -589,8 +589,11 @@ type ResultPage struct {
 	Rows             []*ResultRow           `protobuf:"bytes,2,rep,name=rows,proto3" json:"rows,omitempty"`
 	Page             *PageResponse          `protobuf:"bytes,3,opt,name=page,proto3" json:"page,omitempty"`
 	SnapshotComplete bool                   `protobuf:"varint,4,opt,name=snapshot_complete,json=snapshotComplete,proto3" json:"snapshot_complete,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Opaque identity of the immutable retained result snapshot. Absent for
+	// previews and servers that do not support retained-result navigation.
+	SnapshotRef   string `protobuf:"bytes,5,opt,name=snapshot_ref,json=snapshotRef,proto3" json:"snapshot_ref,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ResultPage) Reset() {
@@ -649,6 +652,13 @@ func (x *ResultPage) GetSnapshotComplete() bool {
 		return x.SnapshotComplete
 	}
 	return false
+}
+
+func (x *ResultPage) GetSnapshotRef() string {
+	if x != nil {
+		return x.SnapshotRef
+	}
+	return ""
 }
 
 type FieldValueCount struct {
@@ -1105,13 +1115,14 @@ const file_open_splunk_result_proto_rawDesc = "" +
 	"\aordinal\x18\x02 \x01(\x04R\aordinal\x12-\n" +
 	"\x05cells\x18\x03 \x03(\v2\x17.open_splunk.TypedValueR\x05cells\x12>\n" +
 	"\vtime_bucket\x18\x04 \x01(\v2\x1d.open_splunk.TimeBucketBoundsR\n" +
-	"timeBucket\"\xc7\x01\n" +
+	"timeBucket\"\xea\x01\n" +
 	"\n" +
 	"ResultPage\x121\n" +
 	"\x06schema\x18\x01 \x01(\v2\x19.open_splunk.ResultSchemaR\x06schema\x12*\n" +
 	"\x04rows\x18\x02 \x03(\v2\x16.open_splunk.ResultRowR\x04rows\x12-\n" +
 	"\x04page\x18\x03 \x01(\v2\x19.open_splunk.PageResponseR\x04page\x12+\n" +
-	"\x11snapshot_complete\x18\x04 \x01(\bR\x10snapshotComplete\"\x88\x01\n" +
+	"\x11snapshot_complete\x18\x04 \x01(\bR\x10snapshotComplete\x12!\n" +
+	"\fsnapshot_ref\x18\x05 \x01(\tR\vsnapshotRef\"\x88\x01\n" +
 	"\x0fFieldValueCount\x12-\n" +
 	"\x05value\x18\x01 \x01(\v2\x17.open_splunk.TypedValueR\x05value\x12\x14\n" +
 	"\x05count\x18\x02 \x01(\x04R\x05count\x120\n" +

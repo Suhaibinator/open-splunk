@@ -269,7 +269,7 @@ function rowsToEvents(
   });
 }
 
-interface ChartNumericValue {
+export interface ChartNumericValue {
   coordinate: number;
   /** Exact source text when the coordinate is only an approximation. */
   exactText?: string;
@@ -366,7 +366,7 @@ function numericTextValue(source: string): ChartNumericValue | null {
  * discarding its authoritative representation. Tables continue to use
  * `typedValueToJSON`, so large integer cells remain exact strings.
  */
-function chartNumericValue(value: TypedValue | undefined): ChartNumericValue | null {
+export function chartNumericValue(value: TypedValue | undefined): ChartNumericValue | null {
   switch (value?.kind?.$case) {
     case "sint64Value":
     case "uint64Value": {
@@ -1084,12 +1084,30 @@ function resolveTimeExpression(expression: string, now: Date): Date {
 }
 
 export function resolveAbsoluteTimeRange(earliest: string, latest: string, now = new Date()): { earliest: string; latest: string; timezone: string } {
-  const resolvedLatest = resolveTimeExpression(latest, now);
-  const resolvedEarliest = resolveTimeExpression(earliest, now);
-  if (resolvedEarliest >= resolvedLatest) throw new Error("Earliest time must be before latest time.");
+  const resolve = (expression: string): { text: string; nanos: bigint } => {
+    const value = expression.trim();
+    const exact = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})$/u.exec(value);
+    if (exact !== null) {
+      const fraction = (exact[2] ?? "").replace(/0+$/u, "");
+      const utc = timeBucketBoundaryNanoseconds(`${exact[1]}${fraction ? `.${fraction}` : ""}Z`);
+      const hours = exact[3] === "Z" ? 0 : Number(exact[3].slice(1, 3));
+      const minutes = exact[3] === "Z" ? 0 : Number(exact[3].slice(4, 6));
+      if (utc === null || hours > 23 || minutes > 59) throw new Error(`Invalid time expression: ${expression}`);
+      const offset = BigInt(hours * 60 + minutes) * 60_000_000_000n * (exact[3].startsWith("-") ? -1n : 1n);
+      return { text: value, nanos: utc - offset };
+    }
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{10}/u.test(value)) {
+      throw new Error(`Invalid time expression: ${expression}`);
+    }
+    const resolved = resolveTimeExpression(expression, now);
+    return { text: resolved.toISOString(), nanos: BigInt(resolved.valueOf()) * 1_000_000n };
+  };
+  const resolvedLatest = resolve(latest);
+  const resolvedEarliest = resolve(earliest);
+  if (resolvedEarliest.nanos >= resolvedLatest.nanos) throw new Error("Earliest time must be before latest time.");
   return {
-    earliest: resolvedEarliest.toISOString(),
-    latest: resolvedLatest.toISOString(),
+    earliest: resolvedEarliest.text,
+    latest: resolvedLatest.text,
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
   };
 }

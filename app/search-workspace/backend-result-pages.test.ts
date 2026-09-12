@@ -42,6 +42,7 @@ interface StubResultsRequest {
 }
 
 interface StubResultPage {
+  snapshotRef?: string;
   schema?: ResultSchema;
   rows: ResultRow[];
   nextPageToken?: string;
@@ -61,6 +62,7 @@ function stubClient(
             rows: page.rows,
             page: { nextPageToken: page.nextPageToken },
             snapshotComplete: true,
+            snapshotRef: page.snapshotRef ?? "",
           },
         };
       },
@@ -354,4 +356,31 @@ test("resetting for a new job isolates old cursors, pages, starts, and schema", 
   const next = await requestPage(pages, client, 1, 3, [], false, secondJob);
   assert.equal(next.schema.schemaId, "events-v2");
   assert.equal(pages.pageStart(3, 1), 1);
+});
+
+
+test("retained snapshot identity survives page caching and rejects a changed generation", async () => {
+  const pages = new BackendResultPages();
+  pages.resetForJob(2);
+  const client = stubClient((request) => ({
+    rows: [row(request.page.pageToken ?? "first", request.page.pageToken ? 2n : 1n)],
+    nextPageToken: request.page.pageToken ? undefined : "second",
+    snapshotRef: request.page.pageToken ? "different-generation" : "frozen-generation",
+  }));
+  const first = await requestPage(pages, client, 1, 2);
+  assert.equal(first.snapshotRef, "frozen-generation");
+  assert.equal((await requestPage(pages, client, 1, 2)).snapshotRef, "frozen-generation");
+  await assert.rejects(requestPage(pages, client, 2, 2), /snapshot changed/);
+  assert.equal((await requestPage(pages, client, 1, 2)).snapshotRef, "frozen-generation");
+  pages.resetForJob(2);
+  const reopened = stubClient(() => ({ rows: [row("new", 1n)], snapshotRef: "different-generation" }));
+  assert.equal((await requestPage(pages, reopened, 1, 2)).snapshotRef, "different-generation");
+});
+
+test("legacy result snapshots cannot silently acquire a new generation while paging", async () => {
+  const pages = new BackendResultPages();
+  pages.resetForJob(2);
+  const client = stubClient((request) => ({ rows: [], nextPageToken: request.page.pageToken ? undefined : "second", snapshotRef: request.page.pageToken ? "new-ref" : "" }));
+  assert.equal((await requestPage(pages, client, 1, 2)).snapshotRef, "");
+  await assert.rejects(requestPage(pages, client, 2, 2), /snapshot changed/);
 });

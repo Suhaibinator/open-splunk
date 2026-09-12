@@ -17,6 +17,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/lookupcatalog"
 	"github.com/Suhaibinator/open-splunk/internal/lookupdefinition"
 	"github.com/Suhaibinator/open-splunk/internal/lookupservice"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -60,6 +61,10 @@ type LookupManagement interface {
 	Preview(context.Context, lookupservice.Scope, *opensplunk.PreviewLookupRequest) (*opensplunk.PreviewLookupResponse, error)
 }
 
+type idempotentLookupManagement interface {
+	CreateIdempotent(context.Context, lookupservice.Scope, *opensplunk.CreateLookupRequest, requestidempotency.Intent) (*opensplunk.CreateLookupResponse, error)
+}
+
 var _ LookupManagement = (*lookupservice.Service)(nil)
 
 type serializedCreateLookupResponse = boundedProtoResponse[*opensplunk.CreateLookupResponse]
@@ -94,8 +99,30 @@ func (handler *apiHandler) registerLookupManagementRoutes(group *apiRouteGroup) 
 }
 
 func (handler *apiHandler) createLookup(request *http.Request, input *opensplunk.CreateLookupRequest) (*serializedCreateLookupResponse, error) {
-	return invokeLookup(handler, request, input, handler.lookupManagement.Create, func(response *opensplunk.CreateLookupResponse, scope lookupservice.Scope) bool {
-		return response != nil && validLookupProjection(response.GetLookup(), scope) && response.GetLookup().GetVersion() == 1 && response.GetLookup().GetState() == opensplunk.LookupState_LOOKUP_STATE_ACTIVE
+	call := handler.lookupManagement.Create
+	if input.GetClientRequestId() != "" {
+		idempotent, ok := handler.lookupManagement.(idempotentLookupManagement)
+		if !ok {
+			return nil, unavailableError("lookup idempotency is unavailable")
+		}
+		call = func(ctx context.Context, scope lookupservice.Scope, detached *opensplunk.CreateLookupRequest) (*opensplunk.CreateLookupResponse, error) {
+			canonical := proto.Clone(detached).(*opensplunk.CreateLookupRequest)
+			canonical.ClientRequestId = nil
+			intent, err := handler.mutationIntent(ctx, requestidempotency.RouteCreateLookup, detached.ClientRequestId, canonical)
+			if err != nil {
+				return nil, err
+			}
+			return idempotent.CreateIdempotent(ctx, scope, detached, *intent)
+		}
+	}
+	return invokeLookup(handler, request, input, call, func(response *opensplunk.CreateLookupResponse, scope lookupservice.Scope) bool {
+		if response == nil || !validLookupProjection(response.GetLookup(), scope) {
+			return false
+		}
+		if response.GetReplayed() {
+			return response.GetLookup().GetVersion() > 0
+		}
+		return response.GetLookup().GetVersion() == 1 && response.GetLookup().GetState() == opensplunk.LookupState_LOOKUP_STATE_ACTIVE
 	})
 }
 
@@ -211,6 +238,9 @@ func mapLookupCallError(ctx context.Context, err error) error {
 	}
 	if requestContextFailure(ctx, err) != nil {
 		return router.NewHTTPError(http.StatusRequestTimeout, "lookup request was canceled")
+	}
+	if isRequestIdempotencyError(err) {
+		return mapRequestIdempotencyError(err)
 	}
 	switch {
 	case errors.Is(err, lookupservice.ErrInvalid):

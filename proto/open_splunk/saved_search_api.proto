@@ -16,6 +16,8 @@ message CreateSavedSearchRequest {
 
 message CreateSavedSearchResponse {
   SavedSearch saved_search = 1;
+  // True when this request resolves an earlier accepted logical action.
+  bool replayed = 2;
 }
 
 // POST /api/saved-searches/get
@@ -71,6 +73,8 @@ message DuplicateSavedSearchRequest {
 
 message DuplicateSavedSearchResponse {
   SavedSearch saved_search = 1;
+  // True when this request resolves an earlier accepted logical action.
+  bool replayed = 2;
 }
 
 // POST /api/saved-searches/delete

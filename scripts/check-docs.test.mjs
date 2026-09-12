@@ -5,36 +5,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
 import test from "node:test";
+import { OWNED_MARKDOWN_PATHS } from "../lib/help/documentation-registry.mjs";
 
 const workspace = process.cwd();
 const checker = path.join(workspace, "scripts", "check-docs.mjs");
-const ownedMarkdownPaths = [
-  "README.md",
-  "AGENTS.md",
-  "CLAUDE.md",
-  "docs/README.md",
-  "docs/architecture.md",
-  "docs/api.md",
-  "docs/spl.md",
-  "docs/timechart.md",
-  "docs/knowledge.md",
-  "docs/theming.md",
-  "docs/ingestion.md",
-  "docs/insert-coalescing.md",
-  "docs/collector-configuration.md",
-  "docs/hec.md",
-  "docs/auditing.md",
-  "docs/search-sharing-alerts.md",
-  "docs/roadmap.md",
-  "docs/releasing.md",
-  "deploy/README.md",
-  "integration/README.md",
-  "scripts/README.md",
-  "migrations/README.md",
-  "internal/hec/testdata/compatibility/README.md",
-  "gen/go/README.md",
-  "gen/ts/README.md",
-];
+const ownedMarkdownPaths = OWNED_MARKDOWN_PATHS;
 
 async function fixture(t) {
   const root = await mkdtemp(path.join(tmpdir(), "open-splunk-docs-"));

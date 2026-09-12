@@ -21,7 +21,7 @@ const (
 	MaximumListPageSize = 200
 	// MaximumActionFilters is the complete fixed action taxonomy. One list
 	// request cannot contain more distinct action filters than this bound.
-	MaximumActionFilters = 30
+	MaximumActionFilters = 31
 
 	defaultListPageSize        = 50
 	maximumTenantIDBytes       = 255
@@ -99,6 +99,7 @@ func (actor Actor) detached() Actor {
 type Action string
 
 const (
+	ActionExportCreate               Action = "export.create"
 	ActionIngestionTokenCreate       Action = "ingestion_token.create"
 	ActionIngestionTokenUpdate       Action = "ingestion_token.update"
 	ActionIngestionTokenRevoke       Action = "ingestion_token.revoke"
@@ -134,7 +135,7 @@ const (
 // Valid reports whether action belongs to the immutable audit taxonomy.
 func (action Action) Valid() bool {
 	switch action {
-	case ActionIngestionTokenCreate,
+	case ActionExportCreate, ActionIngestionTokenCreate,
 		ActionIngestionTokenUpdate,
 		ActionIngestionTokenRevoke,
 		ActionIndexCreate,
@@ -174,6 +175,7 @@ func (action Action) Valid() bool {
 type TargetKind string
 
 const (
+	TargetKindExportJob       TargetKind = "export_job"
 	TargetKindIngestionToken  TargetKind = "ingestion_token"
 	TargetKindIndex           TargetKind = "index"
 	TargetKindApp             TargetKind = "app"
@@ -186,7 +188,7 @@ const (
 // Valid reports whether kind belongs to the audit target taxonomy.
 func (kind TargetKind) Valid() bool {
 	switch kind {
-	case TargetKindIngestionToken, TargetKindIndex, TargetKindApp,
+	case TargetKindExportJob, TargetKindIngestionToken, TargetKindIndex, TargetKindApp,
 		TargetKindSavedSearch, TargetKindKnowledgeObject,
 		TargetKindServerSettings, TargetKindLookup:
 		return true
@@ -291,7 +293,7 @@ func validKnowledgeMetadata(kind TargetKind, metadata KnowledgeObjectMetadata) b
 
 func validActionVersion(action Action, version uint64) bool {
 	switch action {
-	case ActionIngestionTokenCreate, ActionIndexCreate, ActionAppCreate,
+	case ActionExportCreate, ActionIngestionTokenCreate, ActionIndexCreate, ActionAppCreate,
 		ActionSavedSearchCreate, ActionSavedSearchDuplicate,
 		ActionKnowledgeObjectCreate, ActionLookupCreate:
 		return version == 1
@@ -328,6 +330,8 @@ func validActionVersion(action Action, version uint64) bool {
 
 func validActionTarget(action Action, targetKind TargetKind) bool {
 	switch action {
+	case ActionExportCreate:
+		return targetKind == TargetKindExportJob
 	case ActionIngestionTokenCreate,
 		ActionIngestionTokenUpdate,
 		ActionIngestionTokenRevoke:
@@ -380,7 +384,7 @@ func validSuccessfulActorForAction(actor Actor, action Action) bool {
 		return true
 	}
 	return actor.Role == ActorRoleUser &&
-		validActionTarget(action, TargetKindSavedSearch)
+		(validActionTarget(action, TargetKindSavedSearch) || action == ActionExportCreate)
 }
 
 // Event is the complete immutable public audit projection. Sequence is dense,

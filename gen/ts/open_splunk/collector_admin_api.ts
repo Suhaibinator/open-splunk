@@ -209,6 +209,8 @@ export interface CreateIngestionTokenRequest {
 export interface CreateIngestionTokenResponse {
   ingestionToken: IngestionToken | undefined;
   plaintextToken: string;
+  /** True when this request resolves an earlier accepted logical action. */
+  replayed: boolean;
 }
 
 /** POST /api/ingestion-tokens/get */
@@ -1371,7 +1373,7 @@ export const CreateIngestionTokenRequest: MessageFns<CreateIngestionTokenRequest
 };
 
 function createBaseCreateIngestionTokenResponse(): CreateIngestionTokenResponse {
-  return { ingestionToken: undefined, plaintextToken: "" };
+  return { ingestionToken: undefined, plaintextToken: "", replayed: false };
 }
 
 export const CreateIngestionTokenResponse: MessageFns<CreateIngestionTokenResponse> = {
@@ -1381,6 +1383,9 @@ export const CreateIngestionTokenResponse: MessageFns<CreateIngestionTokenRespon
     }
     if (message.plaintextToken !== "") {
       writer.uint32(18).string(message.plaintextToken);
+    }
+    if (message.replayed !== false) {
+      writer.uint32(24).bool(message.replayed);
     }
     return writer;
   },
@@ -1414,6 +1419,14 @@ export const CreateIngestionTokenResponse: MessageFns<CreateIngestionTokenRespon
             message.plaintextToken = reader.string();
             continue;
           }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.replayed = reader.bool();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -1438,6 +1451,7 @@ export const CreateIngestionTokenResponse: MessageFns<CreateIngestionTokenRespon
         : isSet(object.plaintext_token)
         ? globalThis.String(object.plaintext_token)
         : "",
+      replayed: isSet(object.replayed) ? globalThis.Boolean(object.replayed) : false,
     };
   },
 
@@ -1448,6 +1462,9 @@ export const CreateIngestionTokenResponse: MessageFns<CreateIngestionTokenRespon
     }
     if (message.plaintextToken !== "") {
       obj.plaintextToken = message.plaintextToken;
+    }
+    if (message.replayed !== false) {
+      obj.replayed = message.replayed;
     }
     return obj;
   },
@@ -1461,6 +1478,7 @@ export const CreateIngestionTokenResponse: MessageFns<CreateIngestionTokenRespon
       ? IngestionToken.fromPartial(object.ingestionToken)
       : undefined;
     message.plaintextToken = object.plaintextToken ?? "";
+    message.replayed = object.replayed ?? false;
     return message;
   },
 };

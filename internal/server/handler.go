@@ -27,6 +27,7 @@ import (
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgepreview"
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
 	"github.com/Suhaibinator/open-splunk/internal/scheduledreports"
 	"github.com/Suhaibinator/open-splunk/internal/searchanalysis"
@@ -62,6 +63,8 @@ const (
 	searchTimelinePath                = "/api/search/jobs/timeline"
 	searchInspectionRoute             = "/search/jobs/inspect"
 	searchInspectionPath              = apiPathPrefix + searchInspectionRoute
+	nearbyContextRoute                = "/search/jobs/nearby/prepare"
+	nearbyContextPath                 = apiPathPrefix + nearbyContextRoute
 	auditEventsListRoute              = "/audit/events/list"
 	auditEventsListPath               = apiPathPrefix + auditEventsListRoute
 	searchWebSocketPath               = "/api/search/ws"
@@ -104,6 +107,11 @@ type SearchJobs interface {
 	CancelFor(searchjobs.AccessScope, string) error
 }
 
+type idempotentSearchJobs interface {
+	ReplayIdempotent(context.Context, searchjobs.AccessScope, requestidempotency.Intent) (searchjobs.Job, bool, error)
+	CreateIdempotent(context.Context, searchjobs.CreateRequest, requestidempotency.Intent) (searchjobs.Job, bool, error)
+}
+
 var (
 	ErrTrustedSearchAppUnavailable       = errors.New("trusted search app is unavailable")
 	ErrTrustedSearchIndexUnavailable     = errors.New("trusted search index is unavailable")
@@ -127,6 +135,11 @@ type TrustedSearchAdmissionRequest struct {
 // production so none of them can drift around current app/index authority.
 type TrustedSearchAdmission interface {
 	AdmitTrustedSearch(context.Context, TrustedSearchAdmissionRequest) (searchjobs.Job, error)
+}
+
+type idempotentTrustedSearchAdmission interface {
+	ReplayTrustedSearch(context.Context, searchjobs.AccessScope, requestidempotency.Intent) (searchjobs.Job, bool, error)
+	AdmitTrustedSearchIdempotent(context.Context, TrustedSearchAdmissionRequest, requestidempotency.Intent) (searchjobs.Job, bool, error)
 }
 
 // SearchArtifacts is the durable retained-result surface. It is deliberately
@@ -607,6 +620,7 @@ type Config struct {
 	Logger                     *zap.Logger
 	SearchJobs                 SearchJobs
 	SearchArtifacts            SearchArtifacts
+	SearchPatterns             SearchPatterns
 	TrustedSearchAdmission     TrustedSearchAdmission
 	RuntimeReadiness           RuntimeReadiness
 	Indexes                    IndexCatalog
@@ -680,6 +694,7 @@ type apiHandler struct {
 	logger                     *zap.Logger
 	jobs                       SearchJobs
 	searchArtifacts            SearchArtifacts
+	searchPatterns             SearchPatterns
 	trustedSearchAdmission     TrustedSearchAdmission
 	indexes                    IndexCatalog
 	indexAdmin                 IndexAdministration
@@ -886,6 +901,10 @@ func NewHandler(config Config) (*Handler, error) {
 	if isNilDependency(searchArtifacts) {
 		searchArtifacts = nil
 	}
+	searchPatterns := config.SearchPatterns
+	if isNilDependency(searchPatterns) {
+		searchPatterns = nil
+	}
 	if config.WebUI == nil {
 		return nil, errors.New("create server handler: web UI filesystem is required")
 	}
@@ -902,6 +921,9 @@ func NewHandler(config Config) (*Handler, error) {
 	}
 	if pageSize > maximumTransportPageSize {
 		return nil, fmt.Errorf("create server handler: maximum page size cannot exceed %d", maximumTransportPageSize)
+	}
+	if searchPatterns != nil && (searchPatterns.MaximumPageSize() < 1 || int64(searchPatterns.MaximumPageSize()) > int64(pageSize)) {
+		return nil, errors.New("create server handler: pattern maximum page size cannot exceed browser maximum page size")
 	}
 	if maximumFieldPageSize > pageSize {
 		return nil, errors.New("create server handler: field catalog maximum page size cannot exceed browser maximum page size")
@@ -1025,16 +1047,15 @@ func NewHandler(config Config) (*Handler, error) {
 		}
 	}
 	var searchArtifactCursorKey [32]byte
-	if searchArtifacts != nil {
-		if _, err := rand.Read(searchArtifactCursorKey[:]); err != nil {
-			return nil, errors.New("create server handler: secure randomness unavailable for retained-result cursors")
-		}
+	if _, err := rand.Read(searchArtifactCursorKey[:]); err != nil {
+		return nil, errors.New("create server handler: secure randomness unavailable for retained-result cursors")
 	}
 
 	api := &apiHandler{
 		logger:                     logger,
 		jobs:                       config.SearchJobs,
 		searchArtifacts:            searchArtifacts,
+		searchPatterns:             searchPatterns,
 		trustedSearchAdmission:     trustedSearchAdmission,
 		indexes:                    indexServices.catalog,
 		indexAdmin:                 indexAdmin,
@@ -1109,6 +1130,7 @@ func NewHandler(config Config) (*Handler, error) {
 		"/api/search/jobs/get",
 		searchJobsListPath,
 		"/api/search/jobs/results",
+		nearbyContextPath,
 		"/api/search/jobs/cancel",
 		"/api/saved-searches/create",
 		"/api/saved-searches/get",
@@ -1118,6 +1140,10 @@ func NewHandler(config Config) (*Handler, error) {
 		"/api/saved-searches/delete",
 	)
 	administratorRoutes := make(map[string]struct{}, 25)
+	if api.searchPatterns != nil {
+		apiRoutes[apiPathPrefix+searchPatternsListRoute] = http.MethodPost
+		apiRoutes[apiPathPrefix+searchPatternMembersRoute] = http.MethodPost
+	}
 	if api.searchArtifacts != nil {
 		for _, path := range []string{
 			"/api/search/jobs/settings/get",
@@ -1585,6 +1611,9 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 		Use(protobufMiddleware, requestMiddleware, deadlineMiddleware)
 
 	handler.registerCoreRoutes(protobufGroup, smallRequestBytes)
+	if handler.searchPatterns != nil {
+		(&patternAPI{handler: handler, service: handler.searchPatterns, parseSnapshot: handler.parseResultSnapshotRef}).register(protobufGroup, smallRequestBytes)
+	}
 	if handler.dashboards != nil {
 		handler.registerDashboardRoutes(protobufGroup, smallRequestBytes)
 	}
@@ -1680,6 +1709,7 @@ func (handler *apiHandler) registerCoreRoutes(group *apiRouteGroup, smallRequest
 		sizedProtoPostRoute("/search/jobs/get", smallRequestBytes, handler.getSearchJob, sanitizeGetSearchJobRequest),
 		sizedPostRoute(searchJobsListRoute, smallRequestBytes, newSerializedSearchJobListCodec(), handler.listSearchJobs, handler.sanitizeListSearchJobsRequest),
 		sizedPostRoute("/search/jobs/results", smallRequestBytes, newSerializedSearchResultsCodec(), handler.getSearchResults, handler.sanitizeGetSearchResultsRequest),
+		sizedPostRoute(nearbyContextRoute, smallRequestBytes, newSerializedNearbyContextCodec(), handler.prepareNearbyContext, sanitizePrepareNearbyContextRequest),
 		sizedProtoPostRoute("/search/jobs/cancel", smallRequestBytes, handler.cancelSearchJob, sanitizeCancelSearchJobRequest),
 		protoPostRoute("/saved-searches/create", handler.createSavedSearch, sanitizeCreateSavedSearchRequest),
 		sizedProtoPostRoute("/saved-searches/get", smallRequestBytes, handler.getSavedSearch, sanitizeGetSavedSearchRequest),

@@ -1,11 +1,10 @@
 "use client";
 
 import type { FormEvent, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 
 import type { AppSummary } from "@/gen/ts/open_splunk/app";
-import { createOpenSplunkApiClient, getSystemBootstrap } from "@/lib/api";
 import type { SearchDataMode } from "@/lib/search/backend-data";
 import {
   backendAppHref,
@@ -17,7 +16,6 @@ import {
 } from "@/lib/search/app-navigation";
 import { searchLaunchHref, splFromFindInput } from "@/lib/search/launch-url";
 import { OPEN_SPLUNK_BUILD_LABEL } from "@/lib/build-identity";
-import { createErrorMessage } from "@/lib/error-message";
 import {
   currentThemePreference,
   setThemePreference,
@@ -28,9 +26,10 @@ import {
 
 import { AppIcon } from "./app-icon";
 import { installModalSurface } from "./modal-surface";
+import { useAppCatalog } from "./use-app-catalog";
 import { Wordmark } from "./wordmark";
 
-type ProductSection = "home" | "search" | "analytics" | "datasets" | "reports" | "dashboards" | "activity" | "admin";
+type ProductSection = "home" | "search" | "analytics" | "datasets" | "reports" | "dashboards" | "activity" | "admin" | "help";
 
 interface ProductShellProps {
   activeSection: ProductSection;
@@ -48,6 +47,7 @@ interface ProductShellProps {
    */
   appSwitcher?: ReactNode;
   backendAppCatalog?: {
+    actionsBlocked?: boolean;
     apps: AppSummary[];
     error?: string | null;
     onRetry?: () => void;
@@ -98,8 +98,10 @@ function submitProductFind(
   event: FormEvent<HTMLFormElement>,
   dataMode: "backend" | "demo",
   backendAppId: string | undefined,
+  appContextBlocked: boolean,
 ) {
   event.preventDefault();
+  if (appContextBlocked) return;
   const value = String(new FormData(event.currentTarget).get("find") ?? "").trim();
   if (value.length === 0) return;
   const href = searchLaunchHref(splFromFindInput(value, dataMode === "backend" ? "" : "gradethis"));
@@ -153,8 +155,6 @@ export function ThemeMenu({ onSelect, preference }: ThemeMenuProps) {
   );
 }
 
-const appCatalogErrorMessage = createErrorMessage("The backend app catalog could not be loaded.");
-
 function appLabel(app: AppSummary): string {
   return app.displayName.trim() || app.slug.trim() || app.appId;
 }
@@ -187,21 +187,15 @@ export function ProductShell({
   const ownsCatalog = appSwitcher === undefined && backendAppCatalog === undefined;
   const [menu, setMenu] = useState<ProductMenu | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [backendApps, setBackendApps] = useState<AppSummary[]>([]);
-  const [selectedBackendAppId, setSelectedBackendAppId] = useState<string | null>(null);
-  const [backendAppCatalogState, setBackendAppCatalogState] = useState<BackendAppCatalogState>(
-    dataMode === "backend" ? "loading" : "idle",
-  );
-  const [backendAppCatalogError, setBackendAppCatalogError] = useState<string | null>(null);
-  const [backendAppCatalogGeneration, setBackendAppCatalogGeneration] = useState(0);
-  const apiClient = useMemo(
-    () => createOpenSplunkApiClient({ baseUrl: apiBaseUrl }),
-    [apiBaseUrl],
-  );
   const preferredAppId = useSyncExternalStore(
     subscribeToBackendAppId,
     currentBackendAppId,
     () => undefined,
+  );
+  const sharedCatalog = useAppCatalog(
+    apiBaseUrl,
+    preferredAppId,
+    ownsCatalog && dataMode === "backend",
   );
   const themePreference = useSyncExternalStore(
     subscribeToThemePreference,
@@ -216,10 +210,14 @@ export function ProductShell({
   const sessionInitial = localSession ? "L" : "A";
   const sessionLabel = localSession ? "Local session" : "Administrator";
   const sessionDetail = localSession ? "Single-user backend mode" : "admin@localhost";
-  const displayedBackendApps = backendAppCatalog?.apps ?? backendApps;
-  const displayedBackendAppId = backendAppCatalog?.selectedAppId ?? selectedBackendAppId;
-  const displayedCatalogState = backendAppCatalog?.state ?? backendAppCatalogState;
-  const displayedCatalogError = backendAppCatalog?.error ?? backendAppCatalogError;
+  const displayedBackendApps = backendAppCatalog?.apps ?? sharedCatalog.bootstrap?.apps ?? [];
+  const displayedBackendAppId = backendAppCatalog?.selectedAppId ?? sharedCatalog.bootstrap?.selectedAppId ?? null;
+  const displayedCatalogState = backendAppCatalog?.state
+    ?? (sharedCatalog.state === "idle" ? "loading" : sharedCatalog.state);
+  const displayedCatalogError = backendAppCatalog?.error ?? sharedCatalog.error;
+  const catalogActionsBlocked = backendAppCatalog?.actionsBlocked
+    ?? (backendAppCatalog === undefined
+      && (displayedCatalogState !== "available" || displayedBackendAppId === null));
   const selectedBackendApp = displayedBackendApps.find((app) => app.appId === displayedBackendAppId);
   const navigationBackendAppId = displayedBackendAppId ?? preferredAppId;
   const switcherAppName = dataMode === "backend" && selectedBackendApp !== undefined
@@ -242,24 +240,6 @@ export function ProductShell({
                 : activeSection === "dashboards"
                   ? "Dashboard definitions and panel searches use registered backend routes when available."
               : "This page uses the configured backend where the server advertises support.";
-  const catalogInput = useMemo(() => ({
-    apiClient,
-    dataMode,
-    generation: backendAppCatalogGeneration,
-    ownsCatalog,
-    preferredAppId,
-  }), [apiClient, backendAppCatalogGeneration, dataMode, ownsCatalog, preferredAppId]);
-  const [activeCatalogInput, setActiveCatalogInput] = useState(catalogInput);
-  if (activeCatalogInput !== catalogInput) {
-    setActiveCatalogInput(catalogInput);
-    if (catalogInput.ownsCatalog) {
-      if (catalogInput.dataMode !== "backend") setBackendApps([]);
-      setSelectedBackendAppId(null);
-      setBackendAppCatalogError(null);
-      setBackendAppCatalogState(catalogInput.dataMode === "backend" ? "loading" : "idle");
-    }
-  }
-
   function toggleMenu(nextMenu: ProductMenu, trigger: HTMLButtonElement) {
     menuTriggerRef.current = trigger;
     setMenu((current) => current === nextMenu ? null : nextMenu);
@@ -306,31 +286,13 @@ export function ProductShell({
   }, []);
 
   useEffect(() => {
-    if (!catalogInput.ownsCatalog) return;
-    if (catalogInput.dataMode !== "backend") return;
-    const controller = new AbortController();
-    let current = true;
-    void getSystemBootstrap(catalogInput.apiClient, catalogInput.preferredAppId, { signal: controller.signal })
-      .then((bootstrap) => {
-        if (!current) return;
-        const canonicalAppId = canonicalBackendAppId(catalogInput.preferredAppId, bootstrap.selectedAppId);
-        if (canonicalAppId !== undefined) replaceBackendAppId(canonicalAppId);
-        setBackendApps(bootstrap.apps);
-        setSelectedBackendAppId(bootstrap.selectedAppId);
-        setBackendAppCatalogState("available");
-      })
-      .catch((error: unknown) => {
-        if (!current || controller.signal.aborted) return;
-        setBackendApps([]);
-        setSelectedBackendAppId(null);
-        setBackendAppCatalogError(appCatalogErrorMessage(error));
-        setBackendAppCatalogState("error");
-      });
-    return () => {
-      current = false;
-      controller.abort();
-    };
-  }, [catalogInput]);
+    if (!ownsCatalog || dataMode !== "backend" || sharedCatalog.stale) return;
+    const canonicalAppId = canonicalBackendAppId(
+      preferredAppId,
+      sharedCatalog.bootstrap?.selectedAppId ?? null,
+    );
+    if (canonicalAppId !== undefined) replaceBackendAppId(canonicalAppId);
+  }, [dataMode, ownsCatalog, preferredAppId, sharedCatalog.bootstrap, sharedCatalog.stale]);
 
   useEffect(() => {
     if (menu === null) return;
@@ -425,25 +387,29 @@ export function ProductShell({
             <div className="suite-popover suite-app-popover" id={PRODUCT_MENU_POPOVER_IDS.apps} role="menu" data-suite-menu="apps">
               <span className="suite-menu-label">{dataMode === "backend" ? "Server apps" : "Your apps"}</span>
               {dataMode === "backend" ? (
-                displayedCatalogState === "loading" ? (
+                displayedCatalogState === "loading" && displayedBackendApps.length === 0 ? (
                   <output className="suite-app-catalog-state"><i className="suite-app-icon suite-app-icon--muted" aria-hidden="true">…</i><span><strong>Loading apps</strong><small>Reading system bootstrap</small></span></output>
-                ) : displayedCatalogState === "error" ? (
-                  <button role="menuitem" type="button" onClick={() => { if (backendAppCatalog?.onRetry) backendAppCatalog.onRetry(); else setBackendAppCatalogGeneration((current) => current + 1); }}><i className="suite-app-icon suite-app-icon--muted" aria-hidden="true">!</i><span><strong>Retry app catalog</strong><small>{displayedCatalogError}</small></span></button>
+                ) : displayedCatalogState === "error" && displayedBackendApps.length === 0 ? (
+                  <button role="menuitem" type="button" onClick={() => { if (backendAppCatalog?.onRetry) backendAppCatalog.onRetry(); else void sharedCatalog.refresh(); }}><i className="suite-app-icon suite-app-icon--muted" aria-hidden="true">!</i><span><strong>Retry app catalog</strong><small>{displayedCatalogError}</small></span></button>
                 ) : displayedBackendApps.length === 0 ? (
                   <output className="suite-app-catalog-state"><i className="suite-app-icon suite-app-icon--muted" aria-hidden="true">—</i><span><strong>No authorized apps</strong><small>The backend returned an empty app catalog</small></span></output>
-                ) : displayedBackendApps.map((app) => {
+                ) : <>
+                  {displayedCatalogState === "loading" ? <output className="suite-app-catalog-state"><i className="suite-app-icon suite-app-icon--muted" aria-hidden="true">…</i><span><strong>Refreshing apps</strong><small>Selection is paused until the server responds</small></span></output> : null}
+                  {displayedCatalogState === "error" ? <button role="menuitem" type="button" onClick={() => { if (backendAppCatalog?.onRetry) backendAppCatalog.onRetry(); else void sharedCatalog.refresh(); }}><i className="suite-app-icon suite-app-icon--muted" aria-hidden="true">!</i><span><strong>Retry app catalog</strong><small>{displayedCatalogError}</small></span></button> : null}
+                  {displayedBackendApps.map((app) => {
                   const selected = app.appId === displayedBackendAppId;
                   const label = appLabel(app);
                   const contents = <>
                       <i className="suite-app-icon" aria-hidden="true">{label.charAt(0).toUpperCase() || "⌕"}</i>
                       <span><strong>{label}</strong><small>{appDetail(app, selected)}</small></span>
                     </>;
-                  return backendAppCatalog ? (
-                    <button className={selected ? "selected" : undefined} role="menuitem" type="button" key={app.appId} onClick={() => { backendAppCatalog.onSelect(app.appId); closeMenu(); }} aria-label={`Select ${label}`}>{contents}</button>
+                  return backendAppCatalog || catalogActionsBlocked ? (
+                    <button className={selected ? "selected" : undefined} role="menuitem" type="button" key={app.appId} disabled={catalogActionsBlocked} onClick={() => { backendAppCatalog?.onSelect(app.appId); closeMenu(); }} aria-label={`Select ${label}`}>{contents}</button>
                   ) : (
                     <Link className={selected ? "selected" : undefined} role="menuitem" href={backendAppSearchHref(app.appId)} key={app.appId} onClick={() => closeMenu()} aria-label={`Open ${label} in Search`}>{contents}</Link>
                   );
-                })
+                  })}
+                </>
               ) : (
                 <>
                   <Link role="menuitem" href="/search/events/"><i className="suite-app-icon" aria-hidden="true"><AppIcon name="search" size="md" /></i><span><strong>Search &amp; Reporting</strong><small>Explore deterministic sample data</small></span></Link>
@@ -464,17 +430,20 @@ export function ProductShell({
             <button type="button" aria-controls={productMenuControlId(menu, "help")} aria-haspopup="menu" aria-expanded={menu === "help"} onClick={(event) => { const opening = menu !== "help"; toggleMenu("help", event.currentTarget); if (opening && event.detail === 0) focusFirstMenuItem("help"); }} onKeyDown={(event) => openMenuFromKeyboard(event, "help")}>Help <AppIcon name="chevron-down" size="xs" /></button>
             {menu === "help" ? (
               <div className="suite-popover suite-utility-popover" id={PRODUCT_MENU_POPOVER_IDS.help} role="menu" data-suite-menu="help">
-                <span className="suite-menu-label">Documentation is not bundled in this frontend preview.</span>
+                <span className="suite-menu-label">Bundled documentation</span>
+                <a role="menuitem" href={productHref("/help/")}>Documentation</a>
+                <a role="menuitem" href={productHref("/help/spl/")}>SPL reference</a>
+                <a role="menuitem" href={productHref("/help/collector-configuration/")}>Collector configuration</a>
                 <span className="suite-menu-rule" />
                 <button role="menuitem" type="button" onClick={() => closeMenu(true)}>Close · Open Splunk {OPEN_SPLUNK_BUILD_LABEL}</button>
               </div>
             ) : null}
           </div>
-          <form className="suite-find" onSubmit={(event) => submitProductFind(event, dataMode, navigationBackendAppId)}>
+          <form className="suite-find" onSubmit={(event) => submitProductFind(event, dataMode, navigationBackendAppId, dataMode === "backend" && catalogActionsBlocked)}>
             <label className="sr-only" htmlFor="suite-find-input">Find</label>
-            <input id="suite-find-input" ref={findRef} name="find" placeholder="Find" autoComplete="off" />
+            <input id="suite-find-input" ref={findRef} name="find" placeholder="Find" autoComplete="off" disabled={dataMode === "backend" && catalogActionsBlocked} />
             <kbd aria-label="Control or Command K">Ctrl/⌘K</kbd>
-            <button type="submit" aria-label="Search"><AppIcon name="search" size="sm" /></button>
+            <button type="submit" aria-label="Search" disabled={dataMode === "backend" && catalogActionsBlocked}><AppIcon name="search" size="sm" /></button>
           </form>
           <div className="suite-menu-anchor">
             <button className="suite-user-button" type="button" aria-label={`${sessionLabel} menu`} aria-controls={productMenuControlId(menu, "user")} aria-haspopup="menu" aria-expanded={menu === "user"} onClick={(event) => { const opening = menu !== "user"; toggleMenu("user", event.currentTarget); if (opening && event.detail === 0) focusFirstMenuItem("user"); }} onKeyDown={(event) => openMenuFromKeyboard(event, "user")}>
@@ -505,7 +474,7 @@ export function ProductShell({
             </Link>
           ))}
         </div>
-        <div className="suite-app-identity"><span aria-hidden="true"><AppIcon name={activeSection === "admin" ? "settings" : "search"} size="md" /></span><strong>{appName}</strong></div>
+        <div className="suite-app-identity"><span aria-hidden="true"><AppIcon name={activeSection === "admin" ? "settings" : activeSection === "help" ? "file" : "search"} size="md" /></span><strong>{appName}</strong></div>
       </nav>
 
       {menu !== null ? <button className="suite-dismiss" type="button" aria-label="Close menu" onClick={() => closeMenu(true)} /> : null}
@@ -518,20 +487,24 @@ export function ProductShell({
           {appSwitcher !== undefined ? (
             <Link className={activeSection === "search" ? "active" : undefined} aria-current={activeSection === "search" ? "page" : undefined} href={productHref("/search/events/")}><span aria-hidden="true"><AppIcon name="search" size="md" /></span>{appName}</Link>
           ) : dataMode === "backend" ? (
-            displayedCatalogState === "loading" ? (
+            displayedCatalogState === "loading" && displayedBackendApps.length === 0 ? (
               <output className="drawer-app-state">Loading server apps…</output>
-            ) : displayedCatalogState === "error" ? (
-              <button className="drawer-app-retry" type="button" onClick={() => { if (backendAppCatalog?.onRetry) backendAppCatalog.onRetry(); else setBackendAppCatalogGeneration((current) => current + 1); }}>Retry server apps</button>
+            ) : displayedCatalogState === "error" && displayedBackendApps.length === 0 ? (
+              <button className="drawer-app-retry" type="button" onClick={() => { if (backendAppCatalog?.onRetry) backendAppCatalog.onRetry(); else void sharedCatalog.refresh(); }}>Retry server apps</button>
             ) : displayedBackendApps.length === 0 ? (
               <output className="drawer-app-state">No authorized server apps</output>
-            ) : displayedBackendApps.map((app) => {
+            ) : <>
+              {displayedCatalogState === "loading" ? <output className="drawer-app-state">Refreshing server apps…</output> : null}
+              {displayedCatalogState === "error" ? <button className="drawer-app-retry" type="button" onClick={() => { if (backendAppCatalog?.onRetry) backendAppCatalog.onRetry(); else void sharedCatalog.refresh(); }}>Retry server apps</button> : null}
+              {displayedBackendApps.map((app) => {
               const label = appLabel(app);
               const selected = app.appId === displayedBackendAppId;
               const contents = <><span aria-hidden="true">{label.charAt(0).toUpperCase() || "⌕"}</span>{label}{selected ? <b>Selected</b> : null}</>;
-              return backendAppCatalog
-                ? <button className={selected ? "selected-app" : undefined} type="button" onClick={() => { backendAppCatalog.onSelect(app.appId); setMobileOpen(false); }} key={`mobile-${app.appId}`}>{contents}</button>
+              return backendAppCatalog || catalogActionsBlocked
+                ? <button className={selected ? "selected-app" : undefined} type="button" disabled={catalogActionsBlocked} onClick={() => { backendAppCatalog?.onSelect(app.appId); setMobileOpen(false); }} key={`mobile-${app.appId}`}>{contents}</button>
                 : <Link className={selected ? "selected-app" : undefined} href={backendAppSearchHref(app.appId)} key={`mobile-${app.appId}`}>{contents}</Link>;
-            })
+              })}
+            </>
           ) : (
             <Link className={activeSection === "search" ? "active" : undefined} aria-current={activeSection === "search" ? "page" : undefined} href={productHref("/search/events/")}><span aria-hidden="true"><AppIcon name="search" size="md" /></span>Search &amp; Reporting</Link>
           )}
@@ -542,7 +515,8 @@ export function ProductShell({
           <span className="drawer-label">SYSTEM</span>
           <Link className={activeSection === "activity" ? "active" : undefined} aria-current={activeSection === "activity" ? "page" : undefined} href={productHref("/activity/jobs/")}><span aria-hidden="true"><AppIcon name="activity" size="md" /></span>Activity {dataMode === "demo" ? <b className="activity-count">1</b> : null}</Link>
           <Link className={activeSection === "admin" ? "active" : undefined} aria-current={activeSection === "admin" ? "page" : undefined} href={productHref("/admin/")}><span aria-hidden="true"><AppIcon name="settings" size="md" /></span>Administration</Link>
-          <span className="drawer-label">HELP DOCUMENTATION IS NOT INCLUDED IN THIS PREVIEW</span>
+          <span className="drawer-label">HELP</span>
+          <a className={activeSection === "help" ? "active" : undefined} aria-current={activeSection === "help" ? "page" : undefined} href={productHref("/help/")}><span aria-hidden="true"><AppIcon name="file" size="md" /></span>Documentation</a>
           <span className="drawer-rule" />
           <Link href="/signin/" onClick={onSignOut}><span aria-hidden="true"><AppIcon name={localSession ? "info" : "logout"} size="md" /></span>{localSession ? "About local access" : "Sign out"}</Link>
         </dialog>

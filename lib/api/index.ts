@@ -7,9 +7,11 @@ export {
 
 export {
   clearAdministratorBearerToken,
+  currentAdministratorSessionRevision,
   hasAdministratorBearerToken,
   isValidAdministratorBearerToken,
   setAdministratorBearerToken,
+  subscribeToAdministratorSessionRevision,
 } from "./administrator-session";
 export type { ProtobufRequestOptions } from "./protobuf-transport";
 
@@ -27,6 +29,22 @@ export type {
   SystemBootstrapListener,
   SystemBootstrapModel,
 } from "./system-bootstrap";
+
+export {
+  APP_CATALOG_INVALIDATION_STORAGE_KEY,
+  appCatalogKey,
+  appCatalogStore,
+  createAppCatalogStore,
+  invalidateAppCatalog,
+  normalizeAppCatalogApiBaseUrl,
+} from "./app-catalog";
+export type {
+  AppCatalogKey,
+  AppCatalogSnapshot,
+  AppCatalogState,
+  AppCatalogStore,
+  CreateAppCatalogStoreOptions,
+} from "./app-catalog";
 
 export { paletteFromProto, paletteToProto } from "./ui-palette";
 

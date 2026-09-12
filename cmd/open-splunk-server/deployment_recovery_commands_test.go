@@ -1987,6 +1987,12 @@ func TestDeploymentRecoveryRestoreFailsClosedForPartialOrMismatchedState(t *test
 			if err == nil {
 				t.Fatal("restore accepted partial or mismatched ClickHouse state")
 			}
+			if !strings.Contains(err.Error(), "use a fresh ClickHouse data volume") {
+				t.Fatalf("partial-state restore error = %v, want fresh-target direction", err)
+			}
+			if test.receiptErr != nil && !errors.Is(err, test.receiptErr) {
+				t.Fatalf("partial-state restore error = %v, want receipt cause %v", err, test.receiptErr)
+			}
 			if controlRestored {
 				t.Fatal("restore mutated control plane after rejecting ClickHouse state")
 			}

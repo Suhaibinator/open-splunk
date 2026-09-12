@@ -20,7 +20,6 @@ import {
 } from "react";
 import Link from "next/link";
 
-import { SharingScope } from "@/gen/ts/open_splunk/common";
 import type { Diagnostic, ResolvedTimeRange } from "@/gen/ts/open_splunk/common";
 import {
   ExportJobState,
@@ -67,9 +66,12 @@ import {
 import { ServerFeature } from "@/gen/ts/open_splunk/system_api";
 import {
   analyzeSPLIndexScope,
+  appCatalogKey,
+  appCatalogStore,
   SearchWebSocketClient,
   clearAdministratorBearerToken,
   createOpenSplunkApiClient,
+  currentAdministratorSessionRevision,
   getSystemBootstrap,
   isHttpError,
   isHttpStatus,
@@ -81,11 +83,12 @@ import {
   supportsServerFeature,
   type SystemBootstrapModel,
 } from "@/lib/api";
+import { BrowserCreateAction } from "@/lib/api/client-request-id";
+import { useAppCatalog } from "@/app/_components/use-app-catalog";
 import { OPEN_SPLUNK_BUILD_LABEL } from "@/lib/build-identity";
 import {
   adaptSearchResults,
   compareWorkspaceStatisticValues,
-  patternsFromEvents,
   resolveAbsoluteTimeRange,
   timechartRowsForExport,
   timechartValueFields,
@@ -133,6 +136,10 @@ import {
   duplicateSavedSearchName,
   savedSearchNameWithSuffix,
 } from "@/lib/search/saved-search-names";
+import {
+  DEFAULT_SAVED_SEARCH_SCOPE,
+  type EditableSavedSearchScope,
+} from "@/lib/search/saved-search-scope";
 import { getExactRetainedSearchJob } from "@/lib/search/server-jobs";
 import {
   cancelServerExport,
@@ -152,6 +159,7 @@ import {
   listServerSavedSearches,
   listServerSearchHistory,
   renameServerSavedSearch,
+  savedSearchCreateIntent,
   savedSearchForDisplay,
   serverFieldToDemoField,
   updateServerSavedSearch,
@@ -281,6 +289,11 @@ import {
 } from "./search-workspace/running-search-controller";
 import { summarizeByteQuantity } from "@/lib/byte-quantity";
 import { EventsPanel } from "./search-workspace/panels/events-panel";
+import { useBackendPatterns } from "./search-workspace/use-backend-patterns";
+import { patternExportSource } from "./search-workspace/pattern-export-source";
+import { PatternFilterChip } from "./search-workspace/components/pattern-filter-chip";
+import { NearbyContextEditor } from "./search-workspace/components/nearby-context-editor";
+import { adaptNearbyContext, createNearbyDraft, createNearbyPreparationGate, nearbyBuilderAttached, nearbySearch, type NearbyDraft } from "@/lib/search/nearby-events";
 import { PatternsPanel } from "./search-workspace/panels/patterns-panel";
 import { StatisticsPanel } from "./search-workspace/panels/statistics-panel";
 import { StatisticsColumnLayoutStore } from "./search-workspace/panels/statistics-column-layout";
@@ -566,7 +579,7 @@ function workspaceStackMode(mode: VisualizationStackMode): StackMode | null {
 }
 
 function resultTabCompatibleWithKind(tab: ResultTab, kind: ResultSetKind): boolean {
-  if (kind === ResultSetKind.RESULT_SET_KIND_EVENTS) return tab === "events";
+  if (kind === ResultSetKind.RESULT_SET_KIND_EVENTS) return tab === "events" || tab === "patterns";
   if (
     kind === ResultSetKind.RESULT_SET_KIND_STATISTICS
     || kind === ResultSetKind.RESULT_SET_KIND_TIME_SERIES
@@ -660,7 +673,7 @@ function currentBackendServerTime(bootstrap: BackendBootstrapState): Date {
 }
 
 function receivedBackendBootstrap(response: SystemBootstrapModel): BackendBootstrapState {
-  return { response, receivedAt: Date.now() };
+  return { response, receivedAt: response.receivedAt ?? Date.now() };
 }
 
 function newDemoObjectId(prefix: string): string {
@@ -821,6 +834,7 @@ export function SearchWorkspace({
     currentBackendAppId,
     () => undefined,
   );
+  const sharedAppCatalog = useAppCatalog(apiBaseUrl, preferredAppId, backendEnabled);
   const themePreference = useSyncExternalStore(
     subscribeToThemePreference,
     currentThemePreference,
@@ -878,6 +892,7 @@ export function SearchWorkspace({
   const [backendResultTotalRows, setBackendResultTotalRows] = useState<number | null>(null);
   const [backendResultTotalExact, setBackendResultTotalExact] = useState(false);
   const [backendHasNextPage, setBackendHasNextPage] = useState(false);
+  const [backendSnapshotRef, setBackendSnapshotRef] = useState("");
   const [backendSnapshotComplete, setBackendSnapshotComplete] = useState(true);
   const [backendResultsTruncated, setBackendResultsTruncated] = useState(false);
   const [backendResultsExpired, setBackendResultsExpired] = useState(false);
@@ -963,6 +978,9 @@ export function SearchWorkspace({
   const [saveName, setSaveName] = useState("Production log investigation");
   const [saveDescription, setSaveDescription] = useState("");
   const [savePurpose, setSavePurpose] = useState<"report" | "search">("search");
+  const [saveSharingScope, setSaveSharingScope] = useState<EditableSavedSearchScope>(
+    DEFAULT_SAVED_SEARCH_SCOPE,
+  );
   const [saveAsNew, setSaveAsNew] = useState(false);
   const [activeSavedSearchId, setActiveSavedSearchId] = useState<string | null>(null);
   const [savedWorkspaceBaseline, setSavedWorkspaceBaseline] = useState<SavedWorkspaceBaseline | null>(null);
@@ -979,6 +997,7 @@ export function SearchWorkspace({
   const [demoExportSize, setDemoExportSize] = useState(0);
   const [exportClockTick, setExportClockTick] = useState(0);
   const [exportFields, setExportFields] = useState<string[]>(EVENT_EXPORT_FIELDS);
+  const [exportPatternSource, setExportPatternSource] = useState<ReturnType<typeof patternExportSource> | undefined>(undefined);
   const [exportSourceTab, setExportSourceTab] = useState<ResultTab>("events");
   const [chartStyle, setChartStyle] = useState<ChartStyle>("column");
   const [chartTitle, setChartTitle] = useState("Event volume by level");
@@ -986,6 +1005,10 @@ export function SearchWorkspace({
   const [showDataLabels, setShowDataLabels] = useState(true);
   const [stackMode, setStackMode] = useState<StackMode>("none");
   const [statsDensity, setStatsDensity] = useState<StatsDensity>("compact");
+  const [nearbyPreparation] = useState(createNearbyPreparationGate);
+  const [nearbyDraft, setNearbyDraft] = useState<NearbyDraft | null>(null);
+  const [nearbyAppliedDraft, setNearbyAppliedDraft] = useState<NearbyDraft | null>(null);
+  const [nearbyPreparing, setNearbyPreparing] = useState(false);
   const [patternSensitivity, setPatternSensitivity] = useState<PatternSensitivity>("Balanced");
   const [eventDisplay, setEventDisplay] = useState<EventDisplay>("List");
   const [eventPageSize, setEventPageSize] = useState(20);
@@ -1003,6 +1026,12 @@ export function SearchWorkspace({
   const [showAllFields, setShowAllFields] = useState(false);
   const [globalFind, setGlobalFind] = useState("");
   const [runningSearch] = useState(() => new RunningSearchController());
+  const [searchCreateAction] = useState(() => new BrowserCreateAction());
+  const [exportCreateAction] = useState(() => new BrowserCreateAction());
+  const [savedCreateAction] = useState(() => new BrowserCreateAction());
+  const [savedDuplicateAction] = useState(() => new BrowserCreateAction());
+  const pendingSearchCreateIdRef = useRef<string | null>(null);
+  const pendingDuplicateRef = useRef<{ sourceId: string; candidate: string } | null>(null);
   const backendPageAbortRef = useRef<AbortController | null>(null);
   const backendChartSeriesAbortRef = useRef<AbortController | null>(null);
   const backendMetadataAbortRef = useRef<AbortController | null>(null);
@@ -1185,10 +1214,18 @@ export function SearchWorkspace({
       backendBootstrapModel,
       ServerFeature.SERVER_FEATURE_SEARCH_PREVIEW,
     );
+  const appCatalogActionsBlocked = backendEnabled && (
+    sharedAppCatalog.state !== "available"
+    || sharedAppCatalog.stale
+    || sharedAppCatalog.bootstrap !== backendBootstrapModel
+    || sharedAppCatalog.bootstrap?.selectedAppId == null
+  );
   const runDisabledReason = !isRunning && backendEnabled && backendConnectionState === "loading"
     ? "Search is disabled while the backend connection is loading."
     : !isRunning && backendEnabled && backendConnectionState === "error"
       ? "Retry the backend connection before running a search."
+      : !isRunning && appCatalogActionsBlocked
+        ? "Wait for the current app catalog before running a search."
       : !isRunning && backendHasNoSearchableIndexes
         ? "No searchable indexes are available in the current backend scope."
         : !isRunning && query.trim().length === 0
@@ -1353,6 +1390,18 @@ export function SearchWorkspace({
       controller.abort();
     };
   }, [apiClient, backendBootstrapModel, backendCompletionEnabled, editorCaret, query, timeRange]);
+  const retainedPatternContext = backendEnabled && backendAuthoritativeResultsReady
+    && !backendResultsExpired && backendResultKind === ResultSetKind.RESULT_SET_KIND_EVENTS
+    && phase === "completed" && backendSnapshotRef && runningSearch.jobSnapshot().id
+    ? { searchJobId: runningSearch.jobSnapshot().id!, snapshotRef: backendSnapshotRef, sensitivity: patternSensitivity }
+    : null;
+  const backendPatterns = useBackendPatterns(backendEnabled ? apiClient.search : null, retainedPatternContext, activeTab === "patterns");
+  const patternMembers = backendPatterns.members;
+  const patternMemberEvents = useMemo(() => {
+    const page = patternMembers?.page;
+    return page?.schema ? adaptSearchResults(page.schema, page.rows).events : [];
+  }, [patternMembers?.page]);
+
   const displayedBackendResults = backendDisplayingPreview
     ? backendPreviewDisplay.adapted
     : null;
@@ -1360,9 +1409,9 @@ export function SearchWorkspace({
     () => searchIsClosed
       ? []
       : backendEnabled
-        ? displayedBackendResults?.events ?? backendEvents
+        ? patternMembers !== null ? patternMemberEvents : displayedBackendResults?.events ?? backendEvents
         : filteredDemoEvents(submittedQuery),
-    [backendEnabled, backendEvents, displayedBackendResults?.events, searchIsClosed, submittedQuery],
+    [backendEnabled, backendEvents, displayedBackendResults?.events, patternMemberEvents, patternMembers, searchIsClosed, submittedQuery],
   );
   const timelinePoints = useMemo(() => backendEnabled
     ? backendDisplayingPreview
@@ -1676,13 +1725,13 @@ export function SearchWorkspace({
     const featureSupported = !backendEnabled
       || (bootstrap !== undefined && supportsServerFeature(bootstrap, feature));
     const resultMatchesSource = backendResultKind === ResultSetKind.RESULT_SET_KIND_EVENTS
-      ? exportSourceTab === "events"
+      ? exportSourceTab === "events" || (exportSourceTab === "patterns" && exportPatternSource !== undefined)
       : exportSourceTab === "statistics" || exportSourceTab === "visualization";
     const jobReady = phase === "completed"
       && runningSearch.jobSnapshot().job !== null
       && backendAuthoritativeResultsReady
       && !backendResultsExpired
-      && exportSourceTab !== "patterns"
+      && (exportSourceTab !== "patterns" || exportPatternSource !== undefined)
       && resultMatchesSource;
     const common = {
       description: backendEnabled
@@ -1693,20 +1742,24 @@ export function SearchWorkspace({
       maximumRows: backendEnabled
         ? bootstrap?.limits.maximumExportRows || null
         : displayedRowsForTab(exportSourceTab),
-      maximumBytes: backendEnabled ? bootstrap?.limits.maximumExportBytes || null : null,
+      byteLimit: backendEnabled
+        ? serverExportJob?.definition?.byteLimit ?? "server-default"
+        : null,
     } as const;
     if (exportStage === "configure") {
-      const available = !backendEnabled || (featureSupported && jobReady);
+      const available = !backendEnabled || (featureSupported && jobReady && !appCatalogActionsBlocked);
       return {
         ...common,
         status: "configure",
         available,
         unavailableReason: available
           ? null
+          : appCatalogActionsBlocked
+            ? "Wait for the current app catalog before creating an export."
           : !featureSupported
             ? `The server does not advertise ${exportFormat === "csv" ? "CSV" : "JSON Lines"} exports.`
             : exportSourceTab === "patterns"
-              ? "Patterns are derived in this browser and are not a server export result."
+              ? "Patterns export requires a retained event snapshot. Rerun this search to enable it."
               : !resultMatchesSource
                 ? "This browser-derived view does not match the authoritative server result."
                 : backendResultsExpired
@@ -1821,8 +1874,21 @@ export function SearchWorkspace({
     () => sortTimechartRows(timelinePoints, timechartSort),
     [timelinePoints, timechartSort],
   );
+  if (nearbyAppliedDraft !== null && (
+    !nearbyBuilderAttached(nearbyAppliedDraft, query)
+    || nearbyAppliedDraft.earliest !== timeRange.earliest
+    || nearbyAppliedDraft.latest !== timeRange.latest
+  )) {
+    setNearbyDraft(null);
+    setNearbyAppliedDraft(null);
+  }
+  useEffect(() => {
+    nearbyPreparation.invalidate();
+  }, [nearbyPreparation, query, timeRange.earliest, timeRange.latest]);
+  useEffect(() => () => nearbyPreparation.invalidate(), [nearbyPreparation]);
+
   const patternRows = useMemo(() => {
-    if (backendEnabled) return patternsFromEvents(resultEvents, baseEventCount, patternSensitivity);
+    if (backendEnabled) return backendPatterns.rows;
     if (patternSensitivity === "Precise") {
       return [
         { signature: "Request metrics status=200 duration_ms=*", count: 4932, percent: 38.4 },
@@ -1838,7 +1904,7 @@ export function SearchWorkspace({
       ];
     }
     return DEMO_PATTERNS;
-  }, [backendEnabled, baseEventCount, patternSensitivity, resultEvents]);
+  }, [backendEnabled, backendPatterns.rows, patternSensitivity]);
   const backendRuntimeNotices = useMemo(() => {
     if (!backendEnabled) return [];
     return uniqueMessages([
@@ -1971,6 +2037,78 @@ export function SearchWorkspace({
     setToast({ message, tone });
   }
 
+  const acceptSharedAppCatalog = useEffectEvent((response: SystemBootstrapModel) => {
+    if (appSwitchAbortRef.current !== null || backendObjectMutationRef.current || persistedLaunchPendingRef.current) return;
+    const previous = backendBootstrapRef.current;
+    if (previous?.response === response) return;
+    if (!supportsServerFeature(response, ServerFeature.SERVER_FEATURE_SEARCH)) {
+      setBackendConnectionState("error");
+      setBackendConnectionError("This server does not advertise browser search support.");
+      return;
+    }
+    const selectionChanged = previous !== null
+      && previous.response.selectedAppId !== response.selectedAppId;
+    const bootstrap = receivedBackendBootstrap(response);
+    backendBootstrapRef.current = bootstrap;
+    setBackendBootstrapModel(response);
+    setBackendConnectionState("ready");
+    setBackendConnectionError(null);
+    setDefaultSearchQuery(defaultQueryForBootstrap(response));
+    if (response.selectedAppId !== null && response.selectedAppId !== preferredAppId) {
+      observedBackendAppPreferenceRef.current = response.selectedAppId;
+      observedBackendAppPreferenceInitializedRef.current = true;
+      replaceBackendAppId(response.selectedAppId);
+    }
+    if (selectionChanged) {
+      // Catalog fallback changes future admission authority, while the current
+      // editor and retained job continue to describe their original search.
+      clearPersistedContextForAdHocSearch();
+      backendSavedSearchesRef.current.clear();
+      backendHistoryRef.current.clear();
+      setSavedSearches([]);
+      setHistory([]);
+      setSavedSearchesNextPageToken(null);
+      setHistoryNextPageToken(null);
+      if (response.selectedAppId !== null) {
+        void refreshBackendSavedSearches(bootstrap);
+        void refreshBackendHistory(bootstrap);
+      }
+      showToast("The app catalog changed. Your search draft and displayed results have been preserved.");
+    }
+  });
+
+  useEffect(() => {
+    if (
+      backendEnabled
+      && sharedAppCatalog.state === "available"
+      && !sharedAppCatalog.stale
+      && sharedAppCatalog.bootstrap !== null
+    ) {
+      let canceled = false;
+      const response = sharedAppCatalog.bootstrap;
+      queueMicrotask(() => { if (!canceled) acceptSharedAppCatalog(response); });
+      return () => { canceled = true; };
+    }
+  }, [appSwitchingId, backendEnabled, objectMutation, persistedLaunchPending, sharedAppCatalog.bootstrap, sharedAppCatalog.stale, sharedAppCatalog.state]);
+
+  async function loadSharedWorkspaceBootstrap(requestedAppId: string | undefined, signal: AbortSignal) {
+    const key = appCatalogKey(apiBaseUrl, requestedAppId, currentAdministratorSessionRevision());
+    async function awaitCurrentCatalog(): Promise<SystemBootstrapModel> {
+      if (signal.aborted) throw new DOMException("The bootstrap request was canceled.", "AbortError");
+      await appCatalogStore.load(key);
+      if (signal.aborted) throw new DOMException("The bootstrap request was canceled.", "AbortError");
+      const snapshot = appCatalogStore.getSnapshot(key);
+      if (snapshot.state === "available" && !snapshot.stale && snapshot.bootstrap !== null) {
+        return snapshot.bootstrap;
+      }
+      // Subscription replay or a concurrent catalog invalidation can supersede
+      // the awaited request. Join the replacement rather than failing launch.
+      if (snapshot.state === "loading" || snapshot.state === "idle") return awaitCurrentCatalog();
+      throw new Error(snapshot.error ?? "The current app catalog is unavailable.");
+    }
+    return awaitCurrentCatalog();
+  }
+
   async function ensureBackendBootstrap(): Promise<BackendBootstrapState> {
     const existing = backendBootstrapRef.current;
     if (existing !== null) return existing;
@@ -1982,7 +2120,7 @@ export function SearchWorkspace({
     const request = requestCurrentBackendApp((requestedAppId, signal) => {
       observedBackendAppPreferenceRef.current = requestedAppId;
       observedBackendAppPreferenceInitializedRef.current = true;
-      return getSystemBootstrap(apiClient, requestedAppId, { signal });
+      return loadSharedWorkspaceBootstrap(requestedAppId, signal);
     })
       .then(({ preferredAppId: requestedAppId, value: response }) => {
         if (!supportsServerFeature(response, ServerFeature.SERVER_FEATURE_SEARCH)) {
@@ -2382,6 +2520,7 @@ export function SearchWorkspace({
     setBackendFieldSummaryError(null);
     setBackendResultKind(ResultSetKind.RESULT_SET_KIND_UNSPECIFIED);
     setBackendResultSchema(null);
+    setBackendSnapshotRef("");
     runningSearch.resetPreview();
     setBackendPreviewDisplay(null);
     setBackendPreviewStatus("disabled");
@@ -2855,8 +2994,9 @@ export function SearchWorkspace({
       let launchTimer: number | null = null;
       persistedLaunchPendingRef.current = true;
       setPersistedLaunchPending(true);
-      setPhase("queued");
-      setProgress(1);
+      // Object hydration is not a running search. The dedicated pending flag
+      // blocks competing actions without making the saved/history open guards
+      // reject the hydrated definition as an active job.
       void ensureBackendBootstrap()
         .then(async (bootstrap) => {
           if (controller.signal.aborted || persistedLaunchEpochRef.current !== launchEpoch) return;
@@ -3039,6 +3179,10 @@ export function SearchWorkspace({
   // and remembered state say what to show; nothing here adds history, so a
   // run triggered from here refines the entry it lands on.
   const followHistoryEntry = useEffectEvent((event: PopStateEvent) => {
+    nearbyPreparation.invalidate();
+    setNearbyPreparing(false);
+    setNearbyDraft(null);
+    setNearbyAppliedDraft(null);
     const url = new URL(window.location.href);
     const restoredView = searchResultViewFromPathname(url.pathname) ?? "events";
     const restoredState = readSearchLaunchState(event.state);
@@ -3086,8 +3230,16 @@ export function SearchWorkspace({
       return;
     }
     abandonDisplayedJobRef.current(timeRange);
+    if (decision.kind === "open-job" && restoredState !== null) {
+      const restoredDraft = restoredTimeRange(restoredState);
+      setQuery(restoredState.q);
+      setEditorCaret(restoredState.q.length);
+      setTimeRange(restoredDraft);
+      setDraftTimeRange(restoredDraft);
+    }
     historyLaunchCleanupRef.current = applyUrlLaunch({
       initial: false,
+      preserveDraft: decision.kind === "open-job" && restoredState !== null,
       launch: decision.kind === "open-job"
         ? { source: "searchJobId", value: decision.searchJobId, run: false }
         : undefined,
@@ -3298,6 +3450,7 @@ export function SearchWorkspace({
     }
     setBackendHasNextPage(page.nextPageToken !== undefined);
     setBackendSnapshotComplete(page.snapshotComplete);
+    setBackendSnapshotRef(page.snapshotRef ?? "");
   }
 
   async function requestBackendResultPage(
@@ -4697,7 +4850,31 @@ export function SearchWorkspace({
             visualization: undefined,
           }
         : undefined;
-      if (definition !== undefined) {
+      const createIntent = {
+        definition,
+        source: savedExecution !== undefined
+          ? {
+            origin: SearchJobOrigin.SEARCH_JOB_ORIGIN_SAVED_SEARCH,
+            savedSearchId: savedExecution.id,
+            historySearchId: undefined,
+            dashboardId: undefined,
+          }
+          : launchHistoryEntry === null
+            ? undefined
+            : {
+              origin: SearchJobOrigin.SEARCH_JOB_ORIGIN_HISTORY_RERUN,
+              savedSearchId: undefined,
+              historySearchId: launchHistoryEntry.id,
+              dashboardId: undefined,
+            },
+        options: undefined,
+
+      };
+      const clientRequestId = searchCreateAction.requestId({
+        ...createIntent,
+        sessionRevision: currentAdministratorSessionRevision(),
+      });
+      if (definition !== undefined && pendingSearchCreateIdRef.current !== clientRequestId) {
         const validation = await apiClient.search.validate(
           { definition },
           { signal: controller.signal, timeoutMs: 10_000 },
@@ -4720,25 +4897,8 @@ export function SearchWorkspace({
         }
       }
       if (!runningSearch.isCurrent(generation) || controller.signal.aborted) return;
-      const response = await apiClient.search.create({
-        definition,
-        source: savedExecution !== undefined
-          ? {
-            origin: SearchJobOrigin.SEARCH_JOB_ORIGIN_SAVED_SEARCH,
-            savedSearchId: savedExecution.id,
-            historySearchId: undefined,
-            dashboardId: undefined,
-          }
-          : launchHistoryEntry === null
-            ? undefined
-            : {
-              origin: SearchJobOrigin.SEARCH_JOB_ORIGIN_HISTORY_RERUN,
-              savedSearchId: undefined,
-              historySearchId: launchHistoryEntry.id,
-              dashboardId: undefined,
-            },
-        options: undefined,
-      }).catch((error: unknown) => {
+      pendingSearchCreateIdRef.current = clientRequestId;
+      const response = await apiClient.search.create({ ...createIntent, clientRequestId }).catch((error: unknown) => {
         if (launchHistoryEntry !== null && isHttpStatus(error, 404)) {
           removeBackendHistoryEntryLocally(launchHistoryEntry.id);
         }
@@ -4746,6 +4906,8 @@ export function SearchWorkspace({
       });
       let job = response.searchJob;
       if (job === undefined || job.searchJobId.length === 0) throw new Error("The server did not return a search job ID.");
+      searchCreateAction.complete(clientRequestId);
+      if (pendingSearchCreateIdRef.current === clientRequestId) pendingSearchCreateIdRef.current = null;
       if (backendHistoryRerunRef.current?.id === launchHistoryEntry?.id) {
         backendHistoryRerunRef.current = null;
       }
@@ -4842,6 +5004,20 @@ export function SearchWorkspace({
 
   function backendWorkspaceTransitionBlocked(): boolean {
     if (!backendEnabled) return false;
+    const currentCatalog = appCatalogStore.getSnapshot(appCatalogKey(
+      apiBaseUrl,
+      preferredAppId,
+      currentAdministratorSessionRevision(),
+    ));
+    if (backendBootstrapRef.current !== null && (
+      currentCatalog.state !== "available"
+      || currentCatalog.stale
+      || currentCatalog.bootstrap !== backendBootstrapRef.current.response
+      || currentCatalog.bootstrap?.selectedAppId == null
+    )) {
+      showToast("Wait for an available app context before starting another action.", "warning");
+      return true;
+    }
     if (persistedLaunchPendingRef.current) {
       showToast("Wait for the persisted search to finish opening.", "warning");
       return true;
@@ -4892,6 +5068,8 @@ export function SearchWorkspace({
   ) {
     if (runningSearch.launchIsLocked()) return;
     if (backendWorkspaceTransitionBlocked()) return;
+    nearbyPreparation.invalidate();
+    setNearbyPreparing(false);
     if (resultViewUnavailable) {
       pendingUrlResultViewRef.current = null;
       setResultViewUnavailable(false);
@@ -5343,6 +5521,42 @@ export function SearchWorkspace({
     focusEditor(nextQuery.length, nextQuery);
   }
 
+  function applyNearbyDraft(draft: NearbyDraft) {
+    if (runningSearch.launchIsLocked() || backendWorkspaceTransitionBlocked()) return;
+    const next = nearbySearch(draft);
+    // Save the old job together with the current unsaved editor before the
+    // new query creates its history entry. Back reopens that retained job.
+    stampSearchLaunchState(currentLaunchState());
+    clearPersistedContextForAdHocSearch();
+    timelineZoomParentRef.current = null;
+    setNearbyDraft(draft);
+    setNearbyAppliedDraft(draft);
+    setTimeRange(next.timeRange);
+    setDraftTimeRange(next.timeRange);
+    runSearch(next.query, next.timeRange);
+    applyResultView("events");
+    commitRoutedView(window, SEARCH_BASE_PATH, "events", "replace", { ...window.history.state, resultView: "events" });
+  }
+
+  async function findNearbyEvent(event: DemoEvent) {
+    if (backendWorkspaceTransitionBlocked() || runningSearch.launchIsLocked()) return;
+    const searchJobId = runningSearch.jobSnapshot().id;
+    const snapshotRef = backendSnapshotRef;
+    const generation = runningSearch.generationSnapshot();
+    if (!searchJobId || !snapshotRef || !backendAuthoritativeResultsReady || backendResultsExpired || phase !== "completed") return;
+    setNearbyPreparing(true);
+    try {
+      await nearbyPreparation.prepare(
+        async (signal) => adaptNearbyContext(await apiClient.search.prepareNearby({ searchJobId, snapshotRef, rowId: event.id }, { signal }), searchJobId, event.id),
+        (context) => { if (runningSearch.isCurrent(generation)) applyNearbyDraft(createNearbyDraft(context)); },
+      );
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Nearby context is unavailable. Rerun this search.", "warning");
+    } finally {
+      setNearbyPreparing(false);
+    }
+  }
+
   function toggleField(fieldName: string) {
     setFields((current) => current.map((field) => (field.name === fieldName ? { ...field, selected: !field.selected } : field)));
   }
@@ -5557,6 +5771,7 @@ export function SearchWorkspace({
     const existing = savedSearches.find((item) => item.id === activeSavedSearchId);
     setSavePurpose(purpose);
     setSaveAsNew(forceNew);
+    setSaveSharingScope(DEFAULT_SAVED_SEARCH_SCOPE);
     setSaveName(existing === undefined
       ? "Production log investigation"
       : forceNew
@@ -5697,6 +5912,7 @@ export function SearchWorkspace({
     descriptionOverride = saveDescription,
     purpose: "report" | "search" = "search",
   ) {
+    if (backendWorkspaceTransitionBlocked()) return;
     const trimmedName = nameOverride.trim();
     const trimmedDescription = descriptionOverride.trim();
     if (trimmedName.length === 0 || objectMutation !== null) return;
@@ -5739,12 +5955,17 @@ export function SearchWorkspace({
         visualization,
         base: source?.search ?? backendHistoryRerunRef.current?.search,
       };
+      const createSavedIntent = {
+        name: trimmedName, description: trimmedDescription || undefined, search,
+        sharingScope: saveSharingScope,
+      };
       const result = existing === undefined
         ? await createServerSavedSearch(apiClient, bootstrap.response, {
           name: trimmedName,
           description: trimmedDescription,
           search,
-          sharingScope: SharingScope.SHARING_SCOPE_PRIVATE,
+          sharingScope: saveSharingScope,
+          clientRequestId: savedCreateAction.requestId({ definition: savedSearchCreateIntent(createSavedIntent), sessionRevision: currentAdministratorSessionRevision() }),
         })
         : await updateServerSavedSearch(apiClient, bootstrap.response, {
           id: existing.id,
@@ -5764,6 +5985,7 @@ export function SearchWorkspace({
         setSavedSearchesAvailable(false);
         throw new Error("Saved searches are not available from this server.");
       }
+      if (existing === undefined) savedCreateAction.complete();
       backendSavedSearchesRef.current.set(result.value.id, result.value);
       backendHistoryRerunRef.current = null;
       activeSavedSearchIdRef.current = result.value.id;
@@ -5941,6 +6163,8 @@ export function SearchWorkspace({
   }
 
   function navigateResultView(nextView: ResultTab) {
+    nearbyPreparation.invalidate();
+    setNearbyPreparing(false);
     if (nextView === activeTabRef.current && !resultViewUnavailable) return;
     const currentState = currentLaunchState();
     stampSearchLaunchState({ ...currentState, resultView: activeTabRef.current });
@@ -6138,6 +6362,7 @@ export function SearchWorkspace({
   }
 
   async function duplicateSavedSearch(id: string) {
+    if (backendWorkspaceTransitionBlocked()) return;
     const displaySearch = savedSearches.find((savedSearch) => savedSearch.id === id);
     if (displaySearch === undefined) return;
     const initialName = nextDuplicateSavedSearchName(displaySearch.name);
@@ -6181,7 +6406,9 @@ export function SearchWorkspace({
       ): Promise<Awaited<ReturnType<typeof duplicateServerSavedSearch>> | null> {
         if (attempt >= duplicateNameAttempts) return null;
         let candidate: string;
-        if (attempt < MAXIMUM_READABLE_DUPLICATE_NAME_ATTEMPTS) {
+        if (attempt === 0 && pendingDuplicateRef.current?.sourceId === id) {
+          candidate = pendingDuplicateRef.current.candidate;
+        } else if (attempt < MAXIMUM_READABLE_DUPLICATE_NAME_ATTEMPTS) {
           candidate = nextDuplicateSavedSearchName(sourceName, attemptedNames);
         } else {
           candidate = randomDuplicateSavedSearchName(sourceName);
@@ -6190,6 +6417,7 @@ export function SearchWorkspace({
           }
         }
         attemptedNames.add(candidate);
+        pendingDuplicateRef.current = { sourceId: id, candidate };
         try {
           return await duplicateServerSavedSearch(
             apiClient,
@@ -6197,9 +6425,11 @@ export function SearchWorkspace({
             id,
             candidate,
             savedAppId,
+            { clientRequestId: savedDuplicateAction.requestId({ id: id.trim(), candidate: candidate.trim(), appId: savedAppId?.trim(), sessionRevision: currentAdministratorSessionRevision() }) },
           );
         } catch (error) {
           if (!isHttpStatus(error, 409)) throw error;
+          pendingDuplicateRef.current = null;
           return attemptDuplicate(attempt + 1);
         }
       }
@@ -6211,6 +6441,8 @@ export function SearchWorkspace({
         throw new Error("Saved-search duplication is not available from this server.");
       }
       backendSavedSearchesRef.current.set(result.value.id, result.value);
+      savedDuplicateAction.complete();
+      pendingDuplicateRef.current = null;
       const duplicate = savedSearchForDisplay(result.value);
       setSavedSearches((current) => [duplicate, ...current.filter((item) => item.id !== duplicate.id)]);
       showToast(`Duplicated as “${result.value.name}”.`, "success");
@@ -6507,6 +6739,11 @@ export function SearchWorkspace({
       setModal("export");
       return;
     }
+    if (backendWorkspaceTransitionBlocked()) return;
+    setExportPatternSource(backendEnabled && retainedPatternContext !== null
+      && (sourceTab === "patterns" || (sourceTab === "events" && patternMembers !== null))
+      ? patternExportSource(retainedPatternContext, sourceTab === "patterns" ? null : patternMembers!.pattern)
+      : undefined);
     setExportSourceTab(sourceTab);
     setExportFields(exportFieldsForTab(sourceTab));
     setExportStage("configure");
@@ -6561,6 +6798,7 @@ export function SearchWorkspace({
   }
 
   async function prepareExport() {
+    if (backendWorkspaceTransitionBlocked()) return;
     const exportEpoch = ++exportEpochRef.current;
     const requestId = `export-${Date.now()}-${runningSearch.generationSnapshot()}`;
     setExportRequestId(requestId);
@@ -6578,7 +6816,7 @@ export function SearchWorkspace({
       || job === null
       || phase !== "completed"
       || backendResultsExpired
-      || exportSourceTab === "patterns"
+      || (exportSourceTab === "patterns" && exportPatternSource === undefined)
     ) {
       setExportError("Complete a retained backend result before creating this export.");
       setExportRetryable(false);
@@ -6594,23 +6832,27 @@ export function SearchWorkspace({
     setServerExportJob(null);
     setExportStage("pending");
     try {
-      const created = await createServerExport(apiClient, bootstrap.response, {
-        searchJobId: job.searchJobId,
+      const exportIntent = {
+        searchJobId: exportPatternSource?.value.searchJobId ?? job.searchJobId,
+        source: exportPatternSource,
         format: exportFormat === "csv" ? "csv" : "json-lines",
         columns: exportFields,
         rowLimit: bootstrap.response.limits.maximumExportRows > 0n
           ? bootstrap.response.limits.maximumExportRows
           : undefined,
-        byteLimit: bootstrap.response.limits.maximumExportBytes > 0n
-          ? bootstrap.response.limits.maximumExportBytes
-          : undefined,
         csvHeaderMode: "field-names",
         jsonIntegerEncoding: "string",
+      } as const;
+      const clientRequestId = exportCreateAction.requestId({ ...exportIntent, sessionRevision: currentAdministratorSessionRevision() });
+      const created = await createServerExport(apiClient, bootstrap.response, {
+        ...exportIntent,
+        clientRequestId,
         signal: controller.signal,
       });
       if (created.status === "unavailable") {
         throw new Error("The selected export format is not available from this server.");
       }
+      exportCreateAction.complete(clientRequestId);
       if (controller.signal.aborted || exportEpochRef.current !== exportEpoch) return;
       serverExportJobRef.current = created.value;
       setServerExportJob(created.value);
@@ -6902,6 +7144,8 @@ export function SearchWorkspace({
   }
 
   async function switchBackendApp(appId: string | undefined, commitLocation = true) {
+    nearbyPreparation.invalidate();
+    setNearbyPreparing(false);
     if (!backendEnabled || isRunning) {
       if (isRunning) showToast("Cancel the active search before switching apps.", "warning");
       return;
@@ -7065,6 +7309,7 @@ export function SearchWorkspace({
   }
 
   function resultTabAvailable(tab: ResultTab): boolean {
+    if (backendEnabled && tab === "patterns") return retainedPatternContext !== null;
     if (!backendEnabled || !hasResultData) return true;
     return resultTabCompatibleWithKind(tab, backendResultKind);
   }
@@ -7208,6 +7453,11 @@ export function SearchWorkspace({
       {menu === "app" ? (
         <div className="floating-menu app-menu" role="menu">
           <span className="menu-label">{backendEnabled ? "Server apps" : "Your apps"}</span>
+          {backendEnabled && sharedAppCatalog.error !== null ? (
+            <button aria-label="Retry app catalog" role="menuitem" type="button" onClick={() => { void sharedAppCatalog.refresh(); }}>
+              <span><strong>Retry app catalog</strong><small>{sharedAppCatalog.error}</small></span>
+            </button>
+          ) : null}
           {backendEnabled
             ? backendBootstrapModel === null
               ? backendConnectionState === "error"
@@ -7223,6 +7473,7 @@ export function SearchWorkspace({
                     aria-busy={appSwitchingId === app.appId}
                     disabled={
                       isRunning
+                      || appCatalogActionsBlocked
                       || appSwitchingId !== null
                       || objectMutation !== null
                       || historyClearBusy
@@ -7299,6 +7550,15 @@ export function SearchWorkspace({
       </div>
     </nav>
   );
+
+  const saveDialogSource = activeSavedSearchId === null
+    ? undefined
+    : backendSavedSearchesRef.current.get(activeSavedSearchId);
+  const saveDialogAppId = saveDialogSource === undefined
+    ? backendHistoryRerunRef.current === null
+      ? backendBootstrapModel?.selectedAppId
+      : backendHistoryRerunRef.current.search.appId
+    : saveDialogSource.search.appId;
 
   const workspaceOverlays = (
     <>
@@ -7408,10 +7668,13 @@ export function SearchWorkspace({
         phase={phase}
         resultCountLabel={backendEnabled ? backendPrimaryCountLabel : "events"}
         resultCountPrefix={visibleCountPrefix}
+        saveAppAvailable={Boolean(saveDialogAppId)}
         saveDescription={saveDescription}
         saveDialogReturnFocus={saveDialogReturnFocusRef.current}
         saveName={saveName}
         savePurpose={savePurpose}
+        saveSharingAvailable={backendEnabled}
+        saveSharingScope={saveSharingScope}
         saveState={objectMutation?.kind === "save"
           ? { status: "pending" }
           : saveError === null
@@ -7500,6 +7763,7 @@ export function SearchWorkspace({
         onResetExport={resetExport}
         onSaveDescriptionChange={setSaveDescription}
         onSaveNameChange={setSaveName}
+        onSaveSharingScopeChange={setSaveSharingScope}
         onSaveSearch={saveSearch}
         onSavedSearchFilterChange={setSavedSearchFilter}
         onSavedSearchRenameNameChange={setSavedSearchRenameName}
@@ -7527,6 +7791,15 @@ export function SearchWorkspace({
     <ProductShell
       activeSection="search"
       apiBaseUrl={apiBaseUrl}
+      backendAppCatalog={backendEnabled ? {
+        actionsBlocked: appCatalogActionsBlocked,
+        apps: backendBootstrapModel?.apps ?? [],
+        error: sharedAppCatalog.error,
+        onRetry: () => { void sharedAppCatalog.refresh(); },
+        onSelect: (appId) => { void switchBackendApp(appId); },
+        selectedAppId: backendBootstrapModel?.selectedAppId ?? null,
+        state: sharedAppCatalog.state,
+      } : undefined}
       appName={workspaceAppName}
       appSwitcher={productAppSwitcher}
       dataMode={dataMode}
@@ -7645,6 +7918,15 @@ export function SearchWorkspace({
         onTimePickerSectionChange={setTimePickerSection}
         onTimeRangeChange={handleManualTimeRangeChange}
       />
+
+      {nearbyDraft !== null ? <NearbyContextEditor
+        draft={nearbyDraft}
+        onChange={setNearbyDraft}
+        onApply={applyNearbyDraft}
+        onDetach={() => { setNearbyDraft(null); setNearbyAppliedDraft(null); focusEditor(query.length); }}
+        busy={isRunning || nearbyPreparing || appCatalogActionsBlocked}
+      /> : null}
+      {nearbyPreparing ? <p role="status">Preparing nearby event context…</p> : null}
 
       <section className={`job-strip${searchIsClosed ? " is-closed" : ""}`} data-testid="job-strip" aria-label="Search job status" aria-busy={isRunning}>
         <div className="job-primary">
@@ -7768,7 +8050,7 @@ export function SearchWorkspace({
       <div className={`result-tabs${searchIsClosed ? " is-closed" : ""}`} role="tablist" aria-label="Search result views">
         {([
           ["events", "Events", backendEnabled && backendResultKind !== ResultSetKind.RESULT_SET_KIND_EVENTS ? "0" : `${visibleCountPrefix}${NUMBER_FORMAT.format(visibleEventCount)}`],
-          ["patterns", "Patterns", backendEnabled ? "0" : hasResultData ? String(patternRows.length) : "0"],
+          ["patterns", "Patterns", backendEnabled ? String(backendPatterns.coverage?.totalGroups ?? 0) : hasResultData ? String(patternRows.length) : "0"],
           ["statistics", "Statistics", backendEnabled && backendResultKind === ResultSetKind.RESULT_SET_KIND_EVENTS
             ? "0"
             : hasResultData
@@ -7875,20 +8157,27 @@ export function SearchWorkspace({
         </section>
       ) : null}
 
+      {!resultViewUnavailable && searchFailure === null && hasResultData && activeTab === "events" && patternMembers !== null ? (
+        <>
+          <PatternFilterChip pattern={patternMembers.pattern} onClear={() => { backendPatterns.controller?.clearPattern(); setExpandedEvents(new Set()); }} />
+          {patternMembers.error ? <p role="alert">{patternMembers.error} <button className="button button--link" type="button" onClick={() => { void backendPatterns.controller?.loadMembers(); }}>Retry pattern events</button></p> : null}
+        </>
+      ) : null}
+
       {!resultViewUnavailable && searchFailure === null && hasResultData && activeTab === "events" ? (
         <EventsPanel
           activeField={activeField}
           backendEnabled={backendEnabled}
-          backendHasNextPage={backendHasNextPage}
-          backendResultTotalExact={!backendEnabled || backendResultTotalExact}
-          backendResultTotalRows={backendEnabled ? backendResultTotalRows : pageableEventCount}
+          backendHasNextPage={patternMembers?.hasNextPage ?? backendHasNextPage}
+          backendResultTotalExact={patternMembers !== null || !backendEnabled || backendResultTotalExact}
+          backendResultTotalRows={patternMembers?.pattern.count ?? (backendEnabled ? backendResultTotalRows : pageableEventCount)}
           defaultQuery={defaultSearchQuery}
           draggingTimeline={draggingTimeline}
           eventDisplay={eventDisplay}
-          eventPage={eventPage}
-          eventPageLoading={eventPageLoading}
-          eventPageStart={eventPageStart}
-          eventPageSize={currentResultPageSize}
+          eventPage={patternMembers?.pageNumber ?? eventPage}
+          eventPageLoading={patternMembers?.loading ?? eventPageLoading}
+          eventPageStart={patternMembers?.pageStart ?? eventPageStart}
+          eventPageSize={patternMembers?.pageSize ?? currentResultPageSize}
           eventSortDirection={eventSortDirection}
           expandedEvents={expandedEvents}
           fieldFilter={fieldFilter}
@@ -7904,7 +8193,7 @@ export function SearchWorkspace({
           maximumEventPageSize={backendEnabled && backendBootstrapRef.current !== null
             ? backendMaximumPageSize(backendBootstrapRef.current)
             : null}
-          pageCount={eventPageCount}
+          pageCount={patternMembers ? Math.max(patternMembers.pageNumber, Math.ceil(patternMembers.pattern.count / patternMembers.pageSize)) : eventPageCount}
           pagedResultEvents={pagedResultEvents}
           previewTruncated={backendPreviewDisplay?.snapshot.truncated === true}
           resultEvents={resultEvents}
@@ -7922,11 +8211,15 @@ export function SearchWorkspace({
           onCollapsePage={collapseCurrentEventPage}
           onCopyPageRaw={() => void copyCurrentEventPageRaw()}
           onExpandPage={expandCurrentEventPage}
+          onFindNearby={backendEnabled ? (event) => { void findNearbyEvent(event); } : undefined}
+          nearbyUnavailableReason={backendEnabled && (!backendSnapshotRef || !backendAuthoritativeResultsReady || phase !== "completed")
+            ? "Nearby events require a completed retained snapshot. Rerun this search to enable them."
+            : nearbyPreparing ? "Preparing nearby context…" : null}
           onLoadMoreFields={() => void loadMoreBackendFields()}
           setActiveField={setActiveField}
           setEventDisplay={setEventDisplay}
-          setEventPage={changeEventPage}
-          setEventPageSize={changeEventPageSize}
+          setEventPage={patternMembers ? (page) => { setExpandedEvents(new Set()); void backendPatterns.controller?.loadMembers(typeof page === "function" ? page(patternMembers.pageNumber) : page); } : changeEventPage}
+          setEventPageSize={patternMembers ? (size) => { setExpandedEvents(new Set()); void backendPatterns.controller?.selectPattern(patternMembers.pattern, size); } : changeEventPageSize}
           setEventSortDirection={setEventSortDirection}
           setFieldFilter={setFieldFilter}
           setFieldsCollapsed={setFieldsCollapsed}
@@ -7950,6 +8243,21 @@ export function SearchWorkspace({
       {!resultViewUnavailable && searchFailure === null && hasResultData && activeTab === "patterns" ? (
         <PatternsPanel
           menu={menu}
+          coverage={backendEnabled ? backendPatterns.coverage : undefined}
+          loading={backendEnabled && backendPatterns.loading}
+          error={backendEnabled ? backendPatterns.error ?? (retainedPatternContext === null ? "Patterns require a completed retained event snapshot. Rerun this search to enable them." : null) : undefined}
+          pageNumber={backendEnabled ? backendPatterns.pageNumber : undefined}
+          pageSize={backendEnabled ? backendPatterns.pageSize : undefined}
+          hasNextPage={backendEnabled && backendPatterns.hasNextPage}
+          onPageChange={backendEnabled ? (page) => { void backendPatterns.controller?.loadGroups(page); } : undefined}
+          onRetry={backendEnabled ? () => { void backendPatterns.controller?.loadGroups(); } : undefined}
+          onViewPattern={backendEnabled ? (pattern) => {
+            if (backendWorkspaceTransitionBlocked()) return;
+            setExpandedEvents(new Set());
+            void backendPatterns.controller?.selectPattern(pattern);
+            navigateResultView("events");
+          } : undefined}
+          onExport={backendEnabled ? () => openExportDialog("patterns") : undefined}
           patternRows={patternRows}
           patternSensitivity={patternSensitivity}
           onMenuChange={setMenu}

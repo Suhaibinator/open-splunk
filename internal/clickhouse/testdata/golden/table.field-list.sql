@@ -4,7 +4,7 @@
 -- output_fields: host, source, sourcetype
 -- sparse_fields: false subset=false
 -- atomic_result: false
--- execution_authority_digest: f3173b621f1c1067324079949a7568a706d02608d3902e9c0f9651b4f1a137bc
+-- execution_authority_digest: 869fb6458ac320458e4380cb6caa4666a2e94cfada60798f86a0e9cb5bbcbe91
 -- args[0]: "tenant-1"
 -- args[1]: "main"
 -- args[2]: "2026-07-21 00:00:00.000000000"

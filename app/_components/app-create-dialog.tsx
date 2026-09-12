@@ -1,9 +1,10 @@
 "use client";
 
-import { type FormEvent, useMemo, useState } from "react";
+import { type FormEvent, useMemo, useRef, useState } from "react";
 
 import type { AppWorkspace } from "@/gen/ts/open_splunk/app";
-import { createOpenSplunkApiClient } from "@/lib/api";
+import { createOpenSplunkApiClient, invalidateAppCatalog } from "@/lib/api";
+import { BrowserCreateAction } from "@/lib/api/client-request-id";
 import { createErrorMessage } from "@/lib/error-message";
 import { AppFields } from "./app-fields";
 import { blankAppForm, definitionFromForm } from "../admin/admin-resource-data";
@@ -19,6 +20,7 @@ const appCreateError = createErrorMessage("The app could not be created.");
 
 export function AppCreateDialog({ apiBaseUrl, onClose, onCreated }: AppCreateDialogProps) {
   const client = useMemo(() => createOpenSplunkApiClient({ baseUrl: apiBaseUrl }), [apiBaseUrl]);
+  const createAction = useRef(new BrowserCreateAction());
   const [form, setForm] = useState(blankAppForm);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -29,8 +31,10 @@ export function AppCreateDialog({ apiBaseUrl, onClose, onCreated }: AppCreateDia
     setBusy(true);
     setError(null);
     try {
-      const response = await client.apps.create({ definition, clientRequestId: undefined });
+      const response = await client.apps.create({ definition, clientRequestId: createAction.current.requestId(definition) });
       if (response.app === undefined) throw new Error("The server returned an empty app workspace.");
+      createAction.current.complete();
+      invalidateAppCatalog(apiBaseUrl);
       onCreated(response.app);
     } catch (requestError) {
       setError(appCreateError(requestError));

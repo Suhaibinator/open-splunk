@@ -30,6 +30,7 @@ import {
   type OpenSplunkApiClient,
   type SystemBootstrapModel,
 } from "@/lib/api";
+import { BrowserCreateAction } from "@/lib/api/client-request-id";
 import { createErrorMessage } from "@/lib/error-message";
 
 import { FieldNote, fieldControlProps } from "../_components/field-validation";
@@ -102,12 +103,12 @@ import {
   requestTokenCreateLock,
   serializeTokenCreateGuard,
   subscribeTokenCreateGuard,
-  tokenFallsWithinCreateAttributionWindow,
   tokenIsTerminallySafe,
+  tokenCreateNeedsCatalogRecovery,
   tokenMatchesCreateDefinition,
-  tokenMatchesCreateMetadata,
   tokenPurposeLabel,
   tokenUsesHEC,
+  validateTokenCreateResponse,
   validCollectorId,
   validHECMetadataDefault,
   writeTokenCreateGuard,
@@ -584,6 +585,9 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     switch (tokenRecoveryStartupSnapshot.kind) {
       case "idle":
       case "preflight":
+      case "owned":
+        // The lock callback owns the live recovery state; an acquisition
+        // snapshot must not overwrite its catalog transition or receipt result.
         break;
       case "storage-unavailable":
         setTokenCreateGuardStorageState("unavailable");
@@ -1318,7 +1322,11 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     });
   }, [filter, indexes]);
 
+  const indexCreateAction = useRef(new BrowserCreateAction());
+
   function openIndexDialog() {
+    if (busy !== null) return;
+    indexCreateAction.current.complete();
     setIndexEditTarget(null);
     setIndexName("");
     setIndexDisplayName("");
@@ -1480,8 +1488,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     cancelIndexLoadMoreRequest();
     setBusy("create-index");
     try {
-      const response = await client.indexes.create({
-        definition: {
+      const definition = {
           name: normalized,
           displayName: indexDisplayName.trim() || normalized,
           description: indexDescription.trim() || undefined,
@@ -1491,10 +1498,13 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
           defaultSourcetype: policy.defaultSourcetype,
           limits: policy.limits,
           ingestionRateLimits: policy.ingestionRateLimits,
-        },
-        clientRequestId: undefined,
+        };
+      const response = await client.indexes.create({
+        definition,
+        clientRequestId: indexCreateAction.current.requestId(definition),
       });
       if (response.index === undefined) throw new Error("The server returned an empty index.");
+      indexCreateAction.current.complete();
       setIndexes((current) => [...current, response.index as Index].toSorted((left, right) =>
         (left.definition?.name ?? "").localeCompare(right.definition?.name ?? "")));
       setIndexTotalSize(null);
@@ -1637,18 +1647,37 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     }
   }
 
-  async function findTokenCreateCandidates(
-    recovery: TokenCreateRecovery,
-    signal?: AbortSignal,
-  ): Promise<IngestionToken[]> {
-    const currentTokens = await listTokensForCreateSafety(
-      client,
-      recovery.definition.name,
-      signal,
-    );
-    return currentTokens.filter((token) =>
-      !recovery.preexistingTokenIds.has(token.ingestionTokenId)
-      && tokenMatchesCreateMetadata(token, recovery.definition));
+  async function replayTokenCreate(recovery: TokenCreateRecovery) {
+    if (recovery.clientRequestId === undefined) {
+      throw new Error("This older request has no server receipt key. Review the token catalog and revoke any unusable token; matching names or timestamps cannot identify its outcome.");
+    }
+    const definition = recovery.definition;
+    const serverNowMs = authoritativeServerNowMs();
+    if (serverNowMs === undefined || serverNowMs - definition.armedServerTimeMs >= 7 * 24 * 60 * 60 * 1_000) {
+      throw new Error("The token receipt retry window has elapsed. Review the token catalog before starting a new request; the old request will not be resubmitted.");
+    }
+    const response = await client.ingestionTokens.create({
+      clientRequestId: recovery.clientRequestId,
+      definition: {
+        name: definition.name,
+        description: definition.description || undefined,
+        constraints: {
+          allowedIndexNames: definition.allowedIndexNames,
+          allowedHostRegexes: definition.allowedHostRegexes ?? [],
+          allowedSourceRegexes: definition.allowedSourceRegexes ?? [],
+          boundCollectorId: definition.boundCollectorId || undefined,
+        },
+        expiresAt: definition.expiresAt,
+        ingestionRateLimits: {
+          maxEventsPerSecond: definition.maxEventsPerSecond,
+          maxUncompressedBytesPerSecond: definition.maxUncompressedBytesPerSecond,
+        },
+        purpose: definition.purpose,
+        hecProfile: definition.hecProfile,
+      },
+    });
+    const token = validateTokenCreateResponse(response, definition);
+    return { token, plaintext: response.replayed ? null : response.plaintextToken };
   }
 
   function scheduleNextTokenRecoveryCheck(delayMs?: number) {
@@ -1662,147 +1691,33 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     tokenRecoveryPollAttemptRef.current = 0;
   }
 
-  function applyTokenCreateCandidates(
+  function applyTokenCreateReceipt(
     recovery: TokenCreateRecovery,
-    candidates: IngestionToken[],
+    token: IngestionToken,
+    plaintext: string | null,
   ) {
     if (!requireTokenGuardOwnership(recovery)) return;
+    stopAutomaticTokenRecovery();
     setTokenRecoveryLastCheckedAt(Date.now());
-    for (const candidate of candidates) storeTokenSnapshot(candidate);
-    if (candidates.some((candidate) =>
-      !tokens.some((token) => token.ingestionTokenId === candidate.ingestionTokenId))) {
-      setTokenTotalSize(null);
-      setTokenTotalSizeExact(false);
-    }
-    const unsafeTimingOutliers = candidates.filter((candidate) =>
-      !tokenIsTerminallySafe(candidate)
-      && !tokenFallsWithinCreateAttributionWindow(candidate, recovery.definition));
-    if (unsafeTimingOutliers.length > 0) {
-      stopAutomaticTokenRecovery();
-      tokenRecoveryFirstZeroObservationRef.current = null;
-      const outlierRecovery: TokenCreateRecovery = {
-        ...recovery,
-        candidates,
-        reconciliationError: `${unsafeTimingOutliers.length.toLocaleString()} nonterminal exact post-baseline token match${unsafeTimingOutliers.length === 1 ? " is" : "es are"} outside the expected request window. Automatic safe clearing is blocked until every possible live credential is reviewed or revoked.`,
-      };
-      if (!persistTokenCreateGuard(outlierRecovery, null)) return;
-      setTokenCreateRecovery(outlierRecovery);
-      setIssuedToken(null);
-      setIssuedTokenRecovery(null);
-      setTokenSecret(null);
-      setToast({
-        message: "A matching token falls outside the expected request timing window. It remains visible and blocks automatic recovery clearing.",
-        kind: "warning",
-      });
-      return;
-    }
-    const terminalCandidates = candidates.filter(tokenIsTerminallySafe);
-    const attributedTerminalCandidates = terminalCandidates.filter((candidate) =>
-      tokenFallsWithinCreateAttributionWindow(candidate, recovery.definition));
-    const unresolvedCandidates = candidates.filter((candidate) =>
-      !tokenIsTerminallySafe(candidate));
-    const reconciledIds = new Set(recovery.preexistingTokenIds);
-    for (const candidate of terminalCandidates) reconciledIds.add(candidate.ingestionTokenId);
-    const nextRecovery: TokenCreateRecovery = {
-      ...recovery,
-      preexistingTokenIds: reconciledIds,
-    };
-    if (
-      unresolvedCandidates.length === 0
-      && (
-        attributedTerminalCandidates.length > 0
-        || recovery.confirmedRevokedTokenIds.size > 0
-      )
-    ) {
-      stopAutomaticTokenRecovery();
-      tokenRecoveryFirstZeroObservationRef.current = null;
-      if (!clearTokenCreateGuard(recovery.attemptId, recovery.ownerId)) {
-        setToast({
-          message: "All identified tokens are safe, but the browser could not clear its reload guard. Token generation remains locked.",
-          kind: "warning",
-        });
-        return;
-      }
+    storeTokenSnapshot(token);
+    if (tokenIsTerminallySafe(token)) {
+      if (!clearTokenCreateGuard(recovery.attemptId, recovery.ownerId)) return;
       setTokenCreateRecovery(null);
       setIssuedToken(null);
       setIssuedTokenRecovery(null);
       setTokenSecret(null);
       setModal(null);
-      setToast({
-        message: "All identified tokens from the uncertain create request are revoked or expired. Token generation is safe again.",
-        kind: "success",
-      });
+      setToast({ kind: "success", message: "The token from this request is revoked or expired. You can generate a new token with a new request key." });
       return;
     }
-    if (
-      unresolvedCandidates.length === 1
-      && unresolvedCandidates[0].state !== IngestionTokenState.INGESTION_TOKEN_STATE_UNSPECIFIED
-      && unresolvedCandidates[0].state !== IngestionTokenState.UNRECOGNIZED
-    ) {
-      stopAutomaticTokenRecovery();
-      tokenRecoveryFirstZeroObservationRef.current = null;
-      const candidate = unresolvedCandidates[0];
-      if (!persistTokenCreateGuard(nextRecovery, candidate.ingestionTokenId)) return;
-      setTokenCreateRecovery(null);
-      setIssuedToken(candidate);
-      setIssuedTokenRecovery(nextRecovery);
-      setTokenSecret(null);
-      setToast({
-        message: tokenCanBeRevoked(candidate)
-          ? `A newly created token (${candidate.tokenPrefix}) was identified, but its one-time secret was lost. Revoke it before leaving.`
-          : `A newly created token (${candidate.tokenPrefix}) was identified without its secret and is already ${tokenStateLabel(candidate.state).toLowerCase()}.`,
-        kind: "warning",
-      });
-      return;
-    }
-    if (unresolvedCandidates.length > 0) {
-      stopAutomaticTokenRecovery();
-      tokenRecoveryFirstZeroObservationRef.current = null;
-    }
-    const unresolvedRecovery: TokenCreateRecovery = {
-      ...nextRecovery,
-      candidates: unresolvedCandidates,
-      reconciliationError: null,
-    };
-    if (!persistTokenCreateGuard(unresolvedRecovery, null)) return;
-    setTokenCreateRecovery(unresolvedRecovery);
-    if (unresolvedCandidates.length === 0) {
-      const serverNowMs = authoritativeServerNowMs();
-      const decision = serverNowMs === undefined
-        ? { kind: "pending" as const, firstObservation: null }
-        : tokenRecoverySnapshotDecision({
-            candidateCount: unresolvedCandidates.length,
-            attemptId: recovery.attemptId,
-            serverNowMs,
-            quiescenceDeadlineMs: tokenRecoveryQuiescenceDeadline(recovery.definition),
-            previousObservation: tokenRecoveryFirstZeroObservationRef.current,
-          });
-      tokenRecoveryFirstZeroObservationRef.current = decision.firstObservation;
-      if (decision.kind === "clear") {
-        if (!clearTokenCreateGuard(recovery.attemptId, recovery.ownerId)) return;
-        setTokenCreateRecovery(null);
-        setIssuedToken(null);
-        setIssuedTokenRecovery(null);
-        setTokenSecret(null);
-        setModal((current) => current === "create-token" ? null : current);
-        setToast({
-          message: `No token named “${recovery.definition.name}” was created. Token generation is available again.`,
-          kind: "success",
-        });
-        return;
-      }
-      scheduleNextTokenRecoveryCheck(
-        decision.kind === "confirm"
-          ? TOKEN_CREATE_ZERO_CONFIRMATION_INTERVAL_MS
-          : undefined,
-      );
-    }
-    setToast({
-      message: unresolvedCandidates.length === 0
-        ? `Open Splunk is still checking whether token “${recovery.definition.name}” was created. You can keep using the rest of the app.`
-        : `${unresolvedCandidates.length.toLocaleString()} new matching tokens prevent safe automatic identification. Review the possible tokens and check again; do not submit another create request.`,
-      kind: "warning",
-    });
+    if (!persistTokenCreateGuard(recovery, token.ingestionTokenId)) return;
+    setTokenCreateRecovery(null);
+    setIssuedToken(token);
+    setIssuedTokenRecovery(recovery);
+    setTokenSecret(plaintext);
+    setToast({ kind: plaintext === null ? "warning" : "success", message: plaintext === null
+      ? "This request already created the token. Its one-time secret is unavailable. Revoke this token, then generate a new token."
+      : "The token was created. Copy its one-time secret before leaving." });
   }
 
   async function reconcileTokenCreateRecovery(
@@ -1811,15 +1726,39 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
   ) {
     if (tokenRecoveryCheckingRef.current) return;
     if (!requireTokenGuardOwnership(recovery)) return;
+    if (recovery.clientRequestId !== undefined && authoritativeServerNowMs() === undefined) {
+      setTokenRecoveryNextCheckAt(Date.now() + 1_000);
+      return;
+    }
+    if (tokenCreateNeedsCatalogRecovery(recovery, authoritativeServerNowMs())) {
+      if (normalizedApiBaseUrl === null) return;
+      let raw: string | null;
+      try {
+        raw = readTokenCreateGuardRaw(normalizedApiBaseUrl);
+      } catch (error) {
+        setTokenCreateGuardStorageState("unavailable");
+        setTokenCreateGuardStorageError(errorMessage(error));
+        return;
+      }
+      if (raw === null) return;
+      const review: UnreadableTokenCreateRecovery = {
+        attemptId: recovery.attemptId, raw, observedServerTimeMs: null,
+        candidates: [], reconciliationError: "This request has no usable receipt key. Review the full token catalog without resubmitting the create request.",
+      };
+      setTokenCreateRecovery(null);
+      setUnreadableTokenCreateRecovery(review);
+      await reconcileUnreadableTokenCreateRecovery(review);
+      return;
+    }
     const operationGeneration = inheritedOperationGeneration
       ?? beginTokenRecoveryOperation();
     setTokenRecoveryNextCheckAt(null);
     tokenRecoveryCheckingRef.current = true;
     setTokenRecoveryChecking(true);
     try {
-      const candidates = await findTokenCreateCandidates(recovery);
+      const receipt = await replayTokenCreate(recovery);
       if (!tokenRecoveryOperationIsCurrent(operationGeneration, recovery)) return;
-      applyTokenCreateCandidates(recovery, candidates);
+      applyTokenCreateReceipt(recovery, receipt.token, receipt.plaintext);
     } catch (error) {
       if (!tokenRecoveryOperationIsCurrent(operationGeneration, recovery)) return;
       const failedRecovery: TokenCreateRecovery = {
@@ -1951,7 +1890,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
         setUnreadableTokenCreateRecovery({
           ...recovery,
           candidates,
-          reconciliationError: "Every nonterminal token must become revoked or expired because the damaged record contains no safe attribution data.",
+          reconciliationError: "Every nonterminal token must become revoked or expired because this record has no usable receipt that identifies its token.",
         });
         return;
       }
@@ -1984,7 +1923,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
         if (!clearUnreadableTokenCreateGuard(nextRecovery)) return;
         setModal((current) => current === "create-token" ? null : current);
         setToast({
-          message: "The damaged token safety record was reconciled. No nonterminal token remained, so token generation is available again.",
+          message: "The saved token safety record was reconciled. No nonterminal token remained, so token generation is available again.",
           kind: "success",
         });
         return;
@@ -2092,9 +2031,9 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       if (!persistTokenCreateGuard(nextRecovery, null)) return;
       setTokenCreateRecovery(nextRecovery);
       try {
-        const candidates = await findTokenCreateCandidates(nextRecovery);
+        const receipt = await replayTokenCreate(nextRecovery);
         if (!tokenRecoveryOperationIsCurrent(operationGeneration, nextRecovery)) return;
-        applyTokenCreateCandidates(nextRecovery, candidates);
+        applyTokenCreateReceipt(nextRecovery, receipt.token, receipt.plaintext);
       } catch (error) {
         if (!tokenRecoveryOperationIsCurrent(operationGeneration, nextRecovery)) return;
         const failedRecovery: TokenCreateRecovery = {
@@ -2336,6 +2275,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
         candidates: [],
         reconciliationError: null,
       };
+      recovery.clientRequestId = recovery.attemptId;
       tokenGuardLockOperationAttemptRef.current = recovery.attemptId;
       if (!persistTokenCreateGuard(recovery, null, { allowCreate: true })) {
         throw new Error("The browser could not persist the non-secret token creation safety record.");
@@ -2370,7 +2310,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
           purpose: definition.purpose,
           hecProfile: definition.hecProfile,
         },
-        clientRequestId: undefined,
+        clientRequestId: recovery.clientRequestId,
       });
       // The transport call has synchronously begun before the guard is updated
       // with its true dispatch mapping. If the tab dies first, the pre-armed
@@ -2389,23 +2329,12 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
         requestStartedMonotonicMs,
         "settled-response",
       );
+      const createdToken = validateTokenCreateResponse(response, definition);
       if (
-        response.ingestionToken === undefined
-        || response.ingestionToken.ingestionTokenId.length === 0
-        || response.ingestionToken.version !== 1n
-        || response.ingestionToken.state !== IngestionTokenState.INGESTION_TOKEN_STATE_ACTIVE
-        || response.ingestionToken.tokenPrefix.length === 0
-        || response.plaintextToken.length === 0
-        || !response.plaintextToken.startsWith(response.ingestionToken.tokenPrefix)
-      ) {
-        throw new Error("The server response did not satisfy the one-time token creation contract.");
-      }
-      const createdToken = response.ingestionToken;
-      if (
-        recovery.preexistingTokenIds.has(createdToken.ingestionTokenId)
+        !response.replayed && (recovery.preexistingTokenIds.has(createdToken.ingestionTokenId)
         || createdToken.createdAt === undefined
         || Number.isNaN(createdToken.createdAt.valueOf())
-        || !tokenMatchesCreateDefinition(createdToken, definition)
+        || !tokenMatchesCreateDefinition(createdToken, definition))
       ) {
         throw new Error("The server response did not match the token creation request.");
       }
@@ -2421,7 +2350,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       setTokenCreateRecovery(null);
       setIssuedToken(createdToken);
       setIssuedTokenRecovery(recovery);
-      setTokenSecret(response.plaintextToken);
+      setTokenSecret(response.replayed ? null : response.plaintextToken);
     } catch (error) {
       if (
         !requestDispatched
@@ -3043,6 +2972,12 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
   });
 
   useEffect(() => {
+    if (serverClockAnchor !== null && tokenCreateRecoveryRef.current?.clientRequestId !== undefined) {
+      runScheduledTokenRecovery();
+    }
+  }, [serverClockAnchor]);
+
+  useEffect(() => {
     if (
       tokenRecoveryNextCheckAt === null
       || tokenRecoveryOwnership !== "owned"
@@ -3140,7 +3075,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
         ? "The browser reload-safety check is still running."
         : `The browser cannot persist the non-secret token safety record. Token generation is disabled.${tokenCreateGuardStorageError === null ? "" : ` ${tokenCreateGuardStorageError}`}`
       : unreadableTokenCreateRecovery !== null
-        ? `A damaged token safety record is being reconciled. Token generation remains paused, but the rest of Administration is available.${unreadableTokenCreateRecovery.reconciliationError === null ? "" : ` Latest check: ${unreadableTokenCreateRecovery.reconciliationError}`}`
+        ? `A saved token safety record is being reconciled. Token generation remains paused, but the rest of Administration is available.${unreadableTokenCreateRecovery.reconciliationError === null ? "" : ` Latest check: ${unreadableTokenCreateRecovery.reconciliationError}`}`
       : tokenCreateRecovery !== null
         ? `Open Splunk is checking whether token “${tokenCreateRecovery.definition.name}” was created. Token generation remains paused, but the rest of Administration is available.${tokenCreateRecovery.reconciliationError === null ? "" : ` Latest check: ${tokenCreateRecovery.reconciliationError}`}`
       : issuedToken !== null
@@ -3577,7 +3512,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       {modal === "create-token" && tokenRecoveryOpen ? (
         <Modal
           title={unreadableTokenCreateRecovery !== null
-            ? "Resolve damaged token recovery"
+            ? "Review unresolved token request"
             : "Resolve token creation"}
           subtitle="New token creation is paused while Open Splunk checks; the rest of the app remains available."
           dismissible={!tokenDialogHardBlocked}
@@ -3618,7 +3553,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
                 <div>
                   <strong>{unreadableTokenCreateRecovery === null
                     ? "Open Splunk could not confirm token creation"
-                    : "The saved recovery record is damaged"}</strong>
+                    : "The saved request has no usable receipt"}</strong>
                   <p>{unreadableTokenCreateRecovery === null && tokenCreateRecovery !== null
                     ? `We couldn’t confirm whether the server created token “${tokenCreateRecovery.definition.name}.” New token creation is paused while Open Splunk checks. You can keep using the rest of the app.`
                     : "The record no longer contains enough attribution data to identify one create request. Open Splunk must conservatively review every nonterminal ingestion token. You can keep using the rest of the app."}</p>
@@ -3638,14 +3573,14 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
               )}
               <div className="token-recovery-summary">
                 <strong>{tokenCreateRecovery === null
-                  ? "Damaged-record safety review"
+                  ? "Saved-request safety review"
                   : `Checking token “${tokenCreateRecovery.definition.name}”`}</strong>
                 {tokenCreateRecovery === null ? (
-                  <p>All nonterminal tokens listed below must become revoked or expired before two complete zero-result snapshots can safely remove the damaged guard.</p>
+                  <p>All nonterminal tokens listed below must become revoked or expired before two complete zero-result snapshots can safely remove the saved guard.</p>
                 ) : (
                   <p>Request dispatched {tokenCreateRecovery.definition.dispatchedServerTimeMs === null
                     ? "at an unknown server time"
-                    : formatDate(new Date(tokenCreateRecovery.definition.dispatchedServerTimeMs))}. Two complete zero-result snapshots after the safety window are required before Open Splunk concludes that no token was created.</p>
+                    : formatDate(new Date(tokenCreateRecovery.definition.dispatchedServerTimeMs))}. The browser retries the same request key to read its exact server receipt. A token name or creation time never identifies the request outcome.</p>
                 )}
                 <p>
                   Last successful check: {tokenRecoveryLastCheckedAt === null ? "not yet" : formatDate(new Date(tokenRecoveryLastCheckedAt))}.
@@ -3657,10 +3592,10 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
                 </p>
               </div>
               {tokenCreateRecovery === null || tokenCreateRecovery.candidates.length === 0 ? null : (
-                <ul className="token-recovery-list" aria-label="Possible tokens created by the uncertain request">
+                <ul className="token-recovery-list" aria-label="Tokens retained in the recovery record">
                   {tokenCreateRecovery.candidates.map((candidate) => (
                     <li key={candidate.ingestionTokenId}>
-                      <div><strong>{candidate.name}</strong><code>{candidate.tokenPrefix}</code><small>Created {formatDate(candidate.createdAt)}</small>{tokenFallsWithinCreateAttributionWindow(candidate, tokenCreateRecovery.definition) ? null : <small className="table-warning-detail">Outside expected request window · manual review required</small>}</div>
+                      <div><strong>{candidate.name}</strong><code>{candidate.tokenPrefix}</code><small>Created {formatDate(candidate.createdAt)}</small></div>
                       <StatusLabel tone={statusTone(tokenStateLabel(candidate.state))}>{tokenStateLabel(candidate.state)}</StatusLabel>
                       <button
                         className="button button--danger"

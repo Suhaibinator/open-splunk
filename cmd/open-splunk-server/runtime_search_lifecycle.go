@@ -12,6 +12,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgepreview"
+	"github.com/Suhaibinator/open-splunk/internal/patterns"
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
 	"github.com/Suhaibinator/open-splunk/internal/searchartifacts"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
@@ -38,6 +39,7 @@ type runtimeSearchLifecycleConfig struct {
 	auditAppender           runtimeSearchAuditAppender
 	featureOperations       *runtimeFeatureOperations
 	exportSettings          exportRuntimeSettings
+	exportJournal           exportjobs.Journal
 	masterKeyPath           string
 	searchArtifactDirectory string
 	exportArtifactDirectory string
@@ -57,6 +59,7 @@ type runtimeSearchLifecycle struct {
 	preview               *knowledgepreview.Service
 	inspection            *runtimeSearchInspection
 	exports               *exportjobs.Manager
+	patterns              *patterns.Service
 	analysis              *runtimeSearchAnalysis
 	webSocket             *searchws.Service
 	logger                *zap.Logger
@@ -64,6 +67,7 @@ type runtimeSearchLifecycle struct {
 	closeWebSocket        func() error
 	closeAnalysis         func() error
 	closeExports          func() error
+	closePatterns         func() error
 	closeInspection       func() error
 	closeSearchJobs       func() error
 	closeScheduledReports func()
@@ -129,6 +133,15 @@ func newRuntimeSearchLifecycle(config runtimeSearchLifecycleConfig) (_ *runtimeS
 		return nil, fmt.Errorf("open durable search artifacts: %w", err)
 	}
 	lifecycle.closeSearchArtifacts = lifecycle.artifacts.Close
+	lifecycle.patterns, err = newRuntimePatternService(config.ctx, config.controlDB, config.masterKeyPath, lifecycle.artifacts)
+	if err != nil {
+		return nil, err
+	}
+	lifecycle.closePatterns = func() error {
+		ctx, cancel := context.WithTimeout(context.Background(), lifecycle.closeTimeout)
+		defer cancel()
+		return lifecycle.patterns.Close(ctx)
+	}
 	lifecycle.scheduledReports, err = newRuntimeScheduledReportLifecycle()
 	if err != nil {
 		return nil, err
@@ -182,9 +195,12 @@ func newRuntimeSearchLifecycle(config runtimeSearchLifecycleConfig) (_ *runtimeS
 	if err != nil {
 		return nil, fmt.Errorf("create export re-execution source: %w", err)
 	}
-	lifecycle.exports, err = exportjobs.New(config.exportSettings.managerConfig(
+	exportConfig := config.exportSettings.managerConfig(
 		exportSource, config.exportArtifactDirectory, newExportCleanupErrorReporter(config.logger),
-	))
+	)
+	exportConfig.Journal = config.exportJournal
+	exportConfig.PatternSource = lifecycle.patterns
+	lifecycle.exports, err = exportjobs.New(exportConfig)
 	if err != nil {
 		return nil, fmt.Errorf("create export manager: %w", err)
 	}
@@ -234,6 +250,11 @@ func (lifecycle *runtimeSearchLifecycle) Close() {
 		if lifecycle.closeExports != nil {
 			if err := lifecycle.closeExports(); err != nil {
 				logger.Warn("close exports", zap.Error(err))
+			}
+		}
+		if lifecycle.closePatterns != nil {
+			if err := lifecycle.closePatterns(); err != nil {
+				logger.Warn("close retained pattern service", zap.Error(err))
 			}
 		}
 		if lifecycle.closeInspection != nil {

@@ -102,6 +102,24 @@ OPEN_SPLUNK_BACKEND_INTEGRATION=1 go test ./integration -run '^TestBackendVertic
 Set `OPEN_SPLUNK_BROWSER_EXECUTABLE` to use a specific Chromium-family browser
 instead of Playwright's pinned download.
 
+Enable the completed-feature browser flow against the same compiled server and
+real ClickHouse fixture, and repeat the complete vertical three times:
+
+```sh
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_FEATURE_COMPLETION_INTEGRATION=1 \
+  go test ./integration -run '^TestBackendVertical$' -count=3 -timeout=25m -v
+```
+
+This additionally checks the 10,000-row retained Patterns relation and its exact
+summary/member exports, Nearby search and Back navigation, Private/Global/App
+saved-search scope persistence, the HEC settings surface, and bundled Help
+navigation/search. It uses the production APIs without mocked responses. The
+separate HEC vertical and offline Help browser suite cover enabled ingestion
+and Help with backend requests blocked. CI enables this flow in its backend
+vertical job and retains its failure screenshots alongside the other browser
+artifacts; administrator-session traces are disabled.
+
 The default image is
 `clickhouse/clickhouse-server:26.7.5.10-alpine@sha256:0a45b864c73322d4360dea1973ee9b77f29c51af1242ad2d47409908071fa56e`.
 Set `OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE` to exercise another digest-pinned image
@@ -196,6 +214,41 @@ OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
     -run '^(TestSPLSemanticInvariantsAgainstClickHouse|TestGradeThisCorpusAgainstClickHouse|TestPipelineCommandsPreserveUntouchedSemanticBytesThroughManagerAgainstClickHouse)$' \
     -count=1 -timeout=15m -v
 ```
+
+The controlled ordinary-search qualification accepts two already-built server
+binaries from the same pinned release toolchain. Build the baseline at
+`da8415f3bf4ad115da0a0b3941e5c333392ae3b9` and the clean candidate before reserving
+an idle host. It verifies their identities, uses one immutable 10,001-row
+ClickHouse fixture, and records seven alternating pairs per admission mode with
+exact output and error parity. The `unkeyed` mode omits request keys on both
+binaries. The `browser_behavior` mode compares the baseline's unkeyed browser
+admission with a fresh unique request key on every candidate admission; key
+generation occurs outside the timer and replayed receipts fail qualification.
+Median and p95 regressions must each remain below 10% in both modes:
+
+```sh
+OPEN_SPLUNK_NEARBY_SEARCH_QUALIFICATION=1 \
+OPEN_SPLUNK_NEARBY_BASELINE_SERVER=/absolute/baseline/open-splunk-server \
+OPEN_SPLUNK_NEARBY_CANDIDATE_SERVER=/absolute/candidate/open-splunk-server \
+OPEN_SPLUNK_NEARBY_CANDIDATE_REVISION="$(git rev-parse HEAD)" \
+  go test ./integration -run '^TestNearbyOrdinarySearchQualification$' \
+    -count=1 -timeout=15m -v
+```
+
+The output includes a `NEARBY_SEARCH_QUALIFICATION` JSON report for each mode,
+with raw samples, fixture/output digests, binary hashes, and toolchain metadata. The
+separate retained-Patterns qualification records seven cold/cached pairs,
+resource accounting and process RSS, with cold p95 at most 2 seconds, cached
+p95 at most 100 milliseconds, and cancellation at most 250 milliseconds:
+
+```sh
+OPEN_SPLUNK_PATTERNS_QUALIFICATION=1 \
+OPEN_SPLUNK_PATTERNS_QUALIFICATION_OUTPUT=/absolute/patterns-qualification.json \
+  go test ./internal/patterns -run '^TestPatternQualification$' -count=1 -v
+```
+
+Both timing gates are opt-in controlled-host qualification; ordinary unit tests
+do not enforce machine-dependent latency targets.
 
 For arithmetic and membership aggregation baselines, the existing
 `BenchmarkAuthoredExpressionExecution` uses 100,000 ingested events by default:
@@ -486,3 +539,52 @@ them to be consolidated.
 `scripts/safety-net.test.mjs` guards the net itself: every unit test file must
 appear in the hardcoded list in `scripts/test-frontend.mjs`, and every listed
 test file must still exist.
+
+## Disposable deployment recovery drill
+
+The opt-in `TestDeploymentRecoveryDrill` runs the actual server image using
+[`docker-compose.recovery.yaml`](../deploy/docker-compose.recovery.yaml) and its
+[restore overlay](../deploy/docker-compose.recovery-restore.yaml). It owns a
+unique Compose project, temporary credentials, TLS identities and fresh target
+volumes, and removes only its exact owned resources. It requires Linux, Docker
+Compose v2, the repository Go/Node toolchains, a prepared backend `out/` release
+manifest, and a server image built from that same clean committed source/release identity.
+The wrapper rejects the ambiguous `development` identity and uncommitted source.
+Run this after building the backend UI and local server image using the release
+or OCI workflows described in [releasing](../docs/releasing.md):
+
+```sh
+OPEN_SPLUNK_DEPLOYMENT_RECOVERY_DRILL=1 \
+OPEN_SPLUNK_RECOVERY_DRILL_SERVER_IMAGE=open-splunk-server:recovery-test \
+  scripts/test-deployment-recovery.sh
+```
+
+The wrapper compares the image and source release identities, builds a static
+**test-only** helper with the same embedded manifest, and runs the drill. The
+pinned ClickHouse image is the one in the shipped recovery Compose file. No
+production crash flag is added. It seeds an app, index, saved search, HEC token,
+three events and a retained terminal result through the real HTTPS APIs, then
+uses the real pending-attempt store for a stopped-server pending fixture.
+It executes the production backup and offline verify commands, switches to
+fresh SQLite/ClickHouse volumes with a shared read-only archive, and kills a
+helper process after canonical receipt publication but before control-plane
+publication. The identical production restore retry must preserve both the
+receipt/physical identity and the count of native RESTORE operations. Restart
+must preserve authenticated catalog/event/retained-result readback and mark
+the pending attempt Interrupted. The source and restore volume names are
+tracked separately so cleanup also removes source volumes displaced by the
+overlay, without pruning unrelated resources.
+
+CI runs this drill in the release OCI job after building the native images and
+backend UI from the same commit. It compares the image's embedded UI identity
+and digest with the prepared manifest before compiling the helper. The separate
+ARM64 image reproducibility checks run afterward.
+
+The lower-level native recovery privilege/archive/state-machine qualification
+remains independently available:
+
+```sh
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  go test ./cmd/open-splunk-server \
+  -run '^TestDeploymentNativeRecoveryClickHouseLifecycle$' -count=1 -timeout=12m -v
+```

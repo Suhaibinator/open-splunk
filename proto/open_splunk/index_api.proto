@@ -17,6 +17,8 @@ message CreateIndexRequest {
 
 message CreateIndexResponse {
   Index index = 1;
+  // True when this request resolves an earlier accepted logical action.
+  bool replayed = 2;
 }
 
 // POST /api/indexes/get

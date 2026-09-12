@@ -2056,7 +2056,9 @@ const MODAL_MODULE = "app/_components/modal";
 const FEATURE_PREFIXES = [
   "alerts-",
   "analytics-",
+  "help-",
   "operations-",
+  "nearby-context",
   "reports-",
   "visualization-",
   "workspace-dialog-",

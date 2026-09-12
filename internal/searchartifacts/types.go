@@ -158,17 +158,10 @@ type Stats struct {
 	ActiveLeases  uint64
 }
 
-// ResultLease is a detached immutable snapshot. Existing leases remain usable
-// after the exact expiry deadline; new acquisitions do not.
-type ResultLease interface {
-	Schema() searchjobs.Schema
-	RowCount() uint64
-	RowCountExact() bool
-	ResultsTruncated() bool
-	Generation() uint64
-	Next(context.Context) (searchjobs.ResultRow, bool, error)
-	Close() error
-}
+// ResultLease is the shared detached immutable snapshot contract. Existing
+// leases remain usable after the exact expiry deadline; new acquisitions do
+// not.
+type ResultLease = searchjobs.ResultLease
 
 // SeekableResultLease extends a retained lease with bounded sparse-index
 // seeking. Offset is a zero-based row position and may equal RowCount.

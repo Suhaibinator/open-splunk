@@ -13,10 +13,122 @@ import (
 	"testing"
 	"time"
 
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"gorm.io/gorm"
 )
 
 var errTestAppAuditAppend = errors.New("test app audit append failure")
+
+func TestAuditedAppCatalogIdempotentCreateReplaysCurrentMetadata(t *testing.T) {
+	db := openTestDB(t)
+	base := time.Date(2026, time.September, 12, 12, 0, 0, 0, time.UTC)
+	var clockCalls atomic.Int64
+	catalog := newAppAuditTestCatalog(
+		t, db,
+		func() time.Time { return base.Add(time.Duration(clockCalls.Add(1)) * time.Microsecond) },
+		func() (string, error) { return appAuditTestID(90), nil },
+	)
+	appender := &recordingAppMutationAuditAppender{}
+	audited := newTestAuditedAppCatalog(t, catalog, appender)
+	scope := AppAccessScope{TenantID: "tenant-a"}
+	definition := appDefinitionWithIndexes("idempotent-app")
+	requestID := "app request 0001"
+	intent, err := requestidempotency.NewIntent(
+		"tenant-a", "browser", "owner-a", requestidempotency.RouteCreateApp,
+		requestID,
+		&opensplunk.CreateAppRequest{Definition: &opensplunk.AppDefinition{Slug: "idempotent-app"}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, replayed, err := audited.CreateAppIdempotent(t.Context(), scope, definition, intent)
+	if err != nil || replayed {
+		t.Fatalf("first create = (%+v, %t, %v)", created, replayed, err)
+	}
+	updatedDefinition := created.Definition
+	updatedDefinition.DisplayName = "Current idempotent app"
+	updated, err := audited.UpdateApp(
+		t.Context(), scope, AppSelector{AppID: created.ID}, created.Version, updatedDefinition,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, replayed, err := audited.CreateAppIdempotent(t.Context(), scope, definition, intent)
+	if err != nil || !replayed || current.Version != updated.Version ||
+		current.Definition.DisplayName != updated.Definition.DisplayName {
+		t.Fatalf("replay = (%+v, %t, %v), want current %+v", current, replayed, err, updated)
+	}
+	if calls := appender.snapshot(); len(calls) != 2 {
+		t.Fatalf("audit calls after replay = %d, want create and update only", len(calls))
+	}
+	changed := intent
+	changed.RequestSHA256[0] ^= 0xff
+	if _, _, err := audited.CreateAppIdempotent(t.Context(), scope, definition, changed); !errors.Is(err, requestidempotency.ErrConflict) {
+		t.Fatalf("changed intent error = %v", err)
+	}
+}
+
+func TestAuditedAppCatalogParallelIdempotentCreatesConverge(t *testing.T) {
+	db := openTestDB(t)
+	base := time.Date(2026, time.September, 12, 13, 0, 0, 0, time.UTC)
+	var clockCalls atomic.Int64
+	var idCalls atomic.Int64
+	catalog := newAppAuditTestCatalog(
+		t, db,
+		func() time.Time { return base.Add(time.Duration(clockCalls.Add(1)) * time.Microsecond) },
+		func() (string, error) { return appAuditTestID(100 + int(idCalls.Add(1))), nil },
+	)
+	appender := &recordingAppMutationAuditAppender{}
+	audited := newTestAuditedAppCatalog(t, catalog, appender)
+	scope := AppAccessScope{TenantID: "tenant-a"}
+	definition := appDefinitionWithIndexes("parallel-idempotent-app")
+	intent, err := requestidempotency.NewIntent(
+		"tenant-a", "browser", "owner-a", requestidempotency.RouteCreateApp,
+		"parallel app request 01",
+		&opensplunk.CreateAppRequest{Definition: &opensplunk.AppDefinition{Slug: definition.Slug}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type outcome struct {
+		app      AppWorkspace
+		replayed bool
+		err      error
+	}
+	start := make(chan struct{})
+	results := make(chan outcome, 8)
+	for range 8 {
+		go func() {
+			<-start
+			app, replayed, createErr := audited.CreateAppIdempotent(
+				context.Background(), scope, definition, intent,
+			)
+			results <- outcome{app: app, replayed: replayed, err: createErr}
+		}()
+	}
+	close(start)
+	var targetID string
+	fresh := 0
+	for range 8 {
+		result := <-results
+		if result.err != nil {
+			t.Fatalf("parallel create error = %v", result.err)
+		}
+		if targetID == "" {
+			targetID = result.app.ID
+		}
+		if result.app.ID != targetID {
+			t.Fatalf("parallel target = %q, want %q", result.app.ID, targetID)
+		}
+		if !result.replayed {
+			fresh++
+		}
+	}
+	if fresh != 1 || len(appender.snapshot()) != 1 {
+		t.Fatalf("parallel outcomes = %d fresh, %d audit calls", fresh, len(appender.snapshot()))
+	}
+}
 
 type recordedAppMutationAudit struct {
 	tenantID       string

@@ -39,8 +39,25 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
 	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
 	"github.com/Suhaibinator/open-splunk/internal/protocolid"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"github.com/Suhaibinator/open-splunk/internal/tokenconstraint"
 )
+
+type idempotentIndexAdministration interface {
+	CreateIndexIdempotent(
+		context.Context,
+		control.IndexDefinition,
+		requestidempotency.Intent,
+	) (control.Index, bool, error)
+}
+
+type idempotentIngestionTokenAdministration interface {
+	CreateCollectorTokenIdempotent(
+		context.Context,
+		auth.CreateCollectorTokenRequest,
+		requestidempotency.Intent,
+	) (auth.IssuedCollectorToken, bool, error)
+}
 
 const (
 	defaultAdminPageSize          = 50
@@ -326,19 +343,44 @@ func (handler *apiHandler) registerIngestionTokenRoutes(group *apiRouteGroup, re
 }
 
 func (handler *apiHandler) createIndex(request *http.Request, input *opensplunk.CreateIndexRequest) (*opensplunk.CreateIndexResponse, error) {
+	canonical := proto.Clone(input).(*opensplunk.CreateIndexRequest)
+	canonical.ClientRequestId = nil
+	intent, err := handler.mutationIntent(
+		request.Context(),
+		requestidempotency.RouteCreateIndex,
+		input.ClientRequestId,
+		canonical,
+	)
+	if err != nil {
+		return nil, err
+	}
 	definition, err := indexDefinitionFromProto(input.GetDefinition())
 	if err != nil {
 		return nil, badRequestError(err.Error())
 	}
-	record, err := handler.indexAdmin.CreateIndex(request.Context(), definition)
+	var record control.Index
+	replayed := false
+	if intent == nil {
+		record, err = handler.indexAdmin.CreateIndex(request.Context(), definition)
+	} else if idempotent, ok := handler.indexAdmin.(idempotentIndexAdministration); ok {
+		record, replayed, err = idempotent.CreateIndexIdempotent(
+			request.Context(), definition, *intent,
+		)
+	} else {
+		return nil, unavailableError("index idempotency is unavailable")
+	}
+	if isRequestIdempotencyError(err) {
+		return nil, mapRequestIdempotencyError(err)
+	}
 	if err := mapAdministrativeCallError(request.Context(), err, "index"); err != nil {
 		return nil, err
 	}
 	converted, err := indexToProto(record)
-	if err != nil || converted.GetVersion() != 1 {
+	if err != nil || converted.GetVersion() == 0 ||
+		(!replayed && converted.GetVersion() != 1) {
 		return nil, internalError()
 	}
-	return &opensplunk.CreateIndexResponse{Index: converted}, nil
+	return &opensplunk.CreateIndexResponse{Index: converted, Replayed: replayed}, nil
 }
 
 func (handler *apiHandler) getIndex(request *http.Request, input *opensplunk.GetIndexRequest) (*opensplunk.GetIndexResponse, error) {
@@ -1366,17 +1408,45 @@ func validIndexDeletionAdmission(
 }
 
 func (handler *apiHandler) createIngestionToken(request *http.Request, input *opensplunk.CreateIngestionTokenRequest) (*opensplunk.CreateIngestionTokenResponse, error) {
+	canonical := proto.Clone(input).(*opensplunk.CreateIngestionTokenRequest)
+	canonical.ClientRequestId = nil
+	intent, err := handler.mutationIntent(
+		request.Context(),
+		requestidempotency.RouteCreateIngestionToken,
+		input.ClientRequestId,
+		canonical,
+	)
+	if err != nil {
+		return nil, err
+	}
 	definition, err := tokenDefinitionFromProto(input.GetDefinition())
 	if err != nil {
 		return nil, badRequestError(err.Error())
 	}
-	issued, err := handler.ingestionTokens.CreateCollectorToken(request.Context(), auth.CreateCollectorTokenRequest(definition))
+	var issued auth.IssuedCollectorToken
+	replayed := false
+	if intent == nil {
+		issued, err = handler.ingestionTokens.CreateCollectorToken(
+			request.Context(), auth.CreateCollectorTokenRequest(definition),
+		)
+	} else if idempotent, ok := handler.ingestionTokens.(idempotentIngestionTokenAdministration); ok {
+		issued, replayed, err = idempotent.CreateCollectorTokenIdempotent(
+			request.Context(), auth.CreateCollectorTokenRequest(definition), *intent,
+		)
+	} else {
+		return nil, unavailableError("ingestion token idempotency is unavailable")
+	}
+	if isRequestIdempotencyError(err) {
+		return nil, mapRequestIdempotencyError(err)
+	}
 	if err := mapAdministrativeCallError(request.Context(), err, "ingestion token"); err != nil {
 		return nil, err
 	}
 	converted, err := tokenToProto(issued.Token)
 	plaintext := issued.Secret.Plaintext()
-	if err != nil || converted.GetVersion() != 1 || plaintext == "" {
+	if err != nil || converted.GetVersion() == 0 ||
+		(!replayed && (converted.GetVersion() != 1 || plaintext == "")) ||
+		(replayed && plaintext != "") {
 		return nil, internalError()
 	}
 	// Plaintext() is called only at this one response construction site. The
@@ -1384,6 +1454,7 @@ func (handler *apiHandler) createIngestionToken(request *http.Request, input *op
 	return &opensplunk.CreateIngestionTokenResponse{
 		IngestionToken: converted,
 		PlaintextToken: plaintext,
+		Replayed:       replayed,
 	}, nil
 }
 
@@ -1516,7 +1587,22 @@ func (handler *apiHandler) setIngestionTokenEnabled(
 			if errors.As(err, &databaseErr) {
 				code = databaseErr.Code()
 			}
+			phase := "other"
+			for _, candidate := range []struct{ prefix, phase string }{
+				{"begin collector token state update:", "begin"},
+				{"read collector token for state update:", "read_before"},
+				{"set collector token enabled state:", "update"},
+				{"read state-updated collector token:", "read_after"},
+				{"append collector token state update audit event:", "audit"},
+				{"commit collector token state update:", "commit"},
+			} {
+				if strings.HasPrefix(err.Error(), candidate.prefix) {
+					phase = candidate.phase
+					break
+				}
+			}
 			handler.logger.Error("ingestion token state update unavailable",
+				zap.String("mutation_phase", phase),
 				zap.Bool("database_contention", control.IsDatabaseContention(err)),
 				zap.Int("database_error_code", code),
 			)

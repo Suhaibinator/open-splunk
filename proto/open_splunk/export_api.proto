@@ -16,6 +16,8 @@ message CreateExportJobRequest {
 
 message CreateExportJobResponse {
   ExportJob export_job = 1;
+  // True when this request resolves an earlier accepted logical action.
+  bool replayed = 2;
 }
 
 // ExportDownloadGrant is a short-lived, single-purpose capability. It must not

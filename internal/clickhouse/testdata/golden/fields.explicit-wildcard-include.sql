@@ -5,7 +5,7 @@
 -- string_or_bytes_outputs: []clickhouse.ResultStringOrBytesOutput{clickhouse.ResultStringOrBytesOutput{OutputIndex:0x2, Nullable:false}}
 -- sparse_fields: true subset=true
 -- atomic_result: false
--- execution_authority_digest: 809940f47c3dcbb5a93c1ae4bd39a64135a23f1df7eb5564d8ecdc42fa8da63d
+-- execution_authority_digest: 3c3cdb2d2945c89f55a693da3d38b72f4eb7cfda2ee7cafcc9435830d4409783
 -- args[0]: "event_id"
 -- args[1]: "event_id"
 -- args[2]: "(?s:\\A(?:status.*)\\z)"

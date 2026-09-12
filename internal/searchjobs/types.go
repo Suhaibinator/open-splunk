@@ -13,6 +13,7 @@ import (
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 	"google.golang.org/protobuf/proto"
 )
@@ -394,6 +395,10 @@ type Job struct {
 	KnowledgeSnapshot *opensplunk.KnowledgeSnapshotSummary
 	State             State
 	Schema            *Schema
+	// NearbyEventProvenance is a compiler-authenticated binding from the final
+	// result schema to unchanged physical event fields. Nil is the compatible
+	// representation for legacy and transformed results.
+	NearbyEventProvenance *NearbyEventProvenance
 	// ScannedRows and ScannedBytes are the exact executor-reported progress
 	// received so far. A terminal job may contain only the prefix reported
 	// before cancellation or failure; the manager never extrapolates a total.
@@ -429,6 +434,28 @@ type Job struct {
 type JobJournal interface {
 	Admit(context.Context, Job) error
 	Finalize(context.Context, Job) error
+}
+
+// IdempotentJobJournal extends durable admission with actor-scoped receipt
+// lookup. Lookup returns current authorized metadata from the durable target,
+// rather than a historical response projection stored in the receipt.
+type IdempotentJobJournal interface {
+	JobJournal
+	LookupIdempotent(context.Context, AccessScope, requestidempotency.Intent) (Job, bool, error)
+	AdmitIdempotent(context.Context, Job, requestidempotency.Intent) error
+}
+
+// IdempotencyReceiptJournal is the single journal projection that co-commits
+// a mutation receipt with its admission audit.
+type IdempotencyReceiptJournal interface {
+	LookupIdempotencyReceipt(context.Context, requestidempotency.Intent) (requestidempotency.Target, bool, error)
+	AdmitIdempotent(context.Context, Job, requestidempotency.Intent) error
+}
+
+// IdempotencyTargetJournal rehydrates the receipt target through the current
+// durable authorization boundary.
+type IdempotencyTargetJournal interface {
+	ReadIdempotencyTarget(context.Context, AccessScope, requestidempotency.Target) (Job, error)
 }
 
 // CompletedResultJournal is an optional extension implemented by journals
@@ -774,6 +801,7 @@ type ResultPage struct {
 	NextCursor string
 	TotalRows  uint64
 	Complete   bool
+	Generation uint64
 }
 
 func cloneJob(source Job) Job {
@@ -784,6 +812,10 @@ func cloneJob(source Job) Job {
 	if source.Schema != nil {
 		schema := cloneSchema(*source.Schema)
 		result.Schema = &schema
+	}
+	if source.NearbyEventProvenance != nil {
+		provenance := *source.NearbyEventProvenance
+		result.NearbyEventProvenance = &provenance
 	}
 	if source.Failure != nil {
 		failure := cloneFailure(*source.Failure)
@@ -800,6 +832,7 @@ func cloneJobSummary(source Job) Job {
 	result.EffectiveIndexes = nil
 	result.KnowledgeSnapshot = nil
 	result.Schema = nil
+	result.NearbyEventProvenance = nil
 	if source.Failure != nil {
 		failure := *source.Failure
 		failure.Diagnostics = nil
@@ -989,7 +1022,9 @@ func retainedJobMetadataReservation(id string, request CreateRequest) (uint64, e
 func retainedNormalizedJobMetadataReservation(id string, request CreateRequest) (uint64, error) {
 	var err error
 	intent := request.TimeRange.Intent()
-	total := uint64(unsafe.Sizeof(jobEntry{})) + metadataContextAllowance + metadataDiagnosticAllowance
+	total := uint64(unsafe.Sizeof(jobEntry{})) +
+		uint64(unsafe.Sizeof(NearbyEventProvenance{})) +
+		metadataContextAllowance + metadataDiagnosticAllowance
 	for _, value := range []string{
 		id,
 		request.OwnerID,

@@ -136,7 +136,7 @@ func TestSanitizeCreateIndexRequest(t *testing.T) {
 	assertSanitizerRejection(
 		t,
 		err,
-		"client request idempotency is not supported",
+		"request idempotency input is invalid: client request ID must contain between 16 and 128 bytes",
 	)
 }
 
@@ -644,7 +644,7 @@ func TestSanitizeCreateIngestionTokenRequest(t *testing.T) {
 	assertSanitizerRejection(
 		t,
 		err,
-		"client request idempotency is not supported",
+		"request idempotency input is invalid: client request ID must contain between 16 and 128 bytes",
 	)
 }
 

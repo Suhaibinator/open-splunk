@@ -19,7 +19,7 @@ from the authenticated principal.
 ## Successful mutation journal
 
 The immutable taxonomy covers successful mutations to ingestion tokens,
-indexes, apps, saved searches, knowledge objects, lookups, and server settings.
+indexes, apps, saved searches, knowledge objects, lookups, export admissions, and server settings.
 Representative actions are:
 
 - `ingestion_token.create`, `.update`, and `.revoke`;
@@ -34,7 +34,9 @@ Representative actions are:
   `ui-palette` for the instance UI palette) and `target_version` is that
   singleton's own committed version; old and new values are not recorded;
   and
-- lookup `create`, `replace`, `enable`, `disable`, and `delete`.
+- lookup `create`, `replace`, `enable`, `disable`, and `delete`; and
+- `export.create` for durable export acceptance before enqueue. Replaying an
+  accepted create receipt does not append another successful mutation event.
 
 Protective knowledge quarantine belongs to the separate recovery journal.
 

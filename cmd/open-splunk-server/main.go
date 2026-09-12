@@ -28,6 +28,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/dashboards"
+	"github.com/Suhaibinator/open-splunk/internal/exportjournal"
 	"github.com/Suhaibinator/open-splunk/internal/featureaudit"
 	"github.com/Suhaibinator/open-splunk/internal/hechttp"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
@@ -613,11 +614,15 @@ func runWithOptions(config options) error {
 		}()
 	}
 
+	exportJournal, err := exportjournal.New(controlDB.GORMDB(), securityStores.auditEvents)
+	if err != nil {
+		return fmt.Errorf("create durable export journal: %w", err)
+	}
 	searchLifecycle, err := newRuntimeSearchLifecycle(runtimeSearchLifecycleConfig{
 		ctx: startupContext, controlDB: controlDB, connection: connection,
 		clickHouseOptions: clickHouseOptions.runtime, indexReads: indexReads, sequencer: sequencer,
 		history: searchHistory, auditAppender: securityStores.auditEvents,
-		featureOperations: featureOperations, exportSettings: exportSettings,
+		featureOperations: featureOperations, exportSettings: exportSettings, exportJournal: exportJournal,
 		masterKeyPath: config.masterKeyPath, searchArtifactDirectory: config.searchArtifactDir,
 		exportArtifactDirectory: config.exportArtifactDir, tenantID: config.tenantID,
 		ownerID: defaultOwnerID, logger: logger, closeTimeout: shutdownTimeout,
@@ -678,6 +683,7 @@ func runWithOptions(config options) error {
 		Logger:                     logger,
 		SearchJobs:                 jobs,
 		SearchArtifacts:            searchArtifactStore,
+		SearchPatterns:             searchLifecycle.patterns,
 		TrustedSearchAdmission:     trustedScheduledAdmission,
 		RuntimeReadiness:           connection,
 		SearchInspections:          inspection.service,

@@ -732,8 +732,10 @@ type CreateIngestionTokenResponse struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	IngestionToken *IngestionToken        `protobuf:"bytes,1,opt,name=ingestion_token,json=ingestionToken,proto3" json:"ingestion_token,omitempty"`
 	PlaintextToken string                 `protobuf:"bytes,2,opt,name=plaintext_token,json=plaintextToken,proto3" json:"plaintext_token,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// True when this request resolves an earlier accepted logical action.
+	Replayed      bool `protobuf:"varint,3,opt,name=replayed,proto3" json:"replayed,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CreateIngestionTokenResponse) Reset() {
@@ -778,6 +780,13 @@ func (x *CreateIngestionTokenResponse) GetPlaintextToken() string {
 		return x.PlaintextToken
 	}
 	return ""
+}
+
+func (x *CreateIngestionTokenResponse) GetReplayed() bool {
+	if x != nil {
+		return x.Replayed
+	}
+	return false
 }
 
 // POST /api/ingestion-tokens/get
@@ -1385,10 +1394,11 @@ const file_open_splunk_collector_admin_api_proto_rawDesc = "" +
 	"definition\x18\x01 \x01(\v2%.open_splunk.IngestionTokenDefinitionR\n" +
 	"definition\x12/\n" +
 	"\x11client_request_id\x18\x02 \x01(\tH\x00R\x0fclientRequestId\x88\x01\x01B\x14\n" +
-	"\x12_client_request_id\"\x8d\x01\n" +
+	"\x12_client_request_id\"\xa9\x01\n" +
 	"\x1cCreateIngestionTokenResponse\x12D\n" +
 	"\x0fingestion_token\x18\x01 \x01(\v2\x1b.open_splunk.IngestionTokenR\x0eingestionToken\x12'\n" +
-	"\x0fplaintext_token\x18\x02 \x01(\tR\x0eplaintextToken\"H\n" +
+	"\x0fplaintext_token\x18\x02 \x01(\tR\x0eplaintextToken\x12\x1a\n" +
+	"\breplayed\x18\x03 \x01(\bR\breplayed\"H\n" +
 	"\x18GetIngestionTokenRequest\x12,\n" +
 	"\x12ingestion_token_id\x18\x01 \x01(\tR\x10ingestionTokenId\"a\n" +
 	"\x19GetIngestionTokenResponse\x12D\n" +

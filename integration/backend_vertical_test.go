@@ -116,8 +116,7 @@ func TestBackendVertical(t *testing.T) {
 	buildBinary(t, ctx, stagedBackendRepository, serverBinary, "./cmd/open-splunk-server")
 	buildBinary(t, ctx, repository, collectorBinary, "./cmd/open-splunk-collector")
 
-	httpAddress := unusedLoopbackAddress(t)
-	collectorAddress := unusedLoopbackAddress(t)
+	httpAddress, collectorAddress := unusedLoopbackAddressPair(t)
 	httpTLSIdentity, err := testsupport.WriteServerTLSIdentity(
 		filepath.Join(work, "http-tls"),
 		"127.0.0.1",
@@ -487,6 +486,7 @@ func TestBackendVertical(t *testing.T) {
 		"Backend vertical bulk export",
 	)
 	bulkStart := insertBulkEvents(t, ctx, storage, visibilityCutoff)
+	assertBrowserFeatureCompletion(t, ctx, repository, baseURL, fixtureStart, bulkStart, persistedSavedSearch.GetSavedSearchId(), lookupFixture.appID, administratorToken, serverProcess)
 	serverSecrets = append(serverSecrets, assertTruncatedPreviewExportsAllRows(
 		t, ctx, httpClient, storage, baseURL, bulkStart, visibilityCutoff,
 	))
