@@ -471,10 +471,14 @@ dc() { docker compose -p open-splunk-recovery -f deploy/docker-compose.recovery.
 dc config --quiet
 dc run --rm prepare-recovery-volume
 dc run --rm recovery provision-administrator-token \
-  -source /run/recovery/administrator.seed \
+  -source /run/recovery/administrator/seed \
   -destination /var/lib/open-splunk/state/private/administrator.token
 dc up -d clickhouse server
 ```
+
+The administrator seed is read-only inside a directory restricted to UID
+65532. Use it only to provision the private server token; other UIDs, including
+ClickHouse, cannot traverse that directory.
 
 The helper prepares a fresh archive volume as UID 101, GID 65532, mode 02750,
 and prepares the ClickHouse log volume. It refuses unsafe/nonempty initial

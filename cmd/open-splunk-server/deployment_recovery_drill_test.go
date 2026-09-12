@@ -45,7 +45,7 @@ func TestDeploymentRecoveryDrill(t *testing.T) {
 	fixture.compose(t, ctx, "config", "--quiet")
 	fixture.compose(t, ctx, "run", "--rm", "prepare-recovery-volume")
 	fixture.compose(t, ctx, "run", "--rm", "recovery", "provision-administrator-token",
-		"-source", "/run/recovery/administrator.seed", "-destination", "/var/lib/open-splunk/state/private/administrator.token")
+		"-source", "/run/recovery/administrator/seed", "-destination", "/var/lib/open-splunk/state/private/administrator.token")
 	fixture.compose(t, ctx, "up", "-d", "clickhouse", "server")
 	fixture.waitReady(t, ctx)
 
@@ -223,6 +223,94 @@ func TestDeploymentRecoveryDrill(t *testing.T) {
 
 const recoveryDrillSet = "/var/lib/open-splunk/recovery/private/rehearsal-001"
 
+const recoveryDrillAdministratorSeedMode os.FileMode = 0o444
+
+func TestRecoveryDrillAdministratorSeedProvisioningContract(t *testing.T) {
+	t.Parallel()
+	token := nativeRecoveryIntegrationRandomHex(t, 32)
+	private := filepath.Join(t.TempDir(), "administrator")
+	if err := os.Mkdir(private, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(private, "seed")
+	if err := os.WriteFile(source, []byte(token), recoveryDrillAdministratorSeedMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(source, recoveryDrillAdministratorSeedMode); err != nil {
+		t.Fatal(err)
+	}
+	assertRecoverySeedProvisioning(t, source, token)
+}
+
+func TestPreparedRecoveryAdministratorSeedProvisioningContract(t *testing.T) {
+	t.Parallel()
+	identity, err := testsupport.WriteServerTLSIdentity(filepath.Join(t.TempDir(), "tls"), "clickhouse")
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(t.TempDir(), "config")
+	// Substitute only host root privileges and chown. The real operator script
+	// still verifies certificates, creates exclusive files, and applies modes.
+	const launcher = `import os, runpy, sys
+os.geteuid = lambda: 0
+ownership = {}
+os.chown = lambda path, uid, gid: ownership.__setitem__(os.fspath(path), (uid, gid))
+script = sys.argv[1]
+sys.argv = sys.argv[1:]
+directory = sys.argv[sys.argv.index('--directory') + 1]
+runpy.run_path(script, run_name="__main__")
+for path in (os.path.join(directory, 'administrator'), os.path.join(directory, 'administrator', 'seed')):
+    if ownership.get(path) != (65532, 65532):
+        raise RuntimeError('administrator seed and private parent must belong to the server UID/GID')
+`
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, "python3", "-c", launcher,
+		"../../deploy/recovery/prepare-config.py", "--directory", config,
+		"--ca-cert", identity.CertificateFile, "--server-cert", identity.CertificateFile,
+		"--server-key", identity.PrivateKeyFile)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("prepare operator recovery configuration: %v\n%s", err, output)
+	}
+	source := filepath.Join(config, "administrator", "seed")
+	token, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(token)
+	assertRecoverySeedProvisioning(t, source, string(token))
+}
+
+func assertRecoverySeedProvisioning(t *testing.T, source, token string) {
+	t.Helper()
+	parent, err := os.Lstat(filepath.Dir(source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !parent.IsDir() || parent.Mode().Perm() != 0o700 {
+		t.Fatalf("administrator seed must have a private 0700 parent, got %v", parent.Mode())
+	}
+	destination := filepath.Join(secureProvisioningDirectory(t), "administrator.token")
+	if err := runProvisionAdministratorTokenSubcommand([]string{"-source", source, "-destination", destination}); err != nil {
+		t.Fatalf("provision drill administrator seed: %v", err)
+	}
+	credential, err := readAdministratorToken(destination)
+	if err != nil {
+		t.Fatalf("load provisioned drill runtime credential: %v", err)
+	}
+	defer clear(credential)
+	if string(credential) != token {
+		t.Fatal("provisioned runtime credential differs from drill seed")
+	}
+	info, err := os.Lstat(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("provisioned runtime credential mode = %#o, want 0600", info.Mode().Perm())
+	}
+}
+
 func recoveryDrillControlFlags() []string {
 	return []string{"-control-db", "/var/lib/open-splunk/state/private/open-splunk.db", "-master-key", "/var/lib/open-splunk/state/private/master.key",
 		"-administrator-token-file", "/var/lib/open-splunk/state/private/administrator.token", "-search-artifact-directory", "/var/lib/open-splunk/state/private/search-artifacts"}
@@ -256,6 +344,9 @@ func newRecoveryDrill(t *testing.T, ctx context.Context, image, helper string) *
 	if err := os.Chmod(config, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Mkdir(filepath.Join(config, "administrator"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	fixture.tls = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: identity.RootCAs, ServerName: "clickhouse"}
 	fixture.client = &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{TLSClientConfig: fixture.tls.Clone()}}
 	template, err := os.ReadFile(filepath.Join(repository, "deploy", "recovery", "users.xml.template"))
@@ -277,7 +368,7 @@ func newRecoveryDrill(t *testing.T, ctx context.Context, image, helper string) *
 		t.Fatal(err)
 	}
 	for name, data := range map[string][]byte{"users.xml": []byte(contents), "ca.crt": certificate, "server.crt": certificate,
-		"server.key": key, "http.key": key, "administrator.seed": []byte(fixture.administrator)} {
+		"server.key": key, "http.key": key, "administrator/seed": []byte(fixture.administrator)} {
 		recoveryDrillWrite(t, filepath.Join(config, name), data)
 	}
 	fixture.overlay = filepath.Join(fixture.work, "drill.yaml")
@@ -304,9 +395,15 @@ func newRecoveryDrill(t *testing.T, ctx context.Context, image, helper string) *
 	initializer := fixture.project + "-config"
 	fixture.children = append(fixture.children, initializer)
 	fixture.docker(t, ctx, "run", "--rm", "--name", initializer, "--user", "0:0", "--volume", config+":/config", "--entrypoint", "sh", testsupport.DefaultClickHouseImage, "-c",
-		"chown 65532:65532 /config/*.password /config/administrator.seed /config/http.key && chmod 400 /config/*.password /config/administrator.seed /config/http.key && chown 101:101 /config/server.key && chmod 400 /config/server.key && chmod 444 /config/*.crt /config/users.xml")
+		"chown 65532:65532 /config/*.password /config/http.key && chmod 400 /config/*.password /config/http.key && chown 101:101 /config/server.key && chmod 400 /config/server.key && chmod 444 /config/*.crt /config/users.xml && "+recoveryDrillAdministratorSeedInitializationCommand())
 	return fixture
 }
+
+func recoveryDrillAdministratorSeedInitializationCommand() string {
+	return fmt.Sprintf("chown 65532:65532 /config/administrator /config/administrator/seed && chmod 700 /config/administrator && chmod %o /config/administrator/seed", recoveryDrillAdministratorSeedMode)
+}
+
+const recoveryDrillAdministratorSeedCleanupCommand = "rm -f /config/administrator/seed && rmdir /config/administrator"
 
 func recoveryDrillWrite(t *testing.T, path string, data []byte) {
 	t.Helper()
@@ -562,6 +659,15 @@ func (fixture *recoveryDrill) close(t *testing.T) {
 		if err != nil && !strings.Contains(strings.ToLower(string(output)), "no such volume") {
 			t.Errorf("remove owned volume %s: %v", name, err)
 		}
+	}
+	// The container-owned private parent is intentionally inaccessible to the
+	// host test user. Remove only its seed and empty directory before TempDir's
+	// cleanup; never make the administrator credential more broadly readable.
+	command = exec.CommandContext(ctx, "docker", "run", "--rm", "--network", "none", "--user", "0:0",
+		"--volume", filepath.Join(fixture.work, "config")+":/config", "--entrypoint", "sh",
+		testsupport.DefaultClickHouseImage, "-ec", recoveryDrillAdministratorSeedCleanupCommand)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Errorf("remove owned private administrator seed: %v\n%s", err, output)
 	}
 }
 

@@ -33,14 +33,18 @@ def main():
     # existing configuration and operator-provided keys are never changed.
     target.mkdir(mode=0o755)
     os.chmod(target, 0o755)
+    administrator = target / 'administrator'
+    administrator.mkdir(mode=0o700)
+    os.chown(administrator, 65532, 65532)
+    os.chmod(administrator, 0o700)
     template = Path(__file__).with_name('users.xml.template').read_text()
     for role in ('operator', 'backup', 'restore'):
         password = secrets.token_hex(32).encode()
         template = template.replace('@' + role.upper() + '_SHA256@',
                                     hashlib.sha256(password).hexdigest())
         write_file(target / (role + '.password'), password, 65532, 65532, 0o400)
-    write_file(target / 'administrator.seed', secrets.token_hex(32).encode(),
-               65532, 65532, 0o400)
+    write_file(administrator / 'seed', secrets.token_hex(32).encode(),
+               65532, 65532, 0o444)
     write_file(target / 'users.xml', template.encode(), 0, 0, 0o444)
     for source, name, uid, gid, mode in (
         (args.ca_cert, 'ca.crt', 0, 0, 0o444),
