@@ -20,7 +20,7 @@ const expectedBulkRows = positiveInteger("OPEN_SPLUNK_FEATURE_COMPLETION_EXPECTE
 const browserExecutable = process.env.OPEN_SPLUNK_BROWSER_EXECUTABLE?.trim();
 const timeout = 60_000;
 const bulkQuery = "index=vertical-bulk";
-const verticalQuery = "index=vertical";
+const verticalQuery = "index=vertical | dedup event_id";
 const expectedBulkPattern = "bulk export vertical-bulk-<int>";
 const savedName = "Feature completion scope roundtrip";
 
