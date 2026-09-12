@@ -93,6 +93,7 @@ export class OpenSplunkApiClient {
     get: this.route(searchRoutes.get),
     list: this.route(searchRoutes.list),
     results: this.route(searchRoutes.results),
+    prepareNearby: this.route(searchRoutes.prepareNearby),
     fields: this.route(searchRoutes.fields),
     fieldSummary: this.route(searchRoutes.fieldSummary),
     timeline: this.route(searchRoutes.timeline),

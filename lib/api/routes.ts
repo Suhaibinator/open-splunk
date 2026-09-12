@@ -11,6 +11,7 @@ import * as KnowledgeApi from "@/gen/ts/open_splunk/knowledge_api";
 import * as LookupApi from "@/gen/ts/open_splunk/lookup_api";
 import * as SavedSearchApi from "@/gen/ts/open_splunk/saved_search_api";
 import * as ScheduleApi from "@/gen/ts/open_splunk/schedule_api";
+import * as NearbyApi from "@/gen/ts/open_splunk/nearby_api";
 import * as SearchApi from "@/gen/ts/open_splunk/search_api";
 import * as PatternsApi from "@/gen/ts/open_splunk/patterns_api";
 import * as SearchAttemptAuditApi from "@/gen/ts/open_splunk/search_attempt_audit_api";
@@ -446,6 +447,12 @@ export const searchRoutes = {
     "/api/search/jobs/results",
     SearchApi.GetSearchResultsRequest,
     SearchApi.GetSearchResultsResponse,
+  ),
+  prepareNearby: defineProtobufRoute(
+    "/api/search/jobs/nearby/prepare",
+    NearbyApi.PrepareNearbyContextRequest,
+    NearbyApi.PrepareNearbyContextResponse,
+    { maximumResponseBytes: 8 << 20 },
   ),
   fields: defineProtobufRoute(
     "/api/search/jobs/fields/list",

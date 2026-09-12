@@ -237,6 +237,7 @@ export class FakeElement extends FakeNode {
   public defaultChecked = false;
   public defaultValue = "";
   public value = "";
+  private popoverOpen = false;
 
   public constructor(ownerDocument: FakeDocument, name: string) {
     super(ownerDocument, 1, name.toUpperCase());
@@ -294,6 +295,19 @@ export class FakeElement extends FakeNode {
 
   public setAttribute(name: string, value: unknown): void {
     this.attributes.set(name, String(value));
+  }
+
+  /** The shared Select uses the native popover state to synchronize its listbox. */
+  public matches(selector: string): boolean {
+    return selector === ":popover-open" ? this.popoverOpen : compileSelector(selector)(this);
+  }
+
+  public showPopover(): void {
+    this.popoverOpen = true;
+  }
+
+  public hidePopover(): void {
+    this.popoverOpen = false;
   }
 
   public blur(): void {

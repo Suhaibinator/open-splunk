@@ -69,6 +69,8 @@ interface EventsPanelProps {
   copyText: (text: string, message: string) => Promise<void> | void;
   endTimelineDrag: (event: PointerEvent<HTMLInputElement>) => void;
   moveTimelineDrag: (event: PointerEvent<HTMLInputElement>) => void;
+  onFindNearby?: (event: DemoEvent) => void;
+  nearbyUnavailableReason?: string | null;
   onLoadMoreFields: () => void;
   onCollapsePage: () => void;
   onCopyPageRaw: () => void;
@@ -182,6 +184,8 @@ export function EventsPanel({
   copyText,
   endTimelineDrag,
   moveTimelineDrag,
+  onFindNearby,
+  nearbyUnavailableReason,
   onLoadMoreFields,
   onCollapsePage,
   onCopyPageRaw,
@@ -703,7 +707,7 @@ export function EventsPanel({
                 return (
                   <article className={`event-row level-${level}${expanded ? " expanded" : ""}${isPreview ? " event-row--preview" : ""}`} data-testid={`event-row-${event.id}`} key={event.id}>
                     <button className="event-expander" type="button" aria-disabled={isPreview} title={isPreview ? "Event details become available with final results." : undefined} aria-label={isPreview ? "Event details unavailable during live preview" : `${expanded ? "Collapse" : "Expand"} event`} aria-expanded={expanded} onClick={() => { if (!isPreview) toggleEvent(event.id); }}><AppIcon name={expanded ? "chevron-down" : "chevron-right"} size="sm" /></button>
-                    <button className="event-time" type="button" aria-disabled={isPreview} title={isPreview ? "Nearby-event navigation becomes available with final results." : "Find nearby events"} aria-label={isPreview ? `${event.timeLabel}; nearby-event navigation unavailable during live preview` : undefined} onClick={() => { if (!isPreview) showToast("Choose a nearby interval from the time range picker."); }}><span>{event.timeLabel.split(", ")[0]}</span><strong>{event.timeLabel.split(", ").slice(1).join(", ")}</strong></button>
+                    <button className="event-time" type="button" aria-disabled={isPreview || !onFindNearby || !!nearbyUnavailableReason} title={isPreview ? "Nearby-event navigation becomes available with final results." : nearbyUnavailableReason || (!onFindNearby ? "Nearby events are unavailable for this result." : "Find nearby events")} aria-label={isPreview ? `${event.timeLabel}; nearby-event navigation unavailable during live preview` : undefined} onClick={() => { if (!isPreview && !nearbyUnavailableReason) onFindNearby?.(event); }}><span>{event.timeLabel.split(", ")[0]}</span><strong>{event.timeLabel.split(", ").slice(1).join(", ")}</strong></button>
                     <div className="event-content">
                       <button className="event-raw" type="button" aria-disabled={isPreview} title={isPreview ? "This row may change until the search completes." : undefined} aria-label={isPreview ? "Provisional event row; details unavailable until completion" : `${expanded ? "Collapse" : "Expand"} event details`} onClick={() => { if (!isPreview) toggleEvent(event.id); }}>{highlightedRaw(event.raw, submittedQuery)}</button>
                       <div className="event-chips">

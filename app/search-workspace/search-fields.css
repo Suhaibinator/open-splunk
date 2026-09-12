@@ -1140,3 +1140,36 @@
     min-width: calc(var(--space-8) + var(--space-1));
   }
 }
+
+/* Nearby context chips keep edits together until the next search is applied. */
+.nearby-context {
+  border-bottom: 1px solid var(--border-subtle);
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+}
+
+.nearby-context-heading,
+.nearby-context-chips {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.nearby-context-comparison {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) repeat(2, minmax(0, 1fr)) minmax(0, 2fr) auto;
+}
+
+.nearby-context-range {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (max-width: 760px) {
+  .nearby-context-comparison,
+  .nearby-context-range {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

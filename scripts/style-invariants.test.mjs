@@ -2057,6 +2057,7 @@ const FEATURE_PREFIXES = [
   "alerts-",
   "analytics-",
   "operations-",
+  "nearby-context",
   "reports-",
   "visualization-",
   "workspace-dialog-",

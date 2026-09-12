@@ -26,7 +26,7 @@ family prefix are already complete relative to `/api`.
 | --- | --- |
 | System | `/system/bootstrap` |
 | Server settings | `/server/settings/get`, `/update`, `/server/appearance/get`, `/update` |
-| Search jobs | `/search/jobs/create`, `/get`, `/list`, `/results`, `/fields/list`, `/field-summary`, `/timeline`, `/cancel`, `/share`, `/inspect` |
+| Search jobs | `/search/jobs/create`, `/get`, `/list`, `/results`, `/fields/list`, `/field-summary`, `/nearby/prepare`, `/timeline`, `/cancel`, `/share`, `/inspect` |
 | Search tools | `/search/validate`, `/search/suggestions`, `/search/jobs/settings/get`, `/search/jobs/settings/update` |
 | History | `/search/history/get`, `/list`, `/delete`, `/clear` |
 | Exports | `/search/exports/create`, `/get`, `/list`, `/cancel` |

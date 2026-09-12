@@ -25,6 +25,9 @@ const scriptTests = [
   "build-oci.test.mjs",
 ];
 const testFiles = [
+  path.join("app", "search-workspace", "components", "nearby-context-editor.mount.test.tsx"),
+  path.join("app", "search-workspace", "components", "nearby-context-editor.test.tsx"),
+  path.join("lib", "search", "nearby-events.test.ts"),
   path.join("app", "_components", "app-icon.test.tsx"),
   path.join("app", "_components", "button.test.tsx"),
   path.join("app", "_components", "field-validation.test.tsx"),

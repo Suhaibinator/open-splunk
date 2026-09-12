@@ -16,6 +16,29 @@ An expired link returns an explicit expired state and can be rerun only by an
 operator action. Search history remains separate metadata with its existing
 30-day default retention and never extends a result artifact.
 
+## Nearby events
+
+Click a final event timestamp to run a new ad hoc search for the same exact
+index, host, and source, from five minutes before the event through five
+minutes after it. The lower endpoint is inclusive and the upper endpoint is
+exclusive. The server resolves the timestamp and context from the selected
+retained result, preserving nanoseconds. Intervals that reach the supported
+1900–2262 timestamp boundaries are clipped with a visible explanation.
+
+Context chips let you change comparisons and the interval, then apply all
+edits in one new search. Trace, span, and request identifiers are suggestions
+and start disabled. Text comparisons are literal, including wildcard-looking
+characters. Number comparisons retain exact integer and decimal text. The
+full SPL editor detaches the structured controls when you edit its query.
+Browser Back restores the previous retained result and draft.
+
+Nearby navigation is disabled during live preview. It is unavailable when a
+retained result cannot prove the original timestamp, index, host, and source,
+including older artifacts and searches that replace or omit those fields.
+The interface explains when a rerun is needed. Preparing context reads the
+retained result; the new search uses current authorization, index visibility,
+and knowledge definitions.
+
 ## Scheduled searches
 
 A saved search may have a strict five-field cron schedule and an IANA

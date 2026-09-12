@@ -29,7 +29,7 @@ import {
   systemRoutes,
 } from "./routes";
 
-const EXPECTED_METHOD_COUNT = 82;
+const EXPECTED_METHOD_COUNT = 83;
 
 /**
  * The binder's failure mode is a transposition — a method wired to a sibling
