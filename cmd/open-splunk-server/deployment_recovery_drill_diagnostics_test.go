@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os/exec"
 	"regexp"
 	"slices"
@@ -61,6 +62,15 @@ func (buffer *recoveryDrillDiagnosticBuffer) Write(value []byte) (int, error) {
 
 func (buffer *recoveryDrillDiagnosticBuffer) writeString(value string) {
 	_, _ = buffer.Write([]byte(value))
+}
+
+func (fixture *recoveryDrill) apiErrorDiagnostic(body io.Reader, token string) string {
+	secrets := append([]string{token}, fixture.diagnosticSecrets...)
+	diagnostic := newRecoveryDrillDiagnosticBuffer(secrets)
+	if _, err := io.Copy(diagnostic, io.LimitReader(body, int64(diagnostic.limit)+1)); err != nil {
+		diagnostic.writeString("\nread error response: " + err.Error())
+	}
+	return recoveryDrillDiagnosticTextWithTruncation(diagnostic.contents, secrets, diagnostic.truncated)
 }
 
 func (fixture *recoveryDrill) reportDiagnostics(t *testing.T) {
@@ -171,6 +181,31 @@ func TestRecoveryDrillDiagnosticTextRedactsSecretsAndPrivateKeys(t *testing.T) {
 	}
 	if strings.Count(got, recoveryDrillDiagnosticPlaceholder) != 3 || !strings.Contains(got, "after") {
 		t.Fatalf("diagnostic redaction = %q", got)
+	}
+}
+
+func TestRecoveryDrillAPIErrorDiagnosticPreservesReasonWithoutCredentials(t *testing.T) {
+	t.Parallel()
+	const token = "request-administrator-credential"
+	const password = "fixture-clickhouse-password"
+	fixture := &recoveryDrill{diagnosticSecrets: []string{password}}
+	body := strings.NewReader(`{"error":"search authority is unavailable","token":"` + token + `","password":"` + password + `"}`)
+	got := fixture.apiErrorDiagnostic(body, token)
+	if !strings.Contains(got, "search authority is unavailable") || strings.Contains(got, token) || strings.Contains(got, password) {
+		t.Fatalf("API error diagnostic lost its reason or exposed a credential: %q", got)
+	}
+}
+
+func TestRecoveryDrillAPIErrorDiagnosticBoundsResponseConsumption(t *testing.T) {
+	t.Parallel()
+	fixture := &recoveryDrill{}
+	body := strings.NewReader(strings.Repeat("x", 1<<20))
+	before := body.Len()
+	got := fixture.apiErrorDiagnostic(body, "")
+	maximumRead := newRecoveryDrillDiagnosticBuffer(nil).limit + 1
+	if before-body.Len() != maximumRead || len(got) > recoveryDrillDiagnosticLimit ||
+		!strings.HasSuffix(got, recoveryDrillDiagnosticTruncated) {
+		t.Fatalf("error response bounds: read=%d output=%d", before-body.Len(), len(got))
 	}
 }
 

@@ -62,7 +62,7 @@ func TestDeploymentRecoveryDrill(t *testing.T) {
 			Slug: "recovery-drill", DisplayName: "Recovery drill", DefaultIndexNames: []string{"recovery-drill"},
 		}}, &app)
 	definition := &opensplunk.SearchDefinition{Spl: "index=recovery-drill | sort _raw | table _raw", AppId: new(app.GetApp().GetAppId()),
-		TimeRange: &opensplunk.TimeRangeSpec{Earliest: new("-24h"), Latest: new("now")}}
+		IndexScope: []string{"recovery-drill"}, TimeRange: &opensplunk.TimeRangeSpec{Earliest: new("-24h"), Latest: new("now")}}
 	var saved opensplunk.CreateSavedSearchResponse
 	fixture.post(t, ctx, "/api/saved-searches/create", fixture.administrator,
 		&opensplunk.CreateSavedSearchRequest{Definition: &opensplunk.SavedSearchDefinition{
@@ -587,12 +587,12 @@ func (fixture *recoveryDrill) post(t *testing.T, ctx context.Context, path, toke
 		t.Fatal(err)
 	}
 	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("POST %s returned %d: %s", path, response.StatusCode, fixture.apiErrorDiagnostic(response.Body, token))
+	}
 	body, err = io.ReadAll(io.LimitReader(response.Body, 8<<20))
 	if err != nil {
 		t.Fatal(err)
-	}
-	if response.StatusCode != http.StatusOK {
-		t.Fatalf("POST %s returned %d", path, response.StatusCode)
 	}
 	if err := proto.Unmarshal(body, output); err != nil {
 		t.Fatal(err)
