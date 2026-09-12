@@ -98,3 +98,18 @@ toward their corresponding budgets. A catalog too large for the cache can be
 delivered through a bounded uncached operation. Exceeding an analysis limit
 fails the operation atomically; the server does not report a partial prefix as
 a complete set of patterns.
+
+The Patterns artifact reader reserves memory before JSON decoding. A framed
+header reserves 32 times its encoded length plus 1 MiB; a row reserves 32 times
+its encoded length plus 256 KiB. This conservative allowance includes the
+encoded buffer, decoded JSON values and containers, and the immutable typed
+value tree. Legacy artifacts reserve 32 times the entire encoded file plus
+1 MiB because their streaming decoder can buffer beyond the current row.
+A reservation that cannot fit fails before allocating or decoding that frame.
+Ordinary retained-result readers keep their existing behavior.
+
+Responses retain their reservation through conversion, protobuf marshaling,
+and the HTTP write. Member pages and group pages use a conservative 7 MiB
+response envelope and an 8 MiB final protobuf limit. Page size defaults to 20,
+with a configurable ceiling no greater than 100. A smaller ceiling clamps the
+requested maximum; it does not change the relation selected by the cursor.
