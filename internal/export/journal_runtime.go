@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"fortio.org/safecast"
+
 	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 )
@@ -32,7 +34,7 @@ func (manager *Manager) durableEntryLocked(entry *jobEntry) (DurableJob, error) 
 		return DurableJob{}, ErrArtifactUnavailable
 	}
 	digest := sha256.New()
-	size, err := io.Copy(digest, io.LimitReader(file, int64(entry.job.ByteLimit)+1))
+	size, err := io.Copy(digest, io.LimitReader(file, safecast.MustConv[int64](entry.job.ByteLimit)+1))
 	if err != nil || size < 0 || uint64(size) != entry.job.Artifact.SizeBytes {
 		return DurableJob{}, ErrArtifactUnavailable
 	}
@@ -79,13 +81,13 @@ func (manager *Manager) restoreJournal(ctx context.Context) error {
 	if len(entries) > manager.maxJobs {
 		return ErrCapacity
 	}
-	now := manager.nowUTC()
+	manager.nowUTC()
 	for _, retained := range entries {
 		if err := validateDurableJob(retained); err != nil {
 			return err
 		}
 		job := cloneJob(retained.Job)
-		now = manager.observeTime(maxTime(job.CreatedAt, job.Progress.UpdatedAt))
+		now := manager.observeTime(maxTime(job.CreatedAt, job.Progress.UpdatedAt))
 		entryContext, cancel := context.WithCancel(manager.ctx)
 		entry := &jobEntry{access: retained.Access, job: job, ctx: entryContext, cancel: cancel, workerDone: true, leaseReleased: true}
 		metadata, err := requestedMetadataBytes(manager.artifactDir, retained.Access, job.SearchJobID, job.Columns)
@@ -149,7 +151,7 @@ func (manager *Manager) restoreArtifact(entry *jobEntry, retained DurableJob) bo
 		return false
 	}
 	digest := sha256.New()
-	size, err := io.Copy(digest, io.LimitReader(file, int64(job.ByteLimit)+1))
+	size, err := io.Copy(digest, io.LimitReader(file, safecast.MustConv[int64](job.ByteLimit)+1))
 	if err != nil || size < 0 || uint64(size) != job.Artifact.SizeBytes || !bytes.Equal(digest.Sum(nil), retained.ArtifactSHA256) {
 		return false
 	}

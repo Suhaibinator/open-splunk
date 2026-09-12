@@ -193,6 +193,13 @@ func (store *Store) Get(ctx context.Context, access searchjobs.AccessScope, id s
 		retained.Job.State = exportjobs.StateExpired
 		retained.Job.Version++
 		retained.Job.Artifact = nil
+		// Persist the observed expiration so a later clock rollback or restart
+		// cannot expose an older completed projection again.
+		retained.ArtifactName = ""
+		retained.ArtifactSHA256 = nil
+		if err := store.Update(ctx, retained); err != nil {
+			return exportjobs.DurableJob{}, err
+		}
 	}
 	return retained, nil
 }

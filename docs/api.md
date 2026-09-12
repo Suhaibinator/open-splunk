@@ -101,8 +101,9 @@ Unexpired receipts are not evicted to admit new work. Existing receipts can be
 replayed at capacity. Canonical fingerprint versions remain readable while their
 receipts are retained.
 
-Search and export acceptance is durable before work is enqueued. On restart,
-accepted export IDs and metadata survive; completed files are available only if
+Search and export acceptance is durable before work is enqueued. Accepted search
+IDs survive restart; unfinished accepted searches are recorded as interrupted
+failures instead of being rerun. On restart, accepted export IDs and metadata survive; completed files are available only if
 the retained file identity, size, and digest are verified. Interrupted exports
 or missing files become unavailable under their existing IDs. Restart does not
 rerun the source query. Pattern exports retain the resolved snapshot generation

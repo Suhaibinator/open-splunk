@@ -515,10 +515,6 @@ type artifactDirectoryLock struct {
 	file *os.File
 }
 
-func prepareArtifactDirectory(configured string) (*preparedArtifactDirectory, error) {
-	return prepareArtifactDirectoryMode(configured, false)
-}
-
 func prepareArtifactDirectoryMode(configured string, persistent bool) (*preparedArtifactDirectory, error) {
 	if persistent && configured == "" {
 		return nil, errors.New("durable export journal requires a configured artifact directory")

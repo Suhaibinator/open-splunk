@@ -17,6 +17,7 @@ import { parsePersistedTokenCreateGuard, serializeTokenCreateGuard, tokenCreateG
 
 Object.assign(FakeElement.prototype, {
   closest(this: FakeElement, selector: string) {
+    if (this.tagName.toLowerCase() === selector) return this;
     let element = this.parentNode instanceof FakeElement ? this.parentNode : null;
     while (element !== null) {
       if (element.tagName.toLowerCase() === selector) return element;
@@ -169,9 +170,9 @@ for (const kind of ["legacy", "aged", "current"] as const) {
       releaseCreate?.();
       releaseList?.();
       await act(async () => { root.unmount(); });
+      assert.equal(heldLocks, 0);
       container.parentNode?.removeChild(container);
       globalThis.fetch = originalFetch;
     }
-    assert.equal(heldLocks, 0);
   });
 }
