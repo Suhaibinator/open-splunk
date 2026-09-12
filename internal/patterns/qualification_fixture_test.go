@@ -105,7 +105,7 @@ func qualificationRows(epoch time.Time) ([]searchjobs.ResultRow, string) {
 	rows := make([]searchjobs.ResultRow, qualificationFixtureRows)
 	digest := sha256.New()
 	var encoded [8]byte
-	for index := uint64(0); index < qualificationFixtureRows; index++ {
+	for index := range qualificationFixtureRows {
 		class := qualificationClass(index % qualificationFixtureGroups)
 		raw := fmt.Sprintf("class%s request=%016x status=%d", class, index, 200+index%5)
 		sequence := ^uint64(0) - index

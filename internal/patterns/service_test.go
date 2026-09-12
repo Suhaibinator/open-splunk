@@ -480,7 +480,7 @@ func TestPatternExportLeasesUseTheRetainedRelation(t *testing.T) {
 	if members.RowCount() != 2 || len(members.Schema().Columns) != 2 {
 		t.Fatalf("member metadata rows=%d schema=%+v", members.RowCount(), members.Schema())
 	}
-	for wantOrdinal := uint64(0); wantOrdinal < 2; wantOrdinal++ {
+	for wantOrdinal := range uint64(2) {
 		row, ok, err := members.Next(context.Background())
 		if err != nil || !ok || row.Ordinal != wantOrdinal {
 			t.Fatalf("member %d = ordinal %d ok=%t err=%v", wantOrdinal, row.Ordinal, ok, err)

@@ -96,3 +96,12 @@ func TestNormalizationReviewSignatureLimitAppliesAfterNormalization(t *testing.T
 		t.Fatalf("long literal signature error = %v, want ErrLimit", err)
 	}
 }
+
+func TestNormalizationReviewOversizedWorkingLimitReturnsAtomicLimitError(t *testing.T) {
+	// Even an invalid limit supplied directly to this boundary must not panic or
+	// wrap to a negative native int before the normalizer checks its budget.
+	result, release, err := normalizeWithBudget(t.Context(), nil, "event 42", Balanced, DefaultMaximumSignatureBytes, ^uint64(0))
+	if !errors.Is(err, ErrLimit) || release != nil || result != (normalizedPattern{}) {
+		t.Fatalf("oversized working limit = %+v, release=%t, error=%v", result, release != nil, err)
+	}
+}

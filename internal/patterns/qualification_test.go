@@ -49,10 +49,10 @@ func TestPatternQualification(t *testing.T) {
 		ChargedGlobalLimit: DefaultMaximumPinnedBytes, ChargedWorkingLimit: DefaultMaximumWorkingBytes,
 		TargetColdP95NS: int64(2 * time.Second), TargetCachedP95NS: int64(100 * time.Millisecond), TargetCancelMaximumNS: int64(250 * time.Millisecond),
 	}
-	if revision, err := exec.Command("git", "rev-parse", "HEAD").Output(); err == nil {
+	if revision, err := exec.CommandContext(t.Context(), "git", "rev-parse", "HEAD").Output(); err == nil {
 		report.SourceRevision = strings.TrimSpace(string(revision))
 	}
-	if status, err := exec.Command("git", "status", "--porcelain", "--untracked-files=no").Output(); err == nil {
+	if status, err := exec.CommandContext(t.Context(), "git", "status", "--porcelain", "--untracked-files=no").Output(); err == nil {
 		report.TrackedWorktreeDirty = len(status) != 0
 	}
 	fixture := newQualificationFixture(t)
@@ -293,7 +293,7 @@ func qualificationRSS() (qualificationRSSValue, error) {
 		return qualificationRSSValue{}, err
 	}
 	result := qualificationRSSValue{}
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) != 3 || (fields[0] != "VmRSS:" && fields[0] != "VmHWM:") {
 			continue

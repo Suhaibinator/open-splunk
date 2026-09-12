@@ -153,7 +153,7 @@ func TestPatternAPIValidatesSnapshotBeforeAnalysisAndReleasesSerialization(t *te
 	}}
 	input := &opensplunk.ListSearchPatternsRequest{SearchJobId: "job", SnapshotRef: "invalid", Sensitivity: opensplunk.PatternSensitivity_PATTERN_SENSITIVITY_PRECISE,
 		Page: &opensplunk.PageRequest{IncludeTotalSize: true}}
-	request := httptest.NewRequest(http.MethodPost, "/", nil)
+	request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", nil)
 	if _, err := api.list(request, input); err == nil || fake.calls != 0 {
 		t.Fatalf("unvalidated snapshot reached analysis: %v", err)
 	} else {
@@ -228,7 +228,7 @@ func TestPatternMemberAPIHoldsPermitThroughWriteAndRejectsSnapshot(t *testing.T)
 	}}
 	input := &opensplunk.ListSearchPatternMembersRequest{SearchJobId: "job", PatternId: "opaque", SnapshotRef: "invalid",
 		Sensitivity: opensplunk.PatternSensitivity_PATTERN_SENSITIVITY_BALANCED, Columns: []string{"_raw"}}
-	request := httptest.NewRequest(http.MethodPost, "/", nil)
+	request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", nil)
 	_, err := api.members(request, input)
 	assertHTTPErrorStatus(t, err, http.StatusBadRequest)
 	if fake.calls != 0 {

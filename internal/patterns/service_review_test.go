@@ -117,10 +117,11 @@ func TestServiceReviewCursorsBindScopeGenerationSensitivityAndProjection(t *test
 			changedAccess, changedQuery := access, query
 			mutate(&changedAccess, &changedQuery)
 			result, err := service.List(context.Background(), changedAccess, changedQuery)
-			defer result.Close()
 			if !errors.Is(err, ErrInvalidCursor) && !errors.Is(err, ErrGenerationMismatch) {
+				result.Close()
 				t.Fatalf("cross-context cursor error=%v", err)
 			}
+			result.Close()
 		})
 	}
 	membersQuery := MemberRequest{SearchJobID: "job", Generation: 7, Sensitivity: Balanced, PatternID: patternID, PageSize: 1, Columns: []string{"_raw", "number"}}
@@ -132,10 +133,11 @@ func TestServiceReviewCursorsBindScopeGenerationSensitivityAndProjection(t *test
 	members.Close()
 	membersQuery.Columns = []string{"number", "_raw"}
 	changed, err := service.Members(context.Background(), access, membersQuery)
-	defer changed.Close()
 	if !errors.Is(err, ErrInvalidCursor) {
+		changed.Close()
 		t.Fatalf("projection-replayed cursor error=%v", err)
 	}
+	changed.Close()
 }
 
 type failingReviewSource struct {
@@ -200,10 +202,11 @@ func TestServiceReviewInputAndGroupLimitsAreAtomic(t *testing.T) {
 			config.Source = reviewRows()
 			service := newReviewService(t, config)
 			result, err := service.List(context.Background(), searchjobs.AccessScope{TenantID: "tenant", OwnerID: "owner"}, ListRequest{SearchJobID: "job", Generation: 7, Sensitivity: Balanced})
-			defer result.Close()
 			if !errors.Is(err, ErrLimit) || len(result.Patterns) != 0 {
+				result.Close()
 				t.Fatalf("bound published partial relation: %+v / %v", result, err)
 			}
+			result.Close()
 		})
 	}
 }

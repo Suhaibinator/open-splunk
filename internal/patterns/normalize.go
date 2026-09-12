@@ -27,10 +27,6 @@ type normalizedPattern struct {
 	canonical string
 }
 
-func normalizePattern(raw string, sensitivity Sensitivity, maximumBytes int) (normalizedPattern, error) {
-	return normalizePatternContext(context.Background(), raw, sensitivity, maximumBytes)
-}
-
 func normalizePatternContext(ctx context.Context, raw string, sensitivity Sensitivity, maximumBytes int) (normalizedPattern, error) {
 	return normalizePatternContextWithWorking(ctx, raw, sensitivity, maximumBytes, int(DefaultMaximumWorkingBytes))
 }
@@ -283,9 +279,9 @@ func rightNumericBoundary(value string, end int) bool {
 }
 
 func asciiBoundary(character byte) bool {
-	return !((character >= 'a' && character <= 'z') ||
-		(character >= 'A' && character <= 'Z') ||
-		(character >= '0' && character <= '9') || character == '_')
+	return (character < 'a' || character > 'z') &&
+		(character < 'A' || character > 'Z') &&
+		(character < '0' || character > '9') && character != '_'
 }
 
 func asciiHex(character byte) bool {

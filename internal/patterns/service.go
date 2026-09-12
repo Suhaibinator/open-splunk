@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"fortio.org/safecast"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 )
 
@@ -321,7 +322,7 @@ func (service *Service) Members(ctx context.Context, access searchjobs.AccessSco
 		if err := operation.Err(); err != nil {
 			return MemberResult{}, err
 		}
-		row, present, _, releaseRow, err := nextResultRow(operation, lease)
+		row, present, releaseRow, err := nextResultRow(operation, lease)
 		if err != nil {
 			return MemberResult{}, err
 		}
@@ -466,7 +467,7 @@ func (service *Service) buildCatalog(
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		row, present, _, releaseRow, err := nextResultRow(ctx, lease)
+		row, present, releaseRow, err := nextResultRow(ctx, lease)
 		if err != nil {
 			return nil, err
 		}
@@ -754,11 +755,15 @@ func normalizeWithBudget(
 	if working > maximumWorkingBytes {
 		return normalizedPattern{}, nil, ErrLimit
 	}
+	maximumWorking, conversionErr := safecast.Conv[int](maximumWorkingBytes)
+	if conversionErr != nil {
+		return normalizedPattern{}, nil, ErrLimit
+	}
 	if err := budget.addWorking(working); err != nil {
 		return normalizedPattern{}, nil, err
 	}
 	normalized, err := normalizePatternContextWithWorking(
-		ctx, raw, sensitivity, maximumSignatureBytes, int(maximumWorkingBytes),
+		ctx, raw, sensitivity, maximumSignatureBytes, maximumWorking,
 	)
 	if err != nil {
 		budget.releaseWorkingBytes(working)
@@ -820,19 +825,6 @@ func (budget *operationBudget) reserveWorking(bytes uint64) (func(), bool) {
 	return func() {
 		once.Do(func() { budget.releaseWorkingBytes(bytes) })
 	}, true
-}
-
-func (budget *operationBudget) releaseBytes(bytes uint64) {
-	if bytes == 0 {
-		return
-	}
-	service := budget.service
-	service.mu.Lock()
-	if bytes <= budget.bytes && bytes <= service.globalBytes {
-		budget.bytes -= bytes
-		service.globalBytes -= bytes
-	}
-	service.mu.Unlock()
 }
 
 func (budget *operationBudget) releaseWorkingBytes(bytes uint64) {
@@ -950,15 +942,15 @@ func (service *Service) acquire(
 func nextResultRow(ctx context.Context, lease searchjobs.ResultLease) (
 	searchjobs.ResultRow,
 	bool,
-	uint64,
 	func(),
 	error,
 ) {
 	if bounded, ok := lease.(boundedResultLease); ok && bounded.BoundedRead() {
-		return bounded.NextBounded(ctx)
+		row, present, _, release, err := bounded.NextBounded(ctx)
+		return row, present, release, err
 	}
 	row, present, err := lease.Next(ctx)
-	return row, present, 0, nil, err
+	return row, present, nil, err
 }
 
 func (service *Service) cachedCatalog(key catalogKey, budget *operationBudget) *catalog {

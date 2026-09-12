@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"slices"
 
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 )
@@ -163,14 +162,4 @@ func responseReservationBytes(wireUpperBound uint64) (uint64, error) {
 		return 0, ErrLimit
 	}
 	return wireUpperBound * multiplier, nil
-}
-
-func cloneRow(row searchjobs.ResultRow) searchjobs.ResultRow {
-	result := row
-	result.Values = slices.Clone(row.Values)
-	if row.TimeBucket != nil {
-		bounds := *row.TimeBucket
-		result.TimeBucket = &bounds
-	}
-	return result
 }

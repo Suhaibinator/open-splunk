@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"unicode/utf8"
 
+	"fortio.org/safecast"
 	"github.com/Suhaibinator/SRouter/pkg/codec"
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	"google.golang.org/protobuf/proto"
@@ -75,9 +76,13 @@ func (api *patternAPI) list(request *http.Request, input *opensplunk.ListSearchP
 	if err != nil {
 		return nil, badRequestError("snapshot reference is invalid")
 	}
+	sensitivity, err := patternSensitivityFromProto(input.GetSensitivity())
+	if err != nil {
+		return nil, err
+	}
 	pageSize, pageToken, includeTotal := api.pageRequest(input.GetPage())
 	query := patterns.ListRequest{SearchJobID: input.GetSearchJobId(), Generation: generation,
-		Sensitivity: patterns.Sensitivity(input.GetSensitivity()), PageSize: pageSize, PageToken: pageToken, IncludeTotal: includeTotal}
+		Sensitivity: sensitivity, PageSize: pageSize, PageToken: pageToken, IncludeTotal: includeTotal}
 	result, err := api.service.List(request.Context(), api.handler.accessScope(), query)
 	transferred := false
 	defer func() {
@@ -110,9 +115,13 @@ func (api *patternAPI) members(request *http.Request, input *opensplunk.ListSear
 	if err != nil {
 		return nil, badRequestError("snapshot reference is invalid")
 	}
+	sensitivity, err := patternSensitivityFromProto(input.GetSensitivity())
+	if err != nil {
+		return nil, err
+	}
 	pageSize, pageToken, includeTotal := api.pageRequest(input.GetPage())
 	query := patterns.MemberRequest{SearchJobID: input.GetSearchJobId(), Generation: generation,
-		Sensitivity: patterns.Sensitivity(input.GetSensitivity()), PatternID: input.GetPatternId(), Columns: input.GetColumns(),
+		Sensitivity: sensitivity, PatternID: input.GetPatternId(), Columns: input.GetColumns(),
 		PageSize: pageSize, PageToken: pageToken, IncludeTotal: includeTotal}
 	result, err := api.service.Members(request.Context(), api.handler.accessScope(), query)
 	transferred := false
@@ -267,6 +276,10 @@ func patternMemberSchemaID(jobID string, generation uint64, schema searchjobs.Sc
 }
 
 func patternPageToProto(count, requestedSize int, token, next string, total *uint64, exact, includeTotal, shortPages bool) (*opensplunk.PageResponse, error) {
+	countValue, conversionErr := safecast.Conv[uint64](count)
+	if conversionErr != nil {
+		return nil, errors.New("invalid pattern page count")
+	}
 	if requestedSize == 0 {
 		requestedSize = patterns.DefaultMaximumPageSize
 	}
@@ -277,8 +290,8 @@ func patternPageToProto(count, requestedSize int, token, next string, total *uin
 		return nil, errors.New("invalid pattern page")
 	}
 	if total != nil {
-		if *total > patterns.DefaultMaximumRows || *total < uint64(count) || next != "" && *total <= uint64(count) ||
-			token == "" && next == "" && *total != uint64(count) {
+		if *total > patterns.DefaultMaximumRows || *total < countValue || next != "" && *total <= countValue ||
+			token == "" && next == "" && *total != countValue {
 			return nil, errors.New("invalid pattern page total")
 		}
 	}
@@ -290,6 +303,19 @@ func patternPageToProto(count, requestedSize int, token, next string, total *uin
 		page.NextPageToken = new(next)
 	}
 	return page, nil
+}
+
+func patternSensitivityFromProto(value opensplunk.PatternSensitivity) (patterns.Sensitivity, error) {
+	switch value {
+	case opensplunk.PatternSensitivity_PATTERN_SENSITIVITY_PRECISE:
+		return patterns.Precise, nil
+	case opensplunk.PatternSensitivity_PATTERN_SENSITIVITY_BALANCED:
+		return patterns.Balanced, nil
+	case opensplunk.PatternSensitivity_PATTERN_SENSITIVITY_BROAD:
+		return patterns.Broad, nil
+	default:
+		return patterns.SensitivityInvalid, badRequestError("pattern sensitivity is invalid")
+	}
 }
 
 func (api *patternAPI) pageRequest(page *opensplunk.PageRequest) (int, string, bool) {

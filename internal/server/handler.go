@@ -922,7 +922,7 @@ func NewHandler(config Config) (*Handler, error) {
 	if pageSize > maximumTransportPageSize {
 		return nil, fmt.Errorf("create server handler: maximum page size cannot exceed %d", maximumTransportPageSize)
 	}
-	if searchPatterns != nil && (searchPatterns.MaximumPageSize() < 1 || uint64(searchPatterns.MaximumPageSize()) > uint64(pageSize)) {
+	if searchPatterns != nil && (searchPatterns.MaximumPageSize() < 1 || int64(searchPatterns.MaximumPageSize()) > int64(pageSize)) {
 		return nil, errors.New("create server handler: pattern maximum page size cannot exceed browser maximum page size")
 	}
 	if maximumFieldPageSize > pageSize {

@@ -6,6 +6,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
+	"fortio.org/safecast"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 )
 
@@ -213,12 +214,16 @@ func (lease *summaryExportLease) Next(ctx context.Context) (searchjobs.ResultRow
 	if lease.next == len(lease.patterns) {
 		return searchjobs.ResultRow{}, false, nil
 	}
+	ordinal, conversionErr := safecast.Conv[uint64](lease.next)
+	if conversionErr != nil {
+		return searchjobs.ResultRow{}, false, ErrUnsupported
+	}
 	pattern := lease.patterns[lease.next]
 	percent := float64(0)
 	if lease.eligible != 0 {
 		percent = float64(pattern.EventCount) * 100 / float64(lease.eligible)
 	}
-	row := searchjobs.ResultRow{Ordinal: uint64(lease.next), Values: []searchjobs.Value{
+	row := searchjobs.ResultRow{Ordinal: ordinal, Values: []searchjobs.Value{
 		searchjobs.StringValue(pattern.Signature),
 		searchjobs.UnsignedValue(pattern.EventCount),
 		searchjobs.DoubleValue(percent),
@@ -319,7 +324,7 @@ func (lease *memberExportLease) Next(ctx context.Context) (searchjobs.ResultRow,
 	for {
 		nextContext, cancel := context.WithCancel(ctx)
 		stop := context.AfterFunc(lease.ctx, cancel)
-		row, present, _, releaseRow, err := nextResultRow(nextContext, lease.source)
+		row, present, releaseRow, err := nextResultRow(nextContext, lease.source)
 		if err != nil {
 			stop()
 			cancel()
