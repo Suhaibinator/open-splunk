@@ -103,8 +103,8 @@ import {
   requestTokenCreateLock,
   serializeTokenCreateGuard,
   subscribeTokenCreateGuard,
-  tokenFallsWithinCreateAttributionWindow,
   tokenIsTerminallySafe,
+  tokenCreateNeedsCatalogRecovery,
   tokenMatchesCreateDefinition,
   tokenPurposeLabel,
   tokenUsesHEC,
@@ -1322,6 +1322,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
   const indexCreateAction = useRef(new BrowserCreateAction());
 
   function openIndexDialog() {
+    if (busy !== null) return;
     indexCreateAction.current.complete();
     setIndexEditTarget(null);
     setIndexName("");
@@ -1484,8 +1485,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     cancelIndexLoadMoreRequest();
     setBusy("create-index");
     try {
-      const response = await client.indexes.create({
-        definition: {
+      const definition = {
           name: normalized,
           displayName: indexDisplayName.trim() || normalized,
           description: indexDescription.trim() || undefined,
@@ -1495,8 +1495,10 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
           defaultSourcetype: policy.defaultSourcetype,
           limits: policy.limits,
           ingestionRateLimits: policy.ingestionRateLimits,
-        },
-        clientRequestId: indexCreateAction.current.requestId({ normalized, indexDisplayName, indexDescription, retention, policy }),
+        };
+      const response = await client.indexes.create({
+        definition,
+        clientRequestId: indexCreateAction.current.requestId(definition),
       });
       if (response.index === undefined) throw new Error("The server returned an empty index.");
       indexCreateAction.current.complete();
@@ -1721,6 +1723,19 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
   ) {
     if (tokenRecoveryCheckingRef.current) return;
     if (!requireTokenGuardOwnership(recovery)) return;
+    if (tokenCreateNeedsCatalogRecovery(recovery, authoritativeServerNowMs())) {
+      if (normalizedApiBaseUrl === null) return;
+      const raw = readTokenCreateGuardRaw(normalizedApiBaseUrl);
+      if (raw === null) return;
+      const review: UnreadableTokenCreateRecovery = {
+        attemptId: recovery.attemptId, raw, observedServerTimeMs: null,
+        candidates: [], reconciliationError: "This request has no usable receipt key. Review the full token catalog without resubmitting the create request.",
+      };
+      setTokenCreateRecovery(null);
+      setUnreadableTokenCreateRecovery(review);
+      await reconcileUnreadableTokenCreateRecovery(review);
+      return;
+    }
     const operationGeneration = inheritedOperationGeneration
       ?? beginTokenRecoveryOperation();
     setTokenRecoveryNextCheckAt(null);
@@ -1861,7 +1876,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
         setUnreadableTokenCreateRecovery({
           ...recovery,
           candidates,
-          reconciliationError: "Every nonterminal token must become revoked or expired because the damaged record contains no safe attribution data.",
+          reconciliationError: "Every nonterminal token must become revoked or expired because this record has no usable receipt that identifies its token.",
         });
         return;
       }
@@ -1894,7 +1909,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
         if (!clearUnreadableTokenCreateGuard(nextRecovery)) return;
         setModal((current) => current === "create-token" ? null : current);
         setToast({
-          message: "The damaged token safety record was reconciled. No nonterminal token remained, so token generation is available again.",
+          message: "The saved token safety record was reconciled. No nonterminal token remained, so token generation is available again.",
           kind: "success",
         });
         return;
@@ -3040,7 +3055,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
         ? "The browser reload-safety check is still running."
         : `The browser cannot persist the non-secret token safety record. Token generation is disabled.${tokenCreateGuardStorageError === null ? "" : ` ${tokenCreateGuardStorageError}`}`
       : unreadableTokenCreateRecovery !== null
-        ? `A damaged token safety record is being reconciled. Token generation remains paused, but the rest of Administration is available.${unreadableTokenCreateRecovery.reconciliationError === null ? "" : ` Latest check: ${unreadableTokenCreateRecovery.reconciliationError}`}`
+        ? `A saved token safety record is being reconciled. Token generation remains paused, but the rest of Administration is available.${unreadableTokenCreateRecovery.reconciliationError === null ? "" : ` Latest check: ${unreadableTokenCreateRecovery.reconciliationError}`}`
       : tokenCreateRecovery !== null
         ? `Open Splunk is checking whether token “${tokenCreateRecovery.definition.name}” was created. Token generation remains paused, but the rest of Administration is available.${tokenCreateRecovery.reconciliationError === null ? "" : ` Latest check: ${tokenCreateRecovery.reconciliationError}`}`
       : issuedToken !== null
@@ -3477,7 +3492,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       {modal === "create-token" && tokenRecoveryOpen ? (
         <Modal
           title={unreadableTokenCreateRecovery !== null
-            ? "Resolve damaged token recovery"
+            ? "Review unresolved token request"
             : "Resolve token creation"}
           subtitle="New token creation is paused while Open Splunk checks; the rest of the app remains available."
           dismissible={!tokenDialogHardBlocked}
@@ -3518,7 +3533,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
                 <div>
                   <strong>{unreadableTokenCreateRecovery === null
                     ? "Open Splunk could not confirm token creation"
-                    : "The saved recovery record is damaged"}</strong>
+                    : "The saved request has no usable receipt"}</strong>
                   <p>{unreadableTokenCreateRecovery === null && tokenCreateRecovery !== null
                     ? `We couldn’t confirm whether the server created token “${tokenCreateRecovery.definition.name}.” New token creation is paused while Open Splunk checks. You can keep using the rest of the app.`
                     : "The record no longer contains enough attribution data to identify one create request. Open Splunk must conservatively review every nonterminal ingestion token. You can keep using the rest of the app."}</p>
@@ -3538,10 +3553,10 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
               )}
               <div className="token-recovery-summary">
                 <strong>{tokenCreateRecovery === null
-                  ? "Damaged-record safety review"
+                  ? "Saved-request safety review"
                   : `Checking token “${tokenCreateRecovery.definition.name}”`}</strong>
                 {tokenCreateRecovery === null ? (
-                  <p>All nonterminal tokens listed below must become revoked or expired before two complete zero-result snapshots can safely remove the damaged guard.</p>
+                  <p>All nonterminal tokens listed below must become revoked or expired before two complete zero-result snapshots can safely remove the saved guard.</p>
                 ) : (
                   <p>Request dispatched {tokenCreateRecovery.definition.dispatchedServerTimeMs === null
                     ? "at an unknown server time"
@@ -3560,7 +3575,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
                 <ul className="token-recovery-list" aria-label="Tokens retained in the recovery record">
                   {tokenCreateRecovery.candidates.map((candidate) => (
                     <li key={candidate.ingestionTokenId}>
-                      <div><strong>{candidate.name}</strong><code>{candidate.tokenPrefix}</code><small>Created {formatDate(candidate.createdAt)}</small>{tokenFallsWithinCreateAttributionWindow(candidate, tokenCreateRecovery.definition) ? null : <small className="table-warning-detail">Outside expected request window · manual review required</small>}</div>
+                      <div><strong>{candidate.name}</strong><code>{candidate.tokenPrefix}</code><small>Created {formatDate(candidate.createdAt)}</small></div>
                       <StatusLabel tone={statusTone(tokenStateLabel(candidate.state))}>{tokenStateLabel(candidate.state)}</StatusLabel>
                       <button
                         className="button button--danger"

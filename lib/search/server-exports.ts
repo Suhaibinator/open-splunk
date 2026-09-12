@@ -3,6 +3,7 @@ import {
   CsvHeaderMode,
   ExportJobState,
   JsonIntegerEncoding,
+  type ExportDefinition,
   type ExportJob,
   type ExportProgress,
 } from "@/gen/ts/open_splunk/export";
@@ -243,6 +244,7 @@ function reconcileAuthoritativeExportSnapshot(
 }
 
 export interface CreateServerExportOptions extends BrowserCreateRequestOptions {
+  source?: ExportDefinition["source"];
   searchJobId: string;
   format: ServerExportFormat;
   columns?: readonly string[];
@@ -289,6 +291,9 @@ export async function createServerExport(
   }
   const searchJobId = options.searchJobId.trim();
   if (searchJobId.length === 0) throw new TypeError("Search job ID is required.");
+  if (options.source !== undefined && options.source.value.searchJobId !== searchJobId) {
+    throw new TypeError("Pattern export source must belong to the selected search job.");
+  }
   assertPositiveLimit(options.rowLimit, "Export row limit");
   assertPositiveLimit(options.byteLimit, "Export byte limit");
   if (
@@ -321,7 +326,7 @@ export async function createServerExport(
     const response = await client.exports.create({
       definition: {
         searchJobId,
-        source: undefined,
+        source: options.source,
         columns: [...new Set(options.columns?.map((column) => column.trim()).filter(Boolean) ?? [])],
         rowLimit: options.rowLimit,
         byteLimit: options.byteLimit,

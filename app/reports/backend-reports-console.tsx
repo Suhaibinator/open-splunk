@@ -384,8 +384,8 @@ export function BackendReportsConsole({ apiBaseUrl, onViewChange, view }: Backen
     && supportsServerFeature(currentBootstrap, ServerFeature.SERVER_FEATURE_SCHEDULED_SEARCHES);
 
   function openAction(nextAction: SavedSearchAction, target: ServerSavedSearch) {
-    duplicateAction.current.complete();
     if (actionPending !== null) return;
+    duplicateAction.current.complete();
     setActionError(null);
     setActionName(nextAction === "duplicate"
       ? nextDuplicateSavedSearchName(target.name, savedSearches.map((candidate) => candidate.name))

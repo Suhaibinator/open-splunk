@@ -11,17 +11,56 @@ import (
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/exportjobproto"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
+	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 )
 
 const exportDownloadPath = "/api/search/exports/download"
 
+type idempotentExports interface {
+	ReplayIdempotent(context.Context, searchjobs.AccessScope, requestidempotency.Intent) (exportjobs.Job, bool, error)
+	CreateIdempotent(context.Context, searchjobs.AccessScope, exportjobs.CreateRequest, requestidempotency.Intent) (exportjobs.Job, bool, error)
+}
+
 func (handler *apiHandler) createExportJob(request *http.Request, input *opensplunk.CreateExportJobRequest) (*opensplunk.CreateExportJobResponse, error) {
+	canonical := proto.Clone(input).(*opensplunk.CreateExportJobRequest)
+	canonical.ClientRequestId = nil
+	intent, err := handler.mutationIntent(request.Context(), requestidempotency.RouteCreateExportJob, input.ClientRequestId, canonical)
+	if err != nil {
+		return nil, err
+	}
+	var keyed idempotentExports
+	if intent != nil {
+		var supported bool
+		keyed, supported = handler.exports.(idempotentExports)
+		if !supported {
+			return nil, mapRequestIdempotencyError(requestidempotency.ErrUnavailable)
+		}
+		job, found, err := keyed.ReplayIdempotent(request.Context(), handler.accessScope(), *intent)
+		if err != nil {
+			return nil, mapExportCallError(request.Context(), err)
+		}
+		if found {
+			converted, err := exportJobToProto(job, handler.now())
+			if err != nil {
+				return nil, internalError()
+			}
+			return &opensplunk.CreateExportJobResponse{ExportJob: converted, Replayed: true}, nil
+		}
+	}
 	definition, err := exportRequestFromProto(input.GetDefinition())
 	if err != nil {
 		return nil, badRequestError(err.Error())
 	}
-	job, err := handler.exports.Create(request.Context(), handler.accessScope(), definition)
+	var job exportjobs.Job
+	replayed := false
+	if intent == nil {
+		job, err = handler.exports.Create(request.Context(), handler.accessScope(), definition)
+	} else {
+		job, replayed, err = keyed.CreateIdempotent(request.Context(), handler.accessScope(), definition, *intent)
+	}
 	if callErr := mapExportCallError(request.Context(), err); callErr != nil {
 		return nil, callErr
 	}
@@ -29,7 +68,7 @@ func (handler *apiHandler) createExportJob(request *http.Request, input *openspl
 	if err != nil {
 		return nil, internalError()
 	}
-	return &opensplunk.CreateExportJobResponse{ExportJob: converted}, nil
+	return &opensplunk.CreateExportJobResponse{ExportJob: converted, Replayed: replayed}, nil
 }
 
 func (handler *apiHandler) getExportJob(request *http.Request, input *opensplunk.GetExportJobRequest) (*opensplunk.GetExportJobResponse, error) {
@@ -75,7 +114,13 @@ func (handler *apiHandler) cancelExportJob(request *http.Request, input *openspl
 }
 
 func exportRequestFromProto(definition *opensplunk.ExportDefinition) (exportjobs.CreateRequest, error) {
+	kind, pattern, err := exportPatternSourceFromProto(definition)
+	if err != nil {
+		return exportjobs.CreateRequest{}, err
+	}
 	result := exportjobs.CreateRequest{
+		SourceKind:  kind,
+		Pattern:     pattern,
 		SearchJobID: definition.GetSearchJobId(),
 		Columns:     slices.Clone(definition.GetColumns()),
 		RowLimit:    definition.GetRowLimit(),
@@ -135,6 +180,9 @@ func exportJobToProto(job exportjobs.Job, now time.Time) (*opensplunk.ExportJob,
 		Columns:     slices.Clone(job.Columns),
 		RowLimit:    new(job.RowLimit),
 		ByteLimit:   new(job.ByteLimit),
+	}
+	if err := applyExportPatternSourceToProto(definition, job); err != nil {
+		return nil, err
 	}
 	switch job.Format {
 	case exportjobs.FormatCSV:
@@ -255,6 +303,8 @@ func jsonIntegerEncodingToProto(encoding exportjobs.JSONIntegerEncoding) openspl
 
 func mapExportError(err error) error {
 	switch {
+	case errors.Is(err, requestidempotency.ErrInvalid), errors.Is(err, requestidempotency.ErrConflict), errors.Is(err, requestidempotency.ErrCapacity), errors.Is(err, requestidempotency.ErrUnavailable), errors.Is(err, requestidempotency.ErrCorrupt):
+		return mapRequestIdempotencyError(err)
 	case errors.Is(err, exportjobs.ErrInvalidRequest), errors.Is(err, exportjobs.ErrInvalidColumns):
 		return badRequestError("export definition is invalid")
 	case errors.Is(err, exportjobs.ErrNotFound):

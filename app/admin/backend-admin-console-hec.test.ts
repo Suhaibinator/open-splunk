@@ -14,6 +14,7 @@ import {
   tokenPurposeLabel,
   validHECMetadataDefault,
   validateTokenCreateResponse,
+  tokenCreateNeedsCatalogRecovery,
   type TokenCreateDefinitionSnapshot,
 } from "./token-creation";
 import { tokenCanSetEnabled } from "./backend-admin-panels";
@@ -224,6 +225,11 @@ test("ambiguous-create guard round-trips HEC identity without a secret", () => {
   assert.equal(raw.includes("os_hec_secret"), false);
   const restored = parsePersistedTokenCreateGuard(raw, apiBaseUrl);
   assert.equal(restored?.recovery.clientRequestId, "stored-logical-token-request");
+  assert.ok(restored);
+  assert.equal(tokenCreateNeedsCatalogRecovery(restored.recovery, 2_000), false);
+  assert.equal(tokenCreateNeedsCatalogRecovery({ ...restored.recovery, clientRequestId: undefined }, 2_000), true);
+  assert.equal(tokenCreateNeedsCatalogRecovery(restored.recovery, 1_000 + 7 * 24 * 60 * 60 * 1_000), true);
+  assert.equal(tokenCreateNeedsCatalogRecovery(restored.recovery, 500), false);
   assert.equal(
     restored?.recovery.definition.purpose,
     IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_HEC,

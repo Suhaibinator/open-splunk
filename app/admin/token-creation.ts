@@ -724,3 +724,12 @@ export function validateTokenCreateResponse(
   }
   return token;
 }
+
+export function tokenCreateNeedsCatalogRecovery(
+  recovery: TokenCreateRecovery,
+  serverNowMs: number | undefined,
+): boolean {
+  return recovery.clientRequestId === undefined
+    || (serverNowMs !== undefined
+      && serverNowMs - recovery.definition.armedServerTimeMs >= 7 * 24 * 60 * 60 * 1_000);
+}
