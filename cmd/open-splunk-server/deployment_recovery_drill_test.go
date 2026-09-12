@@ -78,6 +78,7 @@ func TestDeploymentRecoveryDrill(t *testing.T) {
 	if token.GetPlaintextToken() == "" {
 		t.Fatal("token creation returned no credential")
 	}
+	fixture.diagnosticSecrets = append(fixture.diagnosticSecrets, token.GetPlaintextToken())
 	for _, event := range []string{"recovery-event-one", "recovery-event-two", "recovery-event-three"} {
 		fixture.hec(t, ctx, "/services/collector/event", token.GetPlaintextToken(), `{"event":"`+event+`"}`)
 	}
@@ -182,8 +183,20 @@ func TestDeploymentRecoveryDrill(t *testing.T) {
 	fixture.rejectAdministrator(t, ctx)
 	var recoveredRows opensplunk.GetSearchResultsResponse
 	fixture.post(t, ctx, "/api/search/jobs/results", "", &opensplunk.GetSearchResultsRequest{SearchJobId: job}, &recoveredRows)
-	if !proto.Equal(retained.GetResultPage(), recoveredRows.GetResultPage()) {
+	if !recoveryDrillResultsEqual(retained.GetResultPage(), recoveredRows.GetResultPage()) {
 		t.Fatal("retained immutable result changed across restore")
+	}
+	var recoveredPatterns opensplunk.ListSearchPatternsResponse
+	recoveredReference := recoveredRows.GetResultPage().GetSnapshotRef()
+	fixture.post(t, ctx, "/api/search/jobs/patterns/list", "", &opensplunk.ListSearchPatternsRequest{
+		SearchJobId: job, SnapshotRef: recoveredReference,
+		Sensitivity: opensplunk.PatternSensitivity_PATTERN_SENSITIVITY_PRECISE,
+	}, &recoveredPatterns)
+	if recoveredPatterns.GetSnapshotRef() != recoveredReference ||
+		recoveredPatterns.GetRetainedEventCount() != 3 || recoveredPatterns.GetEligibleEventCount() != 3 ||
+		recoveredPatterns.GetExcludedEventCount() != 0 || !recoveredPatterns.GetSnapshotComplete() ||
+		recoveredPatterns.GetRetainedTruncated() {
+		t.Fatal("restored snapshot reference did not resolve the complete retained event relation")
 	}
 	freshJob := fixture.search(t, ctx, definition)
 	var freshRows opensplunk.GetSearchResultsResponse
@@ -326,6 +339,8 @@ type recoveryDrill struct {
 	client                                                                       *http.Client
 	tls                                                                          *tls.Config
 	restore                                                                      bool
+	diagnosticSecrets                                                            []string
+	lastReadiness                                                                string
 }
 
 func newRecoveryDrill(t *testing.T, ctx context.Context, image, helper string) *recoveryDrill {
@@ -336,6 +351,7 @@ func newRecoveryDrill(t *testing.T, ctx context.Context, image, helper string) *
 	}
 	fixture := &recoveryDrill{project: "recovery-drill-" + nativeRecoveryIntegrationRandomHex(t, 6), repository: repository, work: t.TempDir(),
 		administrator: nativeRecoveryIntegrationRandomHex(t, 32), operatorPassword: nativeRecoveryIntegrationRandomHex(t, 32)}
+	fixture.diagnosticSecrets = []string{fixture.administrator}
 	config := filepath.Join(fixture.work, "config")
 	identity, err := testsupport.WriteServerTLSIdentity(config, "clickhouse", "127.0.0.1")
 	if err != nil {
@@ -356,6 +372,7 @@ func newRecoveryDrill(t *testing.T, ctx context.Context, image, helper string) *
 	contents := string(template)
 	for role, password := range map[string]string{"operator": fixture.operatorPassword, "backup": nativeRecoveryIntegrationRandomHex(t, 32), "restore": nativeRecoveryIntegrationRandomHex(t, 32)} {
 		digest := sha256.Sum256([]byte(password))
+		fixture.diagnosticSecrets = append(fixture.diagnosticSecrets, password, hex.EncodeToString(digest[:]))
 		contents = strings.ReplaceAll(contents, "@"+strings.ToUpper(role)+"_SHA256@", hex.EncodeToString(digest[:]))
 		recoveryDrillWrite(t, filepath.Join(config, role+".password"), []byte(password))
 	}
@@ -445,8 +462,10 @@ func (fixture *recoveryDrill) wait(t *testing.T, ctx context.Context, label stri
 	for !ready() {
 		select {
 		case <-ctx.Done():
+			fixture.reportDiagnostics(t)
 			t.Fatalf("wait for %s: %v", label, ctx.Err())
 		case <-deadline.C:
+			fixture.reportDiagnostics(t)
 			t.Fatalf("timed out waiting for %s", label)
 		case <-ticker.C:
 		}
@@ -455,20 +474,42 @@ func (fixture *recoveryDrill) wait(t *testing.T, ctx context.Context, label stri
 
 func (fixture *recoveryDrill) waitReady(t *testing.T, ctx context.Context) {
 	t.Helper()
-	address := strings.TrimSpace(fixture.compose(t, ctx, "port", "server", "8080"))
-	fixture.baseURL = "https://" + address
 	fixture.wait(t, ctx, "server readiness", func() bool {
-		request, err := http.NewRequestWithContext(ctx, http.MethodGet, fixture.baseURL+"/readyz", nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		response, err := fixture.client.Do(request)
-		if err != nil {
-			return false
-		}
-		defer response.Body.Close()
-		return response.StatusCode == http.StatusOK
+		return fixture.readinessAttempt(ctx, func(ctx context.Context) (string, error) {
+			command := exec.CommandContext(ctx, "docker", fixture.composeArguments("port", "server", "8080")...)
+			command.Env = fixture.environment
+			output, err := command.Output()
+			return strings.TrimSpace(string(output)), err
+		})
 	})
+}
+
+func (fixture *recoveryDrill) readinessAttempt(ctx context.Context, resolve func(context.Context) (string, error)) bool {
+	// Docker can assign a different ephemeral host port when startup retries
+	// restart the server. Only a verified ready endpoint becomes the API base.
+	address, err := resolve(ctx)
+	if err != nil {
+		fixture.lastReadiness = "resolve server port: " + err.Error()
+		return false
+	}
+	baseURL := "https://" + address
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/readyz", nil)
+	if err != nil {
+		fixture.lastReadiness = "create readiness request: " + err.Error()
+		return false
+	}
+	response, err := fixture.client.Do(request)
+	if err != nil {
+		fixture.lastReadiness = "readiness request: " + err.Error()
+		return false
+	}
+	defer response.Body.Close()
+	fixture.lastReadiness = fmt.Sprintf("GET %s/readyz: HTTP %d", baseURL, response.StatusCode)
+	if response.StatusCode != http.StatusOK {
+		return false
+	}
+	fixture.baseURL = baseURL
+	return true
 }
 
 func (fixture *recoveryDrill) connection(t *testing.T, ctx context.Context) clickhousedriver.Conn {
