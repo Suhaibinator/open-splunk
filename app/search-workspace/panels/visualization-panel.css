@@ -72,7 +72,7 @@
 /* Categorical canvas: the plot and the shared legend it positions */
 .visualization-canvas--categorical {
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(360px, 1fr) 40px;
+  grid-template-rows: minmax(360px, 1fr) minmax(var(--space-8), auto);
   padding: var(--space-5) 18px 5px var(--space-3);
 }
 
@@ -105,7 +105,7 @@
   .visualization-canvas--categorical.legend-right,
   .visualization-canvas--categorical.legend-none {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: 300px 40px;
+    grid-template-rows: 300px minmax(var(--space-8), auto);
     padding-left: var(--space-1);
   }
 
