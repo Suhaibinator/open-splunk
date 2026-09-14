@@ -1410,3 +1410,50 @@ test.describe("SPL editor auto-grow", () => {
     expect(selection).not.toEqual(surface);
   });
 });
+
+// Wrapped legends must contribute their full height to the bordered canvas.
+for (const width of [DESKTOP_WIDTH, NARROW_WIDTH]) {
+  for (const variant of ["columns", "line", "categorical"]) {
+    for (const position of width === NARROW_WIDTH ? ["bottom", "right"] : ["bottom"]) {
+      test(`wrapped ${variant} legend stays inside the canvas at ${width}px (${position})`, async ({ page }) => {
+        const modifier = variant === "columns" ? "" : `visualization-canvas--${variant}`;
+        const plot = variant === "columns"
+          ? '<div class="chart-y-axis">0</div><div class="chart-plot"></div>'
+          : `<div class="${variant === "line" ? "time-series-chart" : "visualization-chart"}"></div>`;
+        const labels = [
+          "Apple OAuth configuration incomplete",
+          "Failed to create canonical course",
+          "Failed to provision personal course workspace",
+          "Request summary statistics",
+          "Section student relink pass failed",
+          "Something went wrong on our end. Please try again. If the problem continues, contact support.",
+          "kms config diverges from source defaults",
+        ];
+        await mount(page, `
+          <div class="visualization-canvas ${modifier} legend-${position}">
+            ${plot}
+            <div class="chart-legend">${labels.map((label) => `<span><i class="legend-info"></i>${label}</span>`).join("")}</div>
+          </div>
+        `, width);
+        const geometry = await page.locator(".visualization-canvas").evaluate((canvas) => {
+          const bounds = canvas.getBoundingClientRect();
+          const legend = canvas.querySelector(".chart-legend");
+          if (legend === null) throw new Error("fixture is missing the legend");
+          return {
+            bottom: bounds.bottom,
+            legendBottom: legend.getBoundingClientRect().bottom,
+            items: Array.from(legend.children, (item) => {
+              const rect = item.getBoundingClientRect();
+              return { top: rect.top, bottom: rect.bottom };
+            }),
+          };
+        });
+        expect(new Set(geometry.items.map((item) => item.top)).size).toBeGreaterThan(1);
+        expect(geometry.legendBottom).toBeLessThan(geometry.bottom);
+        for (const item of geometry.items) {
+          expect(item.bottom).toBeLessThan(geometry.bottom);
+        }
+      });
+    }
+  }
+}
