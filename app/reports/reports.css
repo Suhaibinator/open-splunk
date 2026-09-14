@@ -282,23 +282,6 @@
   text-transform: uppercase;
 }
 
-.reports-select-field select {
-  appearance: none;
-  background: var(--bg-surface) linear-gradient(45deg, transparent 50%, var(--fg-muted) 50%) calc(100% - 11px) 13px / 4px 4px no-repeat;
-  border: 1px solid var(--border-strong);
-  border-radius: 0;
-  color: var(--fg-text);
-  font-size: var(--type-xs);
-  height: 32px;
-  padding: 0 25px 0 var(--space-2);
-  width: 100%;
-}
-
-.reports-select-field select:focus-visible {
-  border-color: var(--border-focus);
-  outline: 1px solid var(--focus-ring);
-}
-
 @media (max-width: 980px) {
   .reports-toolbar {
     grid-template-columns: minmax(240px, 1fr) repeat(3, minmax(120px, 0.55fr));
@@ -327,12 +310,6 @@
   .reports-search-field input {
     font-size: var(--type-xl);
     height: 40px;
-  }
-
-  .reports-select-field select {
-    background-position: calc(100% - 11px) 18px;
-    font-size: var(--type-xl);
-    height: 44px;
   }
 }
 

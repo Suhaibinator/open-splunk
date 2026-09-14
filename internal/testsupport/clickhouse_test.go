@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/xml"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -20,6 +21,145 @@ func TestStartClickHouseRejectsNilContextWithoutCallingDocker(t *testing.T) {
 
 	if _, err := StartClickHouse(nilContext, ""); err == nil || !strings.Contains(err.Error(), "context is required") {
 		t.Fatalf("StartClickHouse(nil) error = %v", err)
+	}
+}
+
+func TestWaitForClickHouseReadinessRequiresStableFinalDaemon(t *testing.T) {
+	t.Parallel()
+
+	connectionRefused := errors.New("connection refused")
+	observations := []clickHouseReadinessObservation{
+		{
+			processName: "entrypoint.sh",
+			queryOutput: []byte("1\n"),
+		},
+		{
+			processName: clickHouseFinalProcessName,
+			queryOutput: []byte("1\n"),
+		},
+		{
+			processName: clickHouseFinalProcessName,
+			queryErr:    connectionRefused,
+		},
+		{
+			processName: clickHouseFinalProcessName,
+			queryOutput: []byte("1\n"),
+		},
+		{
+			processName: clickHouseFinalProcessName,
+			queryOutput: []byte("1\n"),
+		},
+		{
+			processName: clickHouseFinalProcessName,
+			queryOutput: []byte("1\n"),
+		},
+		{
+			processName: clickHouseFinalProcessName,
+			queryOutput: []byte("1\n"),
+		},
+	}
+	ticks := make(chan time.Time, len(observations))
+	for range observations {
+		ticks <- time.Time{}
+	}
+	probes := 0
+	err := waitForClickHouseReadiness(
+		context.Background(),
+		ticks,
+		func(context.Context) clickHouseReadinessObservation {
+			observation := observations[probes]
+			probes++
+			return observation
+		},
+	)
+	if err != nil {
+		t.Fatalf("waitForClickHouseReadiness() error = %v", err)
+	}
+	if probes != len(observations) {
+		t.Fatalf(
+			"waitForClickHouseReadiness() used %d probes, want %d",
+			probes,
+			len(observations),
+		)
+	}
+}
+
+func TestWaitForClickHouseReadinessRejectsCanceledContextBeforeProbe(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	probes := 0
+	err := waitForClickHouseReadiness(
+		ctx,
+		make(chan time.Time),
+		func(context.Context) clickHouseReadinessObservation {
+			probes++
+			return clickHouseReadinessObservation{}
+		},
+	)
+	if err == nil ||
+		!errors.Is(err, context.Canceled) ||
+		!strings.Contains(err.Error(), "before first readiness probe") {
+		t.Fatalf("canceled readiness error = %v", err)
+	}
+	if probes != 0 {
+		t.Fatalf("canceled readiness probes = %d, want 0", probes)
+	}
+}
+
+func TestWaitForClickHouseReadinessReportsFinalDaemonFailure(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	err := waitForClickHouseReadiness(
+		ctx,
+		make(chan time.Time),
+		func(context.Context) clickHouseReadinessObservation {
+			cancel()
+			return clickHouseReadinessObservation{
+				processName: clickHouseFinalProcessName,
+				queryOutput: []byte("native endpoint unavailable"),
+				queryErr:    errors.New("connection refused"),
+			}
+		},
+	)
+	if err == nil ||
+		!errors.Is(err, context.Canceled) ||
+		!strings.Contains(err.Error(), "query final ClickHouse daemon: connection refused") ||
+		!strings.Contains(err.Error(), "native endpoint unavailable") {
+		t.Fatalf("final-daemon readiness error = %v", err)
+	}
+}
+
+func TestWaitForClickHouseReadinessDeadlineCancelsBlockedProbe(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	probes := 0
+	err := waitForClickHouseReadiness(
+		ctx,
+		make(chan time.Time),
+		func(probeContext context.Context) clickHouseReadinessObservation {
+			probes++
+			<-probeContext.Done()
+			return clickHouseReadinessObservation{
+				processErr: probeContext.Err(),
+			}
+		},
+	)
+	if err == nil ||
+		!errors.Is(err, context.DeadlineExceeded) ||
+		!strings.Contains(err.Error(), "inspect container PID 1: context deadline exceeded") {
+		t.Fatalf("deadline readiness error = %v", err)
+	}
+	if probes != 1 {
+		t.Fatalf("deadline readiness probes = %d, want 1", probes)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("blocked readiness probe canceled after %s, want no more than 2s", elapsed)
 	}
 }
 
@@ -373,10 +513,30 @@ func TestServicePrincipalProvisioningSQLUsesOnlyScopedGrants(t *testing.T) {
 		"ALTER TABLE OPEN_SPLUNK.",
 		"GRANT SELECT ON SYSTEM.PARTS TO OPEN_SPLUNK_RUNTIME",
 		"GRANT SELECT ON SYSTEM.* TO OPEN_SPLUNK_RUNTIME",
+		"ON SYSTEM.QUERY_LOG TO OPEN_SPLUNK_RUNTIME",
+		"ON SYSTEM.PART_LOG TO OPEN_SPLUNK_RUNTIME",
+		"ON SYSTEM.EVENTS TO OPEN_SPLUNK_RUNTIME",
+		"DATA_COMPRESSED_BYTES) ON SYSTEM.PARTS TO OPEN_SPLUNK_RUNTIME",
 		"OPEN_SPLUNK_BOOTSTRAP",
 	} {
 		if strings.Contains(upperQuery, forbidden) {
 			t.Errorf("service-principal provisioning SQL contains forbidden %q", forbidden)
+		}
+	}
+}
+
+func TestUnifiedPrincipalProvisioningSQLIncludesLoadTelemetryGrants(t *testing.T) {
+	t.Parallel()
+
+	query := unifiedPrincipalProvisioningSQL(strings.Repeat("a", 64))
+	for _, required := range []string{
+		"GRANT SELECT ON system.parts TO open_splunk",
+		"GRANT SELECT(type, query_start_time_microseconds, query_kind, tables, written_rows, written_bytes, exception_code) ON system.query_log TO open_splunk",
+		"GRANT SELECT(event_time_microseconds, event_type, database, table, rows) ON system.part_log TO open_splunk",
+		"GRANT SELECT(event, value) ON system.events TO open_splunk",
+	} {
+		if !strings.Contains(query, required) {
+			t.Errorf("unified principal provisioning SQL missing %q", required)
 		}
 	}
 }

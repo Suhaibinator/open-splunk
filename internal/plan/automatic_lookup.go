@@ -142,6 +142,7 @@ func InjectAutomaticLookupGroup(
 		return nil, errors.New("inject automatic lookups: knowledge prefix is incomplete")
 	}
 	result := cloneQueryHeader(query)
+	result.timechartContinuations = shiftedTimechartContinuations(query.timechartContinuations, insertAt, 1)
 	result.Operators = make([]Operator, 0, len(query.Operators)+1)
 	result.Operators = append(result.Operators, query.Operators[:insertAt]...)
 	result.Operators = append(result.Operators, group)

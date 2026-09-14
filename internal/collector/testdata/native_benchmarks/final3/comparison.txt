@@ -1,0 +1,33 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+                          │ before.txt  │             after.txt              │
+                          │   sec/op    │   sec/op     vs base               │
+NDJSONDecoder/canonical     1.632µ ± 8%   1.738µ ± 5%       ~ (p=0.062 n=20)
+NDJSONDecoder/nested        3.242µ ± 4%   3.334µ ± 5%       ~ (p=0.387 n=20)
+NDJSONDecoder/high_fields   258.7µ ± 4%   265.6µ ± 3%       ~ (p=0.157 n=20)
+geomean                     11.10µ        11.54µ       +3.97%
+
+                          │  before.txt  │              after.txt              │
+                          │     B/s      │     B/s       vs base               │
+NDJSONDecoder/canonical     60.19Mi ± 7%   56.52Mi ± 5%       ~ (p=0.060 n=20)
+NDJSONDecoder/nested        36.77Mi ± 4%   35.75Mi ± 5%       ~ (p=0.387 n=20)
+NDJSONDecoder/high_fields   52.33Mi ± 4%   50.99Mi ± 3%       ~ (p=0.157 n=20)
+geomean                     48.75Mi        46.88Mi       -3.82%
+
+                          │  before.txt  │               after.txt               │
+                          │     B/op     │     B/op      vs base                 │
+NDJSONDecoder/canonical     2.406Ki ± 0%   2.406Ki ± 0%       ~ (p=1.000 n=20) ¹
+NDJSONDecoder/nested        4.695Ki ± 0%   4.695Ki ± 0%       ~ (p=1.000 n=20) ¹
+NDJSONDecoder/high_fields   429.4Ki ± 0%   429.4Ki ± 0%       ~ (p=1.000 n=20) ¹
+geomean                     16.93Ki        16.93Ki       +0.00%
+¹ all samples are equal
+
+                          │ before.txt  │              after.txt               │
+                          │  allocs/op  │  allocs/op   vs base                 │
+NDJSONDecoder/canonical      55.00 ± 0%    55.00 ± 0%       ~ (p=1.000 n=20) ¹
+NDJSONDecoder/nested         129.0 ± 0%    129.0 ± 0%       ~ (p=1.000 n=20) ¹
+NDJSONDecoder/high_fields   6.369k ± 0%   6.369k ± 0%       ~ (p=1.000 n=20) ¹
+geomean                      356.2         356.2       +0.00%
+¹ all samples are equal

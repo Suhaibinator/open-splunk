@@ -45,6 +45,22 @@ test("terminal initial dashboard jobs return without sleeping or polling", async
   assert.equal(requests, 0);
 });
 
+test("an interrupted durable dashboard job is terminal and is never polled", async () => {
+  const initial = searchJob("job-interrupted", SearchJobState.SEARCH_JOB_STATE_INTERRUPTED);
+  let requests = 0;
+  const result = await waitForDashboardSearchJob(initial, {
+    defaultSearchTimeoutMs: 30_000,
+    signal: new AbortController().signal,
+    sleep: async () => assert.fail("an interrupted job must not sleep"),
+    getJob: async () => {
+      requests += 1;
+      return initial;
+    },
+  });
+  assert.equal(result, initial);
+  assert.equal(requests, 0);
+});
+
 test("dashboard polling is sequential and uses capped exponential backoff", async () => {
   const delays: number[] = [];
   const requestedIDs: string[] = [];

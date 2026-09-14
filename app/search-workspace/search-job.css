@@ -222,6 +222,79 @@
   border-bottom-color: var(--border);
 }
 
+.search-failure-panel {
+  background: var(--bg-canvas);
+  min-height: var(--space-result-panel-min-height);
+  padding: var(--space-6);
+}
+
+.search-failure {
+  align-items: start;
+  background: var(--status-error-soft);
+  border: 1px solid var(--status-error-edge);
+  border-radius: var(--radius-md);
+  color: var(--status-error-strong);
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: auto minmax(0, 1fr);
+  padding: var(--space-5);
+}
+
+.search-failure__icon {
+  color: var(--status-error);
+}
+
+.search-failure__body h2 {
+  color: var(--status-error-strong);
+  font-size: var(--type-xxl);
+  margin: 0;
+}
+
+.search-failure__body > p {
+  color: var(--fg-secondary);
+  font-size: var(--type-sm);
+  margin: var(--space-2) 0 0;
+}
+
+.search-failure__guidance,
+.search-failure__problems {
+  color: var(--fg-secondary);
+  display: grid;
+  font-size: var(--type-sm);
+  gap: var(--space-2);
+  margin: var(--space-4) 0 0;
+  padding-left: var(--space-5);
+}
+
+.search-failure__problems {
+  list-style: none;
+  padding-left: 0;
+}
+
+.search-failure__problems li {
+  align-items: center;
+  background: var(--bg-surface);
+  border: 1px solid var(--status-error-edge);
+  border-radius: var(--radius-sm);
+  display: grid;
+  gap: var(--space-2);
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  padding: var(--space-3);
+}
+
+.search-failure__problems strong {
+  color: var(--status-error-strong);
+  font-family: var(--font-mono);
+  font-size: var(--type-xxs);
+}
+
+.search-failure__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
 .backend-preview-status.is-warning,
 .backend-preview-status.status-finalization-error,
 .backend-preview-status[data-state="finalization-error"],
@@ -509,6 +582,19 @@
 }
 
 @media (max-width: 760px) {
+  .search-failure-panel {
+    min-height: 0;
+    padding: var(--space-3);
+  }
+
+  .search-failure {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .search-failure__problems li {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .job-strip {
     grid-template-columns: minmax(0, 1fr) auto;
     padding-inline: 10px;

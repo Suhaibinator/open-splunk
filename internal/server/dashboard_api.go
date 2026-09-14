@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/Suhaibinator/SRouter/pkg/codec"
-	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
@@ -237,39 +236,15 @@ func mapDashboardCallError(request *http.Request, operationErr error) error {
 	}
 }
 
-func (handler *apiHandler) dashboardRoutes(noAuth router.AuthLevel, smallRequestBytes int64) []router.RouteDefinition {
-	return []router.RouteDefinition{
-		router.RouteConfig[*opensplunk.CreateDashboardRequest, *opensplunk.CreateDashboardResponse]{
-			Path: "/dashboards/create", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.CreateDashboardRequest, *opensplunk.CreateDashboardResponse](), Handler: handler.createDashboard, SourceType: router.Body,
-			Sanitizer: handler.sanitizeCreateDashboardRequest,
-		},
-		router.RouteConfig[*opensplunk.GetDashboardRequest, *opensplunk.GetDashboardResponse]{
-			Path: "/dashboards/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.GetDashboardRequest, *opensplunk.GetDashboardResponse](), Handler: handler.getDashboard, SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeGetDashboardRequest,
-		},
-		router.RouteConfig[*opensplunk.ListDashboardsRequest, *serializedDashboardListResponse]{
-			Path: "/dashboards/list", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newSerializedDashboardListCodec(), Handler: handler.listDashboards, SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeListDashboardsRequest,
-		},
-		router.RouteConfig[*opensplunk.UpdateDashboardRequest, *opensplunk.UpdateDashboardResponse]{
-			Path: "/dashboards/update", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.UpdateDashboardRequest, *opensplunk.UpdateDashboardResponse](), Handler: handler.updateDashboard, SourceType: router.Body,
-			Sanitizer: handler.sanitizeUpdateDashboardRequest,
-		},
-		router.RouteConfig[*opensplunk.DeleteDashboardRequest, *opensplunk.DeleteDashboardResponse]{
-			Path: "/dashboards/delete", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.DeleteDashboardRequest, *opensplunk.DeleteDashboardResponse](), Handler: handler.deleteDashboard, SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeDeleteDashboardRequest,
-		},
-		router.RouteConfig[*opensplunk.RunDashboardPanelRequest, *opensplunk.RunDashboardPanelResponse]{
-			Path: "/dashboards/panels/run", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.RunDashboardPanelRequest, *opensplunk.RunDashboardPanelResponse](), Handler: handler.runDashboardPanel, SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeRunDashboardPanelRequest,
-		},
-	}
+func (handler *apiHandler) registerDashboardRoutes(group *apiRouteGroup, smallRequestBytes int64) {
+	group.Route(
+		protoPostRoute("/dashboards/create", handler.createDashboard, handler.sanitizeCreateDashboardRequest),
+		sizedProtoPostRoute("/dashboards/get", smallRequestBytes, handler.getDashboard, sanitizeGetDashboardRequest),
+		sizedPostRoute("/dashboards/list", smallRequestBytes, newSerializedDashboardListCodec(), handler.listDashboards, sanitizeListDashboardsRequest),
+		protoPostRoute("/dashboards/update", handler.updateDashboard, handler.sanitizeUpdateDashboardRequest),
+		sizedProtoPostRoute("/dashboards/delete", smallRequestBytes, handler.deleteDashboard, sanitizeDeleteDashboardRequest),
+		sizedProtoPostRoute("/dashboards/panels/run", smallRequestBytes, handler.runDashboardPanel, sanitizeRunDashboardPanelRequest),
+	)
 }
 
 type serializedDashboardListResponse = boundedProtoResponse[*opensplunk.ListDashboardsResponse]

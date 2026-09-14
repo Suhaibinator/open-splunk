@@ -99,12 +99,12 @@ func TestSanitizeCreateAppRequestRejectsUnsupportedShapes(t *testing.T) {
 		request *opensplunk.CreateAppRequest
 		message string
 	}{
-		"idempotency key": {
+		"short idempotency key": {
 			request: &opensplunk.CreateAppRequest{
 				Definition:      appSanitizerDefinition(),
 				ClientRequestId: new("retry-1"),
 			},
-			message: "client request idempotency is not supported",
+			message: "request idempotency input is invalid: client request ID must contain between 16 and 128 bytes",
 		},
 		"absent definition": {
 			request: &opensplunk.CreateAppRequest{},

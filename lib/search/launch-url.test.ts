@@ -19,8 +19,20 @@ test("bounded index searches put head before any expensive default pipeline", ()
 test("search launch URLs preserve an explicitly bounded query", () => {
   const query = boundedIndexSearchQuery("main");
   const url = new URL(searchLaunchHref(query), "https://example.test");
+  assert.equal(url.pathname, "/search/events/");
   assert.equal(url.searchParams.get("q"), query);
   assert.equal(url.searchParams.get("run"), "1");
+});
+
+test("search launch URLs select canonical result routes", () => {
+  assert.equal(
+    new URL(searchLaunchHref("index=main | stats count"), "https://example.test").pathname,
+    "/search/statistics/",
+  );
+  assert.equal(
+    new URL(searchLaunchHref("index=main | timechart count"), "https://example.test").pathname,
+    "/search/visualization/",
+  );
 });
 
 test("query launch parsing and replacement preserve exact SPL whitespace", () => {
@@ -51,12 +63,14 @@ test("query launch parsing and replacement preserve exact SPL whitespace", () =>
 
 test("saved-search and exact-job links contain one exclusive source", () => {
   const saved = new URL(savedSearchLaunchHref("saved-1"), "https://example.test");
+  assert.equal(saved.pathname, "/search/events/");
   assert.deepEqual(parseSearchLaunch(saved.searchParams), {
     source: "savedSearchId",
     value: "saved-1",
     run: true,
   });
   const job = new URL(searchJobLaunchHref("job-1"), "https://example.test");
+  assert.equal(job.pathname, "/search/events/");
   assert.deepEqual(parseSearchLaunch(job.searchParams), {
     source: "searchJobId",
     value: "job-1",

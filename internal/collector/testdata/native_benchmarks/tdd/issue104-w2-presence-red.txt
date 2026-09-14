@@ -1,0 +1,116 @@
+--- FAIL: TestParserPresenceRejectsNullAndWrongTypes (0.05s)
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/ndjson/merged-alias-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/ndjson/null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/ndjson/implicit-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/ndjson/tagged-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/ndjson/merged-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/ndjson/merge-sequence-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/ndjson/tilde (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/ndjson/alias-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/raw/tagged-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/raw/merged-alias-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/raw/merge-sequence-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/raw/tilde (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/raw/alias-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/raw/merged-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/raw/null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/raw/implicit-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/docker-json-file/merged-alias-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/docker-json-file/null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/docker-json-file/implicit-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/docker-json-file/merged-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/docker-json-file/merge-sequence-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/docker-json-file/tilde (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/docker-json-file/tagged-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/docker-json-file/alias-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/nginx-combined/implicit-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/nginx-combined/tilde (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/nginx-combined/merged-alias-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/nginx-combined/null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/nginx-combined/tagged-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/nginx-combined/alias-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/nginx-combined/merged-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/nginx-combined/merge-sequence-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/apache-common/implicit-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/apache-common/tilde (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/apache-common/tagged-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/apache-common/alias-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/apache-common/merged-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/apache-common/merged-alias-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/apache-common/merge-sequence-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/apache-common/null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/apache-combined/null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/apache-combined/implicit-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/apache-combined/alias-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/apache-combined/merged-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/apache-combined/tilde (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/apache-combined/tagged-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/apache-combined/merged-alias-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/apache-combined/merge-sequence-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/logfmt/implicit-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/logfmt/alias-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/logfmt/merged-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/logfmt/merged-alias-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/logfmt/null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/logfmt/tilde (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/logfmt/tagged-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+    --- FAIL: TestParserPresenceRejectsNullAndWrongTypes/logfmt/merge-sequence-null (0.00s)
+        parser_presence_test.go:26: accepted parser value that is not a mapping
+FAIL
+FAIL	github.com/Suhaibinator/open-splunk/internal/collector/config	0.379s
+FAIL

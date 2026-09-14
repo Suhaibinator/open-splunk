@@ -1,0 +1,5 @@
+internal/collector/parserconfig/perf_review_astra_correctness_test.go:28:6: rangeint: for loop can be modernized using range over int (modernize)
+	for i := 0; i < 1023; i++ {
+	    ^
+1 issues:
+* modernize: 1

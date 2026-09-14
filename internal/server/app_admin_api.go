@@ -18,15 +18,24 @@ import (
 
 	"fortio.org/safecast"
 	"github.com/Suhaibinator/SRouter/pkg/codec"
-	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 )
+
+type idempotentAppAdministration interface {
+	CreateAppIdempotent(
+		context.Context,
+		AppAdministrationScope,
+		AppAdministrationDefinition,
+		requestidempotency.Intent,
+	) (AppAdministrationWorkspace, bool, error)
+}
 
 const (
 	defaultAppAdministrationPageSize     = 50
@@ -156,97 +165,36 @@ type AppAdministrationListResult struct {
 	TotalSizeExact  bool
 }
 
-func (handler *apiHandler) appAdministrationRoutes(
-	noAuth router.AuthLevel,
+func (handler *apiHandler) registerAppAdministrationRoutes(
+	group *apiRouteGroup,
 	requestBytes int64,
 	smallRequestBytes int64,
-) []router.RouteDefinition {
-	return []router.RouteDefinition{
-		router.RouteConfig[
-			*opensplunk.CreateAppRequest,
-			*serializedCreateAppResponse,
-		]{
-			Path:       "/apps/create",
-			Methods:    []router.HttpMethod{router.MethodPost},
-			AuthLevel:  &noAuth,
-			Codec:      newSerializedCreateAppCodec(),
-			Handler:    handler.createApp,
-			SourceType: router.Body,
-			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: requestBytes},
-			Sanitizer:  sanitizeCreateAppRequest,
-		},
-		router.RouteConfig[
-			*opensplunk.GetAppRequest,
-			*serializedGetAppResponse,
-		]{
-			Path:       "/apps/get",
-			Methods:    []router.HttpMethod{router.MethodPost},
-			AuthLevel:  &noAuth,
-			Codec:      newSerializedGetAppCodec(),
-			Handler:    handler.getApp,
-			SourceType: router.Body,
-			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer:  sanitizeGetAppRequest,
-		},
-		router.RouteConfig[
-			*opensplunk.ListAppsRequest,
-			*serializedListAppsResponse,
-		]{
-			Path:       "/apps/list",
-			Methods:    []router.HttpMethod{router.MethodPost},
-			AuthLevel:  &noAuth,
-			Codec:      newSerializedListAppsCodec(),
-			Handler:    handler.listApps,
-			SourceType: router.Body,
-			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer:  sanitizeListAppsRequest,
-		},
-		router.RouteConfig[
-			*opensplunk.UpdateAppRequest,
-			*serializedUpdateAppResponse,
-		]{
-			Path:       "/apps/update",
-			Methods:    []router.HttpMethod{router.MethodPost},
-			AuthLevel:  &noAuth,
-			Codec:      newSerializedUpdateAppCodec(),
-			Handler:    handler.updateApp,
-			SourceType: router.Body,
-			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: requestBytes},
-			Sanitizer:  sanitizeUpdateAppRequest,
-		},
-		router.RouteConfig[
-			*opensplunk.SetAppStateRequest,
-			*serializedSetAppStateResponse,
-		]{
-			Path:       "/apps/state/set",
-			Methods:    []router.HttpMethod{router.MethodPost},
-			AuthLevel:  &noAuth,
-			Codec:      newSerializedSetAppStateCodec(),
-			Handler:    handler.setAppState,
-			SourceType: router.Body,
-			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer:  sanitizeSetAppStateRequest,
-		},
-		router.RouteConfig[
-			*opensplunk.DeleteAppRequest,
-			*serializedDeleteAppResponse,
-		]{
-			Path:       "/apps/delete",
-			Methods:    []router.HttpMethod{router.MethodPost},
-			AuthLevel:  &noAuth,
-			Codec:      newSerializedDeleteAppCodec(),
-			Handler:    handler.deleteApp,
-			SourceType: router.Body,
-			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer:  sanitizeDeleteAppRequest,
-		},
-	}
+) {
+	group.Route(
+		sizedPostRoute("/apps/create", requestBytes, newSerializedCreateAppCodec(), handler.createApp, sanitizeCreateAppRequest),
+		sizedPostRoute("/apps/get", smallRequestBytes, newSerializedGetAppCodec(), handler.getApp, sanitizeGetAppRequest),
+		sizedPostRoute("/apps/list", smallRequestBytes, newSerializedListAppsCodec(), handler.listApps, sanitizeListAppsRequest),
+		sizedPostRoute("/apps/update", requestBytes, newSerializedUpdateAppCodec(), handler.updateApp, sanitizeUpdateAppRequest),
+		sizedPostRoute("/apps/state/set", smallRequestBytes, newSerializedSetAppStateCodec(), handler.setAppState, sanitizeSetAppStateRequest),
+		sizedPostRoute("/apps/delete", smallRequestBytes, newSerializedDeleteAppCodec(), handler.deleteApp, sanitizeDeleteAppRequest),
+	)
 }
 
 func (handler *apiHandler) createApp(
 	request *http.Request,
 	input *opensplunk.CreateAppRequest,
 ) (*serializedCreateAppResponse, error) {
+	canonical := proto.Clone(input).(*opensplunk.CreateAppRequest)
+	canonical.ClientRequestId = nil
+	intent, err := handler.mutationIntent(
+		request.Context(),
+		requestidempotency.RouteCreateApp,
+		input.ClientRequestId,
+		canonical,
+	)
+	if err != nil {
+		return nil, err
+	}
 	scope, err := handler.appAdministrationAccess(request)
 	if err != nil {
 		return nil, err
@@ -270,11 +218,29 @@ func (handler *apiHandler) createApp(
 	}()
 
 	expectedDefinition := cloneAppAdministrationDefinition(definition)
-	record, operationErr := handler.appAdmin.CreateApp(
-		request.Context(),
-		scope,
-		cloneAppAdministrationDefinition(definition),
-	)
+	var record AppAdministrationWorkspace
+	replayed := false
+	var operationErr error
+	if intent == nil {
+		record, operationErr = handler.appAdmin.CreateApp(
+			request.Context(),
+			scope,
+			cloneAppAdministrationDefinition(definition),
+		)
+	} else if idempotent, ok := handler.appAdmin.(idempotentAppAdministration); ok {
+		record, replayed, operationErr = idempotent.CreateAppIdempotent(
+			request.Context(),
+			scope,
+			cloneAppAdministrationDefinition(definition),
+			*intent,
+		)
+	} else {
+		return nil, unavailableError("app idempotency is unavailable")
+	}
+	if mapped := mapRequestIdempotencyError(operationErr); mapped != nil &&
+		isRequestIdempotencyError(operationErr) {
+		return nil, mapped
+	}
 	if mapped := mapAppAdministrationCallError(
 		request.Context(),
 		operationErr,
@@ -282,17 +248,17 @@ func (handler *apiHandler) createApp(
 		return nil, mapped
 	}
 	converted, err := handler.appAdministrationWorkspaceToProto(record)
-	if err != nil ||
-		converted.GetVersion() != 1 ||
-		record.State != AppAdministrationStateActive ||
-		!equalAppAdministrationDefinition(
-			record.Definition,
-			expectedDefinition,
-		) ||
-		!record.CreatedAt.Equal(record.UpdatedAt) {
+	if err != nil || converted.GetVersion() == 0 ||
+		(!replayed && (converted.GetVersion() != 1 ||
+			record.State != AppAdministrationStateActive ||
+			!equalAppAdministrationDefinition(
+				record.Definition,
+				expectedDefinition,
+			) ||
+			!record.CreatedAt.Equal(record.UpdatedAt))) {
 		return nil, internalError()
 	}
-	message := &opensplunk.CreateAppResponse{App: converted}
+	message := &opensplunk.CreateAppResponse{App: converted, Replayed: replayed}
 	if proto.Size(message) > maximumAppAdministrationResponse {
 		return nil, internalError()
 	}

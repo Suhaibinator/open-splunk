@@ -491,9 +491,9 @@ func testStreamStatsAgainstClickHouse(
 			wantCounts: []uint64{0, 0, 0, 0, 0, 0, 0},
 		},
 		{
-			name:       "conditional exact numeric and string calls",
+			name:       "conditional exact numeric strings and string calls",
 			predicate:  `(streamstats_group=500 AND match(event_id, "-(01|03|07)$")) OR like(event_id, "%06")`,
-			wantCounts: []uint64{0, 0, 1, 1, 1, 2, 3},
+			wantCounts: []uint64{1, 1, 2, 2, 2, 3, 4},
 		},
 	} {
 		assertCounts(

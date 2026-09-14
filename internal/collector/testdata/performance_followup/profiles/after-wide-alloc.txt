@@ -1,0 +1,17 @@
+File: after.test
+Type: alloc_objects
+Time: 2026-09-08 09:15:51 PDT
+Showing nodes accounting for 40444758, 99.43% of 40677670 total
+Dropped 33 nodes (cum <= 203388)
+      flat  flat%   sum%        cum   cum%
+  13664463 33.59% 33.59%   21504133 52.86%  encoding/json.(*Decoder).Token
+  11018742 27.09% 60.68%   11018742 27.09%  github.com/Suhaibinator/open-splunk/internal/collector.typedJSONNumber
+   7798902 19.17% 79.85%    7798902 19.17%  encoding/json/jsontext.Token.String (inline)
+   7668114 18.85% 98.70%   18686856 45.94%  github.com/Suhaibinator/open-splunk/internal/collector.dynamicFields
+    267775  0.66% 99.36%   21771908 53.52%  github.com/Suhaibinator/open-splunk/internal/collector.(*jsonParser).value
+     26762 0.066% 99.43%   40578606 99.76%  github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).Decode
+         0     0% 99.43%   40578606 99.76%  github.com/Suhaibinator/open-splunk/internal/collector.BenchmarkNDJSONDecoder.func1
+         0     0% 99.43%   21796021 53.58%  github.com/Suhaibinator/open-splunk/internal/collector.parseJSONObject
+         0     0% 99.43%   11018742 27.09%  github.com/Suhaibinator/open-splunk/internal/collector.typedJSONValue
+         0     0% 99.43%   40578606 99.76%  testing.(*B).run1.func1
+         0     0% 99.43%   40578606 99.76%  testing.(*B).runN

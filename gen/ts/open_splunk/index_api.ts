@@ -128,7 +128,11 @@ export interface CreateIndexRequest {
 }
 
 export interface CreateIndexResponse {
-  index: Index | undefined;
+  index:
+    | Index
+    | undefined;
+  /** True when this request resolves an earlier accepted logical action. */
+  replayed: boolean;
 }
 
 /** POST /api/indexes/get */
@@ -354,13 +358,16 @@ export const CreateIndexRequest: MessageFns<CreateIndexRequest> = {
 };
 
 function createBaseCreateIndexResponse(): CreateIndexResponse {
-  return { index: undefined };
+  return { index: undefined, replayed: false };
 }
 
 export const CreateIndexResponse: MessageFns<CreateIndexResponse> = {
   encode(message: CreateIndexResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     if (message.index !== undefined) {
       Index.encode(message.index, writer.uint32(10).fork()).join();
+    }
+    if (message.replayed !== false) {
+      writer.uint32(16).bool(message.replayed);
     }
     return writer;
   },
@@ -386,6 +393,14 @@ export const CreateIndexResponse: MessageFns<CreateIndexResponse> = {
             message.index = Index.decode(reader, reader.uint32());
             continue;
           }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.replayed = reader.bool();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -399,13 +414,19 @@ export const CreateIndexResponse: MessageFns<CreateIndexResponse> = {
   },
 
   fromJSON(object: any): CreateIndexResponse {
-    return { index: isSet(object.index) ? Index.fromJSON(object.index) : undefined };
+    return {
+      index: isSet(object.index) ? Index.fromJSON(object.index) : undefined,
+      replayed: isSet(object.replayed) ? globalThis.Boolean(object.replayed) : false,
+    };
   },
 
   toJSON(message: CreateIndexResponse): unknown {
     const obj: any = {};
     if (message.index !== undefined) {
       obj.index = Index.toJSON(message.index);
+    }
+    if (message.replayed !== false) {
+      obj.replayed = message.replayed;
     }
     return obj;
   },
@@ -416,6 +437,7 @@ export const CreateIndexResponse: MessageFns<CreateIndexResponse> = {
   fromPartial<I extends Exact<DeepPartial<CreateIndexResponse>, I>>(object: I): CreateIndexResponse {
     const message = createBaseCreateIndexResponse();
     message.index = (object.index !== undefined && object.index !== null) ? Index.fromPartial(object.index) : undefined;
+    message.replayed = object.replayed ?? false;
     return message;
   },
 };

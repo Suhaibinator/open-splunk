@@ -1231,6 +1231,13 @@ func (runtimeFieldExecutionExecutor) Execute(
 			Nullable: true,
 		}
 	}
+	if output, available := compiled.NearbyEventOutput(); available {
+		// Physical event columns keep their executor types; dynamic fields may mix.
+		columns[output.TimeIndex].Kind = searchjobs.ValueKindTime
+		for _, index := range []uint16{output.IndexIndex, output.HostIndex, output.SourceIndex} {
+			columns[index].Kind = searchjobs.ValueKindString
+		}
+	}
 	return sink.SetSchema(searchjobs.Schema{Columns: columns})
 }
 

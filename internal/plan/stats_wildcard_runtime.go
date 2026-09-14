@@ -863,7 +863,7 @@ func statsWildcardPlanSemanticDigest(query *Query) ([sha256.Size]byte, bool) {
 	} else {
 		writeStatsWildcardUint64(digest, 1)
 		writeStatsWildcardStrings(digest, query.DynamicOutput.FixedFields)
-		writeStatsWildcardUint64(digest, uint64(query.DynamicOutput.MaxSeries))
+		writeStatsWildcardUint64(digest, query.DynamicOutput.MaxSeries)
 	}
 	if !writeStatsWildcardTime(digest, query.SearchStart) {
 		return [sha256.Size]byte{}, false

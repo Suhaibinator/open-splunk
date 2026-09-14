@@ -21,6 +21,7 @@ import (
 	"fortio.org/safecast"
 	"github.com/Suhaibinator/open-splunk/internal/featureops"
 	"github.com/Suhaibinator/open-splunk/internal/privatefs"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchretention"
 	"golang.org/x/sys/unix"
@@ -438,6 +439,30 @@ func (store *Store) Get(
 	return store.getLocked(ctx, access, jobID, mode)
 }
 
+// ReadIdempotencyTarget rehydrates one receipt through the current durable,
+// owner-scoped metadata boundary. Expired or missing targets stay unavailable
+// and are never recreated under the original request key.
+func (store *Store) ReadIdempotencyTarget(
+	ctx context.Context,
+	access searchjobs.AccessScope,
+	target requestidempotency.Target,
+) (searchjobs.Job, error) {
+	if target.Kind != requestidempotency.TargetSearchJob || target.ID == "" || target.Version == 0 {
+		return searchjobs.Job{}, requestidempotency.ErrCorrupt
+	}
+	record, err := store.Get(ctx, access, target.ID, AccessInspect)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) || errors.Is(err, ErrExpired) {
+			return searchjobs.Job{}, requestidempotency.ErrUnavailable
+		}
+		return searchjobs.Job{}, err
+	}
+	if record.Job.ID != target.ID || record.Job.Version < target.Version {
+		return searchjobs.Job{}, requestidempotency.ErrCorrupt
+	}
+	return record.Job, nil
+}
+
 // Acquire pins a completed artifact and refreshes its expiry under the store
 // mutex, then validates the opened file identity and reuses verified metadata
 // without blocking unrelated metadata operations.
@@ -445,6 +470,32 @@ func (store *Store) Acquire(
 	ctx context.Context,
 	access searchjobs.AccessScope,
 	jobID string,
+) (ResultLease, error) {
+	return store.acquire(ctx, access, jobID, nil)
+}
+
+// AcquireBounded preserves Acquire's authorization, immutable pin, and
+// generation semantics while reserving conservative decode memory before any
+// artifact metadata or row payload is decoded. The callback must be
+// concurrency-safe. Its releases are invoked on every failed acquisition and
+// when the returned lease closes.
+func (store *Store) AcquireBounded(
+	ctx context.Context,
+	access searchjobs.AccessScope,
+	jobID string,
+	reserve func(uint64) (func(), bool),
+) (ResultLease, error) {
+	if reserve == nil {
+		return nil, ErrInvalid
+	}
+	return store.acquire(ctx, access, jobID, reserve)
+}
+
+func (store *Store) acquire(
+	ctx context.Context,
+	access searchjobs.AccessScope,
+	jobID string,
+	reserve func(uint64) (func(), bool),
 ) (ResultLease, error) {
 	if ctx == nil || !validIdentity(access, jobID) {
 		return nil, ErrInvalid
@@ -509,6 +560,22 @@ func (store *Store) Acquire(
 		store.mu.Unlock()
 		return nil, ErrCorrupt
 	}
+	var releaseMemory func()
+	if reserve != nil {
+		charge, chargeErr := boundedArtifactAcquireBytes(file, record.ArtifactBytes)
+		if chargeErr != nil {
+			_ = file.Close()
+			store.mu.Unlock()
+			return nil, chargeErr
+		}
+		var reserved bool
+		releaseMemory, reserved = reserve(charge)
+		if !reserved || releaseMemory == nil {
+			_ = file.Close()
+			store.mu.Unlock()
+			return nil, ErrCapacity
+		}
+	}
 	store.pins[jobID]++
 	store.loads.Add(1)
 	load := store.load
@@ -525,17 +592,22 @@ func (store *Store) Acquire(
 	if loadErr != nil {
 		_ = file.Close()
 		store.releasePin(jobID)
+		if releaseMemory != nil {
+			releaseMemory()
+		}
 		return nil, loadErr
 	}
 	return &resultLease{
-		store:      store,
-		jobID:      jobID,
-		generation: metadata.Generation,
-		schema:     cloneSchema(metadata.Schema),
-		rowCount:   metadata.RowCount,
-		rowExact:   metadata.RowCountExact,
-		rows:       rows,
-		truncated:  metadata.ResultsTruncated,
+		store:         store,
+		jobID:         jobID,
+		generation:    metadata.Generation,
+		schema:        cloneSchema(metadata.Schema),
+		rowCount:      metadata.RowCount,
+		rowExact:      metadata.RowCountExact,
+		rows:          rows,
+		truncated:     metadata.ResultsTruncated,
+		reserve:       reserve,
+		releaseMemory: releaseMemory,
 	}, nil
 }
 

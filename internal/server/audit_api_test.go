@@ -134,6 +134,7 @@ func TestIndexAuditProtoTaxonomyRoundTripsAndAcceptsCompleteFilterSet(t *testing
 		opensplunk.AuditAction_AUDIT_ACTION_LOOKUP_ENABLE,
 		opensplunk.AuditAction_AUDIT_ACTION_LOOKUP_DISABLE,
 		opensplunk.AuditAction_AUDIT_ACTION_LOOKUP_DELETE,
+		opensplunk.AuditAction_AUDIT_ACTION_EXPORT_CREATE,
 	}
 	service := &fakeAuditEvents{}
 	handler := newAuditTestHandler(t, service)

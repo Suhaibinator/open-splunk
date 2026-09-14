@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/collector/parserconfig"
 	"github.com/Suhaibinator/open-splunk/internal/collectorlimits"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/jsonnumber"
@@ -51,6 +52,7 @@ type DecodeConfig struct {
 	MaxLineBytes   int
 	MaxJSONDepth   int
 	MaxJSONFields  int
+	Parser         *parserconfig.Options
 }
 
 // SourcePosition is the durable origin of one framed event. Both line fields
@@ -73,14 +75,23 @@ type Decoder struct {
 	cfg           DecodeConfig
 	constants     []*opensplunk.TypedObjectField
 	constantNames map[string]struct{}
+	parser        *parserconfig.Compiled
+	kind          decoderKind
 }
+
+type decoderKind uint8
+
+const (
+	decoderNDJSON decoderKind = iota
+	decoderRaw
+	decoderNative
+)
 
 // NewDecoder validates and takes an independent copy of cfg.
 func NewDecoder(cfg DecodeConfig) (*Decoder, error) {
-	switch cfg.Format {
-	case InputFormatNDJSON, InputFormatRaw:
-	default:
-		return nil, fmt.Errorf("unsupported input format %q", cfg.Format)
+	compiled, err := parserconfig.Compile(string(cfg.Format), cfg.Parser)
+	if err != nil {
+		return nil, err
 	}
 	for name, value := range map[string]string{
 		"input ID": cfg.InputID, "index name": cfg.IndexName, "source": cfg.Source,
@@ -108,6 +119,11 @@ func NewDecoder(cfg DecodeConfig) (*Decoder, error) {
 	if cfg.MaxLineBytes < 1 || cfg.MaxJSONDepth < 1 || cfg.MaxJSONFields < 1 {
 		return nil, errors.New("decoder limits must be positive")
 	}
+	if cfg.Format != InputFormatNDJSON && cfg.Format != InputFormatRaw {
+		if cfg.MaxLineBytes > defaultMaxLineBytes || cfg.MaxJSONFields > defaultMaxJSONFields {
+			return nil, errors.New("native decoder limits exceed the event or field ceiling")
+		}
+	}
 
 	constants, err := cloneAndValidateConstants(cfg.ConstantFields)
 	if err != nil {
@@ -118,7 +134,17 @@ func NewDecoder(cfg DecodeConfig) (*Decoder, error) {
 		constantNames[field.GetName()] = struct{}{}
 	}
 	cfg.ConstantFields = nil
-	return &Decoder{cfg: cfg, constants: constants, constantNames: constantNames}, nil
+	cfg.Parser = nil
+	// Format validation and classification happen once. NDJSON enters its direct
+	// JSON path with one integer branch, without comparing format strings per event.
+	kind := decoderNative
+	switch cfg.Format {
+	case InputFormatNDJSON:
+		kind = decoderNDJSON
+	case InputFormatRaw:
+		kind = decoderRaw
+	}
+	return &Decoder{cfg: cfg, constants: constants, constantNames: constantNames, parser: compiled, kind: kind}, nil
 }
 
 // Decode converts raw to an independent event. raw must not contain the file
@@ -174,19 +200,22 @@ func (d *Decoder) Decode(raw []byte, position SourcePosition, collectedAt time.T
 		event.RawEncoding = opensplunk.RawEncoding_RAW_ENCODING_UTF8
 	}
 
-	if d.cfg.Format == InputFormatRaw {
-		if event.RawEncoding == opensplunk.RawEncoding_RAW_ENCODING_UTF8 {
-			event.Message = new(string(raw))
+	if d.kind != decoderNDJSON {
+		if d.kind == decoderRaw {
+			if event.RawEncoding == opensplunk.RawEncoding_RAW_ENCODING_UTF8 {
+				event.Message = new(string(raw))
+			}
+			event.Fields = d.mergeConstants(nil)
+			return event, nil
 		}
-		event.Fields = d.mergeConstants(nil)
-		return event, nil
+		return d.decodeNative(event, raw)
 	}
 
 	parsed, err := parseJSONObject(raw, d.cfg.MaxJSONDepth, d.cfg.MaxJSONFields)
 	if err != nil {
 		return nil, fmt.Errorf("decode NDJSON event: %w", err)
 	}
-	if err := d.extractCanonical(event, parsed, collectedAt); err != nil {
+	if err := d.extractCanonical(event, parsed); err != nil {
 		return nil, err
 	}
 	dynamic, err := dynamicFields(parsed)
@@ -197,7 +226,7 @@ func (d *Decoder) Decode(raw []byte, position SourcePosition, collectedAt time.T
 	return event, nil
 }
 
-func (d *Decoder) extractCanonical(event *opensplunk.LogEvent, object jsonObject, fallback time.Time) error {
+func (d *Decoder) extractCanonical(event *opensplunk.LogEvent, object jsonObject) error {
 	if value, found, err := oneCanonical(object, "timestamp", "ts", "time", "@timestamp"); err != nil {
 		return err
 	} else if found && value != nil {
@@ -210,8 +239,6 @@ func (d *Decoder) extractCanonical(event *opensplunk.LogEvent, object jsonObject
 			return fmt.Errorf("invalid event timestamp: %w", err)
 		}
 		event.EventTimeSource = opensplunk.EventTimeSource_EVENT_TIME_SOURCE_PARSED
-	} else {
-		event.EventTime = timestamppb.New(fallback)
 	}
 
 	if value, found, err := oneCanonical(object, "level", "severity", "severity_text"); err != nil {
@@ -255,6 +282,14 @@ func (d *Decoder) extractCanonical(event *opensplunk.LogEvent, object jsonObject
 }
 
 func (d *Decoder) mergeConstants(dynamic []*opensplunk.TypedObjectField) *opensplunk.TypedObject {
+	if len(d.constants) == 0 {
+		// Dynamic fields belong to this decode, so no second slice is needed.
+		// Preserve the established nonnil representation of empty fields.
+		if dynamic == nil {
+			dynamic = []*opensplunk.TypedObjectField{}
+		}
+		return &opensplunk.TypedObject{Fields: dynamic}
+	}
 	fields := make([]*opensplunk.TypedObjectField, 0, len(dynamic)+len(d.constants))
 	positions := make(map[string]int, len(dynamic)+len(d.constants))
 	for _, field := range dynamic {
@@ -576,8 +611,15 @@ func sourceOrigin(inputID string, position SourcePosition) *opensplunk.EventOrig
 
 func stableEventID(inputID string, position SourcePosition, raw []byte) string {
 	hash := sha256.New()
-	writeHashString(hash, inputID)
-	writeHashString(hash, position.FileIdentity)
+	// Keep writes on the concrete digest path so temporary headers and string
+	// conversions do not escape through an interface-taking helper.
+	var length [8]byte
+	binary.BigEndian.PutUint64(length[:], uint64(len(inputID)))
+	_, _ = hash.Write(length[:])
+	_, _ = hash.Write([]byte(inputID))
+	binary.BigEndian.PutUint64(length[:], uint64(len(position.FileIdentity)))
+	_, _ = hash.Write(length[:])
+	_, _ = hash.Write([]byte(position.FileIdentity))
 	// LineNumber is deliberately excluded. Framers reconstruct line counts on
 	// restart, while byte coordinates and the persisted file-generation identity
 	// remain stable. Including it would turn a crash replay into a new event ID.
@@ -585,21 +627,13 @@ func stableEventID(inputID string, position SourcePosition, raw []byte) string {
 	binary.BigEndian.PutUint64(integers[0:8], position.StartOffset)
 	binary.BigEndian.PutUint64(integers[8:16], position.EndOffset)
 	_, _ = hash.Write(integers[:])
-	writeHashBytes(hash, raw)
-	return hex.EncodeToString(hash.Sum(nil))
-}
-
-type byteWriter interface {
-	Write([]byte) (int, error)
-}
-
-func writeHashString(hash byteWriter, value string) { writeHashBytes(hash, []byte(value)) }
-
-func writeHashBytes(hash byteWriter, value []byte) {
-	var length [8]byte
-	binary.BigEndian.PutUint64(length[:], uint64(len(value)))
+	binary.BigEndian.PutUint64(length[:], uint64(len(raw)))
 	_, _ = hash.Write(length[:])
-	_, _ = hash.Write(value)
+	_, _ = hash.Write(raw)
+	var digest [sha256.Size]byte
+	var encoded [sha256.Size * 2]byte
+	hex.Encode(encoded[:], hash.Sum(digest[:0]))
+	return string(encoded[:])
 }
 
 func cloneAndValidateConstants(object *opensplunk.TypedObject) ([]*opensplunk.TypedObjectField, error) {

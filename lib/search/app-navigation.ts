@@ -16,7 +16,7 @@ export function backendAppHref(href: string, appId: string): string {
 
 /** Builds a Search URL that asks system bootstrap to select a specific advertised app. */
 export function backendAppSearchHref(appId: string): string {
-  return backendAppHref("/search/", appId);
+  return backendAppHref("/search/events/", appId);
 }
 
 /** Reads the optional app selection handed to Search by another frontend surface. */

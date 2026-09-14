@@ -1,6 +1,7 @@
 import type { SearchDataMode } from "@/lib/search/backend-data";
+import type { SearchResultView } from "@/lib/search/result-view-navigation";
 
-export type ResultTab = "events" | "patterns" | "statistics" | "visualization";
+export type ResultTab = SearchResultView;
 export type ModalName =
   | "time"
   | "save"
@@ -25,6 +26,7 @@ export type MenuName =
   | "search-mode"
   | "save-as"
   | "stats-format"
+  | "statistics-columns"
   | "pattern-sensitivity"
   | "event-display"
   | "event-page-size"
@@ -48,9 +50,10 @@ export type ExportFormatChoice = "csv" | "jsonl";
 export type TimePickerSection = "presets" | "relative" | "range" | "advanced";
 export type StatsDensity = "compact" | "standard";
 export type PatternSensitivity = "Precise" | "Balanced" | "Broad";
-export type EventDisplay = "List" | "Raw";
+export type EventDisplay = "List" | "Raw" | "Table";
 export type TimelineDisplay = "Columns" | "Compact";
-export type ChartStyle = "column" | "horizontal" | "line";
+export type ChartStyle = "area" | "column" | "horizontal" | "line";
+export type StackMode = "none" | "stacked" | "stacked100";
 export type LegendPosition = "bottom" | "right" | "none";
 
 export interface TimeRange {
@@ -76,6 +79,7 @@ export type TargetedDialogActionState =
   | { status: "error"; error: string; targetId?: string | null };
 
 export type ExportQuantity = number | bigint;
+export type ExportByteLimit = ExportQuantity | "server-default" | null;
 
 export interface ExportArtifactDetails {
   /** Opaque value passed back to the owner when this exact artifact is downloaded. */
@@ -92,7 +96,7 @@ interface ExportDialogStateBase {
   sourceTab: ResultTab;
   format: ExportFormatChoice;
   maximumRows?: ExportQuantity | null;
-  maximumBytes?: ExportQuantity | null;
+  byteLimit?: ExportByteLimit;
 }
 
 export type ExportDialogState =
@@ -148,4 +152,6 @@ export type SearchCapabilityName = keyof Pick<
 export interface SearchWorkspaceProps {
   dataMode: SearchDataMode;
   apiBaseUrl?: string;
+  canonicalizeParent?: boolean;
+  initialResultView: ResultTab;
 }

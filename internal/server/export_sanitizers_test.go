@@ -27,12 +27,12 @@ func TestSanitizeCreateExportJobRequest(t *testing.T) {
 			request:     &opensplunk.CreateExportJobRequest{},
 			wantMessage: "export definition is required",
 		},
-		"client request ID": {
+		"short client request ID": {
 			request: &opensplunk.CreateExportJobRequest{
 				ClientRequestId: new("client-1"),
 				Definition:      csvDefinition("search-1"),
 			},
-			wantMessage: "client request idempotency is not supported",
+			wantMessage: "request idempotency input is invalid: client request ID must contain between 16 and 128 bytes",
 		},
 		"missing search job ID": {
 			request: &opensplunk.CreateExportJobRequest{

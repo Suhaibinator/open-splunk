@@ -1,0 +1,41 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical         	  136029	      1701 ns/op	  60.54 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/canonical         	  136695	      1689 ns/op	  61.00 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/canonical         	  141786	      1695 ns/op	  60.77 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested            	   73473	      3272 ns/op	  38.21 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/nested            	   72830	      3292 ns/op	  37.97 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/nested            	   73137	      3298 ns/op	  37.90 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields       	     884	    269287 ns/op	  52.72 MB/s	  439696 B/op	    6369 allocs/op
+BenchmarkNDJSONDecoder/high_fields       	     914	    266964 ns/op	  53.18 MB/s	  439696 B/op	    6369 allocs/op
+BenchmarkNDJSONDecoder/high_fields       	     891	    267715 ns/op	  53.03 MB/s	  439696 B/op	    6369 allocs/op
+BenchmarkNativeDecoder/docker-json-file  	  109819	      2186 ns/op	  51.23 MB/s	    3048 B/op	      72 allocs/op
+BenchmarkNativeDecoder/docker-json-file  	  108180	      2176 ns/op	  51.47 MB/s	    3048 B/op	      72 allocs/op
+BenchmarkNativeDecoder/docker-json-file  	  108495	      2179 ns/op	  51.39 MB/s	    3048 B/op	      72 allocs/op
+BenchmarkNativeDecoder/nginx-combined    	  113528	      2176 ns/op	  46.87 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/nginx-combined    	  114782	      2111 ns/op	  48.33 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/nginx-combined    	  113295	      2128 ns/op	  47.94 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/apache-common     	  132633	      1778 ns/op	  47.80 MB/s	    2664 B/op	      56 allocs/op
+BenchmarkNativeDecoder/apache-common     	  143653	      1681 ns/op	  50.55 MB/s	    2664 B/op	      56 allocs/op
+BenchmarkNativeDecoder/apache-common     	  145460	      1667 ns/op	  50.98 MB/s	    2664 B/op	      56 allocs/op
+BenchmarkNativeDecoder/apache-combined   	  124741	      1938 ns/op	  50.56 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/apache-combined   	  122089	      1952 ns/op	  50.20 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/apache-combined   	  124658	      1945 ns/op	  50.38 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/logfmt            	   98982	      2433 ns/op	  46.04 MB/s	    2648 B/op	      79 allocs/op
+BenchmarkNativeDecoder/logfmt            	   99300	      2434 ns/op	  46.01 MB/s	    2648 B/op	      79 allocs/op
+BenchmarkNativeDecoder/logfmt            	   99466	      2468 ns/op	  45.38 MB/s	    2648 B/op	      79 allocs/op
+BenchmarkNativeDecoder/log4j2-pattern    	  188658	      1270 ns/op	  81.09 MB/s	    1896 B/op	      36 allocs/op
+BenchmarkNativeDecoder/log4j2-pattern    	  201331	      1240 ns/op	  83.09 MB/s	    1896 B/op	      36 allocs/op
+BenchmarkNativeDecoder/log4j2-pattern    	  195781	      1240 ns/op	  83.06 MB/s	    1896 B/op	      36 allocs/op
+BenchmarkNativeDecoder/logback-pattern   	  202796	      1206 ns/op	  54.74 MB/s	    1832 B/op	      36 allocs/op
+BenchmarkNativeDecoder/logback-pattern   	  200959	      1213 ns/op	  54.39 MB/s	    1832 B/op	      36 allocs/op
+BenchmarkNativeDecoder/logback-pattern   	  202573	      1229 ns/op	  53.69 MB/s	    1832 B/op	      36 allocs/op
+BenchmarkNativeMixedInputs/ndjson-only   	   79081	      2958 ns/op	  39.22 MB/s	    4688 B/op	     100 allocs/op
+BenchmarkNativeMixedInputs/ndjson-only   	   81097	      2917 ns/op	  39.77 MB/s	    4688 B/op	     100 allocs/op
+BenchmarkNativeMixedInputs/ndjson-only   	   82123	      2873 ns/op	  40.37 MB/s	    4688 B/op	     100 allocs/op
+BenchmarkNativeMixedInputs/ndjson-and-java         	   88101	      2715 ns/op	  59.30 MB/s	    4232 B/op	      86 allocs/op
+BenchmarkNativeMixedInputs/ndjson-and-java         	   85047	      2722 ns/op	  59.14 MB/s	    4232 B/op	      86 allocs/op
+BenchmarkNativeMixedInputs/ndjson-and-java         	   87990	      2716 ns/op	  59.28 MB/s	    4232 B/op	      86 allocs/op
+PASS

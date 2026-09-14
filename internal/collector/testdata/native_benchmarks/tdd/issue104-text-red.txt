@@ -1,0 +1,50 @@
+--- FAIL: TestNativeTextLogfmtTypedGrammar (0.00s)
+    native_text_test.go:45: Decode: native parser not implemented
+--- FAIL: TestNativeTextLogfmtMappingsAndOwnership (0.00s)
+    native_text_test.go:86: Decode: native parser not implemented
+--- FAIL: TestNativeTextLimitsCountReservedAndConstants (0.00s)
+    native_text_test.go:140: Decode: native parser not implemented
+--- FAIL: TestNativeTextJavaPatternProjection (0.00s)
+    --- FAIL: TestNativeTextJavaPatternProjection/log4j2-pattern (0.00s)
+        native_text_test.go:162: Decode: native parser not implemented
+    --- FAIL: TestNativeTextJavaPatternProjection/logback-pattern (0.00s)
+        native_text_test.go:162: Decode: native parser not implemented
+--- FAIL: TestNativeTextJavaTimezoneGapFoldAndBounds (0.00s)
+    --- FAIL: TestNativeTextJavaTimezoneGapFoldAndBounds/log4j2-pattern (0.00s)
+        native_text_test.go:195: Decode: native parser not implemented
+    --- FAIL: TestNativeTextJavaTimezoneGapFoldAndBounds/logback-pattern (0.00s)
+        native_text_test.go:195: Decode: native parser not implemented
+--- FAIL: TestNativeTextConfigurationRejectsAmbiguity (0.00s)
+    --- FAIL: TestNativeTextConfigurationRejectsAmbiguity/case_00 (0.00s)
+        native_text_test.go:230: accepted invalid parser configuration
+    --- FAIL: TestNativeTextConfigurationRejectsAmbiguity/case_01 (0.00s)
+        native_text_test.go:230: accepted invalid parser configuration
+    --- FAIL: TestNativeTextConfigurationRejectsAmbiguity/case_02 (0.00s)
+        native_text_test.go:230: accepted invalid parser configuration
+    --- FAIL: TestNativeTextConfigurationRejectsAmbiguity/case_03 (0.00s)
+        native_text_test.go:230: accepted invalid parser configuration
+    --- FAIL: TestNativeTextConfigurationRejectsAmbiguity/case_04 (0.00s)
+        native_text_test.go:230: accepted invalid parser configuration
+    --- FAIL: TestNativeTextConfigurationRejectsAmbiguity/case_05 (0.00s)
+        native_text_test.go:230: accepted invalid parser configuration
+    --- FAIL: TestNativeTextConfigurationRejectsAmbiguity/case_06 (0.00s)
+        native_text_test.go:230: accepted invalid parser configuration
+    --- FAIL: TestNativeTextConfigurationRejectsAmbiguity/case_07 (0.00s)
+        native_text_test.go:230: accepted invalid parser configuration
+    --- FAIL: TestNativeTextConfigurationRejectsAmbiguity/case_08 (0.00s)
+        native_text_test.go:230: accepted invalid parser configuration
+    --- FAIL: TestNativeTextConfigurationRejectsAmbiguity/case_09 (0.00s)
+        native_text_test.go:230: accepted invalid parser configuration
+    --- FAIL: TestNativeTextConfigurationRejectsAmbiguity/case_10 (0.00s)
+        native_text_test.go:230: accepted invalid parser configuration
+    --- FAIL: TestNativeTextConfigurationRejectsAmbiguity/case_11 (0.00s)
+        native_text_test.go:230: accepted invalid parser configuration
+    --- FAIL: TestNativeTextConfigurationRejectsAmbiguity/case_12 (0.00s)
+        native_text_test.go:230: accepted invalid parser configuration
+    --- FAIL: TestNativeTextConfigurationRejectsAmbiguity/case_13 (0.00s)
+        native_text_test.go:230: accepted invalid parser configuration
+    --- FAIL: TestNativeTextConfigurationRejectsAmbiguity/case_14 (0.00s)
+        native_text_test.go:230: accepted invalid parser configuration
+FAIL
+FAIL	github.com/Suhaibinator/open-splunk/internal/collector	0.381s
+FAIL

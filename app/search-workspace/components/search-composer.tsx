@@ -6,7 +6,7 @@ import type {
   SetStateAction,
   UIEvent,
 } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useSyncExternalStore } from "react";
 
 import { resolveAbsoluteTimeRange } from "@/lib/search/backend-data";
 import type { EditorProblem } from "@/lib/search/spl-diagnostic-markers";
@@ -20,6 +20,27 @@ import { AppIcon, StatusIcon } from "../../_components/app-icon";
 import { Button } from "../../_components/button";
 import type { KeyboardPlatform } from "../keyboard-shortcuts";
 import { SearchEditor, type CompletionItem } from "./search-editor";
+import { Select, SelectOption } from "../../_components/select";
+
+const PHONE_VIEWPORT = "(max-width: 760px)";
+
+function subscribePhoneViewport(listener: () => void): () => void {
+  const query = window.matchMedia(PHONE_VIEWPORT);
+  query.addEventListener("change", listener);
+  return () => query.removeEventListener("change", listener);
+}
+
+function phoneViewportSnapshot(): boolean {
+  return window.matchMedia(PHONE_VIEWPORT).matches;
+}
+
+function localTimeZoneSnapshot(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || "Local browser time";
+}
+
+function subscribeToStableBrowserValue(): () => void {
+  return () => undefined;
+}
 
 interface SearchComposerProps {
   absoluteEnd: string;
@@ -123,10 +144,13 @@ export function SearchComposer({
   onTimePickerSectionChange,
   onTimeRangeChange,
 }: SearchComposerProps) {
-  const closeTimePickerRef = useRef(onCloseTimePicker);
-  const [mobileTimePicker, setMobileTimePicker] = useState(false);
-  const [localTimeZone, setLocalTimeZone] = useState("Local browser time");
-  closeTimePickerRef.current = onCloseTimePicker;
+  const mobileTimePicker = useSyncExternalStore(subscribePhoneViewport, phoneViewportSnapshot, () => false);
+  const localTimeZone = useSyncExternalStore(
+    subscribeToStableBrowserValue,
+    localTimeZoneSnapshot,
+    () => "Local browser time",
+  );
+  const closeTimePicker = useEffectEvent(onCloseTimePicker);
   let draftTimeRangeInvalid = backendTimeSyntax
     ? serverTimeRangeValidationError(draftTimeRange) !== null
     : false;
@@ -144,15 +168,6 @@ export function SearchComposer({
     : TIME_PRESETS;
 
   useEffect(() => {
-    const phoneViewport = window.matchMedia("(max-width: 760px)");
-    const updateViewport = () => setMobileTimePicker(phoneViewport.matches);
-    updateViewport();
-    setLocalTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone || "Local browser time");
-    phoneViewport.addEventListener("change", updateViewport);
-    return () => phoneViewport.removeEventListener("change", updateViewport);
-  }, []);
-
-  useEffect(() => {
     if (modal !== "time" || !mobileTimePicker) return;
     const dialog = document.querySelector<HTMLElement>("[data-testid='time-picker-dialog']");
     if (dialog === null) return;
@@ -160,7 +175,7 @@ export function SearchComposer({
     return installModalSurface({
       container: dialog,
       excludedSiblingClassNames: ["drawer-backdrop"],
-      onEscape: () => closeTimePickerRef.current(),
+      onEscape: closeTimePicker,
       returnFocus: trigger,
     });
   }, [mobileTimePicker, modal]);
@@ -257,8 +272,8 @@ export function SearchComposer({
                       <h3>Relative time</h3><p>Search backward from the current moment.</p>
                       <div className="relative-time-row">
                         <label><span>Last</span><input type="number" min="1" max="999" value={relativeAmount} onChange={(event) => onRelativeRangeChange(Number(event.target.value), relativeUnit)} /></label>
-                        <label><span>Unit</span><select value={relativeUnit} onChange={(event) => onRelativeRangeChange(relativeAmount, event.target.value as "m" | "h" | "d")}><option value="m">Minutes</option><option value="h">Hours</option><option value="d">Days</option></select></label>
-                        <label><span>Anchor</span><select value="now" disabled><option value="now">Now</option></select></label>
+                        <label htmlFor="search-composer-choice-275"><span>Unit</span><Select id="search-composer-choice-275" value={relativeUnit} onValueChange={(selectedValue) => onRelativeRangeChange(relativeAmount, selectedValue as "m" | "h" | "d")}><SelectOption value="m">Minutes</SelectOption><SelectOption value="h">Hours</SelectOption><SelectOption value="d">Days</SelectOption></Select></label>
+                        <label htmlFor="search-composer-choice-276"><span>Anchor</span><Select id="search-composer-choice-276" value="now" disabled><SelectOption value="now">Now</SelectOption></Select></label>
                       </div>
                     </div>
                   ) : null}

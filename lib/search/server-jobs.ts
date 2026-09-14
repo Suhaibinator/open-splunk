@@ -1,3 +1,4 @@
+import { browserClientRequestId, type BrowserCreateRequestOptions } from "@/lib/api/client-request-id";
 import {
   SearchJobOrigin,
   SearchJobState,
@@ -274,7 +275,7 @@ export async function rerunServerSearchJob(
   client: OpenSplunkApiClient,
   bootstrap: SystemBootstrapModel,
   job: ServerSearchJob,
-  options?: ProtobufRequestOptions,
+  options?: BrowserCreateRequestOptions,
 ): Promise<OptionalFeatureResult<ServerSearchJob>> {
   if (!supportsServerFeature(bootstrap, ServerFeature.SERVER_FEATURE_SEARCH)) {
     return featureNotAdvertised;
@@ -283,7 +284,7 @@ export async function rerunServerSearchJob(
     definition: job.definition,
     source: undefined,
     options: undefined,
-    clientRequestId: undefined,
+    clientRequestId: options?.clientRequestId ?? browserClientRequestId(),
   }, options);
   if (response.searchJob === undefined) throw new TypeError("The server returned an empty rerun response.");
   return { status: "available", value: adaptServerSearchJob(response.searchJob) };

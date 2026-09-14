@@ -562,6 +562,15 @@ func newTestRepository(t *testing.T, now time.Time) (*Repository, *gorm.DB) {
 	if err != nil {
 		t.Fatalf("open test database: %v", err)
 	}
+	sqlDatabase, err := database.DB()
+	if err != nil {
+		t.Fatalf("read test database handle: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := sqlDatabase.Close(); err != nil {
+			t.Errorf("close test database: %v", err)
+		}
+	})
 	for _, statement := range scheduledReportTestSchema {
 		if err := database.Exec(statement).Error; err != nil {
 			t.Fatalf("create test schema: %v", err)

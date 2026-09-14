@@ -12,6 +12,7 @@ import (
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -41,6 +42,16 @@ type pendingAttempt struct {
 // execution begins. An exact retry is idempotent; a changed retry cannot
 // rewrite the original search intent.
 func (store *Store) BeginAttempt(ctx context.Context, scope AccessScope, input *opensplunk.SearchHistoryEntry) (result *opensplunk.SearchHistoryEntry, returnedErr error) {
+	return store.beginAttempt(ctx, scope, input, nil, nil)
+}
+
+func (store *Store) beginAttempt(
+	ctx context.Context,
+	scope AccessScope,
+	input *opensplunk.SearchHistoryEntry,
+	intent *requestidempotency.Intent,
+	target *requestidempotency.Target,
+) (result *opensplunk.SearchHistoryEntry, returnedErr error) {
 	if err := validateContext(ctx); err != nil {
 		return nil, err
 	}
@@ -58,6 +69,18 @@ func (store *Store) BeginAttempt(ctx context.Context, scope AccessScope, input *
 		return nil, mapContextError(ctx, "begin pending search-history record", tx.Error)
 	}
 	defer finishGORMTx(tx, &returnedErr)
+	if intent != nil {
+		if target == nil || store.searchAttemptAuditAppender == nil {
+			return nil, requestidempotency.ErrUnavailable
+		}
+		_, found, receiptErr := requestidempotency.Read(ctx, tx, *intent)
+		if receiptErr != nil {
+			return nil, receiptErr
+		}
+		if found {
+			return nil, requestidempotency.ErrConflict
+		}
+	}
 
 	var terminal historyRecord
 	err = tx.Select("tenant_id", "owner_id").
@@ -146,6 +169,18 @@ func (store *Store) BeginAttempt(ctx context.Context, scope AccessScope, input *
 			return nil, fmt.Errorf("append search-attempt audit event: %w", err)
 		}
 	}
+	if intent != nil {
+		if _, err := requestidempotency.AppendInTransaction(
+			ctx,
+			tx,
+			*intent,
+			*target,
+			nil,
+			time.UnixMicro(indexed.createdAt).UTC(),
+		); err != nil {
+			return nil, fmt.Errorf("append search admission receipt: %w", err)
+		}
+	}
 	if err := tx.Commit().Error; err != nil {
 		return nil, fmt.Errorf("commit pending search-history record: %w", err)
 	}
@@ -219,6 +254,16 @@ func (store *Store) CompleteAttempt(ctx context.Context, scope AccessScope, inpu
 		if err := requireOneAffected(result.RowsAffected, "remove completed pending search-history entry"); err != nil {
 			return nil, err
 		}
+	}
+	if err := requestidempotency.MarkTargetTerminalInTransaction(
+		ctx,
+		tx,
+		scope.TenantID,
+		requestidempotency.TargetSearchJob,
+		indexed.jobID,
+		now,
+	); err != nil {
+		return nil, fmt.Errorf("close search admission receipt: %w", err)
 	}
 	if _, _, err := store.pruneScopeBatch(
 		tx,
@@ -317,6 +362,16 @@ func (store *Store) RecoverInterrupted(ctx context.Context, scope AccessScope) (
 		}
 		if err := requireOneAffected(result.RowsAffected, "remove interrupted pending search-history entry"); err != nil {
 			return 0, err
+		}
+		if err := requestidempotency.MarkTargetTerminalInTransaction(
+			ctx,
+			tx,
+			scope.TenantID,
+			requestidempotency.TargetSearchJob,
+			pending.indexed.jobID,
+			finished,
+		); err != nil {
+			return 0, fmt.Errorf("close interrupted search admission receipt: %w", err)
 		}
 		recovered++
 	}

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 
 // The one table behind the keyboard-shortcut sheet and the editor's help
 // strip. A shortcut that is not listed here is one the sheet cannot show, so
@@ -55,6 +55,7 @@ export const KEYBOARD_SHORTCUTS: readonly KeyboardShortcut[] = [
 ];
 
 const MAC_PLATFORM = /Mac|iPhone|iPad|iPod/u;
+const subscribeKeyboardPlatform = () => () => {};
 
 /** Reads the platform from a navigator; `mac` decides whether Mod is ⌘. */
 export function detectKeyboardPlatform(navigatorLike: { platform?: string; userAgent?: string } | undefined): KeyboardPlatform {
@@ -69,11 +70,11 @@ export function detectKeyboardPlatform(navigatorLike: { platform?: string; userA
  * the effect corrects it after hydration so the markup never mismatches.
  */
 export function useKeyboardPlatform(): KeyboardPlatform {
-  const [platform, setPlatform] = useState<KeyboardPlatform>("mac");
-  useEffect(() => {
-    setPlatform(detectKeyboardPlatform(window.navigator));
-  }, []);
-  return platform;
+  return useSyncExternalStore(
+    subscribeKeyboardPlatform,
+    () => detectKeyboardPlatform(window.navigator),
+    () => "mac",
+  );
 }
 
 const SHEET_LABELS: Record<Exclude<ShortcutKey, "Mod">, string> = {

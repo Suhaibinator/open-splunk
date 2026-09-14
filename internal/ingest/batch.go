@@ -36,6 +36,7 @@ func (s *Service) processBatchWithDeferredAuthority(
 	deferredAuthority error,
 ) (*opensplunk.CollectResponse, error) {
 	state.pendingThrottle = nil
+	defer state.releaseAdmission()
 	uncompressedBytes, eventSizes, rejection := s.validateBatchHardEnvelope(batch, state)
 	if rejection != nil {
 		if deferredAuthority != nil {
@@ -99,6 +100,10 @@ func (s *Service) processBatchWithDeferredAuthority(
 			completeBatchIdentity(state, batch.GetBatchSequence(), identity)
 			return s.responseForStoredBatch(batch, result, nil)
 		case StoredBatchPending:
+			if state.admissionReady != nil && deferredAuthority == nil {
+				rememberDurablePendingBatchIdentity(state, batch.GetBatchSequence(), identity, boundaryAt)
+				state.releaseAdmission()
+			}
 			result, resumeErr := recoverable.ResumeBatch(ctx, durableIdentity)
 			if resumeErr != nil {
 				if isStoredBatchGone(resumeErr) {
@@ -169,8 +174,14 @@ func (s *Service) processBatchWithDeferredAuthority(
 		), nil
 	}
 	if rejection := s.validateBatchPolicy(batch, receivedAt, uncompressedBytes); rejection != nil {
+		if state.repackRequest && state.supportsRepacking && len(batch.GetEvents()) > 1 &&
+			(rejection.GetCode() == opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_TOO_MANY_EVENTS ||
+				rejection.GetCode() == opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE) {
+			rejection.Code = opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_REPACK_REQUIRED
+			rejection.Message = "original batch is durably rejected; repack its events within the negotiated limits"
+		}
 		return s.rejectRecordedBatch(
-			ctx, batch, state, identity, durableIdentity, receivedAt, rejection,
+			ctx, batch, state, identity, durableIdentity, receivedAt, boundaryAt, rejection,
 		)
 	}
 
@@ -290,7 +301,7 @@ func (s *Service) processBatchWithDeferredAuthority(
 	}
 
 	if len(normalized) == 0 {
-		return s.rejectRecordedBatch(ctx, batch, state, identity, durableIdentity, receivedAt, &opensplunk.BatchReject{
+		return s.rejectRecordedBatch(ctx, batch, state, identity, durableIdentity, receivedAt, boundaryAt, &opensplunk.BatchReject{
 			BatchId:       batch.GetBatchId(),
 			BatchSequence: batch.GetBatchSequence(),
 			Code:          opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS,
@@ -306,6 +317,7 @@ func (s *Service) processBatchWithDeferredAuthority(
 			identity,
 			durableIdentity,
 			receivedAt,
+			boundaryAt,
 			batchRejection(
 				batch,
 				opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE,
@@ -342,6 +354,7 @@ func (s *Service) processBatchWithDeferredAuthority(
 	}
 	quotaAdmission := &ingestquota.Admission{Charges: quotaCharges}
 
+	state.releaseAdmission()
 	result, err := s.store.Store(ctx, StoreBatch{
 		TenantID:           state.authorization.TenantID,
 		CollectorID:        state.collectorID,
@@ -373,6 +386,7 @@ func (s *Service) rejectRecordedBatch(
 	identity batchIdentity,
 	durableIdentity StoreBatchIdentity,
 	receivedAt time.Time,
+	boundaryAt time.Time,
 	rejection *opensplunk.BatchReject,
 ) (*opensplunk.CollectResponse, error) {
 	recoverable, ok := s.store.(RecoverableEventStore)
@@ -383,10 +397,19 @@ func (s *Service) rejectRecordedBatch(
 	if err != nil {
 		return nil, status.Error(codes.Internal, "terminal batch rejection is invalid")
 	}
+	state.releaseAdmission()
 	result, err := recoverable.RejectBatch(ctx, StoreBatchRejection{
 		Identity:   durableIdentity,
 		ReceivedAt: receivedAt,
 		Rejection:  durableRejection,
+		RejectionAdmission: &ingestquota.RejectionAdmission{
+			Scope: ingestquota.ScopeKey{
+				Kind: ingestquota.ScopeKindToken, TenantID: state.authorization.TenantID,
+				Identity: state.authorization.SubjectID,
+			},
+			TokenLimits: state.authorization.TokenRateLimits,
+		},
+		QuotaEvaluatedAt: boundaryAt.UTC(),
 	})
 	if err != nil {
 		if isDurableIdentityConflict(err) {
@@ -915,13 +938,15 @@ func recordBatchIdentity(
 	receivedAt time.Time,
 	maxInFlight uint32,
 ) (time.Time, *opensplunk.BatchReject, bool) {
+	state, unlock := state.lockHistory()
+	defer unlock()
 	if state.pendingBatches == nil {
 		state.pendingBatches = make(map[uint64]pendingBatchIdentity)
 	}
 	if state.pendingSequencesByID == nil {
 		state.pendingSequencesByID = make(map[string]uint64)
 	}
-	if rejection := pendingBatchIdentityConflict(state, sequence, identity); rejection != nil {
+	if rejection := pendingBatchIdentityConflictLocked(state, sequence, identity); rejection != nil {
 		return time.Time{}, rejection, false
 	}
 	if pending, ok := state.pendingBatches[sequence]; ok {
@@ -952,17 +977,19 @@ func rememberDurablePendingBatchIdentity(
 	identity batchIdentity,
 	receivedAt time.Time,
 ) bool {
+	state, unlock := state.lockHistory()
+	defer unlock()
 	if state.pendingBatches == nil {
 		state.pendingBatches = make(map[uint64]pendingBatchIdentity)
 	}
 	if state.pendingSequencesByID == nil {
 		state.pendingSequencesByID = make(map[string]uint64)
 	}
-	if pendingBatchIdentityConflict(state, sequence, identity) != nil {
+	if pendingBatchIdentityConflictLocked(state, sequence, identity) != nil {
 		return false
 	}
 	if _, exists := state.pendingBatches[sequence]; exists {
-		observeBatchSequence(state, sequence)
+		observeBatchSequenceLocked(state, sequence)
 		return true
 	}
 	if uint64(len(state.pendingBatches)) >= uint64(HardMaxInFlightBatches) {
@@ -970,11 +997,17 @@ func rememberDurablePendingBatchIdentity(
 	}
 	state.pendingBatches[sequence] = pendingBatchIdentity{identity: identity, receivedAt: receivedAt}
 	state.pendingSequencesByID[identity.batchID] = sequence
-	observeBatchSequence(state, sequence)
+	observeBatchSequenceLocked(state, sequence)
 	return true
 }
 
 func pendingBatchIdentityConflict(state *streamState, sequence uint64, identity batchIdentity) *opensplunk.BatchReject {
+	state, unlock := state.lockHistory()
+	defer unlock()
+	return pendingBatchIdentityConflictLocked(state, sequence, identity)
+}
+
+func pendingBatchIdentityConflictLocked(state *streamState, sequence uint64, identity batchIdentity) *opensplunk.BatchReject {
 	if pending, ok := state.pendingBatches[sequence]; ok && pending.identity != identity {
 		return batchRejectionValues(identity.batchID, sequence, opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_SEQUENCE_CONFLICT, "retry changed the durable batch payload", "batch_sequence", "sequence_conflict")
 	}
@@ -985,6 +1018,8 @@ func pendingBatchIdentityConflict(state *streamState, sequence uint64, identity 
 }
 
 func completeBatchIdentity(state *streamState, sequence uint64, identity batchIdentity) {
+	state, unlock := state.lockHistory()
+	defer unlock()
 	pending, ok := state.pendingBatches[sequence]
 	if !ok || pending.identity != identity {
 		return
@@ -996,6 +1031,12 @@ func completeBatchIdentity(state *streamState, sequence uint64, identity batchId
 }
 
 func observeBatchSequence(state *streamState, sequence uint64) {
+	state, unlock := state.lockHistory()
+	defer unlock()
+	observeBatchSequenceLocked(state, sequence)
+}
+
+func observeBatchSequenceLocked(state *streamState, sequence uint64) {
 	if !state.hasHighestBatchSequence || sequence > state.highestBatchSequence {
 		state.hasHighestBatchSequence = true
 		state.highestBatchSequence = sequence

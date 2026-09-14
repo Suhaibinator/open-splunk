@@ -67,6 +67,24 @@ export function IndexObservabilityPanel({ client, index }: IndexObservabilityPan
   const selector = useMemo(() => ({
     selector: { $case: "indexId" as const, value: index.id },
   }), [index.id]);
+  const loadInput = { client, generation, indexId: index.id, selector, submitted };
+  const [activeLoadInput, setActiveLoadInput] = useState(loadInput);
+  if (
+    activeLoadInput.client !== loadInput.client
+    || activeLoadInput.generation !== loadInput.generation
+    || activeLoadInput.indexId !== loadInput.indexId
+    || activeLoadInput.selector !== loadInput.selector
+    || activeLoadInput.submitted !== loadInput.submitted
+  ) {
+    setActiveLoadInput(loadInput);
+    setStatsState("loading");
+    setStats(null);
+    setStatsError(null);
+    setFieldsState("loading");
+    setFieldSnapshot(null);
+    setFieldsError(null);
+    setLoadingMore(false);
+  }
 
   function applyDraft() {
     const next = normalizeIndexObservationQuery({ earliest, latest, nameFilter });
@@ -84,19 +102,12 @@ export function IndexObservabilityPanel({ client, index }: IndexObservabilityPan
   }
 
   useEffect(() => {
+    if (activeLoadInput.generation !== generation) return;
     const controller = new AbortController();
     let current = true;
     moreControllerRef.current?.abort();
     moreControllerRef.current = null;
     snapshotRef.current = null;
-    setStatsState("loading");
-    setStats(null);
-    setStatsError(null);
-    setFieldsState("loading");
-    setFieldSnapshot(null);
-    setFieldsError(null);
-    setLoadingMore(false);
-
     void client.indexes.stats({ selector }, { signal: controller.signal }).then(
       (response) => {
         if (!current) return;
@@ -145,7 +156,7 @@ export function IndexObservabilityPanel({ client, index }: IndexObservabilityPan
       current = false;
       controller.abort();
     };
-  }, [client, generation, index.id, selector, submitted]);
+  }, [activeLoadInput, client, generation, index.id, selector, submitted]);
 
   async function loadMore() {
     const current = snapshotRef.current;

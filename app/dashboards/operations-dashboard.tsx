@@ -12,8 +12,10 @@ import { TimeSeriesLineChart } from "@/app/search-workspace/charts/time-series-l
 import type { TimelinePoint } from "@/lib/demo/search-data";
 import { searchLaunchHref } from "@/lib/search/launch-url";
 import { StatusLabel } from "../_components/status";
+import { ProductShell } from "../_components/product-shell";
 
 import { BackendDashboardManager } from "./backend-dashboard-manager";
+import { Select, SelectOption } from "../_components/select";
 
 const LATENCY_VALUES = [
   368, 412, 386, 447, 401, 462, 508, 476, 535, 492, 518, 451,
@@ -194,7 +196,7 @@ export function OperationsDashboard({ apiBaseUrl, dataMode }: OperationsDashboar
   if (dataMode === "backend") {
     return <BackendDashboardManager apiBaseUrl={apiBaseUrl} />;
   }
-  return <DemoOperationsDashboard />;
+  return <ProductShell activeSection="dashboards" apiBaseUrl={apiBaseUrl} appName="GradeThis Operations" dataMode="demo"><DemoOperationsDashboard /></ProductShell>;
 }
 
 function DemoOperationsDashboard() {
@@ -224,11 +226,11 @@ function DemoOperationsDashboard() {
           <p>Preview production signals across the API, workers, and real-time services.</p>
         </div>
         <div className="operations-header-actions">
-          <label className="operations-range-picker">
+          <label htmlFor="operations-dashboard-choice-231" className="operations-range-picker">
             <span>Metrics range</span>
-            <select value={rangeValue} onChange={(event) => setRangeValue(event.target.value as RangeValue)}>
-              {RANGE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-            </select>
+            <Select id="operations-dashboard-choice-231" value={rangeValue} onValueChange={(selectedValue) => setRangeValue(selectedValue as RangeValue)}>
+              {RANGE_OPTIONS.map((option) => <SelectOption key={option.value} value={option.value}>{option.label}</SelectOption>)}
+            </Select>
           </label>
           <span className="badge badge--outline operations-preview-badge">Preview data</span>
           <span className="operations-update-status">Fixture timestamp: Jul 21, 4:00 PM · Range scopes request and latency metrics; service health is the current fixture.</span>

@@ -18,6 +18,7 @@ import {
 import type { SystemBootstrapModel } from "@/lib/api/system-bootstrap";
 import type { ProtobufRequestOptions } from "@/lib/api/protobuf-transport";
 import { supportsServerFeature } from "@/lib/api/system-bootstrap";
+import type { SearchResultView } from "@/lib/search/result-view-navigation";
 
 import type { DialogActionState, TimeRange } from "./model";
 
@@ -30,6 +31,7 @@ interface UseSearchSharingOptions {
   job: SearchJob | null;
   activeSavedSearchId: string | null;
   query: string;
+  resultView: SearchResultView;
   timeRange: TimeRange;
   copyText: (text: string, successMessage: string) => Promise<boolean>;
   onJobUpdated: (job: SearchJob) => void;
@@ -62,6 +64,7 @@ export async function shareSearchJobForLink(
   searchJobId: string,
   expectedStateVersion: bigint,
   origin: string,
+  resultView: SearchResultView = "events",
   options?: ProtobufRequestOptions,
 ): Promise<Awaited<ReturnType<typeof shareServerSearchJob>> & { href: string }> {
   const result = await shareServerSearchJob(
@@ -73,7 +76,7 @@ export async function shareSearchJobForLink(
   );
   return {
     ...result,
-    href: new URL(searchJobLaunchHref(result.job.searchJobId), origin).toString(),
+    href: new URL(searchJobLaunchHref(result.job.searchJobId, resultView), origin).toString(),
   };
 }
 
@@ -86,6 +89,7 @@ export function useSearchSharing(options: UseSearchSharingOptions): SearchSharin
   const requestAbortRef = useRef<AbortController | null>(null);
   const requestEpochRef = useRef(0);
   const jobID = options.job?.searchJobId ?? null;
+  const activeRequestJobIDRef = useRef(jobID);
   const durableJobsSupported = options.bootstrap !== null && supportsServerFeature(
     options.bootstrap,
     ServerFeature.SERVER_FEATURE_DURABLE_SEARCH_JOBS,
@@ -106,15 +110,22 @@ export function useSearchSharing(options: UseSearchSharingOptions): SearchSharin
     && !requestAbortRef.current?.signal.aborted
   ), [options.job?.searchJobId]);
 
-  useEffect(() => {
-    requestAbortRef.current?.abort();
-    requestAbortRef.current = null;
-    requestEpochRef.current += 1;
+  const [dialogJobID, setDialogJobID] = useState(jobID);
+  if (dialogJobID !== jobID) {
+    setDialogJobID(jobID);
     setDialog(null);
     setSettings(null);
     setLoadState({ status: "idle" });
     setMutationState({ status: "idle" });
     setManualCopyValue(null);
+  }
+
+  useEffect(() => {
+    if (activeRequestJobIDRef.current === jobID) return;
+    activeRequestJobIDRef.current = jobID;
+    requestAbortRef.current?.abort();
+    requestAbortRef.current = null;
+    requestEpochRef.current += 1;
   }, [jobID]);
 
   useEffect(() => () => {
@@ -189,16 +200,17 @@ export function useSearchSharing(options: UseSearchSharingOptions): SearchSharin
       latest: options.timeRange.latest,
       label: options.timeRange.label,
       timezone: options.timeRange.timezone,
+      view: options.resultView,
     })), "Query link copied to the clipboard.");
-  }, [copyLink, options.query, options.timeRange]);
+  }, [copyLink, options.query, options.resultView, options.timeRange]);
 
   const copySavedSearchLink = useCallback(async () => {
     if (options.activeSavedSearchId === null) return;
     await copyLink(
-      absoluteHref(savedSearchLaunchHref(options.activeSavedSearchId)),
+      absoluteHref(savedSearchLaunchHref(options.activeSavedSearchId, true, options.resultView)),
       "Saved-search link copied to the clipboard.",
     );
-  }, [copyLink, options.activeSavedSearchId]);
+  }, [copyLink, options.activeSavedSearchId, options.resultView]);
 
   const share = useCallback(async (copyAfterShare: boolean) => {
     if (options.job === null || options.bootstrap === null || settings === null) return;
@@ -214,6 +226,7 @@ export function useSearchSharing(options: UseSearchSharingOptions): SearchSharin
           options.job.searchJobId,
           settings.stateVersion,
           window.location.origin,
+          options.resultView,
           { signal: request.controller.signal },
         );
         result = shared;

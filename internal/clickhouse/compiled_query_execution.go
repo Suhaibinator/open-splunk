@@ -21,11 +21,11 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
-// v12 additionally binds the minimum automatic-lookup replay descriptor.
+// v13 additionally binds exact original-event output provenance.
 // Lookup blocks can therefore cross the driver boundary only as part of the
 // same immutable executable authority as their SQL, and derived compilation
 // can restore exact automatic placement without consulting mutable state.
-const compiledExecutionSealDomain = "open-splunk-compiled-query-execution-v12"
+const compiledExecutionSealDomain = "open-splunk-compiled-query-execution-v13"
 
 var timeType = reflect.TypeFor[time.Time]()
 
@@ -204,6 +204,12 @@ func sealFinalCompiledQueryContext(
 	}
 	if err := ctx.Err(); err != nil {
 		return CompiledQuery{}, err
+	}
+	if compiled.Timechart != nil &&
+		!validTimechartOutputSpanContract(compiled.Timechart) {
+		return CompiledQuery{}, errors.New(
+			"seal compiled ClickHouse execution: timechart calendar and fixed span contract is invalid",
+		)
 	}
 	if len(lookupPreparations) > 1 {
 		return CompiledQuery{}, errors.New(
@@ -601,7 +607,8 @@ func compiledExecutionDigestContext(
 	if err != nil {
 		return compiledExecutionSeal{}, false, err
 	}
-	if !validResultContainerOutputs(compiled) ||
+	if !validResultTimeBucketOutput(compiled) || !validNearbyEventOutput(compiled) ||
+		!validResultContainerOutputs(compiled) ||
 		!validResultOptionalMultivalueOutputs(compiled) ||
 		!validResultStringOrBytesOutputs(compiled) ||
 		!validResultFieldPresentations(compiled) ||
@@ -612,8 +619,29 @@ func compiledExecutionDigestContext(
 	}
 	digest := sha256.New()
 	writeTokenPart(digest, compiledExecutionSealDomain)
+	writeBool(digest, compiled.TimeBucket != nil)
+	if compiled.TimeBucket != nil {
+		writeInt64(digest, int64(compiled.TimeBucket.TimeIndex))
+	}
+	writeBool(digest, compiled.emptyTimechartInput)
+	writeBool(digest, compiled.hasTimechartStage)
+	writeTimechartContinuation(digest, compiled)
+	deferredValid, deferredErr := writeCompiledLookupExternalTablesContext(ctx, digest, compiled.deferredLookupTables())
+	if deferredErr != nil {
+		return compiledExecutionSeal{}, false, deferredErr
+	}
+	if !deferredValid {
+		return compiledExecutionSeal{}, false, nil
+	}
 	writeTokenPart(digest, compiled.SQL)
 	writeStringSlice(digest, compiled.OutputFields)
+	writeBool(digest, compiled.NearbyEvent != nil)
+	if compiled.NearbyEvent != nil {
+		writeUint64(digest, uint64(compiled.NearbyEvent.TimeIndex))
+		writeUint64(digest, uint64(compiled.NearbyEvent.IndexIndex))
+		writeUint64(digest, uint64(compiled.NearbyEvent.HostIndex))
+		writeUint64(digest, uint64(compiled.NearbyEvent.SourceIndex))
+	}
 	writeBool(digest, compiled.OutputPresentations == nil)
 	writeUint64(digest, uint64(len(compiled.OutputPresentations)))
 	for _, presentation := range compiled.OutputPresentations {
@@ -680,9 +708,29 @@ func compiledExecutionDigestContext(
 			return compiledExecutionSeal{}, false, nil
 		}
 		writeInt64(digest, int64(compiled.Timechart.Span))
+		writeBool(digest, compiled.Timechart.ExactGrid)
+		writeBool(digest, compiled.Timechart.Continuous)
+		writeBool(digest, compiled.Timechart.IncludePartial)
+		if !writeTime(digest, compiled.Timechart.SearchEarliest) || !writeTime(digest, compiled.Timechart.SearchLatest) {
+			return compiledExecutionSeal{}, false, nil
+		}
+		writeUint64(digest, uint64(len(compiled.Timechart.Boundaries)))
+		if !writeTimechartBoundaries(digest, compiled.Timechart.Boundaries) {
+			return compiledExecutionSeal{}, false, nil
+		}
+
+		if compiled.Timechart.Calendar {
+			// False keeps the established fixed-grid digest byte-for-byte. The
+			// calendar-only marker still seals both transitions because adding or
+			// removing it changes the digest.
+			writeBool(digest, true)
+		}
 		writeUint64(digest, compiled.Timechart.BucketCount)
-		writeUint64(digest, uint64(compiled.Timechart.MaxSeries))
+		writeUint64(digest, compiled.Timechart.SeriesLimit)
+		writeUint64(digest, compiled.Timechart.MaxSeries)
 		writeUint64(digest, uint64(compiled.Timechart.MaxLabelBytes))
+		writeBool(digest, compiled.Timechart.IncludeNull)
+		writeBool(digest, compiled.Timechart.IncludeOther)
 		writeTokenPart(digest, compiled.Timechart.ValueField)
 		writeInt64(digest, int64(compiled.Timechart.ValueKind))
 	}
@@ -742,6 +790,13 @@ func writeCompiledArgument(writer hash.Hash, argument any, depth int) bool {
 		writeTokenPart(writer, "<nil>")
 		return true
 	}
+	if values, ok := argument.([]int64); ok {
+		if depth != 0 {
+			return false
+		}
+		writeCompiledInt64Slice(writer, values)
+		return true
+	}
 	value := reflect.ValueOf(argument)
 	valueType := value.Type()
 	writeTokenPart(writer, valueType.PkgPath())
@@ -780,6 +835,34 @@ func writeCompiledArgument(writer hash.Hash, argument any, depth int) bool {
 	return true
 }
 
+// Preserve the generic argument encoding byte for byte, including each
+// element's type identity. A fixed batch avoids interface boxing and small
+// escaping buffers for every boundary in a 10,000-element lookup argument.
+func writeCompiledInt64Slice(writer hash.Hash, values []int64) {
+	writeTokenPart(writer, "")
+	writeTokenPart(writer, "[]int64")
+	writeBool(writer, values == nil)
+	writeUint64(writer, uint64(len(values)))
+	const elementBytes = 8 + 8 + len("int64") + 8
+	var batch [128 * elementBytes]byte
+	used := 0
+	for _, value := range values {
+		element := batch[used : used+elementBytes]
+		binary.BigEndian.PutUint64(element[:8], 0)
+		binary.BigEndian.PutUint64(element[8:16], uint64(len("int64")))
+		copy(element[16:21], "int64")
+		_, _ = binary.Encode(element[21:], binary.BigEndian, value)
+		used += elementBytes
+		if used == len(batch) {
+			_, _ = writer.Write(batch[:used])
+			used = 0
+		}
+	}
+	if used > 0 {
+		_, _ = writer.Write(batch[:used])
+	}
+}
+
 func supportedCompiledSliceElement(element reflect.Type) bool {
 	if element == timeType {
 		return true
@@ -812,6 +895,30 @@ func writePosition(writer hash.Hash, position spl.Position) {
 	writeInt64(writer, int64(position.Offset))
 	writeInt64(writer, int64(position.Line))
 	writeInt64(writer, int64(position.Column))
+}
+
+// UTC boundaries use a fixed-width time encoding. Batch them in one buffer so
+// sealing a 10,000-bucket grid does not allocate per timestamp or hash write.
+func writeTimechartBoundaries(writer hash.Hash, boundaries []time.Time) bool {
+	if len(boundaries) == 0 {
+		return true
+	}
+	if len(boundaries) > 10001 {
+		return false
+	}
+	encoded := make([]byte, 0, len(boundaries)*15)
+	for _, boundary := range boundaries {
+		if boundary.Location() != time.UTC {
+			return false
+		}
+		var err error
+		encoded, err = boundary.AppendBinary(encoded)
+		if err != nil {
+			return false
+		}
+	}
+	_, _ = writer.Write(encoded)
+	return true
 }
 
 func writeTime(writer hash.Hash, value time.Time) bool {
@@ -862,8 +969,16 @@ func (compiled CompiledQuery) CloneForExecutionContext(
 		return CompiledQuery{}, false, nil
 	}
 	cloned := compiled
+	if compiled.TimeBucket != nil {
+		bounds := *compiled.TimeBucket
+		cloned.TimeBucket = &bounds
+	}
 	cloned.SQL = strings.Clone(compiled.SQL)
 	cloned.OutputFields = cloneStrings(compiled.OutputFields)
+	if compiled.NearbyEvent != nil {
+		output := *compiled.NearbyEvent
+		cloned.NearbyEvent = &output
+	}
 	cloned.OutputPresentations = cloneResultFieldPresentations(
 		compiled.OutputPresentations,
 	)
@@ -871,6 +986,12 @@ func (compiled CompiledQuery) CloneForExecutionContext(
 	cloned.OptionalMultivalueOutputs = slices.Clone(compiled.OptionalMultivalueOutputs)
 	cloned.StringOrBytesOutputs = slices.Clone(compiled.StringOrBytesOutputs)
 	cloned.lookupTables = cloneCompiledLookupExternalTables(compiled.lookupTables)
+	cloned.continuation = cloneTimechartContinuation(compiled.continuation)
+	if compiled.rangeDiscovery != nil {
+		discovery := *compiled.rangeDiscovery
+		discovery.continuation = cloneTimechartContinuation(discovery.continuation)
+		cloned.rangeDiscovery = &discovery
+	}
 	cloned.automaticLookupReplay = cloneRetainedAutomaticLookups(
 		compiled.automaticLookupReplay,
 	)
@@ -892,6 +1013,7 @@ func (compiled CompiledQuery) CloneForExecutionContext(
 	if compiled.Timechart != nil {
 		output := *compiled.Timechart
 		output.ValueField = strings.Clone(output.ValueField)
+		output.Boundaries = slices.Clone(output.Boundaries)
 		cloned.Timechart = &output
 	}
 	if compiled.Chart != nil {
@@ -933,6 +1055,9 @@ func cloneStrings(values []string) []string {
 func cloneCompiledArgument(argument any) (any, bool) {
 	if argument == nil {
 		return nil, true
+	}
+	if values, ok := argument.([]int64); ok {
+		return slices.Clone(values), true
 	}
 	value := reflect.ValueOf(argument)
 	cloned, ok := cloneCompiledValue(value, 0)
@@ -1008,6 +1133,12 @@ func (compiled CompiledQuery) RetainedBytesContext(
 	if !ok {
 		return 0, false, nil
 	}
+	if compiled.NearbyEvent != nil {
+		total, ok = retainedAdd(total, uint64(unsafe.Sizeof(*compiled.NearbyEvent)))
+		if !ok {
+			return 0, false, nil
+		}
+	}
 	total, ok = retainedAdd(
 		total,
 		uint64(cap(compiled.OutputPresentations))*
@@ -1062,6 +1193,65 @@ func (compiled CompiledQuery) RetainedBytesContext(
 			return 0, false, nil
 		}
 	}
+	if compiled.relationInput != nil {
+		total, ok = retainedAdd(total, compiled.relationInput.retainedBytes)
+		if !ok {
+			return 0, false, nil
+		}
+	}
+	total, ok = retainedTimechartContinuationBytes(total, compiled.continuation)
+	if !ok {
+		return 0, false, nil
+	}
+	if compiled.rangeDiscovery != nil {
+		discovery := compiled.rangeDiscovery
+		total, ok = retainedAdd(total, uint64(unsafe.Sizeof(*discovery)))
+		if !ok {
+			return 0, false, nil
+		}
+		total, ok = retainedStringSlice(total, []string{discovery.timezone, discovery.scan.TenantID, discovery.compiler.Database, discovery.compiler.Table, discovery.operator.Time.Name, discovery.operator.Measure.Input.Name, discovery.operator.Measure.Output, discovery.operator.Axis.AlignTime})
+		if !ok {
+			return 0, false, nil
+		}
+		for _, values := range [][]string{discovery.scan.Indexes, discovery.operator.Time.Path, discovery.operator.Measure.Input.Path} {
+			total, ok = retainedStringSlice(total, values)
+			if !ok {
+				return 0, false, nil
+			}
+		}
+		total, ok = retainedAdd(total, uint64(cap(discovery.operator.GridBoundaries))*uint64(unsafe.Sizeof(time.Time{})))
+		if !ok {
+			return 0, false, nil
+		}
+		if discovery.operator.Split != nil {
+			total, ok = retainedAdd(total, uint64(unsafe.Sizeof(*discovery.operator.Split)))
+			if !ok {
+				return 0, false, nil
+			}
+			total, ok = retainedStringSlice(total, []string{discovery.operator.Split.Field.Name, discovery.operator.Split.NullLabel, discovery.operator.Split.OtherLabel})
+			if !ok {
+				return 0, false, nil
+			}
+			total, ok = retainedStringSlice(total, discovery.operator.Split.Field.Path)
+			if !ok {
+				return 0, false, nil
+			}
+		}
+		total, ok = retainedTimechartContinuationBytes(total, discovery.continuation)
+		if !ok {
+			return 0, false, nil
+		}
+	}
+	if compiled.TimeBucket != nil {
+		total, ok = retainedAdd(total, uint64(unsafe.Sizeof(*compiled.TimeBucket)))
+		if !ok {
+			return 0, false, nil
+		}
+	}
+	total, ok, err = retainedCompiledLookupExternalTablesContext(ctx, total, compiled.deferredLookupTables())
+	if err != nil || !ok {
+		return 0, ok, err
+	}
 	total, ok, err = retainedCompiledLookupExternalTablesContext(
 		ctx,
 		total,
@@ -1082,7 +1272,7 @@ func (compiled CompiledQuery) RetainedBytesContext(
 		return 0, false, nil
 	}
 	if compiled.Timechart != nil {
-		total, ok = retainedAdd(total, uint64(unsafe.Sizeof(*compiled.Timechart))+uint64(len(compiled.Timechart.ValueField)))
+		total, ok = retainedAdd(total, uint64(unsafe.Sizeof(*compiled.Timechart))+uint64(len(compiled.Timechart.ValueField))+uint64(cap(compiled.Timechart.Boundaries))*uint64(unsafe.Sizeof(time.Time{})))
 		if !ok {
 			return 0, false, nil
 		}

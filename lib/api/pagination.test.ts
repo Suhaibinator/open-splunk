@@ -3,14 +3,13 @@ import test from "node:test";
 
 import {
   assertBrowserResultPageBounds,
-  MAXIMUM_BROWSER_RESULT_COLUMNS,
   pruneCursorChainFrom,
   recordNextPageToken,
 } from "./pagination";
 
-test("browser result pages enforce requested rows and a documented column bound", () => {
+test("browser result pages enforce requested rows without rejecting wide schemas", () => {
   assert.doesNotThrow(() => assertBrowserResultPageBounds({
-    columnCount: MAXIMUM_BROWSER_RESULT_COLUMNS,
+    columnCount: 4_097,
     pageSize: 1_000,
     rowCount: 1_000,
   }));
@@ -22,14 +21,11 @@ test("browser result pages enforce requested rows and a documented column bound"
     }),
     /1000 rows.*page size of 20/,
   );
-  assert.throws(
-    () => assertBrowserResultPageBounds({
-      columnCount: MAXIMUM_BROWSER_RESULT_COLUMNS + 1,
-      pageSize: 1_000,
-      rowCount: 1,
-    }),
-    /65 columns.*supports 1–64/,
-  );
+  assert.throws(() => assertBrowserResultPageBounds({
+    columnCount: 0,
+    pageSize: 1_000,
+    rowCount: 1,
+  }), /invalid number of columns/);
 });
 
 test("cursor divergence removes every downstream token, start, cache entry, and seen token", () => {

@@ -270,7 +270,10 @@ func (lease *resultLease) Next(ctx context.Context) (row ResultRow, ok bool, err
 		return ResultRow{}, false, ErrResultsUnavailable
 	}
 	source := lease.entry.rows[rowIndex]
-	row = ResultRow{Ordinal: source.Ordinal, Values: slices.Clone(source.Values)}
+	row = ResultRow{
+		Ordinal: source.Ordinal, Values: slices.Clone(source.Values),
+		TimeBucket: cloneTimeBucketBounds(source.TimeBucket),
+	}
 	lease.entry.mu.RUnlock()
 	if err := ctx.Err(); err != nil {
 		return ResultRow{}, false, err

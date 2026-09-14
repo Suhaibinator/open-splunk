@@ -43,6 +43,9 @@ func (searchAnalysisSnapshotExecutor) Execute(
 			Kind: searchjobs.ValueKindString,
 		}
 	}
+	if output, available := query.NearbyEventOutput(); available {
+		columns[output.TimeIndex].Kind = searchjobs.ValueKindTime
+	}
 	return sink.SetSchema(searchjobs.Schema{Columns: columns})
 }
 

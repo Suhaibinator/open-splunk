@@ -4,7 +4,7 @@
 -- output_fields: host, count, percent
 -- sparse_fields: false subset=false
 -- atomic_result: false
--- execution_authority_digest: 701443f6df9f4629d3137a2ef220b717ce280fd8c91b43dd1ea0d4762f5d3496
+-- execution_authority_digest: 62e8e72fcdcfd8b5f67c6323b7b22d70f1e4799545dbbdb9edd32fbec1be3134
 -- args[0]: "tenant-1"
 -- args[1]: "main"
 -- args[2]: "2026-07-21 00:00:00.000000000"

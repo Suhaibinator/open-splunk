@@ -5,6 +5,7 @@ package open_splunk;
 import "google/protobuf/duration.proto";
 import "google/protobuf/timestamp.proto";
 import "open_splunk/knowledge.proto";
+import "open_splunk/patterns_api.proto";
 
 option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk;opensplunk";
 
@@ -38,11 +39,32 @@ message JsonLinesExportOptions {
   bool include_type_metadata = 2;
 }
 
+// Pattern exports consume the exact retained relation; they never rerun SPL.
+message PatternSummaryExportSource {
+  string search_job_id = 1;
+  PatternSensitivity sensitivity = 2;
+  string snapshot_ref = 3;
+}
+
+message PatternMemberExportSource {
+  string search_job_id = 1;
+  PatternSensitivity sensitivity = 2;
+  string snapshot_ref = 3;
+  string pattern_id = 4;
+}
+
 message ExportDefinition {
   string search_job_id = 1;
   repeated string columns = 2;
   optional uint64 row_limit = 3;
   optional uint64 byte_limit = 4;
+
+  // Absent source keeps the existing ordinary search export behavior.
+  // A typed source search_job_id must equal the outer search_job_id.
+  oneof source {
+    PatternSummaryExportSource pattern_summary = 20;
+    PatternMemberExportSource pattern_members = 21;
+  }
 
   oneof format_options {
     CsvExportOptions csv = 10;

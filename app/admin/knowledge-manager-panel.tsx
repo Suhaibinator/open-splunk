@@ -50,6 +50,7 @@ import {
   safeKnowledgeManagerAppOptions,
   type KnowledgeManagerPanelProps,
 } from "./knowledge-manager-feature";
+import { Select, SelectOption } from "../_components/select";
 
 type ListState = "loading" | "available" | "unavailable";
 type DetailState = "closed" | "loading" | "available" | "unavailable";
@@ -294,12 +295,48 @@ export function KnowledgeManagerPanel({
     }
   }, [selectedObjectId]);
 
+  const listInput = {
+    advancedFilters,
+    appId,
+    client,
+    lifecycleState,
+    objectType,
+    pageSize,
+    reloadGeneration,
+    sort,
+  };
+  const [activeListInput, setActiveListInput] = useState(listInput);
+  if (
+    activeListInput.advancedFilters !== listInput.advancedFilters
+    || activeListInput.appId !== listInput.appId
+    || activeListInput.client !== listInput.client
+    || activeListInput.lifecycleState !== listInput.lifecycleState
+    || activeListInput.objectType !== listInput.objectType
+    || activeListInput.pageSize !== listInput.pageSize
+    || activeListInput.reloadGeneration !== listInput.reloadGeneration
+    || activeListInput.sort !== listInput.sort
+  ) {
+    setActiveListInput(listInput);
+    setListState("loading");
+    setPage(null);
+    setLoadingMore(false);
+    setContinuationStale(false);
+    setSelectedObjectId(null);
+    setSelectedObject(null);
+    setDetailState("closed");
+    setDetail(null);
+    setDetailAuthority(null);
+    setMutationSurfaceGeneration((value) => value + 1);
+  }
+
   useEffect(() => {
-    resetForQueryChange();
-    if (!advancedFilterRequestAllowedRef.current) {
-      setListState("unavailable");
-      return;
-    }
+    if (activeListInput.reloadGeneration !== reloadGeneration) return;
+    listRequestRef.current?.abort();
+    detailRequestRef.current?.abort();
+    consumedPageTokensRef.current = new Set();
+    rowRefs.current.clear();
+    focusDetailWhenReadyRef.current = false;
+    if (!advancedFilterRequestAllowedRef.current) return;
     const controller = new AbortController();
     listRequestRef.current = controller;
 
@@ -312,7 +349,10 @@ export function KnowledgeManagerPanel({
       pageSize,
       pageToken: null,
     }, { signal: controller.signal }).then((result) => {
-      if (controller.signal.aborted || listRequestRef.current !== controller) return;
+      if (
+        controller.signal.aborted
+        || listRequestRef.current !== controller
+      ) return;
       listRequestRef.current = null;
       if (result.status === "unavailable") {
         setListState("unavailable");
@@ -329,8 +369,8 @@ export function KnowledgeManagerPanel({
     lifecycleState,
     objectType,
     pageSize,
+    activeListInput,
     reloadGeneration,
-    resetForQueryChange,
     sort,
   ]);
 
@@ -538,56 +578,56 @@ export function KnowledgeManagerPanel({
         <div className="knowledge-manager__filters">
           <label htmlFor="knowledge-app-filter">
             <span>App scope</span>
-            <select
+            <Select
               id="knowledge-app-filter"
               value={appId ?? ""}
-              onChange={(event) => changeApp(event.currentTarget.value)}
+              onValueChange={(selectedValue) => changeApp(selectedValue)}
               disabled={listState === "loading"}
             >
-              <option value="">All readable apps</option>
+              <SelectOption value="">All readable apps</SelectOption>
               {appOptions.map((app) => (
-                <option value={app.appId} key={app.appId}>{app.label}</option>
+                <SelectOption value={app.appId} key={app.appId}>{app.label}</SelectOption>
               ))}
-            </select>
+            </Select>
           </label>
           <label htmlFor="knowledge-object-type-filter">
             <span>Object type</span>
-            <select
+            <Select
               id="knowledge-object-type-filter"
               value={objectType}
-              onChange={(event) => changeObjectType(event.currentTarget.value)}
+              onValueChange={(selectedValue) => changeObjectType(selectedValue)}
               disabled={listState === "loading"}
             >
               {KNOWLEDGE_OBJECT_TYPE_FILTER_OPTIONS.map((option) => (
-                <option value={option.value} key={option.value}>{option.label}</option>
+                <SelectOption value={option.value} key={option.value}>{option.label}</SelectOption>
               ))}
-            </select>
+            </Select>
           </label>
           <label htmlFor="knowledge-lifecycle-state-filter">
             <span>Lifecycle state</span>
-            <select
+            <Select
               id="knowledge-lifecycle-state-filter"
               value={lifecycleState}
-              onChange={(event) => changeLifecycleState(event.currentTarget.value)}
+              onValueChange={(selectedValue) => changeLifecycleState(selectedValue)}
               disabled={listState === "loading"}
             >
               {KNOWLEDGE_LIFECYCLE_STATE_FILTER_OPTIONS.map((option) => (
-                <option value={option.value} key={option.value}>{option.label}</option>
+                <SelectOption value={option.value} key={option.value}>{option.label}</SelectOption>
               ))}
-            </select>
+            </Select>
           </label>
           <label htmlFor="knowledge-sort-choice">
             <span>Sort by</span>
-            <select
+            <Select
               id="knowledge-sort-choice"
               value={sort}
-              onChange={(event) => changeSort(event.currentTarget.value)}
+              onValueChange={(selectedValue) => changeSort(selectedValue)}
               disabled={listState === "loading"}
             >
               {KNOWLEDGE_SORT_OPTIONS.map((option) => (
-                <option value={option.value} key={option.value}>{option.label}</option>
+                <SelectOption value={option.value} key={option.value}>{option.label}</SelectOption>
               ))}
-            </select>
+            </Select>
           </label>
         </div>
         {page === null ? null : (
@@ -822,17 +862,17 @@ function KnowledgeAdvancedFilterForm({
             </label>
             <label htmlFor="knowledge-sharing-scope-filter">
               <span>Sharing scope</span>
-              <select
+              <Select
                 id="knowledge-sharing-scope-filter"
                 value={drafts.sharingScope}
                 aria-describedby="knowledge-advanced-filter-status"
                 aria-invalid={validationAttempted && normalized.invalid.sharingScope || undefined}
-                onChange={(event) => updateSharingScopeDraft(event.currentTarget.value)}
+                onValueChange={(selectedValue) => updateSharingScopeDraft(selectedValue)}
               >
                 {KNOWLEDGE_SHARING_SCOPE_FILTER_OPTIONS.map((option) => (
-                  <option value={option.value} key={option.value}>{option.label}</option>
+                  <SelectOption value={option.value} key={option.value}>{option.label}</SelectOption>
                 ))}
-              </select>
+              </Select>
             </label>
             <label htmlFor="knowledge-selector-text-filter">
               <span>Selector text</span>
@@ -1248,16 +1288,37 @@ function KnowledgeRelationshipSection({
     startInspectorRequest(edge);
   }, [startInspectorRequest]);
 
+  const relationshipInput = {
+    client,
+    direction,
+    knowledgeObjectId,
+    pageSize,
+    reloadGeneration,
+    version,
+  };
+  const [activeRelationshipInput, setActiveRelationshipInput] = useState(relationshipInput);
+  if (
+    activeRelationshipInput.client !== relationshipInput.client
+    || activeRelationshipInput.direction !== relationshipInput.direction
+    || activeRelationshipInput.knowledgeObjectId !== relationshipInput.knowledgeObjectId
+    || activeRelationshipInput.pageSize !== relationshipInput.pageSize
+    || activeRelationshipInput.reloadGeneration !== relationshipInput.reloadGeneration
+    || activeRelationshipInput.version !== relationshipInput.version
+  ) {
+    setActiveRelationshipInput(relationshipInput);
+    setState("loading");
+    setPage(null);
+    setLoadingMore(false);
+    setInspector({ state: "closed" });
+  }
+
   useEffect(() => {
+    if (activeRelationshipInput.reloadGeneration !== reloadGeneration) return;
     const cleanup = knowledgeRelationshipUnmountCleanup(requestRef, inspectorRequestRef);
     abortKnowledgeRequests(requestRef, inspectorRequestRef);
     inspectorEdgeRef.current = null;
     inspectorTriggerRef.current = null;
     consumedPageTokensRef.current = new Set();
-    setState("loading");
-    setPage(null);
-    setLoadingMore(false);
-    setInspector({ state: "closed" });
     const controller = new AbortController();
     requestRef.current = controller;
     void loadKnowledgeRelationshipPage(client, {
@@ -1267,7 +1328,10 @@ function KnowledgeRelationshipSection({
       pageSize,
       pageToken: null,
     }, { signal: controller.signal }).then((result) => {
-      if (controller.signal.aborted || requestRef.current !== controller) return;
+      if (
+        controller.signal.aborted
+        || requestRef.current !== controller
+      ) return;
       requestRef.current = null;
       if (result.status === "unavailable") {
         setState("unavailable");
@@ -1277,7 +1341,7 @@ function KnowledgeRelationshipSection({
       setState("available");
     });
     return cleanup;
-  }, [client, direction, knowledgeObjectId, pageSize, reloadGeneration, version]);
+  }, [activeRelationshipInput, client, direction, knowledgeObjectId, pageSize, reloadGeneration, version]);
 
   const loadMore = useCallback(async () => {
     const requestedPageToken = page?.nextPageToken;

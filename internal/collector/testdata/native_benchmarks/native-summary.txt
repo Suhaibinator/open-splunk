@@ -1,0 +1,55 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+                                  │ native.txt  │
+                                  │   sec/op    │
+NativeDecoder/docker-json-file      2.357µ ± 2%
+NativeDecoder/nginx-combined        2.204µ ± 3%
+NativeDecoder/apache-common         1.894µ ± 2%
+NativeDecoder/apache-combined       2.204µ ± 4%
+NativeDecoder/logfmt                2.686µ ± 2%
+NativeDecoder/log4j2-pattern        1.262µ ± 3%
+NativeDecoder/logback-pattern       1.223µ ± 2%
+NativeMixedInputs/ndjson-only       2.945µ ± 1%
+NativeMixedInputs/ndjson-and-java   2.839µ ± 2%
+geomean                             2.087µ
+
+                                  │  native.txt  │
+                                  │     B/s      │
+NativeDecoder/docker-json-file      45.30Mi ± 2%
+NativeDecoder/nginx-combined        44.14Mi ± 3%
+NativeDecoder/apache-common         42.80Mi ± 2%
+NativeDecoder/apache-combined       42.42Mi ± 4%
+NativeDecoder/logfmt                39.78Mi ± 2%
+NativeDecoder/log4j2-pattern        77.87Mi ± 3%
+NativeDecoder/logback-pattern       51.48Mi ± 2%
+NativeMixedInputs/ndjson-only       37.57Mi ± 1%
+NativeMixedInputs/ndjson-and-java   54.10Mi ± 2%
+geomean                             47.26Mi
+
+                                  │  native.txt  │
+                                  │     B/op     │
+NativeDecoder/docker-json-file      2.977Ki ± 0%
+NativeDecoder/nginx-combined        3.242Ki ± 0%
+NativeDecoder/apache-common         2.602Ki ± 0%
+NativeDecoder/apache-combined       3.242Ki ± 0%
+NativeDecoder/logfmt                2.586Ki ± 0%
+NativeDecoder/log4j2-pattern        1.852Ki ± 0%
+NativeDecoder/logback-pattern       1.789Ki ± 0%
+NativeMixedInputs/ndjson-only       4.578Ki ± 0%
+NativeMixedInputs/ndjson-and-java   4.133Ki ± 0%
+geomean                             2.870Ki
+
+                                  │ native.txt │
+                                  │ allocs/op  │
+NativeDecoder/docker-json-file      72.00 ± 0%
+NativeDecoder/nginx-combined        64.00 ± 0%
+NativeDecoder/apache-common         56.00 ± 0%
+NativeDecoder/apache-combined       64.00 ± 0%
+NativeDecoder/logfmt                79.00 ± 0%
+NativeDecoder/log4j2-pattern        36.00 ± 0%
+NativeDecoder/logback-pattern       36.00 ± 0%
+NativeMixedInputs/ndjson-only       100.0 ± 0%
+NativeMixedInputs/ndjson-and-java   86.00 ± 0%
+geomean                             62.50

@@ -1,3 +1,4 @@
+import { browserClientRequestId, type BrowserCreateRequestOptions } from "@/lib/api/client-request-id";
 import { SortDirection } from "@/gen/ts/open_splunk/common";
 import {
   Lookup,
@@ -42,7 +43,7 @@ export interface LookupManagerClient {
   create(
     definition: LookupDefinition,
     csvData: Uint8Array,
-    options?: ProtobufRequestOptions,
+    options?: BrowserCreateRequestOptions,
   ): Promise<LookupMessage>;
   get(lookupId: string, version?: bigint, options?: ProtobufRequestOptions): Promise<LookupMessage>;
   list(appId?: string, options?: ProtobufRequestOptions): Promise<readonly LookupMessage[]>;
@@ -82,11 +83,11 @@ export function createLookupManagerClient(
       validateCSVBytes(csvData);
       const response: CreateLookupResponse = await transport.post(
         lookupRoutes.create,
-        CreateLookupRequest.fromPartial({ definition, csvData }),
+        CreateLookupRequest.fromPartial({ definition, csvData, clientRequestId: requestOptions?.clientRequestId ?? browserClientRequestId() }),
         requestOptions,
       );
       const lookup = requiredLookup(response.lookup);
-      if (lookup.version !== 1n || lookup.state !== LookupState.LOOKUP_STATE_ACTIVE) {
+      if (!response.replayed && (lookup.version !== 1n || lookup.state !== LookupState.LOOKUP_STATE_ACTIVE)) {
         throw new TypeError("Lookup create response authority is invalid.");
       }
       return lookup;

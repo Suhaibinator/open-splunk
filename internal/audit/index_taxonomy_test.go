@@ -211,5 +211,6 @@ func allKnownAuditActions() []Action {
 		ActionLookupEnable,
 		ActionLookupDisable,
 		ActionLookupDelete,
+		ActionExportCreate,
 	}
 }

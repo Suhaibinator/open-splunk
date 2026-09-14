@@ -1,0 +1,6 @@
+--- FAIL: TestNativeFixedApacheEmptyUserSentinel (0.00s)
+    native_fixed_impl_test.go:59: apache-common empty user: invalid access user
+    native_fixed_impl_test.go:59: apache-combined empty user: invalid access user
+FAIL
+FAIL	github.com/Suhaibinator/open-splunk/internal/collector	0.844s
+FAIL

@@ -1,6 +1,21 @@
 package plan
 
-import "github.com/Suhaibinator/open-splunk/internal/spl"
+import (
+	"time"
+
+	"github.com/Suhaibinator/open-splunk/internal/spl"
+)
+
+func validBucketSpanContract(span time.Duration, calendar CalendarUnit) bool {
+	switch calendar {
+	case CalendarNone:
+		return span > 0
+	case CalendarDay, CalendarWeek, CalendarMonth:
+		return span == 0
+	default:
+		return false
+	}
+}
 
 // validTimechartMeasureContract validates the aggregate-specific logical
 // shape needed by metadata consumers. Backend compilation independently
@@ -51,8 +66,6 @@ func validTimechartMeasureContract(operator *Timechart) bool {
 func validTimechartSplitContract(split *TimechartSplit) bool {
 	return split != nil &&
 		validResolvedEventAggregateField(split.Field) &&
-		split.SeriesLimit >= 1 &&
-		split.SeriesLimit <= timechartSeriesLimit &&
 		split.NullLabel == "NULL" &&
 		split.OtherLabel == "OTHER"
 }

@@ -317,7 +317,7 @@ func TestAuthoredExpressionAgainstClickHouse(t *testing.T) {
 		}
 		if got := queryIDs(
 			`index=expression-v02 | where numeric_status IN (2)`,
-		); !reflect.DeepEqual(got, []string{"membership-match"}) {
+		); !reflect.DeepEqual(got, []string{"membership-case-mismatch", "membership-match"}) {
 			t.Fatalf("numeric membership = %v", got)
 		}
 		if got := queryIDs(
@@ -389,8 +389,8 @@ func TestAuthoredExpressionAgainstClickHouse(t *testing.T) {
 			).Scan(&matches, &misses, &numericMatches); err != nil {
 				t.Fatalf("execute stats membership: %v", err)
 			}
-			if matches != 1 || misses != 0 || numericMatches != 1 {
-				t.Fatalf("stats membership = %d/%d/%d, want 1/0/1", matches, misses, numericMatches)
+			if matches != 1 || misses != 0 || numericMatches != 2 {
+				t.Fatalf("stats membership = %d/%d/%d, want 1/0/2", matches, misses, numericMatches)
 			}
 		})
 

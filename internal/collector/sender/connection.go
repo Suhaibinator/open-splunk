@@ -15,6 +15,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/collector/wal"
 	"github.com/Suhaibinator/open-splunk/internal/collectorlimits"
 	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
 )
@@ -97,6 +98,13 @@ type scheduledRetry struct {
 	done   chan struct{}
 }
 
+// openResult carries the outcome of opening a Collect stream off the
+// connection goroutine so establishment can be abandoned on cancellation.
+type openResult struct {
+	stream opensplunk.CollectorIngestService_CollectClient
+	err    error
+}
+
 func (s *Sender) newConn(ctx context.Context, cancel, streamCancel context.CancelFunc, stream opensplunk.CollectorIngestService_CollectClient) *conn {
 	c := &conn{
 		s:            s,
@@ -127,9 +135,40 @@ func (s *Sender) runConnection(parent context.Context) (connected bool, reconnec
 	if err != nil {
 		return false, 0, fmt.Errorf("collector/sender: read token: %w", err)
 	}
-	stream, err := s.client.Collect(withBearer(streamCtx, token), s.collectCallOptions()...)
-	if err != nil {
-		return false, 0, classifyPreReadyError(err)
+
+	// DialTimeout bounds the whole attempt: transport establishment, Hello, and
+	// Ready. Start it before opening the stream. Collect blocks while the
+	// channel connects (the client dials lazily), so opening runs on its own
+	// goroutine and is aborted through streamCtx when the parent is canceled or
+	// the deadline passes.
+	var readyTimer <-chan time.Time
+	if s.opts.DialTimeout > 0 {
+		timer := time.NewTimer(s.opts.DialTimeout)
+		readyTimer = timer.C
+		defer timer.Stop()
+	}
+	opened := make(chan openResult, 1)
+	go func() {
+		stream, err := s.client.Collect(withBearer(streamCtx, token), s.collectCallOptions()...)
+		opened <- openResult{stream: stream, err: err}
+	}()
+	var stream opensplunk.CollectorIngestService_CollectClient
+	select {
+	case result := <-opened:
+		if result.err != nil {
+			return false, 0, classifyPreReadyError(result.err)
+		}
+		stream = result.stream
+	case <-parent.Done():
+		// Canceling streamCtx unblocks a Collect waiting on the connecting
+		// channel. Join it so no opener survives into another connection.
+		streamCancel()
+		<-opened
+		return false, 0, parent.Err()
+	case <-readyTimer:
+		streamCancel()
+		<-opened
+		return false, 0, fmt.Errorf("collector/sender: stream establishment timed out after %s", s.opts.DialTimeout)
 	}
 
 	c := s.newConn(ctx, cancel, streamCancel, stream)
@@ -141,13 +180,6 @@ func (s *Sender) runConnection(parent context.Context) (connected bool, reconnec
 		}
 		handshakeDone <- c.receiveReady()
 	}()
-	var readyTimer <-chan time.Time
-	var timer *time.Timer
-	if s.opts.DialTimeout > 0 {
-		timer = time.NewTimer(s.opts.DialTimeout)
-		readyTimer = timer.C
-		defer timer.Stop()
-	}
 	select {
 	case err := <-handshakeDone:
 		if err != nil {
@@ -356,11 +388,9 @@ func (c *conn) pumpLoop() {
 			}
 		}
 
-		// A batch that exceeds the NEGOTIATED Ready limits can never be accepted on
-		// this stream. A single event has an exact dead-letter disposition; a
-		// multi-event batch must remain durable until a lossless repacker can split
-		// valid events from the offending limit.
-		if code, ok := c.batchExceedsReadyLimits(batch); ok {
+		// Older servers cannot authorize repacking. Keep multi-event batches
+		// durable for an upgraded peer; singletons retain the legacy disposition.
+		if code, ok := c.batchExceedsReadyLimits(batch); ok && !c.ready.GetSupportsBatchRepacking() {
 			if len(batch.GetEvents()) != 1 {
 				c.fail(&fatalError{err: fmt.Errorf(
 					"collector/sender: durable batch %d exceeds negotiated limits and requires lossless repacking; batch retained",
@@ -471,9 +501,7 @@ func (c *conn) trySendBatch(
 	c.recordBatchSendLocked(now)
 	c.mu.Unlock()
 
-	err := c.sendLocked(&opensplunk.CollectRequest{
-		Payload: &opensplunk.CollectRequest_Batch{Batch: batch},
-	})
+	err := c.sendLocked(c.batchRequest(batch))
 	return batchSent, 0, throttleGeneration, err
 }
 
@@ -482,6 +510,13 @@ func (c *conn) recordBatchSendLocked(sentAt time.Time) {
 	if c.throttleActiveLocked() && c.minSendDelay > 0 {
 		c.nextBatchSendAt = sentAt.Add(c.minSendDelay)
 	}
+}
+
+func (c *conn) batchRequest(batch *opensplunk.EventBatch) *opensplunk.CollectRequest {
+	if _, exceeds := c.batchExceedsReadyLimits(batch); exceeds && c.ready.GetSupportsBatchRepacking() {
+		return &opensplunk.CollectRequest{Payload: &opensplunk.CollectRequest_RepackBatch{RepackBatch: batch}}
+	}
+	return &opensplunk.CollectRequest{Payload: &opensplunk.CollectRequest_Batch{Batch: batch}}
 }
 
 func (c *conn) effectiveMaxInFlightLocked() int {
@@ -591,9 +626,8 @@ func (c *conn) throttleActiveLocked() bool {
 }
 
 // batchExceedsReadyLimits reports whether batch exceeds the NEGOTIATED Ready
-// limits (fixed for the life of the stream). The caller can terminally
-// dead-letter a single-event batch; a multi-event batch is retained because it
-// requires lossless repacking to preserve its otherwise-valid events.
+// limits (fixed for the life of the stream). Capable peers first recover or
+// durably reject the exact identity before the sender creates child batches.
 func (c *conn) batchExceedsReadyLimits(batch *opensplunk.EventBatch) (string, bool) {
 	c.mu.Lock()
 	maxEvents := c.maxBatchEvents
@@ -876,6 +910,17 @@ func (c *conn) handleReject(reject *opensplunk.BatchReject) error {
 		return fmt.Errorf("collector/sender: reject batch id %q does not match sequence %d", reject.GetBatchId(), seq)
 	}
 	c.cancelRetry(seq)
+	if reject.GetCode() == opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_REPACK_REQUIRED {
+		repacker, ok := c.s.queue.(wal.RepackingQueue)
+		if !ok || !c.ready.GetSupportsBatchRepacking() {
+			return &fatalError{err: errors.New("collector/sender: lossless repacking is unavailable; original batch retained")}
+		}
+		if err := repacker.Repack(seq, c.maxBatchEvents, c.maxBatchBytes); err != nil {
+			return fmt.Errorf("collector/sender: repack durable batch: %w", err)
+		}
+		c.releaseInflight(seq)
+		return nil
+	}
 	if err := c.deadLetterWholeBatch(batch, reject.GetCode().String(), reject.GetMessage()); err != nil {
 		return err
 	}
@@ -949,9 +994,7 @@ func (c *conn) handleRetry(retry *opensplunk.RetryBatch) error {
 			if retryCtx.Err() != nil {
 				return
 			}
-			sent, wait, throttleGeneration, throttleLimited, err := c.sendRetryIfCurrent(seq, batch, state, &opensplunk.CollectRequest{
-				Payload: &opensplunk.CollectRequest_Batch{Batch: batch},
-			})
+			sent, wait, throttleGeneration, throttleLimited, err := c.sendRetryIfCurrent(seq, batch, state, c.batchRequest(batch))
 			if sent {
 				if err != nil {
 					c.fail(err)

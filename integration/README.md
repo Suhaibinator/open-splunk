@@ -1,5 +1,18 @@
 # Backend vertical integration
 
+## Dashboard and shared control browser tests
+
+Run `npm run test:dashboards` to exercise backend-mode dashboard onboarding,
+app creation, app switching, error recovery, and the editor against mocked
+protobuf responses. Its isolated Next development output lives in
+`.cache/dashboard-next`; no running backend or Docker is required.
+
+Run `npm run build && npm run test:workspace` for the demo export, including
+the shared dropdown's filtering, keyboard, and nested-dialog behavior.
+`npm run test:contracts` checks themed popup geometry and padded state cards
+at desktop and mobile widths. Install the pinned browser with
+`npx --no-install playwright install chromium` before these suites.
+
 ## Development workflow smoke test
 
 The opt-in development workflow gate generates a Git-independent development
@@ -89,6 +102,24 @@ OPEN_SPLUNK_BACKEND_INTEGRATION=1 go test ./integration -run '^TestBackendVertic
 Set `OPEN_SPLUNK_BROWSER_EXECUTABLE` to use a specific Chromium-family browser
 instead of Playwright's pinned download.
 
+Enable the completed-feature browser flow against the same compiled server and
+real ClickHouse fixture, and repeat the complete vertical three times:
+
+```sh
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_FEATURE_COMPLETION_INTEGRATION=1 \
+  go test ./integration -run '^TestBackendVertical$' -count=3 -timeout=25m -v
+```
+
+This additionally checks the 10,000-row retained Patterns relation and its exact
+summary/member exports, Nearby search and Back navigation, Private/Global/App
+saved-search scope persistence, the HEC settings surface, and bundled Help
+navigation/search. It uses the production APIs without mocked responses. The
+separate HEC vertical and offline Help browser suite cover enabled ingestion
+and Help with backend requests blocked. CI enables this flow in its backend
+vertical job and retains its failure screenshots alongside the other browser
+artifacts; administrator-session traces are disabled.
+
 The default image is
 `clickhouse/clickhouse-server:26.7.5.10-alpine@sha256:0a45b864c73322d4360dea1973ee9b77f29c51af1242ad2d47409908071fa56e`.
 Set `OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE` to exercise another digest-pinned image
@@ -104,7 +135,11 @@ generation continues, and concurrent bounded searches over monotonically
 advancing visibility snapshots. Final checks require exact source, raw-row,
 cardinality, checkpoint, WAL-drain, dead-letter, and secret-redaction results.
 Throughput, outage/recovery, storage, and search-latency measurements are logged
-as observational evidence rather than portable timing promises.
+as observational evidence rather than portable timing promises. The gate also
+queries ClickHouse's system logs and parts after the final drain to report
+physical inserts, rows-per-insert distribution, insert delays/rejections, and
+active-part growth. These measurements contain no tenant, index, batch, group,
+channel, token, payload, or error-text labels.
 
 Run this resource-intensive gate explicitly:
 
@@ -117,6 +152,116 @@ OPEN_SPLUNK_BACKEND_LOAD=1 \
 It starts the repository-pinned ClickHouse image unless
 `OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE` deliberately selects another digest-pinned
 image.
+
+Physical insert coalescing has a separate concurrent HEC qualification gate.
+It excludes startup, outage, recovery, and final drain from the measured
+window and enforces the documented median, coverage, hard-limit, and physical-
+to-logical ratio thresholds:
+
+```sh
+OPEN_SPLUNK_HEC_QUALIFIED_LOAD=1 \
+  go test ./integration -run '^TestBackendHECQualifiedLoad$' \
+    -count=1 -timeout=15m -v
+```
+
+## Search performance and parity
+
+Search optimizations must preserve exact values, types, ordering, truncation,
+visibility, and whole-result failure behavior. Compare the same immutable
+fixture and query authority with and without the optimization. Keep data
+generation and warmup outside timed samples, and report allocations, bytes and
+rows read alongside timing. Use an otherwise idle machine for latency claims.
+
+The Go benchmarks isolate repeated field-metadata decoding and durable result
+encoding, including stable and changing event schemas and nested values:
+
+```sh
+go test ./internal/queryexec -run '^$' \
+  -bench '^BenchmarkResultMetadataConversion$' -benchmem -count=3
+go test ./internal/searchartifacts -run '^$' \
+  -bench '^BenchmarkStoredRowJSON$' -benchmem -count=3
+```
+
+The bounded event-sort benchmark defaults to 1,048,576 rows and compares the
+same canonical query with its search-only limit, including the overflow row:
+
+```sh
+OPEN_SPLUNK_CLICKHOUSE_BENCHMARK=1 \
+  go test ./internal/clickhouse -run '^$' \
+    -bench '^BenchmarkEventResultLimit$' -benchtime=7x -count=3 -benchmem -v
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  go test ./internal/clickhouse -run '^TestEventResultLimitAgainstClickHouse$' \
+    -count=1 -timeout=8m -v
+```
+
+The normalized-ID integration gate loads 524,288 rows into the production
+schema and compares indexed and unindexed results. It checks actual granule
+pruning as well as case, Unicode, nulls, Boolean filters, and field lineage:
+
+```sh
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  go test ./internal/clickhouse -run '^TestNormalizedIDIndexesAgainstClickHouse$' \
+    -count=1 -timeout=8m -v
+```
+
+Run the SPL corpus and cross-command semantic comparisons against the pinned
+database, then the backend vertical above to verify exports beyond the
+interactive retained-row ceiling:
+
+```sh
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  go test ./internal/clickhouse ./internal/queryexec \
+    -run '^(TestSPLSemanticInvariantsAgainstClickHouse|TestGradeThisCorpusAgainstClickHouse|TestPipelineCommandsPreserveUntouchedSemanticBytesThroughManagerAgainstClickHouse)$' \
+    -count=1 -timeout=15m -v
+```
+
+The controlled ordinary-search qualification accepts two already-built server
+binaries from the same pinned release toolchain. Build the baseline at
+`da8415f3bf4ad115da0a0b3941e5c333392ae3b9` and the clean candidate before reserving
+an idle host. It verifies their identities, uses one immutable 10,001-row
+ClickHouse fixture, and records seven alternating pairs per admission mode with
+exact output and error parity. The `unkeyed` mode omits request keys on both
+binaries. The `browser_behavior` mode compares the baseline's unkeyed browser
+admission with a fresh unique request key on every candidate admission; key
+generation occurs outside the timer and replayed receipts fail qualification.
+Median and p95 regressions must each remain below 10% in both modes:
+
+```sh
+OPEN_SPLUNK_NEARBY_SEARCH_QUALIFICATION=1 \
+OPEN_SPLUNK_NEARBY_BASELINE_SERVER=/absolute/baseline/open-splunk-server \
+OPEN_SPLUNK_NEARBY_CANDIDATE_SERVER=/absolute/candidate/open-splunk-server \
+OPEN_SPLUNK_NEARBY_CANDIDATE_REVISION="$(git rev-parse HEAD)" \
+  go test ./integration -run '^TestNearbyOrdinarySearchQualification$' \
+    -count=1 -timeout=15m -v
+```
+
+The output includes a `NEARBY_SEARCH_QUALIFICATION` JSON report for each mode,
+with raw samples, fixture/output digests, binary hashes, and toolchain metadata. The
+separate retained-Patterns qualification records seven cold/cached pairs,
+resource accounting and process RSS, with cold p95 at most 2 seconds, cached
+p95 at most 100 milliseconds, and cancellation at most 250 milliseconds:
+
+```sh
+OPEN_SPLUNK_PATTERNS_QUALIFICATION=1 \
+OPEN_SPLUNK_PATTERNS_QUALIFICATION_OUTPUT=/absolute/patterns-qualification.json \
+  go test ./internal/patterns -run '^TestPatternQualification$' -count=1 -v
+```
+
+Both timing gates are opt-in controlled-host qualification; ordinary unit tests
+do not enforce machine-dependent latency targets.
+
+For arithmetic and membership aggregation baselines, the existing
+`BenchmarkAuthoredExpressionExecution` uses 100,000 ingested events by default:
+
+```sh
+OPEN_SPLUNK_CLICKHOUSE_BENCHMARK=1 \
+  go test ./internal/queryexec -run '^$' \
+    -bench '^BenchmarkAuthoredExpressionExecution$' -benchtime=7x -count=3 -benchmem -v
+```
+
+Its hand-written SQL controls assume known fixture types and are not alternate
+SPL implementations. A timing gap does not justify dropping dynamic-type,
+precision, null, or atomic-validation semantics.
 
 ## Browser stream recovery and cancellation
 
@@ -198,12 +343,12 @@ OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
 `browser_rendering_test.go` isolates browser rendering from ClickHouse and
 query latency. It runs the compiled backend UI and production protobuf HTTP
 handler against a deterministic executor that returns exactly 1,000 statistics
-rows at the browser's 64-column boundary. The test verifies the decoded
+rows across 70 columns. The test verifies the decoded
 response, exact total and page contract, bounded virtualized rows and cells at
 the first and last rows, fixed table width, ARIA row positions, sorting, table
-density changes, and browser/API safety.
-The browser rejects a result page that exceeds its requested row count or the
-explicit 64-column interactive-table limit before adapting or rendering it.
+density changes, column-page navigation, and browser/API safety. The browser
+rejects a result page that exceeds its requested row count, while wide schemas
+remain available through bounded 24-column table pages.
 
 Run it with the same pinned Chromium installation:
 
@@ -218,6 +363,66 @@ latency acceptance thresholds. Exact payload semantics and the maximum number
 of materialized rows remain correctness gates. Metrics and top/bottom
 screenshots are written beneath
 `test-results/browser-fixed-result-rendering/visual`.
+
+## Instance palette browser smoke
+
+`palette_smoke_test.go` proves the two halves of the administrator-selectable
+palette meet without Docker, ClickHouse, or a compiled server binary. It
+stages and builds the backend-mode static export, opens a real SQLite control
+plane in a temporary directory with the real audit journal and the real
+`server_search_settings` / `server_appearance_settings` singleton stores, and
+mounts the production browser API handler over that export on a random
+loopback port. The search-job manager is backed by a fixed executor that
+returns no rows: nothing ClickHouse-shaped is exercised, and nothing about the
+palette needs it.
+
+`palette-smoke/instance-palette.spec.ts`, run through
+`playwright.palette-smoke.config.ts`, then drives Chromium against that origin
+with an administrator bearer the Go test minted:
+
+1. a fresh browser loads `/signin/`, paints `data-palette="classic"`, and
+   caches it once `/api/system/bootstrap` answers;
+2. the administrator updates the palette to `terminal`; the next load paints
+   `terminal` after hydration and the cache follows;
+3. with the bootstrap route blocked, the next load paints `terminal` from the
+   cache before any network response, which an init-script mutation observer
+   records as the first `data-palette` write, together with whether `<body>`
+   existed yet: only the inline `<head>` boot script writes before `<body>`
+   is parsed, so `beforeBody: true` is what separates the boot script from
+   ThemeSync's mount-time repaint (deleting the boot script from
+   `app/layout.tsx` fails this step and every other first-paint check);
+4. the user picks Dark from the user menu; both attributes hold, and the boot
+   script paints both on a reload with bootstrap blocked again;
+5. the administrator updates to `glass`; the search workspace paints it and
+   the user menu's `.floating-menu` computes a translucent background at or
+   above the documented 80% floor with a `blur()` backdrop filter;
+6. a raw protobuf body carrying an out-of-range `UiPalette` number is
+   rejected with `400`, a stale `expected_version` with `409`, and the page
+   still paints `glass`.
+
+Back in Go, the durable singleton must read version 2 `glass`, agree with the
+live snapshot bootstrap serves, and the audit journal must hold exactly two
+`server_settings.update` events for `ui-palette`.
+
+Install the pinned Chromium build once, then run the gate explicitly:
+
+```sh
+npm ci
+npx --no-install playwright install chromium
+OPEN_SPLUNK_PALETTE_SMOKE=1 \
+  go test ./integration -run '^TestBrowserInstancePaletteSmoke$' -count=1 -timeout=10m -v
+```
+
+`OPEN_SPLUNK_BROWSER_EXECUTABLE` selects another Chromium-family browser, as
+for the other browser gates. Failure artifacts are written beneath
+`test-results/palette-smoke`. What this gate does not prove is the compiled
+`open-splunk-server` wiring of the same stores into its runtime settings
+object: the smoke restates that wiring over a test settings object.
+`TestBackendVertical` (`OPEN_SPLUNK_BACKEND_INTEGRATION=1`, Docker) covers the
+binary's own through `assertInstancePaletteRoundTrip`: a fresh control
+database bootstraps `classic`, an administrator update lands `ocean` at
+version 1, the unauthenticated bootstrap and a fresh authenticated read both
+serve it, and after the server restart the reloaded snapshot still does.
 
 ## Global stylesheet computed-style contracts
 
@@ -334,3 +539,52 @@ them to be consolidated.
 `scripts/safety-net.test.mjs` guards the net itself: every unit test file must
 appear in the hardcoded list in `scripts/test-frontend.mjs`, and every listed
 test file must still exist.
+
+## Disposable deployment recovery drill
+
+The opt-in `TestDeploymentRecoveryDrill` runs the actual server image using
+[`docker-compose.recovery.yaml`](../deploy/docker-compose.recovery.yaml) and its
+[restore overlay](../deploy/docker-compose.recovery-restore.yaml). It owns a
+unique Compose project, temporary credentials, TLS identities and fresh target
+volumes, and removes only its exact owned resources. It requires Linux, Docker
+Compose v2, the repository Go/Node toolchains, a prepared backend `out/` release
+manifest, and a server image built from that same clean committed source/release identity.
+The wrapper rejects the ambiguous `development` identity and uncommitted source.
+Run this after building the backend UI and local server image using the release
+or OCI workflows described in [releasing](../docs/releasing.md):
+
+```sh
+OPEN_SPLUNK_DEPLOYMENT_RECOVERY_DRILL=1 \
+OPEN_SPLUNK_RECOVERY_DRILL_SERVER_IMAGE=open-splunk-server:recovery-test \
+  scripts/test-deployment-recovery.sh
+```
+
+The wrapper compares the image and source release identities, builds a static
+**test-only** helper with the same embedded manifest, and runs the drill. The
+pinned ClickHouse image is the one in the shipped recovery Compose file. No
+production crash flag is added. It seeds an app, index, saved search, HEC token,
+three events and a retained terminal result through the real HTTPS APIs, then
+uses the real pending-attempt store for a stopped-server pending fixture.
+It executes the production backup and offline verify commands, switches to
+fresh SQLite/ClickHouse volumes with a shared read-only archive, and kills a
+helper process after canonical receipt publication but before control-plane
+publication. The identical production restore retry must preserve both the
+receipt/physical identity and the count of native RESTORE operations. Restart
+must preserve authenticated catalog/event/retained-result readback and mark
+the pending attempt Interrupted. The source and restore volume names are
+tracked separately so cleanup also removes source volumes displaced by the
+overlay, without pruning unrelated resources.
+
+CI runs this drill in the release OCI job after building the native images and
+backend UI from the same commit. It compares the image's embedded UI identity
+and digest with the prepared manifest before compiling the helper. The separate
+ARM64 image reproducibility checks run afterward.
+
+The lower-level native recovery privilege/archive/state-machine qualification
+remains independently available:
+
+```sh
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  go test ./cmd/open-splunk-server \
+  -run '^TestDeploymentNativeRecoveryClickHouseLifecycle$' -count=1 -timeout=12m -v
+```

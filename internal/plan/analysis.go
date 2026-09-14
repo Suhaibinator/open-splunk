@@ -8,6 +8,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/Suhaibinator/open-splunk/internal/ianatimezone"
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
@@ -99,6 +100,13 @@ func analyze(query *Query) (internalAnalysis, error) {
 			return internalAnalysis{}, err
 		}
 	}
+	if analyzer.calendarSpan {
+		if _, err := ianatimezone.Load(query.SearchTimezone); err != nil {
+			return internalAnalysis{}, errors.New(
+				"analyze logical query: calendar spans require a valid search timezone",
+			)
+		}
+	}
 	fields := make([]string, 0, len(analyzer.fields))
 	for field := range analyzer.fields {
 		fields = append(fields, field)
@@ -117,6 +125,7 @@ type queryAnalyzer struct {
 	scalarPredicates      uint32
 	arithmeticOperators   int
 	membershipCandidates  int
+	calendarSpan          bool
 	activeExpressionNodes map[any]struct{}
 }
 
@@ -565,6 +574,10 @@ func (analyzer *queryAnalyzer) visitOperator(operator Operator, depth int) error
 		}
 		return analyzer.addField(operator.Input, depth+1)
 	case *TimeBucket:
+		if !validBucketSpanContract(operator.Span, operator.Calendar) {
+			return errors.New("analyze logical query: time bucket span metadata is invalid")
+		}
+		analyzer.calendarSpan = analyzer.calendarSpan || operator.Calendar != CalendarNone
 		if err := analyzer.validateField(operator.Output, depth+1); err != nil {
 			return err
 		}
@@ -745,6 +758,10 @@ func (analyzer *queryAnalyzer) visitOperator(operator Operator, depth int) error
 		}
 		return nil
 	case *Timechart:
+		if !validBucketSpanContract(operator.Span, operator.Calendar) {
+			return errors.New("analyze logical query: timechart span metadata is invalid")
+		}
+		analyzer.calendarSpan = analyzer.calendarSpan || operator.Calendar != CalendarNone
 		if err := analyzer.addField(operator.Time, depth+1); err != nil {
 			return err
 		}

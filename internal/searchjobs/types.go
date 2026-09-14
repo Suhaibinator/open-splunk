@@ -13,6 +13,7 @@ import (
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 	"google.golang.org/protobuf/proto"
 )
@@ -394,6 +395,10 @@ type Job struct {
 	KnowledgeSnapshot *opensplunk.KnowledgeSnapshotSummary
 	State             State
 	Schema            *Schema
+	// NearbyEventProvenance is a compiler-authenticated binding from the final
+	// result schema to unchanged physical event fields. Nil is the compatible
+	// representation for legacy and transformed results.
+	NearbyEventProvenance *NearbyEventProvenance
 	// ScannedRows and ScannedBytes are the exact executor-reported progress
 	// received so far. A terminal job may contain only the prefix reported
 	// before cancellation or failure; the manager never extrapolates a total.
@@ -429,6 +434,28 @@ type Job struct {
 type JobJournal interface {
 	Admit(context.Context, Job) error
 	Finalize(context.Context, Job) error
+}
+
+// IdempotentJobJournal extends durable admission with actor-scoped receipt
+// lookup. Lookup returns current authorized metadata from the durable target,
+// rather than a historical response projection stored in the receipt.
+type IdempotentJobJournal interface {
+	JobJournal
+	LookupIdempotent(context.Context, AccessScope, requestidempotency.Intent) (Job, bool, error)
+	AdmitIdempotent(context.Context, Job, requestidempotency.Intent) error
+}
+
+// IdempotencyReceiptJournal is the single journal projection that co-commits
+// a mutation receipt with its admission audit.
+type IdempotencyReceiptJournal interface {
+	LookupIdempotencyReceipt(context.Context, requestidempotency.Intent) (requestidempotency.Target, bool, error)
+	AdmitIdempotent(context.Context, Job, requestidempotency.Intent) error
+}
+
+// IdempotencyTargetJournal rehydrates the receipt target through the current
+// durable authorization boundary.
+type IdempotencyTargetJournal interface {
+	ReadIdempotencyTarget(context.Context, AccessScope, requestidempotency.Target) (Job, error)
 }
 
 // CompletedResultJournal is an optional extension implemented by journals
@@ -742,10 +769,19 @@ func (value Value) Object() ([]ObjectField, bool) {
 	return cloneObject(value.objectValue), true
 }
 
+// TimeBucketBounds is an exact half-open UTC timechart bucket interval. Both
+// fields use canonical RFC3339Nano text so transport never rounds through a
+// lower-precision timestamp representation.
+type TimeBucketBounds struct {
+	Earliest string
+	Latest   string
+}
+
 // ResultRow is a stable, zero-based row within one completed result snapshot.
 type ResultRow struct {
-	Ordinal uint64
-	Values  []Value
+	Ordinal    uint64
+	Values     []Value
+	TimeBucket *TimeBucketBounds
 
 	retainedBytes uint64
 }
@@ -765,6 +801,7 @@ type ResultPage struct {
 	NextCursor string
 	TotalRows  uint64
 	Complete   bool
+	Generation uint64
 }
 
 func cloneJob(source Job) Job {
@@ -775,6 +812,10 @@ func cloneJob(source Job) Job {
 	if source.Schema != nil {
 		schema := cloneSchema(*source.Schema)
 		result.Schema = &schema
+	}
+	if source.NearbyEventProvenance != nil {
+		provenance := *source.NearbyEventProvenance
+		result.NearbyEventProvenance = &provenance
 	}
 	if source.Failure != nil {
 		failure := cloneFailure(*source.Failure)
@@ -791,6 +832,7 @@ func cloneJobSummary(source Job) Job {
 	result.EffectiveIndexes = nil
 	result.KnowledgeSnapshot = nil
 	result.Schema = nil
+	result.NearbyEventProvenance = nil
 	if source.Failure != nil {
 		failure := *source.Failure
 		failure.Diagnostics = nil
@@ -847,9 +889,78 @@ func cloneSchema(source Schema) Schema {
 func cloneRows(source []ResultRow) []ResultRow {
 	result := make([]ResultRow, len(source))
 	for index, row := range source {
-		result[index] = ResultRow{Ordinal: row.Ordinal, Values: cloneValues(row.Values), retainedBytes: row.retainedBytes}
+		result[index] = ResultRow{
+			Ordinal: row.Ordinal, Values: cloneValues(row.Values),
+			TimeBucket: cloneTimeBucketBounds(row.TimeBucket), retainedBytes: row.retainedBytes,
+		}
 	}
 	return result
+}
+
+func cloneTimeBucketBounds(source *TimeBucketBounds) *TimeBucketBounds {
+	if source == nil {
+		return nil
+	}
+	return &TimeBucketBounds{
+		Earliest: strings.Clone(source.Earliest),
+		Latest:   strings.Clone(source.Latest),
+	}
+}
+
+func measureTimeBucketBounds(
+	columns []Column,
+	values []Value,
+	bounds *TimeBucketBounds,
+	payloadBytes uint64,
+	retainedBytes uint64,
+) (uint64, uint64, error) {
+	if bounds == nil {
+		return payloadBytes, retainedBytes, nil
+	}
+	earliest, earliestOK := canonicalTimeBucketBoundary(bounds.Earliest)
+	latest, latestOK := canonicalTimeBucketBoundary(bounds.Latest)
+	if !earliestOK || !latestOK || !earliest.Before(latest) {
+		return 0, 0, fmt.Errorf("%w: time bucket bounds are invalid", ErrInvalidResult)
+	}
+	timeIndex := -1
+	for index, column := range columns {
+		if column.Name == "_time" && column.Kind == ValueKindTime {
+			timeIndex = index
+			break
+		}
+	}
+	if timeIndex < 0 || timeIndex >= len(values) {
+		return 0, 0, fmt.Errorf("%w: time bucket metadata requires a timestamp _time cell", ErrInvalidResult)
+	}
+	bucketTime, ok := values[timeIndex].Time()
+	if !ok || !bucketTime.Equal(earliest) {
+		return 0, 0, fmt.Errorf("%w: time bucket earliest does not match the _time cell", ErrInvalidResult)
+	}
+	stringsBytes, err := checkedAdd(uint64(len(bounds.Earliest)), uint64(len(bounds.Latest)))
+	if err != nil {
+		return 0, 0, ErrByteLimit
+	}
+	payloadBytes, err = checkedAdd(payloadBytes, stringsBytes)
+	if err != nil {
+		return 0, 0, ErrByteLimit
+	}
+	retainedBytes, err = checkedAdd(retainedBytes, uint64(unsafe.Sizeof(TimeBucketBounds{})))
+	if err != nil {
+		return 0, 0, ErrByteLimit
+	}
+	retainedBytes, err = checkedAdd(retainedBytes, stringsBytes)
+	if err != nil {
+		return 0, 0, ErrByteLimit
+	}
+	return payloadBytes, retainedBytes, nil
+}
+
+func canonicalTimeBucketBoundary(value string) (time.Time, bool) {
+	if len(value) < len("0000-00-00T00:00:00Z") || len(value) > len("0000-00-00T00:00:00.000000000Z") {
+		return time.Time{}, false
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	return parsed, err == nil && parsed.Location() == time.UTC && parsed.Format(time.RFC3339Nano) == value
 }
 
 func cloneValues(source []Value) []Value {
@@ -911,7 +1022,9 @@ func retainedJobMetadataReservation(id string, request CreateRequest) (uint64, e
 func retainedNormalizedJobMetadataReservation(id string, request CreateRequest) (uint64, error) {
 	var err error
 	intent := request.TimeRange.Intent()
-	total := uint64(unsafe.Sizeof(jobEntry{})) + metadataContextAllowance + metadataDiagnosticAllowance
+	total := uint64(unsafe.Sizeof(jobEntry{})) +
+		uint64(unsafe.Sizeof(NearbyEventProvenance{})) +
+		metadataContextAllowance + metadataDiagnosticAllowance
 	for _, value := range []string{
 		id,
 		request.OwnerID,
@@ -979,11 +1092,47 @@ func validateValue(value Value, depth int) error {
 // temporarily buffer values use this same accounting as the durable result
 // sink so recursive containers cannot evade a private memory ceiling.
 func (value Value) RetainedSizeBytes() (uint64, error) {
-	_, retained, err := measureValue(value, 0)
+	_, retained, err := (*valueMeasurement)(nil).measure(value, 0)
 	return retained, err
 }
 
+// RetainedSizeBytesContext applies the same modeled heap accounting while
+// checking cancellation throughout nested lists and objects.
+func (value Value) RetainedSizeBytesContext(ctx context.Context) (uint64, error) {
+	if ctx == nil {
+		return 0, errors.New("measure search result value: context is nil")
+	}
+	measurement := valueMeasurement{ctx: ctx}
+	_, retained, err := measurement.measure(value, 0)
+	if err != nil {
+		return 0, err
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	return retained, nil
+}
+
+// A nil measurement retains the shared accounting without context polling for
+// legacy callers. Context-aware measurements carry their own bounded counter.
+type valueMeasurement struct {
+	ctx   context.Context
+	nodes uint64
+}
+
 func measureValue(value Value, depth int) (uint64, uint64, error) {
+	return (*valueMeasurement)(nil).measure(value, depth)
+}
+
+func (measurement *valueMeasurement) measure(value Value, depth int) (uint64, uint64, error) {
+	if measurement != nil {
+		if measurement.nodes&255 == 0 {
+			if err := measurement.ctx.Err(); err != nil {
+				return 0, 0, err
+			}
+		}
+		measurement.nodes++
+	}
 	if depth > 32 {
 		return 0, 0, errors.New("search result value exceeds maximum nesting depth")
 	}
@@ -1010,7 +1159,7 @@ func measureValue(value Value, depth int) (uint64, uint64, error) {
 	case ValueKindList:
 		var payload uint64
 		for _, child := range value.listValue {
-			childPayload, childRetained, err := measureValue(child, depth+1)
+			childPayload, childRetained, err := measurement.measure(child, depth+1)
 			if err != nil {
 				return 0, 0, err
 			}
@@ -1025,6 +1174,11 @@ func measureValue(value Value, depth int) (uint64, uint64, error) {
 		}
 		return payload, retained, nil
 	case ValueKindObject:
+		if measurement != nil {
+			if err := measurement.ctx.Err(); err != nil {
+				return 0, 0, err
+			}
+		}
 		seen := make(map[string]struct{}, len(value.objectValue))
 		var payload uint64
 		for _, field := range value.objectValue {
@@ -1035,7 +1189,7 @@ func measureValue(value Value, depth int) (uint64, uint64, error) {
 				return 0, 0, fmt.Errorf("search result object field %q is duplicated", field.Name)
 			}
 			seen[field.Name] = struct{}{}
-			childPayload, childRetained, err := measureValue(field.Value, depth+1)
+			childPayload, childRetained, err := measurement.measure(field.Value, depth+1)
 			if err != nil {
 				return 0, 0, err
 			}

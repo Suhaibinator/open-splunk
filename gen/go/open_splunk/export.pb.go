@@ -400,12 +400,149 @@ func (x *JsonLinesExportOptions) GetIncludeTypeMetadata() bool {
 	return false
 }
 
+// Pattern exports consume the exact retained relation; they never rerun SPL.
+type PatternSummaryExportSource struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SearchJobId   string                 `protobuf:"bytes,1,opt,name=search_job_id,json=searchJobId,proto3" json:"search_job_id,omitempty"`
+	Sensitivity   PatternSensitivity     `protobuf:"varint,2,opt,name=sensitivity,proto3,enum=open_splunk.PatternSensitivity" json:"sensitivity,omitempty"`
+	SnapshotRef   string                 `protobuf:"bytes,3,opt,name=snapshot_ref,json=snapshotRef,proto3" json:"snapshot_ref,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PatternSummaryExportSource) Reset() {
+	*x = PatternSummaryExportSource{}
+	mi := &file_open_splunk_export_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PatternSummaryExportSource) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PatternSummaryExportSource) ProtoMessage() {}
+
+func (x *PatternSummaryExportSource) ProtoReflect() protoreflect.Message {
+	mi := &file_open_splunk_export_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PatternSummaryExportSource.ProtoReflect.Descriptor instead.
+func (*PatternSummaryExportSource) Descriptor() ([]byte, []int) {
+	return file_open_splunk_export_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *PatternSummaryExportSource) GetSearchJobId() string {
+	if x != nil {
+		return x.SearchJobId
+	}
+	return ""
+}
+
+func (x *PatternSummaryExportSource) GetSensitivity() PatternSensitivity {
+	if x != nil {
+		return x.Sensitivity
+	}
+	return PatternSensitivity_PATTERN_SENSITIVITY_UNSPECIFIED
+}
+
+func (x *PatternSummaryExportSource) GetSnapshotRef() string {
+	if x != nil {
+		return x.SnapshotRef
+	}
+	return ""
+}
+
+type PatternMemberExportSource struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SearchJobId   string                 `protobuf:"bytes,1,opt,name=search_job_id,json=searchJobId,proto3" json:"search_job_id,omitempty"`
+	Sensitivity   PatternSensitivity     `protobuf:"varint,2,opt,name=sensitivity,proto3,enum=open_splunk.PatternSensitivity" json:"sensitivity,omitempty"`
+	SnapshotRef   string                 `protobuf:"bytes,3,opt,name=snapshot_ref,json=snapshotRef,proto3" json:"snapshot_ref,omitempty"`
+	PatternId     string                 `protobuf:"bytes,4,opt,name=pattern_id,json=patternId,proto3" json:"pattern_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PatternMemberExportSource) Reset() {
+	*x = PatternMemberExportSource{}
+	mi := &file_open_splunk_export_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PatternMemberExportSource) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PatternMemberExportSource) ProtoMessage() {}
+
+func (x *PatternMemberExportSource) ProtoReflect() protoreflect.Message {
+	mi := &file_open_splunk_export_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PatternMemberExportSource.ProtoReflect.Descriptor instead.
+func (*PatternMemberExportSource) Descriptor() ([]byte, []int) {
+	return file_open_splunk_export_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *PatternMemberExportSource) GetSearchJobId() string {
+	if x != nil {
+		return x.SearchJobId
+	}
+	return ""
+}
+
+func (x *PatternMemberExportSource) GetSensitivity() PatternSensitivity {
+	if x != nil {
+		return x.Sensitivity
+	}
+	return PatternSensitivity_PATTERN_SENSITIVITY_UNSPECIFIED
+}
+
+func (x *PatternMemberExportSource) GetSnapshotRef() string {
+	if x != nil {
+		return x.SnapshotRef
+	}
+	return ""
+}
+
+func (x *PatternMemberExportSource) GetPatternId() string {
+	if x != nil {
+		return x.PatternId
+	}
+	return ""
+}
+
 type ExportDefinition struct {
 	state       protoimpl.MessageState `protogen:"open.v1"`
 	SearchJobId string                 `protobuf:"bytes,1,opt,name=search_job_id,json=searchJobId,proto3" json:"search_job_id,omitempty"`
 	Columns     []string               `protobuf:"bytes,2,rep,name=columns,proto3" json:"columns,omitempty"`
 	RowLimit    *uint64                `protobuf:"varint,3,opt,name=row_limit,json=rowLimit,proto3,oneof" json:"row_limit,omitempty"`
 	ByteLimit   *uint64                `protobuf:"varint,4,opt,name=byte_limit,json=byteLimit,proto3,oneof" json:"byte_limit,omitempty"`
+	// Absent source keeps the existing ordinary search export behavior.
+	// A typed source search_job_id must equal the outer search_job_id.
+	//
+	// Types that are valid to be assigned to Source:
+	//
+	//	*ExportDefinition_PatternSummary
+	//	*ExportDefinition_PatternMembers
+	Source isExportDefinition_Source `protobuf_oneof:"source"`
 	// Types that are valid to be assigned to FormatOptions:
 	//
 	//	*ExportDefinition_Csv
@@ -417,7 +554,7 @@ type ExportDefinition struct {
 
 func (x *ExportDefinition) Reset() {
 	*x = ExportDefinition{}
-	mi := &file_open_splunk_export_proto_msgTypes[2]
+	mi := &file_open_splunk_export_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -429,7 +566,7 @@ func (x *ExportDefinition) String() string {
 func (*ExportDefinition) ProtoMessage() {}
 
 func (x *ExportDefinition) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_export_proto_msgTypes[2]
+	mi := &file_open_splunk_export_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -442,7 +579,7 @@ func (x *ExportDefinition) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExportDefinition.ProtoReflect.Descriptor instead.
 func (*ExportDefinition) Descriptor() ([]byte, []int) {
-	return file_open_splunk_export_proto_rawDescGZIP(), []int{2}
+	return file_open_splunk_export_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ExportDefinition) GetSearchJobId() string {
@@ -473,6 +610,31 @@ func (x *ExportDefinition) GetByteLimit() uint64 {
 	return 0
 }
 
+func (x *ExportDefinition) GetSource() isExportDefinition_Source {
+	if x != nil {
+		return x.Source
+	}
+	return nil
+}
+
+func (x *ExportDefinition) GetPatternSummary() *PatternSummaryExportSource {
+	if x != nil {
+		if x, ok := x.Source.(*ExportDefinition_PatternSummary); ok {
+			return x.PatternSummary
+		}
+	}
+	return nil
+}
+
+func (x *ExportDefinition) GetPatternMembers() *PatternMemberExportSource {
+	if x != nil {
+		if x, ok := x.Source.(*ExportDefinition_PatternMembers); ok {
+			return x.PatternMembers
+		}
+	}
+	return nil
+}
+
 func (x *ExportDefinition) GetFormatOptions() isExportDefinition_FormatOptions {
 	if x != nil {
 		return x.FormatOptions
@@ -497,6 +659,22 @@ func (x *ExportDefinition) GetJsonLines() *JsonLinesExportOptions {
 	}
 	return nil
 }
+
+type isExportDefinition_Source interface {
+	isExportDefinition_Source()
+}
+
+type ExportDefinition_PatternSummary struct {
+	PatternSummary *PatternSummaryExportSource `protobuf:"bytes,20,opt,name=pattern_summary,json=patternSummary,proto3,oneof"`
+}
+
+type ExportDefinition_PatternMembers struct {
+	PatternMembers *PatternMemberExportSource `protobuf:"bytes,21,opt,name=pattern_members,json=patternMembers,proto3,oneof"`
+}
+
+func (*ExportDefinition_PatternSummary) isExportDefinition_Source() {}
+
+func (*ExportDefinition_PatternMembers) isExportDefinition_Source() {}
 
 type isExportDefinition_FormatOptions interface {
 	isExportDefinition_FormatOptions()
@@ -525,7 +703,7 @@ type ExportFailure struct {
 
 func (x *ExportFailure) Reset() {
 	*x = ExportFailure{}
-	mi := &file_open_splunk_export_proto_msgTypes[3]
+	mi := &file_open_splunk_export_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -537,7 +715,7 @@ func (x *ExportFailure) String() string {
 func (*ExportFailure) ProtoMessage() {}
 
 func (x *ExportFailure) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_export_proto_msgTypes[3]
+	mi := &file_open_splunk_export_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -550,7 +728,7 @@ func (x *ExportFailure) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExportFailure.ProtoReflect.Descriptor instead.
 func (*ExportFailure) Descriptor() ([]byte, []int) {
-	return file_open_splunk_export_proto_rawDescGZIP(), []int{3}
+	return file_open_splunk_export_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *ExportFailure) GetCode() ExportFailureCode {
@@ -587,7 +765,7 @@ type ExportProgress struct {
 
 func (x *ExportProgress) Reset() {
 	*x = ExportProgress{}
-	mi := &file_open_splunk_export_proto_msgTypes[4]
+	mi := &file_open_splunk_export_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -599,7 +777,7 @@ func (x *ExportProgress) String() string {
 func (*ExportProgress) ProtoMessage() {}
 
 func (x *ExportProgress) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_export_proto_msgTypes[4]
+	mi := &file_open_splunk_export_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -612,7 +790,7 @@ func (x *ExportProgress) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExportProgress.ProtoReflect.Descriptor instead.
 func (*ExportProgress) Descriptor() ([]byte, []int) {
-	return file_open_splunk_export_proto_rawDescGZIP(), []int{4}
+	return file_open_splunk_export_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ExportProgress) GetRowsWritten() uint64 {
@@ -663,7 +841,7 @@ type ExportArtifact struct {
 
 func (x *ExportArtifact) Reset() {
 	*x = ExportArtifact{}
-	mi := &file_open_splunk_export_proto_msgTypes[5]
+	mi := &file_open_splunk_export_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -675,7 +853,7 @@ func (x *ExportArtifact) String() string {
 func (*ExportArtifact) ProtoMessage() {}
 
 func (x *ExportArtifact) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_export_proto_msgTypes[5]
+	mi := &file_open_splunk_export_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -688,7 +866,7 @@ func (x *ExportArtifact) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExportArtifact.ProtoReflect.Descriptor instead.
 func (*ExportArtifact) Descriptor() ([]byte, []int) {
-	return file_open_splunk_export_proto_rawDescGZIP(), []int{5}
+	return file_open_splunk_export_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ExportArtifact) GetFileName() string {
@@ -747,7 +925,7 @@ type ExportJob struct {
 
 func (x *ExportJob) Reset() {
 	*x = ExportJob{}
-	mi := &file_open_splunk_export_proto_msgTypes[6]
+	mi := &file_open_splunk_export_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -759,7 +937,7 @@ func (x *ExportJob) String() string {
 func (*ExportJob) ProtoMessage() {}
 
 func (x *ExportJob) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_export_proto_msgTypes[6]
+	mi := &file_open_splunk_export_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -772,7 +950,7 @@ func (x *ExportJob) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExportJob.ProtoReflect.Descriptor instead.
 func (*ExportJob) Descriptor() ([]byte, []int) {
-	return file_open_splunk_export_proto_rawDescGZIP(), []int{6}
+	return file_open_splunk_export_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ExportJob) GetExportJobId() string {
@@ -870,23 +1048,36 @@ var File_open_splunk_export_proto protoreflect.FileDescriptor
 
 const file_open_splunk_export_proto_rawDesc = "" +
 	"\n" +
-	"\x18open_splunk/export.proto\x12\vopen_splunk\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1bopen_splunk/knowledge.proto\"O\n" +
+	"\x18open_splunk/export.proto\x12\vopen_splunk\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1bopen_splunk/knowledge.proto\x1a\x1eopen_splunk/patterns_api.proto\"O\n" +
 	"\x10CsvExportOptions\x12;\n" +
 	"\vheader_mode\x18\x01 \x01(\x0e2\x1a.open_splunk.CsvHeaderModeR\n" +
 	"headerMode\"\x99\x01\n" +
 	"\x16JsonLinesExportOptions\x12K\n" +
 	"\x10integer_encoding\x18\x01 \x01(\x0e2 .open_splunk.JsonIntegerEncodingR\x0fintegerEncoding\x122\n" +
-	"\x15include_type_metadata\x18\x02 \x01(\bR\x13includeTypeMetadata\"\xbe\x02\n" +
+	"\x15include_type_metadata\x18\x02 \x01(\bR\x13includeTypeMetadata\"\xa6\x01\n" +
+	"\x1aPatternSummaryExportSource\x12\"\n" +
+	"\rsearch_job_id\x18\x01 \x01(\tR\vsearchJobId\x12A\n" +
+	"\vsensitivity\x18\x02 \x01(\x0e2\x1f.open_splunk.PatternSensitivityR\vsensitivity\x12!\n" +
+	"\fsnapshot_ref\x18\x03 \x01(\tR\vsnapshotRef\"\xc4\x01\n" +
+	"\x19PatternMemberExportSource\x12\"\n" +
+	"\rsearch_job_id\x18\x01 \x01(\tR\vsearchJobId\x12A\n" +
+	"\vsensitivity\x18\x02 \x01(\x0e2\x1f.open_splunk.PatternSensitivityR\vsensitivity\x12!\n" +
+	"\fsnapshot_ref\x18\x03 \x01(\tR\vsnapshotRef\x12\x1d\n" +
+	"\n" +
+	"pattern_id\x18\x04 \x01(\tR\tpatternId\"\xef\x03\n" +
 	"\x10ExportDefinition\x12\"\n" +
 	"\rsearch_job_id\x18\x01 \x01(\tR\vsearchJobId\x12\x18\n" +
 	"\acolumns\x18\x02 \x03(\tR\acolumns\x12 \n" +
-	"\trow_limit\x18\x03 \x01(\x04H\x01R\browLimit\x88\x01\x01\x12\"\n" +
+	"\trow_limit\x18\x03 \x01(\x04H\x02R\browLimit\x88\x01\x01\x12\"\n" +
 	"\n" +
-	"byte_limit\x18\x04 \x01(\x04H\x02R\tbyteLimit\x88\x01\x01\x121\n" +
+	"byte_limit\x18\x04 \x01(\x04H\x03R\tbyteLimit\x88\x01\x01\x12R\n" +
+	"\x0fpattern_summary\x18\x14 \x01(\v2'.open_splunk.PatternSummaryExportSourceH\x00R\x0epatternSummary\x12Q\n" +
+	"\x0fpattern_members\x18\x15 \x01(\v2&.open_splunk.PatternMemberExportSourceH\x00R\x0epatternMembers\x121\n" +
 	"\x03csv\x18\n" +
-	" \x01(\v2\x1d.open_splunk.CsvExportOptionsH\x00R\x03csv\x12D\n" +
+	" \x01(\v2\x1d.open_splunk.CsvExportOptionsH\x01R\x03csv\x12D\n" +
 	"\n" +
-	"json_lines\x18\v \x01(\v2#.open_splunk.JsonLinesExportOptionsH\x00R\tjsonLinesB\x10\n" +
+	"json_lines\x18\v \x01(\v2#.open_splunk.JsonLinesExportOptionsH\x01R\tjsonLinesB\b\n" +
+	"\x06sourceB\x10\n" +
 	"\x0eformat_optionsB\f\n" +
 	"\n" +
 	"_row_limitB\r\n" +
@@ -983,49 +1174,56 @@ func file_open_splunk_export_proto_rawDescGZIP() []byte {
 }
 
 var file_open_splunk_export_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
-var file_open_splunk_export_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_open_splunk_export_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_open_splunk_export_proto_goTypes = []any{
-	(ExportFormat)(0),                // 0: open_splunk.ExportFormat
-	(CsvHeaderMode)(0),               // 1: open_splunk.CsvHeaderMode
-	(JsonIntegerEncoding)(0),         // 2: open_splunk.JsonIntegerEncoding
-	(ExportJobState)(0),              // 3: open_splunk.ExportJobState
-	(ExportFailureCode)(0),           // 4: open_splunk.ExportFailureCode
-	(*CsvExportOptions)(nil),         // 5: open_splunk.CsvExportOptions
-	(*JsonLinesExportOptions)(nil),   // 6: open_splunk.JsonLinesExportOptions
-	(*ExportDefinition)(nil),         // 7: open_splunk.ExportDefinition
-	(*ExportFailure)(nil),            // 8: open_splunk.ExportFailure
-	(*ExportProgress)(nil),           // 9: open_splunk.ExportProgress
-	(*ExportArtifact)(nil),           // 10: open_splunk.ExportArtifact
-	(*ExportJob)(nil),                // 11: open_splunk.ExportJob
-	(*durationpb.Duration)(nil),      // 12: google.protobuf.Duration
-	(*timestamppb.Timestamp)(nil),    // 13: google.protobuf.Timestamp
-	(*KnowledgeSnapshotSummary)(nil), // 14: open_splunk.KnowledgeSnapshotSummary
+	(ExportFormat)(0),                  // 0: open_splunk.ExportFormat
+	(CsvHeaderMode)(0),                 // 1: open_splunk.CsvHeaderMode
+	(JsonIntegerEncoding)(0),           // 2: open_splunk.JsonIntegerEncoding
+	(ExportJobState)(0),                // 3: open_splunk.ExportJobState
+	(ExportFailureCode)(0),             // 4: open_splunk.ExportFailureCode
+	(*CsvExportOptions)(nil),           // 5: open_splunk.CsvExportOptions
+	(*JsonLinesExportOptions)(nil),     // 6: open_splunk.JsonLinesExportOptions
+	(*PatternSummaryExportSource)(nil), // 7: open_splunk.PatternSummaryExportSource
+	(*PatternMemberExportSource)(nil),  // 8: open_splunk.PatternMemberExportSource
+	(*ExportDefinition)(nil),           // 9: open_splunk.ExportDefinition
+	(*ExportFailure)(nil),              // 10: open_splunk.ExportFailure
+	(*ExportProgress)(nil),             // 11: open_splunk.ExportProgress
+	(*ExportArtifact)(nil),             // 12: open_splunk.ExportArtifact
+	(*ExportJob)(nil),                  // 13: open_splunk.ExportJob
+	(PatternSensitivity)(0),            // 14: open_splunk.PatternSensitivity
+	(*durationpb.Duration)(nil),        // 15: google.protobuf.Duration
+	(*timestamppb.Timestamp)(nil),      // 16: google.protobuf.Timestamp
+	(*KnowledgeSnapshotSummary)(nil),   // 17: open_splunk.KnowledgeSnapshotSummary
 }
 var file_open_splunk_export_proto_depIdxs = []int32{
 	1,  // 0: open_splunk.CsvExportOptions.header_mode:type_name -> open_splunk.CsvHeaderMode
 	2,  // 1: open_splunk.JsonLinesExportOptions.integer_encoding:type_name -> open_splunk.JsonIntegerEncoding
-	5,  // 2: open_splunk.ExportDefinition.csv:type_name -> open_splunk.CsvExportOptions
-	6,  // 3: open_splunk.ExportDefinition.json_lines:type_name -> open_splunk.JsonLinesExportOptions
-	4,  // 4: open_splunk.ExportFailure.code:type_name -> open_splunk.ExportFailureCode
-	12, // 5: open_splunk.ExportProgress.elapsed:type_name -> google.protobuf.Duration
-	13, // 6: open_splunk.ExportProgress.updated_at:type_name -> google.protobuf.Timestamp
-	13, // 7: open_splunk.ExportArtifact.expires_at:type_name -> google.protobuf.Timestamp
-	7,  // 8: open_splunk.ExportJob.definition:type_name -> open_splunk.ExportDefinition
-	0,  // 9: open_splunk.ExportJob.format:type_name -> open_splunk.ExportFormat
-	3,  // 10: open_splunk.ExportJob.state:type_name -> open_splunk.ExportJobState
-	9,  // 11: open_splunk.ExportJob.progress:type_name -> open_splunk.ExportProgress
-	10, // 12: open_splunk.ExportJob.artifact:type_name -> open_splunk.ExportArtifact
-	8,  // 13: open_splunk.ExportJob.failure:type_name -> open_splunk.ExportFailure
-	13, // 14: open_splunk.ExportJob.created_at:type_name -> google.protobuf.Timestamp
-	13, // 15: open_splunk.ExportJob.started_at:type_name -> google.protobuf.Timestamp
-	13, // 16: open_splunk.ExportJob.finished_at:type_name -> google.protobuf.Timestamp
-	13, // 17: open_splunk.ExportJob.expires_at:type_name -> google.protobuf.Timestamp
-	14, // 18: open_splunk.ExportJob.knowledge_snapshot:type_name -> open_splunk.KnowledgeSnapshotSummary
-	19, // [19:19] is the sub-list for method output_type
-	19, // [19:19] is the sub-list for method input_type
-	19, // [19:19] is the sub-list for extension type_name
-	19, // [19:19] is the sub-list for extension extendee
-	0,  // [0:19] is the sub-list for field type_name
+	14, // 2: open_splunk.PatternSummaryExportSource.sensitivity:type_name -> open_splunk.PatternSensitivity
+	14, // 3: open_splunk.PatternMemberExportSource.sensitivity:type_name -> open_splunk.PatternSensitivity
+	7,  // 4: open_splunk.ExportDefinition.pattern_summary:type_name -> open_splunk.PatternSummaryExportSource
+	8,  // 5: open_splunk.ExportDefinition.pattern_members:type_name -> open_splunk.PatternMemberExportSource
+	5,  // 6: open_splunk.ExportDefinition.csv:type_name -> open_splunk.CsvExportOptions
+	6,  // 7: open_splunk.ExportDefinition.json_lines:type_name -> open_splunk.JsonLinesExportOptions
+	4,  // 8: open_splunk.ExportFailure.code:type_name -> open_splunk.ExportFailureCode
+	15, // 9: open_splunk.ExportProgress.elapsed:type_name -> google.protobuf.Duration
+	16, // 10: open_splunk.ExportProgress.updated_at:type_name -> google.protobuf.Timestamp
+	16, // 11: open_splunk.ExportArtifact.expires_at:type_name -> google.protobuf.Timestamp
+	9,  // 12: open_splunk.ExportJob.definition:type_name -> open_splunk.ExportDefinition
+	0,  // 13: open_splunk.ExportJob.format:type_name -> open_splunk.ExportFormat
+	3,  // 14: open_splunk.ExportJob.state:type_name -> open_splunk.ExportJobState
+	11, // 15: open_splunk.ExportJob.progress:type_name -> open_splunk.ExportProgress
+	12, // 16: open_splunk.ExportJob.artifact:type_name -> open_splunk.ExportArtifact
+	10, // 17: open_splunk.ExportJob.failure:type_name -> open_splunk.ExportFailure
+	16, // 18: open_splunk.ExportJob.created_at:type_name -> google.protobuf.Timestamp
+	16, // 19: open_splunk.ExportJob.started_at:type_name -> google.protobuf.Timestamp
+	16, // 20: open_splunk.ExportJob.finished_at:type_name -> google.protobuf.Timestamp
+	16, // 21: open_splunk.ExportJob.expires_at:type_name -> google.protobuf.Timestamp
+	17, // 22: open_splunk.ExportJob.knowledge_snapshot:type_name -> open_splunk.KnowledgeSnapshotSummary
+	23, // [23:23] is the sub-list for method output_type
+	23, // [23:23] is the sub-list for method input_type
+	23, // [23:23] is the sub-list for extension type_name
+	23, // [23:23] is the sub-list for extension extendee
+	0,  // [0:23] is the sub-list for field type_name
 }
 
 func init() { file_open_splunk_export_proto_init() }
@@ -1034,19 +1232,22 @@ func file_open_splunk_export_proto_init() {
 		return
 	}
 	file_open_splunk_knowledge_proto_init()
-	file_open_splunk_export_proto_msgTypes[2].OneofWrappers = []any{
+	file_open_splunk_patterns_api_proto_init()
+	file_open_splunk_export_proto_msgTypes[4].OneofWrappers = []any{
+		(*ExportDefinition_PatternSummary)(nil),
+		(*ExportDefinition_PatternMembers)(nil),
 		(*ExportDefinition_Csv)(nil),
 		(*ExportDefinition_JsonLines)(nil),
 	}
-	file_open_splunk_export_proto_msgTypes[4].OneofWrappers = []any{}
 	file_open_splunk_export_proto_msgTypes[6].OneofWrappers = []any{}
+	file_open_splunk_export_proto_msgTypes[8].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_open_splunk_export_proto_rawDesc), len(file_open_splunk_export_proto_rawDesc)),
 			NumEnums:      5,
-			NumMessages:   7,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

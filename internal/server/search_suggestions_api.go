@@ -11,7 +11,6 @@ import (
 
 	"fortio.org/safecast"
 	"github.com/Suhaibinator/SRouter/pkg/codec"
-	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
@@ -43,22 +42,17 @@ const (
 	maximumSearchSuggestionResponseBytes = 10 << 20
 )
 
-func (handler *apiHandler) searchSuggestionRoutes(
-	noAuth router.AuthLevel,
+func (handler *apiHandler) registerSearchSuggestionRoutes(
+	group *apiRouteGroup,
 	smallRequestBytes int64,
-) []router.RouteDefinition {
-	return []router.RouteDefinition{
-		router.RouteConfig[
-			*opensplunk.GetSearchSuggestionsRequest,
-			*serializedSearchSuggestionsResponse,
-		]{
-			Path: searchSuggestionsRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newSerializedSearchSuggestionsCodec(), Handler: handler.getSearchSuggestions,
-			SourceType: router.Body,
-			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer:  handler.sanitizeGetSearchSuggestionsRequest,
-		},
-	}
+) {
+	group.Route(sizedPostRoute(
+		searchSuggestionsRoute,
+		smallRequestBytes,
+		newSerializedSearchSuggestionsCodec(),
+		handler.getSearchSuggestions,
+		handler.sanitizeGetSearchSuggestionsRequest,
+	))
 }
 
 func (handler *apiHandler) getSearchSuggestions(

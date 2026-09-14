@@ -55,15 +55,24 @@ func Evaluate(condition Condition, observation CountObservation) (Evaluation, er
 		return Evaluation{Certainty: certainty, Observed: observation}, nil
 	}
 
+	// A truncated result supplies only a lower bound. The true count is at
+	// least that bound, so a bound above the threshold proves ">" and "!=",
+	// a bound at or above the threshold disproves "<", and a bound above the
+	// threshold disproves "=". Every other comparison stays indeterminate.
 	certainty := EvaluationIndeterminate
 	switch condition.Operator {
 	case ConditionGreaterThan, ConditionNotEqual:
 		if observation.Count > condition.Threshold {
 			certainty = EvaluationTrue
 		}
-	case ConditionLessThan, ConditionEqual:
-		// A truncated result supplies only a lower bound. It cannot prove these
-		// operators, even when the bound reaches or exceeds the threshold.
+	case ConditionLessThan:
+		if observation.Count >= condition.Threshold {
+			certainty = EvaluationFalse
+		}
+	case ConditionEqual:
+		if observation.Count > condition.Threshold {
+			certainty = EvaluationFalse
+		}
 	}
 	return Evaluation{Certainty: certainty, Observed: observation}, nil
 }

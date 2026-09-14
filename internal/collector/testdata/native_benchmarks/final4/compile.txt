@@ -1,0 +1,140 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   85322	      2702 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   88910	      2675 ns/op	    1568 B/op	      17 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   90000	      2609 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   92074	      2590 ns/op	    1568 B/op	      17 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   89840	      2594 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   91662	      2573 ns/op	    1568 B/op	      17 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   89877	      2610 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   92287	      2577 ns/op	    1568 B/op	      17 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   89607	      2605 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   92176	      2614 ns/op	    1568 B/op	      17 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   89637	      2591 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   93805	      2547 ns/op	    1568 B/op	      17 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   90898	      2590 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   92829	      2568 ns/op	    1568 B/op	      17 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   88340	      2621 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   91465	      2601 ns/op	    1568 B/op	      17 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   90084	      2586 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   92654	      2562 ns/op	    1568 B/op	      17 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   86506	      2676 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   91856	      2595 ns/op	    1568 B/op	      17 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   91789	      2548 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   92911	      2553 ns/op	    1568 B/op	      17 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   86584	      2616 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   92908	      2557 ns/op	    1568 B/op	      17 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   90838	      2595 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   93392	      2557 ns/op	    1568 B/op	      17 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   90415	      2566 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   90530	      2574 ns/op	    1568 B/op	      17 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   89683	      2597 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   90070	      2592 ns/op	    1568 B/op	      17 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   91084	      2589 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   93607	      2549 ns/op	    1568 B/op	      17 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   88812	      2595 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   92916	      2599 ns/op	    1568 B/op	      17 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   90361	      2566 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   93304	      2563 ns/op	    1568 B/op	      17 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   89514	      2604 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   93872	      2557 ns/op	    1568 B/op	      17 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	   91693	      2559 ns/op	    1568 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   93549	      2548 ns/op	    1568 B/op	      17 allocs/op
+PASS

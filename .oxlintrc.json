@@ -33,9 +33,9 @@
   "rules": {
     "import/no-unassigned-import": "off",
     "jsx-a11y/prefer-tag-over-role": "off",
-    "react/exhaustive-effect-dependencies": "off",
-    "react/refs": "off",
+    "react/exhaustive-effect-dependencies": "error",
+    "react/refs": "error",
     "react/react-in-jsx-scope": "off",
-    "react/set-state-in-effect": "off"
+    "react/set-state-in-effect": "error"
   }
 }

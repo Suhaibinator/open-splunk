@@ -92,6 +92,7 @@ func TestDocumentedCommandSurfaceHasOfficialSPLCases(t *testing.T) {
 		t.Errorf("no official %s case pins its documented facets %v", command, officialspl.AllowedFacets[command])
 	}
 	for _, required := range []string{
+		"bin.span-day",
 		"fields.exclude-list",
 		"fields.explicit-wildcard-include",
 		"fields.internal-wildcard-exclude",
@@ -102,6 +103,7 @@ func TestDocumentedCommandSurfaceHasOfficialSPLCases(t *testing.T) {
 		"sort.spaced-descending-field",
 		"sort.terminal-descending",
 		"sort.typed-multiple-fields",
+		"timechart.span-day",
 	} {
 		if _, exists := caseIDs[required]; !exists {
 			t.Errorf("official SPL corpus is missing required compatibility case %q", required)

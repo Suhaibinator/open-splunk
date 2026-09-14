@@ -10,6 +10,7 @@ import { Timestamp } from "../google/protobuf/timestamp";
 import { AppSummary } from "./app";
 import { BuildMetadata } from "./common";
 import { IndexSummary } from "./index";
+import { UiPalette, uiPaletteFromJSON, uiPaletteToJSON } from "./server_settings_api";
 
 export enum ServerFeature {
   SERVER_FEATURE_UNSPECIFIED = 0,
@@ -235,7 +236,14 @@ export interface GetSystemBootstrapResponse {
   indexes: IndexSummary[];
   selectedAppId?: string | undefined;
   serverTime: Date | undefined;
-  build: BuildMetadata | undefined;
+  build:
+    | BuildMetadata
+    | undefined;
+  /**
+   * The live instance palette. UNSPECIFIED when no settings service is
+   * configured; the client paints that as classic.
+   */
+  uiPalette: UiPalette;
 }
 
 function createBaseBrowserApiLimits(): BrowserApiLimits {
@@ -608,6 +616,7 @@ function createBaseGetSystemBootstrapResponse(): GetSystemBootstrapResponse {
     selectedAppId: undefined,
     serverTime: undefined,
     build: undefined,
+    uiPalette: 0,
   };
 }
 
@@ -638,6 +647,9 @@ export const GetSystemBootstrapResponse: MessageFns<GetSystemBootstrapResponse> 
     }
     if (message.build !== undefined) {
       BuildMetadata.encode(message.build, writer.uint32(90).fork()).join();
+    }
+    if (message.uiPalette !== 0) {
+      writer.uint32(96).int32(message.uiPalette);
     }
     return writer;
   },
@@ -729,6 +741,14 @@ export const GetSystemBootstrapResponse: MessageFns<GetSystemBootstrapResponse> 
             message.build = BuildMetadata.decode(reader, reader.uint32());
             continue;
           }
+          case 12: {
+            if (tag !== 96) {
+              break;
+            }
+
+            message.uiPalette = reader.int32() as any;
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -767,6 +787,11 @@ export const GetSystemBootstrapResponse: MessageFns<GetSystemBootstrapResponse> 
         ? fromJsonTimestamp(object.server_time)
         : undefined,
       build: isSet(object.build) ? BuildMetadata.fromJSON(object.build) : undefined,
+      uiPalette: isSet(object.uiPalette)
+        ? uiPaletteFromJSON(object.uiPalette)
+        : isSet(object.ui_palette)
+        ? uiPaletteFromJSON(object.ui_palette)
+        : 0,
     };
   },
 
@@ -796,6 +821,9 @@ export const GetSystemBootstrapResponse: MessageFns<GetSystemBootstrapResponse> 
     if (message.build !== undefined) {
       obj.build = BuildMetadata.toJSON(message.build);
     }
+    if (message.uiPalette !== 0) {
+      obj.uiPalette = uiPaletteToJSON(message.uiPalette);
+    }
     return obj;
   },
 
@@ -816,6 +844,7 @@ export const GetSystemBootstrapResponse: MessageFns<GetSystemBootstrapResponse> 
     message.build = (object.build !== undefined && object.build !== null)
       ? BuildMetadata.fromPartial(object.build)
       : undefined;
+    message.uiPalette = object.uiPalette ?? 0;
     return message;
   },
 };

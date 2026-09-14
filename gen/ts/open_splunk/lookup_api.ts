@@ -68,7 +68,11 @@ export interface CreateLookupRequest {
 }
 
 export interface CreateLookupResponse {
-  lookup: Lookup | undefined;
+  lookup:
+    | Lookup
+    | undefined;
+  /** True when this request resolves an earlier accepted logical action. */
+  replayed: boolean;
 }
 
 /** POST /api/knowledge/lookups/get */
@@ -264,13 +268,16 @@ export const CreateLookupRequest: MessageFns<CreateLookupRequest> = {
 };
 
 function createBaseCreateLookupResponse(): CreateLookupResponse {
-  return { lookup: undefined };
+  return { lookup: undefined, replayed: false };
 }
 
 export const CreateLookupResponse: MessageFns<CreateLookupResponse> = {
   encode(message: CreateLookupResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     if (message.lookup !== undefined) {
       Lookup.encode(message.lookup, writer.uint32(10).fork()).join();
+    }
+    if (message.replayed !== false) {
+      writer.uint32(16).bool(message.replayed);
     }
     return writer;
   },
@@ -296,6 +303,14 @@ export const CreateLookupResponse: MessageFns<CreateLookupResponse> = {
             message.lookup = Lookup.decode(reader, reader.uint32());
             continue;
           }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.replayed = reader.bool();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -309,13 +324,19 @@ export const CreateLookupResponse: MessageFns<CreateLookupResponse> = {
   },
 
   fromJSON(object: any): CreateLookupResponse {
-    return { lookup: isSet(object.lookup) ? Lookup.fromJSON(object.lookup) : undefined };
+    return {
+      lookup: isSet(object.lookup) ? Lookup.fromJSON(object.lookup) : undefined,
+      replayed: isSet(object.replayed) ? globalThis.Boolean(object.replayed) : false,
+    };
   },
 
   toJSON(message: CreateLookupResponse): unknown {
     const obj: any = {};
     if (message.lookup !== undefined) {
       obj.lookup = Lookup.toJSON(message.lookup);
+    }
+    if (message.replayed !== false) {
+      obj.replayed = message.replayed;
     }
     return obj;
   },
@@ -328,6 +349,7 @@ export const CreateLookupResponse: MessageFns<CreateLookupResponse> = {
     message.lookup = (object.lookup !== undefined && object.lookup !== null)
       ? Lookup.fromPartial(object.lookup)
       : undefined;
+    message.replayed = object.replayed ?? false;
     return message;
   },
 };

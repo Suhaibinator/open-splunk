@@ -57,7 +57,7 @@
 .signin-error span { align-items: center; background: var(--status-error); border-radius: 50%; color: var(--fg-inverse); display: flex; flex: 0 0 16px; height: 16px; justify-content: center; width: 16px; }
 .signin-help-notice { align-items: center; background: var(--status-info-soft); border: 1px solid var(--status-info-edge); color: var(--fg-secondary); display: flex; font-size: var(--type-xs); gap: 7px; margin-top: 10px; padding: var(--space-2); }
 .signin-help-notice span { align-items: center; background: var(--status-info); border-radius: 50%; color: var(--fg-inverse); display: flex; flex: 0 0 16px; height: 16px; justify-content: center; width: 16px; }
-.signin-submit { align-items: center; background: var(--accent); border: 1px solid var(--accent-hover); border-radius: var(--radius-sm); color: var(--fg-inverse); display: flex; font-weight: 600; gap: 7px; height: 41px; justify-content: center; width: 100%; }
+.signin-submit { align-items: center; background: var(--accent); border: 1px solid var(--accent-hover); border-radius: var(--radius-sm); color: var(--fg-inverse); display: flex; font-weight: 600; gap: 7px; height: 41px; justify-content: center; text-decoration: none; width: 100%; }
 .signin-submit:hover { background: var(--accent-hover); }
 .signin-submit i { animation: spin 700ms linear infinite; border: 2px solid color-mix(in srgb, var(--fg-inverse) 35%, transparent); border-radius: 50%; border-top-color: var(--fg-inverse); height: 14px; width: 14px; }
 .signin-card form .signin-submit { margin-top: 18px; }

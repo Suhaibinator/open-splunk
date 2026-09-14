@@ -1,0 +1,600 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical     	  134084	      1693 ns/op	  60.84 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested        	   69622	      3335 ns/op	  37.48 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields   	     890	    269094 ns/op	  52.76 MB/s	  439696 B/op	    6369 allocs/op
+BenchmarkNativeDecoder/docker-json-file         	  106194	      2212 ns/op	  50.63 MB/s	    3048 B/op	      72 allocs/op
+BenchmarkNativeDecoder/nginx-combined           	  113796	      2053 ns/op	  49.68 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/apache-common            	  136432	      1769 ns/op	  48.05 MB/s	    2664 B/op	      56 allocs/op
+BenchmarkNativeDecoder/apache-combined          	  120651	      2078 ns/op	  47.16 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/logfmt                   	   93087	      2605 ns/op	  42.99 MB/s	    2648 B/op	      79 allocs/op
+BenchmarkNativeDecoder/log4j2-pattern           	  200210	      1231 ns/op	  83.68 MB/s	    1896 B/op	      36 allocs/op
+BenchmarkNativeDecoder/logback-pattern          	  196429	      1220 ns/op	  54.11 MB/s	    1832 B/op	      36 allocs/op
+BenchmarkNativeMixedInputs/ndjson-only          	   82092	      2892 ns/op	  40.12 MB/s	    4688 B/op	     100 allocs/op
+BenchmarkNativeMixedInputs/ndjson-and-java      	   88484	      2726 ns/op	  59.07 MB/s	    4232 B/op	      86 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_plain_large         	    1598	    136042 ns/op	 481.88 MB/s	  140575 B/op	      32 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_escaped_large       	    1084	    217408 ns/op	 226.18 MB/s	  148764 B/op	      33 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_numeric_lookalikes  	   75114	      3222 ns/op	  24.52 MB/s	    3488 B/op	      96 allocs/op
+BenchmarkCollectorAllocationCases/ndjson_constants           	  123223	      1954 ns/op	  26.62 MB/s	    2776 B/op	      58 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_constants           	  153171	      1595 ns/op	  25.08 MB/s	    1824 B/op	      43 allocs/op
+BenchmarkCollectorAllocationCases/raw_large                  	    5491	     39524 ns/op	1554.50 MB/s	  132096 B/op	      21 allocs/op
+BenchmarkCollectorAllocationCases/access_plain               	  120747	      2038 ns/op	  46.13 MB/s	    3280 B/op	      63 allocs/op
+BenchmarkCollectorAllocationCases/access_binary              	  119941	      2086 ns/op	  46.02 MB/s	    3320 B/op	      63 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1/bytes_32       	  404250	       586.0 ns/op	  54.61 MB/s	    1144 B/op	      24 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_32       	  231957	      1110 ns/op	  28.83 MB/s	    1920 B/op	      37 allocs/op
+BenchmarkCollectorPatternAllocations/fields_32/bytes_32      	   45888	      5113 ns/op	  36.38 MB/s	    9368 B/op	     120 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1024/bytes_32    	    1572	    145780 ns/op	  42.10 MB/s	  265664 B/op	    3098 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_1048576  	     384	    607689 ns/op	1725.51 MB/s	 2099010 B/op	      37 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical     	  135751	      1751 ns/op	  58.82 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested        	   73394	      3339 ns/op	  37.44 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields   	     898	    270865 ns/op	  52.42 MB/s	  439696 B/op	    6369 allocs/op
+BenchmarkNativeDecoder/docker-json-file         	  106004	      2244 ns/op	  49.92 MB/s	    3048 B/op	      72 allocs/op
+BenchmarkNativeDecoder/nginx-combined           	  110560	      2139 ns/op	  47.68 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/apache-common            	  133998	      1806 ns/op	  47.07 MB/s	    2664 B/op	      56 allocs/op
+BenchmarkNativeDecoder/apache-combined          	  118905	      2093 ns/op	  46.83 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/logfmt                   	   92407	      2645 ns/op	  42.35 MB/s	    2648 B/op	      79 allocs/op
+BenchmarkNativeDecoder/log4j2-pattern           	  197966	      1223 ns/op	  84.25 MB/s	    1896 B/op	      36 allocs/op
+BenchmarkNativeDecoder/logback-pattern          	  202730	      1220 ns/op	  54.12 MB/s	    1832 B/op	      36 allocs/op
+BenchmarkNativeMixedInputs/ndjson-only          	   81380	      2888 ns/op	  40.17 MB/s	    4688 B/op	     100 allocs/op
+BenchmarkNativeMixedInputs/ndjson-and-java      	   85219	      2751 ns/op	  58.52 MB/s	    4232 B/op	      86 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_plain_large         	    1710	    128671 ns/op	 509.49 MB/s	  140574 B/op	      32 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_escaped_large       	    1077	    223205 ns/op	 220.31 MB/s	  148764 B/op	      33 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_numeric_lookalikes  	   75742	      3253 ns/op	  24.29 MB/s	    3488 B/op	      96 allocs/op
+BenchmarkCollectorAllocationCases/ndjson_constants           	  123560	      2012 ns/op	  25.85 MB/s	    2776 B/op	      58 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_constants           	  148051	      1612 ns/op	  24.81 MB/s	    1824 B/op	      43 allocs/op
+BenchmarkCollectorAllocationCases/raw_large                  	    5211	     40220 ns/op	1527.61 MB/s	  132096 B/op	      21 allocs/op
+BenchmarkCollectorAllocationCases/access_plain               	  115131	      2055 ns/op	  45.75 MB/s	    3280 B/op	      63 allocs/op
+BenchmarkCollectorAllocationCases/access_binary              	  115804	      2082 ns/op	  46.12 MB/s	    3320 B/op	      63 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1/bytes_32       	  393900	       580.2 ns/op	  55.15 MB/s	    1144 B/op	      24 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_32       	  223428	      1119 ns/op	  28.60 MB/s	    1920 B/op	      37 allocs/op
+BenchmarkCollectorPatternAllocations/fields_32/bytes_32      	   45985	      5161 ns/op	  36.04 MB/s	    9368 B/op	     120 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1024/bytes_32    	    1611	    145167 ns/op	  42.28 MB/s	  265664 B/op	    3098 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_1048576  	     397	    604445 ns/op	1734.78 MB/s	 2099010 B/op	      37 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical     	  133084	      1698 ns/op	  60.65 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested        	   71076	      3292 ns/op	  37.97 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields   	     896	    266424 ns/op	  53.29 MB/s	  439696 B/op	    6369 allocs/op
+BenchmarkNativeDecoder/docker-json-file         	  109484	      2199 ns/op	  50.92 MB/s	    3048 B/op	      72 allocs/op
+BenchmarkNativeDecoder/nginx-combined           	  111889	      2116 ns/op	  48.21 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/apache-common            	  135778	      1807 ns/op	  47.05 MB/s	    2664 B/op	      56 allocs/op
+BenchmarkNativeDecoder/apache-combined          	  116802	      2079 ns/op	  47.14 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/logfmt                   	   92882	      2645 ns/op	  42.35 MB/s	    2648 B/op	      79 allocs/op
+BenchmarkNativeDecoder/log4j2-pattern           	  193521	      1249 ns/op	  82.46 MB/s	    1896 B/op	      36 allocs/op
+BenchmarkNativeDecoder/logback-pattern          	  199828	      1234 ns/op	  53.49 MB/s	    1832 B/op	      36 allocs/op
+BenchmarkNativeMixedInputs/ndjson-only          	   82053	      2875 ns/op	  40.35 MB/s	    4688 B/op	     100 allocs/op
+BenchmarkNativeMixedInputs/ndjson-and-java      	   86937	      2725 ns/op	  59.09 MB/s	    4232 B/op	      86 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_plain_large         	    1777	    135777 ns/op	 482.82 MB/s	  140574 B/op	      32 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_escaped_large       	    1101	    222799 ns/op	 220.71 MB/s	  148764 B/op	      33 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_numeric_lookalikes  	   75646	      3234 ns/op	  24.43 MB/s	    3488 B/op	      96 allocs/op
+BenchmarkCollectorAllocationCases/ndjson_constants           	  124138	      1979 ns/op	  26.28 MB/s	    2776 B/op	      58 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_constants           	  151076	      1608 ns/op	  24.88 MB/s	    1824 B/op	      43 allocs/op
+BenchmarkCollectorAllocationCases/raw_large                  	    5271	     41046 ns/op	1496.85 MB/s	  132096 B/op	      21 allocs/op
+BenchmarkCollectorAllocationCases/access_plain               	  118525	      2026 ns/op	  46.40 MB/s	    3280 B/op	      63 allocs/op
+BenchmarkCollectorAllocationCases/access_binary              	  119560	      2052 ns/op	  46.77 MB/s	    3320 B/op	      63 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1/bytes_32       	  398106	       592.0 ns/op	  54.05 MB/s	    1144 B/op	      24 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_32       	  221388	      1124 ns/op	  28.47 MB/s	    1920 B/op	      37 allocs/op
+BenchmarkCollectorPatternAllocations/fields_32/bytes_32      	   46309	      5114 ns/op	  36.37 MB/s	    9368 B/op	     120 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1024/bytes_32    	    1624	    147575 ns/op	  41.59 MB/s	  265664 B/op	    3098 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_1048576  	     386	    623227 ns/op	1682.49 MB/s	 2099010 B/op	      37 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical     	  118197	      1785 ns/op	  57.71 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested        	   69828	      3434 ns/op	  36.40 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields   	     840	    273173 ns/op	  51.97 MB/s	  439696 B/op	    6369 allocs/op
+BenchmarkNativeDecoder/docker-json-file         	  107577	      2232 ns/op	  50.17 MB/s	    3048 B/op	      72 allocs/op
+BenchmarkNativeDecoder/nginx-combined           	  112688	      2145 ns/op	  47.55 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/apache-common            	  131394	      1844 ns/op	  46.10 MB/s	    2664 B/op	      56 allocs/op
+BenchmarkNativeDecoder/apache-combined          	  113379	      2108 ns/op	  46.50 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/logfmt                   	   91546	      2630 ns/op	  42.58 MB/s	    2648 B/op	      79 allocs/op
+BenchmarkNativeDecoder/log4j2-pattern           	  199412	      1254 ns/op	  82.11 MB/s	    1896 B/op	      36 allocs/op
+BenchmarkNativeDecoder/logback-pattern          	  199839	      1225 ns/op	  53.87 MB/s	    1832 B/op	      36 allocs/op
+BenchmarkNativeMixedInputs/ndjson-only          	   82852	      2907 ns/op	  39.90 MB/s	    4688 B/op	     100 allocs/op
+BenchmarkNativeMixedInputs/ndjson-and-java      	   87738	      2750 ns/op	  58.55 MB/s	    4232 B/op	      86 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_plain_large         	    1716	    134216 ns/op	 488.44 MB/s	  140574 B/op	      32 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_escaped_large       	    1088	    223017 ns/op	 220.49 MB/s	  148764 B/op	      33 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_numeric_lookalikes  	   75777	      3257 ns/op	  24.26 MB/s	    3488 B/op	      96 allocs/op
+BenchmarkCollectorAllocationCases/ndjson_constants           	  122176	      1978 ns/op	  26.29 MB/s	    2776 B/op	      58 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_constants           	  148932	      1586 ns/op	  25.22 MB/s	    1824 B/op	      43 allocs/op
+BenchmarkCollectorAllocationCases/raw_large                  	    5265	     41542 ns/op	1478.99 MB/s	  132096 B/op	      21 allocs/op
+BenchmarkCollectorAllocationCases/access_plain               	  116758	      2046 ns/op	  45.94 MB/s	    3280 B/op	      63 allocs/op
+BenchmarkCollectorAllocationCases/access_binary              	  118791	      2079 ns/op	  46.18 MB/s	    3320 B/op	      63 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1/bytes_32       	  386167	       592.9 ns/op	  53.97 MB/s	    1144 B/op	      24 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_32       	  221533	      1120 ns/op	  28.57 MB/s	    1920 B/op	      37 allocs/op
+BenchmarkCollectorPatternAllocations/fields_32/bytes_32      	   46872	      5242 ns/op	  35.48 MB/s	    9368 B/op	     120 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1024/bytes_32    	    1455	    150996 ns/op	  40.65 MB/s	  265664 B/op	    3098 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_1048576  	     385	    615241 ns/op	1704.33 MB/s	 2099010 B/op	      37 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical     	  132487	      1713 ns/op	  60.12 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested        	   72285	      3332 ns/op	  37.52 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields   	     897	    269243 ns/op	  52.73 MB/s	  439696 B/op	    6369 allocs/op
+BenchmarkNativeDecoder/docker-json-file         	   97623	      2254 ns/op	  49.68 MB/s	    3048 B/op	      72 allocs/op
+BenchmarkNativeDecoder/nginx-combined           	  113016	      2086 ns/op	  48.89 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/apache-common            	  130402	      1855 ns/op	  45.83 MB/s	    2664 B/op	      56 allocs/op
+BenchmarkNativeDecoder/apache-combined          	  111910	      2151 ns/op	  45.56 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/logfmt                   	   91203	      2666 ns/op	  42.02 MB/s	    2648 B/op	      79 allocs/op
+BenchmarkNativeDecoder/log4j2-pattern           	  194864	      1246 ns/op	  82.69 MB/s	    1896 B/op	      36 allocs/op
+BenchmarkNativeDecoder/logback-pattern          	  200235	      1231 ns/op	  53.61 MB/s	    1832 B/op	      36 allocs/op
+BenchmarkNativeMixedInputs/ndjson-only          	   82164	      2879 ns/op	  40.30 MB/s	    4688 B/op	     100 allocs/op
+BenchmarkNativeMixedInputs/ndjson-and-java      	   85585	      2784 ns/op	  57.82 MB/s	    4232 B/op	      86 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_plain_large         	    1657	    140985 ns/op	 464.99 MB/s	  140575 B/op	      32 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_escaped_large       	    1062	    224954 ns/op	 218.60 MB/s	  148764 B/op	      33 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_numeric_lookalikes  	   73353	      3259 ns/op	  24.24 MB/s	    3488 B/op	      96 allocs/op
+BenchmarkCollectorAllocationCases/ndjson_constants           	  122654	      1974 ns/op	  26.35 MB/s	    2776 B/op	      58 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_constants           	  150298	      1602 ns/op	  24.98 MB/s	    1824 B/op	      43 allocs/op
+BenchmarkCollectorAllocationCases/raw_large                  	    5221	     41165 ns/op	1492.53 MB/s	  132096 B/op	      21 allocs/op
+BenchmarkCollectorAllocationCases/access_plain               	  114276	      2041 ns/op	  46.05 MB/s	    3280 B/op	      63 allocs/op
+BenchmarkCollectorAllocationCases/access_binary              	  116860	      2055 ns/op	  46.71 MB/s	    3320 B/op	      63 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1/bytes_32       	  387865	       598.4 ns/op	  53.47 MB/s	    1144 B/op	      24 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_32       	  227253	      1103 ns/op	  29.00 MB/s	    1920 B/op	      37 allocs/op
+BenchmarkCollectorPatternAllocations/fields_32/bytes_32      	   46939	      5128 ns/op	  36.27 MB/s	    9368 B/op	     120 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1024/bytes_32    	    1610	    149485 ns/op	  41.06 MB/s	  265664 B/op	    3098 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_1048576  	     384	    603726 ns/op	1736.84 MB/s	 2099009 B/op	      37 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical     	  135261	      1750 ns/op	  58.86 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested        	   73056	      3287 ns/op	  38.03 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields   	     916	    268757 ns/op	  52.83 MB/s	  439696 B/op	    6369 allocs/op
+BenchmarkNativeDecoder/docker-json-file         	  107467	      2227 ns/op	  50.30 MB/s	    3048 B/op	      72 allocs/op
+BenchmarkNativeDecoder/nginx-combined           	  109377	      2104 ns/op	  48.47 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/apache-common            	  135619	      1828 ns/op	  46.50 MB/s	    2664 B/op	      56 allocs/op
+BenchmarkNativeDecoder/apache-combined          	  111858	      2125 ns/op	  46.12 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/logfmt                   	   90912	      2665 ns/op	  42.03 MB/s	    2648 B/op	      79 allocs/op
+BenchmarkNativeDecoder/log4j2-pattern           	  191803	      1254 ns/op	  82.12 MB/s	    1896 B/op	      36 allocs/op
+BenchmarkNativeDecoder/logback-pattern          	  188160	      1272 ns/op	  51.88 MB/s	    1832 B/op	      36 allocs/op
+BenchmarkNativeMixedInputs/ndjson-only          	   80696	      2906 ns/op	  39.92 MB/s	    4688 B/op	     100 allocs/op
+BenchmarkNativeMixedInputs/ndjson-and-java      	   86617	      2759 ns/op	  58.36 MB/s	    4232 B/op	      86 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_plain_large         	    1644	    132352 ns/op	 495.31 MB/s	  140575 B/op	      32 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_escaped_large       	    1068	    225631 ns/op	 217.94 MB/s	  148764 B/op	      33 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_numeric_lookalikes  	   72598	      3279 ns/op	  24.09 MB/s	    3488 B/op	      96 allocs/op
+BenchmarkCollectorAllocationCases/ndjson_constants           	  119163	      1995 ns/op	  26.06 MB/s	    2776 B/op	      58 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_constants           	  145342	      1622 ns/op	  24.66 MB/s	    1824 B/op	      43 allocs/op
+BenchmarkCollectorAllocationCases/raw_large                  	    5258	     41468 ns/op	1481.64 MB/s	  132096 B/op	      21 allocs/op
+BenchmarkCollectorAllocationCases/access_plain               	  117406	      2042 ns/op	  46.03 MB/s	    3280 B/op	      63 allocs/op
+BenchmarkCollectorAllocationCases/access_binary              	  116631	      2072 ns/op	  46.34 MB/s	    3320 B/op	      63 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1/bytes_32       	  383518	       591.0 ns/op	  54.14 MB/s	    1144 B/op	      24 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_32       	  226821	      1131 ns/op	  28.30 MB/s	    1920 B/op	      37 allocs/op
+BenchmarkCollectorPatternAllocations/fields_32/bytes_32      	   46497	      5210 ns/op	  35.70 MB/s	    9368 B/op	     120 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1024/bytes_32    	    1558	    148819 ns/op	  41.24 MB/s	  265664 B/op	    3098 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_1048576  	     372	    629695 ns/op	1665.21 MB/s	 2099010 B/op	      37 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical     	  133468	      1727 ns/op	  59.65 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested        	   71313	      3367 ns/op	  37.13 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields   	     901	    265034 ns/op	  53.57 MB/s	  439696 B/op	    6369 allocs/op
+BenchmarkNativeDecoder/docker-json-file         	  105573	      2208 ns/op	  50.71 MB/s	    3048 B/op	      72 allocs/op
+BenchmarkNativeDecoder/nginx-combined           	  114817	      2075 ns/op	  49.16 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/apache-common            	  135078	      1826 ns/op	  46.56 MB/s	    2664 B/op	      56 allocs/op
+BenchmarkNativeDecoder/apache-combined          	  108706	      2153 ns/op	  45.51 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/logfmt                   	   89648	      2617 ns/op	  42.79 MB/s	    2648 B/op	      79 allocs/op
+BenchmarkNativeDecoder/log4j2-pattern           	  195654	      1249 ns/op	  82.50 MB/s	    1896 B/op	      36 allocs/op
+BenchmarkNativeDecoder/logback-pattern          	  203947	      1245 ns/op	  52.99 MB/s	    1832 B/op	      36 allocs/op
+BenchmarkNativeMixedInputs/ndjson-only          	   81358	      2912 ns/op	  39.84 MB/s	    4688 B/op	     100 allocs/op
+BenchmarkNativeMixedInputs/ndjson-and-java      	   87247	      2732 ns/op	  58.94 MB/s	    4232 B/op	      86 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_plain_large         	    1702	    129762 ns/op	 505.20 MB/s	  140575 B/op	      32 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_escaped_large       	    1070	    223914 ns/op	 219.61 MB/s	  148764 B/op	      33 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_numeric_lookalikes  	   74701	      3273 ns/op	  24.13 MB/s	    3488 B/op	      96 allocs/op
+BenchmarkCollectorAllocationCases/ndjson_constants           	  122378	      2004 ns/op	  25.95 MB/s	    2776 B/op	      58 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_constants           	  146931	      1611 ns/op	  24.83 MB/s	    1824 B/op	      43 allocs/op
+BenchmarkCollectorAllocationCases/raw_large                  	    5042	     41291 ns/op	1487.97 MB/s	  132096 B/op	      21 allocs/op
+BenchmarkCollectorAllocationCases/access_plain               	  116654	      2054 ns/op	  45.77 MB/s	    3280 B/op	      63 allocs/op
+BenchmarkCollectorAllocationCases/access_binary              	  116974	      2079 ns/op	  46.17 MB/s	    3320 B/op	      63 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1/bytes_32       	  390722	       590.5 ns/op	  54.19 MB/s	    1144 B/op	      24 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_32       	  221899	      1113 ns/op	  28.76 MB/s	    1920 B/op	      37 allocs/op
+BenchmarkCollectorPatternAllocations/fields_32/bytes_32      	   46431	      5155 ns/op	  36.08 MB/s	    9368 B/op	     120 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1024/bytes_32    	    1587	    148059 ns/op	  41.46 MB/s	  265664 B/op	    3098 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_1048576  	     380	    624460 ns/op	1679.17 MB/s	 2099010 B/op	      37 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical     	  115945	      1756 ns/op	  58.66 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested        	   68775	      3343 ns/op	  37.39 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields   	     892	    267416 ns/op	  53.09 MB/s	  439696 B/op	    6369 allocs/op
+BenchmarkNativeDecoder/docker-json-file         	  103572	      2221 ns/op	  50.43 MB/s	    3048 B/op	      72 allocs/op
+BenchmarkNativeDecoder/nginx-combined           	  116601	      2083 ns/op	  48.98 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/apache-common            	  133317	      1795 ns/op	  47.35 MB/s	    2664 B/op	      56 allocs/op
+BenchmarkNativeDecoder/apache-combined          	  117798	      2082 ns/op	  47.06 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/logfmt                   	   92022	      2648 ns/op	  42.30 MB/s	    2648 B/op	      79 allocs/op
+BenchmarkNativeDecoder/log4j2-pattern           	  195451	      1234 ns/op	  83.48 MB/s	    1896 B/op	      36 allocs/op
+BenchmarkNativeDecoder/logback-pattern          	  203383	      1233 ns/op	  53.54 MB/s	    1832 B/op	      36 allocs/op
+BenchmarkNativeMixedInputs/ndjson-only          	   81116	      2904 ns/op	  39.94 MB/s	    4688 B/op	     100 allocs/op
+BenchmarkNativeMixedInputs/ndjson-and-java      	   85626	      2730 ns/op	  58.97 MB/s	    4232 B/op	      86 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_plain_large         	    1762	    131825 ns/op	 497.30 MB/s	  140574 B/op	      32 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_escaped_large       	    1071	    225093 ns/op	 218.46 MB/s	  148764 B/op	      33 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_numeric_lookalikes  	   75940	      3272 ns/op	  24.15 MB/s	    3488 B/op	      96 allocs/op
+BenchmarkCollectorAllocationCases/ndjson_constants           	  121972	      2015 ns/op	  25.81 MB/s	    2776 B/op	      58 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_constants           	  144435	      1623 ns/op	  24.65 MB/s	    1824 B/op	      43 allocs/op
+BenchmarkCollectorAllocationCases/raw_large                  	    5364	     42000 ns/op	1462.84 MB/s	  132096 B/op	      21 allocs/op
+BenchmarkCollectorAllocationCases/access_plain               	  118072	      2041 ns/op	  46.06 MB/s	    3280 B/op	      63 allocs/op
+BenchmarkCollectorAllocationCases/access_binary              	  119700	      2047 ns/op	  46.91 MB/s	    3320 B/op	      63 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1/bytes_32       	  392049	       584.1 ns/op	  54.79 MB/s	    1144 B/op	      24 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_32       	  227566	      1095 ns/op	  29.22 MB/s	    1920 B/op	      37 allocs/op
+BenchmarkCollectorPatternAllocations/fields_32/bytes_32      	   46938	      5121 ns/op	  36.32 MB/s	    9368 B/op	     120 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1024/bytes_32    	    1584	    148164 ns/op	  41.43 MB/s	  265664 B/op	    3098 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_1048576  	     373	    627598 ns/op	1670.78 MB/s	 2099010 B/op	      37 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical     	  127956	      1726 ns/op	  59.66 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested        	   70460	      3362 ns/op	  37.18 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields   	     884	    267172 ns/op	  53.14 MB/s	  439696 B/op	    6369 allocs/op
+BenchmarkNativeDecoder/docker-json-file         	  108946	      2246 ns/op	  49.86 MB/s	    3048 B/op	      72 allocs/op
+BenchmarkNativeDecoder/nginx-combined           	  109896	      2097 ns/op	  48.64 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/apache-common            	  133734	      1823 ns/op	  46.63 MB/s	    2664 B/op	      56 allocs/op
+BenchmarkNativeDecoder/apache-combined          	  115026	      2107 ns/op	  46.51 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/logfmt                   	   92998	      2623 ns/op	  42.69 MB/s	    2648 B/op	      79 allocs/op
+BenchmarkNativeDecoder/log4j2-pattern           	  186098	      1240 ns/op	  83.08 MB/s	    1896 B/op	      36 allocs/op
+BenchmarkNativeDecoder/logback-pattern          	  203470	      1234 ns/op	  53.47 MB/s	    1832 B/op	      36 allocs/op
+BenchmarkNativeMixedInputs/ndjson-only          	   82556	      2876 ns/op	  40.34 MB/s	    4688 B/op	     100 allocs/op
+BenchmarkNativeMixedInputs/ndjson-and-java      	   88411	      2740 ns/op	  58.76 MB/s	    4232 B/op	      86 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_plain_large         	    1574	    140743 ns/op	 465.79 MB/s	  140575 B/op	      32 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_escaped_large       	    1082	    224424 ns/op	 219.11 MB/s	  148764 B/op	      33 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_numeric_lookalikes  	   74066	      3258 ns/op	  24.25 MB/s	    3488 B/op	      96 allocs/op
+BenchmarkCollectorAllocationCases/ndjson_constants           	  119625	      1980 ns/op	  26.26 MB/s	    2776 B/op	      58 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_constants           	  145396	      1604 ns/op	  24.93 MB/s	    1824 B/op	      43 allocs/op
+BenchmarkCollectorAllocationCases/raw_large                  	    5161	     41731 ns/op	1472.27 MB/s	  132096 B/op	      21 allocs/op
+BenchmarkCollectorAllocationCases/access_plain               	  118392	      2059 ns/op	  45.65 MB/s	    3280 B/op	      63 allocs/op
+BenchmarkCollectorAllocationCases/access_binary              	  116943	      2067 ns/op	  46.45 MB/s	    3320 B/op	      63 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1/bytes_32       	  381985	       592.0 ns/op	  54.06 MB/s	    1144 B/op	      24 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_32       	  225756	      1104 ns/op	  28.97 MB/s	    1920 B/op	      37 allocs/op
+BenchmarkCollectorPatternAllocations/fields_32/bytes_32      	   46170	      5173 ns/op	  35.95 MB/s	    9368 B/op	     120 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1024/bytes_32    	    1585	    146475 ns/op	  41.90 MB/s	  265664 B/op	    3098 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_1048576  	     376	    628962 ns/op	1667.15 MB/s	 2099010 B/op	      37 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical     	  130266	      1764 ns/op	  58.40 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested        	   71960	      3389 ns/op	  36.89 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields   	     866	    274802 ns/op	  51.67 MB/s	  439696 B/op	    6369 allocs/op
+BenchmarkNativeDecoder/docker-json-file         	  107526	      2227 ns/op	  50.30 MB/s	    3048 B/op	      72 allocs/op
+BenchmarkNativeDecoder/nginx-combined           	  112120	      2113 ns/op	  48.27 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/apache-common            	  135702	      1812 ns/op	  46.91 MB/s	    2664 B/op	      56 allocs/op
+BenchmarkNativeDecoder/apache-combined          	  115020	      2127 ns/op	  46.08 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/logfmt                   	   91893	      2677 ns/op	  41.84 MB/s	    2648 B/op	      79 allocs/op
+BenchmarkNativeDecoder/log4j2-pattern           	  197592	      1244 ns/op	  82.81 MB/s	    1896 B/op	      36 allocs/op
+BenchmarkNativeDecoder/logback-pattern          	  198288	      1241 ns/op	  53.18 MB/s	    1832 B/op	      36 allocs/op
+BenchmarkNativeMixedInputs/ndjson-only          	   81986	      2931 ns/op	  39.58 MB/s	    4688 B/op	     100 allocs/op
+BenchmarkNativeMixedInputs/ndjson-and-java      	   85467	      2770 ns/op	  58.13 MB/s	    4232 B/op	      86 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_plain_large         	    1812	    130000 ns/op	 504.28 MB/s	  140574 B/op	      32 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_escaped_large       	    1064	    224990 ns/op	 218.56 MB/s	  148764 B/op	      33 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_numeric_lookalikes  	   73969	      3282 ns/op	  24.07 MB/s	    3488 B/op	      96 allocs/op
+BenchmarkCollectorAllocationCases/ndjson_constants           	  118329	      2020 ns/op	  25.74 MB/s	    2776 B/op	      58 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_constants           	  146292	      1644 ns/op	  24.33 MB/s	    1824 B/op	      43 allocs/op
+BenchmarkCollectorAllocationCases/raw_large                  	    4978	     42673 ns/op	1439.78 MB/s	  132096 B/op	      21 allocs/op
+BenchmarkCollectorAllocationCases/access_plain               	  117193	      2080 ns/op	  45.19 MB/s	    3280 B/op	      63 allocs/op
+BenchmarkCollectorAllocationCases/access_binary              	  114752	      2105 ns/op	  45.60 MB/s	    3320 B/op	      63 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1/bytes_32       	  386143	       596.2 ns/op	  53.68 MB/s	    1144 B/op	      24 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_32       	  219692	      1126 ns/op	  28.42 MB/s	    1920 B/op	      37 allocs/op
+BenchmarkCollectorPatternAllocations/fields_32/bytes_32      	   45891	      5222 ns/op	  35.62 MB/s	    9368 B/op	     120 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1024/bytes_32    	    1564	    149624 ns/op	  41.02 MB/s	  265664 B/op	    3098 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_1048576  	     366	    642044 ns/op	1633.18 MB/s	 2099010 B/op	      37 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical     	  134852	      1708 ns/op	  60.32 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested        	   72350	      3313 ns/op	  37.72 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields   	     870	    272236 ns/op	  52.15 MB/s	  439696 B/op	    6369 allocs/op
+BenchmarkNativeDecoder/docker-json-file         	  106645	      2233 ns/op	  50.16 MB/s	    3048 B/op	      72 allocs/op
+BenchmarkNativeDecoder/nginx-combined           	  114046	      2083 ns/op	  48.97 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/apache-common            	  132648	      1818 ns/op	  46.77 MB/s	    2664 B/op	      56 allocs/op
+BenchmarkNativeDecoder/apache-combined          	  116000	      2099 ns/op	  46.68 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/logfmt                   	   93613	      2650 ns/op	  42.27 MB/s	    2648 B/op	      79 allocs/op
+BenchmarkNativeDecoder/log4j2-pattern           	  203373	      1222 ns/op	  84.29 MB/s	    1896 B/op	      36 allocs/op
+BenchmarkNativeDecoder/logback-pattern          	  200436	      1230 ns/op	  53.67 MB/s	    1832 B/op	      36 allocs/op
+BenchmarkNativeMixedInputs/ndjson-only          	   80882	      2901 ns/op	  39.99 MB/s	    4688 B/op	     100 allocs/op
+BenchmarkNativeMixedInputs/ndjson-and-java      	   87328	      2780 ns/op	  57.92 MB/s	    4232 B/op	      86 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_plain_large         	    1666	    135597 ns/op	 483.46 MB/s	  140575 B/op	      32 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_escaped_large       	    1082	    222144 ns/op	 221.36 MB/s	  148764 B/op	      33 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_numeric_lookalikes  	   74503	      3256 ns/op	  24.26 MB/s	    3488 B/op	      96 allocs/op
+BenchmarkCollectorAllocationCases/ndjson_constants           	  121449	      1972 ns/op	  26.38 MB/s	    2776 B/op	      58 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_constants           	  151575	      1632 ns/op	  24.50 MB/s	    1824 B/op	      43 allocs/op
+BenchmarkCollectorAllocationCases/raw_large                  	    5077	     42254 ns/op	1454.06 MB/s	  132096 B/op	      21 allocs/op
+BenchmarkCollectorAllocationCases/access_plain               	  117322	      2062 ns/op	  45.59 MB/s	    3280 B/op	      63 allocs/op
+BenchmarkCollectorAllocationCases/access_binary              	  116444	      2100 ns/op	  45.71 MB/s	    3320 B/op	      63 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1/bytes_32       	  404946	       595.7 ns/op	  53.72 MB/s	    1144 B/op	      24 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_32       	  211824	      1121 ns/op	  28.53 MB/s	    1920 B/op	      37 allocs/op
+BenchmarkCollectorPatternAllocations/fields_32/bytes_32      	   46045	      5189 ns/op	  35.84 MB/s	    9368 B/op	     120 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1024/bytes_32    	    1617	    149545 ns/op	  41.04 MB/s	  265664 B/op	    3098 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_1048576  	     373	    640455 ns/op	1637.24 MB/s	 2099010 B/op	      37 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical     	  127288	      1724 ns/op	  59.74 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested        	   73239	      3362 ns/op	  37.18 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields   	     888	    271309 ns/op	  52.33 MB/s	  439696 B/op	    6369 allocs/op
+BenchmarkNativeDecoder/docker-json-file         	  106574	      2211 ns/op	  50.66 MB/s	    3048 B/op	      72 allocs/op
+BenchmarkNativeDecoder/nginx-combined           	  110727	      2093 ns/op	  48.73 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/apache-common            	  132378	      1822 ns/op	  46.66 MB/s	    2664 B/op	      56 allocs/op
+BenchmarkNativeDecoder/apache-combined          	  112604	      2116 ns/op	  46.31 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/logfmt                   	   91536	      2614 ns/op	  42.85 MB/s	    2648 B/op	      79 allocs/op
+BenchmarkNativeDecoder/log4j2-pattern           	  190426	      1241 ns/op	  82.99 MB/s	    1896 B/op	      36 allocs/op
+BenchmarkNativeDecoder/logback-pattern          	  196509	      1232 ns/op	  53.59 MB/s	    1832 B/op	      36 allocs/op
+BenchmarkNativeMixedInputs/ndjson-only          	   82552	      2915 ns/op	  39.79 MB/s	    4688 B/op	     100 allocs/op
+BenchmarkNativeMixedInputs/ndjson-and-java      	   88276	      2754 ns/op	  58.46 MB/s	    4232 B/op	      86 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_plain_large         	    1700	    140932 ns/op	 465.16 MB/s	  140575 B/op	      32 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_escaped_large       	    1004	    230190 ns/op	 213.62 MB/s	  148764 B/op	      33 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_numeric_lookalikes  	   72578	      3253 ns/op	  24.28 MB/s	    3488 B/op	      96 allocs/op
+BenchmarkCollectorAllocationCases/ndjson_constants           	  124078	      2008 ns/op	  25.90 MB/s	    2776 B/op	      58 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_constants           	  149929	      1597 ns/op	  25.05 MB/s	    1824 B/op	      43 allocs/op
+BenchmarkCollectorAllocationCases/raw_large                  	    4950	     42029 ns/op	1461.86 MB/s	  132096 B/op	      21 allocs/op
+BenchmarkCollectorAllocationCases/access_plain               	  117908	      2066 ns/op	  45.50 MB/s	    3280 B/op	      63 allocs/op
+BenchmarkCollectorAllocationCases/access_binary              	  116707	      2091 ns/op	  45.91 MB/s	    3320 B/op	      63 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1/bytes_32       	  371790	       603.8 ns/op	  53.00 MB/s	    1144 B/op	      24 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_32       	  223749	      1119 ns/op	  28.59 MB/s	    1920 B/op	      37 allocs/op
+BenchmarkCollectorPatternAllocations/fields_32/bytes_32      	   47062	      5111 ns/op	  36.39 MB/s	    9368 B/op	     120 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1024/bytes_32    	    1600	    146325 ns/op	  41.95 MB/s	  265664 B/op	    3098 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_1048576  	     370	    641324 ns/op	1635.02 MB/s	 2099010 B/op	      37 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical     	  131020	      1724 ns/op	  59.75 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested        	   72219	      3312 ns/op	  37.75 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields   	     884	    269710 ns/op	  52.64 MB/s	  439696 B/op	    6369 allocs/op
+BenchmarkNativeDecoder/docker-json-file         	  107484	      2231 ns/op	  50.21 MB/s	    3048 B/op	      72 allocs/op
+BenchmarkNativeDecoder/nginx-combined           	  115410	      2096 ns/op	  48.66 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/apache-common            	  126344	      1824 ns/op	  46.60 MB/s	    2664 B/op	      56 allocs/op
+BenchmarkNativeDecoder/apache-combined          	  116824	      2107 ns/op	  46.52 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/logfmt                   	   91137	      2630 ns/op	  42.58 MB/s	    2648 B/op	      79 allocs/op
+BenchmarkNativeDecoder/log4j2-pattern           	  198866	      1242 ns/op	  82.90 MB/s	    1896 B/op	      36 allocs/op
+BenchmarkNativeDecoder/logback-pattern          	  204740	      1238 ns/op	  53.29 MB/s	    1832 B/op	      36 allocs/op
+BenchmarkNativeMixedInputs/ndjson-only          	   80730	      2950 ns/op	  39.33 MB/s	    4688 B/op	     100 allocs/op
+BenchmarkNativeMixedInputs/ndjson-and-java      	   88191	      2784 ns/op	  57.83 MB/s	    4232 B/op	      86 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_plain_large         	    1780	    137820 ns/op	 475.66 MB/s	  140574 B/op	      32 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_escaped_large       	    1077	    221458 ns/op	 222.05 MB/s	  148764 B/op	      33 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_numeric_lookalikes  	   75178	      3255 ns/op	  24.27 MB/s	    3488 B/op	      96 allocs/op
+BenchmarkCollectorAllocationCases/ndjson_constants           	  120884	      1966 ns/op	  26.45 MB/s	    2776 B/op	      58 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_constants           	  151326	      1621 ns/op	  24.68 MB/s	    1824 B/op	      43 allocs/op
+BenchmarkCollectorAllocationCases/raw_large                  	    5178	     42419 ns/op	1448.39 MB/s	  132096 B/op	      21 allocs/op
+BenchmarkCollectorAllocationCases/access_plain               	  116961	      2064 ns/op	  45.53 MB/s	    3280 B/op	      63 allocs/op
+BenchmarkCollectorAllocationCases/access_binary              	  117482	      2087 ns/op	  46.00 MB/s	    3320 B/op	      63 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1/bytes_32       	  393178	       601.4 ns/op	  53.21 MB/s	    1144 B/op	      24 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_32       	  224067	      1112 ns/op	  28.77 MB/s	    1920 B/op	      37 allocs/op
+BenchmarkCollectorPatternAllocations/fields_32/bytes_32      	   45121	      5237 ns/op	  35.52 MB/s	    9368 B/op	     120 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1024/bytes_32    	    1560	    149669 ns/op	  41.01 MB/s	  265664 B/op	    3098 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_1048576  	     367	    649129 ns/op	1615.36 MB/s	 2099010 B/op	      37 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical     	  121370	      1855 ns/op	  55.51 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested        	   65778	      3557 ns/op	  35.14 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields   	     822	    274488 ns/op	  51.73 MB/s	  439696 B/op	    6369 allocs/op
+BenchmarkNativeDecoder/docker-json-file         	  106039	      2209 ns/op	  50.70 MB/s	    3048 B/op	      72 allocs/op
+BenchmarkNativeDecoder/nginx-combined           	  112591	      2130 ns/op	  47.88 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/apache-common            	  133160	      1807 ns/op	  47.03 MB/s	    2664 B/op	      56 allocs/op
+BenchmarkNativeDecoder/apache-combined          	  118747	      2102 ns/op	  46.61 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/logfmt                   	   90169	      2621 ns/op	  42.74 MB/s	    2648 B/op	      79 allocs/op
+BenchmarkNativeDecoder/log4j2-pattern           	  188634	      1240 ns/op	  83.05 MB/s	    1896 B/op	      36 allocs/op
+BenchmarkNativeDecoder/logback-pattern          	  201442	      1232 ns/op	  53.55 MB/s	    1832 B/op	      36 allocs/op
+BenchmarkNativeMixedInputs/ndjson-only          	   81362	      2930 ns/op	  39.59 MB/s	    4688 B/op	     100 allocs/op
+BenchmarkNativeMixedInputs/ndjson-and-java      	   86646	      2773 ns/op	  58.07 MB/s	    4232 B/op	      86 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_plain_large         	    1796	    130185 ns/op	 503.56 MB/s	  140574 B/op	      32 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_escaped_large       	    1056	    226346 ns/op	 217.25 MB/s	  148764 B/op	      33 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_numeric_lookalikes  	   75580	      3279 ns/op	  24.09 MB/s	    3488 B/op	      96 allocs/op
+BenchmarkCollectorAllocationCases/ndjson_constants           	  122678	      1963 ns/op	  26.49 MB/s	    2776 B/op	      58 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_constants           	  150660	      1636 ns/op	  24.44 MB/s	    1824 B/op	      43 allocs/op
+BenchmarkCollectorAllocationCases/raw_large                  	    4993	     42146 ns/op	1457.79 MB/s	  132096 B/op	      21 allocs/op
+BenchmarkCollectorAllocationCases/access_plain               	  115581	      2064 ns/op	  45.54 MB/s	    3280 B/op	      63 allocs/op
+BenchmarkCollectorAllocationCases/access_binary              	  116079	      2095 ns/op	  45.82 MB/s	    3320 B/op	      63 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1/bytes_32       	  403728	       593.0 ns/op	  53.96 MB/s	    1144 B/op	      24 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_32       	  212721	      1130 ns/op	  28.33 MB/s	    1920 B/op	      37 allocs/op
+BenchmarkCollectorPatternAllocations/fields_32/bytes_32      	   47194	      5189 ns/op	  35.84 MB/s	    9368 B/op	     120 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1024/bytes_32    	    1546	    147708 ns/op	  41.55 MB/s	  265664 B/op	    3098 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_1048576  	     373	    641586 ns/op	1634.35 MB/s	 2099010 B/op	      37 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical     	  131126	      1728 ns/op	  59.62 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested        	   70203	      3389 ns/op	  36.89 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields   	     879	    276445 ns/op	  51.36 MB/s	  439696 B/op	    6369 allocs/op
+BenchmarkNativeDecoder/docker-json-file         	  104997	      2240 ns/op	  50.01 MB/s	    3048 B/op	      72 allocs/op
+BenchmarkNativeDecoder/nginx-combined           	  110292	      2131 ns/op	  47.87 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/apache-common            	  132248	      1820 ns/op	  46.70 MB/s	    2664 B/op	      56 allocs/op
+BenchmarkNativeDecoder/apache-combined          	  112933	      2112 ns/op	  46.39 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/logfmt                   	   94012	      2640 ns/op	  42.43 MB/s	    2648 B/op	      79 allocs/op
+BenchmarkNativeDecoder/log4j2-pattern           	  194388	      1247 ns/op	  82.63 MB/s	    1896 B/op	      36 allocs/op
+BenchmarkNativeDecoder/logback-pattern          	  192028	      1239 ns/op	  53.29 MB/s	    1832 B/op	      36 allocs/op
+BenchmarkNativeMixedInputs/ndjson-only          	   79065	      2938 ns/op	  39.48 MB/s	    4688 B/op	     100 allocs/op
+BenchmarkNativeMixedInputs/ndjson-and-java      	   84460	      2765 ns/op	  58.22 MB/s	    4232 B/op	      86 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_plain_large         	    1659	    140229 ns/op	 467.49 MB/s	  140575 B/op	      32 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_escaped_large       	    1064	    226493 ns/op	 217.11 MB/s	  148764 B/op	      33 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_numeric_lookalikes  	   75732	      3308 ns/op	  23.88 MB/s	    3488 B/op	      96 allocs/op
+BenchmarkCollectorAllocationCases/ndjson_constants           	  116983	      2050 ns/op	  25.37 MB/s	    2776 B/op	      58 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_constants           	  136225	      1647 ns/op	  24.29 MB/s	    1824 B/op	      43 allocs/op
+BenchmarkCollectorAllocationCases/raw_large                  	    5164	     42274 ns/op	1453.37 MB/s	  132096 B/op	      21 allocs/op
+BenchmarkCollectorAllocationCases/access_plain               	  117736	      2054 ns/op	  45.77 MB/s	    3280 B/op	      63 allocs/op
+BenchmarkCollectorAllocationCases/access_binary              	  113822	      2096 ns/op	  45.80 MB/s	    3320 B/op	      63 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1/bytes_32       	  395145	       591.5 ns/op	  54.10 MB/s	    1144 B/op	      24 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_32       	  220096	      1125 ns/op	  28.44 MB/s	    1920 B/op	      37 allocs/op
+BenchmarkCollectorPatternAllocations/fields_32/bytes_32      	   46166	      5202 ns/op	  35.75 MB/s	    9368 B/op	     120 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1024/bytes_32    	    1623	    146748 ns/op	  41.83 MB/s	  265664 B/op	    3098 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_1048576  	     369	    641811 ns/op	1633.78 MB/s	 2099010 B/op	      37 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical     	  135472	      1762 ns/op	  58.47 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested        	   71119	      3346 ns/op	  37.36 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields   	     895	    268790 ns/op	  52.82 MB/s	  439696 B/op	    6369 allocs/op
+BenchmarkNativeDecoder/docker-json-file         	  106054	      2231 ns/op	  50.21 MB/s	    3048 B/op	      72 allocs/op
+BenchmarkNativeDecoder/nginx-combined           	  112413	      2110 ns/op	  48.35 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/apache-common            	  133626	      1802 ns/op	  47.17 MB/s	    2664 B/op	      56 allocs/op
+BenchmarkNativeDecoder/apache-combined          	  115406	      2096 ns/op	  46.76 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/logfmt                   	   90726	      2628 ns/op	  42.61 MB/s	    2648 B/op	      79 allocs/op
+BenchmarkNativeDecoder/log4j2-pattern           	  200203	      1260 ns/op	  81.76 MB/s	    1896 B/op	      36 allocs/op
+BenchmarkNativeDecoder/logback-pattern          	  202399	      1218 ns/op	  54.17 MB/s	    1832 B/op	      36 allocs/op
+BenchmarkNativeMixedInputs/ndjson-only          	   82506	      2896 ns/op	  40.05 MB/s	    4688 B/op	     100 allocs/op
+BenchmarkNativeMixedInputs/ndjson-and-java      	   86938	      2741 ns/op	  58.74 MB/s	    4232 B/op	      86 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_plain_large         	    1575	    150799 ns/op	 434.72 MB/s	  140575 B/op	      32 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_escaped_large       	     993	    229710 ns/op	 214.07 MB/s	  148764 B/op	      33 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_numeric_lookalikes  	   74704	      3242 ns/op	  24.37 MB/s	    3488 B/op	      96 allocs/op
+BenchmarkCollectorAllocationCases/ndjson_constants           	  117906	      1995 ns/op	  26.06 MB/s	    2776 B/op	      58 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_constants           	  148186	      1620 ns/op	  24.69 MB/s	    1824 B/op	      43 allocs/op
+BenchmarkCollectorAllocationCases/raw_large                  	    4988	     41967 ns/op	1464.00 MB/s	  132096 B/op	      21 allocs/op
+BenchmarkCollectorAllocationCases/access_plain               	  115998	      2076 ns/op	  45.27 MB/s	    3280 B/op	      63 allocs/op
+BenchmarkCollectorAllocationCases/access_binary              	  117530	      2090 ns/op	  45.93 MB/s	    3320 B/op	      63 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1/bytes_32       	  385950	       594.2 ns/op	  53.85 MB/s	    1144 B/op	      24 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_32       	  214510	      1129 ns/op	  28.34 MB/s	    1920 B/op	      37 allocs/op
+BenchmarkCollectorPatternAllocations/fields_32/bytes_32      	   46536	      5173 ns/op	  35.96 MB/s	    9368 B/op	     120 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1024/bytes_32    	    1587	    148881 ns/op	  41.23 MB/s	  265664 B/op	    3098 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_1048576  	     363	    640159 ns/op	1637.99 MB/s	 2099010 B/op	      37 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical     	  131689	      1710 ns/op	  60.24 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested        	   72753	      3288 ns/op	  38.02 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields   	     892	    271116 ns/op	  52.37 MB/s	  439696 B/op	    6369 allocs/op
+BenchmarkNativeDecoder/docker-json-file         	  108704	      2228 ns/op	  50.27 MB/s	    3048 B/op	      72 allocs/op
+BenchmarkNativeDecoder/nginx-combined           	  109009	      2120 ns/op	  48.12 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/apache-common            	  131685	      1825 ns/op	  46.58 MB/s	    2664 B/op	      56 allocs/op
+BenchmarkNativeDecoder/apache-combined          	  113523	      2124 ns/op	  46.15 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/logfmt                   	   91249	      2621 ns/op	  42.74 MB/s	    2648 B/op	      79 allocs/op
+BenchmarkNativeDecoder/log4j2-pattern           	  199162	      1251 ns/op	  82.36 MB/s	    1896 B/op	      36 allocs/op
+BenchmarkNativeDecoder/logback-pattern          	  199426	      1227 ns/op	  53.77 MB/s	    1832 B/op	      36 allocs/op
+BenchmarkNativeMixedInputs/ndjson-only          	   80775	      2953 ns/op	  39.29 MB/s	    4688 B/op	     100 allocs/op
+BenchmarkNativeMixedInputs/ndjson-and-java      	   83470	      2803 ns/op	  57.44 MB/s	    4232 B/op	      86 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_plain_large         	    1647	    138797 ns/op	 472.32 MB/s	  140575 B/op	      32 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_escaped_large       	    1034	    226728 ns/op	 216.89 MB/s	  148764 B/op	      33 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_numeric_lookalikes  	   73681	      3250 ns/op	  24.31 MB/s	    3488 B/op	      96 allocs/op
+BenchmarkCollectorAllocationCases/ndjson_constants           	  116442	      1983 ns/op	  26.22 MB/s	    2776 B/op	      58 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_constants           	  147752	      1614 ns/op	  24.79 MB/s	    1824 B/op	      43 allocs/op
+BenchmarkCollectorAllocationCases/raw_large                  	    5232	     42384 ns/op	1449.59 MB/s	  132096 B/op	      21 allocs/op
+BenchmarkCollectorAllocationCases/access_plain               	  118548	      2055 ns/op	  45.75 MB/s	    3280 B/op	      63 allocs/op
+BenchmarkCollectorAllocationCases/access_binary              	  118629	      2104 ns/op	  45.63 MB/s	    3320 B/op	      63 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1/bytes_32       	  386221	       601.1 ns/op	  53.24 MB/s	    1144 B/op	      24 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_32       	  218330	      1128 ns/op	  28.38 MB/s	    1920 B/op	      37 allocs/op
+BenchmarkCollectorPatternAllocations/fields_32/bytes_32      	   46128	      5329 ns/op	  34.91 MB/s	    9368 B/op	     120 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1024/bytes_32    	    1526	    150395 ns/op	  40.81 MB/s	  265664 B/op	    3098 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_1048576  	     370	    637236 ns/op	1645.51 MB/s	 2099010 B/op	      37 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical     	  133142	      1787 ns/op	  57.63 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested        	   71518	      3336 ns/op	  37.48 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields   	     891	    270923 ns/op	  52.41 MB/s	  439696 B/op	    6369 allocs/op
+BenchmarkNativeDecoder/docker-json-file         	  105806	      2234 ns/op	  50.13 MB/s	    3048 B/op	      72 allocs/op
+BenchmarkNativeDecoder/nginx-combined           	  108765	      2137 ns/op	  47.74 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/apache-common            	  132780	      1828 ns/op	  46.50 MB/s	    2664 B/op	      56 allocs/op
+BenchmarkNativeDecoder/apache-combined          	  114476	      2158 ns/op	  45.42 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/logfmt                   	   90517	      2641 ns/op	  42.41 MB/s	    2648 B/op	      79 allocs/op
+BenchmarkNativeDecoder/log4j2-pattern           	  198246	      1244 ns/op	  82.78 MB/s	    1896 B/op	      36 allocs/op
+BenchmarkNativeDecoder/logback-pattern          	  200044	      1234 ns/op	  53.49 MB/s	    1832 B/op	      36 allocs/op
+BenchmarkNativeMixedInputs/ndjson-only          	   79519	      2958 ns/op	  39.21 MB/s	    4688 B/op	     100 allocs/op
+BenchmarkNativeMixedInputs/ndjson-and-java      	   86842	      2746 ns/op	  58.64 MB/s	    4232 B/op	      86 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_plain_large         	    1555	    140886 ns/op	 465.31 MB/s	  140575 B/op	      32 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_escaped_large       	    1065	    225109 ns/op	 218.45 MB/s	  148764 B/op	      33 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_numeric_lookalikes  	   75343	      3268 ns/op	  24.17 MB/s	    3488 B/op	      96 allocs/op
+BenchmarkCollectorAllocationCases/ndjson_constants           	  119676	      1986 ns/op	  26.18 MB/s	    2776 B/op	      58 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_constants           	  147544	      1613 ns/op	  24.80 MB/s	    1824 B/op	      43 allocs/op
+BenchmarkCollectorAllocationCases/raw_large                  	    5324	     41967 ns/op	1464.00 MB/s	  132096 B/op	      21 allocs/op
+BenchmarkCollectorAllocationCases/access_plain               	  119233	      2034 ns/op	  46.22 MB/s	    3280 B/op	      63 allocs/op
+BenchmarkCollectorAllocationCases/access_binary              	  111926	      2088 ns/op	  45.97 MB/s	    3320 B/op	      63 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1/bytes_32       	  406291	       595.5 ns/op	  53.74 MB/s	    1144 B/op	      24 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_32       	  217776	      1120 ns/op	  28.57 MB/s	    1920 B/op	      37 allocs/op
+BenchmarkCollectorPatternAllocations/fields_32/bytes_32      	   46711	      5201 ns/op	  35.76 MB/s	    9368 B/op	     120 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1024/bytes_32    	    1602	    148500 ns/op	  41.33 MB/s	  265664 B/op	    3098 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_1048576  	     370	    644494 ns/op	1626.98 MB/s	 2099010 B/op	      37 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical     	  131802	      1721 ns/op	  59.85 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested        	   72171	      3331 ns/op	  37.53 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields   	     909	    268412 ns/op	  52.90 MB/s	  439696 B/op	    6369 allocs/op
+BenchmarkNativeDecoder/docker-json-file         	  107736	      2200 ns/op	  50.90 MB/s	    3048 B/op	      72 allocs/op
+BenchmarkNativeDecoder/nginx-combined           	  115976	      2080 ns/op	  49.05 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/apache-common            	  133256	      1818 ns/op	  46.75 MB/s	    2664 B/op	      56 allocs/op
+BenchmarkNativeDecoder/apache-combined          	  116264	      2132 ns/op	  45.97 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/logfmt                   	   92192	      2638 ns/op	  42.45 MB/s	    2648 B/op	      79 allocs/op
+BenchmarkNativeDecoder/log4j2-pattern           	  191841	      1244 ns/op	  82.79 MB/s	    1896 B/op	      36 allocs/op
+BenchmarkNativeDecoder/logback-pattern          	  204853	      1229 ns/op	  53.69 MB/s	    1832 B/op	      36 allocs/op
+BenchmarkNativeMixedInputs/ndjson-only          	   80953	      2921 ns/op	  39.72 MB/s	    4688 B/op	     100 allocs/op
+BenchmarkNativeMixedInputs/ndjson-and-java      	   88052	      2746 ns/op	  58.62 MB/s	    4232 B/op	      86 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_plain_large         	    1618	    132513 ns/op	 494.71 MB/s	  140575 B/op	      32 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_escaped_large       	    1071	    224313 ns/op	 219.22 MB/s	  148764 B/op	      33 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_numeric_lookalikes  	   75642	      3246 ns/op	  24.33 MB/s	    3488 B/op	      96 allocs/op
+BenchmarkCollectorAllocationCases/ndjson_constants           	  120930	      2000 ns/op	  26.00 MB/s	    2776 B/op	      58 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_constants           	  152925	      1605 ns/op	  24.92 MB/s	    1824 B/op	      43 allocs/op
+BenchmarkCollectorAllocationCases/raw_large                  	    5283	     41962 ns/op	1464.18 MB/s	  132096 B/op	      21 allocs/op
+BenchmarkCollectorAllocationCases/access_plain               	  117564	      2022 ns/op	  46.49 MB/s	    3280 B/op	      63 allocs/op
+BenchmarkCollectorAllocationCases/access_binary              	  120702	      2044 ns/op	  46.97 MB/s	    3320 B/op	      63 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1/bytes_32       	  388992	       587.4 ns/op	  54.48 MB/s	    1144 B/op	      24 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_32       	  227481	      1115 ns/op	  28.69 MB/s	    1920 B/op	      37 allocs/op
+BenchmarkCollectorPatternAllocations/fields_32/bytes_32      	   46221	      5143 ns/op	  36.16 MB/s	    9368 B/op	     120 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1024/bytes_32    	    1572	    151091 ns/op	  40.62 MB/s	  265664 B/op	    3098 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_1048576  	     374	    636969 ns/op	1646.20 MB/s	 2099010 B/op	      37 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/canonical     	  118624	      1743 ns/op	  59.08 MB/s	    2464 B/op	      55 allocs/op
+BenchmarkNDJSONDecoder/nested        	   73639	      3341 ns/op	  37.41 MB/s	    4808 B/op	     129 allocs/op
+BenchmarkNDJSONDecoder/high_fields   	     895	    267370 ns/op	  53.10 MB/s	  439696 B/op	    6369 allocs/op
+BenchmarkNativeDecoder/docker-json-file         	  106299	      2215 ns/op	  50.57 MB/s	    3048 B/op	      72 allocs/op
+BenchmarkNativeDecoder/nginx-combined           	  113229	      2113 ns/op	  48.28 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/apache-common            	  132901	      1798 ns/op	  47.27 MB/s	    2664 B/op	      56 allocs/op
+BenchmarkNativeDecoder/apache-combined          	  117800	      2097 ns/op	  46.72 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/logfmt                   	   89804	      2673 ns/op	  41.91 MB/s	    2648 B/op	      79 allocs/op
+BenchmarkNativeDecoder/log4j2-pattern           	  188973	      1265 ns/op	  81.43 MB/s	    1896 B/op	      36 allocs/op
+BenchmarkNativeDecoder/logback-pattern          	  192681	      1245 ns/op	  53.00 MB/s	    1832 B/op	      36 allocs/op
+BenchmarkNativeMixedInputs/ndjson-only          	   81997	      2928 ns/op	  39.62 MB/s	    4688 B/op	     100 allocs/op
+BenchmarkNativeMixedInputs/ndjson-and-java      	   85962	      2765 ns/op	  58.22 MB/s	    4232 B/op	      86 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_plain_large         	    1636	    137322 ns/op	 477.39 MB/s	  140575 B/op	      32 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_escaped_large       	    1046	    225325 ns/op	 218.24 MB/s	  148764 B/op	      33 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_numeric_lookalikes  	   73323	      3258 ns/op	  24.25 MB/s	    3488 B/op	      96 allocs/op
+BenchmarkCollectorAllocationCases/ndjson_constants           	  119773	      1991 ns/op	  26.12 MB/s	    2776 B/op	      58 allocs/op
+BenchmarkCollectorAllocationCases/logfmt_constants           	  145153	      1620 ns/op	  24.69 MB/s	    1824 B/op	      43 allocs/op
+BenchmarkCollectorAllocationCases/raw_large                  	    5379	     42307 ns/op	1452.25 MB/s	  132096 B/op	      21 allocs/op
+BenchmarkCollectorAllocationCases/access_plain               	  118681	      2022 ns/op	  46.48 MB/s	    3280 B/op	      63 allocs/op
+BenchmarkCollectorAllocationCases/access_binary              	  119276	      2068 ns/op	  46.42 MB/s	    3320 B/op	      63 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1/bytes_32       	  396226	       583.9 ns/op	  54.80 MB/s	    1144 B/op	      24 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_32       	  227672	      1122 ns/op	  28.52 MB/s	    1920 B/op	      37 allocs/op
+BenchmarkCollectorPatternAllocations/fields_32/bytes_32      	   47590	      5135 ns/op	  36.22 MB/s	    9368 B/op	     120 allocs/op
+BenchmarkCollectorPatternAllocations/fields_1024/bytes_32    	    1603	    146461 ns/op	  41.91 MB/s	  265664 B/op	    3098 allocs/op
+BenchmarkCollectorPatternAllocations/fields_5/bytes_1048576  	     368	    644973 ns/op	1625.77 MB/s	 2099010 B/op	      37 allocs/op
+PASS

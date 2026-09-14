@@ -19,6 +19,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"github.com/Suhaibinator/open-splunk/internal/searchlimits"
 )
 
 const (
@@ -46,8 +47,10 @@ const (
 	maximumExplainLineBytes     = uint64(32 << 10)
 	maximumExplainResultBytes   = uint64(1 << 20)
 	maximumExplainArrayElements = 4_096
-	maximumExplainGroups        = uint64(4_096)
-	maximumExplainThreads       = uint64(1)
+	// Exact timechart grids have at most 10,000 bucket starts.
+	maximumExplainGridElements = 10_000
+	maximumExplainGroups       = uint64(4_096)
+	maximumExplainThreads      = uint64(1)
 	// This independently enforces the compiler's 256 KiB generated-query
 	// ceiling at the execution boundary. The ClickHouse max_query_size setting
 	// includes the fixed wrapper and rendered bind arguments.
@@ -248,12 +251,30 @@ func (explainer *Explainer) Explain(
 		return ExplainResult{}, err
 	}
 
-	querySQL := explainQueryPrefix + query.SQL +
+	explainSQL := query.SQL
+	if query.Timechart != nil &&
+		(query.Timechart.Mode == clickhouse.TimechartModeRuntimeWide ||
+			query.Timechart.Mode == clickhouse.TimechartModeRuntimeWideValue) {
+		limits, limitsErr := deriveTimechartResourceLimits(
+			explainer.settings,
+			query,
+			searchlimits.Policy{},
+			false,
+		)
+		if limitsErr != nil {
+			return ExplainResult{}, invalidExplainResult("timechart resource policy is invalid")
+		}
+		explainSQL, limitsErr = bindTimechartResourceLimitsSQL(explainSQL, query, limits)
+		if limitsErr != nil {
+			return ExplainResult{}, invalidExplainResult("timechart resource guard is invalid")
+		}
+	}
+	querySQL := explainQueryPrefix + explainSQL +
 		explainQuerySettingsPrefix + strconv.FormatUint(timeoutSeconds, 10) +
 		explainQuerySettingsSuffix
 	detachedArgs, err := detachExplainArguments(
 		query.Args,
-		compilerPlaceholderCount(query.SQL),
+		compilerPlaceholderCount(explainSQL),
 		uint64(len(querySQL)),
 		maximumBoundQueryBytes,
 	)
@@ -540,11 +561,11 @@ func validateExplainQuery(query clickhouse.CompiledQuery) error {
 
 // detachExplainArguments admits exactly the concrete argument inventory
 // emitted by Compiler.Compile: string, bool, int64, uint64, float64, uint8,
-// []string, and []uint8. In particular, it rejects the formatter, Valuer,
+// []string, []uint8, and []int64. In particular, it rejects the formatter, Valuer,
 // pointer, other-collection, and named-scalar fallbacks that clickhouse-go
 // would otherwise evaluate during unsafe client-side query binding.
 //
-// Compiler's two slice forms are independently bounded and deeply copied.
+// Compiler's slice forms are independently bounded and deeply copied.
 // CompiledQuery.Args is public, so the executor must retain its detached
 // snapshot even if a caller replaces an interface value after admission.
 func detachExplainArguments(
@@ -574,6 +595,12 @@ func detachExplainArguments(
 				return nil, explainLimit(
 					"argument collection exceeds the element limit",
 				)
+			}
+			detached[index] = slices.Clone(value)
+			argument = detached[index]
+		case []int64:
+			if len(value) > maximumExplainGridElements {
+				return nil, explainLimit("grid argument exceeds the element limit")
 			}
 			detached[index] = slices.Clone(value)
 			argument = detached[index]
@@ -644,6 +671,13 @@ func explainArgumentRenderedBytes(argument any) (uint64, bool) {
 		}
 		// Three decimal digits and one separator per element, plus brackets.
 		return length*4 + 2, true
+	case []int64:
+		length := uint64(len(value))
+		if length > (^uint64(0)-2)/21 {
+			return ^uint64(0), true
+		}
+		// Signed decimal timestamps need at most 20 bytes plus a separator.
+		return length*21 + 2, true
 	case bool:
 		return 1, true
 	case int64, uint64:

@@ -1,0 +1,14 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeDecoder/docker-json-file         	  110184	      2167 ns/op	  51.67 MB/s	    3048 B/op	      72 allocs/op
+BenchmarkNativeDecoder/nginx-combined           	  122505	      1963 ns/op	  51.96 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/apache-common            	  143407	      1695 ns/op	  50.14 MB/s	    2664 B/op	      56 allocs/op
+BenchmarkNativeDecoder/apache-combined          	  122313	      1957 ns/op	  50.07 MB/s	    3320 B/op	      64 allocs/op
+BenchmarkNativeDecoder/logfmt                   	   97318	      2478 ns/op	  45.21 MB/s	    2648 B/op	      79 allocs/op
+BenchmarkNativeDecoder/log4j2-pattern           	  210204	      1179 ns/op	  87.38 MB/s	    1896 B/op	      36 allocs/op
+BenchmarkNativeDecoder/logback-pattern          	  213187	      1192 ns/op	  55.36 MB/s	    1832 B/op	      36 allocs/op
+BenchmarkNativeMixedInputs/ndjson-only          	   72987	      3283 ns/op	  35.34 MB/s	    4688 B/op	     100 allocs/op
+BenchmarkNativeMixedInputs/ndjson-and-java      	   83832	      2723 ns/op	  59.12 MB/s	    4232 B/op	      86 allocs/op
+PASS

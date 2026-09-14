@@ -9,11 +9,11 @@ acknowledgment, health, token-purpose, durable-staging, reconciliation,
 recovery, metrics, and shutdown family.
 
 > **Deployment warning:** HEC shares the server HTTP listener. The supplied
-> Compose service publishes that listener from `0.0.0.0:8080` without direct
-> TLS. If HEC is enabled unchanged, token-bearing HEC traffic is plaintext on
-> every network that can reach the published host port. Bind the published port
-> to `127.0.0.1` for host-local use, or put the complete listener behind a
-> controlled TLS boundary before enabling HEC.
+> Compose service publishes that listener only on host loopback (`127.0.0.1`),
+> without direct TLS. Keep token-bearing traffic within the trusted host and
+> Docker network, or configure HTTPS before enabling remote HEC. Workspace
+> APIs on the same listener trust the caller: a remote HEC proxy must expose
+> only HEC routes, or authenticate all workspace HTTP and WebSocket access.
 
 HEC uses the native ingestion authority described in [Ingestion](ingestion.md).
 It cannot select a tenant, grant an index, write directly to ClickHouse, or
@@ -238,7 +238,8 @@ Principal hard ceilings are:
 | exact number token | 128 bytes; exponent magnitude 1,024 |
 | concurrent requests per token / process | 16 / 128 |
 | reserved concurrent health probes | 8 |
-| pending outbox requests / payload | 64 / 256 MiB |
+| pending outbox requests / payload / metadata | 20,000 / 256 MiB / 256 MiB |
+| pending requests / payload / metadata per token | 10,000 / 128 MiB / 128 MiB |
 | retained requests per token | 100,000 |
 | channels per token | 256 |
 | ACK IDs per query / retained per token | 1,000 / 100,000 |
@@ -248,6 +249,14 @@ Principal hard ceilings are:
 The event-age ceiling is 365 days and future skew is 5 minutes; an index may
 tighten both. Native token/index schedules charge server-computed source event
 bytes, so gzip never discounts quotas.
+
+Pending budgets use the stable token record ID across channels, request IDs,
+indexes, and event metadata. They remain charged through lease release and
+restart until the accepted work reaches a terminal state. Capacity exhaustion
+uses the existing retryable queue response. These budgets reserve half of each
+global ceiling for other sources; several independently provisioned sources
+can still fill the global queue. See [Ingestion](ingestion.md) for upgrade debt
+and the shared native-collector policy.
 
 ## Enablement and deployment
 
@@ -260,18 +269,24 @@ OPEN_SPLUNK_SERVER_HEC_ENABLED=true
 
 The HTTP server accepts plaintext whenever its TLS certificate and key are
 absent; it does not restrict plaintext to loopback. The supplied Compose service
-listens on `0.0.0.0:8080` and publishes `${OPEN_SPLUNK_DEPLOY_HTTP_PORT:-8080}`
-on every host interface. For host-local use, change the port mapping to:
+listens on `0.0.0.0:8080` inside the container and publishes
+`${OPEN_SPLUNK_DEPLOY_HTTP_PORT:-8080}` only on host loopback:
 
 ```yaml
 ports:
-  - "127.0.0.1:${OPEN_SPLUNK_DEPLOY_HTTP_PORT:-8080}:8080"
+  - target: 8080
+    published: "${OPEN_SPLUNK_DEPLOY_HTTP_PORT:-8080}"
+    host_ip: 127.0.0.1
+    protocol: tcp
 ```
 
 Remote HEC requires direct server HTTPS or a controlled TLS reverse proxy that
 forwards `/services/collector` unchanged and preserves header/body limits and
 timeouts. The browser Host/Origin policy is not a transport boundary for HEC.
-Do not add plaintext 8088 or CORS.
+Expose only HEC routes to ingestion clients; any remotely reachable workspace
+HTTP routes and WebSocket upgrades need separate proxy authentication. Keep
+the server's direct listener inaccessible to untrusted clients. Do not add
+plaintext 8088 or CORS.
 
 Create an immutable HEC-purpose token in Administration, select allowed active
 indexes, optional defaults/constraints/rates, and choose ACK mode. Store the
@@ -311,6 +326,34 @@ restore, allow reconciliation to resolve retained pending requests. An ID
 issued after the chosen snapshot is lost external state and polls false;
 resending may duplicate an event that existed outside the restored authority.
 
+Accepted HEC requests remain independent logical batches while the server
+combines their rows into durable ordered ClickHouse write groups. ACK remains
+false until the transaction that commits the complete physical group also
+updates every member request; a partial group cannot become acknowledged or
+visible. Backup must use the same exclusive write freeze and empty-drain proof
+as index deletion: no ungrouped reservation, ready group, ambiguous group, or
+live group lease may be omitted. Restore replays the oldest ambiguous group
+with its original membership and token before sending newer work.
+
+The administrator operational snapshot exposes fixed-cardinality histograms
+for member batches, rows, decoded bytes, and monthly partitions per group, plus
+rows per physical insert. Each histogram includes its inclusive bounds, an
+overflow bucket, count, sum, and maximum. The same snapshot reports current and
+peak native waiters and publishes the fixed latency-bucket bounds in
+microseconds; none of these metrics carries request-derived labels.
+
+The Administration Server page presents the complete snapshot, including
+durable grouping states, fill reasons, native waiter outcomes, the three
+latency distributions, and all five shape histograms. Each distribution uses
+fixed validated bounds and a captioned, horizontally scrollable table. Counters
+remain exact unsigned 64-bit values in the browser, so a reported zero is
+distinct from a metric the server did not report. The observations are sampled
+from concurrent counters and are not one atomic transaction: bucket totals may
+temporarily differ from a histogram count. Process counters reset when the
+server restarts, while durable queue and retained acknowledgment state can
+survive a restart; compare snapshots with those boundaries in mind rather than
+inferring rates from one sample.
+
 ## Load, soak, and slow-client gates
 
 The always-on real TLS transport gate is:
@@ -328,9 +371,28 @@ The durable shipped-process load gate exercises HEC, native collector traffic,
 control-plane mutations, ClickHouse outage/backlog/reconciliation, ACK truth,
 and exact event IDs:
 
+It also reports physical inserts, rows per insert, active parts, and insert
+rejections/delays from ClickHouse's bounded system telemetry. Under a qualified
+steady-state window with at least 10,000 eligible rows available before the
+linger deadline, the gate requires a median of at least 10,000 rows, at least
+90 percent of inserts at or above 5,000 rows, no hard-limit violation, and at
+most one physical insert per ten accepted logical batches. Startup recovery,
+explicit drain, and sparse linger flushes are reported separately and are not
+misclassified as steady-state regressions.
+
 ```sh
 OPEN_SPLUNK_HEC_LOAD=1 \
 go test ./integration -run '^TestBackendHECDurableLoad$' \
+  -count=1 -timeout=15m -v
+```
+
+The six-second batch-only qualification profile drives 50,000 events/second
+through concurrent HEC requests. It measures only the pre-outage steady-state
+window after startup, then enforces the coalescing distribution thresholds:
+
+```sh
+OPEN_SPLUNK_HEC_QUALIFIED_LOAD=1 \
+go test ./integration -run '^TestBackendHECQualifiedLoad$' \
   -count=1 -timeout=15m -v
 ```
 

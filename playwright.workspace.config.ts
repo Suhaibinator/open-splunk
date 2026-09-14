@@ -13,7 +13,11 @@ export default defineConfig({
   forbidOnly: process.env.CI === "true",
   reporter: "line",
   outputDir: "./test-results/workspace-behaviour",
-  use: { baseURL },
+  use: {
+    baseURL,
+    screenshot: "only-on-failure",
+    trace: "retain-on-failure",
+  },
   webServer: {
     command: "node scripts/serve-static-ui.mjs",
     env: { PORT: String(port) },

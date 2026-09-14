@@ -2,6 +2,9 @@ package server
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"net/http"
 	"testing"
 	"time"
 
@@ -9,6 +12,38 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/scheduledreports"
 	"github.com/Suhaibinator/open-splunk/internal/searchartifacts"
 )
+
+func TestScheduledReportCallErrorPreservesRequestCancellation(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		ctx  context.Context
+		err  error
+	}{
+		{name: "wrapped cancellation", ctx: context.Background(), err: fmt.Errorf("repository: %w", context.Canceled)},
+		{name: "wrapped deadline", ctx: context.Background(), err: fmt.Errorf("repository: %w", context.DeadlineExceeded)},
+		{name: "canceled request context", ctx: canceledContext(), err: errors.New("persistence stopped")},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			assertHTTPErrorStatus(t, mapScheduledReportCallError(test.ctx, test.err), http.StatusRequestTimeout)
+		})
+	}
+}
+
+func TestScheduledReportCallErrorKeepsSuccessfulCommit(t *testing.T) {
+	t.Parallel()
+	if err := mapScheduledReportCallError(canceledContext(), nil); err != nil {
+		t.Fatalf("successful operation error = %v", err)
+	}
+}
+
+func canceledContext() context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return ctx
+}
 
 func TestSetSavedSearchScheduleRejectsContradictoryConfigVersions(t *testing.T) {
 	t.Parallel()

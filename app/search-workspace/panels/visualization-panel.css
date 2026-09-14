@@ -255,6 +255,15 @@
   z-index: 1;
 }
 
+.visualization-vertical-bars.is-stacked {
+  display: block;
+}
+
+.visualization-vertical-bars.is-stacked .visualization-vertical-slot {
+  inset: 0;
+  position: absolute;
+}
+
 .visualization-vertical-slot {
   flex: 1 1 0;
   min-width: 4px;
@@ -402,6 +411,15 @@
   grid-auto-rows: 14px;
   min-width: 0;
   position: relative;
+}
+
+.visualization-horizontal-bars.is-stacked {
+  display: block;
+}
+
+.visualization-horizontal-bars.is-stacked .visualization-horizontal-slot {
+  inset: 0;
+  position: absolute;
 }
 
 .visualization-horizontal-slot {

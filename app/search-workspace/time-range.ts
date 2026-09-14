@@ -56,7 +56,7 @@ function trimServerSpace(value: string): string {
   return value.slice(start, end);
 }
 
-function strictRfc3339Nanoseconds(expression: string): bigint | null {
+export function strictRfc3339Nanoseconds(expression: string): bigint | null {
   const match = RFC3339_EXPRESSION.exec(expression);
   if (match === null) return null;
   const year = Number(match[1]);

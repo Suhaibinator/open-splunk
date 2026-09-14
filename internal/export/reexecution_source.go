@@ -28,9 +28,9 @@ const (
 
 // SearchSnapshotSource atomically supplies an immutable result pin and the
 // detached execution authority that produced the same retained generation.
-// searchjobs.Manager satisfies this interface. ReexecutionSource deliberately
-// does not consume the pin's rows, but keeps the pin open for its whole lease
-// lifetime so expiry cannot reclaim the corresponding job authority.
+// searchjobs.Manager satisfies this interface. Timechart pipelines export the
+// complete pinned rows. Other searches keep the pin open during re-execution
+// so expiry cannot reclaim the corresponding job authority.
 type SearchSnapshotSource interface {
 	AcquireExecutionFor(
 		context.Context,
@@ -51,9 +51,10 @@ type ReexecutionSourceConfig struct {
 	RowBuffer  int
 }
 
-// ReexecutionSource executes a completed search exclusively from its trusted,
-// immutable execution snapshot. Knowledge-enabled searches use the exact
-// retained compiler seal; only legacy snapshots are rebuilt and recompiled.
+// ReexecutionSource exports timechart pipelines from their complete retained
+// result and re-executes other completed searches from trusted execution
+// snapshots. Knowledge-enabled searches use the retained compiler seal;
+// only legacy execution snapshots are rebuilt and recompiled.
 type ReexecutionSource struct {
 	searches   SearchSnapshotSource
 	executor   searchjobs.Executor
@@ -133,10 +134,15 @@ func (source *ReexecutionSource) AcquireResultsFor(ctx context.Context, access s
 		return nil, fmt.Errorf("%w: completed search execution authority is invalid", searchjobs.ErrResultsUnavailable)
 	}
 	schema := resultMetadata.Schema
-	// Reject hostile or corrupted cardinalities before schema projection or
-	// cloning can allocate in proportion to source-controlled metadata.
-	if !validSourceSchemaCardinality(schema) {
-		return nil, fmt.Errorf("%w: completed search schema cardinality is invalid", searchjobs.ErrResultsUnavailable)
+	// The private result attestation makes this immutable source schema eligible
+	// for bounded wide-column selection. Measure it before any projection or
+	// index can allocate in proportion to the runtime series domain.
+	schemaBytes, validSchema, err := measureTrustedSourceSchema(ctx, schema)
+	if err != nil {
+		return nil, err
+	}
+	if !validSchema {
+		return nil, fmt.Errorf("%w: completed search schema exceeds the source metadata limit", searchjobs.ErrResultsUnavailable)
 	}
 	compiled, summary, err := source.executionAuthority(execution)
 	if err != nil {
@@ -144,6 +150,24 @@ func (source *ReexecutionSource) AcquireResultsFor(ctx context.Context, access s
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if compiled.HasTimechartStage() {
+		// A successful timechart pipeline is an atomic, complete retained result. Its
+		// runtime series schema belongs to that snapshot: executing its prefix
+		// again could change the schema after storage retention removes events.
+		if !compiled.RequiresAtomicResult() || pin.ResultsTruncated() {
+			return nil, fmt.Errorf("%w: timechart snapshot is incomplete", searchjobs.ErrResultsUnavailable)
+		}
+		pinReleased = true
+		return &continuationResultLease{
+			ResultLease:       pin,
+			knowledgeSnapshot: summary,
+			schema:            schema,
+			schemaBytes:       schemaBytes,
+		}, nil
+	}
+	if !validSourceSchemaCardinality(schema) {
+		return nil, fmt.Errorf("%w: completed search schema cardinality is invalid", searchjobs.ErrResultsUnavailable)
 	}
 	if !schemaMatchesCompiledQuery(schema, compiled) {
 		return nil, fmt.Errorf("%w: completed search schema changed", searchjobs.ErrResultsUnavailable)
@@ -170,6 +194,31 @@ func (source *ReexecutionSource) AcquireResultsFor(ctx context.Context, access s
 	}
 	pinReleased = true
 	return lease, nil
+}
+
+type continuationResultLease struct {
+	searchjobs.ResultLease
+	knowledgeSnapshot *opensplunk.KnowledgeSnapshotSummary
+	schema            searchjobs.Schema
+	schemaBytes       uint64
+}
+
+func (lease *continuationResultLease) trustedResolvedSchema() (
+	searchjobs.Schema,
+	uint64,
+	bool,
+) {
+	if lease == nil || lease.schemaBytes == 0 || len(lease.schema.Columns) == 0 {
+		return searchjobs.Schema{}, 0, false
+	}
+	return lease.schema, lease.schemaBytes, true
+}
+
+func (lease *continuationResultLease) knowledgeSnapshotSummary() (*opensplunk.KnowledgeSnapshotSummary, error) {
+	if lease.knowledgeSnapshot == nil {
+		return nil, nil
+	}
+	return knowledgesnapshot.CloneSummary(lease.knowledgeSnapshot)
 }
 
 func (source *ReexecutionSource) nextGeneration() (uint64, bool) {
@@ -500,6 +549,17 @@ func (sink *reexecutionSink) SetSchema(schema searchjobs.Schema) error {
 }
 
 func (sink *reexecutionSink) AddRow(values []searchjobs.Value) error {
+	return sink.addRow(values, nil)
+}
+
+func (sink *reexecutionSink) AddRowWithTimeBucket(
+	values []searchjobs.Value,
+	bounds searchjobs.TimeBucketBounds,
+) error {
+	return sink.addRow(values, &bounds)
+}
+
+func (sink *reexecutionSink) addRow(values []searchjobs.Value, bounds *searchjobs.TimeBucketBounds) error {
 	// Claim the sole send turn before retaining caller-owned row storage. This
 	// bounds both cloned rows and registered senders to one even if a buggy
 	// executor invokes AddRow concurrently.
@@ -534,9 +594,14 @@ func (sink *reexecutionSink) AddRow(values []searchjobs.Value) error {
 			return err
 		}
 	}
+	if bounds != nil && !validReexecutionTimeBucket(sink.expected.Columns, values, *bounds) {
+		err := sink.rememberLocked(fmt.Errorf("%w: re-executed time bucket bounds are invalid", searchjobs.ErrInvalidResult))
+		sink.mu.Unlock()
+		return err
+	}
 	cloned := slices.Clone(values)
 	sink.active++
-	row := searchjobs.ResultRow{Ordinal: sink.ordinal, Values: cloned}
+	row := searchjobs.ResultRow{Ordinal: sink.ordinal, Values: cloned, TimeBucket: cloneReexecutionTimeBucket(bounds)}
 	sink.mu.Unlock()
 
 	var sendErr error
@@ -548,6 +613,44 @@ func (sink *reexecutionSink) AddRow(values []searchjobs.Value) error {
 	case sink.rows <- row:
 	}
 	return sink.finishRow(sendErr, sendErr == nil)
+}
+
+func cloneReexecutionTimeBucket(source *searchjobs.TimeBucketBounds) *searchjobs.TimeBucketBounds {
+	if source == nil {
+		return nil
+	}
+	return &searchjobs.TimeBucketBounds{
+		Earliest: strings.Clone(source.Earliest),
+		Latest:   strings.Clone(source.Latest),
+	}
+}
+
+func validReexecutionTimeBucket(
+	columns []searchjobs.Column,
+	values []searchjobs.Value,
+	bounds searchjobs.TimeBucketBounds,
+) bool {
+	if len(bounds.Earliest) < len("0000-00-00T00:00:00Z") ||
+		len(bounds.Earliest) > len("0000-00-00T00:00:00.000000000Z") ||
+		len(bounds.Latest) < len("0000-00-00T00:00:00Z") ||
+		len(bounds.Latest) > len("0000-00-00T00:00:00.000000000Z") {
+		return false
+	}
+	earliest, earliestErr := time.Parse(time.RFC3339Nano, bounds.Earliest)
+	latest, latestErr := time.Parse(time.RFC3339Nano, bounds.Latest)
+	if earliestErr != nil || latestErr != nil || earliest.Location() != time.UTC || latest.Location() != time.UTC ||
+		earliest.Format(time.RFC3339Nano) != bounds.Earliest || latest.Format(time.RFC3339Nano) != bounds.Latest ||
+		!earliest.Before(latest) {
+		return false
+	}
+	for index, column := range columns {
+		if column.Name != "_time" || column.Kind != searchjobs.ValueKindTime || index >= len(values) {
+			continue
+		}
+		stamp, ok := values[index].Time()
+		return ok && stamp.Equal(earliest)
+	}
+	return false
 }
 
 // rejectUnregisteredRow records cancellation without decrementing the active
@@ -655,7 +758,9 @@ func schemaColumnNames(schema searchjobs.Schema) []string {
 }
 
 func schemaMatchesCompiledQuery(schema searchjobs.Schema, compiled clickhouse.CompiledQuery) bool {
-	if !validSourceSchemaCardinality(schema) {
+	wideTimechart := compiled.Timechart != nil || compiled.HasTimechartStage()
+	if (!wideTimechart && !validSourceSchemaCardinality(schema)) ||
+		(wideTimechart && !validTrustedSourceSchema(schema)) {
 		return false
 	}
 	if compiled.Timechart != nil && compiled.Chart != nil {

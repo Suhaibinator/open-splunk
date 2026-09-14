@@ -4,7 +4,9 @@ package visibility
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
@@ -61,9 +63,27 @@ const (
 	// MaxOutboxBytes bounds the durable replay payload for one reservation.
 	MaxOutboxBytes = 16 << 20
 	// MaxPendingReservations bounds unresolved visibility reservations.
-	MaxPendingReservations = 64
+	MaxPendingReservations = 20_000
 	// MaxPendingOutboxBytes bounds all unresolved replay payloads together.
 	MaxPendingOutboxBytes = 256 << 20
+	// MaxPendingMetadataBytes bounds all unresolved compact response metadata.
+	MaxPendingMetadataBytes = 256 << 20
+	// MaxPrincipalPendingReservations leaves half the backlog for other sources.
+	MaxPrincipalPendingReservations = MaxPendingReservations / 2
+	// MaxPrincipalPendingOutboxBytes bounds one source's unresolved replay data.
+	MaxPrincipalPendingOutboxBytes = MaxPendingOutboxBytes / 2
+	// MaxPrincipalPendingMetadataBytes bounds one source's unresolved metadata.
+	MaxPrincipalPendingMetadataBytes = MaxPendingMetadataBytes / 2
+	// MaxReservationRows bounds one admitted logical batch.
+	MaxReservationRows = uint32(ingestquota.HardMaxAdmissionEvents)
+	// MaxReservationDecodedBytes bounds one admitted logical batch.
+	MaxReservationDecodedBytes = ingestquota.HardMaxAdmissionUncompressedBytes
+	// MaxWriteGroupRows is the hard physical insert row bound.
+	MaxWriteGroupRows = 50_000
+	// MaxWriteGroupDecodedBytes is the hard physical insert decoded-byte bound.
+	MaxWriteGroupDecodedBytes = 64 << 20
+	// MaxWriteGroupMembers is the hard logical membership bound.
+	MaxWriteGroupMembers = 10_000
 	// MaxPruneLimit bounds work performed by one terminal-ledger prune call.
 	MaxPruneLimit = 10_000
 	// MaxHECChannelsPerToken bounds retained channel identities for one token.
@@ -118,6 +138,16 @@ type ReserveRequest struct {
 	PayloadSHA256 [32]byte
 	Metadata      []byte
 	Outbox        []byte
+	// StoredRowCount and DecodedEventBytes are server-derived accounting for
+	// the accepted rows represented by Outbox. They are sealed at admission so
+	// group formation never needs to decode payload blobs while holding a write
+	// transaction.
+	StoredRowCount    uint32
+	DecodedEventBytes uint64
+	// PrincipalSHA256 is the server-derived digest of the tenant and canonical
+	// ingestion source, independent of mutable rate quotas or request identity.
+	// It is required for fresh allocation and ignored for active durable replay.
+	PrincipalSHA256 [32]byte
 	// QuotaAdmission is present only for fresh normalized ingestion. It is
 	// ignored by existing-only and active durable replay paths. Nil preserves
 	// the legacy non-quota reservation contract.
@@ -139,6 +169,10 @@ type RejectRequest struct {
 	PayloadSHA256 [32]byte
 	Metadata      []byte
 	RejectedAt    time.Time
+	// RejectionAdmission is checked only for a new terminal disposition. Exact
+	// durable replay precedes mutable quota; nil preserves trusted legacy callers.
+	RejectionAdmission *ingestquota.RejectionAdmission
+	QuotaEvaluatedAt   time.Time
 }
 
 // Reservation is the durable sequence assigned to one stable batch key.
@@ -166,6 +200,10 @@ type Reservation struct {
 	PayloadSHA256         [32]byte
 	Metadata              []byte
 	Outbox                []byte
+	OutboxSHA256          [32]byte
+	StoredRowCount        uint32
+	DecodedEventBytes     uint64
+	CreatedAt             time.Time
 	CommittedAt           time.Time
 	RejectedAt            time.Time
 	// HECAcknowledgmentID is positive only when this Reserve call allocated the
@@ -179,8 +217,109 @@ type Reservation struct {
 // PendingUsage reports durable reservations that have not reached a terminal
 // state, including reservations currently owned by a live attempt.
 type PendingUsage struct {
-	Reservations uint32
-	OutboxBytes  uint64
+	Reservations          uint32
+	UngroupedReservations uint32
+	ReadyGroups           uint32
+	AmbiguousGroups       uint32
+	LiveGroupLeases       uint32
+	OutboxBytes           uint64
+	MetadataBytes         uint64
+	OldestPendingAt       time.Time
+}
+
+// ValidateBackupDrain proves an offline control-plane snapshot contains no
+// unresolved physical insertion authority. Backup callers must already hold
+// the stopped-server lock, so no admission can race this read.
+func ValidateBackupDrain(ctx context.Context, database interface{ SQLDB() *sql.DB }) error {
+	if err := validateContext(ctx); err != nil {
+		return err
+	}
+	if database == nil || database.SQLDB() == nil {
+		return fmt.Errorf("%w: backup database is required", ErrInvalidArgument)
+	}
+	usage, err := readPendingUsage(ctx, database.SQLDB())
+	if err != nil {
+		return err
+	}
+	if usage.Reservations != 0 || usage.UngroupedReservations != 0 ||
+		usage.ReadyGroups != 0 || usage.AmbiguousGroups != 0 ||
+		usage.LiveGroupLeases != 0 || usage.OutboxBytes != 0 ||
+		usage.MetadataBytes != 0 {
+		return fmt.Errorf(
+			"backup requires a fully drained ingestion ledger: reservations=%d ungrouped=%d ready_groups=%d ambiguous_groups=%d live_group_leases=%d outbox_bytes=%d metadata_bytes=%d",
+			usage.Reservations,
+			usage.UngroupedReservations,
+			usage.ReadyGroups,
+			usage.AmbiguousGroups,
+			usage.LiveGroupLeases,
+			usage.OutboxBytes,
+			usage.MetadataBytes,
+		)
+	}
+	return nil
+}
+
+// WriteGroupState is the durable physical-insert phase.
+type WriteGroupState string
+
+const (
+	WriteGroupReady     WriteGroupState = "ready"
+	WriteGroupAmbiguous WriteGroupState = "ambiguous"
+	WriteGroupCommitted WriteGroupState = "committed"
+)
+
+// WriteGroupFillReason is the bounded cause that sealed a new group. Recovery
+// is reported for an already-durable group acquired by a later attempt.
+type WriteGroupFillReason string
+
+const (
+	WriteGroupFillRowTarget    WriteGroupFillReason = "row_target"
+	WriteGroupFillByteTarget   WriteGroupFillReason = "byte_target"
+	WriteGroupFillHardBoundary WriteGroupFillReason = "hard_boundary"
+	WriteGroupFillLinger       WriteGroupFillReason = "linger"
+	WriteGroupFillDrain        WriteGroupFillReason = "drain"
+	WriteGroupFillRecovery     WriteGroupFillReason = "recovery"
+)
+
+// WriteGroupLimits bounds one group and controls when sparse work is sealed.
+// Hard limits are validated against the package-wide schema maxima.
+type WriteGroupLimits struct {
+	TargetRows          uint32
+	HardMaxRows         uint32
+	TargetDecodedBytes  uint64
+	HardMaxDecodedBytes uint64
+	MaxMembers          uint32
+	MaxLinger           time.Duration
+	ForceSeal           bool
+}
+
+// WriteGroupMember preserves one logical reservation's place in a physical
+// insertion. Reservation owns the authoritative replay metadata and outbox.
+type WriteGroupMember struct {
+	Ordinal      uint32
+	Reservation  Reservation
+	RowCount     uint32
+	DecodedBytes uint64
+	OutboxLength uint64
+	OutboxSHA256 [32]byte
+}
+
+// WriteGroup is one immutable ordered physical ClickHouse insertion unit.
+type WriteGroup struct {
+	ID               string
+	State            WriteGroupState
+	AttemptID        string
+	Members          []WriteGroupMember
+	RowCount         uint32
+	DecodedBytes     uint64
+	MembershipSHA256 [32]byte
+	FirstSequence    uint64
+	LastSequence     uint64
+	CreatedAt        time.Time
+	SendingAt        time.Time
+	CommittedAt      time.Time
+	FillReason       WriteGroupFillReason
+	NewlyFormed      bool
 }
 
 // TerminalRetention independently bounds successful ClickHouse commits and
@@ -208,4 +347,15 @@ type Sequencer interface {
 	Abandon(context.Context, uint64, string) error
 	Cutoff(context.Context) (uint64, error)
 	PruneTerminal(context.Context, TerminalRetention, uint32) (uint32, error)
+}
+
+// WriteGroupSequencer adds durable physical-insert grouping while retaining
+// the logical reservation API during the staged migration of Store callers.
+type WriteGroupSequencer interface {
+	Sequencer
+	AcquireUngroupedReplay(context.Context, string) (Reservation, bool, error)
+	FormOrAcquireWriteGroup(context.Context, string, WriteGroupLimits, time.Time) (WriteGroup, bool, time.Time, error)
+	MarkWriteGroupSending(context.Context, string, string) error
+	CommitWriteGroup(context.Context, string, string, time.Time) error
+	ReleaseWriteGroup(context.Context, string, string) error
 }

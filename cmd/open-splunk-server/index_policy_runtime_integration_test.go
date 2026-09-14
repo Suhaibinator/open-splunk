@@ -478,7 +478,7 @@ func assertIndexPolicyRuntimeAck(
 
 	ack := response.GetBatchAck()
 	if ack == nil || ack.GetBatchId() != batchID || ack.GetBatchSequence() != batchSequence ||
-		ack.GetAcknowledgedThroughBatchSequence() != batchSequence ||
+		ack.AcknowledgedThroughBatchSequence != nil ||
 		ack.GetAcceptedEventCount() != accepted || ack.GetDuplicateEventCount() != 0 ||
 		len(ack.GetRejectedEvents()) != len(wantRejections) ||
 		ack.GetDurability() != opensplunk.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED {

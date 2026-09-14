@@ -18,8 +18,11 @@ func TestValidateSplitNumericTimechartSchema(t *testing.T) {
 		FirstBucket:   time.Unix(0, 0).UTC(),
 		Span:          time.Minute,
 		BucketCount:   2,
+		SeriesLimit:   10,
 		MaxSeries:     12,
 		MaxLabelBytes: 256,
+		IncludeNull:   true,
+		IncludeOther:  true,
 		ValueKind:     clickhouse.TimechartValueKindAverage,
 	}
 	valid := Schema{Columns: []Column{
@@ -42,6 +45,7 @@ func TestValidateSplitNumericTimechartSchema(t *testing.T) {
 	for _, test := range []struct {
 		name   string
 		mutate func(*Schema, *clickhouse.TimechartOutput)
+		valid  bool
 	}{
 		{name: "unsigned series", mutate: func(schema *Schema, _ *clickhouse.TimechartOutput) { schema.Columns[1].Kind = ValueKindUnsigned }},
 		{name: "nonnullable series", mutate: func(schema *Schema, _ *clickhouse.TimechartOutput) { schema.Columns[1].Nullable = false }},
@@ -53,8 +57,9 @@ func TestValidateSplitNumericTimechartSchema(t *testing.T) {
 			got.ValueKind = clickhouse.TimechartValueKind(255)
 		}},
 		{name: "declared value field", mutate: func(_ *Schema, got *clickhouse.TimechartOutput) { got.ValueField = "ignored" }},
-		{name: "zero series bound", mutate: func(schema *Schema, got *clickhouse.TimechartOutput) {
+		{name: "unlimited zero bound", valid: true, mutate: func(schema *Schema, got *clickhouse.TimechartOutput) {
 			schema.Columns = schema.Columns[:1]
+			got.SeriesLimit = 0
 			got.MaxSeries = 0
 		}},
 		{name: "oversized series bound", mutate: func(_ *Schema, got *clickhouse.TimechartOutput) { got.MaxSeries = 13 }},
@@ -69,7 +74,14 @@ func TestValidateSplitNumericTimechartSchema(t *testing.T) {
 			schema := Schema{Columns: append([]Column(nil), valid.Columns...)}
 			got := output
 			test.mutate(&schema, &got)
-			if err := ValidateTimechartSchema(schema, []string{"_time"}, got); !errors.Is(err, ErrInvalidResult) {
+			err := ValidateTimechartSchema(schema, []string{"_time"}, got)
+			if test.valid {
+				if err != nil {
+					t.Fatalf("ValidateTimechartSchema error = %v, want valid", err)
+				}
+				return
+			}
+			if !errors.Is(err, ErrInvalidResult) {
 				t.Fatalf("ValidateTimechartSchema error = %v, want ErrInvalidResult", err)
 			}
 		})
@@ -84,8 +96,11 @@ func TestSplitNumericTimechartResultSinkPreservesNullAndNonfiniteValues(t *testi
 		FirstBucket:   time.Unix(0, 0).UTC(),
 		Span:          time.Minute,
 		BucketCount:   2,
+		SeriesLimit:   10,
 		MaxSeries:     12,
 		MaxLabelBytes: 256,
+		IncludeNull:   true,
+		IncludeOther:  true,
 		ValueKind:     clickhouse.TimechartValueKindSum,
 	}
 	manager := &Manager{

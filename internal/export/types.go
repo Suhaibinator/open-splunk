@@ -9,6 +9,7 @@ import (
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
+	"github.com/Suhaibinator/open-splunk/internal/patterns"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"google.golang.org/protobuf/proto"
 )
@@ -140,7 +141,22 @@ type JSONLinesOptions struct {
 // CreateRequest identifies one retained search snapshot. A zero row or byte
 // limit selects the configured default; requested limits may not exceed the
 // configured maxima.
+type SourceKind string
+
+const (
+	SourceOrdinary       SourceKind = "ordinary"
+	SourcePatternSummary SourceKind = "pattern_summary"
+	SourcePatternMembers SourceKind = "pattern_members"
+)
+
+type PatternResultSource interface {
+	AcquirePatternSummary(context.Context, searchjobs.AccessScope, patterns.ExportRequest) (searchjobs.ResultLease, error)
+	AcquirePatternMembers(context.Context, searchjobs.AccessScope, patterns.ExportRequest) (searchjobs.ResultLease, error)
+}
+
 type CreateRequest struct {
+	SourceKind  SourceKind
+	Pattern     *patterns.ExportRequest
 	SearchJobID string
 	Format      Format
 	Columns     []string
@@ -272,6 +288,8 @@ func (lease *DownloadLease) Artifact() Artifact {
 // Job is a detached export-job snapshot. Owner and tenant are enforced by
 // Manager methods but intentionally omitted from public snapshots.
 type Job struct {
+	SourceKind  SourceKind
+	Pattern     *patterns.ExportRequest
 	ID          string
 	Version     uint64
 	SearchJobID string
@@ -317,6 +335,10 @@ type ListPage struct {
 
 func cloneJob(source Job) Job {
 	result := source
+	if source.Pattern != nil {
+		pattern := *source.Pattern
+		result.Pattern = &pattern
+	}
 	result.Columns = append([]string(nil), source.Columns...)
 	if source.KnowledgeSnapshot != nil {
 		result.KnowledgeSnapshot, _ = proto.Clone(source.KnowledgeSnapshot).(*opensplunk.KnowledgeSnapshotSummary)

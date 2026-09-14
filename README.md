@@ -92,10 +92,12 @@ rm -rf -- \
 ## Build and test
 
 ```sh
-make proto
-make test
-make build
+make verify
 ```
+
+`make test` remains the faster unit, lint, type, and stylesheet-contract loop.
+`make verify` additionally checks generated protobufs, production builds,
+workspace behavior, Go vet, and the Linux CI lint configuration.
 
 `make proto` lints and compiles every schema under `proto/` into
 `gen/go/open_splunk` and `gen/ts/open_splunk`. Generation uses pinned Buf and
@@ -154,6 +156,43 @@ searches, webhook alerts, dashboards, field knowledge, immutable CSV lookups,
 auditing, and the cumulative authored SPL profile documented in
 [SPL](docs/spl.md).
 
+The Search workspace can open [nearby events](docs/search-sharing-alerts.md)
+from a final event with verified original timestamp, index, host, and source.
+It preserves nanoseconds and shows when the five-minute bounds are clipped.
+[Patterns](docs/patterns.md) groups the final string `_raw` values in one
+durable retained snapshot, exposes exact members, and exports those retained
+groups or members without rerunning the query. Retained-row coverage and
+truncation remain explicit.
+
+[Dashboards](docs/dashboards.md) render Table, Line, Area, Column, Bar, Pie,
+Single value, and Scatter from typed server results. Tables page through 20
+rows at a time; charts collect at most 10,000 snapshot rows with coverage
+labels. Visualization settings do not add query aggregation or change time
+buckets. App menus refresh from the authorized server catalog. When browser
+storage is available, it carries cross-tab change notices without persisting
+catalogs or credentials. Fallback after app removal preserves the current draft
+and retained results.
+
+Saved searches offer Private, App, and Global labels during creation and Save
+As, with Private as the default. Reports can edit the label independently of
+the search and schedule. These labels organize content in the current
+single-user model; they do not grant access or provide multi-user RBAC.
+
+Eight create operations support [request retry receipts](docs/api.md): apps,
+indexes, ingestion tokens, search jobs, export jobs, saved searches, saved-search
+copies, and lookups. Within the retained retry fence, retrying the same key and
+intent returns the same resource with current authorized metadata. Token
+plaintext is returned only on first issue; a lost secret requires explicit
+revocation before replacement.
+
+The Administration Server page presents the full HEC operational snapshot,
+including grouping states, fill reasons, native waiters, three latency
+distributions, and five shape histograms. [Coordinated recovery](deploy/README.md)
+includes a TLS-configured deployment topology, an exact receipt-based restore
+retry, and a disposable restore drill. Bundled Help includes the documentation
+and linked examples with browser-side search. Its pages work without internet
+access or healthy backend APIs while the local static assets remain available.
+
 The v0 contract supports persisted state only with the same exact release or
 source revision. Retaining data across arbitrary versions or source revisions
 is not a compatibility promise. Unknown or inconsistent databases, state
@@ -179,6 +218,14 @@ named by tokens in `app/styles/tokens-color.css` and
 intentional component literals used for circular radii, composed shadow parts,
 and local stacking. **Recolouring the product is an edit to the token files, not
 a search across the rules.**
+
+Palettes are that edit, shipped. An administrator picks one instance-wide
+palette (classic, ocean, ember, graphite, glass or terminal) from the admin
+console's Server settings; each is one `app/styles/tokens-palette-<name>.css`
+that restates only the roles it changes, in a light and a dark block, so every
+user keeps their own System / Light / Dark choice on top of it. The choice
+rides on `/api/system/bootstrap`, is cached in the browser, and is painted
+before the first paint on every later load.
 
 Three gates keep that true, because almost none of it is visible to a compiler:
 `npm run test:frontend` runs the structural invariants in
@@ -223,7 +270,8 @@ Start with the [documentation index](docs/README.md). Topic-specific references
 are grouped below:
 
 - Core contracts: [Architecture](docs/architecture.md), [API](docs/api.md),
-  [SPL](docs/spl.md), and
+  [SPL](docs/spl.md), [event patterns](docs/patterns.md),
+  [dashboard visualizations](docs/dashboards.md), and
   [search sharing, schedules, and alerts](docs/search-sharing-alerts.md).
 - Data and ingestion: [Knowledge and lookups](docs/knowledge.md),
   [native ingestion](docs/ingestion.md),

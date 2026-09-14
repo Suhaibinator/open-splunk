@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/Suhaibinator/open-splunk/internal/errorreport"
 )
 
 const (
@@ -66,7 +68,7 @@ type Coordinator struct {
 	claimLimit          int
 	completionTimeout   time.Duration
 	completionRetryWait CompletionRetryWaitFunc
-	onError             func(error)
+	errorReports        errorreport.SingleFlight
 	executorContext     context.Context
 	cancelExecutor      context.CancelFunc
 	completionContext   context.Context
@@ -142,7 +144,8 @@ func NewCoordinator(options CoordinatorOptions) (*Coordinator, error) {
 		results: options.Results, retention: options.Retention, authorizer: options.Authorizer,
 		deliverer: options.Deliverer, poller: poller, clock: clock, deliveryID: deliveryID,
 		publicBaseURL: options.PublicBaseURL, claimLimit: claimLimit,
-		completionTimeout: completionTimeout, completionRetryWait: completionRetryWait, onError: options.OnError,
+		completionTimeout: completionTimeout, completionRetryWait: completionRetryWait,
+		errorReports:    errorreport.SingleFlight{Callback: options.OnError},
 		executorContext: executorContext, cancelExecutor: cancelExecutor,
 		completionContext: completionContext, cancelCompletion: cancelCompletion,
 		queue: make(chan RunSnapshot, queueCapacity), slots: make(chan struct{}, queueCapacity),
@@ -333,10 +336,9 @@ func (coordinator *Coordinator) release(count int) {
 func (coordinator *Coordinator) worker() {
 	defer coordinator.workers.Done()
 	for snapshot := range coordinator.queue {
-		if _, err := coordinator.execute(coordinator.executorContext, snapshot); err != nil && coordinator.onError != nil {
-			coordinator.onError(err)
-		}
+		_, err := coordinator.execute(coordinator.executorContext, snapshot)
 		coordinator.release(1)
+		coordinator.errorReports.Report(err)
 	}
 }
 
@@ -448,6 +450,15 @@ func (coordinator *Coordinator) execute(ctx context.Context, snapshot RunSnapsho
 		summary.FailureCategory = string(FailureCanceled)
 		return coordinator.complete(ctx, summary, err)
 	}
+	// Resolve the retained-result link before any state-changing delivery
+	// step. A missing public base URL then fails the run without extending
+	// retention or consuming its single delivery authorization.
+	resultsURL, err := coordinator.resultsURL(jobID)
+	if err != nil {
+		summary.Outcome = RunDeliveryFailed
+		summary.FailureCategory = string(FailurePublicBaseURL)
+		return coordinator.complete(ctx, summary, err)
+	}
 	extendedExpiry, err := coordinator.retention.ExtendAlertSearchJob(ctx, snapshot.OwnerID, jobID, snapshot.TriggeredRetention)
 	if err != nil || extendedExpiry.IsZero() {
 		summary.Outcome = RunDeliveryFailed
@@ -490,12 +501,6 @@ func (coordinator *Coordinator) execute(ctx context.Context, snapshot RunSnapsho
 	if len(rows) > snapshot.Definition.SampleRows {
 		rows = rows[:snapshot.Definition.SampleRows]
 		sampleTruncated = true
-	}
-	resultsURL, err := coordinator.resultsURL(jobID)
-	if err != nil {
-		summary.Outcome = RunDeliveryUnknown
-		summary.FailureCategory = string(FailurePublicBaseURL)
-		return coordinator.complete(ctx, summary, err)
 	}
 	deliveryAt := coordinator.clock().UTC()
 	signed, err := BuildSignedPayload(WebhookPayload{

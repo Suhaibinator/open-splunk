@@ -37,6 +37,43 @@ type Limits struct {
 	MaxUncompressedBytesPerSecond uint64
 }
 
+// RejectionAdmission binds terminal bookkeeping to trusted token authority.
+// Its budget is independent of accepted-event quota and always finite.
+type RejectionAdmission struct {
+	Scope       ScopeKey
+	TokenLimits Limits
+}
+
+// Charge meters one durable rejection and its encoded metadata. Restrictive
+// token rates also restrict this separate budget; unlimited ingestion never
+// makes rejection persistence unlimited.
+func (admission RejectionAdmission) Charge(metadataBytes uint64) (Charge, error) {
+	if admission.Scope.Kind != ScopeKindToken {
+		return Charge{}, errors.New("rejection admission requires a token scope")
+	}
+	if err := admission.Scope.Validate(); err != nil {
+		return Charge{}, err
+	}
+	if err := admission.TokenLimits.Validate(); err != nil {
+		return Charge{}, err
+	}
+	limits := Limits{MaxEventsPerSecond: 10, MaxUncompressedBytesPerSecond: 256 << 10}
+	if rate := admission.TokenLimits.MaxEventsPerSecond; rate != 0 {
+		limits.MaxEventsPerSecond = min(limits.MaxEventsPerSecond, rate)
+	}
+	if rate := admission.TokenLimits.MaxUncompressedBytesPerSecond; rate != 0 {
+		limits.MaxUncompressedBytesPerSecond = min(limits.MaxUncompressedBytesPerSecond, rate)
+	}
+	charge := Charge{
+		Scope: admission.Scope, Limits: limits,
+		Events: 1, UncompressedBytes: max(1, metadataBytes),
+	}
+	if err := validateCharge(charge); err != nil {
+		return Charge{}, err
+	}
+	return charge, nil
+}
+
 func (limits Limits) Validate() error {
 	switch {
 	case limits.MaxEventsPerSecond > HardMaxEventsPerSecond:

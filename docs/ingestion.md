@@ -12,6 +12,48 @@ processor, and TLS surface is documented in
 [Collector configuration](collector-configuration.md). HEC is documented
 separately in [HEC](hec.md).
 
+## Choosing a source format
+
+Set `inputs[].format` to match the producer: `ndjson`, `raw`,
+`docker-json-file`, `nginx-combined`, `apache-common`, `apache-combined`,
+`logfmt`, `log4j2-pattern`, or `logback-pattern`. The collector selects one
+parser per input at startup; it does not guess formats or retry malformed
+records as raw. See [Input formats](collector-configuration.md#input-formats)
+for projections, producer references, and complete parser examples.
+
+Docker records retain their JSON envelope as raw while exposing the original
+message, nanosecond timestamp, and stream field. Access presets expose typed
+status and byte counts alongside the request and client/header fields.
+Malformed HTTP request text inside a valid access envelope remains available
+for investigation. logfmt supports canonical-key mappings and exact numeric
+conversion. Java inputs require an emitted-text delimiter pattern; configure
+multiline framing separately for exceptions. Offset-free timestamps require an
+explicit timezone, and ambiguous or nonexistent IANA local times are rejected.
+
+Run `validate` before restarting with parser changes. It validates patterns,
+field mappings, layouts, and timezone names without opening source logs or
+contacting the server. Keep the input ID and state directory to preserve the
+cursor, and set `sourcetype` explicitly when migrating from `raw` if existing
+queries depend on its old value. Parser changes apply to newly read records;
+pending WAL batches retain their existing parsed events. They do not trigger a
+historical replay.
+
+The decoder preserves original framed bytes in raw, and event IDs bind those
+bytes and source position. With explicit redaction, native parsers track
+sensitive source fields, active source-derived rename aliases, and embedded
+assignments into parsed fields. They conservatively replace the entire raw and
+message when lexical scrubbing cannot safely remove those values; configured
+field replacements and trusted static metadata remain intact. See the
+[processor reference](collector-configuration.md#processors-reference) for
+replacement precedence and canonical-field behavior. Event IDs remain based on
+the original input, while decode/framing recovery artifacts retain sensitive
+original bytes outside this sanitizer.
+
+Configure redaction before collecting sensitive data, and monitor decode
+failures when enabling a strict parser. Custom access layouts, Java
+conversion-pattern interpretation, syslog, CRI reassembly, and journald are not
+supported by these formats.
+
 ## Token and collector authority
 
 A native ingestion token has immutable native purpose, at least one explicit
@@ -33,11 +75,12 @@ collectors may reconnect; disabled collectors continue to fail as disabled.
 ### Browser recovery for one-time token creation
 
 The Administration page stores a non-secret recovery guard before sending a
-token-create request. The guard contains the requested definition, baseline
-token identities, server-clock timing, and an attempt identity; it never
-contains the plaintext token. This lets the browser reconcile a timeout,
-connection loss, reload, or tab closure without silently creating a second
-live credential.
+token-create request. The guard contains the exact requested definition, a UUID
+`client_request_id`, server-clock timing, and a browser ownership identity; it
+never contains plaintext. After a timeout, connection loss, reload, or tab
+closure, the browser resubmits the same definition and key to obtain the exact
+server receipt. Names, creation times, and similar metadata do not identify the
+outcome of a keyed request.
 
 An unresolved guard pauses only **Generate token**. It does not block links,
 browser navigation, authentication, or other administration work. A persistent
@@ -46,38 +89,33 @@ restoring a guard does not change the current section or open a dialog. Only a
 plaintext token currently visible in memory prevents navigation, because
 leaving would permanently discard that one-time secret.
 
-One tab owns recovery through an exact API-base Web Lock. That tab polls a
-complete, stable, exact-total, name-filtered token snapshot immediately and
-with 1, 2, 4, 8, then at most 10 second delays. Polling pauses while its
-document is hidden or offline and resumes immediately. Other tabs report lock
-contention directly and can use **Try again** after the owner closes. When the
-owner safely resolves and removes the exact guard, matching tabs unlock
-without a reload.
+One tab owns recovery through an exact API-base Web Lock. It waits for the
+authoritative server clock before checking the seven-day retry fence, and keeps
+the same lock and request identity during asynchronous retries. Checks pause
+while the document is hidden or offline. Other tabs report lock contention and
+can use **Try again** after the owner closes. Safely resolving and removing the
+exact guard unlocks matching tabs without a reload.
 
-For an ambiguous request with no matching token, the browser waits until the
-server-clock deadline calculated as two request timeouts plus clock
-uncertainty—about 60 seconds with the current 30-second request timeout. It
-then requires two complete zero-result snapshots at least two seconds apart
-before concluding that no token was created. A matching token cancels that
-completion; an attributable live token whose plaintext was lost must be
-revoked. This bounded policy has a small residual risk if a reverse proxy
-delivers the original create request more than 60 seconds late.
+Only the first successful issue returns plaintext. A receipt replay returns the
+same token ID and current metadata, which may have changed or been revoked,
+with no secret. When an active or disabled token is identified but its secret
+was lost, the dialog requires explicit revocation before a replacement is
+created under a new key. A confirmed revoked or expired token is safe to clear.
+A changed definition under the same key conflicts instead of creating another
+token. Authentication failures preserve the durable guard while the user signs
+in again.
 
-An exact Open Splunk `408` response with `administrative request was canceled`
-or `429` with `ingestion token capacity is exhausted` is a definite no-create
-outcome. A proxy-generated 408/429, browser timeout, connection failure,
-malformed response, or incomplete/unstable listing remains ambiguous. If a
-check requires authentication, use the recovery dialog's sign-in route; the
-durable guard remains in place while the recovery lock is released.
-
-If the saved guard is unreadable, the owning tab records its first observation
-against the authoritative server clock and performs complete unfiltered token
-snapshots. With no trustworthy attribution data, every nonterminal token is
-treated as potentially related and must become revoked or expired. The same
-quiescence period and two zero-nonterminal snapshots are required before the
-damaged record can be removed. Never delete or edit a token recovery guard in
-browser developer tools: an unmatched removal remains fail-closed and can
-leave the browser unable to prove the create outcome safely.
+Legacy records without a request key, records past the seven-day fence, and
+unreadable guards use a conservative fallback without resubmitting the old
+create. The owning tab reviews complete, stable, exact-total, unfiltered token
+snapshots. Every nonterminal token must become revoked or expired; matching a
+name or timestamp never authorizes recovery. Before clearing the record, the
+browser waits two request timeouts plus clock uncertainty from its first
+server-clock observation, then requires two complete zero-nonterminal snapshots
+at least two seconds apart. This fallback cannot identify a historical token
+exactly and can require manual review of unrelated live tokens. The browser
+retains ownership throughout that review. Editing or deleting the guard outside
+the recovery flow cannot establish a safe create outcome.
 
 ## Host and source constraints
 
@@ -140,6 +178,60 @@ same serializable SQLite transaction that establishes batch identity,
 visibility, and outbox work. Concurrent duplicates, ambiguous inserts,
 restart, and stream takeover therefore cannot double-charge inside the retained
 replay horizon.
+
+Fresh terminal whole-batch rejections use a separate durable token budget:
+at most 10 receipts per second and 256 KiB of encoded receipt metadata per
+second, tightened by either nonzero token rate when lower. This budget permits
+one complete receipt burst and retains debt across reconnect, restart, and
+receipt pruning. It does not debit accepted-event or index quotas. A denial
+returns `RetryBatch(RATE_LIMITED)` and `Throttle(TOKEN_QUOTA)` without storing a
+terminal receipt; retry the unchanged batch. Existing durable outcomes replay
+before this budget is checked, including `REPACK_REQUIRED` receipts.
+
+Each tenant/source has a durable pending budget of 10,000 batches, 128 MiB of
+outbox payload, and 128 MiB of response metadata, within shared ceilings of
+20,000 batches and 256 MiB for each byte dimension. Native sources use the
+authenticated bound collector ID, so replacing its credential does not reset
+the budget. HEC uses the stable token record ID. Client-selected batch IDs,
+channels, hosts, sources, and indexes do not create new budgets. These limits
+apply even when token and index rate quotas are unlimited.
+
+All accepted work remains charged while pending, including released leases,
+write-group members, ambiguous sends, and work recovered after restart. Existing
+replay proceeds at capacity; commit or safe abandonment frees capacity. An
+upgrade preserves old reservations without assigning an inferred owner: their
+unattributed usage counts against every new admission until it drains. A large
+old backlog can therefore temporarily pause fresh ingestion after upgrade.
+The budgets prevent one source from filling the shared queue; multiple
+independently provisioned sources can still fill it. Existing ambiguous-send
+barriers and ordered recovery continue to protect visibility consistency.
+
+The logical collector batch remains the unit of identity, quota, response, and
+acknowledgment, but it is not normally the physical ClickHouse insert. The
+server durably coalesces ordered pending batches toward 10,000 rows or 16 MiB,
+with a 200 ms maximum linger and hard limits of 50,000 rows, 64 MiB decoded
+event data, and 10,000 member batches. Sparse traffic may therefore produce a
+small insert when its durable linger deadline expires. A native request waits
+for its own durable terminal result; cancellation or a lost response leaves
+the staged batch available to exact retry and background recovery. The full
+failure and resource contract is in [Insert coalescing](insert-coalescing.md).
+
+Native streams pipeline up to 32 batch commit waits by default, additionally
+bounded by 32 MiB of encoded pending batches per stream. Request authority and
+sequence admission remain ordered; completion can be out of order and carries
+only that batch's exact disposition. This lets one collector contribute
+multiple logical batches to a coalesced insert without weakening commit
+durability or reinterpreting previously admitted authority.
+
+Peers may negotiate `LOSSLESS_REPACKING` in Hello/Ready. A `repack_batch` request
+contains the **unchanged original** EventBatch, even if it exceeds the current
+deployment's negotiated limits (immutable protocol hard bounds still apply).
+Exact durable lookup runs first. Only when the original has no accepted side
+effects may the server durably fence it with `REPACK_REQUIRED`. That rejection
+authorizes replacing it with new child identities; a timeout or Ready resume
+hint does not. The original's local checkpoint barrier remains until all child
+outcomes have been handled. A committed original replays its acknowledgment
+instead, preventing duplicates when an earlier acknowledgment was lost.
 
 ## Container deployment
 
@@ -272,11 +364,26 @@ failed recovery write leaves the cursor unchanged; decode recovery stops the
 run and framing recovery keeps the input on the same retryable range. See
 [Decode, framing, and recovery](collector-configuration.md#decode-framing-and-recovery).
 
+A trailing malformed record is durable in the recovery journal but does not
+independently advance a terminal checkpoint. It can therefore be reread after
+restart until a later acknowledged event covers its source position; the same
+applies to an all-malformed file. Monitor the failure counters and repair the
+producer/configuration rather than assuming repeated recovery artifacts mean
+successful ingestion.
+
 ## Restart, backup, and token rotation
 
 SIGTERM stops reads, seals partial work, and gives the WAL a bounded drain
 window. Use a stop timeout of at least 30 seconds. Unacknowledged batches replay
 after restart.
+
+Server shutdown separately stops new admission, force-seals accepted
+ungrouped batches, and drains write groups within its bounded shutdown context
+before closing SQLite or ClickHouse. Any work that does not finish remains in
+SQLite with its sealed membership and outbox, so restart resumes ambiguous
+groups first, then ready groups, then ungrouped batches. An expired sparse
+linger deadline is durable and fires immediately after restart rather than
+starting a new delay.
 
 Back up or move state only while the collector is stopped. Copy the complete
 directory consistently and preserve UID/GID and owner-only modes. Collector

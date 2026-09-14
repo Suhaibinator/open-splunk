@@ -47,6 +47,7 @@ import {
 } from "./analytics-data";
 import { AnalyticsSampleStatus } from "./analytics-sample-status";
 import { summarizeByteQuantity } from "@/lib/byte-quantity";
+import { Select, SelectOption } from "../_components/select";
 
 type RangeKey = "1h" | "24h" | "7d";
 type EnvironmentKey = "all" | "production" | "staging";
@@ -384,17 +385,17 @@ function DemoAnalyticsConsole() {
           <span className="analytics-context-icon" aria-hidden="true">⌁</span>
           <div><strong>Search workload</strong><small>Filters update summary, trend, and sample-count fixtures; insight lists remain illustrative.</small></div>
         </div>
-        <label>
+        <label htmlFor="analytics-console-choice-390">
           <span>Time range</span>
-          <select data-testid="analytics-range" value={rangeKey} onChange={(event) => setRangeKey(event.target.value as RangeKey)}>
-            {RANGE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-          </select>
+          <Select id="analytics-console-choice-390" data-testid="analytics-range" value={rangeKey} onValueChange={(selectedValue) => setRangeKey(selectedValue as RangeKey)}>
+            {RANGE_OPTIONS.map((option) => <SelectOption key={option.value} value={option.value}>{option.label}</SelectOption>)}
+          </Select>
         </label>
-        <label>
+        <label htmlFor="analytics-console-choice-396">
           <span>Environment</span>
-          <select data-testid="analytics-environment" value={environmentKey} onChange={(event) => setEnvironmentKey(event.target.value as EnvironmentKey)}>
-            {ENVIRONMENT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-          </select>
+          <Select id="analytics-console-choice-396" data-testid="analytics-environment" value={environmentKey} onValueChange={(selectedValue) => setEnvironmentKey(selectedValue as EnvironmentKey)}>
+            {ENVIRONMENT_OPTIONS.map((option) => <SelectOption key={option.value} value={option.value}>{option.label}</SelectOption>)}
+          </Select>
         </label>
       </section>
 
@@ -460,22 +461,22 @@ function DemoAnalyticsConsole() {
               <span className="sr-only">Filter fields</span><i aria-hidden="true"><AppIcon name="search" size="sm" /></i>
               <input data-testid="analytics-field-filter" type="search" placeholder="Filter fields or values" value={fieldQuery} onChange={(event) => setFieldQuery(event.target.value)} />
             </label>
-            <label>
+            <label htmlFor="analytics-console-choice-466">
               <span>Coverage</span>
-              <select data-testid="analytics-coverage" value={coverageFilter} onChange={(event) => setCoverageFilter(event.target.value as CoverageFilter)}>
-                <option value="all">Any coverage</option>
-                <option value="complete">90–100%</option>
-                <option value="partial">40–89%</option>
-                <option value="sparse">Below 40%</option>
-              </select>
+              <Select id="analytics-console-choice-466" data-testid="analytics-coverage" value={coverageFilter} onValueChange={(selectedValue) => setCoverageFilter(selectedValue as CoverageFilter)}>
+                <SelectOption value="all">Any coverage</SelectOption>
+                <SelectOption value="complete">90–100%</SelectOption>
+                <SelectOption value="partial">40–89%</SelectOption>
+                <SelectOption value="sparse">Below 40%</SelectOption>
+              </Select>
             </label>
-            <label>
+            <label htmlFor="analytics-console-choice-475">
               <span>Sort</span>
-              <select data-testid="analytics-field-sort" value={fieldSort} onChange={(event) => setFieldSort(event.target.value as FieldSort)}>
-                <option value="coverage">Coverage</option>
-                <option value="cardinality">Cardinality</option>
-                <option value="name">Field name</option>
-              </select>
+              <Select id="analytics-console-choice-475" data-testid="analytics-field-sort" value={fieldSort} onValueChange={(selectedValue) => setFieldSort(selectedValue as FieldSort)}>
+                <SelectOption value="coverage">Coverage</SelectOption>
+                <SelectOption value="cardinality">Cardinality</SelectOption>
+                <SelectOption value="name">Field name</SelectOption>
+              </Select>
             </label>
           </div>
 
@@ -633,12 +634,14 @@ function BackendAnalyticsConsole({ apiBaseUrl }: { apiBaseUrl: string }) {
   }>({ initialized: false, value: undefined });
   const range = RANGE_OPTIONS.find((option) => option.value === rangeKey) ?? RANGE_OPTIONS[1];
   const refresh = useCallback(() => setGeneration((current) => current + 1), []);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    let current = true;
-    historyControllerRef.current?.abort();
-    fieldControllerRef.current?.abort();
+  const bootstrapInput = { client, generation, preferredAppId };
+  const [activeBootstrapInput, setActiveBootstrapInput] = useState(bootstrapInput);
+  if (
+    activeBootstrapInput.client !== bootstrapInput.client
+    || activeBootstrapInput.generation !== bootstrapInput.generation
+    || activeBootstrapInput.preferredAppId !== bootstrapInput.preferredAppId
+  ) {
+    setActiveBootstrapInput(bootstrapInput);
     setBootstrapState("loading");
     setBootstrapError(null);
     setBootstrap(null);
@@ -647,6 +650,14 @@ function BackendAnalyticsConsole({ apiBaseUrl }: { apiBaseUrl: string }) {
     setHistoryRange(null);
     setFieldState("idle");
     setFieldSnapshot(null);
+  }
+
+  useEffect(() => {
+    if (activeBootstrapInput.generation !== generation) return;
+    const controller = new AbortController();
+    let current = true;
+    historyControllerRef.current?.abort();
+    fieldControllerRef.current?.abort();
     void getSystemBootstrap(client, preferredAppId, { signal: controller.signal }).then(
       (loaded) => {
         if (!current) return;
@@ -688,7 +699,25 @@ function BackendAnalyticsConsole({ apiBaseUrl }: { apiBaseUrl: string }) {
       current = false;
       controller.abort();
     };
-  }, [client, generation, preferredAppId]);
+  }, [activeBootstrapInput, client, generation, preferredAppId]);
+
+  const historyInput = { appId, bootstrap, client, rangeKey };
+  const [activeHistoryInput, setActiveHistoryInput] = useState(historyInput);
+  if (
+    activeHistoryInput.appId !== historyInput.appId
+    || activeHistoryInput.bootstrap !== historyInput.bootstrap
+    || activeHistoryInput.client !== historyInput.client
+    || activeHistoryInput.rangeKey !== historyInput.rangeKey
+  ) {
+    setActiveHistoryInput(historyInput);
+    setHistorySnapshot(null);
+    setHistoryError(null);
+    setHistoryState(
+      bootstrap !== null && !supportsServerFeature(bootstrap, ServerFeature.SERVER_FEATURE_SEARCH_HISTORY)
+        ? "unavailable"
+        : "loading",
+    );
+  }
 
   useEffect(() => {
     if (bootstrap === null) return;
@@ -696,16 +725,12 @@ function BackendAnalyticsConsole({ apiBaseUrl }: { apiBaseUrl: string }) {
     const controller = new AbortController();
     historyControllerRef.current = controller;
     let current = true;
-    setHistorySnapshot(null);
-    setHistoryError(null);
     if (!supportsServerFeature(bootstrap, ServerFeature.SERVER_FEATURE_SEARCH_HISTORY)) {
-      setHistoryState("unavailable");
       return () => {
         current = false;
         controller.abort();
       };
     }
-    setHistoryState("loading");
     const end = new Date(bootstrap.serverTime);
     const start = new Date(end.valueOf() - rangeMilliseconds(rangeKey));
     void loadAnalyticsHistory(client, {
@@ -738,29 +763,44 @@ function BackendAnalyticsConsole({ apiBaseUrl }: { apiBaseUrl: string }) {
     };
   }, [appId, bootstrap, client, rangeKey]);
 
+  const fieldInput = { bootstrap, client, fieldIndexName, rangeEarliest: range.earliest };
+  const [activeFieldInput, setActiveFieldInput] = useState(fieldInput);
+  if (
+    activeFieldInput.bootstrap !== fieldInput.bootstrap
+    || activeFieldInput.client !== fieldInput.client
+    || activeFieldInput.fieldIndexName !== fieldInput.fieldIndexName
+    || activeFieldInput.rangeEarliest !== fieldInput.rangeEarliest
+  ) {
+    setActiveFieldInput(fieldInput);
+    setFieldSnapshot(null);
+    setFieldError(null);
+    setFieldState(
+      bootstrap === null || fieldIndexName.length === 0
+        ? "idle"
+        : supportsServerFeature(bootstrap, ServerFeature.SERVER_FEATURE_INDEX_ADMIN)
+          ? "loading"
+          : "unavailable",
+    );
+  }
+
   useEffect(() => {
     if (bootstrap === null) return;
     fieldControllerRef.current?.abort();
     const controller = new AbortController();
     fieldControllerRef.current = controller;
     let current = true;
-    setFieldSnapshot(null);
-    setFieldError(null);
     if (!supportsServerFeature(bootstrap, ServerFeature.SERVER_FEATURE_INDEX_ADMIN)) {
-      setFieldState("unavailable");
       return () => {
         current = false;
         controller.abort();
       };
     }
     if (fieldIndexName.length === 0) {
-      setFieldState("idle");
       return () => {
         current = false;
         controller.abort();
       };
     }
-    setFieldState("loading");
     void loadAnalyticsFields(client, {
       signal: controller.signal,
       maximumPageSize: bootstrap.limits.maximumPageSize,
@@ -865,18 +905,18 @@ function BackendAnalyticsConsole({ apiBaseUrl }: { apiBaseUrl: string }) {
           <span className="analytics-context-icon" aria-hidden="true">⌁</span>
           <div><strong>Persisted search workload</strong><small>Terminal search metadata only; bounded to eight backend pages per refresh.</small></div>
         </div>
-        <label>
+        <label htmlFor="analytics-console-choice-910">
           <span>Time range</span>
-          <select data-testid="analytics-range" disabled={bootstrapState !== "available"} value={rangeKey} onChange={(event) => setRangeKey(event.target.value as RangeKey)}>
-            {RANGE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-          </select>
+          <Select id="analytics-console-choice-910" data-testid="analytics-range" disabled={bootstrapState !== "available"} value={rangeKey} onValueChange={(selectedValue) => setRangeKey(selectedValue as RangeKey)}>
+            {RANGE_OPTIONS.map((option) => <SelectOption key={option.value} value={option.value}>{option.label}</SelectOption>)}
+          </Select>
         </label>
-        <label>
+        <label htmlFor="analytics-console-choice-916">
           <span>App</span>
-          <select data-testid="analytics-app" disabled={bootstrapState !== "available"} value={appId} onChange={(event) => selectAnalyticsApp(event.target.value)}>
-            <option value="all">All authorized apps (analytics only)</option>
-            {bootstrap?.apps.map((app) => <option key={app.appId} value={app.appId}>{appLabel(app)}</option>)}
-          </select>
+          <Select id="analytics-console-choice-916" data-testid="analytics-app" disabled={bootstrapState !== "available"} value={appId} onValueChange={(selectedValue) => selectAnalyticsApp(selectedValue)}>
+            <SelectOption value="all">All authorized apps (analytics only)</SelectOption>
+            {bootstrap?.apps.map((app) => <SelectOption key={app.appId} value={app.appId}>{appLabel(app)}</SelectOption>)}
+          </Select>
         </label>
       </section>
 
@@ -918,7 +958,7 @@ function BackendAnalyticsConsole({ apiBaseUrl }: { apiBaseUrl: string }) {
                 <div><span>Lowest bucket p95</span><strong>{observedTrendValues.length === 0 ? "Not reported" : `${Math.min(...observedTrendValues).toFixed(2)} s`}</strong></div>
                 <div><span>Median search</span><strong>{formatRuntime(workload.medianRuntimeMs)}</strong></div>
                 <div><span>Highest bucket p95</span><strong>{observedTrendValues.length === 0 ? "Not reported" : `${Math.max(...observedTrendValues).toFixed(2)} s`}</strong></div>
-                <Link href={contextualHref("/activity/")}>Inspect history <AppIcon name="chevron-right" size="xs" /></Link>
+                <Link href={contextualHref("/activity/history/")}>Inspect history <AppIcon name="chevron-right" size="xs" /></Link>
               </footer>
             </section>
 
@@ -951,28 +991,28 @@ function BackendAnalyticsConsole({ apiBaseUrl }: { apiBaseUrl: string }) {
                 {fieldSnapshot === null ? null : <span className="analytics-result-count"><strong>{visibleFields.length}</strong> shown · {fieldSnapshot.sampledEvents.toLocaleString()} events</span>}
               </header>
               <div className="analytics-field-toolbar analytics-field-toolbar--backend">
-                <label>
+                <label htmlFor="analytics-console-choice-996">
                   <span>Index</span>
-                  <select data-testid="analytics-field-index" value={fieldIndexName} onChange={(event) => setFieldIndexName(event.target.value)}>
-                    {bootstrap?.indexes.length === 0 ? <option value="">No indexes</option> : null}
-                    {bootstrap?.indexes.map((index) => <option key={index.id} value={index.name}>{index.displayName}</option>)}
-                  </select>
+                  <Select id="analytics-console-choice-996" data-testid="analytics-field-index" value={fieldIndexName} onValueChange={(selectedValue) => setFieldIndexName(selectedValue)}>
+                    {bootstrap?.indexes.length === 0 ? <SelectOption value="">No indexes</SelectOption> : null}
+                    {bootstrap?.indexes.map((index) => <SelectOption key={index.id} value={index.name}>{index.displayName}</SelectOption>)}
+                  </Select>
                 </label>
                 <label className="analytics-field-search">
                   <span className="sr-only">Filter fields</span><i aria-hidden="true"><AppIcon name="search" size="sm" /></i>
                   <input data-testid="analytics-field-filter" type="search" placeholder="Filter field names or types" value={fieldQuery} onChange={(event) => setFieldQuery(event.target.value)} />
                 </label>
-                <label>
+                <label htmlFor="analytics-console-choice-1007">
                   <span>Coverage</span>
-                  <select data-testid="analytics-coverage" value={coverageFilter} onChange={(event) => setCoverageFilter(event.target.value as CoverageFilter)}>
-                    <option value="all">Any coverage</option><option value="complete">90–100%</option><option value="partial">40–89%</option><option value="sparse">Below 40%</option>
-                  </select>
+                  <Select id="analytics-console-choice-1007" data-testid="analytics-coverage" value={coverageFilter} onValueChange={(selectedValue) => setCoverageFilter(selectedValue as CoverageFilter)}>
+                    <SelectOption value="all">Any coverage</SelectOption><SelectOption value="complete">90–100%</SelectOption><SelectOption value="partial">40–89%</SelectOption><SelectOption value="sparse">Below 40%</SelectOption>
+                  </Select>
                 </label>
-                <label>
+                <label htmlFor="analytics-console-choice-1013">
                   <span>Sort</span>
-                  <select data-testid="analytics-field-sort" value={fieldSort} onChange={(event) => setFieldSort(event.target.value as FieldSort)}>
-                    <option value="coverage">Coverage</option><option value="cardinality">Cardinality</option><option value="name">Field name</option>
-                  </select>
+                  <Select id="analytics-console-choice-1013" data-testid="analytics-field-sort" value={fieldSort} onValueChange={(selectedValue) => setFieldSort(selectedValue as FieldSort)}>
+                    <SelectOption value="coverage">Coverage</SelectOption><SelectOption value="cardinality">Cardinality</SelectOption><SelectOption value="name">Field name</SelectOption>
+                  </Select>
                 </label>
               </div>
               {fieldState === "idle" ? <BackendResourceState kind="empty" title="No index available" message="The backend bootstrap did not return an index for field analysis." /> : null}
@@ -1029,7 +1069,7 @@ function BackendAnalyticsConsole({ apiBaseUrl }: { apiBaseUrl: string }) {
                   ))}
                 </ol>
               )}
-              <footer className="analytics-slowest-footer"><span>Ordered by retained runtime</span><Link href={contextualHref("/activity/")}>View search history <AppIcon name="chevron-right" size="xs" /></Link></footer>
+              <footer className="analytics-slowest-footer"><span>Ordered by retained runtime</span><Link href={contextualHref("/activity/history/")}>View search history <AppIcon name="chevron-right" size="xs" /></Link></footer>
             </section>
           </div>
         </>

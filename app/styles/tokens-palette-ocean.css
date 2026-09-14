@@ -1,0 +1,55 @@
+/*
+ * Ocean palette: cool mist canvas, blue accent, slate-blue bars. Restates only
+ * what differs from classic; see docs/theming.md, "Adding a theme".
+ */
+:root:where([data-palette="ocean"]) {
+  color-scheme: light;
+
+  /* Backgrounds. */
+  --bg-canvas: var(--mist-100); /* The page behind every panel: a cool, faintly blue ground. */
+  --bg-subtle: var(--mist-150); /* Recessed strips inside a surface, one step cooler than the canvas. */
+
+  /* Foregrounds: the mist grounds sit a shade below classic's, so the one ink that was marginal there deepens one step. */
+  --fg-muted: var(--gray-650); /* Secondary text: table headers, neutral badges, ghost buttons; clears AA on the mist strip. */
+
+  /* Borders. */
+  --border-subtle: var(--mist-200); /* Faint divider inside one surface, cooled to sit on the mist canvas. */
+
+  /* Accent: the informational blue promoted to the primary action colour. */
+  --accent: var(--blue-600); /* Primary buttons, active tabs, progress. */
+  --accent-hover: var(--blue-700); /* Hovered and pressed accent. */
+  --accent-bright: var(--blue-450); /* Saturated accent fill: progress bars, timeline columns. */
+  --accent-inverse: var(--blue-350); /* The accent on --bg-inverse; clears AA on the dark inverse ground. */
+  --accent-soft: var(--blue-100); /* Accent-tinted background wash. */
+
+  /* Application chrome. */
+  --chrome-bar: var(--slateblue-900); /* Product bar. */
+  --chrome-appbar: var(--slateblue-700); /* App bar. */
+  --chrome-hover: var(--slateblue-600); /* Hovered or open bar item. */
+
+  /* Loading skeleton. */
+  --skeleton-base: var(--mist-200); /* Resting skeleton surface, cooled to match the dividers. */
+
+  /* Scale: rounder corners and softer elevation. */
+  --radius-lg: 16px; /* Modal and card corners. */
+  --radius-md: 10px; /* Control and menu corners. */
+  --radius-sm: 4px; /* Input and badge corners. */
+  --shadow-lg: 0 12px 36px rgb(18 29 36 / 12%), 0 2px 8px rgb(18 29 36 / 8%); /* Wider, fainter drop for menus and popovers. */
+  --shadow-md: 0 4px 14px rgb(21 35 43 / 14%); /* Wider, fainter drop for raised cards. */
+}
+
+:root[data-palette="ocean"][data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Accent: lightened so it clears the dark ground, as the classic green does. */
+  --accent: var(--blue-400); /* Primary action colour. */
+  --accent-hover: var(--blue-350); /* Hovered and pressed accent. */
+  --accent-bright: var(--blue-300); /* Saturated accent fill. */
+  --accent-inverse: var(--blue-600); /* The accent on --bg-inverse, a light surface here; a label ink, so it clears AA. */
+  --accent-soft: var(--blue-900); /* Accent-tinted background wash; deep enough that --accent-hover reads as ink on it. */
+
+  /* Application chrome: the slate-blue bars deepen instead of turning gray. */
+  --chrome-bar: var(--slateblue-950); /* Product bar. */
+  --chrome-appbar: var(--slateblue-900); /* App bar. */
+  --chrome-hover: var(--slateblue-700); /* Hovered or open bar item. */
+}

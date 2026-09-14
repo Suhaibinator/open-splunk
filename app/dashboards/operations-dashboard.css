@@ -10,17 +10,8 @@
  * largest breakpoint first, so a rule and the widths that change it are read
  * together rather than at opposite ends of the file. */
 
-/* Page header and range picker.
-   The class is doubled here and in both breakpoint rules below because the
-   shared page-heading row states `display: flex` for its last child as
-   `.dashboard-title-row > div:last-child`, which is (0,2,1) -- `:last-child`
-   counts as a class -- and this header is a grid rather than a row of buttons.
-   `div.` brings the tie to (0,2,1) and this file is imported after the
-   primitive, so the later rule wins it. Every rule for the header is doubled
-   rather than only the one that needs to be, because a media query adds no
-   specificity: a doubled base and a single-class override would leave the base
-   winning at every width. */
-div.operations-header-actions.operations-header-actions {
+/* The demo dashboard's range and preview context share one responsive grid. */
+.operations-header-actions {
   display: grid;
   grid-template-columns: auto auto;
   place-items: flex-end end;
@@ -42,26 +33,7 @@ div.operations-header-actions.operations-header-actions {
   text-transform: uppercase;
 }
 
-.operations-range-picker select {
-  appearance: none;
-  background: var(--bg-surface)
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath fill='%23526068' d='M0 0h8L4 5z'/%3E%3C/svg%3E")
-    no-repeat right 9px center;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  color: var(--fg-text);
-  font-family: var(--font-sans);
-  font-size: var(--type-xs);
-  font-weight: 600;
-  height: 31px;
-  line-height: 1;
-  min-width: 148px;
-  padding: 0 28px 0 10px;
-}
-
-/* One focus ring for the three keyboard targets this page adds: the range
-   select here, the service link and the notable-event links further down. */
-.operations-range-picker select:focus-visible,
+/* Shared focus treatment for the service and notable-event links. */
 .operations-service-link:focus-visible,
 .operations-notable-list a:focus-visible {
   outline: 2px solid var(--focus-ring);
@@ -80,14 +52,9 @@ div.operations-header-actions.operations-header-actions {
 }
 
 @media (max-width: 760px) {
-  div.operations-header-actions.operations-header-actions {
+  .operations-header-actions {
     grid-template-columns: minmax(0, 1fr) auto;
     justify-items: stretch;
-    width: 100%;
-  }
-
-  .operations-range-picker select {
-    min-width: 0;
     width: 100%;
   }
 
@@ -97,7 +64,7 @@ div.operations-header-actions.operations-header-actions {
 }
 
 @media (max-width: 480px) {
-  div.operations-header-actions.operations-header-actions {
+  .operations-header-actions {
     grid-template-columns: 1fr 1fr;
   }
 
@@ -334,6 +301,23 @@ div.operations-header-actions.operations-header-actions {
   gap: var(--space-2);
 }
 
+.operations-empty-dashboard {
+  justify-self: center;
+  max-width: var(--space-dashboard-onboarding-width);
+  width: 100%;
+}
+
+.operations-empty-dashboard h2,
+.operations-empty-dashboard p {
+  overflow-wrap: anywhere;
+}
+
+.operations-empty-dashboard .operations-create-form {
+  align-items: end;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
 .operations-create-form label,
 .operations-settings-grid label,
 .operations-panel-fields label {
@@ -343,10 +327,10 @@ div.operations-header-actions.operations-header-actions {
 
 
 .operations-create-form input,
-.operations-create-form select,
 .operations-settings-grid input,
 .operations-panel-fields input,
-.operations-panel-fields textarea {
+.operations-panel-fields textarea,
+.operations-visualization-editor input:not([type="checkbox"]) {
   background: var(--bg-surface);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
@@ -361,28 +345,6 @@ div.operations-header-actions.operations-header-actions {
 .operations-panel-fields textarea {
   font-family: var(--font-mono);
   resize: vertical;
-}
-
-.operations-create-form button,
-.operations-editor-actions button,
-.operations-panel-toolbar button,
-.operations-error-banner button {
-  background: var(--status-info);
-  border: 1px solid var(--status-info-strong);
-  border-radius: var(--radius-sm);
-  color: var(--fg-inverse);
-  cursor: pointer;
-  font-size: var(--type-sm);
-  font-weight: 700;
-  min-height: 32px;
-  padding: 5px var(--space-3);
-}
-
-.operations-create-form button:disabled,
-.operations-editor-actions button:disabled,
-.operations-panel-toolbar button:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
 }
 
 .operations-manager-layout {
@@ -428,6 +390,7 @@ div.operations-header-actions.operations-header-actions {
   cursor: pointer;
   display: grid;
   gap: 3px;
+  overflow-wrap: anywhere;
   padding: 10px var(--space-3);
   text-align: left;
   width: 100%;
@@ -466,12 +429,6 @@ div.operations-header-actions.operations-header-actions {
   gap: 6px;
 }
 
-.operations-editor-actions .operations-danger-button {
-  background: var(--bg-surface);
-  border-color: var(--status-error);
-  color: var(--status-error-strong);
-}
-
 .operations-panel-toolbar {
   align-items: center;
   display: flex;
@@ -481,6 +438,12 @@ div.operations-header-actions.operations-header-actions {
 .operations-panel-toolbar h2 {
   font-size: var(--type-lg);
   margin: 0;
+}
+
+.operations-panel-toolbar p {
+  color: var(--fg-muted);
+  font-size: var(--type-sm);
+  margin: var(--space-1) 0 0;
 }
 
 .operations-live-panel {
@@ -494,6 +457,325 @@ div.operations-header-actions.operations-header-actions {
 .operations-panel-result {
   border-top: 1px solid var(--border);
   padding: var(--space-3);
+}
+
+.operations-visualization-editor {
+  border: 0;
+  display: grid;
+  gap: var(--space-3);
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0;
+  padding: var(--space-3);
+}
+
+.operations-visualization-editor > label:not(.operations-visualization-check),
+.operations-visualization-custom-field > label {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.operations-visualization-editor > legend,
+.operations-visualization-y-fields > legend {
+  font-size: var(--type-md);
+  font-weight: 700;
+  padding: 0;
+}
+
+.operations-visualization-custom-field {
+  align-items: end;
+  display: grid;
+  gap: var(--space-2);
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.operations-visualization-field {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.operations-visualization-field > span,
+.operations-visualization-editor > label > span,
+.operations-visualization-custom-field > label > span {
+  font-size: var(--type-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.operations-visualization-y-fields {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: var(--space-2);
+}
+
+.operations-visualization-y-fields > div,
+.operations-visualization-y-fields label,
+.operations-visualization-y-actions,
+.operations-visualization-check {
+  align-items: center;
+  display: flex;
+}
+
+.operations-visualization-y-fields > div {
+  justify-content: space-between;
+}
+
+.operations-visualization-y-fields label,
+.operations-visualization-check {
+  gap: var(--space-2);
+}
+
+.operations-visualization-y-fields p {
+  color: var(--fg-muted);
+  font-size: var(--type-sm);
+  margin: 0;
+}
+
+.operations-visualization-y-actions {
+  gap: var(--space-1);
+}
+
+.operations-visualization-y-order {
+  color: var(--fg-secondary);
+  font-size: var(--type-sm);
+  margin: 0;
+  padding-left: var(--space-5);
+}
+
+.operations-visualization-editor > [role="alert"] {
+  color: var(--status-error-strong);
+  font-size: var(--type-sm);
+  margin: 0;
+}
+
+.operations-dashboard-visualization {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.operations-dashboard-result-pages {
+  align-items: center;
+  display: flex;
+  gap: var(--space-2);
+  justify-content: end;
+}
+
+.operations-dashboard-chart {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.operations-dashboard-chart svg {
+  display: block;
+  height: auto;
+  max-width: 100%;
+  overflow: visible;
+  width: 100%;
+}
+
+.operations-dashboard-chart-grid line {
+  stroke: var(--border-subtle);
+  vector-effect: non-scaling-stroke;
+}
+
+.operations-dashboard-chart-axis-title,
+.operations-dashboard-chart-grid text {
+  fill: var(--fg-muted);
+  font-family: var(--font-sans);
+  font-size: var(--type-xxs);
+  text-anchor: middle;
+}
+
+.operations-dashboard-chart-tick {
+  pointer-events: none;
+}
+
+.operations-dashboard-chart-tick--y {
+  dominant-baseline: middle;
+  text-anchor: end;
+}
+
+.operations-dashboard-chart-line,
+.operations-dashboard-chart-area {
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.operations-dashboard-chart-line {
+  fill: none;
+}
+
+.operations-dashboard-chart-area {
+  fill: currentcolor;
+  fill-opacity: var(--opacity-chart-area);
+}
+
+.operations-dashboard-chart-bar,
+.operations-dashboard-chart-column,
+.operations-dashboard-chart-point,
+.operations-dashboard-chart-slice {
+  fill: currentcolor;
+  stroke: currentcolor;
+}
+
+.operations-dashboard-chart-bar,
+.operations-dashboard-chart-column,
+.operations-dashboard-chart-point {
+  cursor: pointer;
+}
+
+.operations-dashboard-chart-label {
+  fill: var(--fg-secondary);
+  font-family: var(--font-sans);
+  font-size: var(--type-xxs);
+  text-anchor: middle;
+}
+
+.operations-dashboard-chart figcaption {
+  color: var(--fg-muted);
+  font-size: var(--type-sm);
+}
+
+.operations-dashboard-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.operations-dashboard-chart-legend li {
+  align-items: center;
+  display: flex;
+  font-size: var(--type-sm);
+  gap: var(--space-1);
+}
+
+.operations-dashboard-chart-legend li::before {
+  background: currentcolor;
+  border-radius: var(--radius-pill);
+  content: "";
+  height: var(--space-2);
+  width: var(--space-2);
+}
+
+.operations-dashboard-chart-inspection {
+  min-width: 0;
+}
+
+.operations-dashboard-chart-inspection-button {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.operations-dashboard-pie-values summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.operations-dashboard-pie-values dl,
+.operations-dashboard-pie-values dl div {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.operations-dashboard-pie-values dl {
+  margin: var(--space-2) 0 0;
+}
+
+.operations-dashboard-pie-values dl div {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.operations-dashboard-pie-values dd,
+.operations-dashboard-pie-values dt {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.operations-dashboard-pie-values dt {
+  color: var(--fg-muted);
+}
+
+.operations-dashboard-chart-values {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+}
+
+.operations-dashboard-chart-values dl,
+.operations-dashboard-chart-values dl div {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.operations-dashboard-chart-values dl {
+  grid-template-columns: 1fr;
+  margin: var(--space-2) 0 0;
+}
+
+.operations-dashboard-chart-values dl div {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.operations-dashboard-chart-values dd,
+.operations-dashboard-chart-values dt {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.operations-dashboard-chart-values dt {
+  color: var(--fg-muted);
+}
+
+.operations-dashboard-single-value {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  justify-content: center;
+  min-height: var(--space-skeleton-block-height);
+  text-align: center;
+}
+
+.operations-dashboard-single-value strong {
+  font-size: var(--type-display);
+  overflow-wrap: anywhere;
+}
+
+.operations-dashboard-single-value small,
+.operations-visualization-error details {
+  color: var(--fg-muted);
+}
+
+.operations-visualization-error {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.operations-visualization-error [role="alert"] {
+  background: var(--status-error-soft);
+  border: 1px solid var(--status-error-edge);
+  color: var(--status-error-strong);
+  padding: var(--space-2);
+}
+
+.operations-visualization-error summary {
+  cursor: pointer;
+  font-weight: 700;
 }
 
 .operations-result-status,
@@ -540,6 +822,11 @@ div.operations-header-actions.operations-header-actions {
     grid-template-columns: 1fr;
   }
 
+  .operations-visualization-editor,
+  .operations-visualization-custom-field {
+    grid-template-columns: 1fr;
+  }
+
   .operations-spl-field {
     grid-column: auto;
   }
@@ -548,5 +835,9 @@ div.operations-header-actions.operations-header-actions {
     align-items: stretch;
     flex-direction: column;
     width: 100%;
+  }
+
+  .operations-empty-dashboard .operations-create-form {
+    grid-template-columns: 1fr;
   }
 }

@@ -1,9 +1,11 @@
 import { useState } from "react";
 
 import { Modal } from "../_components/modal";
+import { ONE_TIME_SECRET_NAVIGATION_BLOCKED_MESSAGE } from "./alerts-ui-state";
 
 interface AlertSecretRecoveryProps {
   alertName: string;
+  navigationBlocked?: boolean;
   secret: string;
   onClose: () => void;
   returnFocus?: HTMLElement | null;
@@ -11,7 +13,7 @@ interface AlertSecretRecoveryProps {
 
 type SecretAcknowledgement = "discarded" | "pending" | "saved";
 
-export function AlertSecretRecovery({ alertName, secret, onClose, returnFocus = null }: AlertSecretRecoveryProps) {
+export function AlertSecretRecovery({ alertName, navigationBlocked = false, secret, onClose, returnFocus = null }: AlertSecretRecoveryProps) {
   const [acknowledgement, setAcknowledgement] = useState<SecretAcknowledgement>("pending");
   const [copySucceeded, setCopySucceeded] = useState(false);
   const [copyError, setCopyError] = useState(false);
@@ -39,6 +41,7 @@ export function AlertSecretRecovery({ alertName, secret, onClose, returnFocus = 
     >
       <div className="alerts-secret-recovery">
         <p>Configure the receiver to verify the Open-Splunk-Signature header. The secret cannot be recovered later; rotate it to issue a replacement.</p>
+        {navigationBlocked ? <p className="alerts-inline-error" role="alert">{ONE_TIME_SECRET_NAVIGATION_BLOCKED_MESSAGE}</p> : null}
         <div className="alerts-secret-value"><code>{secret}</code><button className="button button--secondary" type="button" onClick={() => void copySecret()}>Copy secret</button></div>
         {copyError ? <p className="alerts-inline-error" role="alert">Copy failed. Select the secret and copy it manually.</p> : null}
         {copySucceeded ? <output className="alerts-inline-success" aria-live="polite">Copied to the clipboard.</output> : null}

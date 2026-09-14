@@ -20,20 +20,21 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/sha256hex"
 )
 
-// checkpointFileName is the single JSON document holding every checkpoint for a
-// store directory.
+// checkpointFileName holds the compacted baseline; subsequent advances live in
+// checkpointJournalName until compaction.
 const checkpointFileName = "checkpoints.json"
 
 // checkpointFormatVersion is written into the store file so a future format
 // change can be detected on load.
-const checkpointFormatVersion = 1
+const checkpointFormatVersion = 2
 
 const maximumCheckpointInputIDBytes = int(protocolid.MaximumBytes)
 
 // checkpointDoc is the on-disk shape of the checkpoint store.
 type checkpointDoc struct {
-	Version     int          `json:"version"`
-	Checkpoints []Checkpoint `json:"checkpoints"`
+	Version         int          `json:"version"`
+	JournalSequence uint64       `json:"journal_sequence,omitempty"`
+	Checkpoints     []Checkpoint `json:"checkpoints"`
 }
 
 // checkpointKey is deliberately a struct rather than a concatenated string:
@@ -44,25 +45,32 @@ type checkpointKey struct {
 	trackingKey string
 }
 
-// fileCheckpointStore is a CheckpointStore backed by one atomically-rewritten
-// JSON file. The whole document is rewritten on every mutation. Entries are
-// retained until explicitly deleted, so installations that continually see
-// new file identities should monitor this snapshot and periodically compact it
-// under an application-level retention policy.
+// fileCheckpointStore keeps a compact snapshot plus a checksummed journal of
+// changed positions. Mutations are proportional to the affected sources;
+// compaction retains every identity so inactivity never discards a resume point.
 type fileCheckpointStore struct {
 	dir  string
 	path string
 
 	mu              sync.Mutex
 	entries         map[checkpointKey]Checkpoint
-	persistSnapshot func([]Checkpoint) error
+	persistUpdates  func([]Checkpoint) error
 	syncDirectory   func() error
+	journal         *os.File
+	journalSequence uint64
+	journalRequired bool
+	journalBytes    int64
+	snapshotBytes   int64
+	journalErr      error
+	readOnly        bool
 }
 
 // NewCheckpointStore opens or creates the checkpoint store rooted at dir. A
 // missing store file is tolerated (an empty store). A store file that exists
 // but cannot be parsed is a hard error naming the path, so a corrupt file is
 // never silently discarded.
+// The caller must hold the collector state-directory lock for this writer's
+// lifetime. Use ReadCheckpoints to inspect a running collector.
 func NewCheckpointStore(dir string) (CheckpointStore, error) {
 	return newCheckpointStoreWithDirectorySync(dir, fsyncCheckpointDirectory)
 }
@@ -89,9 +97,12 @@ func newCheckpointStoreWithDirectorySync(
 		path:    filepath.Join(dir, checkpointFileName),
 		entries: make(map[checkpointKey]Checkpoint),
 	}
-	s.persistSnapshot = s.writeSnapshot
+	s.persistUpdates = s.appendCheckpointUpdates
 	s.syncDirectory = s.fsyncDir
 	if err := s.load(); err != nil {
+		return nil, err
+	}
+	if err := s.loadCheckpointJournal(); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -170,13 +181,16 @@ func (s *fileCheckpointStore) load() error {
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return fmt.Errorf("collector/input: corrupt checkpoint file %s: %w", s.path, err)
 	}
-	if doc.Version != checkpointFormatVersion {
+	if doc.Version != 1 && doc.Version != checkpointFormatVersion {
 		return fmt.Errorf(
 			"collector/input: checkpoint file %s uses unsupported version %d; provision fresh collector state",
 			s.path,
 			doc.Version,
 		)
 	}
+	s.journalRequired = doc.Version == checkpointFormatVersion
+	s.journalSequence = doc.JournalSequence
+	s.snapshotBytes = int64(len(data))
 	for _, cp := range doc.Checkpoints {
 		if checkpointErr := ValidateCheckpoint(cp); checkpointErr != nil {
 			return fmt.Errorf(
@@ -221,9 +235,8 @@ func (s *fileCheckpointStore) Set(cp Checkpoint) error {
 	return s.SetMany([]Checkpoint{cp})
 }
 
-// SetMany atomically persists all effective checkpoint advances with one temp
-// file + fsync + rename. The in-memory snapshot is not published until that
-// persistence succeeds.
+// SetMany atomically persists all effective advances in one checksummed journal
+// record and fsync. The in-memory snapshot is published only after persistence.
 func (s *fileCheckpointStore) SetMany(checkpoints []Checkpoint) error {
 	if len(checkpoints) == 0 {
 		return nil
@@ -243,13 +256,17 @@ func (s *fileCheckpointStore) SetMany(checkpoints []Checkpoint) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	next := cloneCheckpoints(s.entries)
+	next := make(map[checkpointKey]Checkpoint, len(checkpoints))
 	now := time.Now().UTC()
 	changed := false
 	for index, cp := range checkpoints {
 		key := keys[index]
 		normalized := false
-		if current, ok := next[key]; ok {
+		current, ok := next[key]
+		if !ok {
+			current, ok = s.entries[key]
+		}
+		if ok {
 			switch {
 			case cp.Identity.Generation < current.Identity.Generation:
 				continue // a delayed old-generation batch must not undo truncation
@@ -305,10 +322,10 @@ func (s *fileCheckpointStore) SetMany(checkpoints []Checkpoint) error {
 	if !changed {
 		return nil
 	}
-	if err := s.persistEntriesLocked(next); err != nil {
+	if err := s.persistUpdates(checkpointSnapshot(next)); err != nil {
 		return err
 	}
-	s.entries = next
+	maps.Copy(s.entries, next)
 	return nil
 }
 
@@ -335,7 +352,7 @@ func (s *fileCheckpointStore) Delete(inputID string, id FileIdentity) error {
 	}
 	next := cloneCheckpoints(s.entries)
 	delete(next, key)
-	if err := s.persistEntriesLocked(next); err != nil {
+	if err := s.compactCheckpointEntries(next); err != nil {
 		return err
 	}
 	s.entries = next
@@ -350,9 +367,21 @@ func (s *fileCheckpointStore) List() ([]Checkpoint, error) {
 	return s.snapshotLocked(), nil
 }
 
-// Close releases the store. Every mutation already persisted synchronously, so
-// there is nothing to flush.
-func (s *fileCheckpointStore) Close() error { return nil }
+// Close compacts durable deltas and releases the journal descriptor.
+func (s *fileCheckpointStore) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.journal == nil {
+		return nil
+	}
+	err := s.journalErr
+	if s.journalErr == nil {
+		err = s.compactCheckpointEntries(s.entries)
+	}
+	err = errors.Join(err, s.journal.Close())
+	s.journal = nil
+	return err
+}
 
 // snapshotLocked returns the entries as an input/identity-sorted slice.
 func (s *fileCheckpointStore) snapshotLocked() []Checkpoint {
@@ -379,13 +408,6 @@ func cloneCheckpoints(
 	cloned := make(map[checkpointKey]Checkpoint, len(entries))
 	maps.Copy(cloned, entries)
 	return cloned
-}
-
-// persistEntriesLocked persists entries in deterministic input/identity order.
-func (s *fileCheckpointStore) persistEntriesLocked(
-	entries map[checkpointKey]Checkpoint,
-) error {
-	return s.persistSnapshot(checkpointSnapshot(entries))
 }
 
 func checkpointKeyFor(
@@ -478,7 +500,7 @@ func ValidateCheckpoint(checkpoint Checkpoint) error {
 // directory so the rename itself is durable. A crash leaves either the old or
 // the new complete file, never a torn one.
 func (s *fileCheckpointStore) writeSnapshot(checkpoints []Checkpoint) error {
-	doc := checkpointDoc{Version: checkpointFormatVersion, Checkpoints: checkpoints}
+	doc := checkpointDoc{Version: checkpointFormatVersion, JournalSequence: s.journalSequence, Checkpoints: checkpoints}
 	data, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		return fmt.Errorf("collector/input: marshal checkpoints: %w", err)
@@ -509,6 +531,7 @@ func (s *fileCheckpointStore) writeSnapshot(checkpoints []Checkpoint) error {
 	if err := s.syncDirectory(); err != nil {
 		return fmt.Errorf("collector/input: fsync checkpoint dir: %w", err)
 	}
+	s.snapshotBytes = int64(len(data))
 	return nil
 }
 

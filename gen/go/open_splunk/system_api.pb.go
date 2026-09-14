@@ -325,8 +325,11 @@ type GetSystemBootstrapResponse struct {
 	SelectedAppId       *string                `protobuf:"bytes,9,opt,name=selected_app_id,json=selectedAppId,proto3,oneof" json:"selected_app_id,omitempty"`
 	ServerTime          *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=server_time,json=serverTime,proto3" json:"server_time,omitempty"`
 	Build               *BuildMetadata         `protobuf:"bytes,11,opt,name=build,proto3" json:"build,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// The live instance palette. UNSPECIFIED when no settings service is
+	// configured; the client paints that as classic.
+	UiPalette     UiPalette `protobuf:"varint,12,opt,name=ui_palette,json=uiPalette,proto3,enum=open_splunk.UiPalette" json:"ui_palette,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *GetSystemBootstrapResponse) Reset() {
@@ -415,11 +418,18 @@ func (x *GetSystemBootstrapResponse) GetBuild() *BuildMetadata {
 	return nil
 }
 
+func (x *GetSystemBootstrapResponse) GetUiPalette() UiPalette {
+	if x != nil {
+		return x.UiPalette
+	}
+	return UiPalette_UI_PALETTE_UNSPECIFIED
+}
+
 var File_open_splunk_system_api_proto protoreflect.FileDescriptor
 
 const file_open_splunk_system_api_proto_rawDesc = "" +
 	"\n" +
-	"\x1copen_splunk/system_api.proto\x12\vopen_splunk\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x15open_splunk/app.proto\x1a\x18open_splunk/common.proto\x1a\x17open_splunk/index.proto\"\xfc\x04\n" +
+	"\x1copen_splunk/system_api.proto\x12\vopen_splunk\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x15open_splunk/app.proto\x1a\x18open_splunk/common.proto\x1a\x17open_splunk/index.proto\x1a%open_splunk/server_settings_api.proto\"\xfc\x04\n" +
 	"\x10BrowserApiLimits\x12*\n" +
 	"\x11maximum_page_size\x18\x01 \x01(\rR\x0fmaximumPageSize\x120\n" +
 	"\x14maximum_preview_rows\x18\x02 \x01(\rR\x12maximumPreviewRows\x12F\n" +
@@ -434,7 +444,7 @@ const file_open_splunk_system_api_proto_rawDesc = "" +
 	" \x01(\rR\x19maximumFieldSummaryValues\"_\n" +
 	"\x19GetSystemBootstrapRequest\x12-\n" +
 	"\x10preferred_app_id\x18\x01 \x01(\tH\x00R\x0epreferredAppId\x88\x01\x01B\x13\n" +
-	"\x11_preferred_app_id\"\x9b\x04\n" +
+	"\x11_preferred_app_id\"\xd2\x04\n" +
 	"\x1aGetSystemBootstrapResponse\x122\n" +
 	"\x15search_websocket_path\x18\x04 \x01(\tR\x13searchWebsocketPath\x126\n" +
 	"\bfeatures\x18\x05 \x03(\x0e2\x1a.open_splunk.ServerFeatureR\bfeatures\x125\n" +
@@ -445,7 +455,9 @@ const file_open_splunk_system_api_proto_rawDesc = "" +
 	"\vserver_time\x18\n" +
 	" \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"serverTime\x120\n" +
-	"\x05build\x18\v \x01(\v2\x1a.open_splunk.BuildMetadataR\x05buildB\x12\n" +
+	"\x05build\x18\v \x01(\v2\x1a.open_splunk.BuildMetadataR\x05build\x125\n" +
+	"\n" +
+	"ui_palette\x18\f \x01(\x0e2\x16.open_splunk.UiPaletteR\tuiPaletteB\x12\n" +
 	"\x10_selected_app_idJ\x04\b\x01\x10\x02J\x04\b\x02\x10\x03J\x04\b\x03\x10\x04R\x0eserver_versionR\vapi_versionR\x19spl_compatibility_version*\xd9\x06\n" +
 	"\rServerFeature\x12\x1e\n" +
 	"\x1aSERVER_FEATURE_UNSPECIFIED\x10\x00\x12\x19\n" +
@@ -498,6 +510,7 @@ var file_open_splunk_system_api_proto_goTypes = []any{
 	(*IndexSummary)(nil),               // 6: open_splunk.IndexSummary
 	(*timestamppb.Timestamp)(nil),      // 7: google.protobuf.Timestamp
 	(*BuildMetadata)(nil),              // 8: open_splunk.BuildMetadata
+	(UiPalette)(0),                     // 9: open_splunk.UiPalette
 }
 var file_open_splunk_system_api_proto_depIdxs = []int32{
 	4, // 0: open_splunk.BrowserApiLimits.default_search_timeout:type_name -> google.protobuf.Duration
@@ -508,11 +521,12 @@ var file_open_splunk_system_api_proto_depIdxs = []int32{
 	6, // 5: open_splunk.GetSystemBootstrapResponse.indexes:type_name -> open_splunk.IndexSummary
 	7, // 6: open_splunk.GetSystemBootstrapResponse.server_time:type_name -> google.protobuf.Timestamp
 	8, // 7: open_splunk.GetSystemBootstrapResponse.build:type_name -> open_splunk.BuildMetadata
-	8, // [8:8] is the sub-list for method output_type
-	8, // [8:8] is the sub-list for method input_type
-	8, // [8:8] is the sub-list for extension type_name
-	8, // [8:8] is the sub-list for extension extendee
-	0, // [0:8] is the sub-list for field type_name
+	9, // 8: open_splunk.GetSystemBootstrapResponse.ui_palette:type_name -> open_splunk.UiPalette
+	9, // [9:9] is the sub-list for method output_type
+	9, // [9:9] is the sub-list for method input_type
+	9, // [9:9] is the sub-list for extension type_name
+	9, // [9:9] is the sub-list for extension extendee
+	0, // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_open_splunk_system_api_proto_init() }
@@ -523,6 +537,7 @@ func file_open_splunk_system_api_proto_init() {
 	file_open_splunk_app_proto_init()
 	file_open_splunk_common_proto_init()
 	file_open_splunk_index_proto_init()
+	file_open_splunk_server_settings_api_proto_init()
 	file_open_splunk_system_api_proto_msgTypes[1].OneofWrappers = []any{}
 	file_open_splunk_system_api_proto_msgTypes[2].OneofWrappers = []any{}
 	type x struct{}

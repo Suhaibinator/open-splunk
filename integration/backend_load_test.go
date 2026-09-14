@@ -291,8 +291,7 @@ func runBackendSustainedLoad(t *testing.T, plan backendLoadPlan) {
 	buildBinary(t, ctx, repository, collectorBinary, "./cmd/open-splunk-collector")
 	buildBinary(t, ctx, repository, loggenBinary, "./cmd/open-splunk-loggen")
 
-	httpAddress := unusedLoopbackAddress(t)
-	collectorAddress := unusedLoopbackAddress(t)
+	httpAddress, collectorAddress := unusedLoopbackAddressPair(t)
 	controlDBPath := filepath.Join(work, "control.sqlite")
 	administratorTokenPath, administratorToken := provisionAdministratorToken(
 		t,
@@ -398,12 +397,14 @@ func runBackendSustainedLoad(t *testing.T, plan backendLoadPlan) {
 	collectorProcess := startCollector()
 	waitForCollectorDiscovery(t, ctx, collectorStateDir, logPath, collectorProcess, plaintextToken)
 
+	// Load evidence needs test-only system telemetry that is deliberately
+	// excluded from the server's least-privilege runtime principal.
 	storage, err := clickhousedriver.Open(&clickhousedriver.Options{
 		Addr: []string{clickhouse.Address},
 		Auth: clickhousedriver.Auth{
 			Database: clickhouse.Database,
-			Username: clickhouse.RuntimeUsername,
-			Password: clickhouse.RuntimePassword,
+			Username: clickhouse.Username,
+			Password: clickhouse.Password,
 		},
 		DialTimeout: 5 * time.Second,
 	})
@@ -411,6 +412,12 @@ func runBackendSustainedLoad(t *testing.T, plan backendLoadPlan) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = storage.Close() })
+	activityContext, activityCancel := context.WithTimeout(ctx, 5*time.Second)
+	activityMarker, err := readBackendLoadStorageActivityMarker(activityContext, storage)
+	activityCancel()
+	if err != nil {
+		t.Fatalf("capture backend load ClickHouse activity marker: %v", err)
+	}
 
 	sourceTracker := newBackendLoadSourceTracker(logPath)
 	warmStartedAt := time.Now()
@@ -707,6 +714,23 @@ func runBackendSustainedLoad(t *testing.T, plan backendLoadPlan) {
 		t.Fatal(err)
 	}
 	assertBackendLoadStorageMetrics(t, plan, source, metrics)
+	insertShape := waitForBackendLoadPhysicalInsertShape(
+		t,
+		ctx,
+		storage,
+		activityMarker,
+		plan.eventCount(),
+	)
+	logicalBatches := (plan.WarmEvents+plan.FlushEvents-1)/plan.FlushEvents +
+		(plan.MainEvents+plan.FlushEvents-1)/plan.FlushEvents
+	qualifiedSteadyState := false
+	if err := validateBackendLoadPhysicalInsertShape(
+		insertShape,
+		logicalBatches,
+		qualifiedSteadyState,
+	); err != nil {
+		t.Fatal(err)
+	}
 	rawContext, rawCancel := context.WithTimeout(ctx, 30*time.Second)
 	err = verifyBackendLoadRawRows(
 		rawContext,
@@ -782,6 +806,25 @@ func runBackendSustainedLoad(t *testing.T, plan backendLoadPlan) {
 		metrics.UncompressedBytes,
 		metrics.BytesOnDisk,
 		float64(metrics.CompressedBytes)/float64(metrics.UncompressedBytes),
+	)
+	t.Logf(
+		"backend load physical inserts: qualified_steady_state=%t logical_batches=%d physical_inserts=%d written_rows=%d written_bytes=%d min_rows=%d median_rows=%d max_rows=%d rows_at_least_5000=%d failed_inserts=%d new_parts=%d new_part_rows=%d merge_parts=%d merged_rows=%d delayed_inserts=%d rejected_inserts=%d",
+		qualifiedSteadyState,
+		logicalBatches,
+		insertShape.PhysicalInserts,
+		insertShape.WrittenRows,
+		insertShape.WrittenBytes,
+		insertShape.MinimumRows,
+		insertShape.MedianRows,
+		insertShape.MaximumRows,
+		insertShape.RowsAtLeastFiveThousand,
+		insertShape.FailedInserts,
+		insertShape.NewParts,
+		insertShape.NewPartRows,
+		insertShape.MergeParts,
+		insertShape.MergedRows,
+		insertShape.DelayedInserts,
+		insertShape.RejectedInserts,
 	)
 	logBackendLoadSearchObservation(t, "first", firstSearch)
 	logBackendLoadSearchObservation(t, "repeated", repeatedSearch)

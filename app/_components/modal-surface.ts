@@ -69,7 +69,7 @@ function inertOutsideSurface(
 
 function focusableControls(container: HTMLElement): HTMLElement[] {
   return Array.from(container.querySelectorAll<HTMLElement>(DEFAULT_FOCUSABLE_SELECTOR))
-    .filter((element) => !element.hasAttribute("hidden") && element.getClientRects().length > 0);
+    .filter((element) => !element.hasAttribute("hidden") && element.tabIndex >= 0 && element.getClientRects().length > 0);
 }
 
 export function installModalSurface({

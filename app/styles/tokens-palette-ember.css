@@ -1,0 +1,102 @@
+/*
+ * Ember palette: warm sand and umber neutrals, rust accent, orange focus. Restates
+ * only what differs from classic; see docs/theming.md, "Adding a theme".
+ *
+ * A deliberate trade: the light accent (rust-500) sits near the destructive
+ * red (--status-error, red-500) in lightness and hue, so a primary and a
+ * danger button read as relatives rather than opposites. The danger button
+ * is always paired with a secondary Cancel, never a primary, and the warm
+ * brief was worth more than the one step toward orange (orange-600) that
+ * would roughly double the distance; dark separates the two well on its own.
+ */
+:root:where([data-palette="ember"]) {
+  color-scheme: light;
+
+  /* Backgrounds. */
+  --bg-canvas: var(--sand-100); /* The page behind every panel: warm sand. */
+  --bg-surface: var(--sand-50); /* Panels, cards, tables, dialogs: warm off-white. */
+  --bg-subtle: var(--sand-150); /* Recessed strips inside a surface. */
+  --bg-raised: var(--gray-0); /* A surface lifted off the canvas: menus, popovers, lifted to pure white. */
+  --bg-inverse: var(--umber-950); /* Surfaces that carry inverted text: warm near-black. */
+  --bg-inverse-tint: var(--umber-700); /* The lifted end of a gradient across --bg-inverse. */
+
+  /* Foregrounds. */
+  --fg-text: var(--umber-900); /* Body text, warmed to match the ground. */
+  --fg-strong: var(--umber-950); /* Headings and emphasised text. */
+  --fg-secondary: var(--umber-800); /* Ink one step lighter than body text. */
+  --fg-muted: var(--umber-500); /* Secondary text: a warm taupe deep enough to clear AA on the sand strip. */
+  --fg-link: var(--rust-600); /* Anchor text. */
+
+  /* Borders. */
+  --border: var(--sand-300); /* Default rule between and around surfaces. */
+  --border-subtle: var(--sand-200); /* Faint divider inside one surface. */
+  --border-strong: var(--sand-400); /* Emphasised rule. */
+  --border-focus: var(--orange-500); /* Focused control edge. */
+
+  /* Accent. */
+  --accent: var(--rust-500); /* Primary buttons, active tabs, progress. */
+  --accent-hover: var(--rust-600); /* Hovered and pressed accent. */
+  --accent-bright: var(--orange-400); /* Saturated accent fill: progress bars, timeline columns. */
+  --accent-inverse: var(--rust-300); /* The accent on --bg-inverse; a light ink on the umber inverse ground. */
+  --accent-soft: var(--rust-100); /* Accent-tinted background wash. */
+
+  /* Application chrome: warm dark bars. */
+  --chrome-bar: var(--umber-900); /* Product bar. */
+  --chrome-appbar: var(--umber-800); /* App bar. */
+  --chrome-hover: var(--umber-700); /* Hovered or open bar item. */
+
+  /* Interaction. */
+  --focus-ring: var(--orange-500); /* Focus outline drawn outside a control. */
+
+  /* Loading skeleton. */
+  --skeleton-base: var(--sand-200); /* Resting skeleton surface. */
+  --skeleton-highlight: var(--sand-50); /* Moving highlight across a skeleton surface. */
+
+  /* Scale. */
+  --radius-sm: 3px; /* Input and badge corners, one pixel softer than classic. */
+}
+
+:root[data-palette="ember"][data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Backgrounds: the gray ramp becomes umber. */
+  --bg-canvas: var(--umber-950); /* The page behind every panel. */
+  --bg-surface: var(--umber-900); /* Panels, cards, tables, dialogs. */
+  --bg-subtle: var(--umber-800); /* Recessed strips inside a surface. */
+  --bg-raised: var(--umber-700); /* A surface lifted off the canvas. */
+  --bg-inverse: var(--sand-50); /* Surfaces that carry inverted text. */
+  --bg-inverse-tint: var(--sand-200); /* The lifted end of a gradient across --bg-inverse. */
+
+  /* Foregrounds: sand text on umber ground. */
+  --fg-text: var(--sand-200); /* Body text. */
+  --fg-strong: var(--sand-50); /* Headings and emphasised text. */
+  --fg-secondary: var(--sand-300); /* Ink one step lighter than body text. */
+  --fg-muted: var(--sand-400); /* Secondary text. */
+  --fg-inverse: var(--umber-950); /* Text on --bg-inverse. */
+  --fg-link: var(--rust-300); /* Anchor text. */
+
+  /* Borders. */
+  --border: var(--umber-600); /* Default rule. */
+  --border-subtle: var(--umber-700); /* Faint divider inside one surface. */
+  --border-strong: var(--brown-500); /* Emphasised rule: the warm taupe one step above the border. */
+  --border-focus: var(--orange-300); /* Focused control edge. */
+
+  /* Accent. */
+  --accent: var(--rust-400); /* Primary action colour. */
+  --accent-hover: var(--rust-300); /* Hovered and pressed accent. */
+  --accent-bright: var(--orange-300); /* Saturated accent fill. */
+  --accent-inverse: var(--rust-600); /* The accent on --bg-inverse, a light surface here; a label ink, so it clears AA. */
+  --accent-soft: var(--rust-800); /* Accent-tinted background wash. */
+
+  /* Application chrome: the bars deepen with the ground. */
+  --chrome-bar: var(--umber-950); /* Product bar. */
+  --chrome-appbar: var(--umber-900); /* App bar. */
+  --chrome-hover: var(--umber-800); /* Hovered or open bar item. */
+
+  /* Interaction. */
+  --focus-ring: var(--orange-300); /* Focus outline. */
+
+  /* Loading skeleton. */
+  --skeleton-base: var(--umber-700); /* Resting skeleton surface. */
+  --skeleton-highlight: var(--umber-600); /* Moving highlight across a skeleton surface. */
+}

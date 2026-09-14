@@ -194,6 +194,11 @@ type HECDurableOperationalMetrics struct {
 	OldestPendingOutboxAge    *durationpb.Duration   `protobuf:"bytes,4,opt,name=oldest_pending_outbox_age,json=oldestPendingOutboxAge,proto3" json:"oldest_pending_outbox_age,omitempty"`
 	RequestCapacityAvailable  bool                   `protobuf:"varint,5,opt,name=request_capacity_available,json=requestCapacityAvailable,proto3" json:"request_capacity_available,omitempty"`
 	RetainedRequests          uint64                 `protobuf:"varint,6,opt,name=retained_requests,json=retainedRequests,proto3" json:"retained_requests,omitempty"`
+	PendingMetadataBytes      uint64                 `protobuf:"varint,7,opt,name=pending_metadata_bytes,json=pendingMetadataBytes,proto3" json:"pending_metadata_bytes,omitempty"`
+	PendingUngrouped          uint64                 `protobuf:"varint,8,opt,name=pending_ungrouped,json=pendingUngrouped,proto3" json:"pending_ungrouped,omitempty"`
+	ReadyWriteGroups          uint64                 `protobuf:"varint,9,opt,name=ready_write_groups,json=readyWriteGroups,proto3" json:"ready_write_groups,omitempty"`
+	AmbiguousWriteGroups      uint64                 `protobuf:"varint,10,opt,name=ambiguous_write_groups,json=ambiguousWriteGroups,proto3" json:"ambiguous_write_groups,omitempty"`
+	LiveWriteGroupLeases      uint64                 `protobuf:"varint,11,opt,name=live_write_group_leases,json=liveWriteGroupLeases,proto3" json:"live_write_group_leases,omitempty"`
 	unknownFields             protoimpl.UnknownFields
 	sizeCache                 protoimpl.SizeCache
 }
@@ -270,19 +275,161 @@ func (x *HECDurableOperationalMetrics) GetRetainedRequests() uint64 {
 	return 0
 }
 
-type HECReconciliationOperationalMetrics struct {
+func (x *HECDurableOperationalMetrics) GetPendingMetadataBytes() uint64 {
+	if x != nil {
+		return x.PendingMetadataBytes
+	}
+	return 0
+}
+
+func (x *HECDurableOperationalMetrics) GetPendingUngrouped() uint64 {
+	if x != nil {
+		return x.PendingUngrouped
+	}
+	return 0
+}
+
+func (x *HECDurableOperationalMetrics) GetReadyWriteGroups() uint64 {
+	if x != nil {
+		return x.ReadyWriteGroups
+	}
+	return 0
+}
+
+func (x *HECDurableOperationalMetrics) GetAmbiguousWriteGroups() uint64 {
+	if x != nil {
+		return x.AmbiguousWriteGroups
+	}
+	return 0
+}
+
+func (x *HECDurableOperationalMetrics) GetLiveWriteGroupLeases() uint64 {
+	if x != nil {
+		return x.LiveWriteGroupLeases
+	}
+	return 0
+}
+
+// HECFixedHistogram has compile-time bounded inclusive upper bounds and one
+// final overflow bucket. It never contains request-derived labels.
+type HECFixedHistogram struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Available     bool                   `protobuf:"varint,1,opt,name=available,proto3" json:"available,omitempty"`
-	Successes     uint64                 `protobuf:"varint,2,opt,name=successes,proto3" json:"successes,omitempty"`
-	Retries       uint64                 `protobuf:"varint,3,opt,name=retries,proto3" json:"retries,omitempty"`
-	Ambiguities   uint64                 `protobuf:"varint,4,opt,name=ambiguities,proto3" json:"ambiguities,omitempty"`
+	UpperBounds   []uint64               `protobuf:"varint,1,rep,packed,name=upper_bounds,json=upperBounds,proto3" json:"upper_bounds,omitempty"`
+	BucketCounts  []uint64               `protobuf:"varint,2,rep,packed,name=bucket_counts,json=bucketCounts,proto3" json:"bucket_counts,omitempty"`
+	Count         uint64                 `protobuf:"varint,3,opt,name=count,proto3" json:"count,omitempty"`
+	Sum           uint64                 `protobuf:"varint,4,opt,name=sum,proto3" json:"sum,omitempty"`
+	Max           uint64                 `protobuf:"varint,5,opt,name=max,proto3" json:"max,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
+func (x *HECFixedHistogram) Reset() {
+	*x = HECFixedHistogram{}
+	mi := &file_open_splunk_hec_admin_api_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HECFixedHistogram) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HECFixedHistogram) ProtoMessage() {}
+
+func (x *HECFixedHistogram) ProtoReflect() protoreflect.Message {
+	mi := &file_open_splunk_hec_admin_api_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HECFixedHistogram.ProtoReflect.Descriptor instead.
+func (*HECFixedHistogram) Descriptor() ([]byte, []int) {
+	return file_open_splunk_hec_admin_api_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *HECFixedHistogram) GetUpperBounds() []uint64 {
+	if x != nil {
+		return x.UpperBounds
+	}
+	return nil
+}
+
+func (x *HECFixedHistogram) GetBucketCounts() []uint64 {
+	if x != nil {
+		return x.BucketCounts
+	}
+	return nil
+}
+
+func (x *HECFixedHistogram) GetCount() uint64 {
+	if x != nil {
+		return x.Count
+	}
+	return 0
+}
+
+func (x *HECFixedHistogram) GetSum() uint64 {
+	if x != nil {
+		return x.Sum
+	}
+	return 0
+}
+
+func (x *HECFixedHistogram) GetMax() uint64 {
+	if x != nil {
+		return x.Max
+	}
+	return 0
+}
+
+type HECReconciliationOperationalMetrics struct {
+	state                          protoimpl.MessageState `protogen:"open.v1"`
+	Available                      bool                   `protobuf:"varint,1,opt,name=available,proto3" json:"available,omitempty"`
+	Successes                      uint64                 `protobuf:"varint,2,opt,name=successes,proto3" json:"successes,omitempty"`
+	Retries                        uint64                 `protobuf:"varint,3,opt,name=retries,proto3" json:"retries,omitempty"`
+	Ambiguities                    uint64                 `protobuf:"varint,4,opt,name=ambiguities,proto3" json:"ambiguities,omitempty"`
+	StagedLogicalBatches           uint64                 `protobuf:"varint,5,opt,name=staged_logical_batches,json=stagedLogicalBatches,proto3" json:"staged_logical_batches,omitempty"`
+	StagedLogicalRows              uint64                 `protobuf:"varint,6,opt,name=staged_logical_rows,json=stagedLogicalRows,proto3" json:"staged_logical_rows,omitempty"`
+	FormedWriteGroups              uint64                 `protobuf:"varint,7,opt,name=formed_write_groups,json=formedWriteGroups,proto3" json:"formed_write_groups,omitempty"`
+	PhysicalInsertSends            uint64                 `protobuf:"varint,8,opt,name=physical_insert_sends,json=physicalInsertSends,proto3" json:"physical_insert_sends,omitempty"`
+	SuccessfulWriteGroups          uint64                 `protobuf:"varint,9,opt,name=successful_write_groups,json=successfulWriteGroups,proto3" json:"successful_write_groups,omitempty"`
+	WriteGroupMemberBatches        uint64                 `protobuf:"varint,10,opt,name=write_group_member_batches,json=writeGroupMemberBatches,proto3" json:"write_group_member_batches,omitempty"`
+	WriteGroupRows                 uint64                 `protobuf:"varint,11,opt,name=write_group_rows,json=writeGroupRows,proto3" json:"write_group_rows,omitempty"`
+	WriteGroupDecodedBytes         uint64                 `protobuf:"varint,12,opt,name=write_group_decoded_bytes,json=writeGroupDecodedBytes,proto3" json:"write_group_decoded_bytes,omitempty"`
+	WriteGroupMonthlyPartitions    uint64                 `protobuf:"varint,13,opt,name=write_group_monthly_partitions,json=writeGroupMonthlyPartitions,proto3" json:"write_group_monthly_partitions,omitempty"`
+	FillRowTarget                  uint64                 `protobuf:"varint,14,opt,name=fill_row_target,json=fillRowTarget,proto3" json:"fill_row_target,omitempty"`
+	FillByteTarget                 uint64                 `protobuf:"varint,15,opt,name=fill_byte_target,json=fillByteTarget,proto3" json:"fill_byte_target,omitempty"`
+	FillHardBoundary               uint64                 `protobuf:"varint,16,opt,name=fill_hard_boundary,json=fillHardBoundary,proto3" json:"fill_hard_boundary,omitempty"`
+	FillLinger                     uint64                 `protobuf:"varint,17,opt,name=fill_linger,json=fillLinger,proto3" json:"fill_linger,omitempty"`
+	FillDrain                      uint64                 `protobuf:"varint,18,opt,name=fill_drain,json=fillDrain,proto3" json:"fill_drain,omitempty"`
+	FillRecovery                   uint64                 `protobuf:"varint,19,opt,name=fill_recovery,json=fillRecovery,proto3" json:"fill_recovery,omitempty"`
+	NativeWaiters                  uint64                 `protobuf:"varint,20,opt,name=native_waiters,json=nativeWaiters,proto3" json:"native_waiters,omitempty"`
+	NativeWaiterWakeups            uint64                 `protobuf:"varint,21,opt,name=native_waiter_wakeups,json=nativeWaiterWakeups,proto3" json:"native_waiter_wakeups,omitempty"`
+	NativeWaiterCancellations      uint64                 `protobuf:"varint,22,opt,name=native_waiter_cancellations,json=nativeWaiterCancellations,proto3" json:"native_waiter_cancellations,omitempty"`
+	NativeTerminalLookups          uint64                 `protobuf:"varint,23,opt,name=native_terminal_lookups,json=nativeTerminalLookups,proto3" json:"native_terminal_lookups,omitempty"`
+	SealLatencyBuckets             []uint64               `protobuf:"varint,24,rep,packed,name=seal_latency_buckets,json=sealLatencyBuckets,proto3" json:"seal_latency_buckets,omitempty"`
+	SendLatencyBuckets             []uint64               `protobuf:"varint,25,rep,packed,name=send_latency_buckets,json=sendLatencyBuckets,proto3" json:"send_latency_buckets,omitempty"`
+	CommitLatencyBuckets           []uint64               `protobuf:"varint,26,rep,packed,name=commit_latency_buckets,json=commitLatencyBuckets,proto3" json:"commit_latency_buckets,omitempty"`
+	PeakNativeWaiters              uint64                 `protobuf:"varint,27,opt,name=peak_native_waiters,json=peakNativeWaiters,proto3" json:"peak_native_waiters,omitempty"`
+	LatencyUpperBoundsMicroseconds []uint64               `protobuf:"varint,28,rep,packed,name=latency_upper_bounds_microseconds,json=latencyUpperBoundsMicroseconds,proto3" json:"latency_upper_bounds_microseconds,omitempty"`
+	MemberBatchesPerGroup          *HECFixedHistogram     `protobuf:"bytes,29,opt,name=member_batches_per_group,json=memberBatchesPerGroup,proto3" json:"member_batches_per_group,omitempty"`
+	RowsPerGroup                   *HECFixedHistogram     `protobuf:"bytes,30,opt,name=rows_per_group,json=rowsPerGroup,proto3" json:"rows_per_group,omitempty"`
+	DecodedBytesPerGroup           *HECFixedHistogram     `protobuf:"bytes,31,opt,name=decoded_bytes_per_group,json=decodedBytesPerGroup,proto3" json:"decoded_bytes_per_group,omitempty"`
+	MonthlyPartitionsPerGroup      *HECFixedHistogram     `protobuf:"bytes,32,opt,name=monthly_partitions_per_group,json=monthlyPartitionsPerGroup,proto3" json:"monthly_partitions_per_group,omitempty"`
+	RowsPerPhysicalInsert          *HECFixedHistogram     `protobuf:"bytes,33,opt,name=rows_per_physical_insert,json=rowsPerPhysicalInsert,proto3" json:"rows_per_physical_insert,omitempty"`
+	unknownFields                  protoimpl.UnknownFields
+	sizeCache                      protoimpl.SizeCache
+}
+
 func (x *HECReconciliationOperationalMetrics) Reset() {
 	*x = HECReconciliationOperationalMetrics{}
-	mi := &file_open_splunk_hec_admin_api_proto_msgTypes[3]
+	mi := &file_open_splunk_hec_admin_api_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -294,7 +441,7 @@ func (x *HECReconciliationOperationalMetrics) String() string {
 func (*HECReconciliationOperationalMetrics) ProtoMessage() {}
 
 func (x *HECReconciliationOperationalMetrics) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_hec_admin_api_proto_msgTypes[3]
+	mi := &file_open_splunk_hec_admin_api_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -307,7 +454,7 @@ func (x *HECReconciliationOperationalMetrics) ProtoReflect() protoreflect.Messag
 
 // Deprecated: Use HECReconciliationOperationalMetrics.ProtoReflect.Descriptor instead.
 func (*HECReconciliationOperationalMetrics) Descriptor() ([]byte, []int) {
-	return file_open_splunk_hec_admin_api_proto_rawDescGZIP(), []int{3}
+	return file_open_splunk_hec_admin_api_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *HECReconciliationOperationalMetrics) GetAvailable() bool {
@@ -338,6 +485,209 @@ func (x *HECReconciliationOperationalMetrics) GetAmbiguities() uint64 {
 	return 0
 }
 
+func (x *HECReconciliationOperationalMetrics) GetStagedLogicalBatches() uint64 {
+	if x != nil {
+		return x.StagedLogicalBatches
+	}
+	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetStagedLogicalRows() uint64 {
+	if x != nil {
+		return x.StagedLogicalRows
+	}
+	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetFormedWriteGroups() uint64 {
+	if x != nil {
+		return x.FormedWriteGroups
+	}
+	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetPhysicalInsertSends() uint64 {
+	if x != nil {
+		return x.PhysicalInsertSends
+	}
+	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetSuccessfulWriteGroups() uint64 {
+	if x != nil {
+		return x.SuccessfulWriteGroups
+	}
+	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetWriteGroupMemberBatches() uint64 {
+	if x != nil {
+		return x.WriteGroupMemberBatches
+	}
+	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetWriteGroupRows() uint64 {
+	if x != nil {
+		return x.WriteGroupRows
+	}
+	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetWriteGroupDecodedBytes() uint64 {
+	if x != nil {
+		return x.WriteGroupDecodedBytes
+	}
+	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetWriteGroupMonthlyPartitions() uint64 {
+	if x != nil {
+		return x.WriteGroupMonthlyPartitions
+	}
+	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetFillRowTarget() uint64 {
+	if x != nil {
+		return x.FillRowTarget
+	}
+	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetFillByteTarget() uint64 {
+	if x != nil {
+		return x.FillByteTarget
+	}
+	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetFillHardBoundary() uint64 {
+	if x != nil {
+		return x.FillHardBoundary
+	}
+	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetFillLinger() uint64 {
+	if x != nil {
+		return x.FillLinger
+	}
+	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetFillDrain() uint64 {
+	if x != nil {
+		return x.FillDrain
+	}
+	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetFillRecovery() uint64 {
+	if x != nil {
+		return x.FillRecovery
+	}
+	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetNativeWaiters() uint64 {
+	if x != nil {
+		return x.NativeWaiters
+	}
+	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetNativeWaiterWakeups() uint64 {
+	if x != nil {
+		return x.NativeWaiterWakeups
+	}
+	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetNativeWaiterCancellations() uint64 {
+	if x != nil {
+		return x.NativeWaiterCancellations
+	}
+	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetNativeTerminalLookups() uint64 {
+	if x != nil {
+		return x.NativeTerminalLookups
+	}
+	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetSealLatencyBuckets() []uint64 {
+	if x != nil {
+		return x.SealLatencyBuckets
+	}
+	return nil
+}
+
+func (x *HECReconciliationOperationalMetrics) GetSendLatencyBuckets() []uint64 {
+	if x != nil {
+		return x.SendLatencyBuckets
+	}
+	return nil
+}
+
+func (x *HECReconciliationOperationalMetrics) GetCommitLatencyBuckets() []uint64 {
+	if x != nil {
+		return x.CommitLatencyBuckets
+	}
+	return nil
+}
+
+func (x *HECReconciliationOperationalMetrics) GetPeakNativeWaiters() uint64 {
+	if x != nil {
+		return x.PeakNativeWaiters
+	}
+	return 0
+}
+
+func (x *HECReconciliationOperationalMetrics) GetLatencyUpperBoundsMicroseconds() []uint64 {
+	if x != nil {
+		return x.LatencyUpperBoundsMicroseconds
+	}
+	return nil
+}
+
+func (x *HECReconciliationOperationalMetrics) GetMemberBatchesPerGroup() *HECFixedHistogram {
+	if x != nil {
+		return x.MemberBatchesPerGroup
+	}
+	return nil
+}
+
+func (x *HECReconciliationOperationalMetrics) GetRowsPerGroup() *HECFixedHistogram {
+	if x != nil {
+		return x.RowsPerGroup
+	}
+	return nil
+}
+
+func (x *HECReconciliationOperationalMetrics) GetDecodedBytesPerGroup() *HECFixedHistogram {
+	if x != nil {
+		return x.DecodedBytesPerGroup
+	}
+	return nil
+}
+
+func (x *HECReconciliationOperationalMetrics) GetMonthlyPartitionsPerGroup() *HECFixedHistogram {
+	if x != nil {
+		return x.MonthlyPartitionsPerGroup
+	}
+	return nil
+}
+
+func (x *HECReconciliationOperationalMetrics) GetRowsPerPhysicalInsert() *HECFixedHistogram {
+	if x != nil {
+		return x.RowsPerPhysicalInsert
+	}
+	return nil
+}
+
 type HECAcknowledgmentOperationalMetrics struct {
 	state                  protoimpl.MessageState `protogen:"open.v1"`
 	Available              bool                   `protobuf:"varint,1,opt,name=available,proto3" json:"available,omitempty"`
@@ -356,7 +706,7 @@ type HECAcknowledgmentOperationalMetrics struct {
 
 func (x *HECAcknowledgmentOperationalMetrics) Reset() {
 	*x = HECAcknowledgmentOperationalMetrics{}
-	mi := &file_open_splunk_hec_admin_api_proto_msgTypes[4]
+	mi := &file_open_splunk_hec_admin_api_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -368,7 +718,7 @@ func (x *HECAcknowledgmentOperationalMetrics) String() string {
 func (*HECAcknowledgmentOperationalMetrics) ProtoMessage() {}
 
 func (x *HECAcknowledgmentOperationalMetrics) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_hec_admin_api_proto_msgTypes[4]
+	mi := &file_open_splunk_hec_admin_api_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -381,7 +731,7 @@ func (x *HECAcknowledgmentOperationalMetrics) ProtoReflect() protoreflect.Messag
 
 // Deprecated: Use HECAcknowledgmentOperationalMetrics.ProtoReflect.Descriptor instead.
 func (*HECAcknowledgmentOperationalMetrics) Descriptor() ([]byte, []int) {
-	return file_open_splunk_hec_admin_api_proto_rawDescGZIP(), []int{4}
+	return file_open_splunk_hec_admin_api_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *HECAcknowledgmentOperationalMetrics) GetAvailable() bool {
@@ -467,7 +817,7 @@ type HECProtocolFailureMetric struct {
 
 func (x *HECProtocolFailureMetric) Reset() {
 	*x = HECProtocolFailureMetric{}
-	mi := &file_open_splunk_hec_admin_api_proto_msgTypes[5]
+	mi := &file_open_splunk_hec_admin_api_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -479,7 +829,7 @@ func (x *HECProtocolFailureMetric) String() string {
 func (*HECProtocolFailureMetric) ProtoMessage() {}
 
 func (x *HECProtocolFailureMetric) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_hec_admin_api_proto_msgTypes[5]
+	mi := &file_open_splunk_hec_admin_api_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -492,7 +842,7 @@ func (x *HECProtocolFailureMetric) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HECProtocolFailureMetric.ProtoReflect.Descriptor instead.
 func (*HECProtocolFailureMetric) Descriptor() ([]byte, []int) {
-	return file_open_splunk_hec_admin_api_proto_rawDescGZIP(), []int{5}
+	return file_open_splunk_hec_admin_api_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *HECProtocolFailureMetric) GetCode() uint32 {
@@ -523,7 +873,7 @@ type GetHECOperationalSnapshotResponse struct {
 
 func (x *GetHECOperationalSnapshotResponse) Reset() {
 	*x = GetHECOperationalSnapshotResponse{}
-	mi := &file_open_splunk_hec_admin_api_proto_msgTypes[6]
+	mi := &file_open_splunk_hec_admin_api_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -535,7 +885,7 @@ func (x *GetHECOperationalSnapshotResponse) String() string {
 func (*GetHECOperationalSnapshotResponse) ProtoMessage() {}
 
 func (x *GetHECOperationalSnapshotResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_hec_admin_api_proto_msgTypes[6]
+	mi := &file_open_splunk_hec_admin_api_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -548,7 +898,7 @@ func (x *GetHECOperationalSnapshotResponse) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use GetHECOperationalSnapshotResponse.ProtoReflect.Descriptor instead.
 func (*GetHECOperationalSnapshotResponse) Descriptor() ([]byte, []int) {
-	return file_open_splunk_hec_admin_api_proto_rawDescGZIP(), []int{6}
+	return file_open_splunk_hec_admin_api_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *GetHECOperationalSnapshotResponse) GetObservedAt() *timestamppb.Timestamp {
@@ -611,19 +961,63 @@ const file_open_splunk_hec_admin_api_proto_rawDesc = "" +
 	"\x10staging_failures\x18\t \x01(\x04R\x0fstagingFailures\x12D\n" +
 	"\x10staging_duration\x18\n" +
 	" \x01(\v2\x19.google.protobuf.DurationR\x0fstagingDuration\x12/\n" +
-	"\x13shutdown_rejections\x18\v \x01(\x04R\x12shutdownRejections\"\xfa\x02\n" +
+	"\x13shutdown_rejections\x18\v \x01(\x04R\x12shutdownRejections\"\xf8\x04\n" +
 	"\x1cHECDurableOperationalMetrics\x12'\n" +
 	"\x0fqueue_available\x18\x01 \x01(\bR\x0equeueAvailable\x12>\n" +
 	"\x1bpending_outbox_reservations\x18\x02 \x01(\x04R\x19pendingOutboxReservations\x120\n" +
 	"\x14pending_outbox_bytes\x18\x03 \x01(\x04R\x12pendingOutboxBytes\x12T\n" +
 	"\x19oldest_pending_outbox_age\x18\x04 \x01(\v2\x19.google.protobuf.DurationR\x16oldestPendingOutboxAge\x12<\n" +
 	"\x1arequest_capacity_available\x18\x05 \x01(\bR\x18requestCapacityAvailable\x12+\n" +
-	"\x11retained_requests\x18\x06 \x01(\x04R\x10retainedRequests\"\x9d\x01\n" +
+	"\x11retained_requests\x18\x06 \x01(\x04R\x10retainedRequests\x124\n" +
+	"\x16pending_metadata_bytes\x18\a \x01(\x04R\x14pendingMetadataBytes\x12+\n" +
+	"\x11pending_ungrouped\x18\b \x01(\x04R\x10pendingUngrouped\x12,\n" +
+	"\x12ready_write_groups\x18\t \x01(\x04R\x10readyWriteGroups\x124\n" +
+	"\x16ambiguous_write_groups\x18\n" +
+	" \x01(\x04R\x14ambiguousWriteGroups\x125\n" +
+	"\x17live_write_group_leases\x18\v \x01(\x04R\x14liveWriteGroupLeases\"\x95\x01\n" +
+	"\x11HECFixedHistogram\x12!\n" +
+	"\fupper_bounds\x18\x01 \x03(\x04R\vupperBounds\x12#\n" +
+	"\rbucket_counts\x18\x02 \x03(\x04R\fbucketCounts\x12\x14\n" +
+	"\x05count\x18\x03 \x01(\x04R\x05count\x12\x10\n" +
+	"\x03sum\x18\x04 \x01(\x04R\x03sum\x12\x10\n" +
+	"\x03max\x18\x05 \x01(\x04R\x03max\"\x83\x0e\n" +
 	"#HECReconciliationOperationalMetrics\x12\x1c\n" +
 	"\tavailable\x18\x01 \x01(\bR\tavailable\x12\x1c\n" +
 	"\tsuccesses\x18\x02 \x01(\x04R\tsuccesses\x12\x18\n" +
 	"\aretries\x18\x03 \x01(\x04R\aretries\x12 \n" +
-	"\vambiguities\x18\x04 \x01(\x04R\vambiguities\"\x8f\x03\n" +
+	"\vambiguities\x18\x04 \x01(\x04R\vambiguities\x124\n" +
+	"\x16staged_logical_batches\x18\x05 \x01(\x04R\x14stagedLogicalBatches\x12.\n" +
+	"\x13staged_logical_rows\x18\x06 \x01(\x04R\x11stagedLogicalRows\x12.\n" +
+	"\x13formed_write_groups\x18\a \x01(\x04R\x11formedWriteGroups\x122\n" +
+	"\x15physical_insert_sends\x18\b \x01(\x04R\x13physicalInsertSends\x126\n" +
+	"\x17successful_write_groups\x18\t \x01(\x04R\x15successfulWriteGroups\x12;\n" +
+	"\x1awrite_group_member_batches\x18\n" +
+	" \x01(\x04R\x17writeGroupMemberBatches\x12(\n" +
+	"\x10write_group_rows\x18\v \x01(\x04R\x0ewriteGroupRows\x129\n" +
+	"\x19write_group_decoded_bytes\x18\f \x01(\x04R\x16writeGroupDecodedBytes\x12C\n" +
+	"\x1ewrite_group_monthly_partitions\x18\r \x01(\x04R\x1bwriteGroupMonthlyPartitions\x12&\n" +
+	"\x0ffill_row_target\x18\x0e \x01(\x04R\rfillRowTarget\x12(\n" +
+	"\x10fill_byte_target\x18\x0f \x01(\x04R\x0efillByteTarget\x12,\n" +
+	"\x12fill_hard_boundary\x18\x10 \x01(\x04R\x10fillHardBoundary\x12\x1f\n" +
+	"\vfill_linger\x18\x11 \x01(\x04R\n" +
+	"fillLinger\x12\x1d\n" +
+	"\n" +
+	"fill_drain\x18\x12 \x01(\x04R\tfillDrain\x12#\n" +
+	"\rfill_recovery\x18\x13 \x01(\x04R\ffillRecovery\x12%\n" +
+	"\x0enative_waiters\x18\x14 \x01(\x04R\rnativeWaiters\x122\n" +
+	"\x15native_waiter_wakeups\x18\x15 \x01(\x04R\x13nativeWaiterWakeups\x12>\n" +
+	"\x1bnative_waiter_cancellations\x18\x16 \x01(\x04R\x19nativeWaiterCancellations\x126\n" +
+	"\x17native_terminal_lookups\x18\x17 \x01(\x04R\x15nativeTerminalLookups\x120\n" +
+	"\x14seal_latency_buckets\x18\x18 \x03(\x04R\x12sealLatencyBuckets\x120\n" +
+	"\x14send_latency_buckets\x18\x19 \x03(\x04R\x12sendLatencyBuckets\x124\n" +
+	"\x16commit_latency_buckets\x18\x1a \x03(\x04R\x14commitLatencyBuckets\x12.\n" +
+	"\x13peak_native_waiters\x18\x1b \x01(\x04R\x11peakNativeWaiters\x12I\n" +
+	"!latency_upper_bounds_microseconds\x18\x1c \x03(\x04R\x1elatencyUpperBoundsMicroseconds\x12W\n" +
+	"\x18member_batches_per_group\x18\x1d \x01(\v2\x1e.open_splunk.HECFixedHistogramR\x15memberBatchesPerGroup\x12D\n" +
+	"\x0erows_per_group\x18\x1e \x01(\v2\x1e.open_splunk.HECFixedHistogramR\frowsPerGroup\x12U\n" +
+	"\x17decoded_bytes_per_group\x18\x1f \x01(\v2\x1e.open_splunk.HECFixedHistogramR\x14decodedBytesPerGroup\x12_\n" +
+	"\x1cmonthly_partitions_per_group\x18  \x01(\v2\x1e.open_splunk.HECFixedHistogramR\x19monthlyPartitionsPerGroup\x12W\n" +
+	"\x18rows_per_physical_insert\x18! \x01(\v2\x1e.open_splunk.HECFixedHistogramR\x15rowsPerPhysicalInsert\"\x8f\x03\n" +
 	"#HECAcknowledgmentOperationalMetrics\x12\x1c\n" +
 	"\tavailable\x18\x01 \x01(\bR\tavailable\x12'\n" +
 	"\x0factive_channels\x18\x02 \x01(\x04R\x0eactiveChannels\x12+\n" +
@@ -661,32 +1055,38 @@ func file_open_splunk_hec_admin_api_proto_rawDescGZIP() []byte {
 	return file_open_splunk_hec_admin_api_proto_rawDescData
 }
 
-var file_open_splunk_hec_admin_api_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_open_splunk_hec_admin_api_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_open_splunk_hec_admin_api_proto_goTypes = []any{
 	(*GetHECOperationalSnapshotRequest)(nil),    // 0: open_splunk.GetHECOperationalSnapshotRequest
 	(*HECRequestOperationalMetrics)(nil),        // 1: open_splunk.HECRequestOperationalMetrics
 	(*HECDurableOperationalMetrics)(nil),        // 2: open_splunk.HECDurableOperationalMetrics
-	(*HECReconciliationOperationalMetrics)(nil), // 3: open_splunk.HECReconciliationOperationalMetrics
-	(*HECAcknowledgmentOperationalMetrics)(nil), // 4: open_splunk.HECAcknowledgmentOperationalMetrics
-	(*HECProtocolFailureMetric)(nil),            // 5: open_splunk.HECProtocolFailureMetric
-	(*GetHECOperationalSnapshotResponse)(nil),   // 6: open_splunk.GetHECOperationalSnapshotResponse
-	(*durationpb.Duration)(nil),                 // 7: google.protobuf.Duration
-	(*timestamppb.Timestamp)(nil),               // 8: google.protobuf.Timestamp
+	(*HECFixedHistogram)(nil),                   // 3: open_splunk.HECFixedHistogram
+	(*HECReconciliationOperationalMetrics)(nil), // 4: open_splunk.HECReconciliationOperationalMetrics
+	(*HECAcknowledgmentOperationalMetrics)(nil), // 5: open_splunk.HECAcknowledgmentOperationalMetrics
+	(*HECProtocolFailureMetric)(nil),            // 6: open_splunk.HECProtocolFailureMetric
+	(*GetHECOperationalSnapshotResponse)(nil),   // 7: open_splunk.GetHECOperationalSnapshotResponse
+	(*durationpb.Duration)(nil),                 // 8: google.protobuf.Duration
+	(*timestamppb.Timestamp)(nil),               // 9: google.protobuf.Timestamp
 }
 var file_open_splunk_hec_admin_api_proto_depIdxs = []int32{
-	7, // 0: open_splunk.HECRequestOperationalMetrics.staging_duration:type_name -> google.protobuf.Duration
-	7, // 1: open_splunk.HECDurableOperationalMetrics.oldest_pending_outbox_age:type_name -> google.protobuf.Duration
-	8, // 2: open_splunk.GetHECOperationalSnapshotResponse.observed_at:type_name -> google.protobuf.Timestamp
-	1, // 3: open_splunk.GetHECOperationalSnapshotResponse.request:type_name -> open_splunk.HECRequestOperationalMetrics
-	2, // 4: open_splunk.GetHECOperationalSnapshotResponse.durable:type_name -> open_splunk.HECDurableOperationalMetrics
-	3, // 5: open_splunk.GetHECOperationalSnapshotResponse.reconciliation:type_name -> open_splunk.HECReconciliationOperationalMetrics
-	4, // 6: open_splunk.GetHECOperationalSnapshotResponse.acknowledgments:type_name -> open_splunk.HECAcknowledgmentOperationalMetrics
-	5, // 7: open_splunk.GetHECOperationalSnapshotResponse.protocol_failures:type_name -> open_splunk.HECProtocolFailureMetric
-	8, // [8:8] is the sub-list for method output_type
-	8, // [8:8] is the sub-list for method input_type
-	8, // [8:8] is the sub-list for extension type_name
-	8, // [8:8] is the sub-list for extension extendee
-	0, // [0:8] is the sub-list for field type_name
+	8,  // 0: open_splunk.HECRequestOperationalMetrics.staging_duration:type_name -> google.protobuf.Duration
+	8,  // 1: open_splunk.HECDurableOperationalMetrics.oldest_pending_outbox_age:type_name -> google.protobuf.Duration
+	3,  // 2: open_splunk.HECReconciliationOperationalMetrics.member_batches_per_group:type_name -> open_splunk.HECFixedHistogram
+	3,  // 3: open_splunk.HECReconciliationOperationalMetrics.rows_per_group:type_name -> open_splunk.HECFixedHistogram
+	3,  // 4: open_splunk.HECReconciliationOperationalMetrics.decoded_bytes_per_group:type_name -> open_splunk.HECFixedHistogram
+	3,  // 5: open_splunk.HECReconciliationOperationalMetrics.monthly_partitions_per_group:type_name -> open_splunk.HECFixedHistogram
+	3,  // 6: open_splunk.HECReconciliationOperationalMetrics.rows_per_physical_insert:type_name -> open_splunk.HECFixedHistogram
+	9,  // 7: open_splunk.GetHECOperationalSnapshotResponse.observed_at:type_name -> google.protobuf.Timestamp
+	1,  // 8: open_splunk.GetHECOperationalSnapshotResponse.request:type_name -> open_splunk.HECRequestOperationalMetrics
+	2,  // 9: open_splunk.GetHECOperationalSnapshotResponse.durable:type_name -> open_splunk.HECDurableOperationalMetrics
+	4,  // 10: open_splunk.GetHECOperationalSnapshotResponse.reconciliation:type_name -> open_splunk.HECReconciliationOperationalMetrics
+	5,  // 11: open_splunk.GetHECOperationalSnapshotResponse.acknowledgments:type_name -> open_splunk.HECAcknowledgmentOperationalMetrics
+	6,  // 12: open_splunk.GetHECOperationalSnapshotResponse.protocol_failures:type_name -> open_splunk.HECProtocolFailureMetric
+	13, // [13:13] is the sub-list for method output_type
+	13, // [13:13] is the sub-list for method input_type
+	13, // [13:13] is the sub-list for extension type_name
+	13, // [13:13] is the sub-list for extension extendee
+	0,  // [0:13] is the sub-list for field type_name
 }
 
 func init() { file_open_splunk_hec_admin_api_proto_init() }
@@ -700,7 +1100,7 @@ func file_open_splunk_hec_admin_api_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_open_splunk_hec_admin_api_proto_rawDesc), len(file_open_splunk_hec_admin_api_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   7,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

@@ -74,15 +74,6 @@ func EmbeddedRelease() (Release, error) {
 	return embeddedReleaseCache.release, embeddedReleaseCache.err
 }
 
-// WebUI returns the embedded Next.js export rooted at its public directory.
-func WebUI() (fs.FS, error) {
-	release, err := EmbeddedRelease()
-	if err != nil {
-		return nil, err
-	}
-	return release.WebUI, nil
-}
-
 func loadRelease(filesystem fs.FS, expectedIdentity buildinfo.Identity) (Release, error) {
 	if filesystem == nil {
 		return Release{}, errors.New("load embedded release: filesystem is required")

@@ -1435,7 +1435,7 @@ func assertSearchInspectionProtoMatchesResult(
 			expected.Plan.Output.Fields,
 		) ||
 		logical.GetOutput().GetMaxDynamicFields() !=
-			uint32(expected.Plan.Output.MaxDynamicFields) {
+			expected.Plan.Output.MaxDynamicFields {
 		t.Fatalf("logical plan = %#v", logical)
 	}
 	wantKind, err := searchInspectionOutputKindToProto(

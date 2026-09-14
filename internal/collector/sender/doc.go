@@ -17,7 +17,9 @@
 //     to the queue (wal.Queue.Ack). Any per-event rejections are written to the
 //     dead-letter sink and do not block the queue.
 //   - BatchReject: the whole batch is permanently rejected; every event is
-//     dead-lettered and the batch is acked off the queue.
+//     dead-lettered and the batch is acked off the queue, except a negotiated
+//     REPACK_REQUIRED fence: lossless children replace the wire identity while
+//     the original source checkpoint barrier remains until they are terminal.
 //   - RetryBatch: non-terminal; the exact same durable batch is retained and
 //     resent after retry_after.
 //   - Throttle: adjusts send pacing and in-flight limits until effective_until.

@@ -3,6 +3,7 @@ package export
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/csv"
 	"errors"
@@ -32,14 +33,44 @@ type columnSelection struct {
 }
 
 func selectColumns(schema searchjobs.Schema, requested []string) (columnSelection, error) {
+	return selectColumnsContext(context.Background(), schema, requested, false)
+}
+
+func selectColumnsContext(ctx context.Context, schema searchjobs.Schema, requested []string, trustedWideSchema bool) (columnSelection, error) {
+	if ctx == nil {
+		return columnSelection{}, errors.New("select export columns: context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return columnSelection{}, err
+	}
 	if len(schema.Columns) == 0 {
 		return columnSelection{}, fmt.Errorf("%w: source schema is empty", ErrSourceUnavailable)
 	}
 	if len(schema.Columns) > maximumColumns {
-		return columnSelection{}, fmt.Errorf("%w: source exposes too many columns", ErrInvalidColumns)
+		if len(requested) == 0 {
+			return columnSelection{}, fmt.Errorf("%w: source exposes too many columns", ErrInvalidColumns)
+		}
+		if len(requested) > maximumColumns {
+			return columnSelection{}, fmt.Errorf("%w: source schema exceeds the selection limit", ErrInvalidColumns)
+		}
+		// Only the private immutable result attestation can replace this size
+		// measurement. The complete name/selection scan below always runs.
+		if !trustedWideSchema {
+			_, valid, err := measureTrustedSourceSchema(ctx, schema)
+			if err != nil {
+				return columnSelection{}, err
+			}
+			if !valid {
+				return columnSelection{}, fmt.Errorf("%w: source schema exceeds the selection limit", ErrInvalidColumns)
+			}
+		}
+		return selectWideSourceColumns(ctx, schema, requested)
 	}
 	available := make(map[string]int, len(schema.Columns))
 	for index, column := range schema.Columns {
+		if err := ctx.Err(); err != nil {
+			return columnSelection{}, err
+		}
 		if column.Name == "" || !utf8.ValidString(column.Name) {
 			return columnSelection{}, fmt.Errorf("%w: source schema is invalid", ErrSourceUnavailable)
 		}
@@ -55,6 +86,9 @@ func selectColumns(schema searchjobs.Schema, requested []string) (columnSelectio
 		for index := range indexes {
 			indexes[index] = index
 		}
+		if err := ctx.Err(); err != nil {
+			return columnSelection{}, err
+		}
 		return columnSelection{columns: columns, indexes: indexes}, nil
 	}
 
@@ -64,6 +98,9 @@ func selectColumns(schema searchjobs.Schema, requested []string) (columnSelectio
 	}
 	seen := make(map[string]struct{}, len(requested))
 	for _, name := range requested {
+		if err := ctx.Err(); err != nil {
+			return columnSelection{}, err
+		}
 		index, exists := available[name]
 		if !exists || name == "" {
 			return columnSelection{}, fmt.Errorf("%w: selected column %q is unknown", ErrInvalidColumns, name)
@@ -74,6 +111,77 @@ func selectColumns(schema searchjobs.Schema, requested []string) (columnSelectio
 		seen[name] = struct{}{}
 		selection.columns = append(selection.columns, schema.Columns[index])
 		selection.indexes = append(selection.indexes, index)
+	}
+	if err := ctx.Err(); err != nil {
+		return columnSelection{}, err
+	}
+	return selection, nil
+}
+
+// selectWideSourceColumns indexes only the bounded requested subset. Its
+// production caller admits this path solely for a privately attested completed
+// result, whose full schema was validated before retention. The scan still
+// rejects malformed names and duplicate occurrences of selected columns.
+func selectWideSourceColumns(
+	ctx context.Context,
+	schema searchjobs.Schema,
+	requested []string,
+) (columnSelection, error) {
+	if err := ctx.Err(); err != nil {
+		return columnSelection{}, err
+	}
+	selection := columnSelection{
+		columns: make([]searchjobs.Column, len(requested)),
+		indexes: make([]int, len(requested)),
+	}
+	requestedIndexes := make(map[string]int, len(requested))
+	found := make([]bool, len(requested))
+	for index, name := range requested {
+		if err := ctx.Err(); err != nil {
+			return columnSelection{}, err
+		}
+		if name == "" || !utf8.ValidString(name) {
+			return columnSelection{}, fmt.Errorf("%w: selected column %q is unknown", ErrInvalidColumns, name)
+		}
+		if _, duplicate := requestedIndexes[name]; duplicate {
+			return columnSelection{}, fmt.Errorf("%w: selected column %q is duplicated", ErrInvalidColumns, name)
+		}
+		requestedIndexes[name] = index
+	}
+	for sourceIndex, column := range schema.Columns {
+		if sourceIndex%1_024 == 0 {
+			if err := ctx.Err(); err != nil {
+				return columnSelection{}, err
+			}
+		}
+		if column.Name == "" || !utf8.ValidString(column.Name) {
+			return columnSelection{}, fmt.Errorf("%w: source schema is invalid", ErrSourceUnavailable)
+		}
+		selectionIndex, selected := requestedIndexes[column.Name]
+		if !selected {
+			continue
+		}
+		if found[selectionIndex] {
+			return columnSelection{}, fmt.Errorf("%w: source schema is invalid", ErrSourceUnavailable)
+		}
+		found[selectionIndex] = true
+		selection.columns[selectionIndex] = column
+		selection.indexes[selectionIndex] = sourceIndex
+	}
+	for index, present := range found {
+		if err := ctx.Err(); err != nil {
+			return columnSelection{}, err
+		}
+		if !present {
+			return columnSelection{}, fmt.Errorf(
+				"%w: selected column %q is unknown",
+				ErrInvalidColumns,
+				requested[index],
+			)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return columnSelection{}, err
 	}
 	return selection, nil
 }

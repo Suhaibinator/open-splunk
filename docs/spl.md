@@ -66,6 +66,28 @@ rewrite the limits already attached to a running or retained job. The API
 validates the current supported ranges, so clients should use the returned
 settings rather than assuming these defaults are permanent.
 
+For eligible event searches, the executor passes the retained-row ceiling plus
+one overflow row to ClickHouse after the complete pipeline and final ordering.
+The overflow row is still validated before reporting truncation. Queries with
+aggregation or complete-result validation keep their full execution contract.
+The retained query remains unlimited so exports and field or timeline analysis
+use their own independent bounds.
+
+Exact case-insensitive ID searches retain their full SPL predicate alongside
+an index candidate. Indexes may skip only storage blocks that cannot match;
+their availability never changes the result. See [migration maintenance](../migrations/README.md)
+for indexing historical event parts and [search performance checks](../integration/README.md#search-performance-and-parity)
+for reproducible comparisons.
+
+The same Server settings section carries the Appearance card, which sets the
+instance-wide UI palette every browser session paints, the sign-in page
+included; light and dark stay each user's own choice. Selecting a palette
+previews it in the administrator's own tab only; Apply writes it through
+`/api/server/appearance/update`, versioned separately from the search policy
+so the two forms never conflict with each other, and every other session
+picks it up on its next load through bootstrap. See
+[Theming](theming.md) for the palettes themselves.
+
 The semantic rule inventory is:
 
 | Rule | Contract |
@@ -75,6 +97,7 @@ The semantic rule inventory is:
 | `SPL-PRECEDENCE-001` | fixed operator precedence and associativity |
 | `SPL-GROUPING-001` | scalar/Boolean parenthesis disambiguation |
 | `SPL-LEXER-001` | exact punctuation and operator transitions |
+| `SPL-CALENDAR-SPAN-001` | exact subsecond, elapsed, and magnitude-aware civil timechart grids |
 | `SPL-QUOTED-FIELD-001` | exact quoted field references where explicitly supported |
 | `SPL-STATS-BY-MULTIVALUE-001` | bounded multivalue grouping |
 | `SPL-ARITHMETIC-TYPE-001` | numeric operator eligibility and result types |
@@ -125,6 +148,29 @@ minimum. Both endpoints resolve from one clock capture and form `[earliest,
 latest)`. Calendar-day operations use the effective IANA timezone; elapsed
 hours and calendar days can differ across daylight-saving transitions.
 
+`bin`/`bucket` retain their existing time discretization. `timechart` supports
+exact subsecond and elapsed spans plus positive-magnitude civil day, week,
+month, quarter, and year spans. A fixed `24h` span remains an elapsed
+86,400-second interval and is distinct from the timezone-aware `1d` calendar
+span. Full grid, alignment, sparse-output, series, composition, and result
+metadata behavior is defined in the [timechart contract](timechart.md).
+
+When `timechart` omits `span`, it uses `bins=100` and chooses the first aligned
+step that produces no more than that many buckets: `1s`, `5s`, `10s`, `30s`,
+`1m`, `5m`, `10m`, `30m`, `1h`, `1d`, `1month`, then `2`, `3`, `6`, `12`, `24`,
+`60`, `120`, `240`, `600`, `1200`, `2400`, and `6000` months. `bins=N` changes
+the maximum rather than requesting exactly N buckets, and is bounded from 1
+through 10,000. `minspan=` skips smaller ladder steps; for example,
+`minspan=15m` selects at least `30m`, while `minspan=2d` selects at least
+`1month`. An explicit `span=` takes precedence over `bins=` and `minspan=`.
+These time-axis options must precede the aggregate. Time-axis controls also
+include `aligntime`,
+`cont`, `partial`, and `fixedrange`; series options retain their placement
+before the aggregate or after the `BY` field. Calendar and fixed timechart
+grids remain bounded to 10,000 buckets. The command fails when no supported
+automatic step satisfies the requested `bins` and `minspan` constraints. The
+timeline endpoint continues to use its fixed elapsed-time grid.
+
 Base search and pipeline `search` support terms and phrases over `_raw`,
 parentheses, implicit and explicit `AND`, `OR`, `NOT`, typed field comparisons,
 `*` wildcards, canonical fields, and bounded dotted dynamic paths. Search
@@ -153,6 +199,12 @@ fields. Supported scalar functions include `isnull`, `isnotnull`, `replace`,
 
 The scalar function pack follows these contracts:
 
+- `replace` rejects a call whose conservative output bound exceeds 16 MiB,
+  or a query whose replacement bounds total more than 64 MiB per row, with
+  `SPL_QUERY_TOO_COMPLEX` before SQL execution. The bound includes capture
+  substitutions and nested calls. It can reject a short runtime field, sparse
+  matches, or an unused result when the compiler cannot prove a smaller bound.
+  A later `substr`, filter, or projection does not waive replacement admission.
 - `abs`, `sqrt`, `exp`, `ln`, `log(x[, base])`, `pow`, and `pi()` share the
   arithmetic operand rules, so each call charges one arithmetic operator and
   accepts finite numeric values and bounded numeric strings but not
@@ -257,8 +309,8 @@ The cumulative command surface is:
 | `eventstats` | bounded row-preserving aggregate attachment |
 | `streamstats` | bounded ordered running aggregates |
 | `top`, `rare` | bounded frequency summaries; `countfield=`/`percentfield=` rename and `showcount=false`/`showperc=false` hide the generated outputs; `BY g…` groups the tuples, scopes `percent` to each group, and keeps `limit` tuples per group (`SPL-FREQUENCY-BY-001`) |
-| `bin`/`bucket` | numeric and time discretization |
-| `timechart`, `chart` | bounded chart aggregation and split series; `timechart … BY <field>` accepts `limit=1..10`, `useother=<bool>`, and `usenull=<bool>` before the aggregate or after the split field (`limit=0` is rejected); `chart <agg> BY <row>` (or `OVER <row>`) with one split field is the `stats <agg> BY <row>` table |
+| `bin`/`bucket` | numeric discretization and `_time` discretization by fixed `s`/`m`/`h` spans or timezone-aware `1d`/`1w` calendar spans (`SPL-CALENDAR-SPAN-001`) |
+| `timechart`, `chart` | bounded chart aggregation and split series; `timechart` supports exact subsecond, elapsed, and magnitude-aware calendar grids, sparse and partial controls, relative alignment, composable typed output, and exact bucket-bound metadata; split `limit=0` selects all ordinary series subject to independent atomic resource limits; see the [timechart contract](timechart.md); `chart <agg> BY <row>` (or `OVER <row>`) with one split field is the `stats <agg> BY <row>` table |
 | `regex` | bounded RE2 row filtering (`SPL-REGEX-001`) |
 | `reverse` | reverse the complete established relation order (`SPL-REVERSE-001`) |
 | `accum` | running numeric sum (`SPL-ACCUM-001`) |

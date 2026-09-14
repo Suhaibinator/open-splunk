@@ -1,15 +1,23 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import type { SearchDataMode } from "@/lib/search/backend-data";
 import { searchLaunchHref } from "@/lib/search/launch-url";
+import { commitRoutedView } from "@/lib/view-navigation";
 
 import { AppIcon } from "../_components/app-icon";
+import { BackendResourceState } from "../_components/backend-resource-state";
 import { StatusLabel } from "../_components/status";
 import { PageHeading } from "../_components/product-shell";
 import { BackendReportsConsole } from "./backend-reports-console";
+import {
+  REPORTS_BASE_PATH,
+  reportsViewFromPathname,
+  type ReportsView,
+} from "./reports-view-state";
+import { Select, SelectOption } from "../_components/select";
 
 type ReportScope = "all" | "mine" | "scheduled" | "favorites";
 type ReportType = "all" | "chart" | "statistics" | "events";
@@ -158,10 +166,57 @@ function compareReports(left: ReportDefinition, right: ReportDefinition, sort: S
 interface ReportsConsoleProps {
   dataMode: SearchDataMode;
   apiBaseUrl: string;
+  canonicalizeParent?: boolean;
+  initialView: ReportsView;
 }
 
-export function ReportsConsole({ dataMode, apiBaseUrl }: ReportsConsoleProps) {
-  if (dataMode === "backend") return <BackendReportsConsole apiBaseUrl={apiBaseUrl} />;
+export function ReportsConsole({
+  dataMode,
+  apiBaseUrl,
+  canonicalizeParent = false,
+  initialView,
+}: ReportsConsoleProps) {
+  const [view, setView] = useState(initialView);
+  const [activeInitialView, setActiveInitialView] = useState(initialView);
+  if (activeInitialView !== initialView) {
+    setActiveInitialView(initialView);
+    setView(initialView);
+  }
+
+  useEffect(() => {
+    if (canonicalizeParent) {
+      commitRoutedView(window, REPORTS_BASE_PATH, "saved-searches", "replace");
+    }
+    function restoreView() {
+      const restored = reportsViewFromPathname(window.location.pathname);
+      if (restored !== null) setView(restored);
+    }
+    window.addEventListener("popstate", restoreView);
+    return () => window.removeEventListener("popstate", restoreView);
+  }, [canonicalizeParent]);
+
+  function navigateView(nextView: ReportsView) {
+    if (nextView === view) return;
+    setView(nextView);
+    commitRoutedView(window, REPORTS_BASE_PATH, nextView, "push");
+  }
+
+  if (dataMode === "backend") {
+    return <BackendReportsConsole apiBaseUrl={apiBaseUrl} view={view} onViewChange={navigateView} />;
+  }
+  if (view === "alerts") {
+    return (
+      <div className="suite-page reports-page">
+        <PageHeading eyebrow="SEARCH & REPORTING" title="Reports" description="Curated searches for recurring operational questions and scheduled delivery." />
+        <BackendResourceState
+          kind="unavailable"
+          title="Reports view not found"
+          message="Alert management is not available in preview data mode."
+          action={<Link href="/reports/saved-searches/">View saved searches</Link>}
+        />
+      </div>
+    );
+  }
   return <DemoReportsConsole />;
 }
 
@@ -217,7 +272,7 @@ function DemoReportsConsole() {
         description="Curated searches for recurring operational questions and scheduled delivery."
         actions={(
           <>
-            <Link className="button" href="/search/">Open Search</Link>
+            <Link className="button" href="/search/events/">Open Search</Link>
             <Link
               className="button button--primary"
               href={searchLaunchHref("index=gradethis | stats count by service", { run: false })}
@@ -269,31 +324,31 @@ function DemoReportsConsole() {
               placeholder="Find by name, SPL, or owner"
             />
           </label>
-          <label className="reports-select-field">
+          <label htmlFor="reports-console-choice-329" className="reports-select-field">
             <span>Type</span>
-            <select value={type} onChange={(event) => setType(event.target.value as ReportType)}>
-              <option value="all">All types</option>
-              <option value="chart">Charts</option>
-              <option value="statistics">Statistics</option>
-              <option value="events">Event lists</option>
-            </select>
+            <Select id="reports-console-choice-329" value={type} onValueChange={(selectedValue) => setType(selectedValue as ReportType)}>
+              <SelectOption value="all">All types</SelectOption>
+              <SelectOption value="chart">Charts</SelectOption>
+              <SelectOption value="statistics">Statistics</SelectOption>
+              <SelectOption value="events">Event lists</SelectOption>
+            </Select>
           </label>
-          <label className="reports-select-field">
+          <label htmlFor="reports-console-choice-338" className="reports-select-field">
             <span>Status</span>
-            <select value={status} onChange={(event) => setStatus(event.target.value as "all" | ReportStatus)}>
-              <option value="all">All statuses</option>
-              <option value="Scheduled">Scheduled</option>
-              <option value="Manual">Manual</option>
-              <option value="Paused">Paused</option>
-            </select>
+            <Select id="reports-console-choice-338" value={status} onValueChange={(selectedValue) => setStatus(selectedValue as "all" | ReportStatus)}>
+              <SelectOption value="all">All statuses</SelectOption>
+              <SelectOption value="Scheduled">Scheduled</SelectOption>
+              <SelectOption value="Manual">Manual</SelectOption>
+              <SelectOption value="Paused">Paused</SelectOption>
+            </Select>
           </label>
-          <label className="reports-select-field">
+          <label htmlFor="reports-console-choice-347" className="reports-select-field">
             <span>Sort</span>
-            <select value={sort} onChange={(event) => setSort(event.target.value as SortOrder)}>
-              <option value="modified">Recently modified</option>
-              <option value="name">Name</option>
-              <option value="nextRun">Next scheduled run</option>
-            </select>
+            <Select id="reports-console-choice-347" value={sort} onValueChange={(selectedValue) => setSort(selectedValue as SortOrder)}>
+              <SelectOption value="modified">Recently modified</SelectOption>
+              <SelectOption value="name">Name</SelectOption>
+              <SelectOption value="nextRun">Next scheduled run</SelectOption>
+            </Select>
           </label>
         </div>
 

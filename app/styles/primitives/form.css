@@ -47,8 +47,7 @@
 
 .form-stack input,
 .form-stack textarea,
-.library-toolbar input,
-.library-toolbar select {
+.library-toolbar input {
   background: var(--bg-surface);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
@@ -62,6 +61,110 @@
 .form-stack textarea {
   padding: var(--space-2) 9px;
   resize: vertical;
+}
+
+.select {
+  anchor-scope: --select-anchor;
+  min-width: 0;
+  position: relative;
+}
+
+.select__trigger {
+  align-items: center;
+  anchor-name: --select-anchor;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--fg-text);
+  display: flex;
+  font: inherit;
+  height: var(--space-select-control-height);
+  justify-content: space-between;
+  min-width: 0;
+  padding: 0 var(--space-2);
+  width: 100%;
+}
+
+.select__trigger:disabled {
+  color: var(--fg-faint);
+  cursor: not-allowed;
+}
+
+.select__trigger[aria-invalid="true"] {
+  border-color: var(--status-error);
+}
+
+.select__value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.select__input {
+  clip-path: inset(50%);
+  height: var(--space-1);
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: var(--space-1);
+}
+
+.select__listbox {
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-md);
+  margin: 0;
+  max-height: min(var(--space-select-listbox-max-height), calc(100dvh - var(--space-8)));
+  max-width: calc(100dvw - var(--space-8));
+  overflow-y: auto;
+  padding: var(--space-1);
+  position: absolute;
+  position-anchor: --select-anchor;
+  position-area: block-end span-inline-end;
+  position-try-fallbacks: flip-block, flip-inline, flip-block flip-inline;
+  width: min(anchor-size(width), calc(100dvw - var(--space-8)));
+  z-index: var(--z-dropdown);
+}
+
+.select__option {
+  background: transparent;
+  border: 0;
+  color: var(--fg-text);
+  display: block;
+  font: inherit;
+  min-height: var(--space-select-control-height);
+  overflow-wrap: anywhere;
+  padding: 0 var(--space-2);
+  text-align: left;
+  width: 100%;
+}
+
+.select__option[aria-selected="true"] {
+  background: var(--accent-soft);
+}
+
+.select__option[data-active="true"] {
+  outline: var(--space-select-active-outline) solid var(--border-focus);
+}
+
+.select__option:disabled {
+  color: var(--fg-faint);
+}
+
+.select__empty {
+  color: var(--fg-faint);
+  display: block;
+  min-height: var(--space-select-control-height);
+  padding: 0 var(--space-2);
+}
+
+@media (max-width: 760px) {
+  .select__trigger,
+  .select__option {
+    font-size: var(--type-xl);
+    min-height: var(--space-select-touch-height);
+  }
 }
 
 .form-summary {
@@ -109,11 +212,6 @@
   outline: 0;
   padding: 0 9px;
   width: 100%;
-}
-
-.library-toolbar select {
-  height: 34px;
-  padding: 0 28px 0 9px;
 }
 
 .segmented-fieldset,
@@ -280,7 +378,6 @@
 
 .live-jobs-text-filter input,
 .admin-toolbar input,
-.admin-toolbar select,
 .resource-toolbar input,
 .activity-tabs-row input,
 .dataset-toolbar input {
@@ -295,7 +392,6 @@
 }
 
 .live-jobs-text-filter,
-.live-jobs-app-filter,
 .reports-search-field {
   align-items: center;
   background: var(--bg-surface);

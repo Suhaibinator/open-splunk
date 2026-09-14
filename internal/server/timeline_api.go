@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/SRouter/pkg/codec"
-	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/searchanalysis"
@@ -15,15 +14,14 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 )
 
-func (handler *apiHandler) searchTimelineRoutes(noAuth router.AuthLevel, smallRequestBytes int64) []router.RouteDefinition {
-	return []router.RouteDefinition{
-		router.RouteConfig[*opensplunk.GetSearchTimelineRequest, *serializedSearchTimelineResponse]{
-			Path: "/search/jobs/timeline", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newSerializedSearchTimelineCodec(), Handler: handler.getSearchTimeline,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: handler.sanitizeGetSearchTimelineRequest,
-		},
-	}
+func (handler *apiHandler) registerSearchTimelineRoutes(group *apiRouteGroup, smallRequestBytes int64) {
+	group.Route(sizedPostRoute(
+		"/search/jobs/timeline",
+		smallRequestBytes,
+		newSerializedSearchTimelineCodec(),
+		handler.getSearchTimeline,
+		handler.sanitizeGetSearchTimelineRequest,
+	))
 }
 
 func (handler *apiHandler) getSearchTimeline(request *http.Request, input *opensplunk.GetSearchTimelineRequest) (*serializedSearchTimelineResponse, error) {
@@ -37,6 +35,16 @@ func (handler *apiHandler) getSearchTimeline(request *http.Request, input *opens
 		analysisRequest.PreferredBucketWidthSeconds = new(preferred.GetSeconds())
 	}
 
+	result, err := handler.searchTimelines.Get(request.Context(), handler.accessScope(), analysisRequest)
+	if err := mapSearchTimelineCallError(request.Context(), err); err != nil {
+		return nil, err
+	}
+	if err := searchTimelineRequestContextError(request.Context()); err != nil {
+		return nil, err
+	}
+	// Timeline analysis may scan and aggregate the completed event relation.
+	// Hold the shared response permit only while converting, marshaling, and
+	// writing the already-bounded result.
 	release, acquired := handler.acquireSerialization()
 	if !acquired {
 		return nil, unavailableError("search timeline response capacity is exhausted")
@@ -47,13 +55,6 @@ func (handler *apiHandler) getSearchTimeline(request *http.Request, input *opens
 			release()
 		}
 	}()
-	result, err := handler.searchTimelines.Get(request.Context(), handler.accessScope(), analysisRequest)
-	if err := mapSearchTimelineCallError(request.Context(), err); err != nil {
-		return nil, err
-	}
-	if err := searchTimelineRequestContextError(request.Context()); err != nil {
-		return nil, err
-	}
 	response, err := searchTimelineResultToProto(result, maximumResponseBuckets)
 	if err != nil {
 		return nil, internalError()

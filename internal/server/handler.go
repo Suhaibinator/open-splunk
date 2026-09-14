@@ -27,6 +27,7 @@ import (
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgepreview"
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
 	"github.com/Suhaibinator/open-splunk/internal/scheduledreports"
 	"github.com/Suhaibinator/open-splunk/internal/searchanalysis"
@@ -40,6 +41,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/searchsuggestions"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
+	"github.com/Suhaibinator/open-splunk/internal/uipalette"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"google.golang.org/protobuf/proto"
@@ -61,6 +63,8 @@ const (
 	searchTimelinePath                = "/api/search/jobs/timeline"
 	searchInspectionRoute             = "/search/jobs/inspect"
 	searchInspectionPath              = apiPathPrefix + searchInspectionRoute
+	nearbyContextRoute                = "/search/jobs/nearby/prepare"
+	nearbyContextPath                 = apiPathPrefix + nearbyContextRoute
 	auditEventsListRoute              = "/audit/events/list"
 	auditEventsListPath               = apiPathPrefix + auditEventsListRoute
 	searchWebSocketPath               = "/api/search/ws"
@@ -103,6 +107,11 @@ type SearchJobs interface {
 	CancelFor(searchjobs.AccessScope, string) error
 }
 
+type idempotentSearchJobs interface {
+	ReplayIdempotent(context.Context, searchjobs.AccessScope, requestidempotency.Intent) (searchjobs.Job, bool, error)
+	CreateIdempotent(context.Context, searchjobs.CreateRequest, requestidempotency.Intent) (searchjobs.Job, bool, error)
+}
+
 var (
 	ErrTrustedSearchAppUnavailable       = errors.New("trusted search app is unavailable")
 	ErrTrustedSearchIndexUnavailable     = errors.New("trusted search index is unavailable")
@@ -126,6 +135,11 @@ type TrustedSearchAdmissionRequest struct {
 // production so none of them can drift around current app/index authority.
 type TrustedSearchAdmission interface {
 	AdmitTrustedSearch(context.Context, TrustedSearchAdmissionRequest) (searchjobs.Job, error)
+}
+
+type idempotentTrustedSearchAdmission interface {
+	ReplayTrustedSearch(context.Context, searchjobs.AccessScope, requestidempotency.Intent) (searchjobs.Job, bool, error)
+	AdmitTrustedSearchIdempotent(context.Context, TrustedSearchAdmissionRequest, requestidempotency.Intent) (searchjobs.Job, bool, error)
 }
 
 // SearchArtifacts is the durable retained-result surface. It is deliberately
@@ -219,6 +233,14 @@ type RuntimeReadiness interface {
 // HECOperationalSnapshot is the fixed-shape, administrator-only HEC
 // projection. It deliberately has no string, byte, map, or slice fields which
 // could carry token, channel, index, request, or event identity.
+type HECFixedHistogramSnapshot struct {
+	UpperBounds  [13]uint64
+	BucketCounts [14]uint64
+	Count        uint64
+	Sum          uint64
+	Max          uint64
+}
+
 type HECOperationalSnapshot struct {
 	ObservedAt                time.Time
 	Requests                  uint64
@@ -233,6 +255,11 @@ type HECOperationalSnapshot struct {
 	StagingDuration           time.Duration
 	PendingOutboxReservations uint64
 	PendingOutboxBytes        uint64
+	PendingMetadataBytes      uint64
+	PendingUngrouped          uint64
+	ReadyWriteGroups          uint64
+	AmbiguousWriteGroups      uint64
+	LiveWriteGroupLeases      uint64
 	OldestPendingOutboxAge    time.Duration
 	RequestCapacityAvailable  bool
 	RetainedRequests          uint64
@@ -241,6 +268,35 @@ type HECOperationalSnapshot struct {
 	ReconciliationSuccesses   uint64
 	ReconciliationRetries     uint64
 	ReconciliationAmbiguities uint64
+	StagedLogicalBatches      uint64
+	StagedLogicalRows         uint64
+	FormedWriteGroups         uint64
+	PhysicalInsertSends       uint64
+	SuccessfulWriteGroups     uint64
+	WriteGroupMemberBatches   uint64
+	WriteGroupRows            uint64
+	WriteGroupDecodedBytes    uint64
+	WriteGroupMonthlyParts    uint64
+	MemberBatchesPerGroup     HECFixedHistogramSnapshot
+	RowsPerGroup              HECFixedHistogramSnapshot
+	DecodedBytesPerGroup      HECFixedHistogramSnapshot
+	MonthlyPartitionsPerGroup HECFixedHistogramSnapshot
+	RowsPerPhysicalInsert     HECFixedHistogramSnapshot
+	FillRowTarget             uint64
+	FillByteTarget            uint64
+	FillHardBoundary          uint64
+	FillLinger                uint64
+	FillDrain                 uint64
+	FillRecovery              uint64
+	NativeWaiters             uint64
+	PeakNativeWaiters         uint64
+	NativeWaiterWakeups       uint64
+	NativeWaiterCancellations uint64
+	NativeTerminalLookups     uint64
+	SealLatencyBuckets        [8]uint64
+	SendLatencyBuckets        [8]uint64
+	CommitLatencyBuckets      [8]uint64
+	LatencyUpperBoundsMicros  [7]uint64
 	ActiveChannels            uint64
 	RetainedChannels          uint64
 	PendingAcknowledgments    uint64
@@ -537,11 +593,16 @@ type BootstrapConfig struct {
 }
 
 // Settings is the administrator mutation surface and live bootstrap
-// view for node-wide search limits.
+// view for node-wide settings: the search-limits policy and the instance
+// UI palette. One admin surface and one runtime object own both, under
+// SERVER_FEATURE_SERVER_SETTINGS_ADMIN.
 type Settings interface {
 	Get(context.Context) (control.ServerSearchSettings, error)
 	Update(context.Context, uint64, searchlimits.Policy) (control.ServerSearchSettings, error)
 	Current() control.ServerSearchSettings
+	GetAppearance(context.Context) (control.ServerAppearanceSettings, error)
+	UpdateAppearance(context.Context, uint64, uipalette.Palette) (control.ServerAppearanceSettings, error)
+	CurrentAppearance() control.ServerAppearanceSettings
 }
 
 // AlertCoordinator is the complete scheduled/run-now execution boundary. It
@@ -559,6 +620,7 @@ type Config struct {
 	Logger                     *zap.Logger
 	SearchJobs                 SearchJobs
 	SearchArtifacts            SearchArtifacts
+	SearchPatterns             SearchPatterns
 	TrustedSearchAdmission     TrustedSearchAdmission
 	RuntimeReadiness           RuntimeReadiness
 	Indexes                    IndexCatalog
@@ -632,6 +694,7 @@ type apiHandler struct {
 	logger                     *zap.Logger
 	jobs                       SearchJobs
 	searchArtifacts            SearchArtifacts
+	searchPatterns             SearchPatterns
 	trustedSearchAdmission     TrustedSearchAdmission
 	indexes                    IndexCatalog
 	indexAdmin                 IndexAdministration
@@ -708,9 +771,6 @@ func NewHandler(config Config) (*Handler, error) {
 	if isNilDependency(config.SearchJobs) {
 		return nil, errors.New("create server handler: search job service is required")
 	}
-	if isNilDependency(config.Indexes) {
-		return nil, errors.New("create server handler: index catalog is required")
-	}
 	runtimeReadiness := config.RuntimeReadiness
 	if isNilDependency(runtimeReadiness) {
 		runtimeReadiness = nil
@@ -719,204 +779,55 @@ func NewHandler(config Config) (*Handler, error) {
 	if isNilDependency(trustedSearchAdmission) {
 		trustedSearchAdmission = nil
 	}
-	indexAdmin := config.IndexAdmin
-	if isNilDependency(indexAdmin) {
-		if inferred, ok := config.Indexes.(IndexAdministration); ok && !isNilDependency(inferred) {
-			indexAdmin = inferred
-		} else {
-			indexAdmin = nil
-		}
+	indexServices, err := normalizeHandlerIndexServices(config)
+	if err != nil {
+		return nil, err
 	}
-	indexStatistics := config.IndexStatistics
-	if isNilDependency(indexStatistics) {
-		indexStatistics = nil
+	knowledgeServices, err := normalizeHandlerKnowledgeServices(config)
+	if err != nil {
+		return nil, err
 	}
-	indexStatisticsSnapshotter := config.IndexStatisticsSnapshotter
-	if isNilDependency(indexStatisticsSnapshotter) {
-		indexStatisticsSnapshotter = nil
+	lookupServices, err := normalizeHandlerLookupServices(config)
+	if err != nil {
+		return nil, err
 	}
-	if (indexStatistics == nil) != (indexStatisticsSnapshotter == nil) {
-		return nil, errors.New(
-			"create server handler: index statistics and snapshotter must be configured together",
-		)
-	}
-	if indexStatistics != nil && indexAdmin == nil {
-		return nil, errors.New(
-			"create server handler: index statistics requires index administration",
-		)
-	}
-	indexFields := config.IndexFields
-	if isNilDependency(indexFields) {
-		indexFields = nil
-	}
-	if indexFields != nil && indexAdmin == nil {
-		return nil, errors.New(
-			"create server handler: index fields require index administration",
-		)
-	}
-	indexDataDeletionAdmission := config.IndexDataDeletionAdmission
-	if isNilDependency(indexDataDeletionAdmission) {
-		indexDataDeletionAdmission = nil
-	}
-	indexDataDeletionWaker := config.IndexDataDeletionWaker
-	if isNilDependency(indexDataDeletionWaker) {
-		indexDataDeletionWaker = nil
-	}
-	if (indexDataDeletionAdmission == nil) !=
-		(indexDataDeletionWaker == nil) {
-		return nil, errors.New(
-			"create server handler: index data deletion admission and waker must be configured together",
-		)
-	}
-	if indexDataDeletionAdmission != nil && indexAdmin == nil {
-		return nil, errors.New(
-			"create server handler: index data deletion requires index administration",
-		)
-	}
-	ingestionTokens := config.IngestionTokens
-	if isNilDependency(ingestionTokens) {
-		ingestionTokens = nil
-	}
-	hecOperations := config.HECOperations
-	if isNilDependency(hecOperations) {
-		hecOperations = nil
-	}
-	auditEvents := config.AuditEvents
-	if isNilDependency(auditEvents) {
-		auditEvents = nil
-	}
-	searchAttemptAuditEvents := config.SearchAttemptAuditEvents
-	if isNilDependency(searchAttemptAuditEvents) {
-		searchAttemptAuditEvents = nil
-	}
-	serverSettings := config.ServerSettings
-	if isNilDependency(serverSettings) {
-		serverSettings = nil
-	}
-	collectorAdmin := config.CollectorAdmin
-	if isNilDependency(collectorAdmin) {
-		collectorAdmin = nil
-	}
-	appAdmin := config.AppAdmin
-	if isNilDependency(appAdmin) {
-		appAdmin = nil
-	}
-	knowledgeAdmission := knowledgeSearchAdmissionEnabled(config.SearchJobs)
-	lookupAdmission := lookupSearchAdmissionEnabled(config.SearchJobs)
-	appCatalog := config.AppCatalog
-	if isNilDependency(appCatalog) {
-		appCatalog = nil
-	}
-	if knowledgeAdmission && appCatalog == nil {
-		return nil, errors.New(
-			"create server handler: knowledge-aware search admission requires a live app catalog",
-		)
-	}
-	if appCatalog != nil && len(config.Bootstrap.Apps) != 0 {
-		return nil, errors.New(
-			"create server handler: live app catalog and static bootstrap apps cannot both be configured",
-		)
-	}
-	knowledgeCatalog := config.KnowledgeCatalog
-	if isNilDependency(knowledgeCatalog) {
-		knowledgeCatalog = nil
-	}
-	knowledgeWriter := config.KnowledgeWriter
-	if isNilDependency(knowledgeWriter) {
-		knowledgeWriter = nil
-	}
-	knowledgeApps := config.KnowledgeApps
-	if isNilDependency(knowledgeApps) {
-		knowledgeApps = nil
-	}
-	knowledgeAttempts := config.KnowledgeAttempts
-	if isNilDependency(knowledgeAttempts) {
-		knowledgeAttempts = nil
-	}
-	knowledgeDependenciesConfigured := []bool{
-		knowledgeCatalog != nil,
-		knowledgeWriter != nil,
-		knowledgeApps != nil,
-		knowledgeAttempts != nil,
-	}
-	configuredKnowledgeDependencies := 0
-	for _, configured := range knowledgeDependenciesConfigured {
-		if configured {
-			configuredKnowledgeDependencies++
-		}
-	}
-	if configuredKnowledgeDependencies != 0 &&
-		configuredKnowledgeDependencies != len(knowledgeDependenciesConfigured) {
-		return nil, errors.New(
-			"create server handler: knowledge management dependencies must be configured together",
-		)
-	}
-	if configuredKnowledgeDependencies == len(knowledgeDependenciesConfigured) &&
-		!replaysUnavailableActiveMutations(knowledgeWriter) {
-		return nil, errors.New(
-			"create server handler: knowledge management requires the concrete catalog writer",
-		)
-	}
-	knowledgePreview := config.KnowledgePreview
-	if knowledgePreview != nil &&
-		(configuredKnowledgeDependencies != len(knowledgeDependenciesConfigured) ||
-			!knowledgePreview.Ready()) {
-		return nil, errors.New(
-			"create server handler: knowledge preview requires the complete ready knowledge management family",
-		)
-	}
-	lookupManagement := config.LookupManagement
-	if isNilDependency(lookupManagement) {
-		lookupManagement = nil
-	} else if !lookupManagement.Ready() {
-		return nil, errors.New(
-			"create server handler: lookup management service is not ready",
-		)
-	}
-	alertCoordinator := config.AlertCoordinator
-	if isNilDependency(alertCoordinator) {
-		alertCoordinator = nil
-	}
-	completeAlertFamily := config.AlertService != nil &&
-		!isNilDependency(config.AlertRepository) &&
-		!isNilDependency(config.AlertDeliverer) &&
-		alertCoordinator != nil
-	browserAuthenticator := config.BrowserAuthenticator
-	if isNilDependency(browserAuthenticator) {
-		browserAuthenticator = nil
-	}
+	alertServices := normalizeHandlerAlertServices(config)
 	inspectionService := config.SearchInspections
 	if isNilDependency(inspectionService) {
 		inspectionService = nil
 	}
-	if (indexAdmin != nil ||
-		indexStatistics != nil ||
-		indexFields != nil ||
-		ingestionTokens != nil ||
-		hecOperations != nil ||
-		auditEvents != nil ||
-		searchAttemptAuditEvents != nil ||
-		serverSettings != nil ||
-		collectorAdmin != nil ||
-		appAdmin != nil ||
-		knowledgeCatalog != nil ||
-		lookupManagement != nil ||
-		inspectionService != nil ||
-		completeAlertFamily) &&
-		browserAuthenticator == nil {
-		return nil, errors.New(
-			"create server handler: administrative services require browser authentication",
-		)
+	adminServices, err := normalizeHandlerAdministrativeServices(
+		config, indexServices, knowledgeServices, lookupServices, alertServices, inspectionService,
+	)
+	if err != nil {
+		return nil, err
 	}
-	var appCursorKey []byte
-	if appAdmin != nil {
-		if len(config.AppCursorKey) < 32 || len(config.AppCursorKey) > 1<<10 {
-			return nil, errors.New(
-				"create server handler: app cursor key must contain between 32 and 1024 bytes",
-			)
-		}
-		appCursorKey = slices.Clone(config.AppCursorKey)
-	}
+	indexAdmin := indexServices.administration
+	indexStatistics := indexServices.statistics
+	indexStatisticsSnapshotter := indexServices.statisticsSnapshot
+	indexFields := indexServices.fields
+	indexDataDeletionAdmission := indexServices.deletionAdmission
+	indexDataDeletionWaker := indexServices.deletionWaker
+	ingestionTokens := adminServices.ingestionTokens
+	hecOperations := adminServices.hecOperations
+	auditEvents := adminServices.auditEvents
+	searchAttemptAuditEvents := adminServices.searchAttemptAuditEvents
+	serverSettings := adminServices.serverSettings
+	collectorAdmin := adminServices.collectorAdmin
+	appAdmin := adminServices.appAdmin
+	browserAuthenticator := adminServices.browserAuthenticator
+	appCursorKey := adminServices.appCursorKey
+	appCatalog := knowledgeServices.appCatalog
+	knowledgeCatalog := knowledgeServices.catalog
+	knowledgeWriter := knowledgeServices.writer
+	knowledgeApps := knowledgeServices.apps
+	knowledgeAttempts := knowledgeServices.attempts
+	knowledgePreview := knowledgeServices.preview
+	knowledgeAdmission := knowledgeServices.admission
+	lookupManagement := lookupServices.management
+	lookupAdmission := lookupServices.admission
+	alertCoordinator := alertServices.coordinator
+	completeAlertFamily := alertServices.complete
 	if isNilDependency(config.SavedSearches) {
 		return nil, errors.New("create server handler: saved search service is required")
 	}
@@ -964,26 +875,9 @@ func NewHandler(config Config) (*Handler, error) {
 			return nil, fmt.Errorf("create server handler: field summary maximum values must be between 1 and %d", clickhouse.MaximumFieldSummaryValues)
 		}
 	}
-	maxIndexFieldCatalogFields := uint32(0)
-	maxIndexFieldPageSize := uint32(0)
-	if indexFields != nil {
-		maxIndexFieldCatalogFields = indexFields.MaximumFields()
-		maxIndexFieldPageSize = indexFields.MaximumPageSize()
-		if maxIndexFieldCatalogFields == 0 ||
-			maxIndexFieldCatalogFields > clickhouse.MaximumFieldCatalogFields {
-			return nil, fmt.Errorf(
-				"create server handler: index field catalog maximum fields must be between 1 and %d",
-				clickhouse.MaximumFieldCatalogFields,
-			)
-		}
-		if maxIndexFieldPageSize == 0 ||
-			maxIndexFieldPageSize > maxIndexFieldCatalogFields ||
-			maxIndexFieldPageSize > maximumSearchFieldPageSize {
-			return nil, fmt.Errorf(
-				"create server handler: index field catalog maximum page size must be between 1 and %d and cannot exceed maximum fields",
-				maximumSearchFieldPageSize,
-			)
-		}
+	maxIndexFieldCatalogFields, maxIndexFieldPageSize, err := indexServices.limits()
+	if err != nil {
+		return nil, err
 	}
 	suggestionService := config.SearchSuggestions
 	if isNilDependency(suggestionService) {
@@ -1007,6 +901,10 @@ func NewHandler(config Config) (*Handler, error) {
 	if isNilDependency(searchArtifacts) {
 		searchArtifacts = nil
 	}
+	searchPatterns := config.SearchPatterns
+	if isNilDependency(searchPatterns) {
+		searchPatterns = nil
+	}
 	if config.WebUI == nil {
 		return nil, errors.New("create server handler: web UI filesystem is required")
 	}
@@ -1023,6 +921,9 @@ func NewHandler(config Config) (*Handler, error) {
 	}
 	if pageSize > maximumTransportPageSize {
 		return nil, fmt.Errorf("create server handler: maximum page size cannot exceed %d", maximumTransportPageSize)
+	}
+	if searchPatterns != nil && (searchPatterns.MaximumPageSize() < 1 || int64(searchPatterns.MaximumPageSize()) > int64(pageSize)) {
+		return nil, errors.New("create server handler: pattern maximum page size cannot exceed browser maximum page size")
 	}
 	if maximumFieldPageSize > pageSize {
 		return nil, errors.New("create server handler: field catalog maximum page size cannot exceed browser maximum page size")
@@ -1073,13 +974,9 @@ func NewHandler(config Config) (*Handler, error) {
 	if validateBoundedIdentifier(ownerID, maximumSavedSearchOwnerBytes, false) != nil || validateBoundedIdentifier(tenantID, maximumIdentityBytes, false) != nil {
 		return nil, errors.New("create server handler: owner or tenant identity is invalid")
 	}
-	completeKnowledgeFamily :=
-		configuredKnowledgeDependencies == len(knowledgeDependenciesConfigured) &&
-			knowledgePreview != nil && knowledgePreview.Ready() &&
-			knowledgeAdmission &&
-			inspectionService != nil && searchHistoryService != nil &&
-			exportService != nil && timelineService != nil &&
-			fieldService != nil && suggestionService != nil
+	completeKnowledgeFamily := knowledgeServices.complete(
+		inspectionService, searchHistoryService, exportService, timelineService, fieldService, suggestionService,
+	)
 	completeLookupFamily := completeKnowledgeFamily &&
 		lookupManagement != nil && lookupAdmission
 	_, knowledgeQuarantineReady := readyKnowledgeQuarantine(knowledgeWriter)
@@ -1150,18 +1047,17 @@ func NewHandler(config Config) (*Handler, error) {
 		}
 	}
 	var searchArtifactCursorKey [32]byte
-	if searchArtifacts != nil {
-		if _, err := rand.Read(searchArtifactCursorKey[:]); err != nil {
-			return nil, errors.New("create server handler: secure randomness unavailable for retained-result cursors")
-		}
+	if _, err := rand.Read(searchArtifactCursorKey[:]); err != nil {
+		return nil, errors.New("create server handler: secure randomness unavailable for retained-result cursors")
 	}
 
 	api := &apiHandler{
 		logger:                     logger,
 		jobs:                       config.SearchJobs,
 		searchArtifacts:            searchArtifacts,
+		searchPatterns:             searchPatterns,
 		trustedSearchAdmission:     trustedSearchAdmission,
-		indexes:                    config.Indexes,
+		indexes:                    indexServices.catalog,
 		indexAdmin:                 indexAdmin,
 		indexStatistics:            indexStatistics,
 		indexStatisticsSnapshotter: indexStatisticsSnapshotter,
@@ -1223,7 +1119,10 @@ func NewHandler(config Config) (*Handler, error) {
 		browserAllowedHosts:        browserAllowedHosts,
 		trustForwardedProto:        config.TrustForwardedProto,
 	}
-	apiRouter := api.newRouter(requestBytes, routeTimeout)
+	apiRouter, err := api.newRouter(requestBytes, routeTimeout)
+	if err != nil {
+		return nil, err
+	}
 	apiRoutes := postAPIRoutes(
 		"/api/system/bootstrap",
 		"/api/search/validate",
@@ -1231,6 +1130,7 @@ func NewHandler(config Config) (*Handler, error) {
 		"/api/search/jobs/get",
 		searchJobsListPath,
 		"/api/search/jobs/results",
+		nearbyContextPath,
 		"/api/search/jobs/cancel",
 		"/api/saved-searches/create",
 		"/api/saved-searches/get",
@@ -1240,6 +1140,10 @@ func NewHandler(config Config) (*Handler, error) {
 		"/api/saved-searches/delete",
 	)
 	administratorRoutes := make(map[string]struct{}, 25)
+	if api.searchPatterns != nil {
+		apiRoutes[apiPathPrefix+searchPatternsListRoute] = http.MethodPost
+		apiRoutes[apiPathPrefix+searchPatternMembersRoute] = http.MethodPost
+	}
 	if api.searchArtifacts != nil {
 		for _, path := range []string{
 			"/api/search/jobs/settings/get",
@@ -1347,7 +1251,10 @@ func NewHandler(config Config) (*Handler, error) {
 		administratorRoutes[searchAttemptAuditListPath] = struct{}{}
 	}
 	if api.serverSettings != nil {
-		for _, path := range []string{"/api/server/settings/get", "/api/server/settings/update"} {
+		for _, path := range []string{
+			"/api/server/settings/get", "/api/server/settings/update",
+			"/api/server/appearance/get", "/api/server/appearance/update",
+		} {
 			apiRoutes[path] = http.MethodPost
 			administratorRoutes[path] = struct{}{}
 		}
@@ -1680,210 +1587,15 @@ func (handler *apiHandler) srouterDependencies() router.RouterDependencies[strin
 	return dependencies
 }
 
-func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout time.Duration) http.Handler {
+func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout time.Duration) (*router.Router[string, struct{}], error) {
 	// NewHandler substitutes a no-op logger for a nil Config.Logger, so this is
 	// always non-nil.
 	routerLogger := newSRouterLogger(handler.logger)
-	noAuth := router.NoAuth
 	protobufMiddleware := requireProtobufContentType
 	requestMiddleware := handler.boundRequests
 	deadlineMiddleware := withSynchronousDeadline(routeTimeout)
 	smallRequestBytes := min(maximumRequestBytes, maximumSmallRequestBytes)
-
-	routes := []router.RouteDefinition{
-		router.RouteConfig[*opensplunk.GetSystemBootstrapRequest, *opensplunk.GetSystemBootstrapResponse]{
-			Path: "/system/bootstrap", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.GetSystemBootstrapRequest, *opensplunk.GetSystemBootstrapResponse](), Handler: handler.getSystemBootstrap,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeGetSystemBootstrapRequest,
-		},
-		router.RouteConfig[*opensplunk.ValidateSearchRequest, *opensplunk.ValidateSearchResponse]{
-			Path: "/search/validate", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.ValidateSearchRequest, *opensplunk.ValidateSearchResponse](), Handler: handler.validateSearch,
-			SourceType: router.Body,
-			Sanitizer:  sanitizeValidateSearchRequest,
-		},
-		router.RouteConfig[*opensplunk.CreateSearchJobRequest, *opensplunk.CreateSearchJobResponse]{
-			Path: "/search/jobs/create", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.CreateSearchJobRequest, *opensplunk.CreateSearchJobResponse](), Handler: handler.createSearchJob,
-			SourceType: router.Body,
-			Sanitizer:  sanitizeCreateSearchJobRequest,
-		},
-		router.RouteConfig[*opensplunk.GetSearchJobRequest, *opensplunk.GetSearchJobResponse]{
-			Path: "/search/jobs/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.GetSearchJobRequest, *opensplunk.GetSearchJobResponse](), Handler: handler.getSearchJob,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeGetSearchJobRequest,
-		},
-		router.RouteConfig[*opensplunk.ListSearchJobsRequest, *serializedSearchJobListResponse]{
-			Path: searchJobsListRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newSerializedSearchJobListCodec(), Handler: handler.listSearchJobs,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: handler.sanitizeListSearchJobsRequest,
-		},
-		router.RouteConfig[*opensplunk.GetSearchResultsRequest, *serializedSearchResultsResponse]{
-			Path: "/search/jobs/results", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newSerializedSearchResultsCodec(), Handler: handler.getSearchResults,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: handler.sanitizeGetSearchResultsRequest,
-		},
-		router.RouteConfig[*opensplunk.CancelSearchJobRequest, *opensplunk.CancelSearchJobResponse]{
-			Path: "/search/jobs/cancel", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.CancelSearchJobRequest, *opensplunk.CancelSearchJobResponse](), Handler: handler.cancelSearchJob,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeCancelSearchJobRequest,
-		},
-		router.RouteConfig[*opensplunk.CreateSavedSearchRequest, *opensplunk.CreateSavedSearchResponse]{
-			Path: "/saved-searches/create", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.CreateSavedSearchRequest, *opensplunk.CreateSavedSearchResponse](), Handler: handler.createSavedSearch,
-			SourceType: router.Body,
-			Sanitizer:  sanitizeCreateSavedSearchRequest,
-		},
-		router.RouteConfig[*opensplunk.GetSavedSearchRequest, *opensplunk.GetSavedSearchResponse]{
-			Path: "/saved-searches/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.GetSavedSearchRequest, *opensplunk.GetSavedSearchResponse](), Handler: handler.getSavedSearch,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeGetSavedSearchRequest,
-		},
-		router.RouteConfig[*opensplunk.ListSavedSearchesRequest, *serializedSavedSearchListResponse]{
-			Path: "/saved-searches/list", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newSerializedSavedSearchListCodec(), Handler: handler.listSavedSearches,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: handler.sanitizeListSavedSearchesRequest,
-		},
-		router.RouteConfig[*opensplunk.UpdateSavedSearchRequest, *opensplunk.UpdateSavedSearchResponse]{
-			Path: "/saved-searches/update", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.UpdateSavedSearchRequest, *opensplunk.UpdateSavedSearchResponse](), Handler: handler.updateSavedSearch,
-			SourceType: router.Body,
-			Sanitizer:  sanitizeUpdateSavedSearchRequest,
-		},
-		router.RouteConfig[*opensplunk.DuplicateSavedSearchRequest, *opensplunk.DuplicateSavedSearchResponse]{
-			Path: "/saved-searches/duplicate", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.DuplicateSavedSearchRequest, *opensplunk.DuplicateSavedSearchResponse](), Handler: handler.duplicateSavedSearch,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeDuplicateSavedSearchRequest,
-		},
-		router.RouteConfig[*opensplunk.DeleteSavedSearchRequest, *opensplunk.DeleteSavedSearchResponse]{
-			Path: "/saved-searches/delete", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.DeleteSavedSearchRequest, *opensplunk.DeleteSavedSearchResponse](), Handler: handler.deleteSavedSearch,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeDeleteSavedSearchRequest,
-		},
-	}
-	if handler.dashboards != nil {
-		routes = append(routes, handler.dashboardRoutes(noAuth, smallRequestBytes)...)
-	}
-	if handler.searchArtifacts != nil {
-		routes = append(routes, handler.searchArtifactRoutes(noAuth, smallRequestBytes)...)
-	}
-	if handler.scheduledReports != nil {
-		routes = append(routes, handler.scheduledReportRoutes(noAuth, smallRequestBytes)...)
-	}
-	if handler.scheduledReports != nil || handler.alertsEnabled {
-		routes = append(routes, handler.scheduleValidationRoutes(noAuth, smallRequestBytes)...)
-	}
-	if handler.alertsEnabled {
-		routes = append(routes, handler.alertRoutes(noAuth, maximumRequestBytes, smallRequestBytes)...)
-	}
-	if handler.indexAdmin != nil {
-		routes = append(routes, handler.indexAdministrationRoutes(noAuth, smallRequestBytes)...)
-	}
-	if handler.ingestionTokens != nil {
-		routes = append(routes, handler.ingestionTokenRoutes(noAuth, maximumRequestBytes, smallRequestBytes)...)
-	}
-	if handler.hecOperations != nil {
-		routes = append(routes, handler.hecOperationalRoutes(noAuth, smallRequestBytes)...)
-	}
-	if handler.auditEvents != nil {
-		routes = append(
-			routes,
-			handler.auditEventRoutes(noAuth, smallRequestBytes)...,
-		)
-	}
-	if handler.searchAttemptAuditEvents != nil {
-		routes = append(
-			routes,
-			handler.searchAttemptAuditRoutes(noAuth, smallRequestBytes)...,
-		)
-	}
-	if handler.serverSettings != nil {
-		routes = append(routes, handler.serverSettingsRoutes(noAuth, smallRequestBytes)...)
-	}
-	if handler.collectorAdmin != nil {
-		routes = append(
-			routes,
-			handler.collectorAdministrationRoutes(noAuth, smallRequestBytes)...,
-		)
-	}
-	if handler.appAdmin != nil {
-		routes = append(
-			routes,
-			handler.appAdministrationRoutes(
-				noAuth,
-				maximumRequestBytes,
-				smallRequestBytes,
-			)...,
-		)
-	}
-	if handler.knowledgeManagementConfigured() {
-		routes = append(
-			routes,
-			handler.knowledgeManagementRoutes(noAuth)...,
-		)
-	}
-	if handler.lookupManagementConfigured() {
-		routes = append(routes, handler.lookupManagementRoutes(noAuth)...)
-	}
-	if handler.searchHistory != nil {
-		routes = append(routes, handler.searchHistoryRoutes(noAuth, smallRequestBytes)...)
-	}
-	if handler.searchTimelines != nil {
-		routes = append(routes, handler.searchTimelineRoutes(noAuth, smallRequestBytes)...)
-	}
-	if handler.searchInspections != nil {
-		routes = append(routes, handler.searchInspectionRoutes(noAuth, smallRequestBytes)...)
-	}
-	if handler.searchFields != nil {
-		routes = append(routes, handler.searchFieldRoutes(noAuth, smallRequestBytes)...)
-	}
-	if handler.searchSuggestions != nil {
-		routes = append(
-			routes,
-			handler.searchSuggestionRoutes(
-				noAuth,
-				min(maximumRequestBytes, maximumSearchSuggestionRequestBytes),
-			)...,
-		)
-	}
-	if handler.exports != nil {
-		routes = append(routes,
-			router.RouteConfig[*opensplunk.CreateExportJobRequest, *opensplunk.CreateExportJobResponse]{
-				Path: "/search/exports/create", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-				Codec: codec.NewProtoCodec[*opensplunk.CreateExportJobRequest, *opensplunk.CreateExportJobResponse](), Handler: handler.createExportJob,
-				SourceType: router.Body,
-				Sanitizer:  sanitizeCreateExportJobRequest,
-			},
-			router.RouteConfig[*opensplunk.GetExportJobRequest, *opensplunk.GetExportJobResponse]{
-				Path: "/search/exports/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-				Codec: codec.NewProtoCodec[*opensplunk.GetExportJobRequest, *opensplunk.GetExportJobResponse](), Handler: handler.getExportJob,
-				SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-				Sanitizer: sanitizeGetExportJobRequest,
-			},
-			router.RouteConfig[*opensplunk.ListExportJobsRequest, *serializedExportListResponse]{
-				Path: exportJobsListRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-				Codec: newSerializedExportListCodec(), Handler: handler.listExportJobs,
-				SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-				Sanitizer: handler.sanitizeListExportJobsRequest,
-			},
-			router.RouteConfig[*opensplunk.CancelExportJobRequest, *opensplunk.CancelExportJobResponse]{
-				Path: "/search/exports/cancel", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-				Codec: codec.NewProtoCodec[*opensplunk.CancelExportJobRequest, *opensplunk.CancelExportJobResponse](), Handler: handler.cancelExportJob,
-				SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-				Sanitizer: sanitizeCancelExportJobRequest,
-			},
-		)
-	}
-	apiRouter := router.NewRouter[string, struct{}](router.RouterConfig{
+	apiRouter := router.NewRouter(router.RouterConfig{
 		ServiceName: "open-splunk-server",
 		Logger:      routerLogger,
 		// SRouter's built-in timeout returns while its handler goroutine may
@@ -1892,35 +1604,129 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 		GlobalTimeout:     0,
 		GlobalMaxBodySize: maximumRequestBytes,
 	}, handler.srouterDependencies())
-	apiRouter.Group(apiPathPrefix).
-		Auth(noAuth).
-		Use(disableAPICaching, protobufMiddleware, requestMiddleware, deadlineMiddleware).
-		Route(routes...)
+	apiGroup := apiRouter.Group(apiPathPrefix).
+		Auth(router.NoAuth).
+		Use(disableAPICaching)
+	protobufGroup := apiGroup.Group("/").
+		Use(protobufMiddleware, requestMiddleware, deadlineMiddleware)
+
+	handler.registerCoreRoutes(protobufGroup, smallRequestBytes)
+	if handler.searchPatterns != nil {
+		(&patternAPI{handler: handler, service: handler.searchPatterns, parseSnapshot: handler.parseResultSnapshotRef}).register(protobufGroup, smallRequestBytes)
+	}
+	if handler.dashboards != nil {
+		handler.registerDashboardRoutes(protobufGroup, smallRequestBytes)
+	}
+	if handler.searchArtifacts != nil {
+		handler.registerSearchArtifactRoutes(protobufGroup, smallRequestBytes)
+	}
+	if handler.scheduledReports != nil {
+		handler.registerScheduledReportRoutes(protobufGroup, smallRequestBytes)
+	}
+	if handler.scheduledReports != nil || handler.alertsEnabled {
+		handler.registerScheduleValidationRoutes(protobufGroup, smallRequestBytes)
+	}
+	if handler.alertsEnabled {
+		handler.registerAlertRoutes(protobufGroup, maximumRequestBytes, smallRequestBytes)
+	}
+	if handler.indexAdmin != nil {
+		handler.registerIndexAdministrationRoutes(protobufGroup, smallRequestBytes)
+	}
+	if handler.ingestionTokens != nil {
+		handler.registerIngestionTokenRoutes(protobufGroup, maximumRequestBytes, smallRequestBytes)
+	}
+	if handler.hecOperations != nil {
+		handler.registerHECOperationalRoutes(protobufGroup, smallRequestBytes)
+	}
+	if handler.auditEvents != nil {
+		handler.registerAuditEventRoutes(protobufGroup, smallRequestBytes)
+	}
+	if handler.searchAttemptAuditEvents != nil {
+		handler.registerSearchAttemptAuditRoutes(protobufGroup, smallRequestBytes)
+	}
+	if handler.serverSettings != nil {
+		handler.registerServerSettingsRoutes(protobufGroup, smallRequestBytes)
+	}
+	if handler.collectorAdmin != nil {
+		handler.registerCollectorAdministrationRoutes(protobufGroup, smallRequestBytes)
+	}
+	if handler.appAdmin != nil {
+		handler.registerAppAdministrationRoutes(protobufGroup, maximumRequestBytes, smallRequestBytes)
+	}
+	if handler.knowledgeManagementConfigured() {
+		handler.registerKnowledgeManagementRoutes(protobufGroup)
+	}
+	if handler.lookupManagementConfigured() {
+		handler.registerLookupManagementRoutes(protobufGroup)
+	}
+	if handler.searchHistory != nil {
+		handler.registerSearchHistoryRoutes(protobufGroup, smallRequestBytes)
+	}
+	if handler.searchTimelines != nil {
+		handler.registerSearchTimelineRoutes(protobufGroup, smallRequestBytes)
+	}
+	if handler.searchInspections != nil {
+		handler.registerSearchInspectionRoutes(protobufGroup, smallRequestBytes)
+	}
+	if handler.searchFields != nil {
+		handler.registerSearchFieldRoutes(protobufGroup, smallRequestBytes)
+	}
+	if handler.searchSuggestions != nil {
+		handler.registerSearchSuggestionRoutes(
+			protobufGroup,
+			min(maximumRequestBytes, maximumSearchSuggestionRequestBytes),
+		)
+	}
 	if handler.exports != nil {
-		apiRouter.Group("/api").
-			Auth(noAuth).
-			Use(disableAPICaching, handler.boundDownloads).
-			Route(router.RouteConfigBase{
-				Path:           "/search/exports/download",
-				Methods:        []router.HttpMethod{router.MethodGet},
-				AuthLevel:      &noAuth,
-				DisableTimeout: true,
-				Handler:        handler.downloadExport,
-			})
+		handler.registerExportRoutes(protobufGroup, smallRequestBytes)
+	}
+	if handler.exports != nil {
+		apiGroup.Route(rawGetRoute(
+			"/search/exports/download",
+			handler.downloadExport,
+			true,
+			handler.boundDownloads,
+		))
 	}
 	if handler.searchWebSocket != nil {
-		apiRouter.Group("/api").
-			Auth(noAuth).
-			Use(disableAPICaching).
-			Route(router.RouteConfigBase{
-				Path:           "/search/ws",
-				Methods:        []router.HttpMethod{router.MethodGet},
-				AuthLevel:      &noAuth,
-				DisableTimeout: true,
-				Handler:        handler.searchWebSocket.ServeHTTP,
-			})
+		apiGroup.Route(rawGetRoute(
+			"/search/ws",
+			handler.searchWebSocket.ServeHTTP,
+			true,
+		))
 	}
-	return apiRouter
+	if err := apiRouter.Build(); err != nil {
+		return nil, fmt.Errorf("create server handler: build API router: %w", err)
+	}
+	return apiRouter, nil
+}
+
+func (handler *apiHandler) registerCoreRoutes(group *apiRouteGroup, smallRequestBytes int64) {
+	group.Route(
+		sizedProtoPostRoute("/system/bootstrap", smallRequestBytes, handler.getSystemBootstrap, sanitizeGetSystemBootstrapRequest),
+		protoPostRoute("/search/validate", handler.validateSearch, sanitizeValidateSearchRequest),
+		protoPostRoute("/search/jobs/create", handler.createSearchJob, sanitizeCreateSearchJobRequest),
+		sizedProtoPostRoute("/search/jobs/get", smallRequestBytes, handler.getSearchJob, sanitizeGetSearchJobRequest),
+		sizedPostRoute(searchJobsListRoute, smallRequestBytes, newSerializedSearchJobListCodec(), handler.listSearchJobs, handler.sanitizeListSearchJobsRequest),
+		sizedPostRoute("/search/jobs/results", smallRequestBytes, newSerializedSearchResultsCodec(), handler.getSearchResults, handler.sanitizeGetSearchResultsRequest),
+		sizedPostRoute(nearbyContextRoute, smallRequestBytes, newSerializedNearbyContextCodec(), handler.prepareNearbyContext, sanitizePrepareNearbyContextRequest),
+		sizedProtoPostRoute("/search/jobs/cancel", smallRequestBytes, handler.cancelSearchJob, sanitizeCancelSearchJobRequest),
+		protoPostRoute("/saved-searches/create", handler.createSavedSearch, sanitizeCreateSavedSearchRequest),
+		sizedProtoPostRoute("/saved-searches/get", smallRequestBytes, handler.getSavedSearch, sanitizeGetSavedSearchRequest),
+		sizedPostRoute("/saved-searches/list", smallRequestBytes, newSerializedSavedSearchListCodec(), handler.listSavedSearches, handler.sanitizeListSavedSearchesRequest),
+		protoPostRoute("/saved-searches/update", handler.updateSavedSearch, sanitizeUpdateSavedSearchRequest),
+		sizedProtoPostRoute("/saved-searches/duplicate", smallRequestBytes, handler.duplicateSavedSearch, sanitizeDuplicateSavedSearchRequest),
+		sizedProtoPostRoute("/saved-searches/delete", smallRequestBytes, handler.deleteSavedSearch, sanitizeDeleteSavedSearchRequest),
+	)
+}
+
+func (handler *apiHandler) registerExportRoutes(group *apiRouteGroup, smallRequestBytes int64) {
+	group.Route(
+		protoPostRoute("/search/exports/create", handler.createExportJob, sanitizeCreateExportJobRequest),
+		sizedProtoPostRoute("/search/exports/get", smallRequestBytes, handler.getExportJob, sanitizeGetExportJobRequest),
+		sizedPostRoute(exportJobsListRoute, smallRequestBytes, newSerializedExportListCodec(), handler.listExportJobs, handler.sanitizeListExportJobsRequest),
+		sizedProtoPostRoute("/search/exports/cancel", smallRequestBytes, handler.cancelExportJob, sanitizeCancelExportJobRequest),
+	)
 }
 
 func disableAPICaching(next http.Handler) http.Handler {

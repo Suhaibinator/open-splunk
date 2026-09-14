@@ -12,7 +12,6 @@
         "50%"
       ],
       "box-shadow": [
-        "1px",
         "3px",
         "color-mix(in srgb, var(--accent-bright) 12%, transparent)",
         "color-mix(in srgb, var(--status-info) 12%, transparent)"

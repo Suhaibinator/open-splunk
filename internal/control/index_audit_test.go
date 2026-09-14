@@ -11,10 +11,105 @@ import (
 	"testing"
 	"time"
 
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"gorm.io/gorm"
 )
 
 var errTestIndexAuditAppend = errors.New("test index audit append failure")
+
+func TestAuditedIndexAdministrationIdempotentCreateReplaysCurrentMetadata(t *testing.T) {
+	db := openTestDB(t)
+	appender := &recordingIndexMutationAuditAppender{}
+	administration := newTestAuditedIndexAdministration(t, db, appender)
+	definition := enabledIndex("idempotent-index")
+	requestID := "index request 001"
+	intent, err := requestidempotency.NewIntent(
+		"tenant-a", "browser", "owner-a", requestidempotency.RouteCreateIndex,
+		requestID,
+		&opensplunk.CreateIndexRequest{Definition: &opensplunk.IndexDefinition{Name: "idempotent-index"}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, replayed, err := administration.CreateIndexIdempotent(t.Context(), definition, intent)
+	if err != nil || replayed {
+		t.Fatalf("first create = (%+v, %t, %v)", created, replayed, err)
+	}
+	replacement := created.Definition
+	replacement.DisplayName = "Current index metadata"
+	updated, err := administration.UpdateIndex(
+		t.Context(), created.ID, created.Version, replacement,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, replayed, err := administration.CreateIndexIdempotent(t.Context(), definition, intent)
+	if err != nil || !replayed || current.Version != updated.Version ||
+		current.Definition.DisplayName != updated.Definition.DisplayName {
+		t.Fatalf("replay = (%+v, %t, %v), want current %+v", current, replayed, err, updated)
+	}
+	if calls := appender.snapshot(); len(calls) != 2 {
+		t.Fatalf("audit calls after replay = %d, want create and update only", len(calls))
+	}
+	changed := intent
+	changed.RequestSHA256[0] ^= 0xff
+	if _, _, err := administration.CreateIndexIdempotent(t.Context(), definition, changed); !errors.Is(err, requestidempotency.ErrConflict) {
+		t.Fatalf("changed intent error = %v", err)
+	}
+}
+
+func TestAuditedIndexAdministrationParallelIdempotentCreatesConverge(t *testing.T) {
+	db := openTestDB(t)
+	appender := &recordingIndexMutationAuditAppender{}
+	administration := newTestAuditedIndexAdministration(t, db, appender)
+	definition := enabledIndex("parallel-idempotent-index")
+	intent, err := requestidempotency.NewIntent(
+		"tenant-a", "browser", "owner-a", requestidempotency.RouteCreateIndex,
+		"parallel index request 01",
+		&opensplunk.CreateIndexRequest{Definition: &opensplunk.IndexDefinition{Name: definition.Name}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type outcome struct {
+		index    Index
+		replayed bool
+		err      error
+	}
+	start := make(chan struct{})
+	results := make(chan outcome, 8)
+	for range 8 {
+		go func() {
+			<-start
+			index, replayed, createErr := administration.CreateIndexIdempotent(
+				context.Background(), definition, intent,
+			)
+			results <- outcome{index: index, replayed: replayed, err: createErr}
+		}()
+	}
+	close(start)
+	var targetID string
+	fresh := 0
+	for range 8 {
+		result := <-results
+		if result.err != nil {
+			t.Fatalf("parallel create error = %v", result.err)
+		}
+		if targetID == "" {
+			targetID = result.index.ID
+		}
+		if result.index.ID != targetID {
+			t.Fatalf("parallel target = %q, want %q", result.index.ID, targetID)
+		}
+		if !result.replayed {
+			fresh++
+		}
+	}
+	if fresh != 1 || len(appender.snapshot()) != 1 {
+		t.Fatalf("parallel outcomes = %d fresh, %d audit calls", fresh, len(appender.snapshot()))
+	}
+}
 
 type recordedIndexMutationAudit struct {
 	tenantID string

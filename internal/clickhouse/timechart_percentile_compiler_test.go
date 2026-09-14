@@ -97,18 +97,18 @@ func TestCompileSplitTimechartPercentileUsesMergeableGKStates(t *testing.T) {
 	}
 
 	for _, required := range []string{
-		`"__os_timechart_source" AS (`,
+		`"__os_timechart_source" AS MATERIALIZED (`,
 		`AS "__os_tc_measure_values"`,
 		`"__os_timechart_numeric_groups" AS MATERIALIZED (`,
 		`quantilesGKOrNullArrayState(100, 0.95)(if("__os_tc_kind" IN (0, 1), "__os_tc_measure_values", CAST([], 'Array(Float64)'))) AS "__os_tc_percentile_state"`,
-		`sum(ifNull(arrayElementOrNull(finalizeAggregation("__os_tc_percentile_state"), 1), toFloat64(0))) AS "__os_tc_score"`,
+		`sum(ifNull(arrayElementOrNull(finalizeAggregation("__os_tc_percentile_state"), 1), toFloat64(0))) OVER (PARTITION BY "__os_tc_kind", "__os_tc_label") AS "__os_tc_score"`,
 		`multiIf(isNaN("__os_tc_score"), toUInt8(0), isInfinite("__os_tc_score") AND "__os_tc_score" < 0, toUInt8(1), isInfinite("__os_tc_score"), toUInt8(3), toUInt8(2)) DESC`,
 		`if(isFinite("__os_tc_score"), "__os_tc_score", toFloat64(0)) DESC, "__os_tc_label" ASC`,
 		`quantilesGKOrNullArrayMerge(100, 0.95)("__os_tc_percentile_state") AS "__os_tc_percentile_values"`,
 		`arrayElementOrNull("__os_tc_percentile_values", 1) AS "__os_tc_measure_value"`,
-		`CAST('1:' AS String)`,
-		`CAST('2:' AS String)`,
-		`"__os_timechart_validation" AS (SELECT toUInt8(sumIf("__os_tc_count", "__os_tc_kind" = 3) > 0)`,
+		`"__os_tc_kind" = 1, '1:'`,
+		`"__os_tc_kind" = 0, '2:'`,
+		`toUInt8(maxOrDefault("__os_tc_kind" = 3)) AS "__os_tc_invalid"`,
 		`if("__os_timechart_grid"."__os_timechart_ordinal" = 0, "__os_timechart_domain".names, CAST([], 'Array(String)')) AS "` + TimechartNamesColumn + `"`,
 		`AS "` + TimechartValuesColumn + `"`,
 		`AS "` + TimechartValuePresentColumn + `"`,
@@ -129,6 +129,7 @@ func TestCompileSplitTimechartPercentileUsesMergeableGKStates(t *testing.T) {
 		t.Fatalf("GK state merges = %d, want one shared OTHER/finalization path:\n%s", got, compiled.SQL)
 	}
 	for _, forbidden := range []string{
+		`"__os_tc_count"`,
 		"ARRAY JOIN",
 		"sumCountArray(",
 		`avg("__os_tc_measure_value")`,

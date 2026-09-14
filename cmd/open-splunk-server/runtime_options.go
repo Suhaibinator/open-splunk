@@ -38,7 +38,7 @@ var runtimeOptionBindings = []runtimeOptionBinding{
 	{flagName: "http-trust-x-forwarded-proto", environmentName: "OPEN_SPLUNK_SERVER_HTTP_TRUST_X_FORWARDED_PROTO"},
 	{flagName: "control-database-file", environmentName: "OPEN_SPLUNK_SERVER_CONTROL_DATABASE_FILE"},
 	{flagName: "master-key-file", environmentName: "OPEN_SPLUNK_SERVER_MASTER_KEY_FILE"},
-	{flagName: "server-lock-file", environmentName: "OPEN_SPLUNK_SERVER_LOCK_FILE"},
+	{flagName: "server-lock-file", environmentName: serverSingletonLockPathEnv},
 	{flagName: "export-artifact-directory", environmentName: "OPEN_SPLUNK_SERVER_EXPORT_ARTIFACT_DIRECTORY"},
 	{flagName: "search-artifact-directory", environmentName: "OPEN_SPLUNK_SERVER_SEARCH_ARTIFACT_DIRECTORY"},
 	{flagName: "alert-public-base-url", environmentName: "OPEN_SPLUNK_SERVER_ALERT_PUBLIC_BASE_URL"},
@@ -79,7 +79,7 @@ var legacyRuntimeEnvironments = []legacyRuntimeEnvironment{
 	{name: "OPEN_SPLUNK_CLICKHOUSE_ADDRESS", replacement: "OPEN_SPLUNK_SERVER_CLICKHOUSE_ADDRESS"},
 	{name: "OPEN_SPLUNK_CLICKHOUSE_USERNAME", replacement: "OPEN_SPLUNK_SERVER_CLICKHOUSE_USERNAME"},
 	{name: "OPEN_SPLUNK_HEC_ENABLED", replacement: "OPEN_SPLUNK_SERVER_HEC_ENABLED"},
-	{name: "OPEN_SPLUNK_SERVER_SINGLETON_LOCK_PATH", replacement: "OPEN_SPLUNK_SERVER_LOCK_FILE"},
+	{name: legacyServerSingletonLockPathEnv, replacement: serverSingletonLockPathEnv},
 }
 
 type runtimeEnvironment struct {

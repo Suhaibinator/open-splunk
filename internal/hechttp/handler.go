@@ -326,6 +326,9 @@ func (handler *Handler) authenticate(request *http.Request) (auth.Authentication
 	if errors.Is(err, auth.ErrInactiveToken) {
 		return auth.Authentication{}, hec.NewProtocolError(hec.ErrorTokenDisabled, err)
 	}
+	if errors.Is(err, auth.ErrHECAuthenticationTemporarilyUnavailable) {
+		return auth.Authentication{}, hec.NewProtocolError(hec.ErrorServerBusy, err)
+	}
 	if errors.Is(err, auth.ErrUnauthorized) || errors.Is(err, auth.ErrNoActiveIndexAuthority) ||
 		errors.Is(err, auth.ErrInvalidIndexAuthority) || errors.Is(err, auth.ErrInvalidEventAuthority) {
 		return auth.Authentication{}, hec.NewProtocolError(hec.ErrorInvalidToken, err)

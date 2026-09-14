@@ -1,0 +1,31 @@
+--- FAIL: TestReviewW2FormatsRejectNullParserBlock (0.00s)
+    --- FAIL: TestReviewW2FormatsRejectNullParserBlock/ndjson (0.00s)
+        review_w2_sol_tests_test.go:13: accepted an explicitly configured null parser block
+    --- FAIL: TestReviewW2FormatsRejectNullParserBlock/raw (0.00s)
+        review_w2_sol_tests_test.go:13: accepted an explicitly configured null parser block
+    --- FAIL: TestReviewW2FormatsRejectNullParserBlock/docker-json-file (0.00s)
+        review_w2_sol_tests_test.go:13: accepted an explicitly configured null parser block
+    --- FAIL: TestReviewW2FormatsRejectNullParserBlock/nginx-combined (0.00s)
+        review_w2_sol_tests_test.go:13: accepted an explicitly configured null parser block
+    --- FAIL: TestReviewW2FormatsRejectNullParserBlock/apache-common (0.00s)
+        review_w2_sol_tests_test.go:13: accepted an explicitly configured null parser block
+    --- FAIL: TestReviewW2FormatsRejectNullParserBlock/apache-combined (0.00s)
+        review_w2_sol_tests_test.go:13: accepted an explicitly configured null parser block
+    --- FAIL: TestReviewW2FormatsRejectNullParserBlock/logfmt (0.00s)
+        review_w2_sol_tests_test.go:13: accepted an explicitly configured null parser block
+--- FAIL: TestReviewW2RejectsNullParserForFormatsWithoutOptions (0.00s)
+    --- FAIL: TestReviewW2RejectsNullParserForFormatsWithoutOptions/ndjson (0.00s)
+        review_w2_sol_quality_test.go:20: accepted an explicitly supplied parser option on a format that does not accept parser options
+    --- FAIL: TestReviewW2RejectsNullParserForFormatsWithoutOptions/raw (0.00s)
+        review_w2_sol_quality_test.go:20: accepted an explicitly supplied parser option on a format that does not accept parser options
+    --- FAIL: TestReviewW2RejectsNullParserForFormatsWithoutOptions/docker-json-file (0.00s)
+        review_w2_sol_quality_test.go:20: accepted an explicitly supplied parser option on a format that does not accept parser options
+    --- FAIL: TestReviewW2RejectsNullParserForFormatsWithoutOptions/nginx-combined (0.00s)
+        review_w2_sol_quality_test.go:20: accepted an explicitly supplied parser option on a format that does not accept parser options
+    --- FAIL: TestReviewW2RejectsNullParserForFormatsWithoutOptions/apache-common (0.00s)
+        review_w2_sol_quality_test.go:20: accepted an explicitly supplied parser option on a format that does not accept parser options
+    --- FAIL: TestReviewW2RejectsNullParserForFormatsWithoutOptions/apache-combined (0.00s)
+        review_w2_sol_quality_test.go:20: accepted an explicitly supplied parser option on a format that does not accept parser options
+FAIL
+FAIL	github.com/Suhaibinator/open-splunk/internal/collector/config	0.251s
+FAIL

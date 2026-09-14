@@ -189,7 +189,9 @@ func TestStageDurablyQueuesHECWithoutSynchronousClickHouseWrite(t *testing.T) {
 	if len(sequencer.reserveRequests) != 1 || sequencer.reserveRequests[0].HECAdmission == nil ||
 		sequencer.reserveRequests[0].HECAdmission.TokenID != "ingestion-token-record" ||
 		sequencer.reserveRequests[0].HECAdmission.TokenVersion != 3 ||
-		sequencer.reserveRequests[0].HECAdmission.AcknowledgmentChannel != "channel-a" {
+		sequencer.reserveRequests[0].HECAdmission.AcknowledgmentChannel != "channel-a" ||
+		sequencer.reserveRequests[0].StoredRowCount != 1 ||
+		sequencer.reserveRequests[0].DecodedEventBytes != decodedEventBytes(batch) {
 		t.Fatalf("staged HEC admission = %+v", sequencer.reserveRequests)
 	}
 
@@ -204,6 +206,38 @@ func TestStageDurablyQueuesHECWithoutSynchronousClickHouseWrite(t *testing.T) {
 	if !telemetry.Available || telemetry.Successes != 1 || telemetry.Retries != 0 ||
 		telemetry.Ambiguities != 0 {
 		t.Fatalf("HEC reconciliation telemetry = %+v", telemetry)
+	}
+}
+
+func TestStagePreservesDurableAcceptanceWhenLeaseReleaseFails(t *testing.T) {
+	t.Parallel()
+	sequencer := &fakeVisibilitySequencer{
+		reservation: visibility.Reservation{Sequence: 17, HECRequestSequence: 4, HECAcknowledgmentID: 9},
+		releaseErr:  errors.New("database is busy after durable reservation"),
+	}
+	connection := &fakeStoreConnection{batch: &fakeWriteBatch{}}
+	store := mustTestStoreWithVisibility(t, connection, fixedRetention(time.Hour), sequencer)
+	batch := validStoreBatch()
+	batch.Source = ingest.HECSource("hec-token")
+	batch.CollectorID = ""
+	batch.Events[0].Source, batch.Events[0].CollectorID = batch.Source, ""
+	batch.HECAdmission = &ingest.HECStageAdmission{TokenID: "hec-token", TokenVersion: 1, RequestID: batch.BatchID, AcknowledgmentEnabled: true, Channel: "channel", CreatedAt: batch.ReceivedAt}
+	result, err := store.Stage(context.Background(), batch)
+	if err != nil || result.State != ingest.StoredBatchPending || result.HECRequestSequence != 4 || result.HECAcknowledgmentID != 9 {
+		t.Fatalf("durably accepted request reported as retryable failure: %+v, %v", result, err)
+	}
+	if len(sequencer.reservation.Outbox) == 0 || !slices.Equal(sequencer.released, []uint64{17}) || connection.prepareCalls != 0 {
+		t.Fatal("staged outbox was not retained for asynchronous recovery")
+	}
+	if telemetry := store.HECReconciliationTelemetry(); telemetry.Available || telemetry.Retries != 1 {
+		t.Fatalf("cleanup failure was not exposed to reconciliation health: %+v", telemetry)
+	}
+	sequencer.releaseErr = nil
+	if err := store.ReconcilePending(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(connection.batch.rows) != 1 || !slices.Equal(sequencer.committed, []uint64{17}) {
+		t.Fatal("accepted request failed to reconcile exactly once")
 	}
 }
 
@@ -443,13 +477,16 @@ func TestStoreRebuildsFreshReservationAfterObservedPendingIsAbandoned(t *testing
 	}
 	const staleAttemptID = "stale-normalization-owner"
 	pending, err := sequencer.Reserve(ctx, visibility.ReserveRequest{
-		BatchKey:      deduplicationToken(stale),
-		SequenceKey:   sequenceIdentityKey(stale),
-		AttemptID:     staleAttemptID,
-		IndexTime:     stale.ReceivedAt,
-		PayloadSHA256: payloadDigest,
-		Metadata:      metadata,
-		Outbox:        outbox,
+		BatchKey:          deduplicationToken(stale),
+		SequenceKey:       sequenceIdentityKey(stale),
+		AttemptID:         staleAttemptID,
+		IndexTime:         stale.ReceivedAt,
+		PayloadSHA256:     payloadDigest,
+		Metadata:          metadata,
+		Outbox:            outbox,
+		StoredRowCount:    uint32(len(rows)),
+		DecodedEventBytes: decodedEventBytes(stale),
+		PrincipalSHA256:   ingestionPrincipalSHA256(stale.TenantID, ingest.NativeCollectorSource(stale.CollectorID)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -478,7 +515,8 @@ func TestStoreRebuildsFreshReservationAfterObservedPendingIsAbandoned(t *testing
 		t.Fatalf("first Reserve request = %+v, want identity-only existing acquisition", acquire)
 	}
 	if allocate.ExistingOnly || allocate.AttemptID != acquire.AttemptID ||
-		!allocate.IndexTime.Equal(fresh.ReceivedAt) || len(allocate.Metadata) == 0 || len(allocate.Outbox) == 0 {
+		!allocate.IndexTime.Equal(fresh.ReceivedAt) || len(allocate.Metadata) == 0 || len(allocate.Outbox) == 0 ||
+		allocate.PrincipalSHA256 != ingestionPrincipalSHA256(fresh.TenantID, ingest.NativeCollectorSource(fresh.CollectorID)) {
 		t.Fatalf("fallback Reserve request = %+v, want full fresh allocation with reused clean attempt", allocate)
 	}
 	replayed, err := decodeStoreOutbox(allocate.Outbox)
@@ -627,13 +665,13 @@ func TestBackgroundReconcilerDrainsOutboxWithoutCollectorRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sequencer.Close() })
-	connection := &fakeStoreConnection{batch: &fakeWriteBatch{sendErr: io.ErrUnexpectedEOF}}
+	connection := &fakeStoreConnection{batch: &fakeWriteBatch{}}
 	store := mustTestStoreWithVisibility(t, connection, fixedRetention(time.Hour), sequencer)
-	if _, err := store.Store(ctx, validStoreBatch()); !isTransient(err) {
-		t.Fatalf("ambiguous Store error = %v, want transient", err)
+	if staged, err := store.Stage(ctx, validStoreBatch()); err != nil ||
+		staged.State != ingest.StoredBatchPending {
+		t.Fatalf("Stage = %+v error=%v, want pending durable outbox", staged, err)
 	}
 
-	connection.batch = &fakeWriteBatch{}
 	store.retryAfter = time.Millisecond
 	store.startReconciler()
 	deadline := time.Now().Add(5 * time.Second)
@@ -874,9 +912,10 @@ func TestReconcilePendingBoundsTerminalPruneDuringPersistentReplayFailure(t *tes
 		)
 		INSERT INTO ingest_visibility_reservations
 			(sequence, batch_key, state, phase, attempt_id, index_time_unix_milli,
-			 metadata, outbox, created_at_unix_micro, committed_at_unix_micro)
+			 metadata, outbox, outbox_sha256, stored_row_count, decoded_event_bytes,
+			 created_at_unix_micro, committed_at_unix_micro)
 		SELECT sequence, printf('retention-reject-%d', sequence),
-		       'rejected', 'final', '', 0, X'', X'', sequence, sequence
+		       'rejected', 'final', '', 0, X'', X'', X'', 0, 0, sequence, sequence
 		FROM sequences`, lastSequence); err != nil {
 		_ = tx.Rollback()
 		t.Fatal(err)
@@ -2081,6 +2120,8 @@ type fakeStoreConnection struct {
 	prepareErr        error
 	batch             *fakeWriteBatch
 	pingErr, closeErr error
+	closeStarted      chan struct{}
+	closeRelease      <-chan struct{}
 }
 
 func (c *fakeStoreConnection) prepare(_ context.Context, query string, settings clickhousedriver.Settings) (writeBatch, error) {
@@ -2117,6 +2158,12 @@ func (c *fakeStoreConnection) queryRow(
 func (c *fakeStoreConnection) Ping(context.Context) error { return c.pingErr }
 func (c *fakeStoreConnection) Close() error {
 	c.closeCalls++
+	if c.closeStarted != nil {
+		close(c.closeStarted)
+	}
+	if c.closeRelease != nil {
+		<-c.closeRelease
+	}
 	return c.closeErr
 }
 
@@ -2187,7 +2234,7 @@ func (connection *gatedStoreConnection) Close() error {
 
 type fakeWriteBatch struct {
 	rows                              [][]any
-	appendErr, sendErr                error
+	appendErr, sendErr, closeErr      error
 	sendCalls, abortCalls, closeCalls int
 }
 
@@ -2200,7 +2247,7 @@ func (b *fakeWriteBatch) Append(values ...any) error {
 }
 func (b *fakeWriteBatch) Send() error  { b.sendCalls++; return b.sendErr }
 func (b *fakeWriteBatch) Abort() error { b.abortCalls++; return nil }
-func (b *fakeWriteBatch) Close() error { b.closeCalls++; return nil }
+func (b *fakeWriteBatch) Close() error { b.closeCalls++; return b.closeErr }
 
 type fakeRetentionProvider struct {
 	periods map[string]time.Duration

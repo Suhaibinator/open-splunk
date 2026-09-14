@@ -114,8 +114,6 @@ func TestResolutionFinalizeKeepsPreparedAuthorityOpaque(t *testing.T) {
 }
 
 func TestResolutionFinalizeRejectsNonemptyAuthorityUntilKO1Prelude(t *testing.T) {
-	t.Parallel()
-
 	database, store := newCatalogTestStore(t)
 	insertFixtureObject(t, database, fixtureObject{id: "ko-finalize-nonempty", versions: []fixtureVersion{{
 		definition: resolutionAliasDefinition(testApp, "finalize-nonempty", SharingScopePrivate, "main"),

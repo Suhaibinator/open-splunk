@@ -1,0 +1,34 @@
+--- FAIL: TestYAMLRejectsIrrelevantOptionPresence (0.00s)
+    yaml_test.go:31: logfmt accepted pattern ''
+    yaml_test.go:31: logfmt accepted pattern null
+    yaml_test.go:37: log4j2-pattern accepted fields: null
+    yaml_test.go:37: log4j2-pattern accepted timestamp_layout: ''
+    yaml_test.go:37: log4j2-pattern accepted timestamp_layout: null
+    yaml_test.go:37: log4j2-pattern accepted timezone: ''
+    yaml_test.go:37: log4j2-pattern accepted timezone: null
+    yaml_test.go:37: logback-pattern accepted fields: null
+    yaml_test.go:37: logback-pattern accepted timestamp_layout: ''
+    yaml_test.go:37: logback-pattern accepted timestamp_layout: null
+    yaml_test.go:37: logback-pattern accepted timezone: ''
+    yaml_test.go:37: logback-pattern accepted timezone: null
+    yaml_test.go:47: logfmt accepted irrelevant/empty timestamp options "timezone: ''"
+    yaml_test.go:47: logfmt accepted irrelevant/empty timestamp options "timezone: null"
+    yaml_test.go:47: logfmt accepted irrelevant/empty timestamp options "timestamp_layout: ''"
+    yaml_test.go:47: logfmt accepted irrelevant/empty timestamp options "timestamp_layout: null"
+    yaml_test.go:47: logfmt accepted irrelevant/empty timestamp options "timestamp_layout: '2006-01-02T15:04:05Z07:00'\ntimezone: ''"
+    yaml_test.go:47: logfmt accepted irrelevant/empty timestamp options "timestamp_layout: '2006-01-02T15:04:05Z07:00'\ntimezone: null"
+--- FAIL: TestYAMLOptionsRejectUnknownDuplicateAndMergedInvalidKeys (0.00s)
+    yaml_test.go:89: accepted invalid YAML "<<: &base {pattern: ''}"
+    yaml_test.go:89: accepted invalid YAML "<<: [{pattern: ''}, {fields: {}}]"
+    yaml_test.go:89: accepted invalid YAML "<<: {fields: {}}\npattern: ''"
+--- FAIL: TestYAMLOptionsAliasesPreservePresence (0.00s)
+    yaml_test.go:109: accepted aliased invalid option "defaults: &defaults {pattern: ''}\nparser: *defaults"
+    yaml_test.go:109: accepted aliased invalid option "defaults: &defaults {pattern: ''}\nparser: {<<: *defaults}"
+    yaml_test.go:109: accepted aliased invalid option "defaults: &defaults {unknown: x}\nparser: {<<: *defaults}"
+FAIL
+FAIL	github.com/Suhaibinator/open-splunk/internal/collector/parserconfig	6.225s
+--- FAIL: TestReviewW1LogfmtRejectsExplicitEmptyPattern (0.00s)
+    review_w1_sol_quality_test.go:19: accepted logfmt configuration with an explicit pattern option
+FAIL
+FAIL	github.com/Suhaibinator/open-splunk/internal/collector/config	6.114s
+FAIL

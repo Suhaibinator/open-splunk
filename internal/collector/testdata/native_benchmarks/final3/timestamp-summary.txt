@@ -1,0 +1,37 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector/parserconfig
+cpu: Apple M4 Max
+                                            │ timestamp.txt │
+                                            │    sec/op     │
+TimestampOffsetPosition/terminal_z              48.08n ± 2%
+TimestampOffsetPosition/terminal_numeric        96.78n ± 1%
+TimestampOffsetPosition/nonterminal_z           176.8n ± 2%
+TimestampOffsetPosition/nonterminal_numeric     231.9n ± 1%
+geomean                                         117.5n
+
+                                            │ timestamp.txt │
+                                            │      B/s      │
+TimestampOffsetPosition/terminal_z             476.1Mi ± 2%
+TimestampOffsetPosition/terminal_numeric       285.8Mi ± 1%
+TimestampOffsetPosition/nonterminal_z          134.9Mi ± 2%
+TimestampOffsetPosition/nonterminal_numeric    123.4Mi ± 1%
+geomean                                        218.1Mi
+
+                                            │ timestamp.txt │
+                                            │     B/op      │
+TimestampOffsetPosition/terminal_z             0.000 ± 0%
+TimestampOffsetPosition/terminal_numeric       160.0 ± 0%
+TimestampOffsetPosition/nonterminal_z          128.0 ± 0%
+TimestampOffsetPosition/nonterminal_numeric    296.0 ± 0%
+geomean                                                   ¹
+¹ summaries must be >0 to compute geomean
+
+                                            │ timestamp.txt │
+                                            │   allocs/op   │
+TimestampOffsetPosition/terminal_z             0.000 ± 0%
+TimestampOffsetPosition/terminal_numeric       3.000 ± 0%
+TimestampOffsetPosition/nonterminal_z          3.000 ± 0%
+TimestampOffsetPosition/nonterminal_numeric    6.000 ± 0%
+geomean                                                   ¹
+¹ summaries must be >0 to compute geomean

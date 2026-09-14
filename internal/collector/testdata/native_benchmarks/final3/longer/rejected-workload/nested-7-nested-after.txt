@@ -1,0 +1,6 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNDJSONDecoder/nested         	  653502	      3446 ns/op	  36.27 MB/s	    4808 B/op	     129 allocs/op
+PASS

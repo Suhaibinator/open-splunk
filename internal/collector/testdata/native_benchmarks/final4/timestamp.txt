@@ -1,0 +1,260 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector/parserconfig
+cpu: Apple M4 Max
+BenchmarkTimestampOffsetPosition/terminal_z         	 4359686	        53.89 ns/op	 445.35 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampOffsetPosition/terminal_numeric   	 2452896	        98.41 ns/op	 294.68 MB/s	     160 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_z      	 1363064	       176.3 ns/op	 141.78 MB/s	     128 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_numeric         	 1000000	       230.8 ns/op	 129.96 MB/s	     296 B/op	       6 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_0           	 4357066	        52.70 ns/op	 569.22 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1           	 1442656	       165.5 ns/op	 253.74 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_64          	  137272	      1769 ns/op	 450.98 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1024        	    8997	     26367 ns/op	 467.18 MB/s	       0 B/op	       0 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector/parserconfig
+cpu: Apple M4 Max
+BenchmarkTimestampOffsetPosition/terminal_z         	 4823203	        48.52 ns/op	 494.59 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampOffsetPosition/terminal_numeric   	 2453418	        97.22 ns/op	 298.29 MB/s	     160 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_z      	 1377576	       174.0 ns/op	 143.68 MB/s	     128 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_numeric         	 1000000	       228.7 ns/op	 131.17 MB/s	     296 B/op	       6 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_0           	 4561851	        53.48 ns/op	 560.94 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1           	 1483714	       162.2 ns/op	 258.88 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_64          	  133266	      1768 ns/op	 451.25 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1024        	    9463	     25728 ns/op	 478.77 MB/s	       0 B/op	       0 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector/parserconfig
+cpu: Apple M4 Max
+BenchmarkTimestampOffsetPosition/terminal_z         	 4885888	        48.89 ns/op	 490.93 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampOffsetPosition/terminal_numeric   	 2393569	        98.45 ns/op	 294.56 MB/s	     160 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_z      	 1363164	       175.6 ns/op	 142.39 MB/s	     128 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_numeric         	 1000000	       231.5 ns/op	 129.57 MB/s	     296 B/op	       6 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_0           	 4537894	        52.65 ns/op	 569.82 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1           	 1488493	       161.8 ns/op	 259.52 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_64          	  141717	      1732 ns/op	 460.62 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1024        	    8978	     25331 ns/op	 486.28 MB/s	       0 B/op	       0 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector/parserconfig
+cpu: Apple M4 Max
+BenchmarkTimestampOffsetPosition/terminal_z         	 4986740	        48.35 ns/op	 496.34 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampOffsetPosition/terminal_numeric   	 2458680	        97.05 ns/op	 298.81 MB/s	     160 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_z      	 1390758	       172.2 ns/op	 145.19 MB/s	     128 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_numeric         	 1000000	       229.8 ns/op	 130.57 MB/s	     296 B/op	       6 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_0           	 4684693	        52.79 ns/op	 568.29 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1           	 1450095	       164.1 ns/op	 255.99 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_64          	  136480	      1750 ns/op	 455.96 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1024        	    9480	     25349 ns/op	 485.94 MB/s	       0 B/op	       0 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector/parserconfig
+cpu: Apple M4 Max
+BenchmarkTimestampOffsetPosition/terminal_z         	 5272291	        46.77 ns/op	 513.11 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampOffsetPosition/terminal_numeric   	 2500512	        96.75 ns/op	 299.74 MB/s	     160 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_z      	 1336869	       179.5 ns/op	 139.29 MB/s	     128 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_numeric         	 1000000	       230.8 ns/op	 129.97 MB/s	     296 B/op	       6 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_0           	 4329114	        54.93 ns/op	 546.10 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1           	 1425421	       169.7 ns/op	 247.49 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_64          	  132032	      1767 ns/op	 451.70 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1024        	    9118	     26107 ns/op	 471.82 MB/s	       0 B/op	       0 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector/parserconfig
+cpu: Apple M4 Max
+BenchmarkTimestampOffsetPosition/terminal_z         	 4726863	        49.77 ns/op	 482.27 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampOffsetPosition/terminal_numeric   	 2492779	        95.81 ns/op	 302.67 MB/s	     160 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_z      	 1363134	       175.6 ns/op	 142.38 MB/s	     128 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_numeric         	 1000000	       231.6 ns/op	 129.52 MB/s	     296 B/op	       6 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_0           	 4534660	        53.54 ns/op	 560.36 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1           	 1501351	       161.1 ns/op	 260.71 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_64          	  134323	      1752 ns/op	 455.37 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1024        	    9217	     25808 ns/op	 477.29 MB/s	       0 B/op	       0 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector/parserconfig
+cpu: Apple M4 Max
+BenchmarkTimestampOffsetPosition/terminal_z         	 4801632	        48.95 ns/op	 490.27 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampOffsetPosition/terminal_numeric   	 2421937	        99.30 ns/op	 292.04 MB/s	     160 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_z      	 1362180	       175.9 ns/op	 142.11 MB/s	     128 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_numeric         	 1000000	       229.6 ns/op	 130.64 MB/s	     296 B/op	       6 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_0           	 4359402	        53.81 ns/op	 557.49 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1           	 1485834	       161.1 ns/op	 260.72 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_64          	  136018	      1725 ns/op	 462.65 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1024        	    9364	     25585 ns/op	 481.45 MB/s	       0 B/op	       0 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector/parserconfig
+cpu: Apple M4 Max
+BenchmarkTimestampOffsetPosition/terminal_z         	 4758859	        48.35 ns/op	 496.40 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampOffsetPosition/terminal_numeric   	 2437557	        98.46 ns/op	 294.54 MB/s	     160 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_z      	 1357953	       176.5 ns/op	 141.65 MB/s	     128 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_numeric         	 1000000	       230.5 ns/op	 130.14 MB/s	     296 B/op	       6 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_0           	 4491781	        54.96 ns/op	 545.86 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1           	 1459219	       165.7 ns/op	 253.43 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_64          	  141771	      1742 ns/op	 458.03 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1024        	    9716	     25287 ns/op	 487.13 MB/s	       0 B/op	       0 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector/parserconfig
+cpu: Apple M4 Max
+BenchmarkTimestampOffsetPosition/terminal_z         	 5065290	        47.71 ns/op	 503.04 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampOffsetPosition/terminal_numeric   	 2492810	        95.90 ns/op	 302.38 MB/s	     160 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_z      	 1374194	       174.6 ns/op	 143.18 MB/s	     128 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_numeric         	 1000000	       228.0 ns/op	 131.61 MB/s	     296 B/op	       6 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_0           	 4387986	        54.40 ns/op	 551.49 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1           	 1511082	       159.7 ns/op	 262.95 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_64          	  139371	      1681 ns/op	 474.67 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1024        	    8683	     25333 ns/op	 486.24 MB/s	       0 B/op	       0 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector/parserconfig
+cpu: Apple M4 Max
+BenchmarkTimestampOffsetPosition/terminal_z         	 5066551	        47.95 ns/op	 500.53 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampOffsetPosition/terminal_numeric   	 2504118	        96.70 ns/op	 299.89 MB/s	     160 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_z      	 1324078	       180.6 ns/op	 138.41 MB/s	     128 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_numeric         	 1000000	       228.4 ns/op	 131.38 MB/s	     296 B/op	       6 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_0           	 4699538	        53.46 ns/op	 561.12 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1           	 1458550	       164.3 ns/op	 255.66 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_64          	  136782	      1801 ns/op	 443.10 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1024        	    8763	     25628 ns/op	 480.64 MB/s	       0 B/op	       0 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector/parserconfig
+cpu: Apple M4 Max
+BenchmarkTimestampOffsetPosition/terminal_z         	 4995147	        48.43 ns/op	 495.55 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampOffsetPosition/terminal_numeric   	 2482948	        97.21 ns/op	 298.32 MB/s	     160 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_z      	 1384783	       173.2 ns/op	 144.37 MB/s	     128 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_numeric         	 1000000	       223.9 ns/op	 133.99 MB/s	     296 B/op	       6 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_0           	 4451643	        54.07 ns/op	 554.84 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1           	 1484912	       165.0 ns/op	 254.58 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_64          	  139718	      1770 ns/op	 450.76 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1024        	    8770	     25483 ns/op	 483.37 MB/s	       0 B/op	       0 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector/parserconfig
+cpu: Apple M4 Max
+BenchmarkTimestampOffsetPosition/terminal_z         	 5055158	        47.24 ns/op	 508.09 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampOffsetPosition/terminal_numeric   	 2445118	        97.01 ns/op	 298.95 MB/s	     160 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_z      	 1359120	       179.6 ns/op	 139.20 MB/s	     128 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_numeric         	 1000000	       233.4 ns/op	 128.52 MB/s	     296 B/op	       6 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_0           	 4304012	        55.38 ns/op	 541.67 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1           	 1485751	       161.4 ns/op	 260.27 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_64          	  142568	      1698 ns/op	 469.88 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1024        	    9884	     24872 ns/op	 495.26 MB/s	       0 B/op	       0 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector/parserconfig
+cpu: Apple M4 Max
+BenchmarkTimestampOffsetPosition/terminal_z         	 4980621	        48.55 ns/op	 494.38 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampOffsetPosition/terminal_numeric   	 2472110	        97.63 ns/op	 297.05 MB/s	     160 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_z      	 1303285	       183.1 ns/op	 136.57 MB/s	     128 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_numeric         	 1000000	       228.9 ns/op	 131.09 MB/s	     296 B/op	       6 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_0           	 4553010	        52.69 ns/op	 569.40 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1           	 1491043	       162.7 ns/op	 258.17 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_64          	  137576	      1732 ns/op	 460.71 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1024        	    9696	     25063 ns/op	 491.49 MB/s	       0 B/op	       0 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector/parserconfig
+cpu: Apple M4 Max
+BenchmarkTimestampOffsetPosition/terminal_z         	 4968999	        47.42 ns/op	 506.10 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampOffsetPosition/terminal_numeric   	 2382054	       100.2 ns/op	 289.56 MB/s	     160 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_z      	 1359462	       175.8 ns/op	 142.22 MB/s	     128 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_numeric         	 1000000	       229.5 ns/op	 130.69 MB/s	     296 B/op	       6 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_0           	 4543851	        53.09 ns/op	 565.03 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1           	 1446770	       165.0 ns/op	 254.51 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_64          	  141441	      1735 ns/op	 459.88 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1024        	    9116	     26250 ns/op	 469.26 MB/s	       0 B/op	       0 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector/parserconfig
+cpu: Apple M4 Max
+BenchmarkTimestampOffsetPosition/terminal_z         	 4887016	        48.38 ns/op	 496.03 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampOffsetPosition/terminal_numeric   	 2519613	        95.73 ns/op	 302.94 MB/s	     160 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_z      	 1339183	       179.0 ns/op	 139.67 MB/s	     128 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_numeric         	 1000000	       230.2 ns/op	 130.35 MB/s	     296 B/op	       6 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_0           	 4348183	        53.87 ns/op	 556.90 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1           	 1465257	       164.5 ns/op	 255.25 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_64          	  139500	      1725 ns/op	 462.49 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1024        	    9409	     25169 ns/op	 489.41 MB/s	       0 B/op	       0 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector/parserconfig
+cpu: Apple M4 Max
+BenchmarkTimestampOffsetPosition/terminal_z         	 4705597	        50.60 ns/op	 474.34 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampOffsetPosition/terminal_numeric   	 2447133	        98.38 ns/op	 294.79 MB/s	     160 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_z      	 1380439	       173.6 ns/op	 143.98 MB/s	     128 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_numeric         	 1000000	       224.7 ns/op	 133.53 MB/s	     296 B/op	       6 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_0           	 4591364	        52.52 ns/op	 571.18 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1           	 1406552	       169.1 ns/op	 248.37 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_64          	  141006	      1723 ns/op	 463.10 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1024        	    9570	     25780 ns/op	 477.81 MB/s	       0 B/op	       0 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector/parserconfig
+cpu: Apple M4 Max
+BenchmarkTimestampOffsetPosition/terminal_z         	 4881466	        49.08 ns/op	 488.99 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampOffsetPosition/terminal_numeric   	 2487080	        95.84 ns/op	 302.58 MB/s	     160 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_z      	 1367948	       175.0 ns/op	 142.85 MB/s	     128 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_numeric         	 1000000	       225.2 ns/op	 133.19 MB/s	     296 B/op	       6 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_0           	 4524517	        52.14 ns/op	 575.36 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1           	 1479387	       161.7 ns/op	 259.78 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_64          	  136513	      1734 ns/op	 460.18 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1024        	    9142	     25753 ns/op	 478.32 MB/s	       0 B/op	       0 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector/parserconfig
+cpu: Apple M4 Max
+BenchmarkTimestampOffsetPosition/terminal_z         	 4971019	        48.19 ns/op	 498.02 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampOffsetPosition/terminal_numeric   	 2518396	        94.96 ns/op	 305.38 MB/s	     160 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_z      	 1370628	       176.3 ns/op	 141.84 MB/s	     128 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_numeric         	 1000000	       229.2 ns/op	 130.90 MB/s	     296 B/op	       6 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_0           	 4499686	        53.01 ns/op	 565.90 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1           	 1506192	       160.0 ns/op	 262.52 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_64          	  142874	      1724 ns/op	 462.76 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1024        	    8990	     25429 ns/op	 484.41 MB/s	       0 B/op	       0 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector/parserconfig
+cpu: Apple M4 Max
+BenchmarkTimestampOffsetPosition/terminal_z         	 4884373	        48.68 ns/op	 493.03 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampOffsetPosition/terminal_numeric   	 2501710	        97.53 ns/op	 297.33 MB/s	     160 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_z      	 1373290	       173.9 ns/op	 143.77 MB/s	     128 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_numeric         	 1000000	       223.7 ns/op	 134.09 MB/s	     296 B/op	       6 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_0           	 4380014	        52.86 ns/op	 567.58 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1           	 1500535	       160.5 ns/op	 261.71 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_64          	  136359	      1704 ns/op	 468.40 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1024        	    9466	     25114 ns/op	 490.49 MB/s	       0 B/op	       0 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector/parserconfig
+cpu: Apple M4 Max
+BenchmarkTimestampOffsetPosition/terminal_z         	 4891158	        48.36 ns/op	 496.26 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampOffsetPosition/terminal_numeric   	 2418762	        99.26 ns/op	 292.15 MB/s	     160 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_z      	 1353146	       176.7 ns/op	 141.47 MB/s	     128 B/op	       3 allocs/op
+BenchmarkTimestampOffsetPosition/nonterminal_numeric         	 1000000	       228.4 ns/op	 131.34 MB/s	     296 B/op	       6 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_0           	 4601186	        52.78 ns/op	 568.42 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1           	 1483195	       162.1 ns/op	 259.07 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_64          	  140312	      1712 ns/op	 466.09 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTimestampPrecisionSpelling/literal_runs_1024        	    8944	     25623 ns/op	 480.75 MB/s	       0 B/op	       0 allocs/op
+PASS

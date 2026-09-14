@@ -1,4 +1,4 @@
-import { type Dispatch, type FormEvent, type KeyboardEvent, type PointerEvent, type SetStateAction, useEffect, useMemo, useRef, useState } from "react";
+import { type Dispatch, type FormEvent, type KeyboardEvent, type PointerEvent, type SetStateAction, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import type { DemoEvent, DemoField, DemoScalar, TimelinePoint } from "@/lib/demo/search-data";
 import type { PivotMode } from "@/lib/search/query-pivots";
@@ -9,11 +9,24 @@ import { COMPACT_NUMBER_FORMAT, NUMBER_FORMAT } from "../constants";
 import { eventPageSizeOptions } from "../event-page-controls";
 import { formatExactInteger, formatExactNumericText } from "../formatters";
 import type { EventDisplay, MenuName, TimelineDisplay } from "../model";
+import { EventsTable } from "./events-table";
 import {
   eventFieldValueWhiteSpace,
   formatFieldValue,
   highlightedRaw,
 } from "../workspace-utils";
+
+const PHONE_VIEWPORT = "(max-width: 760px)";
+
+function subscribePhoneViewport(listener: () => void): () => void {
+  const query = window.matchMedia(PHONE_VIEWPORT);
+  query.addEventListener("change", listener);
+  return () => query.removeEventListener("change", listener);
+}
+
+function phoneViewportSnapshot(): boolean {
+  return window.matchMedia(PHONE_VIEWPORT).matches;
+}
 
 interface EventsPanelProps {
   activeField: string | null;
@@ -56,6 +69,8 @@ interface EventsPanelProps {
   copyText: (text: string, message: string) => Promise<void> | void;
   endTimelineDrag: (event: PointerEvent<HTMLInputElement>) => void;
   moveTimelineDrag: (event: PointerEvent<HTMLInputElement>) => void;
+  onFindNearby?: (event: DemoEvent) => void;
+  nearbyUnavailableReason?: string | null;
   onLoadMoreFields: () => void;
   onCollapsePage: () => void;
   onCopyPageRaw: () => void;
@@ -169,6 +184,8 @@ export function EventsPanel({
   copyText,
   endTimelineDrag,
   moveTimelineDrag,
+  onFindNearby,
+  nearbyUnavailableReason,
   onLoadMoreFields,
   onCollapsePage,
   onCopyPageRaw,
@@ -196,7 +213,7 @@ export function EventsPanel({
   canZoomOut,
 }: EventsPanelProps) {
   const [timelineKeyboardIndex, setTimelineKeyboardIndex] = useState(0);
-  const [mobileFieldsMode, setMobileFieldsMode] = useState(false);
+  const mobileFieldsMode = useSyncExternalStore(subscribePhoneViewport, phoneViewportSnapshot, () => false);
   const [pageJumpDraft, setPageJumpDraft] = useState({ page: eventPage, value: String(eventPage) });
   const fieldsRailRef = useRef<HTMLElement>(null);
   const fieldsReturnFocusRef = useRef<HTMLElement | null>(null);
@@ -268,17 +285,11 @@ export function EventsPanel({
     return [...new Set(indexes)].map((index) => timelinePoints[index]?.label).filter((label): label is string => label !== undefined);
   }, [timelinePoints]);
 
-  useEffect(() => {
+  const [timelinePointCount, setTimelinePointCount] = useState(timelinePoints.length);
+  if (timelinePointCount !== timelinePoints.length) {
+    setTimelinePointCount(timelinePoints.length);
     setTimelineKeyboardIndex((current) => Math.min(current, Math.max(0, timelinePoints.length - 1)));
-  }, [timelinePoints.length]);
-
-  useEffect(() => {
-    const phoneViewport = window.matchMedia("(max-width: 760px)");
-    const updateMode = () => setMobileFieldsMode(phoneViewport.matches);
-    updateMode();
-    phoneViewport.addEventListener("change", updateMode);
-    return () => phoneViewport.removeEventListener("change", updateMode);
-  }, []);
+  }
 
   useEffect(() => {
     if (fieldsCollapsed || !window.matchMedia("(max-width: 760px)").matches) return;
@@ -331,6 +342,28 @@ export function EventsPanel({
             .find((button) => button.dataset.fieldName === fieldName);
       (matchingRow ?? fieldsRailRef.current?.querySelector<HTMLInputElement>(".field-filter input"))?.focus();
     });
+  }
+
+  function renderEventDetail(event: DemoEvent) {
+    return (
+      <div className="event-detail">
+        <header><strong>Event fields</strong><span>{Object.keys(event.fields).length} fields · typed JSON</span><button className="event-detail-copy-raw" type="button" onClick={() => void copyText(event.raw, "Raw event copied.")}>Copy raw</button></header>
+        <div className="event-field-grid">
+          {Object.entries(event.fields).map(([fieldName, fieldValue]) => (
+            <div className="event-field" key={fieldName}>
+              <button className="event-field-name" type="button" onClick={() => openFieldInspector(fieldName)}>{fieldName}</button>
+              <span className={`value-type value-${fieldValue === null ? "null" : typeof fieldValue}`}>{fieldValue === null ? "null" : typeof fieldValue}</span>
+              <code style={{ whiteSpace: eventFieldValueWhiteSpace(fieldValue) }}>{formatFieldValue(fieldValue)}</code>
+              <div className="event-field-actions">
+                <button type="button" disabled={event.pivotableFields?.[fieldName] === false} title={event.pivotableFields?.[fieldName] === false ? "This typed value cannot be represented losslessly in SPL" : "Include in current search"} aria-label={`Include ${fieldName}`} onClick={() => applyPivot(fieldName, fieldValue, "include")}><AppIcon name="plus" size="sm" /></button>
+                <button type="button" disabled={event.pivotableFields?.[fieldName] === false} title={event.pivotableFields?.[fieldName] === false ? "This typed value cannot be represented losslessly in SPL" : "Exclude from current search"} aria-label={`Exclude ${fieldName}`} onClick={() => applyPivot(fieldName, fieldValue, "exclude")}><AppIcon name="minus" size="sm" /></button>
+                <button type="button" disabled={event.pivotableFields?.[fieldName] === false} title={event.pivotableFields?.[fieldName] === false ? "This typed value cannot be represented losslessly in SPL" : "Open as new search"} aria-label={`New search for ${fieldName}`} onClick={() => applyPivot(fieldName, fieldValue, "new", true)}><AppIcon name="search" size="sm" /></button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -548,7 +581,7 @@ export function EventsPanel({
                 </div>
                 <footer>
                   <span>Showing top {activeFieldData.values.length} values</span>
-                  <button type="button" disabled={firstPivotableFieldValue === undefined} onClick={() => {
+                  <button className="button button--link" type="button" disabled={firstPivotableFieldValue === undefined} onClick={() => {
                     if (firstPivotableFieldValue !== undefined) {
                       applyPivot(activeFieldData.name, firstPivotableFieldValue.value, "new", true);
                     }
@@ -567,8 +600,8 @@ export function EventsPanel({
                   <button type="button" aria-haspopup="menu" aria-expanded={menu === "event-display"} onClick={() => setMenu(menu === "event-display" ? null : "event-display")}>{eventDisplay} <AppIcon name="chevron-down" size="xs" /></button>
                   {menu === "event-display" ? (
                     <div className="floating-menu result-control-menu" role="menu" aria-label="Event display">
-                      {(["List", "Raw"] as const).map((display) => (
-                        <button role="menuitemradio" aria-checked={eventDisplay === display} type="button" key={display} onClick={() => { setEventDisplay(display); setMenu(null); }}><span className="radio-mark">{eventDisplay === display ? "●" : "○"}</span><span><strong>{display}</strong><small>{display === "List" ? "Fields, metadata, and raw event" : "Raw event text with minimal chrome"}</small></span></button>
+                      {(["List", "Raw", "Table"] as const).map((display) => (
+                        <button role="menuitemradio" aria-checked={eventDisplay === display} type="button" key={display} onClick={() => { setEventDisplay(display); setMenu(null); }}><span className="radio-mark">{eventDisplay === display ? "●" : "○"}</span><span><strong>{display}</strong><small>{display === "List" ? "Fields, metadata, and raw event" : display === "Raw" ? "Raw event text with minimal chrome" : "Selected fields arranged as columns"}</small></span></button>
                       ))}
                     </div>
                   ) : null}
@@ -648,7 +681,7 @@ export function EventsPanel({
                 >Next <AppIcon name="chevron-right" size="xs" /></button>
               </nav>}
             </div>
-            <div className="event-head">
+            {eventDisplay === "Table" ? null : <div className="event-head">
               <span />
               {isPreview
                 ? <span title="Preview arrival order; final order is established when the search completes">Time · provisional order</span>
@@ -657,15 +690,24 @@ export function EventsPanel({
                 : <button type="button" aria-label={`Sort by time, ${eventSortDirection === "desc" ? "ascending" : "descending"}`} onClick={() => { setEventSortDirection((current) => current === "desc" ? "asc" : "desc"); setEventPage(1); }}>Time <span aria-hidden="true">{eventSortDirection === "desc" ? "↓" : "↑"}</span></button>}
               <span>{isPreview ? "Event · live preview" : "Event"}</span>
               <span className="event-row-actions-heading">Actions</span>
-            </div>
-            <div className="event-list" data-testid="event-list">
+            </div>}
+            {eventDisplay === "Table" ? (
+              <EventsTable
+                events={pagedResultEvents}
+                expandedEvents={expandedEvents}
+                fields={fields}
+                isPreview={isPreview}
+                onToggleEvent={toggleEvent}
+                renderEventDetail={renderEventDetail}
+              />
+            ) : <div className="event-list" data-testid="event-list">
               {pagedResultEvents.map((event) => {
                 const expanded = !isPreview && expandedEvents.has(event.id);
                 const level = String(event.fields.level ?? "INFO").toLowerCase();
                 return (
                   <article className={`event-row level-${level}${expanded ? " expanded" : ""}${isPreview ? " event-row--preview" : ""}`} data-testid={`event-row-${event.id}`} key={event.id}>
                     <button className="event-expander" type="button" aria-disabled={isPreview} title={isPreview ? "Event details become available with final results." : undefined} aria-label={isPreview ? "Event details unavailable during live preview" : `${expanded ? "Collapse" : "Expand"} event`} aria-expanded={expanded} onClick={() => { if (!isPreview) toggleEvent(event.id); }}><AppIcon name={expanded ? "chevron-down" : "chevron-right"} size="sm" /></button>
-                    <button className="event-time" type="button" aria-disabled={isPreview} title={isPreview ? "Nearby-event navigation becomes available with final results." : "Find nearby events"} aria-label={isPreview ? `${event.timeLabel}; nearby-event navigation unavailable during live preview` : undefined} onClick={() => { if (!isPreview) showToast("Choose a nearby interval from the time range picker."); }}><span>{event.timeLabel.split(", ")[0]}</span><strong>{event.timeLabel.split(", ").slice(1).join(", ")}</strong></button>
+                    <button className="event-time" type="button" aria-disabled={isPreview || !onFindNearby || !!nearbyUnavailableReason} title={isPreview ? "Nearby-event navigation becomes available with final results." : nearbyUnavailableReason || (!onFindNearby ? "Nearby events are unavailable for this result." : "Find nearby events")} aria-label={isPreview ? `${event.timeLabel}; nearby-event navigation unavailable during live preview` : undefined} onClick={() => { if (!isPreview && !nearbyUnavailableReason) onFindNearby?.(event); }}><span>{event.timeLabel.split(", ")[0]}</span><strong>{event.timeLabel.split(", ").slice(1).join(", ")}</strong></button>
                     <div className="event-content">
                       <button className="event-raw" type="button" aria-disabled={isPreview} title={isPreview ? "This row may change until the search completes." : undefined} aria-label={isPreview ? "Provisional event row; details unavailable until completion" : `${expanded ? "Collapse" : "Expand"} event details`} onClick={() => { if (!isPreview) toggleEvent(event.id); }}>{highlightedRaw(event.raw, submittedQuery)}</button>
                       <div className="event-chips">
@@ -675,25 +717,7 @@ export function EventsPanel({
                           <button type="button" aria-disabled={isPreview} title={isPreview ? "Authoritative field summaries load after completion." : undefined} key={fieldName} style={{ whiteSpace: eventFieldValueWhiteSpace(event.fields[fieldName] ?? null) }} onClick={() => { if (!isPreview) openFieldInspector(fieldName); }}><span>{fieldName}</span> = {formatFieldValue(event.fields[fieldName] ?? null)}</button>
                         ))}
                       </div>
-                      {expanded ? (
-                        <div className="event-detail">
-                          <header><strong>Event fields</strong><span>{Object.keys(event.fields).length} fields · typed JSON</span><button className="event-detail-copy-raw" type="button" onClick={() => void copyText(event.raw, "Raw event copied.")}>Copy raw</button></header>
-                          <div className="event-field-grid">
-                            {Object.entries(event.fields).map(([fieldName, fieldValue]) => (
-                              <div className="event-field" key={fieldName}>
-                                <button className="event-field-name" type="button" onClick={() => openFieldInspector(fieldName)}>{fieldName}</button>
-                                <span className={`value-type value-${fieldValue === null ? "null" : typeof fieldValue}`}>{fieldValue === null ? "null" : typeof fieldValue}</span>
-                                <code style={{ whiteSpace: eventFieldValueWhiteSpace(fieldValue) }}>{formatFieldValue(fieldValue)}</code>
-                                <div className="event-field-actions">
-                                  <button type="button" disabled={event.pivotableFields?.[fieldName] === false} title={event.pivotableFields?.[fieldName] === false ? "This typed value cannot be represented losslessly in SPL" : "Include in current search"} aria-label={`Include ${fieldName}`} onClick={() => applyPivot(fieldName, fieldValue, "include")}><AppIcon name="plus" size="sm" /></button>
-                                  <button type="button" disabled={event.pivotableFields?.[fieldName] === false} title={event.pivotableFields?.[fieldName] === false ? "This typed value cannot be represented losslessly in SPL" : "Exclude from current search"} aria-label={`Exclude ${fieldName}`} onClick={() => applyPivot(fieldName, fieldValue, "exclude")}><AppIcon name="minus" size="sm" /></button>
-                                  <button type="button" disabled={event.pivotableFields?.[fieldName] === false} title={event.pivotableFields?.[fieldName] === false ? "This typed value cannot be represented losslessly in SPL" : "Open as new search"} aria-label={`New search for ${fieldName}`} onClick={() => applyPivot(fieldName, fieldValue, "new", true)}><AppIcon name="search" size="sm" /></button>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ) : null}
+                      {expanded ? renderEventDetail(event) : null}
                     </div>
                     <button
                       className="event-copy-raw"
@@ -707,7 +731,8 @@ export function EventsPanel({
                 );
               })}
               {resultEvents.length === 0 ? <div className="empty-state event-empty"><strong>No events found</strong><span>Widen the time range or remove a field filter.</span><button className="button button--secondary button--compact" type="button" onClick={() => setQuery(defaultQuery)}>Reset search</button></div> : null}
-            </div>
+            </div>}
+            {eventDisplay === "Table" && resultEvents.length === 0 ? <div className="empty-state event-empty"><strong>No events found</strong><span>Widen the time range or remove a field filter.</span><button className="button button--secondary button--compact" type="button" onClick={() => setQuery(defaultQuery)}>Reset search</button></div> : null}
           </section>
         </div>
       </section>

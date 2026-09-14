@@ -246,7 +246,7 @@ func TestCheckpointStoreUsesPhysicalKeyAndFencesOldGeneration(t *testing.T) {
 	}
 }
 
-func TestCheckpointStoreSetManyPersistsOneDeterministicSnapshot(t *testing.T) {
+func TestCheckpointStoreSetManyPersistsOneDeterministicTransaction(t *testing.T) {
 	t.Parallel()
 	storeAPI, err := NewCheckpointStore(t.TempDir())
 	if err != nil {
@@ -255,9 +255,9 @@ func TestCheckpointStoreSetManyPersistsOneDeterministicSnapshot(t *testing.T) {
 	t.Cleanup(func() { _ = storeAPI.Close() })
 	store := storeAPI.(*fileCheckpointStore)
 
-	originalPersist := store.persistSnapshot
+	originalPersist := store.persistUpdates
 	var persisted [][]Checkpoint
-	store.persistSnapshot = func(checkpoints []Checkpoint) error {
+	store.persistUpdates = func(checkpoints []Checkpoint) error {
 		persisted = append(persisted, append([]Checkpoint(nil), checkpoints...))
 		return originalPersist(checkpoints)
 	}
@@ -322,7 +322,7 @@ func TestCheckpointStoreSetManyNoEffectiveAdvanceDoesNotPersist(t *testing.T) {
 	}
 
 	persistCalls := 0
-	store.persistSnapshot = func([]Checkpoint) error {
+	store.persistUpdates = func([]Checkpoint) error {
 		persistCalls++
 		return nil
 	}
@@ -528,7 +528,7 @@ func TestCheckpointStoreSetManyPersistenceFailureRollsBackMemory(t *testing.T) {
 
 	persistErr := errors.New("injected persistence failure")
 	persistCalls := 0
-	store.persistSnapshot = func([]Checkpoint) error {
+	store.persistUpdates = func([]Checkpoint) error {
 		persistCalls++
 		return persistErr
 	}
@@ -616,7 +616,7 @@ func TestCheckpointStoreSetDelegatesToSetMany(t *testing.T) {
 	store := storeAPI.(*fileCheckpointStore)
 
 	persistCalls := 0
-	store.persistSnapshot = func(checkpoints []Checkpoint) error {
+	store.persistUpdates = func(checkpoints []Checkpoint) error {
 		persistCalls++
 		if len(checkpoints) != 1 || checkpoints[0].Offset != 42 {
 			t.Fatalf("persisted snapshot = %+v", checkpoints)

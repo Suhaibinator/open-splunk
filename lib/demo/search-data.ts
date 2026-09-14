@@ -38,6 +38,14 @@ export interface DemoField {
   values: DemoFieldValue[];
 }
 
+export interface DemoSavedSearchVisualization {
+  chartStyle: "area" | "column" | "horizontal" | "line";
+  legend: "bottom" | "right" | "none";
+  showDataLabels: boolean;
+  stackMode: "none" | "stacked" | "stacked100";
+  title: string;
+}
+
 export interface DemoSavedSearch {
   id: string;
   name: string;
@@ -48,6 +56,7 @@ export interface DemoSavedSearch {
   timezone?: string;
   updatedAt: string;
   owner: string;
+  visualization?: DemoSavedSearchVisualization;
 }
 
 export interface DemoHistoryEntry {
@@ -75,8 +84,8 @@ export interface TimelinePoint {
    * `coordinateApproximate` is true, use the exact text fields for labels.
    */
   count: number;
-  /** Transforming searches can return one numeric value per split-by series. */
-  series?: Record<string, number>;
+  /** Transforming searches can return one numeric or explicitly null value per split-by series. */
+  series?: Record<string, number | null>;
   /** Exact server value retained when `count` cannot represent it losslessly. */
   exactCount?: string;
   /** Exact server values retained for split-by coordinates that are approximate. */
@@ -86,6 +95,12 @@ export interface TimelinePoint {
   /** Absolute boundaries are populated by the backend adapter. */
   earliest?: string;
   latest?: string;
+  /** Exact UTC bucket start used only for relative chart geometry. */
+  timeCoordinateNanoseconds?: bigint;
+  /** Exact UTC bucket end used only for relative column geometry. */
+  timeLatestCoordinateNanoseconds?: bigint;
+  /** Authoritative `_time` cell text retained for tabular export. */
+  timeValue?: string;
 }
 
 function raw(fields: Record<string, DemoScalar>): string {

@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package open_splunk;
+
+import "open_splunk/value.proto";
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk;opensplunk";
+
+// POST /api/search/jobs/nearby/prepare
+message PrepareNearbyContextRequest {
+  string search_job_id = 1;
+  string snapshot_ref = 2;
+  string row_id = 3;
+}
+
+message NearbyContextField {
+  string field_name = 1;
+  TypedValue value = 2;
+  bool suggested = 3;
+}
+
+message PrepareNearbyContextResponse {
+  string search_job_id = 1;
+  string row_id = 2;
+  string anchor_time = 3;
+  string earliest = 4;
+  string latest = 5;
+  string index = 6;
+  string host = 7;
+  string source = 8;
+  bool clipped = 9;
+  repeated NearbyContextField fields = 10;
+}

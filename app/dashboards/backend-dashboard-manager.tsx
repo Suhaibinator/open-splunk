@@ -2,6 +2,7 @@
 
 import {
   type FormEvent,
+  type ReactNode,
   useCallback,
   useEffect,
   useMemo,
@@ -9,7 +10,7 @@ import {
   useState,
 } from "react";
 
-import type { AppSummary } from "@/gen/ts/open_splunk/app";
+import type { AppSummary, AppWorkspace } from "@/gen/ts/open_splunk/app";
 import { SharingScope } from "@/gen/ts/open_splunk/common";
 import {
   type Dashboard,
@@ -18,9 +19,11 @@ import {
 } from "@/gen/ts/open_splunk/dashboard";
 import { SearchJobState, searchJobStateToJSON } from "@/gen/ts/open_splunk/search";
 import { ServerFeature } from "@/gen/ts/open_splunk/system_api";
-import type { TypedValue } from "@/gen/ts/open_splunk/value";
+import { type ResultRow, type ResultSchema, VisualizationSpec, VisualizationType } from "@/gen/ts/open_splunk/result";
 import { createOpenSplunkApiClient, getSystemBootstrap } from "@/lib/api";
 import { preferredBackendAppId, replaceBackendAppId } from "@/lib/search/app-navigation";
+import { ProductShell } from "../_components/product-shell";
+import { AppCreateDialog } from "../_components/app-create-dialog";
 
 import {
   cloneDashboardDefinition,
@@ -31,6 +34,7 @@ import {
   dashboardActionError,
   dashboardLoadError,
   dashboardPanelRunCanPublish,
+  dashboardViewState,
   type DashboardLoadMode,
   type DashboardManagerError,
 } from "./dashboard-manager-state";
@@ -39,6 +43,13 @@ import {
   waitForDashboardSearchJob,
 } from "./dashboard-panel-runner";
 
+import {
+  acquireDashboardPanelPipeline,
+  awaitDashboardOperation,
+  DashboardResultLoader,
+} from "./dashboard-result-loader";
+import { DashboardVisualization, DashboardVisualizationEditor } from "./dashboard-visualization";
+
 interface BackendDashboardManagerProps {
   apiBaseUrl: string;
 }
@@ -46,14 +57,25 @@ interface BackendDashboardManagerProps {
 interface PanelResult {
   state: SearchJobState;
   jobId?: string;
-  columns?: Array<{ key: string; label: string }>;
-  rows?: Array<{ id: string; cells: string[] }>;
+  schema?: ResultSchema;
+  rows?: ResultRow[];
+  spec?: VisualizationSpec;
+  capped?: boolean;
+  complete?: boolean;
+  retainedTruncated?: boolean;
+  pageNumber?: number;
+  nextPageToken?: string;
+  paging?: boolean;
+  stale?: boolean;
   error?: string;
 }
 
 interface ActivePanelRun {
+  busy: boolean;
   controller: AbortController;
   jobId?: string;
+  loader?: DashboardResultLoader;
+  terminal: boolean;
 }
 
 const MAXIMUM_DASHBOARD_PANELS = 24;
@@ -69,6 +91,25 @@ function panelID(): string {
 
 function preferredDashboardAppID(): string | undefined {
   return preferredBackendAppId(globalThis.location.search);
+}
+
+async function fetchDashboardCatalog(
+  client: ReturnType<typeof createOpenSplunkApiClient>,
+  preferredAppId: string | undefined,
+  mode: DashboardLoadMode,
+  signal: AbortSignal,
+) {
+  const bootstrap = await getSystemBootstrap(client, preferredAppId, { signal });
+  if (!bootstrap.features.has(ServerFeature.SERVER_FEATURE_DASHBOARDS)) {
+    return { available: false as const };
+  }
+  const selectedApp = bootstrap.apps.find((app) => app.appId === bootstrap.selectedAppId) ?? bootstrap.apps[0];
+  if (mode === "switch" && preferredAppId !== undefined && selectedApp?.appId !== preferredAppId) {
+    throw new Error("The requested dashboard app is no longer available.");
+  }
+  if (!selectedApp) return { available: true as const, bootstrap, dashboards: [], selectedApp: undefined };
+  const response = await client.dashboards.list({ appIdFilter: selectedApp.appId }, { signal });
+  return { available: true as const, bootstrap, dashboards: response.dashboards, selectedApp };
 }
 
 function newPanel(appId: string, indexName: string, row: number): DashboardPanel {
@@ -89,25 +130,6 @@ function newPanel(appId: string, indexName: string, row: number): DashboardPanel
     width: 12,
     height: 4,
   };
-}
-
-function formatValue(value: TypedValue | undefined): string {
-  switch (value?.kind?.$case) {
-    case "nullValue": return "null";
-    case "missingValue": return "";
-    case "stringValue": return value.kind.value;
-    case "sint64Value":
-    case "uint64Value": return value.kind.value.toString();
-    case "doubleValue": return Number.isFinite(value.kind.value) ? String(value.kind.value) : "";
-    case "boolValue": return value.kind.value ? "true" : "false";
-    case "timestampValue": return value.kind.value.toISOString();
-    case "durationValue": return `${value.kind.value.seconds.toString()}.${String(value.kind.value.nanos).padStart(9, "0")}s`;
-    case "decimalValue": return value.kind.value.value;
-    case "bytesValue": return `[${value.kind.value.byteLength} bytes]`;
-    case "listValue": return `[${value.kind.value.values.map(formatValue).join(", ")}]`;
-    case "objectValue": return JSON.stringify(Object.fromEntries(value.kind.value.fields.map((field) => [field.name, formatValue(field.value)])));
-    default: return "";
-  }
 }
 
 function stateLabel(state: SearchJobState): string {
@@ -133,9 +155,13 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
   const [switchingAppID, setSwitchingAppID] = useState<string | null>(null);
   const [defaultSearchTimeoutMs, setDefaultSearchTimeoutMs] = useState(0);
   const [available, setAvailable] = useState(true);
+  const [loadedCatalog, setLoadedCatalog] = useState(false);
+  const [appAdminAvailable, setAppAdminAvailable] = useState(false);
+  const [createAppOpen, setCreateAppOpen] = useState(false);
   const [error, setError] = useState<DashboardManagerError | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [panelResults, setPanelResults] = useState<Record<string, PanelResult>>({});
+  const [invalidPanelIDs, setInvalidPanelIDs] = useState<ReadonlySet<string>>(() => new Set());
   const loadGeneration = useRef(0);
   const loadRequests = useRef(new Set<AbortController>());
   const activePanelRuns = useRef(new Map<string, ActivePanelRun>());
@@ -149,13 +175,22 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
     && !dashboardDefinitionsEqual(draft, selected.definition)
   ), [draft, selected]);
   const workspaceBusy = saving || refreshing || switchingAppID !== null;
+  const invalidVisualization = draft?.panels.some((panel) => invalidPanelIDs.has(panel.panelId)) ?? false;
+  const viewState = dashboardViewState({
+    appCount: apps.length,
+    available,
+    dashboardCount: dashboards.length,
+    error,
+    loadedCatalog,
+    loading,
+  });
 
   const stopPanelRun = useCallback((panelIdValue: string, reason: string) => {
     const active = activePanelRuns.current.get(panelIdValue);
     if (!active) return;
     activePanelRuns.current.delete(panelIdValue);
     active.controller.abort(new DOMException(reason, "AbortError"));
-    if (active.jobId) {
+    if (active.jobId && !active.terminal) {
       void client.search.cancel({ searchJobId: active.jobId, reason }).catch(() => undefined);
     }
   }, [client]);
@@ -175,45 +210,49 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
     loadRequests.current.clear();
     const controller = new AbortController();
     loadRequests.current.add(controller);
-    if (mode === "initial") setLoading(true);
-    if (mode === "reload") setRefreshing(true);
-    if (mode === "switch") {
-      setSwitchingAppID(preferredAppId ?? "");
-    }
-    setError(null);
     try {
-      const bootstrap = await getSystemBootstrap(client, preferredAppId, { signal: controller.signal });
-      if (!bootstrap.features.has(ServerFeature.SERVER_FEATURE_DASHBOARDS)) {
+      const result = await fetchDashboardCatalog(client, preferredAppId, mode, controller.signal);
+      if (!result.available) {
         if (mode === "initial") {
           if (generation === loadGeneration.current) setAvailable(false);
           return false;
         }
         throw new Error("The backend no longer advertises persisted dashboard support.");
       }
-      const selectedApp = bootstrap.apps.find((app) => app.appId === bootstrap.selectedAppId) ?? bootstrap.apps[0];
-      if (!selectedApp) throw new Error("No active app is available for dashboards.");
-      if (mode === "switch" && preferredAppId !== undefined && selectedApp.appId !== preferredAppId) {
-        throw new Error("The requested dashboard app is no longer available.");
-      }
-      const response = await client.dashboards.list({ appIdFilter: selectedApp.appId }, { signal: controller.signal });
       if (generation !== loadGeneration.current) return false;
+      setApps(result.bootstrap.apps);
+      setAppAdminAvailable(result.bootstrap.features.has(ServerFeature.SERVER_FEATURE_APP_ADMIN));
+      setLoadedCatalog(true);
+      if (!result.selectedApp) {
+        stopAllPanelRuns("Dashboard app catalog is empty");
+        setAppID("");
+        setAppName("Dashboard workspace");
+        setIndexNames([]);
+        setDashboards([]);
+        selectedIDRef.current = "";
+        setSelectedID("");
+        setDraft(null);
+        setPanelResults({});
+        setInvalidPanelIDs(new Set());
+        return true;
+      }
       const retainedID = mode === "switch" ? "" : selectedIDRef.current;
-      const nextSelected = response.dashboards.find((dashboard) => dashboard.dashboardId === retainedID)
-        ?? response.dashboards[0]
+      const nextSelected = result.dashboards.find((dashboard) => dashboard.dashboardId === retainedID)
+        ?? result.dashboards[0]
         ?? null;
       if (mode !== "initial") stopAllPanelRuns(mode === "switch" ? "Dashboard app changed" : "Dashboards reloaded");
       setAvailable(true);
-      setApps(bootstrap.apps);
-      setAppID(selectedApp.appId);
-      setAppName(selectedApp.displayName || selectedApp.slug || "Dashboard workspace");
-      setIndexNames(bootstrap.indexes.filter((index) => index.searchable).map((index) => index.name));
-      setDefaultSearchTimeoutMs(bootstrap.limits.defaultSearchTimeoutMs);
-      setDashboards(response.dashboards);
+      setAppID(result.selectedApp.appId);
+      setAppName(result.selectedApp.displayName || result.selectedApp.slug || "Dashboard workspace");
+      setIndexNames(result.bootstrap.indexes.filter((index) => index.searchable).map((index) => index.name));
+      setDefaultSearchTimeoutMs(result.bootstrap.limits.defaultSearchTimeoutMs);
+      setDashboards(result.dashboards);
       selectedIDRef.current = nextSelected?.dashboardId ?? "";
       setSelectedID(selectedIDRef.current);
       setDraft(nextSelected?.definition ? cloneDashboardDefinition(nextSelected.definition) : null);
       setPanelResults({});
-      if (mode === "switch") replaceBackendAppId(selectedApp.appId);
+      setInvalidPanelIDs(new Set());
+      replaceBackendAppId(result.selectedApp.appId);
       return true;
     } catch (requestError) {
       if (!controller.signal.aborted && generation === loadGeneration.current) {
@@ -230,23 +269,78 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
     }
   }, [client, stopAllPanelRuns]);
 
+  const beginLoad = useCallback((preferredAppId: string | undefined, mode: DashboardLoadMode) => {
+    if (mode === "initial") setLoading(true);
+    if (mode === "reload") setRefreshing(true);
+    if (mode === "switch") setSwitchingAppID(preferredAppId ?? "");
+    setError(null);
+    void load(preferredAppId, mode);
+  }, [load]);
+
   useEffect(() => {
     const requests = loadRequests.current;
     const runs = activePanelRuns.current;
-    void load(preferredDashboardAppID(), "initial");
+    const preferredAppId = preferredDashboardAppID();
+    const generation = ++loadGeneration.current;
+    const controller = new AbortController();
+    requests.add(controller);
+    void fetchDashboardCatalog(client, preferredAppId, "initial", controller.signal).then((result) => {
+      if (controller.signal.aborted || generation !== loadGeneration.current) return;
+      if (!result.available) {
+        setAvailable(false);
+        return;
+      }
+      setApps(result.bootstrap.apps);
+      setAppAdminAvailable(result.bootstrap.features.has(ServerFeature.SERVER_FEATURE_APP_ADMIN));
+      setLoadedCatalog(true);
+      if (!result.selectedApp) {
+        setAppID("");
+        setAppName("Dashboard workspace");
+        setIndexNames([]);
+        setDashboards([]);
+        selectedIDRef.current = "";
+        setSelectedID("");
+        setDraft(null);
+        setPanelResults({});
+        setInvalidPanelIDs(new Set());
+        return;
+      }
+      const nextSelected = result.dashboards.find((dashboard) => dashboard.dashboardId === selectedIDRef.current)
+        ?? result.dashboards[0]
+        ?? null;
+      setAvailable(true);
+      setAppID(result.selectedApp.appId);
+      replaceBackendAppId(result.selectedApp.appId);
+      setAppName(result.selectedApp.displayName || result.selectedApp.slug || "Dashboard workspace");
+      setIndexNames(result.bootstrap.indexes.filter((index) => index.searchable).map((index) => index.name));
+      setDefaultSearchTimeoutMs(result.bootstrap.limits.defaultSearchTimeoutMs);
+      setDashboards(result.dashboards);
+      selectedIDRef.current = nextSelected?.dashboardId ?? "";
+      setSelectedID(selectedIDRef.current);
+      setDraft(nextSelected?.definition ? cloneDashboardDefinition(nextSelected.definition) : null);
+      setPanelResults({});
+      setInvalidPanelIDs(new Set());
+    }).catch((requestError: unknown) => {
+      if (!controller.signal.aborted && generation === loadGeneration.current) {
+        setError(dashboardLoadError(errorMessage(requestError), "initial", preferredAppId));
+      }
+    }).finally(() => {
+      requests.delete(controller);
+      if (generation === loadGeneration.current) setLoading(false);
+    });
     return () => {
       loadGeneration.current += 1;
       for (const request of requests) request.abort();
       requests.clear();
       for (const active of runs.values()) {
         active.controller.abort(new DOMException("Dashboard closed", "AbortError"));
-        if (active.jobId) {
+        if (active.jobId && !active.terminal) {
           void client.search.cancel({ searchJobId: active.jobId, reason: "Dashboard closed" }).catch(() => undefined);
         }
       }
       runs.clear();
     };
-  }, [client, load]);
+  }, [client]);
 
   useEffect(() => {
     if (!dirty) return;
@@ -286,6 +380,7 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
       setSelectedID(response.dashboard.dashboardId);
       setDraft(cloneDashboardDefinition(response.dashboard.definition));
       setPanelResults({});
+      setInvalidPanelIDs(new Set());
       setNewName("");
       setNotice("Dashboard created.");
     } catch (requestError) {
@@ -298,7 +393,7 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
   function saveDashboard(): Promise<Dashboard | null> {
     const activeSave = savePromiseRef.current;
     if (activeSave !== null) return activeSave;
-    if (!selected || !draft) return Promise.resolve(null);
+    if (!selected || !draft || invalidVisualization) return Promise.resolve(null);
     if (!dirty) return Promise.resolve(selected);
     const dashboardID = selected.dashboardId;
     const submittedDraft = cloneDashboardDefinition(draft);
@@ -353,6 +448,7 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
       setSelectedID(selectedIDRef.current);
       setDraft(nextSelected?.definition ? cloneDashboardDefinition(nextSelected.definition) : null);
       setPanelResults({});
+      setInvalidPanelIDs(new Set());
       setNotice("Dashboard deleted.");
     } catch (requestError) {
       setError(dashboardActionError(errorMessage(requestError)));
@@ -362,33 +458,49 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
   }
 
   async function runPanel(panel: DashboardPanel) {
-    if (!selected || refreshing || switchingAppID !== null) return;
-    const persisted = dirty ? await saveDashboard() : selected;
-    if (!persisted) return;
+    if (!selected || refreshing || switchingAppID !== null || invalidVisualization) return;
+    const dashboardID = selected.dashboardId;
     stopPanelRun(panel.panelId, "A newer panel run started");
     const controller = new AbortController();
-    const active: ActivePanelRun = { controller };
-    const waitTimeoutMs = dashboardPanelWaitTimeoutMs(defaultSearchTimeoutMs);
-    let terminalJobObserved = false;
+    const active: ActivePanelRun = { busy: true, controller, terminal: false };
+    const current = () => selectedIDRef.current === dashboardID && dashboardPanelRunCanPublish(
+      active,
+      activePanelRuns.current.get(panel.panelId),
+      controller.signal.aborted,
+    );
     activePanelRuns.current.set(panel.panelId, active);
-    setPanelResults((current) => ({ ...current, [panel.panelId]: { state: SearchJobState.SEARCH_JOB_STATE_QUEUED } }));
+    setPanelResults((results) => ({ ...results, [panel.panelId]: { state: SearchJobState.SEARCH_JOB_STATE_QUEUED } }));
+    let release: (() => void) | undefined;
     try {
-      const response = await client.dashboards.runPanel(
+      const persisted = dirty
+        ? await awaitDashboardOperation(saveDashboard(), controller.signal)
+        : selected;
+      if (!current()) return;
+      if (!persisted) throw new Error("The dashboard could not be saved. Save it successfully before running this panel.");
+      const savedPanel = persisted.definition?.panels.find((candidate) => candidate.panelId === panel.panelId);
+      if (!savedPanel?.search) throw new Error("The saved dashboard no longer contains this panel search.");
+      const spec = savedPanel.search.visualization === undefined
+        ? undefined
+        : VisualizationSpec.fromPartial(savedPanel.search.visualization);
+      release = await acquireDashboardPanelPipeline(controller.signal);
+      if (!current()) return;
+      const admission = client.dashboards.runPanel(
         { dashboardId: persisted.dashboardId, panelId: panel.panelId },
         { signal: controller.signal },
       );
+      // A canceled transport may still admit a job. Cancel its late identity
+      // even after the local pipeline has released its concurrency slot.
+      void admission.then((response) => {
+        if (!current() && response.searchJob) {
+          void client.search.cancel({ searchJobId: response.searchJob.searchJobId, reason: "Panel run superseded" }).catch(() => undefined);
+        }
+      }).catch(() => undefined);
+      const response = await awaitDashboardOperation(admission, controller.signal);
       const initialJob = response.searchJob;
       if (!initialJob) throw new Error("The server returned an empty search job.");
-      if (!dashboardPanelRunCanPublish(
-        active,
-        activePanelRuns.current.get(panel.panelId),
-        controller.signal.aborted,
-      )) {
-        void client.search.cancel({ searchJobId: initialJob.searchJobId, reason: "Panel run superseded" }).catch(() => undefined);
-        return;
-      }
+      if (!current()) return;
       active.jobId = initialJob.searchJobId;
-      setPanelResults((current) => ({ ...current, [panel.panelId]: { state: initialJob.state, jobId: initialJob.searchJobId } }));
+      setPanelResults((results) => ({ ...results, [panel.panelId]: { state: initialJob.state, jobId: initialJob.searchJobId, spec } }));
       const job = await waitForDashboardSearchJob(initialJob, {
         defaultSearchTimeoutMs,
         signal: controller.signal,
@@ -399,76 +511,128 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
           );
           const nextJob = polled.searchJob;
           if (!nextJob) throw new Error("The server returned an empty search job.");
-          if (nextJob.searchJobId !== searchJobId) {
-            throw new Error("The server returned a different search job.");
-          }
-          if (dashboardPanelRunCanPublish(
-            active,
-            activePanelRuns.current.get(panel.panelId),
-            signal.aborted,
-          )) {
-            setPanelResults((current) => ({
-              ...current,
-              [panel.panelId]: { state: nextJob.state, jobId: nextJob.searchJobId },
+          if (nextJob.searchJobId !== searchJobId) throw new Error("The server returned a different search job.");
+          if (current()) {
+            setPanelResults((results) => ({
+              ...results,
+              [panel.panelId]: { state: nextJob.state, jobId: nextJob.searchJobId, spec },
             }));
           }
           return nextJob;
         },
       });
-      if (!dashboardPanelRunCanPublish(
-        active,
-        activePanelRuns.current.get(panel.panelId),
-        controller.signal.aborted,
-      )) return;
-      terminalJobObserved = true;
+      if (!current()) return;
+      active.terminal = true;
       if (job.state !== SearchJobState.SEARCH_JOB_STATE_COMPLETED) {
         throw new Error(job.failure?.message || `Panel search ${stateLabel(job.state)}.`);
       }
-      const result = await client.search.results({
-        searchJobId: job.searchJobId,
-        page: { pageSize: 20, pageToken: undefined, includeTotalSize: false },
-        columns: [],
-        allowPartialResults: false,
-      }, { signal: controller.signal });
-      if (!dashboardPanelRunCanPublish(
-        active,
-        activePanelRuns.current.get(panel.panelId),
-        controller.signal.aborted,
-      )) return;
-      const columns = result.resultPage?.schema?.columns.map((column) => ({ key: column.fieldName, label: column.displayName || column.fieldName })) ?? [];
-      const rows = result.resultPage?.rows.map((row) => ({ id: row.rowId, cells: row.cells.map(formatValue) })) ?? [];
-      setPanelResults((current) => ({ ...current, [panel.panelId]: { state: job.state, jobId: job.searchJobId, columns, rows } }));
+      const loader = new DashboardResultLoader({ client, isCurrent: current, job, signal: controller.signal });
+      active.loader = loader;
+      const table = spec === undefined || spec.type === VisualizationType.VISUALIZATION_TYPE_TABLE;
+      if (table) {
+        const page = await loader.firstTablePage();
+        if (!current()) return;
+        setPanelResults((results) => ({
+          ...results,
+          [panel.panelId]: {
+            state: job.state, jobId: job.searchJobId, spec,
+            schema: page.schema, rows: page.rows, pageNumber: page.pageNumber,
+            nextPageToken: page.nextPageToken, complete: page.snapshotComplete, retainedTruncated: job.resultsTruncated,
+          },
+        }));
+      } else {
+        const collected = await loader.collectChartRows();
+        if (!current()) return;
+        setPanelResults((results) => ({
+          ...results,
+          [panel.panelId]: {
+            state: job.state, jobId: job.searchJobId, spec,
+            schema: collected.schema, rows: collected.rows,
+            capped: collected.capped, complete: collected.complete, retainedTruncated: job.resultsTruncated,
+          },
+        }));
+      }
     } catch (requestError) {
-      if (dashboardPanelRunCanPublish(
-        active,
-        activePanelRuns.current.get(panel.panelId),
-        controller.signal.aborted,
-      )) {
-        if (active.jobId && !terminalJobObserved) {
+      if (current()) {
+        if (active.jobId && !active.terminal) {
+          const waitTimeoutMs = dashboardPanelWaitTimeoutMs(defaultSearchTimeoutMs);
           void client.search.cancel({
             searchJobId: active.jobId,
             reason: `Dashboard panel wait stopped before its ${waitTimeoutMs}ms limit`,
           }).catch(() => undefined);
         }
-        setPanelResults((current) => ({
-          ...current,
+        active.loader = undefined;
+        setPanelResults((results) => ({
+          ...results,
           [panel.panelId]: {
-            state: current[panel.panelId]?.state ?? SearchJobState.SEARCH_JOB_STATE_FAILED,
-            jobId: current[panel.panelId]?.jobId,
+            state: results[panel.panelId]?.state ?? SearchJobState.SEARCH_JOB_STATE_FAILED,
+            jobId: active.jobId,
             error: errorMessage(requestError),
           },
         }));
       }
     } finally {
-      if (activePanelRuns.current.get(panel.panelId) === active) {
-        activePanelRuns.current.delete(panel.panelId);
+      release?.();
+      active.busy = false;
+    }
+  }
+
+  async function pagePanel(panelIdValue: string, direction: "next" | "previous") {
+    const active = activePanelRuns.current.get(panelIdValue);
+    if (!active?.loader || active.busy || active.controller.signal.aborted) return;
+    active.busy = true;
+    const current = () => dashboardPanelRunCanPublish(
+      active,
+      activePanelRuns.current.get(panelIdValue),
+      active.controller.signal.aborted,
+    );
+    setPanelResults((results) => ({ ...results, [panelIdValue]: { ...results[panelIdValue], paging: true, error: undefined } }));
+    let release: (() => void) | undefined;
+    try {
+      release = await acquireDashboardPanelPipeline(active.controller.signal);
+      if (!current()) return;
+      const page = direction === "previous"
+        ? active.loader.previousTablePage()
+        : await active.loader.nextTablePage();
+      if (!page || !current()) return;
+      setPanelResults((results) => ({
+        ...results,
+        [panelIdValue]: {
+          ...results[panelIdValue], schema: page.schema, rows: page.rows,
+          pageNumber: page.pageNumber, nextPageToken: page.nextPageToken,
+          complete: page.snapshotComplete, paging: false,
+        },
+      }));
+    } catch (requestError) {
+      if (current()) {
+        setPanelResults((results) => ({ ...results, [panelIdValue]: { ...results[panelIdValue], error: errorMessage(requestError), paging: false } }));
       }
+    } finally {
+      release?.();
+      active.busy = false;
+      if (current()) setPanelResults((results) => ({ ...results, [panelIdValue]: { ...results[panelIdValue], paging: false } }));
     }
   }
 
   function selectApp(nextAppID: string) {
-    if (!nextAppID || nextAppID === appID || workspaceBusy || !confirmDiscardChanges()) return;
-    void load(nextAppID, "switch");
+    if (!nextAppID || saving || refreshing) return;
+    if (nextAppID === appID) {
+      if (switchingAppID !== null) {
+        loadGeneration.current += 1;
+        for (const request of loadRequests.current) request.abort();
+        loadRequests.current.clear();
+        setSwitchingAppID(null);
+        setError(null);
+      }
+      return;
+    }
+    if (!confirmDiscardChanges()) return;
+    beginLoad(nextAppID, "switch");
+  }
+
+  function useCreatedApp(app: AppWorkspace) {
+    setCreateAppOpen(false);
+    beginLoad(app.appId, "switch");
   }
 
   function selectDashboard(nextDashboardID: string) {
@@ -480,12 +644,13 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
     setSelectedID(nextDashboardID);
     setDraft(cloneDashboardDefinition(nextSelected.definition));
     setPanelResults({});
+    setInvalidPanelIDs(new Set());
   }
 
   function retryDashboardLoad() {
     const retry = error?.retry;
     if (!retry || workspaceBusy || !confirmDiscardChanges()) return;
-    void load(retry.appId, retry.mode);
+    beginLoad(retry.appId, retry.mode);
   }
 
   function removePanel(panelIdValue: string) {
@@ -497,66 +662,104 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
   }
 
   function updatePanel(panelIdValue: string, update: (panel: DashboardPanel) => DashboardPanel) {
+    stopPanelRun(panelIdValue, "Dashboard panel settings changed");
+    setPanelResults((results) => {
+      const previous = results[panelIdValue];
+      if (!previous) return results;
+      return { ...results, [panelIdValue]: { state: previous.state, schema: previous.schema, stale: true } };
+    });
     setDraft((current) => current ? {
       ...current,
       panels: current.panels.map((panel) => panel.panelId === panelIdValue ? update(panel) : panel),
     } : current);
   }
 
-  if (loading) {
-    return <div className="suite-page dashboard-page"><section className="suite-card"><p className="operations-state-message">Loading dashboards…</p></section></div>;
+  const shell = (content: ReactNode) => (
+    <ProductShell
+      activeSection="dashboards"
+      apiBaseUrl={apiBaseUrl}
+      appName="Dashboards"
+      backendAppCatalog={{
+        apps,
+        error: error?.message,
+        onRetry: retryDashboardLoad,
+        onSelect: selectApp,
+        selectedAppId: appID || null,
+        state: loading ? "loading" : error && apps.length === 0 ? "error" : "available",
+      }}
+      dataMode="backend"
+      disclosure={false}
+    >
+      {content}
+    </ProductShell>
+  );
+
+  if (viewState === "loading") {
+    return shell(<div className="suite-page dashboard-page"><section className="suite-card"><div className="suite-card-body"><h1>Dashboards</h1><p>Loading dashboards…</p></div></section></div>);
   }
-  if (!available) {
-    return <div className="suite-page dashboard-page"><section className="suite-card"><h1>Dashboards unavailable</h1><p className="operations-state-message">This backend does not advertise persisted dashboard support.</p></section></div>;
+  if (viewState === "unavailable") {
+    return shell(<div className="suite-page dashboard-page"><section className="suite-card"><div className="suite-card-body"><h1>Dashboards unavailable</h1><p>This backend does not support persisted dashboards.</p></div></section></div>);
   }
 
-  return (
+  return shell(
     <div className="suite-page dashboard-page">
       <header className="dashboard-title-row">
-        <div><span className="suite-eyebrow">{appName.toUpperCase()}</span><h1>Dashboards</h1><p>Build persisted panels and run their server-authoritative searches.</p></div>
-        <form className="operations-create-form" onSubmit={createDashboard}>
-          <label><span>App</span><select value={appID} disabled={workspaceBusy || loading} aria-busy={switchingAppID !== null} onChange={(event) => selectApp(event.target.value)}>{apps.map((app) => <option key={app.appId} value={app.appId}>{app.displayName || app.slug || app.appId}</option>)}</select></label>
+        <div><h1>Dashboards</h1><p>Build dashboards and run their searches.</p></div>
+        {dashboards.length > 0 ? <form className="operations-create-form" onSubmit={createDashboard}>
           <label><span>New dashboard name</span><input value={newName} disabled={workspaceBusy} onChange={(event) => setNewName(event.target.value)} maxLength={255} placeholder="Service overview" /></label>
-          <button type="submit" disabled={workspaceBusy || !newName.trim()}>Create dashboard</button>
-        </form>
+          <button className="button button--primary" type="submit" disabled={workspaceBusy || !newName.trim()}>Create dashboard</button>
+        </form> : null}
       </header>
 
-      {error ? <div className="operations-error-banner" role="alert"><span>{error.message}</span>{error.retry ? <button type="button" disabled={workspaceBusy} onClick={retryDashboardLoad}>{error.retry.mode === "switch" ? "Retry app switch" : "Reload"}</button> : null}</div> : null}
+      {error ? <div className="operations-error-banner" role="alert"><span>{error.message}</span>{error.retry ? <button className="button button--primary" type="button" disabled={workspaceBusy} onClick={retryDashboardLoad}>{error.retry.mode === "switch" ? "Retry app switch" : "Retry"}</button> : null}</div> : null}
       {switchingAppID !== null ? <output className="operations-state-message">Switching dashboard app…</output> : null}
       {refreshing ? <output className="operations-state-message">Reloading dashboards…</output> : null}
       {notice ? <output className="operations-notice-banner">{notice}</output> : null}
 
-      <div className="operations-manager-layout">
+      {viewState === "no-apps" ? (
+        <section className="suite-card operations-empty-dashboard"><div className="suite-card-body">
+          <h2>Create an app workspace first</h2>
+          <p>{appAdminAvailable
+            ? "Dashboards belong to an app workspace. Create one here, or ask an administrator to give you access."
+            : "Dashboards belong to an app workspace. Please ask an administrator to give you access."}</p>
+          {appAdminAvailable ? <button className="button button--primary" type="button" onClick={() => setCreateAppOpen(true)}>Create app</button> : <button className="button button--secondary" type="button" onClick={() => beginLoad(undefined, "reload")}>Check again</button>}
+        </div></section>
+      ) : viewState === "empty" ? (
+        <section className="suite-card operations-empty-dashboard"><div className="suite-card-body">
+          <h2>Create your first dashboard</h2>
+          <p>Add a dashboard to begin building panels for {appName}.</p>
+          <form className="operations-create-form" onSubmit={createDashboard}>
+            <label><span>Dashboard name</span><input value={newName} disabled={workspaceBusy} onChange={(event) => setNewName(event.target.value)} maxLength={255} placeholder="Service overview" /></label>
+            <button className="button button--primary" type="submit" disabled={workspaceBusy || !newName.trim()}>Create dashboard</button>
+          </form>
+        </div></section>
+      ) : viewState === "ready" ? <div className="operations-manager-layout">
         <aside className="suite-card operations-dashboard-list" aria-label="Saved dashboards">
           <h2>Saved dashboards</h2>
-          {dashboards.length === 0 ? <p>No dashboards yet.</p> : (
-            <ul>{dashboards.map((dashboard) => (
+          <ul>{dashboards.map((dashboard) => (
               <li key={dashboard.dashboardId}><button className={dashboard.dashboardId === selectedID ? "operations-dashboard-selected" : ""} disabled={workspaceBusy} type="button" onClick={() => selectDashboard(dashboard.dashboardId)}><strong>{dashboard.definition?.name ?? "Untitled"}</strong><span>{dashboard.definition?.panels.length ?? 0} panels · v{dashboard.version.toString()}</span></button></li>
             ))}</ul>
-          )}
         </aside>
 
-        <main className="operations-dashboard-editor">
-          {!selected || !draft ? (
-            <section className="suite-card"><h2>Select a dashboard</h2><p className="operations-state-message">Choose an existing dashboard or create one to start editing.</p></section>
-          ) : (
+        <section className="operations-dashboard-editor">
+          {!selected || !draft ? null : (
             <>
               <section className="suite-card operations-definition-editor">
-                <header className="suite-card-header"><div><h2>Dashboard settings</h2><p>Changes use optimistic versioning.</p></div><div className="operations-editor-actions"><button type="button" onClick={() => void saveDashboard()} disabled={workspaceBusy || !dirty || !draft.name.trim()}>Save</button><button className="operations-danger-button" type="button" onClick={() => void deleteDashboard()} disabled={workspaceBusy}>Delete</button></div></header>
+                <header className="suite-card-header"><div><h2>Dashboard settings</h2><p>Changes use optimistic versioning.</p></div><div className="operations-editor-actions"><button className="button button--primary" type="button" onClick={() => void saveDashboard()} disabled={workspaceBusy || invalidVisualization || !dirty || !draft.name.trim()}>Save</button><button className="button button--danger" type="button" onClick={() => void deleteDashboard()} disabled={workspaceBusy}>Delete</button></div></header>
                 <div className="operations-settings-grid">
                   <label><span>Name</span><input value={draft.name} disabled={workspaceBusy} maxLength={255} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
                   <label><span>Description</span><input value={draft.description ?? ""} disabled={workspaceBusy} maxLength={16384} onChange={(event) => setDraft({ ...draft, description: event.target.value || undefined })} /></label>
                 </div>
               </section>
 
-              <div className="operations-panel-toolbar"><h2>Panels</h2><button type="button" disabled={workspaceBusy || !indexNames[0] || draft.panels.length >= MAXIMUM_DASHBOARD_PANELS} title={draft.panels.length >= MAXIMUM_DASHBOARD_PANELS ? `Dashboards support up to ${MAXIMUM_DASHBOARD_PANELS} panels.` : undefined} onClick={() => setDraft({ ...draft, panels: [...draft.panels, newPanel(appID, indexNames[0] ?? "", draft.panels.length * 4)] })}>Add panel</button></div>
+              <div className="operations-panel-toolbar"><div><h2>Panels</h2>{indexNames.length === 0 ? <p>No searchable indexes are available. Add one before creating panels.</p> : null}</div><button className="button button--primary" type="button" disabled={workspaceBusy || !indexNames[0] || draft.panels.length >= MAXIMUM_DASHBOARD_PANELS} title={draft.panels.length >= MAXIMUM_DASHBOARD_PANELS ? `Dashboards support up to ${MAXIMUM_DASHBOARD_PANELS} panels.` : undefined} onClick={() => setDraft({ ...draft, panels: [...draft.panels, newPanel(appID, indexNames[0] ?? "", draft.panels.length * 4)] })}>Add panel</button></div>
               {draft.panels.length >= MAXIMUM_DASHBOARD_PANELS ? <output className="operations-state-message">This dashboard has reached the {MAXIMUM_DASHBOARD_PANELS}-panel limit.</output> : null}
               {draft.panels.length === 0 ? <section className="suite-card"><p className="operations-state-message">This dashboard has no panels. Add one after at least one searchable index is available.</p></section> : null}
               {draft.panels.map((panel) => {
                 const result = panelResults[panel.panelId];
                 return (
                   <section className="suite-card dashboard-panel operations-live-panel" key={panel.panelId}>
-                    <header className="suite-card-header"><div><h2>{panel.title || "Untitled panel"}</h2><p>{panel.search?.spl || "No SPL configured"}</p></div><div className="operations-editor-actions"><button type="button" onClick={() => void runPanel(panel)} disabled={workspaceBusy}>Run</button><button className="operations-danger-button" type="button" onClick={() => removePanel(panel.panelId)} disabled={workspaceBusy}>Remove</button></div></header>
+                    <header className="suite-card-header"><div><h2>{panel.title || "Untitled panel"}</h2><p>{panel.search?.spl || "No SPL configured"}</p></div><div className="operations-editor-actions"><button className="button button--primary" type="button" onClick={() => void runPanel(panel)} disabled={workspaceBusy || invalidVisualization}>Run</button><button className="button button--danger" type="button" onClick={() => removePanel(panel.panelId)} disabled={workspaceBusy}>Remove</button></div></header>
                     <div className="operations-panel-fields">
                       <label><span>Title</span><input value={panel.title} disabled={workspaceBusy} maxLength={255} onChange={(event) => updatePanel(panel.panelId, (current) => ({ ...current, title: event.target.value }))} /></label>
                       <label className="operations-spl-field"><span>SPL</span><textarea value={panel.search?.spl ?? ""} disabled={workspaceBusy} rows={3} onChange={(event) => updatePanel(panel.panelId, (current) => ({ ...current, search: current.search ? { ...current.search, spl: event.target.value } : current.search }))} /></label>
@@ -564,18 +767,55 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
                       <label><span>Latest</span><input value={panel.search?.timeRange?.latest ?? ""} disabled={workspaceBusy} onChange={(event) => updatePanel(panel.panelId, (current) => ({ ...current, search: current.search ? { ...current.search, timeRange: { ...current.search.timeRange, earliest: current.search.timeRange?.earliest, latest: event.target.value, timezone: current.search.timeRange?.timezone } } : current.search }))} /></label>
                       <label><span>Indexes</span><input value={panel.search?.indexScope.join(", ") ?? ""} disabled={workspaceBusy} onChange={(event) => updatePanel(panel.panelId, (current) => ({ ...current, search: current.search ? { ...current.search, indexScope: event.target.value.split(",").map((value) => value.trim()).filter(Boolean) } : current.search }))} /></label>
                     </div>
-                    {result ? <div className="operations-panel-result">
-                      <p className={result.error ? "operations-result-error" : "operations-result-status"}>{result.error ?? `Search ${stateLabel(result.state)}${result.jobId ? ` · ${result.jobId}` : ""}`}</p>
-                      {result.columns && result.columns.length > 0 ? <div className="table-wrap"><table className="table"><thead><tr>{result.columns.map((column) => <th key={column.key} scope="col">{column.label}</th>)}</tr></thead><tbody>{result.rows?.map((row) => <tr key={row.id}>{result.columns!.map((column, columnIndex) => <td key={column.key}>{row.cells[columnIndex] ?? ""}</td>)}</tr>)}</tbody></table></div> : null}
-                      {result.rows && result.rows.length === 0 ? <p className="operations-state-message">The search completed with no rows.</p> : null}
+                    <DashboardVisualizationEditor
+                      disabled={workspaceBusy}
+                      fields={result?.schema?.columns.map((column) => ({ fieldName: column.fieldName, label: column.displayName || column.fieldName })) ?? []}
+                      value={panel.search?.visualization}
+                      onValidityChange={(valid) => {
+                        setInvalidPanelIDs((current) => {
+                          if (current.has(panel.panelId) === !valid) return current;
+                          const next = new Set(current);
+                          if (valid) next.delete(panel.panelId);
+                          else next.add(panel.panelId);
+                          return next;
+                        });
+                        if (!valid) {
+                          stopPanelRun(panel.panelId, "Dashboard visualization became invalid");
+                          setPanelResults((results) => {
+                            const previous = results[panel.panelId];
+                            if (!previous || previous.stale) return results;
+                            return { ...results, [panel.panelId]: { state: previous.state, schema: previous.schema, stale: true } };
+                          });
+                        }
+                      }}
+                      onChange={(visualization) => updatePanel(panel.panelId, (currentPanel) => ({
+                        ...currentPanel,
+                        search: currentPanel.search ? { ...currentPanel.search, visualization } : undefined,
+                      }))}
+                    />
+                    {result ? <div className="operations-panel-result" aria-busy={result.paging === true}>
+                      <p className={result.error ? "operations-result-error" : "operations-result-status"} role={result.error ? "alert" : "status"}>{result.error ?? (result.stale ? "Panel settings changed. Run the panel to update its results." : result.paging ? "Loading results page…" : `Search ${stateLabel(result.state)}${result.jobId ? ` · ${result.jobId}` : ""}`)}</p>
+                      {result.schema && result.rows ? <DashboardVisualization
+                        panelTitle={panel.title}
+                        spec={result.spec}
+                        schema={result.schema}
+                        rows={result.rows}
+                        capped={result.capped}
+                        complete={result.complete}
+                        retainedTruncated={result.retainedTruncated}
+                        pageNumber={result.pageNumber}
+                        onNextPage={result.nextPageToken === undefined ? undefined : () => void pagePanel(panel.panelId, "next")}
+                        onPreviousPage={(result.pageNumber ?? 1) <= 1 ? undefined : () => void pagePanel(panel.panelId, "previous")}
+                      /> : null}
                     </div> : null}
                   </section>
                 );
               })}
             </>
           )}
-        </main>
-      </div>
+        </section>
+      </div> : null}
+      {createAppOpen ? <AppCreateDialog apiBaseUrl={apiBaseUrl} onClose={() => setCreateAppOpen(false)} onCreated={useCreatedApp} /> : null}
     </div>
   );
 }

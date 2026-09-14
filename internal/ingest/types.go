@@ -385,6 +385,10 @@ type StoreBatchRejection struct {
 	Identity   StoreBatchIdentity
 	ReceivedAt time.Time
 	Rejection  *opensplunk.BatchReject
+	// RejectionAdmission meters fresh terminal writes independently of accepted
+	// events. Nil preserves trusted legacy callers; native requests always set it.
+	RejectionAdmission *ingestquota.RejectionAdmission
+	QuotaEvaluatedAt   time.Time
 }
 
 // StoredBatchState reports whether an exact source batch is absent, has a

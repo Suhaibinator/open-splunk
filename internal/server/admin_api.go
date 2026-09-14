@@ -25,8 +25,8 @@ import (
 
 	"fortio.org/safecast"
 	"github.com/Suhaibinator/SRouter/pkg/codec"
-	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
+	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -39,8 +39,25 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
 	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
 	"github.com/Suhaibinator/open-splunk/internal/protocolid"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"github.com/Suhaibinator/open-splunk/internal/tokenconstraint"
 )
+
+type idempotentIndexAdministration interface {
+	CreateIndexIdempotent(
+		context.Context,
+		control.IndexDefinition,
+		requestidempotency.Intent,
+	) (control.Index, bool, error)
+}
+
+type idempotentIngestionTokenAdministration interface {
+	CreateCollectorTokenIdempotent(
+		context.Context,
+		auth.CreateCollectorTokenRequest,
+		requestidempotency.Intent,
+	) (auth.IssuedCollectorToken, bool, error)
+}
 
 const (
 	defaultAdminPageSize          = 50
@@ -297,125 +314,73 @@ func canonicalHTTPAuthority(input string) (string, string, error) {
 	return host, port, nil
 }
 
-func (handler *apiHandler) indexAdministrationRoutes(noAuth router.AuthLevel, smallRequestBytes int64) []router.RouteDefinition {
-	routes := []router.RouteDefinition{
-		router.RouteConfig[*opensplunk.CreateIndexRequest, *opensplunk.CreateIndexResponse]{
-			Path: "/indexes/create", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.CreateIndexRequest, *opensplunk.CreateIndexResponse](), Handler: handler.createIndex,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeCreateIndexRequest,
-		},
-		router.RouteConfig[*opensplunk.GetIndexRequest, *opensplunk.GetIndexResponse]{
-			Path: "/indexes/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.GetIndexRequest, *opensplunk.GetIndexResponse](), Handler: handler.getIndex,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeGetIndexRequest,
-		},
-		router.RouteConfig[*opensplunk.ListIndexesRequest, *serializedIndexListResponse]{
-			Path: "/indexes/list", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newSerializedIndexListCodec(), Handler: handler.listIndexes,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: handler.sanitizeListIndexesRequest,
-		},
-		router.RouteConfig[*opensplunk.UpdateIndexRequest, *opensplunk.UpdateIndexResponse]{
-			Path: "/indexes/update", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.UpdateIndexRequest, *opensplunk.UpdateIndexResponse](), Handler: handler.updateIndex,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeUpdateIndexRequest,
-		},
-		router.RouteConfig[*opensplunk.SetIndexStateRequest, *opensplunk.SetIndexStateResponse]{
-			Path: "/indexes/state/set", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.SetIndexStateRequest, *opensplunk.SetIndexStateResponse](), Handler: handler.setIndexState,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeSetIndexStateRequest,
-		},
-		router.RouteConfig[*opensplunk.DeleteIndexRequest, *opensplunk.DeleteIndexResponse]{
-			Path: "/indexes/delete", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.DeleteIndexRequest, *opensplunk.DeleteIndexResponse](), Handler: handler.deleteIndex,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeDeleteIndexRequest,
-		},
-	}
+func (handler *apiHandler) registerIndexAdministrationRoutes(group *apiRouteGroup, smallRequestBytes int64) {
+	group.Route(
+		sizedProtoPostRoute("/indexes/create", smallRequestBytes, handler.createIndex, sanitizeCreateIndexRequest),
+		sizedProtoPostRoute("/indexes/get", smallRequestBytes, handler.getIndex, sanitizeGetIndexRequest),
+		sizedPostRoute("/indexes/list", smallRequestBytes, newSerializedIndexListCodec(), handler.listIndexes, handler.sanitizeListIndexesRequest),
+		sizedProtoPostRoute("/indexes/update", smallRequestBytes, handler.updateIndex, sanitizeUpdateIndexRequest),
+		sizedProtoPostRoute("/indexes/state/set", smallRequestBytes, handler.setIndexState, sanitizeSetIndexStateRequest),
+		sizedProtoPostRoute("/indexes/delete", smallRequestBytes, handler.deleteIndex, sanitizeDeleteIndexRequest),
+	)
 	if handler.indexStatistics != nil {
-		routes = append(
-			routes,
-			router.RouteConfig[*opensplunk.GetIndexStatsRequest, *opensplunk.GetIndexStatsResponse]{
-				Path: "/indexes/stats/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-				Codec: codec.NewProtoCodec[*opensplunk.GetIndexStatsRequest, *opensplunk.GetIndexStatsResponse](), Handler: handler.getIndexStatistics,
-				SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-				Sanitizer: sanitizeGetIndexStatsRequest,
-			},
-		)
+		group.Route(sizedProtoPostRoute("/indexes/stats/get", smallRequestBytes, handler.getIndexStatistics, sanitizeGetIndexStatsRequest))
 	}
 	if handler.indexFields != nil {
-		routes = append(
-			routes,
-			router.RouteConfig[*opensplunk.ListIndexFieldsRequest, *serializedIndexFieldsResponse]{
-				Path: indexFieldsListRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-				Codec: newSerializedIndexFieldsCodec(), Handler: handler.listIndexFields,
-				SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-				Sanitizer: handler.sanitizeListIndexFieldsRequest,
-			},
-		)
+		group.Route(sizedPostRoute(indexFieldsListRoute, smallRequestBytes, newSerializedIndexFieldsCodec(), handler.listIndexFields, handler.sanitizeListIndexFieldsRequest))
 	}
-	return routes
 }
 
-func (handler *apiHandler) ingestionTokenRoutes(noAuth router.AuthLevel, requestBytes, smallRequestBytes int64) []router.RouteDefinition {
-	return []router.RouteDefinition{
-		router.RouteConfig[*opensplunk.CreateIngestionTokenRequest, *opensplunk.CreateIngestionTokenResponse]{
-			Path: "/ingestion-tokens/create", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.CreateIngestionTokenRequest, *opensplunk.CreateIngestionTokenResponse](), Handler: handler.createIngestionToken,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: requestBytes},
-			Sanitizer: sanitizeCreateIngestionTokenRequest,
-		},
-		router.RouteConfig[*opensplunk.GetIngestionTokenRequest, *opensplunk.GetIngestionTokenResponse]{
-			Path: "/ingestion-tokens/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.GetIngestionTokenRequest, *opensplunk.GetIngestionTokenResponse](), Handler: handler.getIngestionToken,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeGetIngestionTokenRequest,
-		},
-		router.RouteConfig[*opensplunk.ListIngestionTokensRequest, *serializedTokenListResponse]{
-			Path: "/ingestion-tokens/list", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newSerializedTokenListCodec(), Handler: handler.listIngestionTokens,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: handler.sanitizeListIngestionTokensRequest,
-		},
-		router.RouteConfig[*opensplunk.UpdateIngestionTokenRequest, *opensplunk.UpdateIngestionTokenResponse]{
-			Path: "/ingestion-tokens/update", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.UpdateIngestionTokenRequest, *opensplunk.UpdateIngestionTokenResponse](), Handler: handler.updateIngestionToken,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: requestBytes},
-			Sanitizer: sanitizeUpdateIngestionTokenRequest,
-		},
-		router.RouteConfig[*opensplunk.SetIngestionTokenEnabledRequest, *opensplunk.SetIngestionTokenEnabledResponse]{
-			Path: "/ingestion-tokens/state/set", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.SetIngestionTokenEnabledRequest, *opensplunk.SetIngestionTokenEnabledResponse](), Handler: handler.setIngestionTokenEnabled,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeSetIngestionTokenEnabledRequest,
-		},
-		router.RouteConfig[*opensplunk.RevokeIngestionTokenRequest, *opensplunk.RevokeIngestionTokenResponse]{
-			Path: "/ingestion-tokens/revoke", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.RevokeIngestionTokenRequest, *opensplunk.RevokeIngestionTokenResponse](), Handler: handler.revokeIngestionToken,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeRevokeIngestionTokenRequest,
-		},
-	}
+func (handler *apiHandler) registerIngestionTokenRoutes(group *apiRouteGroup, requestBytes, smallRequestBytes int64) {
+	group.Route(
+		sizedProtoPostRoute("/ingestion-tokens/create", requestBytes, handler.createIngestionToken, sanitizeCreateIngestionTokenRequest),
+		sizedProtoPostRoute("/ingestion-tokens/get", smallRequestBytes, handler.getIngestionToken, sanitizeGetIngestionTokenRequest),
+		sizedPostRoute("/ingestion-tokens/list", smallRequestBytes, newSerializedTokenListCodec(), handler.listIngestionTokens, handler.sanitizeListIngestionTokensRequest),
+		sizedProtoPostRoute("/ingestion-tokens/update", requestBytes, handler.updateIngestionToken, sanitizeUpdateIngestionTokenRequest),
+		sizedProtoPostRoute("/ingestion-tokens/state/set", smallRequestBytes, handler.setIngestionTokenEnabled, sanitizeSetIngestionTokenEnabledRequest),
+		sizedProtoPostRoute("/ingestion-tokens/revoke", smallRequestBytes, handler.revokeIngestionToken, sanitizeRevokeIngestionTokenRequest),
+	)
 }
 
 func (handler *apiHandler) createIndex(request *http.Request, input *opensplunk.CreateIndexRequest) (*opensplunk.CreateIndexResponse, error) {
+	canonical := proto.Clone(input).(*opensplunk.CreateIndexRequest)
+	canonical.ClientRequestId = nil
+	intent, err := handler.mutationIntent(
+		request.Context(),
+		requestidempotency.RouteCreateIndex,
+		input.ClientRequestId,
+		canonical,
+	)
+	if err != nil {
+		return nil, err
+	}
 	definition, err := indexDefinitionFromProto(input.GetDefinition())
 	if err != nil {
 		return nil, badRequestError(err.Error())
 	}
-	record, err := handler.indexAdmin.CreateIndex(request.Context(), definition)
+	var record control.Index
+	replayed := false
+	if intent == nil {
+		record, err = handler.indexAdmin.CreateIndex(request.Context(), definition)
+	} else if idempotent, ok := handler.indexAdmin.(idempotentIndexAdministration); ok {
+		record, replayed, err = idempotent.CreateIndexIdempotent(
+			request.Context(), definition, *intent,
+		)
+	} else {
+		return nil, unavailableError("index idempotency is unavailable")
+	}
+	if isRequestIdempotencyError(err) {
+		return nil, mapRequestIdempotencyError(err)
+	}
 	if err := mapAdministrativeCallError(request.Context(), err, "index"); err != nil {
 		return nil, err
 	}
 	converted, err := indexToProto(record)
-	if err != nil || converted.GetVersion() != 1 {
+	if err != nil || converted.GetVersion() == 0 ||
+		(!replayed && converted.GetVersion() != 1) {
 		return nil, internalError()
 	}
-	return &opensplunk.CreateIndexResponse{Index: converted}, nil
+	return &opensplunk.CreateIndexResponse{Index: converted, Replayed: replayed}, nil
 }
 
 func (handler *apiHandler) getIndex(request *http.Request, input *opensplunk.GetIndexRequest) (*opensplunk.GetIndexResponse, error) {
@@ -1443,17 +1408,45 @@ func validIndexDeletionAdmission(
 }
 
 func (handler *apiHandler) createIngestionToken(request *http.Request, input *opensplunk.CreateIngestionTokenRequest) (*opensplunk.CreateIngestionTokenResponse, error) {
+	canonical := proto.Clone(input).(*opensplunk.CreateIngestionTokenRequest)
+	canonical.ClientRequestId = nil
+	intent, err := handler.mutationIntent(
+		request.Context(),
+		requestidempotency.RouteCreateIngestionToken,
+		input.ClientRequestId,
+		canonical,
+	)
+	if err != nil {
+		return nil, err
+	}
 	definition, err := tokenDefinitionFromProto(input.GetDefinition())
 	if err != nil {
 		return nil, badRequestError(err.Error())
 	}
-	issued, err := handler.ingestionTokens.CreateCollectorToken(request.Context(), auth.CreateCollectorTokenRequest(definition))
+	var issued auth.IssuedCollectorToken
+	replayed := false
+	if intent == nil {
+		issued, err = handler.ingestionTokens.CreateCollectorToken(
+			request.Context(), auth.CreateCollectorTokenRequest(definition),
+		)
+	} else if idempotent, ok := handler.ingestionTokens.(idempotentIngestionTokenAdministration); ok {
+		issued, replayed, err = idempotent.CreateCollectorTokenIdempotent(
+			request.Context(), auth.CreateCollectorTokenRequest(definition), *intent,
+		)
+	} else {
+		return nil, unavailableError("ingestion token idempotency is unavailable")
+	}
+	if isRequestIdempotencyError(err) {
+		return nil, mapRequestIdempotencyError(err)
+	}
 	if err := mapAdministrativeCallError(request.Context(), err, "ingestion token"); err != nil {
 		return nil, err
 	}
 	converted, err := tokenToProto(issued.Token)
 	plaintext := issued.Secret.Plaintext()
-	if err != nil || converted.GetVersion() != 1 || plaintext == "" {
+	if err != nil || converted.GetVersion() == 0 ||
+		(!replayed && (converted.GetVersion() != 1 || plaintext == "")) ||
+		(replayed && plaintext != "") {
 		return nil, internalError()
 	}
 	// Plaintext() is called only at this one response construction site. The
@@ -1461,6 +1454,7 @@ func (handler *apiHandler) createIngestionToken(request *http.Request, input *op
 	return &opensplunk.CreateIngestionTokenResponse{
 		IngestionToken: converted,
 		PlaintextToken: plaintext,
+		Replayed:       replayed,
 	}, nil
 }
 
@@ -1579,12 +1573,41 @@ func (handler *apiHandler) setIngestionTokenEnabled(
 		input.GetExpectedVersion(),
 		input.GetEnabled(),
 	)
-	if err := mapAdministrativeCallError(
+	if mappedErr := mapAdministrativeCallError(
 		request.Context(),
 		err,
 		"ingestion token",
-	); err != nil {
-		return nil, err
+	); mappedErr != nil {
+		var httpErr *router.HTTPError
+		if errors.As(mappedErr, &httpErr) && httpErr.StatusCode == http.StatusServiceUnavailable {
+			// Store errors can contain SQL parameters or token metadata. Keep
+			// diagnostics to classifications, never the error text or token ID.
+			code := 0
+			var databaseErr interface{ Code() int }
+			if errors.As(err, &databaseErr) {
+				code = databaseErr.Code()
+			}
+			phase := "other"
+			for _, candidate := range []struct{ prefix, phase string }{
+				{"begin collector token state update:", "begin"},
+				{"read collector token for state update:", "read_before"},
+				{"set collector token enabled state:", "update"},
+				{"read state-updated collector token:", "read_after"},
+				{"append collector token state update audit event:", "audit"},
+				{"commit collector token state update:", "commit"},
+			} {
+				if strings.HasPrefix(err.Error(), candidate.prefix) {
+					phase = candidate.phase
+					break
+				}
+			}
+			handler.logger.Error("ingestion token state update unavailable",
+				zap.String("mutation_phase", phase),
+				zap.Bool("database_contention", control.IsDatabaseContention(err)),
+				zap.Int("database_error_code", code),
+			)
+		}
+		return nil, mappedErr
 	}
 	targetState := auth.CollectorTokenStateDisabled
 	if input.GetEnabled() {

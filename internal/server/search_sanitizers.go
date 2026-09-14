@@ -9,6 +9,7 @@ import (
 	"fortio.org/safecast"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 )
 
 // sanitizeGetSystemBootstrapRequest trims the preferred app ID so the handler
@@ -45,7 +46,9 @@ func sanitizeCreateSearchJobRequest(
 	request *opensplunk.CreateSearchJobRequest,
 ) (*opensplunk.CreateSearchJobRequest, error) {
 	if request.ClientRequestId != nil {
-		return request, badRequestError("client request idempotency is not supported")
+		if err := requestidempotency.ValidateClientRequestID(request.GetClientRequestId()); err != nil {
+			return request, badRequestError(err.Error())
+		}
 	}
 	options := request.GetOptions()
 	if options.GetEnableFieldDiscovery() || options.GetEnableTimeline() {

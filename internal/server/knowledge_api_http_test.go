@@ -259,29 +259,31 @@ func newKnowledgeHTTPHandler(
 		administratorRoutes: map[string]struct{}{},
 		routeTimeout:        2 * time.Second,
 	}
-	return handler, newKnowledgeHTTPRouter(handler)
+	return handler, newKnowledgeHTTPRouter(t, handler)
 }
 
 // newKnowledgeHTTPRouter deliberately lives in a _test.go file: it exercises
 // the management handlers, codecs, and middleware in isolation from the full
 // production API router.
-func newKnowledgeHTTPRouter(handler *apiHandler) http.Handler {
-	noAuth := router.NoAuth
-	routes := handler.knowledgeManagementRoutes(noAuth)
+func newKnowledgeHTTPRouter(t *testing.T, handler *apiHandler) http.Handler {
+	t.Helper()
 	inner := router.NewRouter[string, struct{}](router.RouterConfig{
 		ServiceName:       "open-splunk-knowledge-http-test",
 		GlobalTimeout:     0,
 		GlobalMaxBodySize: maximumKnowledgeMutationRequestBytes,
 	}, handler.srouterDependencies())
-	inner.Group("/api").
-		Auth(noAuth).
+	group := inner.Group("/api").
+		Auth(router.NoAuth).
 		Use(
 			disableAPICaching,
 			requireProtobufContentType,
 			handler.boundRequests,
 			withSynchronousDeadline(handler.routeTimeout),
-		).
-		Route(routes...)
+		)
+	handler.registerKnowledgeManagementRoutes(group)
+	if err := inner.Build(); err != nil {
+		t.Fatalf("build knowledge HTTP router: %v", err)
+	}
 	trusted := handler.protectBrowserAPIRoutes(
 		handler.protectKnowledgeManagementRoutes(inner),
 	)

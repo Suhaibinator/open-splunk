@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
 import { ScheduleValidationMode } from "@/gen/ts/open_splunk/schedule_api";
@@ -111,19 +111,22 @@ export function ScheduledReportActions({
   const [error, setError] = useState<string | null>(null);
   const [serverValidationErrors, setServerValidationErrors] = useState<ReturnType<typeof validateScheduledReportConfigurationFields>>({});
   const [history, setHistory] = useState<ServerScheduledReportRun[]>([]);
-  const autoOpenedRef = useRef(false);
-
-  useEffect(() => {
-    if (!autoOpenSchedule || autoOpenedRef.current) return;
-    autoOpenedRef.current = true;
+  const [autoOpened, setAutoOpened] = useState(false);
+  if (autoOpenSchedule && !autoOpened) {
+    setAutoOpened(true);
     setError(null);
     setDialog("schedule");
-    onScheduleOpened?.();
-  }, [autoOpenSchedule, onScheduleOpened]);
+  }
 
   useEffect(() => {
+    if (autoOpenSchedule && autoOpened) onScheduleOpened?.();
+  }, [autoOpenSchedule, autoOpened, onScheduleOpened]);
+
+  const [configurationOwner, setConfigurationOwner] = useState({ dialog, savedSearch });
+  if (configurationOwner.dialog !== dialog || configurationOwner.savedSearch !== savedSearch) {
+    setConfigurationOwner({ dialog, savedSearch });
     if (dialog === null) setConfiguration(initialConfiguration(savedSearch));
-  }, [dialog, savedSearch]);
+  }
 
   const validationErrors = useMemo(() => dialog === "schedule" ? {
     ...serverValidationErrors,

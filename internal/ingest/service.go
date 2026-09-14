@@ -63,7 +63,7 @@ func DefaultConfig() Config {
 		Limits:                DefaultLimits(),
 		DefaultIndexRetention: DefaultIndexRetention,
 		HeartbeatInterval:     15 * time.Second,
-		MaxInFlightBatches:    1,
+		MaxInFlightBatches:    32,
 		MaxStreamsPerSubject:  4,
 		DefaultRetryAfter:     time.Second,
 		SessionCleanupTimeout: defaultCollectorSessionCleanupTimeout,
@@ -361,6 +361,7 @@ func (s *Service) Collect(stream opensplunk.CollectorIngestService_CollectServer
 	defer cancelAuthorization()
 
 	state := streamState{
+		supportsRepacking:  slices.Contains(hello.GetCapabilities(), opensplunk.CollectorCapability_COLLECTOR_CAPABILITY_LOSSLESS_REPACKING),
 		collectorID:        hello.GetCollectorId(),
 		instanceID:         hello.GetInstanceId(),
 		authorization:      authorization,
@@ -378,6 +379,7 @@ func (s *Service) Collect(stream opensplunk.CollectorIngestService_CollectServer
 			ServerTime:               timestamppb.New(acceptedAt),
 			HeartbeatInterval:        durationpb.New(s.config.HeartbeatInterval),
 			MaxInFlightBatches:       s.config.MaxInFlightBatches,
+			SupportsBatchRepacking:   state.supportsRepacking,
 			MaxBatchEvents:           s.config.Limits.MaxBatchEvents,
 			MaxBatchBytes:            s.config.Limits.MaxBatchBytes,
 			MaxEventBytes:            s.config.Limits.MaxEventBytes,
@@ -389,23 +391,42 @@ func (s *Service) Collect(stream opensplunk.CollectorIngestService_CollectServer
 	}
 
 	expectedRequestSequence := uint64(2)
+	pipeline := newCollectBatchPipeline(s, stream)
+	defer pipeline.close()
 	for {
 		var result collectRequestResult
 		var ok bool
 		select {
 		case <-lease.Superseded:
+			if err := pipeline.drain(); err != nil {
+				return err
+			}
 			return supersededStreamRPCError()
+		case completed := <-pipeline.completed:
+			if err := pipeline.finish(completed); err != nil {
+				return err
+			}
+			continue
 		case result, ok = <-received:
 			if !ok {
-				return nil
+				return pipeline.drain()
 			}
 		}
 		request, err = result.request, result.err
 		if errors.Is(err, io.EOF) {
-			return nil
+			return pipeline.drain()
 		}
 		if err != nil {
 			return err
+		}
+		batch := request.GetBatch()
+		if batch == nil {
+			batch = request.GetRepackBatch()
+		}
+		if batch != nil {
+			if err := pipeline.waitForCapacity(batch); err != nil {
+				return err
+			}
 		}
 		boundaryAt := s.config.Clock().UTC()
 		if err := s.validateRequestEnvelope(request, expectedRequestSequence, boundaryAt); err != nil {
@@ -432,7 +453,7 @@ func (s *Service) Collect(stream opensplunk.CollectorIngestService_CollectServer
 		}
 		var deferredAuthority, authorizationErr error
 		switch request.GetPayload().(type) {
-		case *opensplunk.CollectRequest_Heartbeat, *opensplunk.CollectRequest_Batch:
+		case *opensplunk.CollectRequest_Heartbeat, *opensplunk.CollectRequest_Batch, *opensplunk.CollectRequest_RepackBatch:
 			deferredAuthority, authorizationErr = s.refreshLeaseAuthorization(
 				authorizationContext,
 				token,
@@ -478,48 +499,17 @@ func (s *Service) Collect(stream opensplunk.CollectorIngestService_CollectServer
 			if payload.Goodbye == nil {
 				return status.Error(codes.InvalidArgument, "goodbye payload is required")
 			}
-			return nil
+			return pipeline.drain()
 		case *opensplunk.CollectRequest_Batch:
-			response, err := s.processBatchWithDeferredAuthority(
-				stream.Context(),
-				payload.Batch,
-				&state,
-				boundaryAt,
-				deferredAuthority,
-			)
-			if err != nil {
+			if err := pipeline.start(payload.Batch, &state, boundaryAt, deferredAuthority, false); err != nil {
 				return err
 			}
-			if responseSequence == math.MaxUint64 {
-				return status.Error(codes.ResourceExhausted, "server stream sequence exhausted")
+		case *opensplunk.CollectRequest_RepackBatch:
+			if !state.supportsRepacking {
+				return status.Error(codes.InvalidArgument, "batch repacking was not negotiated")
 			}
-			responseSequence++
-			response.StreamSequence = responseSequence
-			response.SentAt = timestamppb.New(s.config.Clock().UTC())
-			if err := stream.Send(response); err != nil {
+			if err := pipeline.start(payload.RepackBatch, &state, boundaryAt, deferredAuthority, true); err != nil {
 				return err
-			}
-			if state.pendingThrottle != nil {
-				if responseSequence == math.MaxUint64 {
-					return status.Error(codes.ResourceExhausted, "server stream sequence exhausted")
-				}
-				responseSequence++
-				throttle := state.pendingThrottle
-				state.pendingThrottle = nil
-				sentAt := s.config.Clock().UTC()
-				throttle.EffectiveUntil = timestamppb.New(
-					sentAt.Add(throttle.GetMinimumSendDelay().AsDuration()),
-				)
-				followup := &opensplunk.CollectResponse{
-					StreamSequence: responseSequence,
-					SentAt:         timestamppb.New(sentAt),
-					Payload: &opensplunk.CollectResponse_Throttle{
-						Throttle: throttle,
-					},
-				}
-				if err := stream.Send(followup); err != nil {
-					return err
-				}
 			}
 		default:
 			return status.Error(codes.InvalidArgument, "collector request payload is required")
@@ -1081,6 +1071,13 @@ func (s *Service) validateHeartbeat(
 }
 
 type streamState struct {
+	supportsRepacking bool
+	repackRequest     bool
+	// Worker snapshots own authority and throttle state; sequence history is
+	// shared under historyMu. Admission is released only after sequence fencing.
+	historyOwner       *streamState
+	historyMu          sync.Mutex
+	admissionReady     func()
 	collectorID        string
 	instanceID         string
 	authorization      Authorization

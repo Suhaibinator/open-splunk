@@ -1,0 +1,23 @@
+File: issue104-final.test
+Type: cpu
+Time: 2026-09-07 23:31:35 PDT
+Duration: 6.93s, Total samples = 4.83s (69.72%)
+Showing nodes accounting for 2.96s, 61.28% of 4.83s total
+Dropped 164 nodes (cum <= 0.02s)
+Showing top 15 nodes out of 156
+      flat  flat%   sum%        cum   cum%
+        2s 41.41% 41.41%         2s 41.41%  runtime.kevent
+     0.21s  4.35% 45.76%      0.21s  4.35%  runtime.madvise
+     0.12s  2.48% 48.24%      0.24s  4.97%  runtime.scanObjectsSmall
+     0.07s  1.45% 49.69%      0.09s  1.86%  runtime.findObject
+     0.06s  1.24% 50.93%      1.12s 23.19%  github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt
+     0.06s  1.24% 52.17%      0.15s  3.11%  runtime.mallocgcTinySC2
+     0.06s  1.24% 53.42%      0.13s  2.69%  runtime.scanObject
+     0.06s  1.24% 54.66%      0.11s  2.28%  runtime.tryDeferToSpanScan
+     0.05s  1.04% 55.69%      0.05s  1.04%  crypto/internal/fips140/sha256.blockSHA2
+     0.05s  1.04% 56.73%      0.12s  2.48%  runtime.mallocgcSmallScanNoHeaderSC2
+     0.05s  1.04% 57.76%      0.27s  5.59%  runtime.mallocgcSmallScanSlowPath
+     0.05s  1.04% 58.80%      0.05s  1.04%  runtime.memmove
+     0.04s  0.83% 59.63%      0.04s  0.83%  encoding/hex.Encode
+     0.04s  0.83% 60.46%      0.04s  0.83%  internal/bytealg.IndexByteString
+     0.04s  0.83% 61.28%      0.06s  1.24%  internal/runtime/maps.(*Map).getWithoutKeySmallFastStr

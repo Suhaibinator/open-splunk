@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAnalyzeOperatorReadPositions(t *testing.T) {
@@ -68,6 +69,7 @@ func TestAnalyzeOperatorReadPositions(t *testing.T) {
 			operator: &TimeBucket{
 				Field:  analysisField("time_bucket_input"),
 				Output: analysisField("time_bucket_output"),
+				Span:   time.Second,
 			},
 			want: []string{"time_bucket_input"},
 		},
@@ -156,6 +158,7 @@ func TestAnalyzeOperatorReadPositions(t *testing.T) {
 			operator: &Timechart{
 				Time:    mustResolveEventAggregateField(t, "_time"),
 				Measure: AggregateMeasure{Function: AggregateFunctionCountRows, Output: "count"},
+				Span:    time.Minute,
 				Split: &TimechartSplit{
 					Field:        mustResolveEventAggregateField(t, "timechart_series"),
 					SeriesLimit:  timechartSeriesLimit,
@@ -172,6 +175,7 @@ func TestAnalyzeOperatorReadPositions(t *testing.T) {
 			operator: &Timechart{
 				Time:    mustResolveEventAggregateField(t, "_time"),
 				Measure: AggregateMeasure{Function: AggregateFunctionCountRows, Output: "count"},
+				Span:    time.Minute,
 			},
 			want: []string{"_time"},
 		},
@@ -427,6 +431,7 @@ func TestAnalyzeExcludesWriteOnlyOutputsUntilRead(t *testing.T) {
 			operator: &TimeBucket{
 				Field:  analysisField("time_input"),
 				Output: analysisField("time_output"),
+				Span:   time.Second,
 			},
 			inputs:  []string{"time_input"},
 			outputs: []string{"time_output"},
@@ -759,11 +764,11 @@ func TestAnalyzeRejectsEmptyFieldReferences(t *testing.T) {
 		},
 		{
 			name:     "time bucket input",
-			operator: &TimeBucket{Output: valid},
+			operator: &TimeBucket{Output: valid, Span: time.Second},
 		},
 		{
 			name:     "time bucket output",
-			operator: &TimeBucket{Field: valid},
+			operator: &TimeBucket{Field: valid, Span: time.Second},
 		},
 		{
 			name:     "numeric bucket input",
@@ -819,11 +824,11 @@ func TestAnalyzeRejectsEmptyFieldReferences(t *testing.T) {
 		},
 		{
 			name:     "timechart time",
-			operator: &Timechart{Split: &TimechartSplit{Field: valid}},
+			operator: &Timechart{Span: time.Minute, Split: &TimechartSplit{Field: valid}},
 		},
 		{
 			name:     "timechart split",
-			operator: &Timechart{Time: valid, Split: &TimechartSplit{}},
+			operator: &Timechart{Time: valid, Span: time.Minute, Split: &TimechartSplit{}},
 		},
 		{
 			name:     "chart over",

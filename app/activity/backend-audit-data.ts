@@ -115,6 +115,7 @@ const ACTION_SPECS: ReadonlyMap<AuditAction, MutationAuditActionSpec> = new Map(
   [AuditAction.AUDIT_ACTION_LOOKUP_ENABLE, { label: "Lookup · enable", targetKind: AuditTargetKind.AUDIT_TARGET_KIND_LOOKUP, versionPolicy: AT_LEAST_TWO }],
   [AuditAction.AUDIT_ACTION_LOOKUP_DISABLE, { label: "Lookup · disable", targetKind: AuditTargetKind.AUDIT_TARGET_KIND_LOOKUP, versionPolicy: AT_LEAST_TWO }],
   [AuditAction.AUDIT_ACTION_LOOKUP_DELETE, { label: "Lookup · delete", targetKind: AuditTargetKind.AUDIT_TARGET_KIND_LOOKUP, versionPolicy: AT_LEAST_TWO }],
+  [AuditAction.AUDIT_ACTION_EXPORT_CREATE, { label: "Export · create", targetKind: AuditTargetKind.AUDIT_TARGET_KIND_EXPORT_JOB, versionPolicy: EXACTLY_ONE }],
 ]);
 
 const TARGET_LABELS: ReadonlyMap<AuditTargetKind, string> = new Map([
@@ -125,6 +126,7 @@ const TARGET_LABELS: ReadonlyMap<AuditTargetKind, string> = new Map([
   [AuditTargetKind.AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT, "Knowledge object"],
   [AuditTargetKind.AUDIT_TARGET_KIND_SERVER_SETTINGS, "Server settings"],
   [AuditTargetKind.AUDIT_TARGET_KIND_LOOKUP, "Lookup"],
+  [AuditTargetKind.AUDIT_TARGET_KIND_EXPORT_JOB, "Export job"],
 ]);
 
 const KNOWLEDGE_OBJECT_TYPE_LABELS: ReadonlyMap<KnowledgeObjectType, string> = new Map([
@@ -193,7 +195,8 @@ function assertActor(
   const actionActorValid = actionTargetKind === null
     || actorKind !== AuditActorKind.AUDIT_ACTOR_KIND_BROWSER
     || actorRole !== AuditActorRole.AUDIT_ACTOR_ROLE_USER
-    || actionTargetKind === AuditTargetKind.AUDIT_TARGET_KIND_SAVED_SEARCH;
+    || actionTargetKind === AuditTargetKind.AUDIT_TARGET_KIND_SAVED_SEARCH
+    || actionTargetKind === AuditTargetKind.AUDIT_TARGET_KIND_EXPORT_JOB;
   if (
     !kindRoleValid
     || !actionActorValid

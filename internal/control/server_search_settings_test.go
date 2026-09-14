@@ -91,7 +91,7 @@ func TestServerSearchSettingsDefaultPersistenceConflictAndRollback(t *testing.T)
 	auditCalls := 0
 	appender := serverSettingsAuditAppenderFunc(func(_ context.Context, tx *gorm.DB, tenant string, event ServerSettingsMutationAuditEvent) error {
 		auditCalls++
-		if tx == nil || tenant != "tenant" || event.Version == 0 {
+		if tx == nil || tenant != "tenant" || event.Version == 0 || event.Target != ServerSettingsTargetSearchLimits {
 			return errors.New("invalid audit projection")
 		}
 		return nil

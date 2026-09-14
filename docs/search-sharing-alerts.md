@@ -16,6 +16,46 @@ An expired link returns an explicit expired state and can be rerun only by an
 operator action. Search history remains separate metadata with its existing
 30-day default retention and never extends a result artifact.
 
+## Nearby events
+
+Click a final event timestamp to run a new ad hoc search for the same exact
+index, host, and source, from five minutes before the event through five
+minutes after it. The lower endpoint is inclusive and the upper endpoint is
+exclusive. The server resolves the timestamp and context from the selected
+retained result, preserving nanoseconds. Intervals that reach the supported
+1900–2262 timestamp boundaries are clipped with a visible explanation.
+
+Context chips let you change comparisons and the interval, then apply all
+edits in one new search. Trace, span, and request identifiers are suggestions
+and start disabled. Text comparisons are literal, including wildcard-looking
+characters. Number comparisons retain exact integer and decimal text. The
+full SPL editor detaches the structured controls when you edit its query.
+Browser Back restores the previous retained result and draft.
+
+Nearby navigation is disabled during live preview. It is unavailable when a
+retained result cannot prove the original timestamp, index, host, and source,
+including older artifacts and searches that replace or omit those fields.
+The interface explains when a rerun is needed. Preparing context reads the
+retained result; the new search uses current authorization, index visibility,
+and knowledge definitions.
+
+## Saved-search sharing scope
+
+Creating a saved search or using Save As offers Private, App, and Global
+sharing. New definitions start at Private; Save As also resets to Private so
+the operator must deliberately choose a broader label. Saving changes to an
+existing definition preserves its current sharing scope.
+
+The Saved Searches page can edit this label without changing the SPL, time
+range, app, owner, presentation, or schedule. The update uses the version that
+the editor loaded. If another editor changes the definition first, the page
+loads the latest version, keeps the proposed sharing value visible, and
+requires another explicit submission. If a response is lost, the page reads
+the current definition before deciding whether the update succeeded.
+
+Sharing scope is organizational metadata in the current single-user model. It
+does not grant access and is not a promise of role-based authorization.
+
 ## Scheduled searches
 
 A saved search may have a strict five-field cron schedule and an IANA
@@ -65,12 +105,16 @@ count. Updating or disabling an alert affects future claims; deleting an alert
 with an active run is rejected.
 
 Successful exact results compare the row count using `>`, `<`, `=`, or `!=`.
-A truncated result is only a lower bound. It may prove `>` and may prove `!=`
-when the lower bound is already above the threshold; comparisons that cannot be
-proved are indeterminate and do not deliver. Failed, canceled, expired, or
-interrupted searches never deliver.
+A truncated result is only a lower bound. A bound above the threshold proves
+`>` and `!=`, a bound at or above the threshold disproves `<`, and a bound above
+the threshold disproves `=`. Every other truncated comparison is indeterminate.
+Neither false nor indeterminate evaluations deliver. Failed, canceled, expired,
+or interrupted searches never deliver.
 
-A triggered alert extends its job lifetime to the longer of `dispatch.ttl` and
+A triggered alert first resolves its retained-results link; without a
+configured public base URL the run is recorded as a delivery failure before
+retention is extended or its single delivery authorization is consumed. It
+then extends its job lifetime to the longer of `dispatch.ttl` and
 the webhook TTL, whose default is `10p`, before delivery. Delivery is one
 best-effort HTTPS POST with a ten-second timeout, no proxy, no redirects, no
 retry, and a bounded response read. Any 2xx response succeeds.

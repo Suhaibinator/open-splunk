@@ -12,7 +12,6 @@ import (
 
 	"fortio.org/safecast"
 	"github.com/Suhaibinator/SRouter/pkg/codec"
-	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -39,33 +38,13 @@ const (
 	clearSearchHistoryConfirmation = "CLEAR SEARCH HISTORY"
 )
 
-func (handler *apiHandler) searchHistoryRoutes(noAuth router.AuthLevel, smallRequestBytes int64) []router.RouteDefinition {
-	return []router.RouteDefinition{
-		router.RouteConfig[*opensplunk.GetSearchHistoryEntryRequest, *opensplunk.GetSearchHistoryEntryResponse]{
-			Path: "/search/history/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.GetSearchHistoryEntryRequest, *opensplunk.GetSearchHistoryEntryResponse](), Handler: handler.getSearchHistoryEntry,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeGetSearchHistoryEntryRequest,
-		},
-		router.RouteConfig[*opensplunk.ListSearchHistoryRequest, *serializedSearchHistoryListResponse]{
-			Path: "/search/history/list", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newSerializedSearchHistoryListCodec(), Handler: handler.listSearchHistory,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: handler.sanitizeListSearchHistoryRequest,
-		},
-		router.RouteConfig[*opensplunk.DeleteSearchHistoryEntryRequest, *opensplunk.DeleteSearchHistoryEntryResponse]{
-			Path: "/search/history/delete", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.DeleteSearchHistoryEntryRequest, *opensplunk.DeleteSearchHistoryEntryResponse](), Handler: handler.deleteSearchHistoryEntry,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeDeleteSearchHistoryEntryRequest,
-		},
-		router.RouteConfig[*opensplunk.ClearSearchHistoryRequest, *opensplunk.ClearSearchHistoryResponse]{
-			Path: "/search/history/clear", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.ClearSearchHistoryRequest, *opensplunk.ClearSearchHistoryResponse](), Handler: handler.clearSearchHistory,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeClearSearchHistoryRequest,
-		},
-	}
+func (handler *apiHandler) registerSearchHistoryRoutes(group *apiRouteGroup, smallRequestBytes int64) {
+	group.Route(
+		sizedProtoPostRoute("/search/history/get", smallRequestBytes, handler.getSearchHistoryEntry, sanitizeGetSearchHistoryEntryRequest),
+		sizedPostRoute("/search/history/list", smallRequestBytes, newSerializedSearchHistoryListCodec(), handler.listSearchHistory, handler.sanitizeListSearchHistoryRequest),
+		sizedProtoPostRoute("/search/history/delete", smallRequestBytes, handler.deleteSearchHistoryEntry, sanitizeDeleteSearchHistoryEntryRequest),
+		sizedProtoPostRoute("/search/history/clear", smallRequestBytes, handler.clearSearchHistory, sanitizeClearSearchHistoryRequest),
+	)
 }
 
 func (handler *apiHandler) getSearchHistoryEntry(request *http.Request, input *opensplunk.GetSearchHistoryEntryRequest) (*opensplunk.GetSearchHistoryEntryResponse, error) {

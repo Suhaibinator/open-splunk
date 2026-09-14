@@ -353,3 +353,23 @@ func TestTimeSeriesSchemaMarksStaticCountAsMetric(t *testing.T) {
 		t.Fatalf("count semantic = %v, want METRIC", got)
 	}
 }
+
+func TestTimechartSuffixJobAndPageShareFinalPresentation(t *testing.T) {
+	job := completeJob("timechart-final-schema")
+	job.SPL = `index=main | timechart span=1s count | fields -_time`
+	job.Schema = &searchjobs.Schema{Columns: []searchjobs.Column{{Name: "count", Kind: searchjobs.ValueKindUnsigned}}}
+	converted, err := searchJobToProto(job, testNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if converted.ResultKind != opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS || converted.ResultSchema.ResultKind != converted.ResultKind {
+		t.Fatalf("inconsistent job/schema shape: %v", converted)
+	}
+	page, err := searchjobproto.ResultPage(context.Background(), job.ID, searchjobs.ResultPage{Schema: *job.Schema, Rows: []searchjobs.ResultRow{{Values: []searchjobs.Value{searchjobs.UnsignedValue(3)}}}, TotalRows: 1}, searchjobproto.ResultShapeForSPL(job.SPL), true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Schema.ResultKind != converted.ResultKind || len(page.Rows) != 1 {
+		t.Fatalf("retained page lost final shape: %v", page)
+	}
+}

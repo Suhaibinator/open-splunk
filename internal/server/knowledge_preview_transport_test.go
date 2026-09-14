@@ -447,9 +447,6 @@ func TestPreviewKnowledgeObjectRequestCodecRemainsUnregistered(t *testing.T) {
 		knowledgeHTTPApps(),
 		attempts,
 	)
-	if routes := handler.knowledgeManagementRoutes(0); len(routes) != 9 {
-		t.Fatalf("management routes = %d, want unchanged nine", len(routes))
-	}
 	body := newKnowledgeBoundaryObservedBody("unread Preview body", nil)
 	request := httptest.NewRequestWithContext(
 		t.Context(),

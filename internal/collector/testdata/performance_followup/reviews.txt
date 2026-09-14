@@ -1,0 +1,44 @@
+Performance follow-up after issue #104 / merged PR #107
+
+Implementation review: one gpt-6-astra and two gpt-5.6-sol agents independently
+examined common decoder allocations, scanner/helper reuse, and access projection
+quality. Each implemented a separately owned change with regression tests.
+
+Adversarial review of e6d0462721d8e5e5caf167665738bce5bf3c605a:
+- gpt-6-astra correctness: clean after historical event-ID, independent event
+  ownership, static precedence, empty-field shape, and CaptureInto regressions.
+- gpt-6-astra security: clean after 42,597 historical logfmt differential cases,
+  177,156 numeric grammar cases, binary values, metadata, redaction, and WAL tests.
+- gpt-5.6-sol efficiency/quality/API: clean; compiler analysis confirmed that the
+  caller's small capture array remains on the stack. No shared scratch state.
+
+All three reviewers re-reviewed final source revision
+a64e0e7abf4585ed520afa0bf53098dd3a6f86a3 and returned clean results:
+- Astra correctness: unchanged framing error precedence, controls rejected on
+  both logfmt paths, Docker string ownership, and exactly equivalent bounded
+  access timestamp comparison. Targeted collector/parserconfig/jsonnumber pass.
+- Astra security: historical differential, strict timestamp spelling, Docker
+  validation/ownership, redaction, and reparsing tests pass. Initial broad test
+  selection failed to bind loopback sockets in the sandbox; the parent's full
+  elevated tests, race tests, and compiled backend integrations passed.
+- Sol efficiency/quality/API: owned Docker stream reuse is safe; AppendFormat's
+  canonical buffer and Java capture buffer remain on the stack; logfmt avoids
+  redundant control scanning for escaped strings without weakening validation.
+  Targeted collector/parserconfig/jsonnumber tests pass.
+
+No actionable findings remained on the final source revision. Reviewers did not
+run timing benchmarks during the final measurement. Regression files added by
+reviewers are retained in the repository and run in the ordinary test suites.
+
+Supplemental malformed benchmark investigation:
+The 200ms samples showed a noisy large-logfmt slowdown and a small large-NGINX
+slowdown. An Astra agent disassembled the existing baseline/final benchmark
+binaries with llvm-objdump. The ordinary-byte logfmt quoted scan has identical
+instruction operations/count; the new escape flag is written only on the
+backslash branch that this fixture never takes. Scanner.value has exactly 237
+instructions in both binaries; the normalized differences are four metadata
+addresses, with identical loop instructions. Successful field projection is
+not reached by these malformed inputs. No added scan work, new spill, or source
+fix was identified. No source edits or timing tests were made by the reviewer.
+The disassembly is retained in profiles/*-asm.txt. The parent then scheduled
+20 longer one-second paired samples for the two affected cases.

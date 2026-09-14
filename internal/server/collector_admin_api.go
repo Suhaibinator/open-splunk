@@ -11,7 +11,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/Suhaibinator/SRouter/pkg/codec"
-	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
@@ -38,72 +37,16 @@ const (
 	maximumCollectorInputStatusBytes       = 8 << 10
 )
 
-func (handler *apiHandler) collectorAdministrationRoutes(
-	noAuth router.AuthLevel,
+func (handler *apiHandler) registerCollectorAdministrationRoutes(
+	group *apiRouteGroup,
 	requestBytes int64,
-) []router.RouteDefinition {
-	return []router.RouteDefinition{
-		router.RouteConfig[
-			*opensplunk.ListCollectorsRequest,
-			*serializedListCollectorsResponse,
-		]{
-			Path:       "/collectors/list",
-			Methods:    []router.HttpMethod{router.MethodPost},
-			AuthLevel:  &noAuth,
-			Codec:      newSerializedListCollectorsCodec(),
-			Handler:    handler.listCollectors,
-			SourceType: router.Body,
-			Overrides: sroutercommon.RouteOverrides{
-				MaxBodySize: requestBytes,
-			},
-			Sanitizer: handler.sanitizeListCollectorsRequest,
-		},
-		router.RouteConfig[
-			*opensplunk.GetCollectorRequest,
-			*serializedGetCollectorResponse,
-		]{
-			Path:       "/collectors/get",
-			Methods:    []router.HttpMethod{router.MethodPost},
-			AuthLevel:  &noAuth,
-			Codec:      newSerializedGetCollectorCodec(),
-			Handler:    handler.getCollector,
-			SourceType: router.Body,
-			Overrides: sroutercommon.RouteOverrides{
-				MaxBodySize: requestBytes,
-			},
-			Sanitizer: sanitizeGetCollectorRequest,
-		},
-		router.RouteConfig[
-			*opensplunk.UpdateCollectorRequest,
-			*serializedUpdateCollectorResponse,
-		]{
-			Path:       "/collectors/update",
-			Methods:    []router.HttpMethod{router.MethodPost},
-			AuthLevel:  &noAuth,
-			Codec:      newSerializedUpdateCollectorCodec(),
-			Handler:    handler.updateCollector,
-			SourceType: router.Body,
-			Overrides: sroutercommon.RouteOverrides{
-				MaxBodySize: requestBytes,
-			},
-			Sanitizer: sanitizeUpdateCollectorRequest,
-		},
-		router.RouteConfig[
-			*opensplunk.SetCollectorEnabledRequest,
-			*serializedSetCollectorEnabledResponse,
-		]{
-			Path:       "/collectors/state/set",
-			Methods:    []router.HttpMethod{router.MethodPost},
-			AuthLevel:  &noAuth,
-			Codec:      newSerializedSetCollectorEnabledCodec(),
-			Handler:    handler.setCollectorEnabled,
-			SourceType: router.Body,
-			Overrides: sroutercommon.RouteOverrides{
-				MaxBodySize: requestBytes,
-			},
-			Sanitizer: sanitizeSetCollectorEnabledRequest,
-		},
-	}
+) {
+	group.Route(
+		sizedPostRoute("/collectors/list", requestBytes, newSerializedListCollectorsCodec(), handler.listCollectors, handler.sanitizeListCollectorsRequest),
+		sizedPostRoute("/collectors/get", requestBytes, newSerializedGetCollectorCodec(), handler.getCollector, sanitizeGetCollectorRequest),
+		sizedPostRoute("/collectors/update", requestBytes, newSerializedUpdateCollectorCodec(), handler.updateCollector, sanitizeUpdateCollectorRequest),
+		sizedPostRoute("/collectors/state/set", requestBytes, newSerializedSetCollectorEnabledCodec(), handler.setCollectorEnabled, sanitizeSetCollectorEnabledRequest),
+	)
 }
 
 func (handler *apiHandler) listCollectors(

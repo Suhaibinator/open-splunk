@@ -29,7 +29,6 @@ const MAXIMUM_FIELD_NAME_BYTES = 8_720;
 const MAXIMUM_FIELD_PATH_SEGMENTS = 17;
 const MAXIMUM_FIELD_PATH_SEGMENT_BYTES = 256;
 const MAXIMUM_OPERATOR_BYTES = 32;
-const MAXIMUM_DYNAMIC_FIELDS = 1_024;
 const MAXIMUM_OPERATOR_PROVENANCE = 256;
 const MAXIMUM_OUTPUT_PROVENANCE = 512;
 const MAXIMUM_AUTOMATIC_LOOKUP_OUTPUTS = 16 * 16;
@@ -103,8 +102,11 @@ const PHYSICAL_INDEX_TYPES = new Set(["MinMax", "Partition", "PrimaryKey", "Skip
 const SKIP_INDEX_NAMES = new Set([
   "",
   "idx_event_id",
+  "idx_event_id_ci",
   "idx_trace_id",
+  "idx_trace_id_ci",
   "idx_span_id",
+  "idx_span_id_ci",
   "idx_field_names",
   "idx_raw_text",
   "idx_visibility_seq",
@@ -215,7 +217,7 @@ export interface ServerInspectionLogicalPlanView {
   output: {
     kind: "open" | "static" | "dynamic";
     fields: string[];
-    maxDynamicFields: number;
+    maxDynamicFields: bigint;
   };
 }
 
@@ -732,7 +734,7 @@ function adaptLogicalPlan(value: unknown, exposeKnowledge: boolean): AdaptedLogi
   );
   if (!isRecord(value.output)) return invalidInspection();
   const outputKind = value.output.kind;
-  const maxDynamicFields = uint32(value.output.maxDynamicFields);
+  const maxDynamicFields = uint64(value.output.maxDynamicFields);
   let kind: "open" | "static" | "dynamic";
   let maximumFields: number;
   if (outputKind === SearchInspectionOutputKind.SEARCH_INSPECTION_OUTPUT_KIND_OPEN) {
@@ -749,10 +751,11 @@ function adaptLogicalPlan(value: unknown, exposeKnowledge: boolean): AdaptedLogi
   }
   const fields = adaptFields(value.output.fields, maximumFields, budget, false);
   if (
-    (kind === "open" && (fields.length !== 0 || maxDynamicFields !== 0))
-    || (kind === "static" && (fields.length === 0 || maxDynamicFields !== 0))
+    (kind === "open" && (fields.length !== 0 || maxDynamicFields !== 0n))
+    || (kind === "static" && (fields.length === 0 || maxDynamicFields !== 0n))
     || (kind === "dynamic" && (
-      fields.length === 0 || maxDynamicFields === 0 || maxDynamicFields > MAXIMUM_DYNAMIC_FIELDS
+      fields.length === 0
+      || (maxDynamicFields === 0n && stages[stages.length - 1]?.operator !== "Timechart")
     ))
     || new Set(fields).size !== fields.length
   ) {

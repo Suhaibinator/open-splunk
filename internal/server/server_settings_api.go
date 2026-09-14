@@ -4,8 +4,6 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/Suhaibinator/SRouter/pkg/codec"
-	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -13,26 +11,96 @@ import (
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/searchlimits"
+	"github.com/Suhaibinator/open-splunk/internal/uipalette"
 )
 
-func (handler *apiHandler) serverSettingsRoutes(
-	noAuth router.AuthLevel,
+func (handler *apiHandler) registerServerSettingsRoutes(
+	group *apiRouteGroup,
 	maximumRequestBytes int64,
-) []router.RouteDefinition {
-	return []router.RouteDefinition{
-		router.RouteConfig[*opensplunk.GetServerSettingsRequest, *opensplunk.GetServerSettingsResponse]{
-			Path: "/server/settings/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.GetServerSettingsRequest, *opensplunk.GetServerSettingsResponse](), Handler: handler.getServerSettings,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumRequestBytes},
-			Sanitizer: sanitizeGetServerSettingsRequest,
-		},
-		router.RouteConfig[*opensplunk.UpdateServerSettingsRequest, *opensplunk.UpdateServerSettingsResponse]{
-			Path: "/server/settings/update", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.UpdateServerSettingsRequest, *opensplunk.UpdateServerSettingsResponse](), Handler: handler.updateServerSettings,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumRequestBytes},
-			Sanitizer: sanitizeUpdateServerSettingsRequest,
-		},
+) {
+	group.Route(
+		sizedProtoPostRoute("/server/settings/get", maximumRequestBytes, handler.getServerSettings, sanitizeGetServerSettingsRequest),
+		sizedProtoPostRoute("/server/settings/update", maximumRequestBytes, handler.updateServerSettings, sanitizeUpdateServerSettingsRequest),
+		sizedProtoPostRoute("/server/appearance/get", maximumRequestBytes, handler.getServerAppearance, sanitizeGetServerAppearanceRequest),
+		sizedProtoPostRoute("/server/appearance/update", maximumRequestBytes, handler.updateServerAppearance, sanitizeUpdateServerAppearanceRequest),
+	)
+}
+
+func (handler *apiHandler) getServerAppearance(
+	request *http.Request,
+	_ *opensplunk.GetServerAppearanceRequest,
+) (*opensplunk.GetServerAppearanceResponse, error) {
+	current, err := handler.serverSettings.GetAppearance(request.Context())
+	if err != nil {
+		return nil, unavailableError("server appearance settings are unavailable")
 	}
+	return &opensplunk.GetServerAppearanceResponse{
+		Current:        versionedUIAppearanceToProto(current),
+		DefaultPalette: uiPaletteToProto(uipalette.Default()),
+	}, nil
+}
+
+func (handler *apiHandler) updateServerAppearance(
+	request *http.Request,
+	input *opensplunk.UpdateServerAppearanceRequest,
+) (*opensplunk.UpdateServerAppearanceResponse, error) {
+	palette, err := uiPaletteFromProto(input.GetPalette())
+	if err != nil {
+		return nil, badRequestError("ui palette is invalid")
+	}
+	current, err := handler.serverSettings.UpdateAppearance(request.Context(), input.GetExpectedVersion(), palette)
+	if err != nil {
+		switch {
+		case errors.Is(err, control.ErrVersionConflict):
+			return nil, router.NewHTTPError(http.StatusConflict, "server appearance changed; reload and try again")
+		case errors.Is(err, control.ErrInvalidArgument):
+			return nil, router.NewHTTPError(http.StatusBadRequest, "ui palette is invalid")
+		default:
+			return nil, unavailableError("server appearance settings are unavailable")
+		}
+	}
+	return &opensplunk.UpdateServerAppearanceResponse{
+		Current:        versionedUIAppearanceToProto(current),
+		DefaultPalette: uiPaletteToProto(uipalette.Default()),
+	}, nil
+}
+
+func versionedUIAppearanceToProto(value control.ServerAppearanceSettings) *opensplunk.VersionedUiAppearance {
+	result := &opensplunk.VersionedUiAppearance{Version: value.Version, Palette: uiPaletteToProto(value.Palette)}
+	if !value.UpdatedAt.IsZero() {
+		result.UpdatedAt = timestamppb.New(value.UpdatedAt)
+	}
+	return result
+}
+
+var uiPaletteWireValues = map[uipalette.Palette]opensplunk.UiPalette{
+	uipalette.Classic:  opensplunk.UiPalette_UI_PALETTE_CLASSIC,
+	uipalette.Ocean:    opensplunk.UiPalette_UI_PALETTE_OCEAN,
+	uipalette.Ember:    opensplunk.UiPalette_UI_PALETTE_EMBER,
+	uipalette.Graphite: opensplunk.UiPalette_UI_PALETTE_GRAPHITE,
+	uipalette.Glass:    opensplunk.UiPalette_UI_PALETTE_GLASS,
+	uipalette.Terminal: opensplunk.UiPalette_UI_PALETTE_TERMINAL,
+}
+
+// uiPaletteToProto maps a validated palette to its wire value. A palette the
+// server does not recognize is reported as UNSPECIFIED rather than guessed.
+func uiPaletteToProto(value uipalette.Palette) opensplunk.UiPalette {
+	if wire, ok := uiPaletteWireValues[value]; ok {
+		return wire
+	}
+	return opensplunk.UiPalette_UI_PALETTE_UNSPECIFIED
+}
+
+// uiPaletteFromProto accepts exactly the listed palette values; UNSPECIFIED
+// and numbers outside the enum are rejected so a newer client cannot persist
+// a palette this server cannot paint.
+func uiPaletteFromProto(value opensplunk.UiPalette) (uipalette.Palette, error) {
+	for palette, wire := range uiPaletteWireValues {
+		if wire == value {
+			return palette, nil
+		}
+	}
+	return "", errors.New("ui palette is invalid")
 }
 
 func (handler *apiHandler) getServerSettings(

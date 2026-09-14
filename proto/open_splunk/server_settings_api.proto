@@ -49,3 +49,38 @@ message UpdateServerSettingsResponse {
   SearchLimits minimums = 3;
   SearchLimits maximums = 4;
 }
+
+// UiPalette is the instance-wide aesthetic every browser session paints,
+// including the sign-in page. Light and dark stay each user's own choice.
+enum UiPalette {
+  UI_PALETTE_UNSPECIFIED = 0;
+  UI_PALETTE_CLASSIC = 1;
+  UI_PALETTE_OCEAN = 2;
+  UI_PALETTE_EMBER = 3;
+  UI_PALETTE_GRAPHITE = 4;
+  UI_PALETTE_GLASS = 5;
+  UI_PALETTE_TERMINAL = 6;
+}
+
+message VersionedUiAppearance {
+  uint64 version = 1;
+  UiPalette palette = 2;
+  optional google.protobuf.Timestamp updated_at = 3;
+}
+
+message GetServerAppearanceRequest {}
+
+message GetServerAppearanceResponse {
+  VersionedUiAppearance current = 1;
+  UiPalette default_palette = 2;
+}
+
+message UpdateServerAppearanceRequest {
+  uint64 expected_version = 1;
+  UiPalette palette = 2;
+}
+
+message UpdateServerAppearanceResponse {
+  VersionedUiAppearance current = 1;
+  UiPalette default_palette = 2;
+}

@@ -30,7 +30,11 @@ services:
       OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD: "${OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD:?set OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD}"
       OPEN_SPLUNK_SERVER_HEC_ENABLED: "${OPEN_SPLUNK_SERVER_HEC_ENABLED:-false}"
     ports:
-      - "${OPEN_SPLUNK_DEPLOY_HTTP_PORT:-8080}:8080"
+      # Workspace APIs trust the caller. Remote access needs an authenticated proxy.
+      - target: 8080
+        published: "${OPEN_SPLUNK_DEPLOY_HTTP_PORT:-8080}"
+        host_ip: 127.0.0.1
+        protocol: tcp
     volumes:
       - server-state:/var/lib/open-splunk/state
       - server-lock:/var/lib/open-splunk/lock

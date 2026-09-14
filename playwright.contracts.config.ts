@@ -10,6 +10,10 @@ export default defineConfig({
   forbidOnly: process.env.CI === "true",
   reporter: "line",
   outputDir: "./test-results/css-contracts",
+  use: {
+    screenshot: "only-on-failure",
+    trace: "retain-on-failure",
+  },
   projects: [
     {
       name: "chromium",

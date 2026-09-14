@@ -1,4 +1,5 @@
 import { parseSearchLaunch, replaceSearchLaunchSource, type SearchLaunchSource } from "./launch-url";
+import { isSearchResultView, type SearchResultView } from "./result-view-navigation";
 
 export interface SearchLaunchRange {
   earliest: string;
@@ -29,6 +30,7 @@ export interface SearchLaunchHistoryState {
   label: string;
   latest: string;
   q: string;
+  resultView?: SearchResultView;
   searchJobId?: string;
   timezone?: string;
 }
@@ -140,14 +142,31 @@ export function readSearchLaunchState(state: unknown): SearchLaunchHistoryState 
   if (typeof q !== "string" || typeof earliest !== "string" || typeof latest !== "string" || typeof label !== "string") {
     return null;
   }
+  const resultView = typeof state.resultView === "string" && isSearchResultView(state.resultView)
+    ? state.resultView
+    : undefined;
   return {
     earliest,
     label,
     latest,
     q,
+    ...(resultView === undefined ? {} : { resultView }),
     searchJobId: optionalString(state.searchJobId),
     timezone: optionalString(state.timezone),
   };
+}
+
+/** Whether a history entry still describes the draft, range, and retained job on screen. */
+export function sameSearchLaunchState(
+  left: SearchLaunchHistoryState,
+  right: SearchLaunchHistoryState,
+): boolean {
+  return left.q === right.q
+    && left.earliest === right.earliest
+    && left.latest === right.latest
+    && left.label === right.label
+    && left.timezone === right.timezone
+    && left.searchJobId === right.searchJobId;
 }
 
 /**

@@ -32,6 +32,11 @@ func newSPAHandler(filesystem fs.FS) (http.Handler, error) {
 }
 
 func (handler *spaHandler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
+	// Enforce one frame policy for fallback HTML and every exported page,
+	// including directory indexes served directly by FileServerFS.
+	response.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")
+	response.Header().Set("X-Frame-Options", "DENY")
+
 	if request.Method != http.MethodGet && request.Method != http.MethodHead {
 		response.Header().Set("Allow", "GET, HEAD")
 		http.Error(response, "Method Not Allowed", http.StatusMethodNotAllowed)

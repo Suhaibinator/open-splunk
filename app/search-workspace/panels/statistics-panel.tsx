@@ -2,6 +2,8 @@
 import {
   type CSSProperties,
   type Dispatch,
+  type KeyboardEvent,
+  type PointerEvent,
   type ReactNode,
   type SetStateAction,
   useEffect,
@@ -28,6 +30,18 @@ import { Modal } from "../../_components/modal";
 import { formatGroupedNumericText } from "../formatters";
 import type { MenuName, StatsDensity } from "../model";
 import {
+  createColumnLayout,
+  createColumnLayoutDomain,
+  resizeColumn,
+  selectColumnLayoutWindow,
+  type StatisticsColumnDefinition,
+  type StatisticsColumnLayout,
+  type StatisticsColumnLayoutItem,
+  type StatisticsColumnLayoutStore,
+  toggleColumn,
+  visibleColumnWidth,
+} from "./statistics-column-layout";
+import {
   StatsFlatMultivalueValue,
   StatsMultivalueList,
   statsFlatMultivalueDisplay,
@@ -52,6 +66,7 @@ type TimechartSort = { key: "time" | "count"; direction: "asc" | "desc" };
 type TimechartSeriesSort = { key: string; direction: "asc" | "desc" };
 
 interface StatisticsPanelProps {
+  columnLayoutStore: StatisticsColumnLayoutStore;
   elapsed: string;
   genericStatisticsTable: WorkspaceStatisticsTable | null;
   genericStatsSort: WorkspaceStatisticsSort | null;
@@ -71,6 +86,7 @@ interface StatisticsPanelProps {
   statisticsRows: WorkspaceStatistic[];
   statsDensity: StatsDensity;
   statsSort: StatsSort;
+  submittedQuery: string;
   timechartSort: TimechartSort;
   timechartValueColumns: string[];
   timelinePoints: TimelinePoint[];
@@ -97,10 +113,114 @@ const STANDARD_STATISTICS_ROW_HEIGHT = 52;
 const STATISTICS_HEADER_HEIGHT = 37;
 const STATS_SPARKLINE_WIDTH = 128;
 const STATS_SPARKLINE_HEIGHT = 28;
+const STATISTICS_COLUMN_WINDOW_SIZE = 24;
+
+const STATISTICS_COLUMN_SCALE_TOKENS = {
+  maximum: "--space-statistics-column-maximum",
+  minimum: "--space-statistics-column-minimum",
+  numeric: "--space-statistics-column-numeric",
+  step: "--space-statistics-column-step",
+  text: "--space-statistics-column-text",
+  time: "--space-statistics-column-time",
+} as const;
 
 interface StatisticsTableShellStyle extends CSSProperties {
   "--statistics-header-height": string;
   "--statistics-row-height": string;
+}
+
+interface StatisticsPanelColumn extends StatisticsColumnDefinition {
+  label: string;
+  numeric: boolean;
+}
+
+interface StatisticsColumnScale {
+  maximum: number;
+  minimum: number;
+  numeric: number;
+  step: number;
+  text: number;
+  time: number;
+}
+
+function readStatisticsColumnScale(): StatisticsColumnScale | null {
+  if (typeof window === "undefined") return null;
+  const computedStyle = window.getComputedStyle(document.documentElement);
+  const entries = Object.entries(STATISTICS_COLUMN_SCALE_TOKENS).map(([key, token]) => [
+    key,
+    Number.parseFloat(computedStyle.getPropertyValue(token)),
+  ] as const);
+  if (entries.some(([, value]) => !Number.isFinite(value) || value <= 0)) return null;
+  return Object.fromEntries(entries) as unknown as StatisticsColumnScale;
+}
+
+interface StatisticsColumnResizeHandleProps {
+  column: StatisticsPanelColumn;
+  keyboardStep: number | null;
+  layoutItem: StatisticsColumnLayoutItem | undefined;
+  onResize: (id: string, deltaPx: number) => void;
+}
+
+function StatisticsColumnResizeHandle({
+  column,
+  keyboardStep,
+  layoutItem,
+  onResize,
+}: StatisticsColumnResizeHandleProps) {
+  const lastClientX = useRef<number | null>(null);
+  const width = layoutItem?.width ?? column.defaultWidth;
+
+  function endPointerResize(event: PointerEvent<HTMLSpanElement>): void {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    lastClientX.current = null;
+  }
+
+  function handleKeyboardResize(event: KeyboardEvent<HTMLSpanElement>): void {
+    if (
+      keyboardStep === null
+      || (event.key !== "ArrowLeft" && event.key !== "ArrowRight")
+    ) return;
+    event.preventDefault();
+    onResize(
+      column.id,
+      event.key === "ArrowRight"
+        ? keyboardStep
+        : -keyboardStep,
+    );
+  }
+
+  return (
+    <span
+      className="statistics-column-resizer"
+      role="separator"
+      aria-label={`Resize ${column.label} column`}
+      aria-orientation="vertical"
+      aria-valuemax={column.maximumWidth ?? undefined}
+      aria-valuemin={column.minimumWidth ?? undefined}
+      aria-valuenow={width ?? undefined}
+      tabIndex={0}
+      onKeyDown={handleKeyboardResize}
+      onPointerCancel={endPointerResize}
+      onPointerDown={(event) => {
+        event.preventDefault();
+        event.currentTarget.setPointerCapture(event.pointerId);
+        lastClientX.current = event.clientX;
+      }}
+      onPointerMove={(event) => {
+        if (
+          lastClientX.current === null
+          || !event.currentTarget.hasPointerCapture(event.pointerId)
+        ) return;
+        const deltaPx = event.clientX - lastClientX.current;
+        if (deltaPx === 0) return;
+        lastClientX.current = event.clientX;
+        onResize(column.id, deltaPx);
+      }}
+      onPointerUp={endPointerResize}
+    />
+  );
 }
 
 function serializedGenericValue(value: WorkspaceStatisticsValue): string {
@@ -170,16 +290,15 @@ interface TimechartSeriesCell {
 function timechartSeriesCell(
   point: TimelinePoint,
   seriesName: string,
-  hasExplicitSeries: boolean,
 ): TimechartSeriesCell | null {
-  if (!hasExplicitSeries) {
+  if (point.series === undefined) {
     return {
       displayValue: point.exactCount ?? point.count,
       coordinateApproximate: point.coordinateApproximate === true,
     };
   }
-  const coordinate = point.series?.[seriesName];
-  if (coordinate === undefined) return null;
+  const coordinate = point.series[seriesName];
+  if (typeof coordinate !== "number" || !Number.isFinite(coordinate)) return null;
   const exact = point.exactSeries?.[seriesName];
   return {
     displayValue: exact ?? coordinate,
@@ -216,6 +335,7 @@ function visibleRows<Row>(rows: Row[], window: VirtualTableWindow): Row[] {
 }
 
 export function StatisticsPanel({
+  columnLayoutStore,
   elapsed,
   genericStatisticsTable,
   genericStatsSort,
@@ -235,6 +355,7 @@ export function StatisticsPanel({
   statisticsRows,
   statsDensity,
   statsSort,
+  submittedQuery,
   timechartSort,
   timechartValueColumns,
   timelinePoints,
@@ -252,16 +373,154 @@ export function StatisticsPanel({
     VIRTUAL_TABLE_VIEWPORT_HEIGHT - STATISTICS_HEADER_HEIGHT,
   );
   const [timechartSeriesSort, setTimechartSeriesSort] = useState<TimechartSeriesSort | null>(null);
+  const [columnWindowOffset, setColumnWindowOffset] = useState(0);
   const [multivalueDialog, setMultivalueDialog] = useState<{
     label: string;
     fieldName: string;
     members: string[];
   } | null>(null);
   const tableShellRef = useRef<HTMLDivElement>(null);
-  const hasExplicitTimechartSeries = timelinePoints.some(
-    (point) => Object.keys(point.series ?? {}).length > 0,
+  const hasExplicitTimechartSeries = useMemo(
+    () => timelinePoints.some((point) => point.series !== undefined),
+    [timelinePoints],
   );
   const timechartSeries = timechartValueColumns;
+  const [columnScale, setColumnScale] = useState<StatisticsColumnScale | null>(null);
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => setColumnScale(readStatisticsColumnScale()));
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+  const timechartColumns = useMemo<StatisticsPanelColumn[]>(() => [
+    {
+      id: "_time",
+      label: "_time",
+      numeric: false,
+      defaultWidth: columnScale?.time ?? null,
+      maximumWidth: columnScale?.maximum ?? null,
+      minimumWidth: columnScale?.minimum ?? null,
+    },
+    ...timechartSeries.map((series) => ({
+      id: series,
+      label: series,
+      numeric: true,
+      defaultWidth: columnScale?.numeric ?? null,
+      maximumWidth: columnScale?.maximum ?? null,
+      minimumWidth: columnScale?.minimum ?? null,
+    })),
+  ], [columnScale, timechartSeries]);
+  const genericColumns = useMemo<StatisticsPanelColumn[]>(() => (
+    genericStatisticsTable?.columns.map((column) => ({
+      id: column.key,
+      label: column.label,
+      numeric: column.numeric,
+      defaultWidth: column.numeric
+        ? columnScale?.numeric ?? null
+        : columnScale?.text ?? null,
+      maximumWidth: columnScale?.maximum ?? null,
+      minimumWidth: columnScale?.minimum ?? null,
+    })) ?? []
+  ), [columnScale, genericStatisticsTable?.columns]);
+  const legacyColumns = useMemo<StatisticsPanelColumn[]>(() => [
+    {
+      id: "level",
+      label: statisticsDimension,
+      numeric: false,
+      defaultWidth: columnScale?.time ?? null,
+      maximumWidth: columnScale?.maximum ?? null,
+      minimumWidth: columnScale?.minimum ?? null,
+    },
+    {
+      id: "count",
+      label: "count",
+      numeric: true,
+      defaultWidth: columnScale?.numeric ?? null,
+      maximumWidth: columnScale?.maximum ?? null,
+      minimumWidth: columnScale?.minimum ?? null,
+    },
+    {
+      id: "percent",
+      label: "% of results",
+      numeric: true,
+      defaultWidth: columnScale?.numeric ?? null,
+      maximumWidth: columnScale?.maximum ?? null,
+      minimumWidth: columnScale?.minimum ?? null,
+    },
+    {
+      id: "avgDuration",
+      label: "avg(duration_ms)",
+      numeric: true,
+      defaultWidth: columnScale?.numeric ?? null,
+      maximumWidth: columnScale?.maximum ?? null,
+      minimumWidth: columnScale?.minimum ?? null,
+    },
+  ], [columnScale, statisticsDimension]);
+  const panelColumns = isTimechartResult
+    ? timechartColumns
+    : genericStatisticsTable === null
+      ? legacyColumns
+      : genericColumns;
+  const layoutQueryKey = submittedQuery;
+  const [columnLayoutState, setColumnLayoutState] = useState<StatisticsColumnLayout>(
+    () => columnLayoutStore.get(layoutQueryKey, panelColumns) ?? createColumnLayout(panelColumns),
+  );
+  const columnLayoutDomain = useMemo(
+    () => createColumnLayoutDomain(columnLayoutState, panelColumns),
+    [columnLayoutState, panelColumns],
+  );
+  const columnLayout = columnLayoutDomain.layout;
+  const visibleColumnLayout = columnLayoutDomain.visible;
+  const maximumColumnWindowOffset = Math.floor(
+    Math.max(0, panelColumns.length - 1) / STATISTICS_COLUMN_WINDOW_SIZE,
+  ) * STATISTICS_COLUMN_WINDOW_SIZE;
+  const boundedColumnWindowOffset = Math.min(columnWindowOffset, maximumColumnWindowOffset);
+  const columnWindowEnd = Math.min(
+    panelColumns.length,
+    boundedColumnWindowOffset + STATISTICS_COLUMN_WINDOW_SIZE,
+  );
+  const panelColumnWindow = useMemo(
+    () => panelColumns.slice(boundedColumnWindowOffset, columnWindowEnd),
+    [boundedColumnWindowOffset, columnWindowEnd, panelColumns],
+  );
+  const visibleColumnWindow = useMemo(() => selectColumnLayoutWindow(
+    panelColumns,
+    columnLayoutDomain.byId,
+    boundedColumnWindowOffset,
+    STATISTICS_COLUMN_WINDOW_SIZE,
+  ), [boundedColumnWindowOffset, columnLayoutDomain, panelColumns]);
+  const renderedColumnLayout = visibleColumnWindow.layout;
+  const visiblePanelColumns = visibleColumnWindow.columns;
+  const genericColumnById = useMemo(() => new Map(
+    (genericStatisticsTable?.columns ?? []).map((column) => [column.key, column]),
+  ), [genericStatisticsTable?.columns]);
+  const visibleGenericColumns = useMemo(() => visiblePanelColumns.flatMap(
+    (column) => {
+      const genericColumn = genericColumnById.get(column.id);
+      return genericColumn === undefined ? [] : [genericColumn];
+    },
+  ), [genericColumnById, visiblePanelColumns]);
+  const tableMinimumWidth = visibleColumnWidth(renderedColumnLayout);
+  const columnWindowed = panelColumns.length > STATISTICS_COLUMN_WINDOW_SIZE;
+
+  useEffect(() => {
+    if (columnScale !== null) {
+      columnLayoutStore.set(layoutQueryKey, columnLayout, panelColumns);
+    }
+  }, [columnLayout, columnLayoutStore, columnScale, layoutQueryKey, panelColumns]);
+
+  function updateColumnLayout(
+    transform: (layout: StatisticsColumnLayout) => StatisticsColumnLayout,
+  ): void {
+    setColumnLayoutState((current) => {
+      const currentLayout = createColumnLayoutDomain(current, panelColumns).layout;
+      const layout = [...transform(currentLayout)];
+      columnLayoutStore.set(layoutQueryKey, layout, panelColumns);
+      return layout;
+    });
+  }
+
+  function resizeStatisticsColumn(id: string, deltaPx: number): void {
+    updateColumnLayout((layout) => resizeColumn(layout, id, deltaPx));
+  }
   const activeTimechartSeriesSort = timechartSeriesSort !== null
     && hasExplicitTimechartSeries
     && timechartSeries.includes(timechartSeriesSort.key)
@@ -271,8 +530,8 @@ export function StatisticsPanel({
     ? timechartSort.key === "time"
       ? sortedTimechartRows
       : timelinePoints.toSorted((left, right) => {
-        const leftValue = timechartSeriesCell(left, "count", false);
-        const rightValue = timechartSeriesCell(right, "count", false);
+        const leftValue = timechartSeriesCell(left, "count");
+        const rightValue = timechartSeriesCell(right, "count");
         if (leftValue === null) return rightValue === null ? 0 : 1;
         if (rightValue === null) return -1;
         const comparison = compareWorkspaceNumericValues(
@@ -282,8 +541,8 @@ export function StatisticsPanel({
         return timechartSort.direction === "desc" ? -comparison : comparison;
       })
     : timelinePoints.toSorted((left, right) => {
-      const leftValue = timechartSeriesCell(left, activeTimechartSeriesSort.key, true);
-      const rightValue = timechartSeriesCell(right, activeTimechartSeriesSort.key, true);
+      const leftValue = timechartSeriesCell(left, activeTimechartSeriesSort.key);
+      const rightValue = timechartSeriesCell(right, activeTimechartSeriesSort.key);
       if (leftValue === null) return rightValue === null ? 0 : 1;
       if (rightValue === null) return -1;
       const comparison = compareWorkspaceNumericValues(
@@ -300,25 +559,17 @@ export function StatisticsPanel({
   const displayedRowCount = isTimechartResult
     ? timelinePoints.length
     : genericStatisticsTable?.rows.length ?? statisticsRows.length;
-  const displayedColumnCount = isTimechartResult
-    ? timechartSeries.length + 1
-    : genericStatisticsTable?.columns.length ?? 4;
+  const displayedColumnCount = renderedColumnLayout.length;
   const statisticsRowHeight = statsDensity === "compact"
     ? COMPACT_STATISTICS_ROW_HEIGHT
     : STANDARD_STATISTICS_ROW_HEIGHT;
-  const virtualWindow = useMemo(() => calculateVirtualTableWindow({
+  const virtualWindow = calculateVirtualTableWindow({
     columnCount: displayedColumnCount,
     rowCount: displayedRowCount,
     rowHeight: statisticsRowHeight,
     scrollTop: verticalScrollTop,
     viewportHeight: tableViewportHeight,
-  }), [
-    displayedColumnCount,
-    displayedRowCount,
-    statisticsRowHeight,
-    tableViewportHeight,
-    verticalScrollTop,
-  ]);
+  });
   const visibleTimechartRows = visibleRows(displayedTimechartRows, virtualWindow);
   const visibleGenericStatisticsRows = visibleRows(sortedGenericStatisticsRows, virtualWindow);
   const visibleStatistics = visibleRows(sortedStatistics, virtualWindow);
@@ -350,18 +601,16 @@ export function StatisticsPanel({
     const updateViewportHeight = (): void => {
       setTableViewportHeight(Math.max(1, shell.clientHeight - STATISTICS_HEADER_HEIGHT));
     };
-    updateViewportHeight();
+    const viewportFrame = window.requestAnimationFrame(updateViewportHeight);
     const observer = new ResizeObserver(updateViewportHeight);
     observer.observe(shell);
-    return () => observer.disconnect();
+    return () => {
+      window.cancelAnimationFrame(viewportFrame);
+      observer.disconnect();
+    };
   }, [virtualWindow.virtualized]);
 
-  useEffect(() => {
-    const shell = tableShellRef.current;
-    if (shell !== null) shell.scrollTop = 0;
-    setVerticalScrollTop(0);
-    setMultivalueDialog(null);
-  }, [
+  const scrollResetKey = JSON.stringify([
     genericStatsSort,
     pageNumber,
     resultIdentity,
@@ -370,6 +619,18 @@ export function StatisticsPanel({
     timechartSeriesSort,
     timechartSort,
   ]);
+  const [activeScrollResetKey, setActiveScrollResetKey] = useState(scrollResetKey);
+  if (activeScrollResetKey !== scrollResetKey) {
+    setActiveScrollResetKey(scrollResetKey);
+    setVerticalScrollTop(0);
+    setMultivalueDialog(null);
+  }
+
+  useEffect(() => {
+    if (activeScrollResetKey !== scrollResetKey) return;
+    const shell = tableShellRef.current;
+    if (shell !== null) shell.scrollTop = 0;
+  }, [activeScrollResetKey, scrollResetKey]);
 
   useEffect(() => {
     const maximumScrollTop = maximumVirtualTableScrollTop({
@@ -419,8 +680,56 @@ export function StatisticsPanel({
               </div>
             ) : null}
           </div>
+          <div className="header-menu-wrap result-menu-wrap">
+            <button className="button button--secondary button--compact" type="button" aria-haspopup="menu" aria-expanded={menu === "statistics-columns"} disabled={panelColumns.length === 0} onClick={() => onMenuChange(menu === "statistics-columns" ? null : "statistics-columns")}>Columns <AppIcon name="chevron-down" size="xs" /></button>
+            {menu === "statistics-columns" ? (
+              <div className="floating-menu result-control-menu statistics-columns-menu" role="menu" aria-label="Statistics table columns">
+                {panelColumnWindow.map((column) => {
+                  const visible = columnLayoutDomain.byId.get(column.id)?.visible ?? true;
+                  const finalVisibleColumn = visible && visibleColumnLayout.length === 1;
+                  return (
+                    <button
+                      role="menuitemcheckbox"
+                      aria-checked={visible}
+                      disabled={finalVisibleColumn}
+                      title={finalVisibleColumn ? "At least one statistics column must remain visible." : undefined}
+                      type="button"
+                      key={column.id}
+                      onClick={() => updateColumnLayout((layout) => toggleColumn(layout, column.id))}
+                    >
+                      <span className="radio-mark">{visible ? "✓" : ""}</span>
+                      <span><strong>{column.label}</strong><small>{finalVisibleColumn ? "The final visible column cannot be hidden" : visible ? "Shown in the table" : "Hidden from the table"}</small></span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
         </div>
       </header>
+      {columnWindowed ? (
+        <nav className="statistics-column-window-controls" aria-label="Statistics column pages">
+          <span>Showing columns {boundedColumnWindowOffset + 1}–{columnWindowEnd} of {panelColumns.length}</span>
+          <div>
+            <button
+              className="button button--secondary button--compact"
+              type="button"
+              disabled={boundedColumnWindowOffset === 0}
+              onClick={() => setColumnWindowOffset(Math.max(0, boundedColumnWindowOffset - STATISTICS_COLUMN_WINDOW_SIZE))}
+            >
+              Previous columns
+            </button>
+            <button
+              className="button button--secondary button--compact"
+              type="button"
+              disabled={columnWindowEnd === panelColumns.length}
+              onClick={() => setColumnWindowOffset(columnWindowEnd)}
+            >
+              Next columns
+            </button>
+          </div>
+        </nav>
+      ) : null}
       <div className={`statistics-table-frame${hasScrolled ? " has-scrolled" : ""}`}>
         <section
           className={`statistics-table-shell${virtualWindow.virtualized ? " statistics-table-shell--virtualized" : ""}`}
@@ -458,42 +767,46 @@ export function StatisticsPanel({
             });
           }}
         >
-          {isTimechartResult ? (
+          {visiblePanelColumns.length === 0 ? (
+            <div className="statistics-no-columns" role="status">
+              <strong>All columns are hidden</strong>
+              <span>Use the Columns menu to show table data.</span>
+            </div>
+          ) : isTimechartResult ? (
             <table
-              className={`statistics-table statistics-table--fixed timechart-table density-${statsDensity}`}
-              style={{
-                minWidth: `${Math.max(520, 260 + timechartSeries.length * 150)}px`,
-              }}
+              className={`statistics-table statistics-table--fixed statistics-table--user-layout timechart-table density-${statsDensity}`}
+              width={tableMinimumWidth ?? undefined}
               aria-label={isPreview ? "Live preview timechart statistics" : "Timechart statistics"}
               aria-rowcount={virtualWindow.virtualized ? displayedRowCount + 1 : undefined}
               data-total-rows={displayedRowCount}
             >
               <colgroup>
-                <col style={{ minWidth: 220, width: `${Math.max(35, 70 - timechartSeries.length * 5)}%` }} />
-                {timechartSeries.map((series) => <col key={series} style={{ minWidth: 140 }} />)}
+                {renderedColumnLayout.map((column) => <col key={column.id} width={column.width ?? undefined} />)}
               </colgroup>
               <thead>
                 <tr>
-                  {(() => {
-                    const sorted = activeTimechartSeriesSort === null && timechartSort.key === "time";
-                    const nextDirection = sorted && timechartSort.direction === "desc" ? "ascending" : "descending";
-                    return (
-                      <th scope="col" aria-sort={sorted ? (timechartSort.direction === "desc" ? "descending" : "ascending") : "none"}>
-                        <button
-                          type="button"
-                          aria-label={`Sort by _time, ${nextDirection}`}
-                          onClick={() => {
-                            setTimechartSeriesSort(null);
-                            onTimechartSortChange((current) => ({ key: "time", direction: current.key === "time" && current.direction === "desc" ? "asc" : "desc" }));
-                          }}
-                        >
-                          <span>_time</span>
-                          <i className={sorted ? "sort-active" : ""} aria-hidden="true">{sorted ? (timechartSort.direction === "desc" ? "↓" : "↑") : "↕"}</i>
-                        </button>
-                      </th>
-                    );
-                  })()}
-                  {timechartSeries.map((seriesName) => {
+                  {visiblePanelColumns.map((column) => {
+                    if (column.id === "_time") {
+                      const sorted = activeTimechartSeriesSort === null && timechartSort.key === "time";
+                      const nextDirection = sorted && timechartSort.direction === "desc" ? "ascending" : "descending";
+                      return (
+                        <th scope="col" aria-sort={sorted ? (timechartSort.direction === "desc" ? "descending" : "ascending") : "none"} key={column.id}>
+                          <button
+                            type="button"
+                            aria-label={`Sort by _time, ${nextDirection}`}
+                            onClick={() => {
+                              setTimechartSeriesSort(null);
+                              onTimechartSortChange((current) => ({ key: "time", direction: current.key === "time" && current.direction === "desc" ? "asc" : "desc" }));
+                            }}
+                          >
+                            <span>_time</span>
+                            <i className={sorted ? "sort-active" : ""} aria-hidden="true">{sorted ? (timechartSort.direction === "desc" ? "↓" : "↑") : "↕"}</i>
+                          </button>
+                          <StatisticsColumnResizeHandle column={column} keyboardStep={columnScale?.step ?? null} layoutItem={columnLayoutDomain.byId.get(column.id)} onResize={resizeStatisticsColumn} />
+                        </th>
+                      );
+                    }
+                    const seriesName = column.id;
                     const sorted = hasExplicitTimechartSeries
                       ? activeTimechartSeriesSort?.key === seriesName
                       : activeTimechartSeriesSort === null && timechartSort.key === "count";
@@ -519,6 +832,7 @@ export function StatisticsPanel({
                           <span>{seriesName}</span>
                           <i className={sorted ? "sort-active" : ""} aria-hidden="true">{sorted ? (direction === "desc" ? "↓" : "↑") : "↕"}</i>
                         </button>
+                        <StatisticsColumnResizeHandle column={column} keyboardStep={columnScale?.step ?? null} layoutItem={columnLayoutDomain.byId.get(column.id)} onResize={resizeStatisticsColumn} />
                       </th>
                     );
                   })}
@@ -526,7 +840,7 @@ export function StatisticsPanel({
               </thead>
               <tbody>
                 <VirtualTableSpacer
-                  columnCount={timechartSeries.length + 1}
+                  columnCount={displayedColumnCount}
                   height={virtualWindow.paddingTop}
                 />
                 {visibleTimechartRows.map((row, visibleIndex) => (
@@ -536,9 +850,12 @@ export function StatisticsPanel({
                       ? virtualWindow.startIndex + visibleIndex + 2
                       : undefined}
                   >
-                    <td><time dateTime={row.earliest}>{row.label}</time></td>
-                    {timechartSeries.map((seriesName) => {
-                      const cell = timechartSeriesCell(row, seriesName, hasExplicitTimechartSeries);
+                    {visiblePanelColumns.map((column) => {
+                      if (column.id === "_time") {
+                        return <td key={column.id}><time dateTime={row.earliest}>{row.label}</time></td>;
+                      }
+                      const seriesName = column.id;
+                      const cell = timechartSeriesCell(row, seriesName);
                       return (
                         <td
                           className="numeric-cell"
@@ -562,24 +879,27 @@ export function StatisticsPanel({
                   </tr>
                 ))}
                 <VirtualTableSpacer
-                  columnCount={timechartSeries.length + 1}
+                  columnCount={displayedColumnCount}
                   height={virtualWindow.paddingBottom}
                 />
               </tbody>
             </table>
           ) : genericStatisticsTable !== null ? (
             <table
-              className={`statistics-table statistics-table--fixed density-${statsDensity}`}
-              style={{
-                minWidth: `${Math.max(640, genericStatisticsTable.columns.length * 160)}px`,
-              }}
+              className={`statistics-table statistics-table--fixed statistics-table--user-layout density-${statsDensity}`}
+              width={tableMinimumWidth ?? undefined}
               aria-label={isPreview ? "Live preview search statistics" : "Backend search statistics"}
               aria-rowcount={virtualWindow.virtualized ? displayedRowCount + 1 : undefined}
               data-total-rows={displayedRowCount}
             >
+              <colgroup>
+                {renderedColumnLayout.map((column) => <col key={column.id} width={column.width ?? undefined} />)}
+              </colgroup>
               <thead>
                 <tr>
-                  {genericStatisticsTable.columns.map((column) => {
+                  {visibleGenericColumns.map((column) => {
+                    const panelColumn = genericColumns.find((candidate) => candidate.id === column.key);
+                    if (panelColumn === undefined) return null;
                     const sorted = genericStatsSort?.key === column.key;
                     const nextDirection = sorted && genericStatsSort.direction === "asc" ? "descending" : "ascending";
                     return (
@@ -588,12 +908,12 @@ export function StatisticsPanel({
                         key={column.key}
                         className={column.numeric ? "numeric-cell" : undefined}
                         aria-sort={sorted ? (genericStatsSort.direction === "desc" ? "descending" : "ascending") : "none"}
-                        style={{ minWidth: column.numeric ? 128 : 168 }}
                       >
-                        <button style={{ width: "100%" }} type="button" aria-label={`Sort by ${column.label}, ${nextDirection}`} onClick={() => onGenericStatsSortChange(column.key)}>
+                        <button type="button" aria-label={`Sort by ${column.label}, ${nextDirection}`} onClick={() => onGenericStatsSortChange(column.key)}>
                           <span>{column.label}</span>
                           <i className={sorted ? "sort-active" : ""} aria-hidden="true">{sorted ? (genericStatsSort.direction === "desc" ? "↓" : "↑") : "↕"}</i>
                         </button>
+                        <StatisticsColumnResizeHandle column={panelColumn} keyboardStep={columnScale?.step ?? null} layoutItem={columnLayoutDomain.byId.get(panelColumn.id)} onResize={resizeStatisticsColumn} />
                       </th>
                     );
                   })}
@@ -601,11 +921,11 @@ export function StatisticsPanel({
               </thead>
               <tbody>
                 {sortedGenericStatisticsRows.length === 0 ? (
-                  <tr><td colSpan={Math.max(1, genericStatisticsTable.columns.length)} style={{ textAlign: "center" }}>No statistics rows were returned.</td></tr>
+                  <tr><td className="statistics-table-empty" colSpan={Math.max(1, displayedColumnCount)}>No statistics rows were returned.</td></tr>
                 ) : (
                   <>
                     <VirtualTableSpacer
-                      columnCount={genericStatisticsTable.columns.length}
+                      columnCount={displayedColumnCount}
                       height={virtualWindow.paddingTop}
                     />
                     {visibleGenericStatisticsRows.map((row, visibleIndex) => (
@@ -615,7 +935,7 @@ export function StatisticsPanel({
                           ? virtualWindow.startIndex + visibleIndex + 2
                           : undefined}
                       >
-                        {genericStatisticsTable.columns.map((column) => {
+                        {visibleGenericColumns.map((column) => {
                           const value = row.values[column.key] ?? null;
                           // An invisible delimiter stacks its members instead of
                           // joining them; LIST columns are never pivotable, so
@@ -627,10 +947,9 @@ export function StatisticsPanel({
                           if (members !== undefined) {
                             return (
                               <td
-                                className={column.numeric ? "numeric-cell" : undefined}
+                                className={`statistics-cell--multivalue${column.numeric ? " numeric-cell" : ""}`}
                                 key={column.key}
                                 title={statsMultivalueTitle(members)}
-                                style={{ maxWidth: 420, overflow: "hidden" }}
                               >
                                 <StatsMultivalueList
                                   fieldName={column.fieldName}
@@ -658,15 +977,9 @@ export function StatisticsPanel({
                           const pivotValue = row.pivotValues[column.key];
                           return (
                             <td
-                              className={column.numeric ? "numeric-cell" : undefined}
+                              className={`statistics-cell--single-line${column.numeric ? " numeric-cell" : ""}`}
                               key={column.key}
                               title={value === null ? "Null" : serializedGenericValue(value)}
-                              style={{
-                                maxWidth: 420,
-                                overflow: "hidden",
-                                textOverflow: "ellipsis",
-                                whiteSpace: "nowrap",
-                              }}
                             >
                               {column.pivotable && pivotValue !== undefined ? (
                                 <button
@@ -684,7 +997,7 @@ export function StatisticsPanel({
                       </tr>
                     ))}
                     <VirtualTableSpacer
-                      columnCount={genericStatisticsTable.columns.length}
+                      columnCount={displayedColumnCount}
                       height={virtualWindow.paddingBottom}
                     />
                   </>
@@ -693,29 +1006,32 @@ export function StatisticsPanel({
             </table>
           ) : (
             <table
-              className={`statistics-table density-${statsDensity}`}
+              className={`statistics-table statistics-table--user-layout density-${statsDensity}`}
+              width={tableMinimumWidth ?? undefined}
               aria-label={isPreview ? "Live preview search statistics" : "Search statistics"}
               aria-rowcount={virtualWindow.virtualized ? displayedRowCount + 1 : undefined}
               data-total-rows={displayedRowCount}
             >
-              <colgroup><col className="statistics-col-level" /><col className="statistics-col-count" /><col className="statistics-col-percent" /><col className="statistics-col-average" /></colgroup>
+              <colgroup>
+                {renderedColumnLayout.map((column) => <col key={column.id} width={column.width ?? undefined} />)}
+              </colgroup>
               <thead>
                 <tr>
-                  {([
-                    ["level", statisticsDimension, false], ["count", "count", true], ["percent", "% of results", true], ["avgDuration", "avg(duration_ms)", true],
-                  ] as const).map(([key, label, numeric]) => {
+                  {visiblePanelColumns.map((column) => {
+                    const key = column.id as keyof WorkspaceStatistic;
                     const sorted = statsSort.key === key;
                     const nextDirection = sorted && statsSort.direction === "desc" ? "ascending" : "descending";
                     return (
-                      <th scope="col" key={key} className={numeric ? "numeric-cell" : undefined} aria-sort={sorted ? (statsSort.direction === "desc" ? "descending" : "ascending") : "none"}>
-                        <button type="button" aria-label={`Sort by ${label}, ${nextDirection}`} onClick={() => onStatsSortChange(key)}><span>{label}</span><i className={sorted ? "sort-active" : ""} aria-hidden="true">{sorted ? (statsSort.direction === "desc" ? "↓" : "↑") : "↕"}</i></button>
+                      <th scope="col" key={key} className={column.numeric ? "numeric-cell" : undefined} aria-sort={sorted ? (statsSort.direction === "desc" ? "descending" : "ascending") : "none"}>
+                        <button type="button" aria-label={`Sort by ${column.label}, ${nextDirection}`} onClick={() => onStatsSortChange(key)}><span>{column.label}</span><i className={sorted ? "sort-active" : ""} aria-hidden="true">{sorted ? (statsSort.direction === "desc" ? "↓" : "↑") : "↕"}</i></button>
+                        <StatisticsColumnResizeHandle column={column} keyboardStep={columnScale?.step ?? null} layoutItem={columnLayoutDomain.byId.get(column.id)} onResize={resizeStatisticsColumn} />
                       </th>
                     );
                   })}
                 </tr>
               </thead>
               <tbody>
-                <VirtualTableSpacer columnCount={4} height={virtualWindow.paddingTop} />
+                <VirtualTableSpacer columnCount={displayedColumnCount} height={virtualWindow.paddingTop} />
                 {visibleStatistics.map((row, visibleIndex) => (
                   <tr
                     key={row.id ?? row.level}
@@ -723,13 +1039,21 @@ export function StatisticsPanel({
                       ? virtualWindow.startIndex + visibleIndex + 2
                       : undefined}
                   >
-                    <td>{row.pivotable === false ? row.level : <button className="statistics-value-link" type="button" title={`Add ${statisticsDimension}=${row.level} to the draft search`} onClick={() => onApplyPivot(statisticsDimension, row.pivotValue !== undefined ? row.pivotValue : row.level)}><span className={`severity-dot severity-${row.level.toLowerCase()}`} />{row.level}</button>}</td>
-                    <td className="numeric-cell">{NUMBER_FORMAT.format(row.count)}</td>
-                    <td className="numeric-cell">{row.percent}</td>
-                    <td className="numeric-cell">{Number.isFinite(row.avgDuration) ? <>{row.avgDuration.toFixed(1)} <span className="numeric-unit">ms</span></> : "—"}</td>
+                    {visiblePanelColumns.map((column) => {
+                      if (column.id === "level") {
+                        return <td key={column.id}>{row.pivotable === false ? row.level : <button className="statistics-value-link" type="button" title={`Add ${statisticsDimension}=${row.level} to the draft search`} onClick={() => onApplyPivot(statisticsDimension, row.pivotValue !== undefined ? row.pivotValue : row.level)}><span className={`severity-dot severity-${row.level.toLowerCase()}`} />{row.level}</button>}</td>;
+                      }
+                      if (column.id === "count") {
+                        return <td className="numeric-cell" key={column.id}>{NUMBER_FORMAT.format(row.count)}</td>;
+                      }
+                      if (column.id === "percent") {
+                        return <td className="numeric-cell" key={column.id}>{row.percent}</td>;
+                      }
+                      return <td className="numeric-cell" key={column.id}>{Number.isFinite(row.avgDuration) ? <>{row.avgDuration.toFixed(1)} <span className="numeric-unit">ms</span></> : "—"}</td>;
+                    })}
                   </tr>
                 ))}
-                <VirtualTableSpacer columnCount={4} height={virtualWindow.paddingBottom} />
+                <VirtualTableSpacer columnCount={displayedColumnCount} height={virtualWindow.paddingBottom} />
               </tbody>
             </table>
           )}

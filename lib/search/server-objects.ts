@@ -1,3 +1,4 @@
+import { browserClientRequestId, type BrowserCreateRequestOptions } from "@/lib/api/client-request-id";
 import {
   SortDirection,
   SharingScope,
@@ -423,7 +424,7 @@ export async function listServerSavedSearches(
   }
 }
 
-export interface SaveServerSearchOptions extends ProtobufRequestOptions {
+export interface SaveServerSearchOptions extends BrowserCreateRequestOptions {
   name: string;
   description?: string;
   search: ServerSearchDefinitionInput;
@@ -431,7 +432,7 @@ export interface SaveServerSearchOptions extends ProtobufRequestOptions {
   ownerId?: string;
 }
 
-function savedSearchDefinition(options: SaveServerSearchOptions) {
+export function savedSearchCreateIntent(options: SaveServerSearchOptions) {
   const name = options.name.trim();
   if (name.length === 0) throw new TypeError("Saved search name is required.");
   return {
@@ -453,8 +454,8 @@ export async function createServerSavedSearch(
   }
   try {
     const response = await client.savedSearches.create({
-      definition: savedSearchDefinition(options),
-      clientRequestId: undefined,
+      definition: savedSearchCreateIntent(options),
+      clientRequestId: options.clientRequestId ?? browserClientRequestId(),
     }, options);
     if (response.savedSearch === undefined) throw new TypeError("The server returned an empty saved search.");
     return { status: "available", value: adaptSavedSearch(response.savedSearch) };
@@ -487,7 +488,7 @@ export async function updateServerSavedSearch(
     const response = await client.savedSearches.update({
       savedSearchId: id,
       expectedVersion: options.expectedVersion,
-      definition: savedSearchDefinition(options),
+      definition: savedSearchCreateIntent(options),
       updateMask: [...new Set(options.updatePaths ?? ["name", "description", "search", "sharing_scope", "owner_id"])],
     }, options);
     if (response.savedSearch === undefined) throw new TypeError("The server returned an empty saved search.");
@@ -504,7 +505,7 @@ export async function duplicateServerSavedSearch(
   savedSearchId: string,
   newName: string,
   destinationAppId?: string,
-  options?: ProtobufRequestOptions,
+  options?: BrowserCreateRequestOptions,
 ): Promise<OptionalFeatureResult<ServerSavedSearch>> {
   if (!supportsServerFeature(bootstrap, ServerFeature.SERVER_FEATURE_SAVED_SEARCHES)) {
     return featureNotAdvertised;
@@ -514,7 +515,7 @@ export async function duplicateServerSavedSearch(
       savedSearchId: savedSearchId.trim(),
       newName: newName.trim(),
       destinationAppId: destinationAppId?.trim() || undefined,
-      clientRequestId: undefined,
+      clientRequestId: options?.clientRequestId ?? browserClientRequestId(),
     }, options);
     if (response.savedSearch === undefined) throw new TypeError("The server returned an empty saved search.");
     return { status: "available", value: adaptSavedSearch(response.savedSearch) };

@@ -199,9 +199,10 @@ func TestGradeThisSummarizeInspectionPlan(t *testing.T) {
 		{
 			name: "missing visibility skip",
 			mutate: func(plan *queryexec.ExplainPlan) {
-				plan.Reads[0].Indexes = removeGradeThisInspectionIndex(
+				plan.Reads[0].Indexes = slices.Delete(
 					plan.Reads[0].Indexes,
-					"Skip",
+					3,
+					4,
 				)
 			},
 			wantErr: errGradeThisInspectionSkip,
@@ -213,6 +214,25 @@ func TestGradeThisSummarizeInspectionPlan(t *testing.T) {
 					plan.Reads[0].Indexes,
 					plan.Reads[0].Indexes[3],
 				)
+			},
+			wantErr: errGradeThisInspectionSkip,
+		},
+		{
+			name: "duplicate normalized trace skip",
+			mutate: func(plan *queryexec.ExplainPlan) {
+				plan.Reads[0].Indexes = append(
+					plan.Reads[0].Indexes,
+					plan.Reads[0].Indexes[4],
+				)
+			},
+			wantErr: errGradeThisInspectionSkip,
+		},
+		{
+			name: "private normalized trace skip key",
+			mutate: func(plan *queryexec.ExplainPlan) {
+				plan.Reads[0].Indexes[4].Keys = []string{
+					gradeThisInspectionPrivateSentinel,
+				}
 			},
 			wantErr: errGradeThisInspectionSkip,
 		},
@@ -289,6 +309,14 @@ func TestGradeThisSummarizeInspectionPlan(t *testing.T) {
 		gradeThisInspectionCounterMutationTests(
 			"visibility skip",
 			3,
+			errGradeThisInspectionSkip,
+		)...,
+	)
+	tests = append(
+		tests,
+		gradeThisInspectionCounterMutationTests(
+			"normalized trace skip",
+			4,
 			errGradeThisInspectionSkip,
 		)...,
 	)
@@ -421,7 +449,41 @@ func TestGradeThisValidateInspectionSummaryRejectsDrift(t *testing.T) {
 			name:     "missing visibility skip",
 			searchID: gradethiscorpus.SearchFollowTrace,
 			mutate: func(summary *gradeThisInspectionPlanSummary) {
-				summary.skips = nil
+				summary.skips = summary.skips[:1]
+			},
+			wantErr: errGradeThisInspectionSkip,
+		},
+		{
+			name:     "missing normalized trace skip",
+			searchID: gradethiscorpus.SearchFollowTrace,
+			mutate: func(summary *gradeThisInspectionPlanSummary) {
+				summary.skips = summary.skips[1:]
+			},
+			wantErr: errGradeThisInspectionSkip,
+		},
+		{
+			name:     "duplicate normalized trace skip",
+			searchID: gradethiscorpus.SearchFollowTrace,
+			mutate: func(summary *gradeThisInspectionPlanSummary) {
+				summary.skips = append(
+					[]gradeThisInspectionSkipEvidence{
+						gradeThisInspectionSkip("idx_trace_id_ci"),
+					},
+					summary.skips...,
+				)
+			},
+			wantErr: errGradeThisInspectionSkip,
+		},
+		{
+			name:     "normalized trace skip on another search",
+			searchID: gradethiscorpus.SearchResponses,
+			mutate: func(summary *gradeThisInspectionPlanSummary) {
+				summary.skips = append(
+					[]gradeThisInspectionSkipEvidence{
+						gradeThisInspectionSkip("idx_trace_id_ci"),
+					},
+					summary.skips...,
+				)
 			},
 			wantErr: errGradeThisInspectionSkip,
 		},
@@ -615,6 +677,16 @@ func validGradeThisInspectionPlan(
 			SelectedGranules: 1,
 		},
 	}
+	if searchID == gradethiscorpus.SearchFollowTrace {
+		indexes = append(indexes, queryexec.ExplainIndex{
+			Type:             "Skip",
+			Name:             "idx_trace_id_ci",
+			InitialParts:     1,
+			SelectedParts:    1,
+			InitialGranules:  1,
+			SelectedGranules: 1,
+		})
+	}
 	if searchID == gradethiscorpus.SearchServerErrors {
 		indexes = append(indexes, queryexec.ExplainIndex{
 			Type:             "Skip",
@@ -640,6 +712,14 @@ func validGradeThisInspectionSummary(
 	columns := slices.Clone(gradeThisInspectionExpectedColumns[searchID])
 	skips := []gradeThisInspectionSkipEvidence{
 		gradeThisInspectionSkip("idx_visibility_seq"),
+	}
+	if searchID == gradethiscorpus.SearchFollowTrace {
+		skips = append(
+			[]gradeThisInspectionSkipEvidence{
+				gradeThisInspectionSkip("idx_trace_id_ci"),
+			},
+			skips...,
+		)
 	}
 	if searchID == gradethiscorpus.SearchServerErrors {
 		skips = append(

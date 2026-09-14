@@ -52,6 +52,8 @@ var browserGateAdministratorPaths = []string{
 	searchInspectionPath,
 	"/api/server/settings/get",
 	"/api/server/settings/update",
+	"/api/server/appearance/get",
+	"/api/server/appearance/update",
 }
 
 type recordingBrowserAuthenticator struct {

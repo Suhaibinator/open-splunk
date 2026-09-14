@@ -2111,7 +2111,7 @@ test("unknown control and query enums fail closed before a List request", async 
   assert.equal(knowledgeLifecycleStateFilterFromControlValue("deleted"), "deleted");
   assert.equal(knowledgeLifecycleStateFilterFromControlValue("UNRECOGNIZED"), undefined);
   assert.equal(knowledgeSharingScopeFilterFromControlValue("global"), "global");
-  assert.equal(knowledgeSharingScopeFilterFromControlValue("shared"), undefined);
+  assert.equal(knowledgeSharingScopeFilterFromControlValue("future-sharing"), undefined);
   assert.equal(knowledgeSortChoiceFromControlValue("created-descending"), "created-descending");
   assert.equal(knowledgeSortChoiceFromControlValue("name-sideways"), undefined);
 
@@ -2705,15 +2705,15 @@ test("the panel loading shell labels every closed filter and exposes gated creat
   assert.match(markup, /Create knowledge object/);
   assert.match(markup, /Loading knowledge objects/);
   assert.match(markup, /<label for="knowledge-app-filter"><span>App scope<\/span>/);
-  assert.match(markup, /<select id="knowledge-app-filter"/);
+  assert.match(markup, /<button[^>]*id="knowledge-app-filter"[^>]*role="combobox"/);
   assert.match(markup, /<label for="knowledge-object-type-filter"><span>Object type<\/span>/);
-  assert.match(markup, /<select id="knowledge-object-type-filter"/);
+  assert.match(markup, /<button[^>]*id="knowledge-object-type-filter"[^>]*role="combobox"/);
   assert.match(markup, /All object types/);
   assert.match(markup, /Field extraction/);
   assert.match(markup, /Field alias/);
   assert.match(markup, /Calculated field/);
   assert.match(markup, /<label for="knowledge-lifecycle-state-filter"><span>Lifecycle state<\/span>/);
-  assert.match(markup, /<select id="knowledge-lifecycle-state-filter"/);
+  assert.match(markup, /<button[^>]*id="knowledge-lifecycle-state-filter"[^>]*role="combobox"/);
   assert.match(markup, /All lifecycle states/);
   assert.match(markup, /Draft/);
   assert.match(markup, /Active/);
@@ -2721,7 +2721,7 @@ test("the panel loading shell labels every closed filter and exposes gated creat
   assert.match(markup, /Quarantined/);
   assert.match(markup, /Deleted/);
   assert.match(markup, /<label for="knowledge-sort-choice"><span>Sort by<\/span>/);
-  assert.match(markup, /<select id="knowledge-sort-choice"/);
+  assert.match(markup, /<button[^>]*id="knowledge-sort-choice"[^>]*role="combobox"/);
   assert.match(markup, /Name A–Z/);
   assert.match(markup, /Updated newest/);
   assert.match(markup, /Created newest/);

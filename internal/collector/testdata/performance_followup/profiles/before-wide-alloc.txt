@@ -1,0 +1,17 @@
+File: before-bench.test
+Type: alloc_objects
+Time: 2026-09-08 08:43:55 PDT
+Showing nodes accounting for 44519513, 99.14% of 44906387 total
+Dropped 39 nodes (cum <= 224531)
+      flat  flat%   sum%        cum   cum%
+  17039619 37.94% 37.94%   25086653 55.86%  encoding/json.(*Decoder).Token
+  11813416 26.31% 64.25%   11813416 26.31%  github.com/Suhaibinator/open-splunk/internal/collector.typedJSONNumber
+   7962745 17.73% 81.98%    7962745 17.73%  encoding/json/jsontext.Token.String (inline)
+   7438982 16.57% 98.55%   19252398 42.87%  github.com/Suhaibinator/open-splunk/internal/collector.dynamicFields
+    253826  0.57% 99.11%   25340479 56.43%  github.com/Suhaibinator/open-splunk/internal/collector.(*jsonParser).value
+     10925 0.024% 99.14%   44837826 99.85%  github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).Decode
+         0     0% 99.14%   44837826 99.85%  github.com/Suhaibinator/open-splunk/internal/collector.BenchmarkNDJSONDecoder.func1
+         0     0% 99.14%   25376683 56.51%  github.com/Suhaibinator/open-splunk/internal/collector.parseJSONObject
+         0     0% 99.14%   11813416 26.31%  github.com/Suhaibinator/open-splunk/internal/collector.typedJSONValue
+         0     0% 99.14%   44870594 99.92%  testing.(*B).run1.func1
+         0     0% 99.14%   44870594 99.92%  testing.(*B).runN

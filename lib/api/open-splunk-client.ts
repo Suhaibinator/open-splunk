@@ -32,6 +32,8 @@ export class OpenSplunkApiClient {
   public readonly serverSettings = {
     get: this.route(serverSettingsRoutes.get),
     update: this.route(serverSettingsRoutes.update),
+    getAppearance: this.route(serverSettingsRoutes.getAppearance),
+    updateAppearance: this.route(serverSettingsRoutes.updateAppearance),
   };
 
   public readonly apps = {
@@ -83,12 +85,15 @@ export class OpenSplunkApiClient {
   };
 
   public readonly search = {
+    patterns: this.route(searchRoutes.patterns),
+    patternMembers: this.route(searchRoutes.patternMembers),
     validate: this.route(searchRoutes.validate),
     suggestions: this.route(searchRoutes.suggestions),
     create: this.route(searchRoutes.create),
     get: this.route(searchRoutes.get),
     list: this.route(searchRoutes.list),
     results: this.route(searchRoutes.results),
+    prepareNearby: this.route(searchRoutes.prepareNearby),
     fields: this.route(searchRoutes.fields),
     fieldSummary: this.route(searchRoutes.fieldSummary),
     timeline: this.route(searchRoutes.timeline),

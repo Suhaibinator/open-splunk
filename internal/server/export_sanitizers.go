@@ -9,6 +9,7 @@ import (
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 )
 
 // sanitizeCreateExportJobRequest bounds the scalar shape of the export
@@ -23,7 +24,9 @@ func sanitizeCreateExportJobRequest(
 		return request, badRequestError("export definition is required")
 	}
 	if request.ClientRequestId != nil {
-		return request, badRequestError("client request idempotency is not supported")
+		if err := requestidempotency.ValidateClientRequestID(request.GetClientRequestId()); err != nil {
+			return request, badRequestError(err.Error())
+		}
 	}
 	definition.SearchJobId = strings.TrimSpace(definition.GetSearchJobId())
 	if definition.GetSearchJobId() == "" {

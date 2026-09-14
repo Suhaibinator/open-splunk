@@ -137,6 +137,7 @@ function exportJob(
     stateVersion,
     definition: {
       searchJobId: "search-1",
+      source: undefined,
       columns: [],
       rowLimit: undefined,
       byteLimit: undefined,
@@ -178,6 +179,7 @@ function bootstrapModel(searchWebsocketPath: string | null): SystemBootstrapMode
     indexes: [],
     selectedAppId: null,
     serverTime: new Date("2026-07-26T00:00:00.000Z"),
+    palette: "classic",
   };
 }
 

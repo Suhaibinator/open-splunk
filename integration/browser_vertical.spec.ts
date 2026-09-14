@@ -111,7 +111,6 @@ import {
   SearchWebSocketCommand,
   SearchWebSocketEvent,
 } from "../gen/ts/open_splunk/search_ws";
-import { MAXIMUM_BROWSER_RESULT_COLUMNS } from "../lib/api/pagination";
 import {
   BROWSER_DIAGNOSTIC_TRUNCATION_SUFFIX,
   BoundedObservationRegistry,
@@ -122,6 +121,17 @@ import {
   boundedRecorder,
   type BoundedRecorder,
 } from "./browser_harness";
+
+async function chooseSelectOption(control: Locator, name: string): Promise<void> {
+  await control.click();
+  const listboxId = await control.getAttribute("aria-controls");
+  expect(listboxId).not.toBeNull();
+  await control.page().locator(`[id="${listboxId}"]`).getByRole("option", { name, exact: true }).click();
+}
+
+function selectValue(control: Locator): Locator {
+  return control.locator("xpath=..").locator(".select__input");
+}
 
 const baseURL = requiredEnvironment("OPEN_SPLUNK_E2E_BASE_URL");
 const searchSPL = requiredEnvironment("OPEN_SPLUNK_E2E_SPL");
@@ -140,6 +150,7 @@ const renderingArtifactDirectory =
   process.env.OPEN_SPLUNK_E2E_RENDERING_ARTIFACT_DIRECTORY?.trim();
 const renderingMetricsPath = process.env.OPEN_SPLUNK_E2E_RENDERING_METRICS_PATH?.trim();
 const browserRenderingJobID = "browser-fixed-result-rendering";
+const maximumMaterializedColumns = 24;
 const sequenceExpirationTest = process.env.OPEN_SPLUNK_E2E_SEQUENCE_EXPIRATION_TEST === "1";
 const sequenceGapTest = process.env.OPEN_SPLUNK_E2E_SEQUENCE_GAP_TEST === "1";
 const sequenceGapRESTTerminalTest =
@@ -430,7 +441,13 @@ test("backend diagnostics remain authoritative and prevent browser dispatch", as
   await page.getByTestId("search-input").fill(source);
   await page.getByTestId("run-search").click();
 
-  await expect(page.getByTestId("toast")).toContainText(diagnosticMessage, { timeout });
+  const failurePanel = page.getByTestId("search-failure-panel");
+  await expect(failurePanel).toContainText(diagnosticMessage, { timeout });
+  await expect(failurePanel).toContainText("SPL_UNSUPPORTED_EVAL_EXPRESSION");
+  await expect(
+    failurePanel.getByRole("button", { name: `Line 1, column ${startColumn}` }),
+  ).toBeEnabled();
+  await expect(page.getByTestId("toast")).toHaveCount(0);
   expect(validated).toHaveLength(1);
   expect(safety.createRequests()).toBe(0);
   expect(safety.resultsRequests()).toBe(0);
@@ -1057,7 +1074,7 @@ test("Mutation Audit renders historical Knowledge events without the Knowledge f
   let storageBefore: { local: [string, string][]; session: [string, string][] };
   let trafficBeforeAudit = 0;
   await test.step("audit-only bootstrap exposes the Mutation Audit tab", async () => {
-    activityURL = new URL("/activity/", origin).href;
+    activityURL = new URL("/activity/jobs/", origin).href;
     await page.goto(activityURL, { waitUntil: "domcontentloaded", timeout });
     const mutationTab = page.getByRole("tab", { name: /Mutation audit/ });
     await expect(mutationTab).toBeVisible({ timeout });
@@ -1082,12 +1099,14 @@ test("Mutation Audit renders historical Knowledge events without the Knowledge f
     const legacyRow = mutationPanel.getByRole("row").filter({ hasText: legacyTargetId });
     await expect(legacyRow).toContainText("Saved search");
     await expect(legacyRow).not.toContainText(/App:|Type:|Sharing:/);
-    await expect(mutationPanel.getByLabel("Target kind").locator("option").filter({
-      hasText: "Knowledge object",
-    })).toHaveCount(1);
-    await expect(mutationPanel.getByLabel("Actions").locator("option").filter({
-      hasText: /^Knowledge object ·/,
-    })).toHaveCount(6);
+    await mutationPanel.getByLabel("Target kind").click();
+    await expect(mutationPanel.getByRole("option", { name: "Knowledge object", exact: true }))
+      .toHaveCount(1);
+    await page.keyboard.press("Escape");
+    await mutationPanel.getByLabel("Actions").click();
+    await expect(mutationPanel.getByRole("option", { name: /^Knowledge object ·/ }))
+      .toHaveCount(6);
+    await page.keyboard.press("Escape");
     expect(await page.evaluate(() => Reflect.get(globalThis, "__auditScriptExecuted")))
       .toBeUndefined();
   });
@@ -1114,11 +1133,20 @@ test("Mutation Audit renders historical Knowledge events without the Knowledge f
     ));
     expect(apiTraffic.filter(({ pathname }) => pathname.startsWith("/api/knowledge/")))
       .toEqual([]);
-    expect(page.url()).toBe(activityURL);
+    expect(page.url()).toBe(new URL("/activity/mutations/", origin).href);
     expect(await page.evaluate(() => ({
       local: Object.entries(localStorage),
       session: Object.entries(sessionStorage),
     }))).toEqual(storageBefore);
+
+    const requestsBeforeHistoryNavigation = auditRequests.length;
+    await page.goBack();
+    await expect(page).toHaveURL(activityURL);
+    await expect(page.getByRole("tab", { name: /Current jobs/ })).toHaveAttribute("aria-selected", "true");
+    await page.goForward();
+    await expect(page).toHaveURL(new URL("/activity/mutations/", origin).href);
+    await expect(mutationPanel).toBeVisible();
+    expect(auditRequests).toHaveLength(requestsBeforeHistoryNavigation);
   });
 });
 
@@ -1828,7 +1856,7 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one exact
   const selectorFilter = manager.getByLabel("Selector text");
   await ownerFilter.fill(" \towner-7 ");
   await textFilter.fill(" latency error ");
-  await sharingFilter.selectOption("private");
+  await chooseSelectOption(sharingFilter, "Private");
   await selectorFilter.fill(" source::api ");
   await waitForBrowserRender(page);
   expect(listRequests).toHaveLength(expectedListRequestCount);
@@ -1844,6 +1872,7 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one exact
   await expect(ownerFilter).toHaveValue("owner-7");
   await expect(textFilter).toHaveValue("latency error");
   await expect(selectorFilter).toHaveValue("source::api");
+  await expect(selectValue(sharingFilter)).toHaveValue("private");
   expect(new URL(page.url()).search).toBe("");
 
   const continuationListRequest: ListKnowledgeObjectsRequest = {
@@ -2249,21 +2278,11 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one exact
   await expectNextListRequest("Clear", initialListRequest);
   await expect(ownerFilter).toHaveValue("");
   await expect(textFilter).toHaveValue("");
-  await expect(sharingFilter).toHaveValue("all");
+  await expect(selectValue(sharingFilter)).toHaveValue("all");
   await expect(selectorFilter).toHaveValue("");
 
-  await sharingFilter.evaluate((element) => {
-    const select = element as HTMLSelectElement;
-    select.add(new Option("Forged", "future-sharing"));
-  });
-  await sharingFilter.selectOption("future-sharing");
-  await expect(manager.getByText("Knowledge Manager unavailable")).toBeVisible({ timeout });
-  await expect(manager.getByRole("button", { name: "Retry" })).toHaveCount(0);
-  await waitForBrowserRender(page);
-  expect(listRequests).toHaveLength(expectedListRequestCount);
-  await sharingFilter.selectOption("all");
   await manager.getByRole("button", { name: "Apply filters" }).click();
-  await expectNextListRequest("forged-sharing recovery", initialListRequest);
+  await expectNextListRequest("cleared-filter reapply", initialListRequest);
 
   await page.setViewportSize({ width: 375, height: 812 });
   expect((await manager.locator(".knowledge-manager__advanced-filter-grid").evaluate(
@@ -2274,7 +2293,7 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one exact
     await manager.getByRole("button", { name: "Create knowledge object" }).click();
     const form = manager.locator(".knowledge-manager__mutation-form");
     await expect(form.getByRole("heading", { name: "Create knowledge object" })).toBeVisible();
-    await form.getByLabel("Definition type").selectOption("regex-extraction");
+    await chooseSelectOption(form.getByLabel("Definition type"), "Field extraction");
     await form.getByLabel("Name").fill("browser_regex_stale");
     await form.getByLabel("Source patterns").fill("source::browser");
     await form.getByLabel("Regex pattern").fill("status=(?<status>[0-9]+)");
@@ -2753,16 +2772,16 @@ test("history Run again delegates persisted intent with source-only rerun proven
 
   expect(historyRerunCreateRequests).toHaveLength(1);
   expect(ordinaryValidateRequests).toHaveLength(1);
-  expect(historyRerunCreateRequests[0]).toEqual({
-    definition: undefined,
+  const historyRerunIntent = CreateSearchJobRequest.fromPartial({
     source: {
       origin: SearchJobOrigin.SEARCH_JOB_ORIGIN_HISTORY_RERUN,
-      savedSearchId: undefined,
       historySearchId,
-      dashboardId: undefined,
     },
-    options: undefined,
-    clientRequestId: undefined,
+  });
+  const browserRequestID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+  expect(historyRerunCreateRequests[0]).toEqual({
+    ...historyRerunIntent,
+    clientRequestId: expect.stringMatching(browserRequestID),
   });
 
   await expect(page.getByTestId("job-strip")).toContainText("Canceled", { timeout });
@@ -2788,7 +2807,11 @@ test("history Run again delegates persisted intent with source-only rerun proven
   await refreshedHistoryRow.getByRole("button", { name: /^Run history search from .* again$/ }).click();
   await missingRerunResponse;
   await expect.poll(() => historyRerunCreateRequests.length, { timeout }).toBe(2);
-  expect(historyRerunCreateRequests[1]).toEqual(historyRerunCreateRequests[0]);
+  expect(historyRerunCreateRequests[1]).toEqual({
+    ...historyRerunIntent,
+    clientRequestId: expect.stringMatching(browserRequestID),
+  });
+  expect(historyRerunCreateRequests[1]?.clientRequestId).not.toBe(historyRerunCreateRequests[0]?.clientRequestId);
 
   await page.getByRole("button", { name: "History", exact: true }).click();
   await expect(page.getByTestId("history-list").getByRole("row").filter({
@@ -2945,9 +2968,9 @@ test("renders a fixed 1,000-row statistics result with bounded browser work", as
         const resultColumnNames = resultPage.schema.columns.map(
           (column) => column.fieldName,
         );
-        expect(resultColumnNames).toHaveLength(MAXIMUM_BROWSER_RESULT_COLUMNS);
+        expect(resultColumnNames).toHaveLength(70);
         expect(resultColumnNames.slice(0, 2)).toEqual(["group", "count"]);
-        expect(resultColumnNames.at(-1)).toBe("metric_63");
+        expect(resultColumnNames.at(-1)).toBe("metric_69");
         expect(resultPage.page.totalSize).toBe(BigInt(expectedRows));
         expect(resultPage.page.totalSizeExact).toBe(true);
         expect(resultPage.page.nextPageToken ?? "").toBe("");
@@ -3014,6 +3037,7 @@ test("renders a fixed 1,000-row statistics result with bounded browser work", as
     const table = page.getByRole("table", { name: "Backend search statistics" });
     await expect(table).toHaveAttribute("data-total-rows", "1000", { timeout });
     await expect(table).toHaveAttribute("aria-rowcount", "1001", { timeout });
+    await expect(page.getByText("Showing columns 1–24 of 70", { exact: true })).toBeVisible();
     const materializedRows = table.locator("tbody tr:not(.virtual-table-spacer)");
     const spacerRows = table.locator("tbody tr.virtual-table-spacer");
     const tableBodyRows = table.locator("tbody tr");
@@ -3037,7 +3061,7 @@ test("renders a fixed 1,000-row statistics result with bounded browser work", as
       () => materializedCells.count(),
       { timeout },
     ).toBeLessThanOrEqual(
-      MAXIMUM_BROWSER_RESULT_COLUMNS * (maximumMaterializedRows + 1),
+      maximumMaterializedColumns * (maximumMaterializedRows + 1),
     );
     await expect(
       materializedRows.filter({ hasText: "render-row-0000" }),
@@ -3057,7 +3081,13 @@ test("renders a fixed 1,000-row statistics result with bounded browser work", as
     expect(await table.evaluate((element) => getComputedStyle(element).tableLayout))
       .toBe("fixed");
     const tableScrollWidth = await table.evaluate((element) => element.scrollWidth);
-    expect(tableScrollWidth).toBeLessThanOrEqual(MAXIMUM_BROWSER_RESULT_COLUMNS * 168);
+    expect(tableScrollWidth).toBeLessThanOrEqual(maximumMaterializedColumns * 168);
+    await page.getByRole("button", { name: "Next columns" }).click();
+    await expect(page.getByText("Showing columns 25–48 of 70", { exact: true })).toBeVisible();
+    await expect(table.getByRole("columnheader", { name: /metric_24/u })).toBeVisible();
+    await expect(table.getByRole("columnheader", { name: /group/u })).toHaveCount(0);
+    await page.getByRole("button", { name: "Previous columns" }).click();
+    await expect(page.getByText("Showing columns 1–24 of 70", { exact: true })).toBeVisible();
     expect(renderingObservation.maximumMaterializedRows)
       .toBeLessThanOrEqual(maximumMaterializedRows);
     expect(renderingObservation.maximumTableBodyRows)

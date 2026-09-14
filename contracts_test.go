@@ -1370,3 +1370,86 @@ func TestKnowledgeApiFamiliesExposeOptimisticAndBoundedContracts(t *testing.T) {
 		}
 	}
 }
+
+func TestSystemBootstrapCarriesUiPaletteAsOpenEnum(t *testing.T) {
+	t.Parallel()
+
+	message := opensplunk.File_open_splunk_system_api_proto.Messages().ByName("GetSystemBootstrapResponse")
+	if message == nil {
+		t.Fatal("GetSystemBootstrapResponse descriptor is missing")
+	}
+	field := message.Fields().ByNumber(12)
+	if field == nil {
+		t.Fatal("GetSystemBootstrapResponse has no field 12")
+	}
+	if field.Name() != "ui_palette" || field.Kind() != protoreflect.EnumKind ||
+		field.Cardinality() != protoreflect.Optional || field.HasPresence() ||
+		field.Enum().FullName() != "open_splunk.UiPalette" {
+		t.Fatalf(
+			"field 12 = %s kind=%s cardinality=%s presence=%t enum=%s",
+			field.Name(), field.Kind(), field.Cardinality(), field.HasPresence(), field.Enum().FullName(),
+		)
+	}
+
+	wantValues := map[protoreflect.Name]protoreflect.EnumNumber{
+		"UI_PALETTE_UNSPECIFIED": 0,
+		"UI_PALETTE_CLASSIC":     1,
+		"UI_PALETTE_OCEAN":       2,
+		"UI_PALETTE_EMBER":       3,
+		"UI_PALETTE_GRAPHITE":    4,
+		"UI_PALETTE_GLASS":       5,
+		"UI_PALETTE_TERMINAL":    6,
+	}
+	values := field.Enum().Values()
+	if values.Len() != len(wantValues) {
+		t.Fatalf("open_splunk.UiPalette has %d values, want %d", values.Len(), len(wantValues))
+	}
+	for name, number := range wantValues {
+		value := values.ByName(name)
+		if value == nil || value.Number() != number {
+			t.Errorf("open_splunk.UiPalette.%s = %v, want %d", name, value, number)
+		}
+	}
+	for _, palette := range []opensplunk.UiPalette{
+		opensplunk.UiPalette_UI_PALETTE_CLASSIC,
+		opensplunk.UiPalette_UI_PALETTE_TERMINAL,
+		opensplunk.UiPalette(99),
+	} {
+		wire, err := proto.Marshal(&opensplunk.GetSystemBootstrapResponse{UiPalette: palette})
+		if err != nil {
+			t.Fatalf("marshal palette %d: %v", palette, err)
+		}
+		var decoded opensplunk.GetSystemBootstrapResponse
+		if err := proto.Unmarshal(wire, &decoded); err != nil {
+			t.Fatalf("unmarshal palette %d: %v", palette, err)
+		}
+		if decoded.GetUiPalette() != palette {
+			t.Fatalf("palette %d round-tripped as %d", palette, decoded.GetUiPalette())
+		}
+	}
+
+	appearance := opensplunk.File_open_splunk_server_settings_api_proto.Messages()
+	for messageName, wantFields := range map[protoreflect.Name]map[protoreflect.Name]protoreflect.FieldNumber{
+		"VersionedUiAppearance":          {"version": 1, "palette": 2, "updated_at": 3},
+		"GetServerAppearanceResponse":    {"current": 1, "default_palette": 2},
+		"UpdateServerAppearanceRequest":  {"expected_version": 1, "palette": 2},
+		"UpdateServerAppearanceResponse": {"current": 1, "default_palette": 2},
+	} {
+		descriptor := appearance.ByName(messageName)
+		if descriptor == nil {
+			t.Fatalf("%s descriptor is missing", messageName)
+		}
+		if descriptor.Fields().Len() != len(wantFields) {
+			t.Errorf("%s has %d fields, want %d", messageName, descriptor.Fields().Len(), len(wantFields))
+		}
+		for fieldName, number := range wantFields {
+			field := descriptor.Fields().ByName(fieldName)
+			if field == nil || field.Number() != number {
+				t.Errorf("%s.%s = %v, want field %d", messageName, fieldName, field, number)
+			}
+		}
+	}
+	if request := appearance.ByName("GetServerAppearanceRequest"); request == nil || request.Fields().Len() != 0 {
+		t.Fatalf("GetServerAppearanceRequest = %v, want an empty message", request)
+	}
+}

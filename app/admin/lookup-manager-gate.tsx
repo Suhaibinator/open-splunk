@@ -26,8 +26,6 @@ export function LookupManagerGate(props: LookupManagerPanelProps) {
 
   useEffect(() => {
     let current = true;
-    setPanel(null);
-    setFailed(false);
     void importLookupManagerPanel().then((module) => {
       if (current) setPanel(() => module.LookupManagerPanel);
     }, () => {

@@ -90,6 +90,16 @@ SQLite schema changes are explicit SQL migrations and never GORM
 GORM. A coordinated recovery set binds the SQLite authority and ClickHouse
 backup to one generation so restore cannot mix branches.
 
+Accepted ingestion is split into durable logical batches and physical
+ClickHouse write groups. SQLite retains each batch's identity, quota decision,
+response metadata, outbox, HEC acknowledgment state, and visibility sequence.
+The server seals an ordered group with a stable deduplication token before any
+storage side effect, marks the complete group ambiguous before its one
+synchronous insert, and commits every member atomically afterward. Startup and
+recovery always resolve the oldest ambiguous group before newer ready or
+ungrouped work. See [Insert coalescing](insert-coalescing.md) for the complete
+protocol and limits.
+
 ## Security and bounded execution
 
 - Secrets are accepted only at their transport boundary and removed before

@@ -148,7 +148,7 @@ func TestCreateSearchHistoryRerunRejectsRequestOptionsBeforeLookup(t *testing.T)
 			mutate: func(request *opensplunk.CreateSearchJobRequest) {
 				request.ClientRequestId = new("client-1")
 			},
-			wantMessage: "client request idempotency is not supported",
+			wantMessage: "request idempotency input is invalid: client request ID must contain between 16 and 128 bytes",
 		},
 		{
 			name: "eager field discovery",

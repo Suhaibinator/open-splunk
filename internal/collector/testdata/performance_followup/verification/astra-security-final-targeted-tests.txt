@@ -1,0 +1,463 @@
+=== RUN   TestDaemonRedactsSecretsBeforeOfflineWALAppend
+=== PAUSE TestDaemonRedactsSecretsBeforeOfflineWALAppend
+=== RUN   TestDurableRedactorsTraceRenameChainsBackToRawKeys
+=== PAUSE TestDurableRedactorsTraceRenameChainsBackToRawKeys
+=== RUN   TestBuildDurableRedactorRejectsUnsupportedProcessor
+=== PAUSE TestBuildDurableRedactorRejectsUnsupportedProcessor
+=== RUN   TestBuildProcessorRuntimeEmptyPipelineDoesNotRedact
+=== PAUSE TestBuildProcessorRuntimeEmptyPipelineDoesNotRedact
+=== RUN   TestDurableRedactorPreventsRenameDeclassification
+=== PAUSE TestDurableRedactorPreventsRenameDeclassification
+=== RUN   TestDurableRedactorDoesNotRedactNoOpRenameDestination
+=== PAUSE TestDurableRedactorDoesNotRedactNoOpRenameDestination
+=== RUN   TestDurableRedactorSkipsLineageWithoutOrdinaryRenameSource
+=== PAUSE TestDurableRedactorSkipsLineageWithoutOrdinaryRenameSource
+=== RUN   TestDurableRedactorPreservesOrderedReplacementSemantics
+=== PAUSE TestDurableRedactorPreservesOrderedReplacementSemantics
+=== RUN   TestDurableRedactorTracksExactOrderedRenameLineage
+=== PAUSE TestDurableRedactorTracksExactOrderedRenameLineage
+=== RUN   TestDurableRedactorHandlesPunctuationAliasAndPreservesNestedLookalike
+=== PAUSE TestDurableRedactorHandlesPunctuationAliasAndPreservesNestedLookalike
+=== RUN   TestDurableRedactorSeparatesConstantAliasFromRawAndMessageProvenance
+=== PAUSE TestDurableRedactorSeparatesConstantAliasFromRawAndMessageProvenance
+=== RUN   TestDurableRedactorPreservesAndGroupsExactConfiguredPolicies
+=== PAUSE TestDurableRedactorPreservesAndGroupsExactConfiguredPolicies
+=== RUN   TestDurableRedactorKeepsLastConfiguredReplacement
+=== PAUSE TestDurableRedactorKeepsLastConfiguredReplacement
+=== RUN   TestDurableRedactorUsesConfiguredMarkersForResolvedFields
+=== PAUSE TestDurableRedactorUsesConfiguredMarkersForResolvedFields
+=== RUN   TestDurableRedactorConfiguredFailClosedBoundaryUsesConfiguredReplacement
+=== PAUSE TestDurableRedactorConfiguredFailClosedBoundaryUsesConfiguredReplacement
+=== RUN   TestNativeFormatsOfflineRedaction
+=== RUN   TestNativeFormatsOfflineRedaction/docker-json-file
+=== PAUSE TestNativeFormatsOfflineRedaction/docker-json-file
+=== RUN   TestNativeFormatsOfflineRedaction/logfmt
+=== PAUSE TestNativeFormatsOfflineRedaction/logfmt
+=== RUN   TestNativeFormatsOfflineRedaction/nginx-combined
+=== PAUSE TestNativeFormatsOfflineRedaction/nginx-combined
+=== RUN   TestNativeFormatsOfflineRedaction/apache-combined
+=== PAUSE TestNativeFormatsOfflineRedaction/apache-combined
+=== RUN   TestNativeFormatsOfflineRedaction/log4j2-pattern
+=== PAUSE TestNativeFormatsOfflineRedaction/log4j2-pattern
+=== RUN   TestNativeFormatsOfflineRedaction/logback-pattern
+=== PAUSE TestNativeFormatsOfflineRedaction/logback-pattern
+=== CONT  TestNativeFormatsOfflineRedaction/docker-json-file
+=== CONT  TestNativeFormatsOfflineRedaction/apache-combined
+=== CONT  TestNativeFormatsOfflineRedaction/log4j2-pattern
+=== CONT  TestNativeFormatsOfflineRedaction/logback-pattern
+=== CONT  TestNativeFormatsOfflineRedaction/nginx-combined
+=== CONT  TestNativeFormatsOfflineRedaction/logfmt
+--- PASS: TestNativeFormatsOfflineRedaction (0.00s)
+    --- PASS: TestNativeFormatsOfflineRedaction/docker-json-file (0.35s)
+    --- PASS: TestNativeFormatsOfflineRedaction/logback-pattern (0.35s)
+    --- PASS: TestNativeFormatsOfflineRedaction/nginx-combined (0.36s)
+    --- PASS: TestNativeFormatsOfflineRedaction/logfmt (0.36s)
+    --- PASS: TestNativeFormatsOfflineRedaction/apache-combined (0.36s)
+    --- PASS: TestNativeFormatsOfflineRedaction/log4j2-pattern (0.36s)
+=== RUN   TestNativeFixedDockerStrictTimestampAndText
+=== PAUSE TestNativeFixedDockerStrictTimestampAndText
+=== RUN   TestNativeFixedAccessZeroOffsetSigns
+=== PAUSE TestNativeFixedAccessZeroOffsetSigns
+=== RUN   TestNativeFixedDockerCanonicalAndExtras
+=== PAUSE TestNativeFixedDockerCanonicalAndExtras
+=== RUN   TestNativeFixedDockerRejectsInvalidEnvelope
+=== PAUSE TestNativeFixedDockerRejectsInvalidEnvelope
+=== RUN   TestNativeFixedAccessPresets
+=== PAUSE TestNativeFixedAccessPresets
+=== RUN   TestNativeFixedAccessEscapesAndSentinels
+=== PAUSE TestNativeFixedAccessEscapesAndSentinels
+=== RUN   TestNativeFixedAccessMalformedRequestIsAnEvent
+=== PAUSE TestNativeFixedAccessMalformedRequestIsAnEvent
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope
+=== PAUSE TestNativeFixedAccessRejectsMalformedEnvelope
+=== RUN   TestNativeFixedDockerBounds
+=== PAUSE TestNativeFixedDockerBounds
+=== RUN   TestNativeRedactionProjections
+=== RUN   TestNativeRedactionProjections/access_escaped_alias
+=== RUN   TestNativeRedactionProjections/access_derived_request
+=== RUN   TestNativeRedactionProjections/Java_positional_alias
+=== RUN   TestNativeRedactionProjections/Java_direct_overwritten
+=== RUN   TestNativeRedactionProjections/Java_canonical_message
+=== RUN   TestNativeRedactionProjections/logfmt_mapped_message
+=== RUN   TestNativeRedactionProjections/logfmt_mapped_trace
+=== RUN   TestNativeRedactionProjections/logfmt_mapped_level
+=== RUN   TestNativeRedactionProjections/Docker_message_source
+=== RUN   TestNativeRedactionProjections/Docker_message_destination
+--- PASS: TestNativeRedactionProjections (0.00s)
+    --- PASS: TestNativeRedactionProjections/access_escaped_alias (0.00s)
+    --- PASS: TestNativeRedactionProjections/access_derived_request (0.00s)
+    --- PASS: TestNativeRedactionProjections/Java_positional_alias (0.00s)
+    --- PASS: TestNativeRedactionProjections/Java_direct_overwritten (0.00s)
+    --- PASS: TestNativeRedactionProjections/Java_canonical_message (0.00s)
+    --- PASS: TestNativeRedactionProjections/logfmt_mapped_message (0.00s)
+    --- PASS: TestNativeRedactionProjections/logfmt_mapped_trace (0.00s)
+    --- PASS: TestNativeRedactionProjections/logfmt_mapped_level (0.00s)
+    --- PASS: TestNativeRedactionProjections/Docker_message_source (0.00s)
+    --- PASS: TestNativeRedactionProjections/Docker_message_destination (0.00s)
+=== RUN   TestNativeRedactionPreservesStaticAndDiscardedAliasProvenance
+=== RUN   TestNativeRedactionPreservesStaticAndDiscardedAliasProvenance/constant_alias
+=== RUN   TestNativeRedactionPreservesStaticAndDiscardedAliasProvenance/denied_source
+=== RUN   TestNativeRedactionPreservesStaticAndDiscardedAliasProvenance/overwritten_rename_source
+--- PASS: TestNativeRedactionPreservesStaticAndDiscardedAliasProvenance (0.00s)
+    --- PASS: TestNativeRedactionPreservesStaticAndDiscardedAliasProvenance/constant_alias (0.00s)
+    --- PASS: TestNativeRedactionPreservesStaticAndDiscardedAliasProvenance/denied_source (0.00s)
+    --- PASS: TestNativeRedactionPreservesStaticAndDiscardedAliasProvenance/overwritten_rename_source (0.00s)
+=== RUN   TestNativeRedactionDockerStreamProjection
+=== RUN   TestNativeRedactionDockerStreamProjection/stream
+=== RUN   TestNativeRedactionDockerStreamProjection/docker_stream
+--- PASS: TestNativeRedactionDockerStreamProjection (0.00s)
+    --- PASS: TestNativeRedactionDockerStreamProjection/stream (0.00s)
+    --- PASS: TestNativeRedactionDockerStreamProjection/docker_stream (0.00s)
+=== RUN   TestNativeRedactionTimestampProjection
+--- PASS: TestNativeRedactionTimestampProjection (0.00s)
+=== RUN   TestNativeRedactionLegacyAndNoPolicyPaths
+=== RUN   TestNativeRedactionLegacyAndNoPolicyPaths/ndjson
+=== RUN   TestNativeRedactionLegacyAndNoPolicyPaths/raw
+=== RUN   TestNativeRedactionLegacyAndNoPolicyPaths/logfmt
+--- PASS: TestNativeRedactionLegacyAndNoPolicyPaths (0.00s)
+    --- PASS: TestNativeRedactionLegacyAndNoPolicyPaths/ndjson (0.00s)
+    --- PASS: TestNativeRedactionLegacyAndNoPolicyPaths/raw (0.00s)
+    --- PASS: TestNativeRedactionLegacyAndNoPolicyPaths/logfmt (0.00s)
+=== RUN   TestNativeRedactionEmbeddedEscapedAssignments
+=== RUN   TestNativeRedactionEmbeddedEscapedAssignments/access_escaped_assignment
+=== RUN   TestNativeRedactionEmbeddedEscapedAssignments/access_binary_assignment
+=== RUN   TestNativeRedactionEmbeddedEscapedAssignments/logfmt_escaped_canonical_message
+=== RUN   TestNativeRedactionEmbeddedEscapedAssignments/logfmt_escaped_trace
+=== RUN   TestNativeRedactionEmbeddedEscapedAssignments/Java_embedded_assignment
+--- PASS: TestNativeRedactionEmbeddedEscapedAssignments (0.00s)
+    --- PASS: TestNativeRedactionEmbeddedEscapedAssignments/access_escaped_assignment (0.00s)
+    --- PASS: TestNativeRedactionEmbeddedEscapedAssignments/access_binary_assignment (0.00s)
+    --- PASS: TestNativeRedactionEmbeddedEscapedAssignments/logfmt_escaped_canonical_message (0.00s)
+    --- PASS: TestNativeRedactionEmbeddedEscapedAssignments/logfmt_escaped_trace (0.00s)
+    --- PASS: TestNativeRedactionEmbeddedEscapedAssignments/Java_embedded_assignment (0.00s)
+=== RUN   TestNativeRedactionReparseFailureClosesPayloadBoundary
+--- PASS: TestNativeRedactionReparseFailureClosesPayloadBoundary (0.00s)
+=== RUN   TestPerfReviewAstraNativeOwnershipAndEmptyShape
+=== RUN   TestPerfReviewAstraNativeOwnershipAndEmptyShape/logfmt
+=== RUN   TestPerfReviewAstraNativeOwnershipAndEmptyShape/logback-pattern
+=== RUN   TestPerfReviewAstraNativeOwnershipAndEmptyShape/docker-json-file
+=== RUN   TestPerfReviewAstraNativeOwnershipAndEmptyShape/nginx-combined
+--- PASS: TestPerfReviewAstraNativeOwnershipAndEmptyShape (0.00s)
+    --- PASS: TestPerfReviewAstraNativeOwnershipAndEmptyShape/logfmt (0.00s)
+    --- PASS: TestPerfReviewAstraNativeOwnershipAndEmptyShape/logback-pattern (0.00s)
+    --- PASS: TestPerfReviewAstraNativeOwnershipAndEmptyShape/docker-json-file (0.00s)
+    --- PASS: TestPerfReviewAstraNativeOwnershipAndEmptyShape/nginx-combined (0.00s)
+=== RUN   TestPerfReviewAstraFallbackNullAndProvenance
+--- PASS: TestPerfReviewAstraFallbackNullAndProvenance (0.00s)
+=== RUN   TestPerfReviewAstraSecurityDifferential
+    perf_review_astra_security_test.go:57: Matched historical error/event behavior for 42597 logfmt records and exhaustive numeric alphabet through length 5
+--- PASS: TestPerfReviewAstraSecurityDifferential (0.06s)
+=== RUN   TestAccessTimestampCanonicalSpellingRemainsStrict
+--- PASS: TestAccessTimestampCanonicalSpellingRemainsStrict (0.00s)
+=== RUN   TestAccessRequestProjectionOwnsOneStableResult
+=== PAUSE TestAccessRequestProjectionOwnsOneStableResult
+=== RUN   TestAccessBinaryRequestProjectionRemainsBytes
+=== PAUSE TestAccessBinaryRequestProjectionRemainsBytes
+=== RUN   TestLogfmtPerformancePathPreservesNumericGrammar
+=== PAUSE TestLogfmtPerformancePathPreservesNumericGrammar
+=== RUN   TestLogfmtPlainQuotedValueOwnsDecodedText
+=== PAUSE TestLogfmtPlainQuotedValueOwnsDecodedText
+=== RUN   TestLogfmtQuotedFastPathPreservesJSONEscapesAndValidation
+=== PAUSE TestLogfmtQuotedFastPathPreservesJSONEscapesAndValidation
+=== RUN   TestLogfmtQuotedFastPathPreservesErrorDisposition
+--- PASS: TestLogfmtQuotedFastPathPreservesErrorDisposition (0.00s)
+=== RUN   TestNewRedactProcessorConstructionErrors
+=== PAUSE TestNewRedactProcessorConstructionErrors
+=== RUN   TestRedactProcessor
+=== PAUSE TestRedactProcessor
+=== RUN   TestRedactionInvariantNoSecretSurvivesMarshaling
+=== PAUSE TestRedactionInvariantNoSecretSurvivesMarshaling
+=== CONT  TestDaemonRedactsSecretsBeforeOfflineWALAppend
+=== CONT  TestNativeFixedAccessZeroOffsetSigns
+=== CONT  TestAccessRequestProjectionOwnsOneStableResult
+=== CONT  TestNativeFixedAccessEscapesAndSentinels
+=== CONT  TestNativeFixedAccessPresets
+--- PASS: TestNativeFixedAccessZeroOffsetSigns (0.00s)
+=== CONT  TestDurableRedactorUsesConfiguredMarkersForResolvedFields
+=== CONT  TestLogfmtQuotedFastPathPreservesJSONEscapesAndValidation
+=== RUN   TestAccessRequestProjectionOwnsOneStableResult/nginx_escaped
+=== CONT  TestNativeFixedAccessMalformedRequestIsAnEvent
+--- PASS: TestLogfmtQuotedFastPathPreservesJSONEscapesAndValidation (0.00s)
+=== CONT  TestDurableRedactorSkipsLineageWithoutOrdinaryRenameSource
+=== RUN   TestNativeFixedAccessMalformedRequestIsAnEvent/nginx-combined
+--- PASS: TestDurableRedactorSkipsLineageWithoutOrdinaryRenameSource (0.00s)
+=== CONT  TestDurableRedactorDoesNotRedactNoOpRenameDestination
+--- PASS: TestDurableRedactorDoesNotRedactNoOpRenameDestination (0.00s)
+=== CONT  TestDurableRedactorPreservesAndGroupsExactConfiguredPolicies
+=== CONT  TestNativeFixedDockerCanonicalAndExtras
+=== CONT  TestLogfmtPerformancePathPreservesNumericGrammar
+=== CONT  TestNativeFixedAccessRejectsMalformedEnvelope
+=== CONT  TestDurableRedactorTracksExactOrderedRenameLineage
+=== CONT  TestNativeFixedDockerStrictTimestampAndText
+=== RUN   TestNativeFixedAccessEscapesAndSentinels/nginx-combined
+=== CONT  TestDurableRedactorConfiguredFailClosedBoundaryUsesConfiguredReplacement
+=== CONT  TestLogfmtPlainQuotedValueOwnsDecodedText
+=== RUN   TestNativeFixedAccessPresets/nginx-combined
+=== CONT  TestBuildDurableRedactorRejectsUnsupportedProcessor
+=== CONT  TestBuildProcessorRuntimeEmptyPipelineDoesNotRedact
+=== CONT  TestAccessBinaryRequestProjectionRemainsBytes
+=== CONT  TestNativeFixedDockerBounds
+=== CONT  TestNativeFixedDockerRejectsInvalidEnvelope
+=== CONT  TestRedactionInvariantNoSecretSurvivesMarshaling
+=== CONT  TestNewRedactProcessorConstructionErrors
+=== CONT  TestDurableRedactorsTraceRenameChainsBackToRawKeys
+=== CONT  TestDurableRedactorPreservesOrderedReplacementSemantics
+=== CONT  TestDurableRedactorPreventsRenameDeclassification
+=== CONT  TestDurableRedactorKeepsLastConfiguredReplacement
+=== CONT  TestRedactProcessor
+--- PASS: TestDurableRedactorUsesConfiguredMarkersForResolvedFields (0.00s)
+--- PASS: TestDurableRedactorPreservesAndGroupsExactConfiguredPolicies (0.00s)
+--- PASS: TestNativeFixedDockerStrictTimestampAndText (0.00s)
+--- PASS: TestNativeFixedDockerCanonicalAndExtras (0.00s)
+--- PASS: TestLogfmtPlainQuotedValueOwnsDecodedText (0.00s)
+--- PASS: TestBuildDurableRedactorRejectsUnsupportedProcessor (0.00s)
+--- PASS: TestBuildProcessorRuntimeEmptyPipelineDoesNotRedact (0.00s)
+--- PASS: TestDurableRedactorConfiguredFailClosedBoundaryUsesConfiguredReplacement (0.00s)
+--- PASS: TestAccessBinaryRequestProjectionRemainsBytes (0.00s)
+--- PASS: TestNewRedactProcessorConstructionErrors (0.00s)
+--- PASS: TestDurableRedactorKeepsLastConfiguredReplacement (0.00s)
+=== CONT  TestDurableRedactorSeparatesConstantAliasFromRawAndMessageProvenance
+=== RUN   TestNativeFixedDockerRejectsInvalidEnvelope/0
+--- PASS: TestDurableRedactorPreservesOrderedReplacementSemantics (0.00s)
+=== CONT  TestDurableRedactorHandlesPunctuationAliasAndPreservesNestedLookalike
+--- PASS: TestDurableRedactorsTraceRenameChainsBackToRawKeys (0.00s)
+=== RUN   TestAccessRequestProjectionOwnsOneStableResult/apache_escaped
+--- PASS: TestRedactionInvariantNoSecretSurvivesMarshaling (0.00s)
+--- PASS: TestDurableRedactorHandlesPunctuationAliasAndPreservesNestedLookalike (0.00s)
+=== RUN   TestLogfmtPerformancePathPreservesNumericGrammar/zero
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/nginx-combined
+=== RUN   TestDurableRedactorTracksExactOrderedRenameLineage/later_source_cannot_traverse_an_earlier_rename
+=== PAUSE TestDurableRedactorTracksExactOrderedRenameLineage/later_source_cannot_traverse_an_earlier_rename
+=== RUN   TestDurableRedactorTracksExactOrderedRenameLineage/denied_source_cannot_reach_sensitive_destination
+=== PAUSE TestDurableRedactorTracksExactOrderedRenameLineage/denied_source_cannot_reach_sensitive_destination
+=== RUN   TestDurableRedactorTracksExactOrderedRenameLineage/normalized_lookalike_is_not_exact_source
+=== PAUSE TestDurableRedactorTracksExactOrderedRenameLineage/normalized_lookalike_is_not_exact_source
+=== CONT  TestDurableRedactorTracksExactOrderedRenameLineage/later_source_cannot_traverse_an_earlier_rename
+=== CONT  TestDurableRedactorTracksExactOrderedRenameLineage/normalized_lookalike_is_not_exact_source
+=== CONT  TestDurableRedactorTracksExactOrderedRenameLineage/denied_source_cannot_reach_sensitive_destination
+=== RUN   TestRedactProcessor/replaces_scalar_object_and_list_values_at_top_level_with_a_string
+=== PAUSE TestRedactProcessor/replaces_scalar_object_and_list_values_at_top_level_with_a_string
+=== RUN   TestDurableRedactorPreventsRenameDeclassification/configured_sensitive_source_to_ordinary_destination
+=== PAUSE TestDurableRedactorPreventsRenameDeclassification/configured_sensitive_source_to_ordinary_destination
+=== RUN   TestNativeFixedAccessMalformedRequestIsAnEvent/apache-common
+=== RUN   TestDurableRedactorPreventsRenameDeclassification/transient_sensitive_name_in_rename_chain
+=== PAUSE TestDurableRedactorPreventsRenameDeclassification/transient_sensitive_name_in_rename_chain
+--- PASS: TestDurableRedactorTracksExactOrderedRenameLineage (0.00s)
+    --- PASS: TestDurableRedactorTracksExactOrderedRenameLineage/later_source_cannot_traverse_an_earlier_rename (0.00s)
+    --- PASS: TestDurableRedactorTracksExactOrderedRenameLineage/denied_source_cannot_reach_sensitive_destination (0.00s)
+    --- PASS: TestDurableRedactorTracksExactOrderedRenameLineage/normalized_lookalike_is_not_exact_source (0.00s)
+=== RUN   TestRedactProcessor/redacts_recursively_in_nested_objects_and_objects_inside_lists
+=== PAUSE TestRedactProcessor/redacts_recursively_in_nested_objects_and_objects_inside_lists
+=== RUN   TestDurableRedactorSeparatesConstantAliasFromRawAndMessageProvenance/raw_input
+=== PAUSE TestDurableRedactorSeparatesConstantAliasFromRawAndMessageProvenance/raw_input
+=== RUN   TestNativeFixedAccessMalformedRequestIsAnEvent/apache-combined
+=== RUN   TestDurableRedactorSeparatesConstantAliasFromRawAndMessageProvenance/NDJSON_constant_override
+--- PASS: TestNativeFixedAccessMalformedRequestIsAnEvent (0.00s)
+    --- PASS: TestNativeFixedAccessMalformedRequestIsAnEvent/nginx-combined (0.00s)
+    --- PASS: TestNativeFixedAccessMalformedRequestIsAnEvent/apache-common (0.00s)
+    --- PASS: TestNativeFixedAccessMalformedRequestIsAnEvent/apache-combined (0.00s)
+=== PAUSE TestDurableRedactorSeparatesConstantAliasFromRawAndMessageProvenance/NDJSON_constant_override
+=== CONT  TestDurableRedactorSeparatesConstantAliasFromRawAndMessageProvenance/raw_input
+=== CONT  TestDurableRedactorSeparatesConstantAliasFromRawAndMessageProvenance/NDJSON_constant_override
+=== RUN   TestNativeFixedDockerRejectsInvalidEnvelope/1
+=== RUN   TestNativeFixedDockerRejectsInvalidEnvelope/2
+=== RUN   TestAccessRequestProjectionOwnsOneStableResult/whitespace_remains_malformed
+--- PASS: TestDurableRedactorSeparatesConstantAliasFromRawAndMessageProvenance (0.00s)
+    --- PASS: TestDurableRedactorSeparatesConstantAliasFromRawAndMessageProvenance/raw_input (0.00s)
+    --- PASS: TestDurableRedactorSeparatesConstantAliasFromRawAndMessageProvenance/NDJSON_constant_override (0.00s)
+=== RUN   TestLogfmtPerformancePathPreservesNumericGrammar/negative_zero
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/nginx-combined/0
+=== RUN   TestNativeFixedAccessEscapesAndSentinels/apache-combined
+=== RUN   TestDurableRedactorPreventsRenameDeclassification/configured_sensitive_source_renamed_before_ordered_processor
+=== PAUSE TestDurableRedactorPreventsRenameDeclassification/configured_sensitive_source_renamed_before_ordered_processor
+--- PASS: TestNativeFixedAccessEscapesAndSentinels (0.00s)
+    --- PASS: TestNativeFixedAccessEscapesAndSentinels/nginx-combined (0.00s)
+    --- PASS: TestNativeFixedAccessEscapesAndSentinels/apache-combined (0.00s)
+=== RUN   TestRedactProcessor/no_match_is_a_no-op
+=== PAUSE TestRedactProcessor/no_match_is_a_no-op
+=== RUN   TestRedactProcessor/existing_replacement_is_a_no-op
+=== PAUSE TestRedactProcessor/existing_replacement_is_a_no-op
+=== RUN   TestRedactProcessor/does_not_touch_canonical_raw_or_message
+=== PAUSE TestRedactProcessor/does_not_touch_canonical_raw_or_message
+=== CONT  TestRedactProcessor/replaces_scalar_object_and_list_values_at_top_level_with_a_string
+=== CONT  TestRedactProcessor/existing_replacement_is_a_no-op
+=== CONT  TestRedactProcessor/no_match_is_a_no-op
+=== CONT  TestRedactProcessor/does_not_touch_canonical_raw_or_message
+=== CONT  TestRedactProcessor/redacts_recursively_in_nested_objects_and_objects_inside_lists
+=== RUN   TestNativeFixedDockerRejectsInvalidEnvelope/3
+=== RUN   TestAccessRequestProjectionOwnsOneStableResult/malformed_remains_an_event
+=== RUN   TestNativeFixedAccessPresets/apache-common
+--- PASS: TestRedactProcessor (0.00s)
+    --- PASS: TestRedactProcessor/existing_replacement_is_a_no-op (0.00s)
+    --- PASS: TestRedactProcessor/no_match_is_a_no-op (0.00s)
+    --- PASS: TestRedactProcessor/replaces_scalar_object_and_list_values_at_top_level_with_a_string (0.00s)
+    --- PASS: TestRedactProcessor/does_not_touch_canonical_raw_or_message (0.00s)
+    --- PASS: TestRedactProcessor/redacts_recursively_in_nested_objects_and_objects_inside_lists (0.00s)
+--- PASS: TestAccessRequestProjectionOwnsOneStableResult (0.00s)
+    --- PASS: TestAccessRequestProjectionOwnsOneStableResult/nginx_escaped (0.00s)
+    --- PASS: TestAccessRequestProjectionOwnsOneStableResult/apache_escaped (0.00s)
+    --- PASS: TestAccessRequestProjectionOwnsOneStableResult/whitespace_remains_malformed (0.00s)
+    --- PASS: TestAccessRequestProjectionOwnsOneStableResult/malformed_remains_an_event (0.00s)
+=== RUN   TestLogfmtPerformancePathPreservesNumericGrammar/exponent
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/nginx-combined/1
+=== RUN   TestLogfmtPerformancePathPreservesNumericGrammar/leading_zero
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/nginx-combined/2
+=== RUN   TestNativeFixedDockerRejectsInvalidEnvelope/4
+=== RUN   TestNativeFixedDockerRejectsInvalidEnvelope/5
+=== RUN   TestNativeFixedAccessPresets/apache-combined
+=== RUN   TestDurableRedactorPreventsRenameDeclassification/configured_destination_reached_after_ordered_processor
+=== PAUSE TestDurableRedactorPreventsRenameDeclassification/configured_destination_reached_after_ordered_processor
+=== CONT  TestDurableRedactorPreventsRenameDeclassification/configured_sensitive_source_to_ordinary_destination
+=== CONT  TestDurableRedactorPreventsRenameDeclassification/configured_destination_reached_after_ordered_processor
+=== CONT  TestDurableRedactorPreventsRenameDeclassification/configured_sensitive_source_renamed_before_ordered_processor
+=== RUN   TestLogfmtPerformancePathPreservesNumericGrammar/negative_leading_zero
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/nginx-combined/3
+=== CONT  TestDurableRedactorPreventsRenameDeclassification/transient_sensitive_name_in_rename_chain
+=== RUN   TestNativeFixedDockerRejectsInvalidEnvelope/6
+--- PASS: TestNativeFixedAccessPresets (0.01s)
+    --- PASS: TestNativeFixedAccessPresets/nginx-combined (0.00s)
+    --- PASS: TestNativeFixedAccessPresets/apache-common (0.00s)
+    --- PASS: TestNativeFixedAccessPresets/apache-combined (0.00s)
+--- PASS: TestDurableRedactorPreventsRenameDeclassification (0.00s)
+    --- PASS: TestDurableRedactorPreventsRenameDeclassification/configured_sensitive_source_to_ordinary_destination (0.00s)
+    --- PASS: TestDurableRedactorPreventsRenameDeclassification/transient_sensitive_name_in_rename_chain (0.00s)
+    --- PASS: TestDurableRedactorPreventsRenameDeclassification/configured_sensitive_source_renamed_before_ordered_processor (0.00s)
+    --- PASS: TestDurableRedactorPreventsRenameDeclassification/configured_destination_reached_after_ordered_processor (0.00s)
+=== RUN   TestLogfmtPerformancePathPreservesNumericGrammar/missing_fraction
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/nginx-combined/4
+=== RUN   TestNativeFixedDockerRejectsInvalidEnvelope/7
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/nginx-combined/5
+=== RUN   TestLogfmtPerformancePathPreservesNumericGrammar/missing_exponent
+=== RUN   TestLogfmtPerformancePathPreservesNumericGrammar/missing_signed_exponent
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/nginx-combined/6
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/nginx-combined/7
+=== RUN   TestNativeFixedDockerRejectsInvalidEnvelope/8
+=== RUN   TestLogfmtPerformancePathPreservesNumericGrammar/leading_plus
+--- PASS: TestLogfmtPerformancePathPreservesNumericGrammar (0.01s)
+    --- PASS: TestLogfmtPerformancePathPreservesNumericGrammar/zero (0.00s)
+    --- PASS: TestLogfmtPerformancePathPreservesNumericGrammar/negative_zero (0.00s)
+    --- PASS: TestLogfmtPerformancePathPreservesNumericGrammar/exponent (0.00s)
+    --- PASS: TestLogfmtPerformancePathPreservesNumericGrammar/leading_zero (0.00s)
+    --- PASS: TestLogfmtPerformancePathPreservesNumericGrammar/negative_leading_zero (0.00s)
+    --- PASS: TestLogfmtPerformancePathPreservesNumericGrammar/missing_fraction (0.00s)
+    --- PASS: TestLogfmtPerformancePathPreservesNumericGrammar/missing_exponent (0.00s)
+    --- PASS: TestLogfmtPerformancePathPreservesNumericGrammar/missing_signed_exponent (0.00s)
+    --- PASS: TestLogfmtPerformancePathPreservesNumericGrammar/leading_plus (0.00s)
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/nginx-combined/8
+=== RUN   TestNativeFixedDockerRejectsInvalidEnvelope/9
+=== RUN   TestNativeFixedDockerRejectsInvalidEnvelope/10
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/nginx-combined/9
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/nginx-combined/10
+=== RUN   TestNativeFixedDockerRejectsInvalidEnvelope/11
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/nginx-combined/11
+=== RUN   TestNativeFixedDockerRejectsInvalidEnvelope/12
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/nginx-combined/12
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/nginx-combined/13
+=== RUN   TestNativeFixedDockerRejectsInvalidEnvelope/13
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/apache-common
+=== RUN   TestNativeFixedDockerRejectsInvalidEnvelope/14
+=== RUN   TestNativeFixedDockerRejectsInvalidEnvelope/15
+=== RUN   TestNativeFixedDockerRejectsInvalidEnvelope/16
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/apache-common/0
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/apache-common/1
+=== RUN   TestNativeFixedDockerRejectsInvalidEnvelope/17
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/apache-common/2
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/apache-common/3
+=== RUN   TestNativeFixedDockerRejectsInvalidEnvelope/18
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/apache-common/4
+=== RUN   TestNativeFixedDockerRejectsInvalidEnvelope/19
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/apache-common/5
+--- PASS: TestNativeFixedDockerRejectsInvalidEnvelope (0.01s)
+    --- PASS: TestNativeFixedDockerRejectsInvalidEnvelope/0 (0.00s)
+    --- PASS: TestNativeFixedDockerRejectsInvalidEnvelope/1 (0.00s)
+    --- PASS: TestNativeFixedDockerRejectsInvalidEnvelope/2 (0.00s)
+    --- PASS: TestNativeFixedDockerRejectsInvalidEnvelope/3 (0.00s)
+    --- PASS: TestNativeFixedDockerRejectsInvalidEnvelope/4 (0.00s)
+    --- PASS: TestNativeFixedDockerRejectsInvalidEnvelope/5 (0.00s)
+    --- PASS: TestNativeFixedDockerRejectsInvalidEnvelope/6 (0.00s)
+    --- PASS: TestNativeFixedDockerRejectsInvalidEnvelope/7 (0.00s)
+    --- PASS: TestNativeFixedDockerRejectsInvalidEnvelope/8 (0.00s)
+    --- PASS: TestNativeFixedDockerRejectsInvalidEnvelope/9 (0.00s)
+    --- PASS: TestNativeFixedDockerRejectsInvalidEnvelope/10 (0.00s)
+    --- PASS: TestNativeFixedDockerRejectsInvalidEnvelope/11 (0.00s)
+    --- PASS: TestNativeFixedDockerRejectsInvalidEnvelope/12 (0.00s)
+    --- PASS: TestNativeFixedDockerRejectsInvalidEnvelope/13 (0.00s)
+    --- PASS: TestNativeFixedDockerRejectsInvalidEnvelope/14 (0.00s)
+    --- PASS: TestNativeFixedDockerRejectsInvalidEnvelope/15 (0.00s)
+    --- PASS: TestNativeFixedDockerRejectsInvalidEnvelope/16 (0.00s)
+    --- PASS: TestNativeFixedDockerRejectsInvalidEnvelope/17 (0.00s)
+    --- PASS: TestNativeFixedDockerRejectsInvalidEnvelope/18 (0.00s)
+    --- PASS: TestNativeFixedDockerRejectsInvalidEnvelope/19 (0.00s)
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/apache-common/6
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/apache-common/7
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/apache-common/8
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/apache-common/9
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/apache-common/10
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/apache-common/11
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/apache-common/12
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/apache-common/13
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/apache-combined
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/apache-combined/0
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/apache-combined/1
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/apache-combined/2
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/apache-combined/3
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/apache-combined/4
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/apache-combined/5
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/apache-combined/6
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/apache-combined/7
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/apache-combined/8
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/apache-combined/9
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/apache-combined/10
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/apache-combined/11
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/apache-combined/12
+=== RUN   TestNativeFixedAccessRejectsMalformedEnvelope/apache-combined/13
+--- PASS: TestNativeFixedAccessRejectsMalformedEnvelope (0.01s)
+    --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/nginx-combined (0.01s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/nginx-combined/0 (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/nginx-combined/1 (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/nginx-combined/2 (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/nginx-combined/3 (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/nginx-combined/4 (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/nginx-combined/5 (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/nginx-combined/6 (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/nginx-combined/7 (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/nginx-combined/8 (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/nginx-combined/9 (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/nginx-combined/10 (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/nginx-combined/11 (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/nginx-combined/12 (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/nginx-combined/13 (0.00s)
+    --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/apache-common (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/apache-common/0 (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/apache-common/1 (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/apache-common/2 (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/apache-common/3 (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/apache-common/4 (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/apache-common/5 (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/apache-common/6 (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/apache-common/7 (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/apache-common/8 (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/apache-common/9 (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/apache-common/10 (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/apache-common/11 (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/apache-common/12 (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/apache-common/13 (0.00s)
+    --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/apache-combined (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/apache-combined/0 (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/apache-combined/1 (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/apache-combined/2 (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/apache-combined/3 (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/apache-combined/4 (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/apache-combined/5 (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/apache-combined/6 (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/apache-combined/7 (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/apache-combined/8 (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/apache-combined/9 (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/apache-combined/10 (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/apache-combined/11 (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/apache-combined/12 (0.00s)
+        --- PASS: TestNativeFixedAccessRejectsMalformedEnvelope/apache-combined/13 (0.00s)
+--- PASS: TestNativeFixedDockerBounds (0.01s)
+--- PASS: TestDaemonRedactsSecretsBeforeOfflineWALAppend (0.16s)
+PASS
+ok  	github.com/Suhaibinator/open-splunk/internal/collector	0.869s

@@ -1345,29 +1345,33 @@ func classifyChartSuggestion(context SuggestionContext, tokens []token) Suggesti
 }
 
 func classifyTimechartSuggestion(context SuggestionContext, tokens []token) SuggestionContext {
-	if len(tokens) == 0 {
-		context.Kinds = []SuggestionKind{SuggestionKindKeyword}
-		context.Keywords = []string{"span="}
+	if endsOptionEqual(tokens, "span") || endsOptionEqual(tokens, "bins") ||
+		endsOptionEqual(tokens, "minspan") {
 		return context
 	}
-	if endsOptionEqual(tokens, "span") {
-		return context
+	start := 0
+	for start+1 < len(tokens) && tokens[start].kind == tokenWord &&
+		tokens[start+1].kind == tokenEqual {
+		name := strings.ToLower(tokens[start].text)
+		// While the option value is still being typed, it is not an
+		// aggregate or field position. Only aligntime admits a string.
+		if start+2 >= len(tokens) || (tokens[start+2].kind != tokenWord &&
+			(name != "aligntime" || tokens[start+2].kind != tokenString)) {
+			return context
+		}
+		switch name {
+		case "span", "bins", "minspan", "cont", "partial", "fixedrange", "aligntime", "limit", "useother", "usenull":
+			start += 3
+		default:
+			start = len(tokens)
+		}
 	}
-	if len(tokens) == 3 &&
-		tokenWordEqual(tokens[0], "span") &&
-		tokens[1].kind == tokenEqual &&
-		tokens[2].kind == tokenWord {
+	if start == len(tokens) {
 		context = aggregateSuggestionContext(context)
 		context.FunctionNames = []string{"count", "p50", "p95", "sum", "avg"}
 		return context
 	}
-	if len(tokens) < 4 ||
-		!tokenWordEqual(tokens[0], "span") ||
-		tokens[1].kind != tokenEqual ||
-		tokens[2].kind != tokenWord {
-		return context
-	}
-	aggregate := tokens[3:]
+	aggregate := tokens[start:]
 	if tokenWordEqual(aggregate[0], "count") {
 		if len(aggregate) == 1 || aggregate[1].kind != tokenLeftParen {
 			if topLevelWordIndex(aggregate, "BY") >= 0 {

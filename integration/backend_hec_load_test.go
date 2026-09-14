@@ -26,10 +26,12 @@ import (
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
+	"github.com/Suhaibinator/open-splunk/internal/visibility"
 )
 
 const (
 	backendHECLoadFlag              = "OPEN_SPLUNK_HEC_LOAD"
+	backendHECQualifiedLoadFlag     = "OPEN_SPLUNK_HEC_QUALIFIED_LOAD"
 	backendHECLoadDurationEnv       = "OPEN_SPLUNK_HEC_LOAD_DURATION"
 	backendHECLoadEventRateEnv      = "OPEN_SPLUNK_HEC_LOAD_EVENTS_PER_SECOND"
 	backendHECLoadOutageAfterEnv    = "OPEN_SPLUNK_HEC_LOAD_OUTAGE_AFTER"
@@ -44,7 +46,7 @@ const (
 	backendHECLoadWorkers              = 16
 	backendHECLoadJobCapacity          = 128
 	backendHECLoadFullEvents           = 1_000
-	backendHECLoadMaximumPending       = 64
+	backendHECLoadMaximumPending       = visibility.MaxPendingReservations
 	backendHECLoadMaximumPendingBytes  = 256 << 20
 	backendHECLoadMaximumRuntimeHeapMB = 512
 	backendHECLoadMaximumResidentMB    = 768
@@ -148,8 +150,12 @@ func (plan backendHECLoadPlan) validate() error {
 	if plan.Duration < 6*time.Second || plan.Duration > 24*time.Hour {
 		return errors.New("HEC load duration must be from 6s through 24h")
 	}
-	if plan.EventsPerSecond < 2 || plan.EventsPerSecond > 5_000 {
-		return errors.New("HEC load event rate must be from 2 through 5,000 events/second")
+	maximumEventRate := uint64(5_000)
+	if plan.Profile == backendHECLoadProfileBatchOnly {
+		maximumEventRate = 50_000
+	}
+	if plan.EventsPerSecond < 2 || plan.EventsPerSecond > maximumEventRate {
+		return fmt.Errorf("HEC load event rate must be from 2 through %d events/second for profile %s", maximumEventRate, plan.Profile)
 	}
 	if plan.OutageAfter < time.Second || plan.OutageDuration < time.Second ||
 		plan.OutageAfter+plan.OutageDuration+time.Second > plan.Duration {
@@ -188,6 +194,10 @@ func (plan backendHECLoadPlan) validate() error {
 		)
 	}
 	return nil
+}
+
+func (plan backendHECLoadPlan) qualified() bool {
+	return plan.Profile == backendHECLoadProfileBatchOnly && plan.EventsPerSecond >= 50_000
 }
 
 type backendHECLoadSchedule struct {
@@ -451,6 +461,37 @@ func TestBackendHECLoadWarmAcceptanceUsesCompletionTime(t *testing.T) {
 	}
 }
 
+func TestBackendHECLoadUnexpectedResponseIncludesBoundedDiagnostics(t *testing.T) {
+	t.Parallel()
+	started := time.Unix(1_700_000_000, 0)
+	accumulator := &backendHECLoadAccumulator{outageStart: started.Add(10 * time.Second)}
+	accumulator.result.startedAt = started
+	job := backendHECLoadJob{
+		shape:       backendHECLoadShapeSmall,
+		events:      1,
+		scheduledAt: started.Add(3 * time.Second),
+	}
+	err := accumulator.record(job, backendHECLoadHTTPResponse{
+		status:      http.StatusInternalServerError,
+		code:        8,
+		text:        "Internal server error",
+		completedAt: started.Add(3*time.Second + 125*time.Millisecond),
+	})
+	if err == nil {
+		t.Fatal("unexpected HEC load response returned no diagnostic error")
+	}
+	for _, want := range []string{
+		`small response status/code/text/ack = 500/8/"Internal server error"/0`,
+		"scheduled_offset=3s",
+		"completed_offset=3.125s",
+		"latency=125ms",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("unexpected HEC load response error %q does not contain %q", err, want)
+		}
+	}
+}
+
 func TestBackendHECLoadSoakRateRequiresSustainedTailAndPacing(t *testing.T) {
 	t.Parallel()
 	plan := defaultBackendHECLoadPlan()
@@ -521,6 +562,29 @@ func TestBackendHECDurableLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	runBackendHECDurableLoad(t, plan)
+}
+
+func TestBackendHECQualifiedLoad(t *testing.T) {
+	if os.Getenv(backendHECQualifiedLoadFlag) != "1" {
+		t.Skip("set " + backendHECQualifiedLoadFlag + "=1 to run the qualified HEC coalescing load gate")
+	}
+	plan := backendHECLoadPlan{
+		Duration:        6 * time.Second,
+		EventsPerSecond: 50_000,
+		OutageAfter:     2 * time.Second,
+		OutageDuration:  time.Second,
+		NativeRate:      100,
+		Profile:         backendHECLoadProfileBatchOnly,
+	}
+	if err := plan.validate(); err != nil {
+		t.Fatal(err)
+	}
+	runBackendHECDurableLoad(t, plan)
+}
+
+func runBackendHECDurableLoad(t *testing.T, plan backendHECLoadPlan) {
+	t.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), plan.Duration+8*time.Minute)
 	defer cancel()
@@ -555,8 +619,7 @@ func TestBackendHECDurableLoad(t *testing.T) {
 	buildBinary(t, ctx, repository, collectorBinary, "./cmd/open-splunk-collector")
 	buildBinary(t, ctx, repository, loggenBinary, "./cmd/open-splunk-loggen")
 
-	httpAddress := unusedLoopbackAddress(t)
-	collectorAddress := unusedLoopbackAddress(t)
+	httpAddress, collectorAddress := unusedLoopbackAddressPair(t)
 	httpTLSIdentity, err := testsupport.WriteServerTLSIdentity(
 		filepath.Join(work, "http-tls"),
 		"127.0.0.1",
@@ -704,12 +767,14 @@ func TestBackendHECDurableLoad(t *testing.T) {
 		nativeToken,
 	)
 
+	// Load evidence needs test-only system telemetry that is deliberately
+	// excluded from the server's least-privilege runtime principal.
 	storage, err := clickhousedriver.Open(&clickhousedriver.Options{
 		Addr: []string{clickHouse.Address},
 		Auth: clickhousedriver.Auth{
 			Database: clickHouse.Database,
-			Username: clickHouse.RuntimeUsername,
-			Password: clickHouse.RuntimePassword,
+			Username: clickHouse.Username,
+			Password: clickHouse.Password,
 		},
 		DialTimeout: 5 * time.Second,
 	})
@@ -719,6 +784,12 @@ func TestBackendHECDurableLoad(t *testing.T) {
 	t.Cleanup(func() { _ = storage.Close() })
 	if err := storage.Ping(ctx); err != nil {
 		t.Fatalf("ping ClickHouse HEC load inspection connection: %v", err)
+	}
+	activityContext, activityCancel := context.WithTimeout(ctx, 5*time.Second)
+	activityMarker, err := readBackendLoadStorageActivityMarker(activityContext, storage)
+	activityCancel()
+	if err != nil {
+		t.Fatalf("capture HEC load ClickHouse activity marker: %v", err)
 	}
 
 	protectedValues := []string{
@@ -798,9 +869,47 @@ func TestBackendHECDurableLoad(t *testing.T) {
 			plan,
 		)
 	}()
+	var qualifiedActivity backendLoadStorageActivityMarker
+	var qualifiedStart *opensplunk.GetHECOperationalSnapshotResponse
+	var qualifiedEnd *opensplunk.GetHECOperationalSnapshotResponse
+	if plan.qualified() {
+		if err := waitUntilBackendHECLoad(ctx, loadStarted.Add(500*time.Millisecond)); err != nil {
+			t.Fatal(err)
+		}
+		qualifiedStart, err = readBackendHECLoadOperations(
+			ctx,
+			httpClient,
+			baseURL,
+			administratorToken,
+		)
+		if err != nil {
+			t.Fatalf("read qualified HEC starting operations: %v", err)
+		}
+		qualifiedActivity, err = readBackendLoadStorageActivityMarker(ctx, storage)
+		if err != nil {
+			t.Fatalf("capture qualified HEC activity start: %v", err)
+		}
+	}
 
 	if err := waitUntilBackendHECLoad(ctx, loadStarted.Add(plan.OutageAfter)); err != nil {
 		t.Fatal(err)
+	}
+	if plan.qualified() {
+		activityEnd, markerErr := readBackendLoadStorageActivityMarker(ctx, storage)
+		if markerErr != nil {
+			t.Fatalf("capture qualified HEC activity end: %v", markerErr)
+		}
+		qualifiedActivity.EndedAt = activityEnd.StartedAt
+		qualifiedActivity.EndedEvents = activityEnd.Events
+		qualifiedEnd, err = readBackendHECLoadOperations(
+			ctx,
+			httpClient,
+			baseURL,
+			administratorToken,
+		)
+		if err != nil {
+			t.Fatalf("read qualified HEC ending operations: %v", err)
+		}
 	}
 	clickHousePaused := false
 	backendHECDocker(t, ctx, "pause", clickHouse.Name)
@@ -840,7 +949,18 @@ func TestBackendHECDurableLoad(t *testing.T) {
 
 	load := <-loadDone
 	if load.err != nil {
-		t.Fatalf("durable HEC traffic: %v", load.err)
+		failureOperations, failureOperationsErr := readBackendHECLoadOperations(
+			ctx,
+			httpClient,
+			baseURL,
+			administratorToken,
+		)
+		t.Fatalf(
+			"durable HEC traffic: %v; operations_error=%v; operations=%+v",
+			load.err,
+			failureOperationsErr,
+			failureOperations,
+		)
 	}
 	if err := nativeGenerator.Wait(plan.Duration + 30*time.Second); err != nil {
 		t.Fatalf("native HEC-load generator: %v", err)
@@ -848,7 +968,8 @@ func TestBackendHECDurableLoad(t *testing.T) {
 	stopPressure()
 	control := <-pressureDone
 	if control.err != nil {
-		t.Fatalf("HEC load control-plane pressure: %v", control.err)
+		t.Fatalf("HEC load control-plane pressure: %v\nserver logs:\n%s", control.err,
+			redactForFailure(serverProcess.Logs(), protectedValues...))
 	}
 	if control.mutations == 0 {
 		t.Fatal("HEC load control-plane pressure completed no mutations")
@@ -887,6 +1008,7 @@ func TestBackendHECDurableLoad(t *testing.T) {
 	}
 
 	expectedRows := nativeCount + load.acceptedEvents()
+	t.Logf("HEC drain accounting: expected_rows=%d native_events=%d small=%s full=%s operations=%+v", expectedRows, nativeCount, load.small.summary(plan.Duration), load.full.summary(plan.Duration), finalOperations)
 	waitForBackendLoadStorage(
 		t,
 		ctx,
@@ -938,6 +1060,36 @@ func TestBackendHECDurableLoad(t *testing.T) {
 		!finalOperations.GetReconciliation().GetAvailable() ||
 		!finalOperations.GetAcknowledgments().GetAvailable() {
 		t.Fatalf("final HEC operational snapshot = %+v", finalOperations)
+	}
+	insertShape := waitForBackendLoadPhysicalInsertShape(
+		t,
+		ctx,
+		storage,
+		activityMarker,
+		expectedRows,
+	)
+	logicalBatches := finalOperations.GetReconciliation().GetStagedLogicalBatches()
+	if err := validateBackendLoadPhysicalInsertShape(insertShape, logicalBatches, false); err != nil {
+		t.Fatal(err)
+	}
+	var qualifiedShape backendLoadPhysicalInsertShape
+	var qualifiedLogicalBatches uint64
+	if plan.qualified() {
+		qualifiedLogicalBatches = monotonicCounterDelta(
+			qualifiedStart.GetReconciliation().GetWriteGroupMemberBatches(),
+			qualifiedEnd.GetReconciliation().GetWriteGroupMemberBatches(),
+		)
+		qualifiedShape, err = readBackendLoadPhysicalInsertShape(ctx, storage, qualifiedActivity)
+		if err != nil {
+			t.Fatalf("read qualified HEC physical insert shape: %v", err)
+		}
+		if err := validateBackendLoadPhysicalInsertShape(
+			qualifiedShape,
+			qualifiedLogicalBatches,
+			true,
+		); err != nil {
+			t.Fatalf("qualified steady-state HEC insert shape %+v: %v", qualifiedShape, err)
+		}
 	}
 
 	if err := collectorProcess.Interrupt(20 * time.Second); err != nil {
@@ -1008,6 +1160,41 @@ func TestBackendHECDurableLoad(t *testing.T) {
 		operational.maximumResidentMB,
 		operational.maximumProcessThreads,
 	)
+	t.Logf(
+		"durable HEC physical inserts: qualified_profile=%t logical_batches=%d physical_inserts=%d written_rows=%d written_bytes=%d min_rows=%d median_rows=%d max_rows=%d rows_at_least_5000=%d failed_inserts=%d new_parts=%d new_part_rows=%d merge_parts=%d merged_rows=%d delayed_inserts=%d rejected_inserts=%d",
+		plan.qualified(),
+		logicalBatches,
+		insertShape.PhysicalInserts,
+		insertShape.WrittenRows,
+		insertShape.WrittenBytes,
+		insertShape.MinimumRows,
+		insertShape.MedianRows,
+		insertShape.MaximumRows,
+		insertShape.RowsAtLeastFiveThousand,
+		insertShape.FailedInserts,
+		insertShape.NewParts,
+		insertShape.NewPartRows,
+		insertShape.MergeParts,
+		insertShape.MergedRows,
+		insertShape.DelayedInserts,
+		insertShape.RejectedInserts,
+	)
+	if plan.qualified() {
+		t.Logf(
+			"qualified HEC steady-state inserts: logical_batches=%d physical_inserts=%d written_rows=%d written_bytes=%d min_rows=%d median_rows=%d max_rows=%d rows_at_least_5000=%d failed_inserts=%d delayed_inserts=%d rejected_inserts=%d",
+			qualifiedLogicalBatches,
+			qualifiedShape.PhysicalInserts,
+			qualifiedShape.WrittenRows,
+			qualifiedShape.WrittenBytes,
+			qualifiedShape.MinimumRows,
+			qualifiedShape.MedianRows,
+			qualifiedShape.MaximumRows,
+			qualifiedShape.RowsAtLeastFiveThousand,
+			qualifiedShape.FailedInserts,
+			qualifiedShape.DelayedInserts,
+			qualifiedShape.RejectedInserts,
+		)
+	}
 	backendHECLoadRequireRate(t, plan, load)
 }
 
@@ -1166,11 +1353,15 @@ func (accumulator *backendHECLoadAccumulator) record(
 		return nil
 	default:
 		return fmt.Errorf(
-			"HEC load %s response status/code/ack = %d/%d/%d",
+			"HEC load %s response status/code/text/ack = %d/%d/%q/%d (scheduled_offset=%s completed_offset=%s latency=%s)",
 			job.shape,
 			response.status,
 			response.code,
+			response.text,
 			response.acknowledgment,
+			job.scheduledAt.Sub(accumulator.result.startedAt).Round(time.Millisecond),
+			response.completedAt.Sub(accumulator.result.startedAt).Round(time.Millisecond),
+			response.completedAt.Sub(job.scheduledAt).Round(time.Millisecond),
 		)
 	}
 }
@@ -1326,6 +1517,7 @@ func backendHECLoadFullBody() []byte {
 type backendHECLoadHTTPResponse struct {
 	status         int
 	code           int
+	text           string
 	acknowledgment int64
 	completedAt    time.Time
 }
@@ -1372,6 +1564,7 @@ func backendHECLoadPost(
 	result := backendHECLoadHTTPResponse{
 		status:      response.StatusCode,
 		code:        decoded.Code,
+		text:        decoded.Text,
 		completedAt: time.Now(),
 	}
 	if decoded.AckID != nil {

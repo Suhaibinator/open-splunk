@@ -363,7 +363,7 @@ func TestProjectSearchSchemaMatchesHTTPResultClassification(t *testing.T) {
 			job.SPL = test.spl
 			job.Schema = &searchjobs.Schema{Columns: []searchjobs.Column{
 				{Name: "_time", Kind: searchjobs.ValueKindTime},
-				{Name: "count", Kind: searchjobs.ValueKindUnsigned, Nullable: true, Multivalue: true},
+				{Name: "count", Kind: searchjobs.ValueKindUnsigned, Nullable: true, Multivalue: test.want != opensplunk.ResultSetKind_RESULT_SET_KIND_TIME_SERIES},
 			}}
 
 			projection, err := projectSearch(job, job.CreatedAt)
@@ -387,7 +387,7 @@ func TestProjectSearchSchemaMatchesHTTPResultClassification(t *testing.T) {
 				wantSecondSemantic = opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_METRIC
 			}
 			second := schema.Columns[1]
-			if second.GetValueType() != opensplunk.ValueType_VALUE_TYPE_UINT64 || second.GetSemanticType() != wantSecondSemantic || !second.GetNullable() || !second.GetMultivalue() {
+			if second.GetValueType() != opensplunk.ValueType_VALUE_TYPE_UINT64 || second.GetSemanticType() != wantSecondSemantic || !second.GetNullable() || second.GetMultivalue() != (test.want != opensplunk.ResultSetKind_RESULT_SET_KIND_TIME_SERIES) {
 				t.Fatalf("second column = %+v", second)
 			}
 		})
@@ -719,5 +719,19 @@ func validExportProjectionJob() exportjobs.Job {
 		Version:   9,
 		State:     exportjobs.StateQueued,
 		CreatedAt: time.Date(2026, time.July, 22, 10, 15, 0, 987_654_321, time.FixedZone("test", -7*60*60)),
+	}
+}
+
+func TestTimechartSuffixWebSocketUsesFinalSchema(t *testing.T) {
+	job := validSearchProjectionJob()
+	job.SPL = `index=main | timechart span=1s count | rename _time AS bucket`
+	job.Schema = &searchjobs.Schema{Columns: []searchjobs.Column{{Name: "bucket", Kind: searchjobs.ValueKindTime}, {Name: "count", Kind: searchjobs.ValueKindUnsigned}}}
+	projection, err := projectSearch(job, job.CreatedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := projection.events[2].GetResultSchemaAvailable().GetSchema()
+	if schema.GetResultKind() != opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS {
+		t.Fatalf("timechart suffix shape=%v", schema)
 	}
 }

@@ -8,6 +8,7 @@ import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
 import { Duration } from "../google/protobuf/duration";
 import { Timestamp } from "../google/protobuf/timestamp";
 import { KnowledgeSnapshotSummary } from "./knowledge";
+import { PatternSensitivity, patternSensitivityFromJSON, patternSensitivityToJSON } from "./patterns_api";
 
 export enum ExportFormat {
   EXPORT_FORMAT_UNSPECIFIED = 0,
@@ -289,11 +290,35 @@ export interface JsonLinesExportOptions {
   includeTypeMetadata: boolean;
 }
 
+/** Pattern exports consume the exact retained relation; they never rerun SPL. */
+export interface PatternSummaryExportSource {
+  searchJobId: string;
+  sensitivity: PatternSensitivity;
+  snapshotRef: string;
+}
+
+export interface PatternMemberExportSource {
+  searchJobId: string;
+  sensitivity: PatternSensitivity;
+  snapshotRef: string;
+  patternId: string;
+}
+
 export interface ExportDefinition {
   searchJobId: string;
   columns: string[];
   rowLimit?: bigint | undefined;
-  byteLimit?: bigint | undefined;
+  byteLimit?:
+    | bigint
+    | undefined;
+  /**
+   * Absent source keeps the existing ordinary search export behavior.
+   * A typed source search_job_id must equal the outer search_job_id.
+   */
+  source: { $case: "patternSummary"; value: PatternSummaryExportSource } | {
+    $case: "patternMembers";
+    value: PatternMemberExportSource;
+  } | undefined;
   formatOptions:
     | { $case: "csv"; value: CsvExportOptions }
     | { $case: "jsonLines"; value: JsonLinesExportOptions }
@@ -504,8 +529,253 @@ export const JsonLinesExportOptions: MessageFns<JsonLinesExportOptions> = {
   },
 };
 
+function createBasePatternSummaryExportSource(): PatternSummaryExportSource {
+  return { searchJobId: "", sensitivity: 0, snapshotRef: "" };
+}
+
+export const PatternSummaryExportSource: MessageFns<PatternSummaryExportSource> = {
+  encode(message: PatternSummaryExportSource, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.searchJobId !== "") {
+      writer.uint32(10).string(message.searchJobId);
+    }
+    if (message.sensitivity !== 0) {
+      writer.uint32(16).int32(message.sensitivity);
+    }
+    if (message.snapshotRef !== "") {
+      writer.uint32(26).string(message.snapshotRef);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): PatternSummaryExportSource {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBasePatternSummaryExportSource();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.searchJobId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.sensitivity = reader.int32() as any;
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.snapshotRef = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): PatternSummaryExportSource {
+    return {
+      searchJobId: isSet(object.searchJobId)
+        ? globalThis.String(object.searchJobId)
+        : isSet(object.search_job_id)
+        ? globalThis.String(object.search_job_id)
+        : "",
+      sensitivity: isSet(object.sensitivity) ? patternSensitivityFromJSON(object.sensitivity) : 0,
+      snapshotRef: isSet(object.snapshotRef)
+        ? globalThis.String(object.snapshotRef)
+        : isSet(object.snapshot_ref)
+        ? globalThis.String(object.snapshot_ref)
+        : "",
+    };
+  },
+
+  toJSON(message: PatternSummaryExportSource): unknown {
+    const obj: any = {};
+    if (message.searchJobId !== "") {
+      obj.searchJobId = message.searchJobId;
+    }
+    if (message.sensitivity !== 0) {
+      obj.sensitivity = patternSensitivityToJSON(message.sensitivity);
+    }
+    if (message.snapshotRef !== "") {
+      obj.snapshotRef = message.snapshotRef;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PatternSummaryExportSource>, I>>(base?: I): PatternSummaryExportSource {
+    return PatternSummaryExportSource.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PatternSummaryExportSource>, I>>(object: I): PatternSummaryExportSource {
+    const message = createBasePatternSummaryExportSource();
+    message.searchJobId = object.searchJobId ?? "";
+    message.sensitivity = object.sensitivity ?? 0;
+    message.snapshotRef = object.snapshotRef ?? "";
+    return message;
+  },
+};
+
+function createBasePatternMemberExportSource(): PatternMemberExportSource {
+  return { searchJobId: "", sensitivity: 0, snapshotRef: "", patternId: "" };
+}
+
+export const PatternMemberExportSource: MessageFns<PatternMemberExportSource> = {
+  encode(message: PatternMemberExportSource, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.searchJobId !== "") {
+      writer.uint32(10).string(message.searchJobId);
+    }
+    if (message.sensitivity !== 0) {
+      writer.uint32(16).int32(message.sensitivity);
+    }
+    if (message.snapshotRef !== "") {
+      writer.uint32(26).string(message.snapshotRef);
+    }
+    if (message.patternId !== "") {
+      writer.uint32(34).string(message.patternId);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): PatternMemberExportSource {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBasePatternMemberExportSource();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.searchJobId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.sensitivity = reader.int32() as any;
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.snapshotRef = reader.string();
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+
+            message.patternId = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): PatternMemberExportSource {
+    return {
+      searchJobId: isSet(object.searchJobId)
+        ? globalThis.String(object.searchJobId)
+        : isSet(object.search_job_id)
+        ? globalThis.String(object.search_job_id)
+        : "",
+      sensitivity: isSet(object.sensitivity) ? patternSensitivityFromJSON(object.sensitivity) : 0,
+      snapshotRef: isSet(object.snapshotRef)
+        ? globalThis.String(object.snapshotRef)
+        : isSet(object.snapshot_ref)
+        ? globalThis.String(object.snapshot_ref)
+        : "",
+      patternId: isSet(object.patternId)
+        ? globalThis.String(object.patternId)
+        : isSet(object.pattern_id)
+        ? globalThis.String(object.pattern_id)
+        : "",
+    };
+  },
+
+  toJSON(message: PatternMemberExportSource): unknown {
+    const obj: any = {};
+    if (message.searchJobId !== "") {
+      obj.searchJobId = message.searchJobId;
+    }
+    if (message.sensitivity !== 0) {
+      obj.sensitivity = patternSensitivityToJSON(message.sensitivity);
+    }
+    if (message.snapshotRef !== "") {
+      obj.snapshotRef = message.snapshotRef;
+    }
+    if (message.patternId !== "") {
+      obj.patternId = message.patternId;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PatternMemberExportSource>, I>>(base?: I): PatternMemberExportSource {
+    return PatternMemberExportSource.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PatternMemberExportSource>, I>>(object: I): PatternMemberExportSource {
+    const message = createBasePatternMemberExportSource();
+    message.searchJobId = object.searchJobId ?? "";
+    message.sensitivity = object.sensitivity ?? 0;
+    message.snapshotRef = object.snapshotRef ?? "";
+    message.patternId = object.patternId ?? "";
+    return message;
+  },
+};
+
 function createBaseExportDefinition(): ExportDefinition {
-  return { searchJobId: "", columns: [], rowLimit: undefined, byteLimit: undefined, formatOptions: undefined };
+  return {
+    searchJobId: "",
+    columns: [],
+    rowLimit: undefined,
+    byteLimit: undefined,
+    source: undefined,
+    formatOptions: undefined,
+  };
 }
 
 export const ExportDefinition: MessageFns<ExportDefinition> = {
@@ -527,6 +797,14 @@ export const ExportDefinition: MessageFns<ExportDefinition> = {
         throw new globalThis.Error("value provided for field message.byteLimit of type uint64 too large");
       }
       writer.uint32(32).uint64(message.byteLimit);
+    }
+    switch (message.source?.$case) {
+      case "patternSummary":
+        PatternSummaryExportSource.encode(message.source.value, writer.uint32(162).fork()).join();
+        break;
+      case "patternMembers":
+        PatternMemberExportSource.encode(message.source.value, writer.uint32(170).fork()).join();
+        break;
     }
     switch (message.formatOptions?.$case) {
       case "csv":
@@ -584,6 +862,28 @@ export const ExportDefinition: MessageFns<ExportDefinition> = {
             message.byteLimit = reader.uint64() as bigint;
             continue;
           }
+          case 20: {
+            if (tag !== 162) {
+              break;
+            }
+
+            message.source = {
+              $case: "patternSummary",
+              value: PatternSummaryExportSource.decode(reader, reader.uint32()),
+            };
+            continue;
+          }
+          case 21: {
+            if (tag !== 170) {
+              break;
+            }
+
+            message.source = {
+              $case: "patternMembers",
+              value: PatternMemberExportSource.decode(reader, reader.uint32()),
+            };
+            continue;
+          }
           case 10: {
             if (tag !== 82) {
               break;
@@ -633,6 +933,15 @@ export const ExportDefinition: MessageFns<ExportDefinition> = {
         : isSet(object.byte_limit)
         ? BigInt(object.byte_limit)
         : undefined,
+      source: isSet(object.patternSummary)
+        ? { $case: "patternSummary", value: PatternSummaryExportSource.fromJSON(object.patternSummary) }
+        : isSet(object.pattern_summary)
+        ? { $case: "patternSummary", value: PatternSummaryExportSource.fromJSON(object.pattern_summary) }
+        : isSet(object.patternMembers)
+        ? { $case: "patternMembers", value: PatternMemberExportSource.fromJSON(object.patternMembers) }
+        : isSet(object.pattern_members)
+        ? { $case: "patternMembers", value: PatternMemberExportSource.fromJSON(object.pattern_members) }
+        : undefined,
       formatOptions: isSet(object.csv)
         ? { $case: "csv", value: CsvExportOptions.fromJSON(object.csv) }
         : isSet(object.jsonLines)
@@ -657,6 +966,11 @@ export const ExportDefinition: MessageFns<ExportDefinition> = {
     if (message.byteLimit !== undefined) {
       obj.byteLimit = message.byteLimit.toString();
     }
+    if (message.source?.$case === "patternSummary") {
+      obj.patternSummary = PatternSummaryExportSource.toJSON(message.source.value);
+    } else if (message.source?.$case === "patternMembers") {
+      obj.patternMembers = PatternMemberExportSource.toJSON(message.source.value);
+    }
     if (message.formatOptions?.$case === "csv") {
       obj.csv = CsvExportOptions.toJSON(message.formatOptions.value);
     } else if (message.formatOptions?.$case === "jsonLines") {
@@ -678,6 +992,26 @@ export const ExportDefinition: MessageFns<ExportDefinition> = {
     message.byteLimit = (object.byteLimit !== undefined && object.byteLimit !== null)
       ? BigInt(object.byteLimit)
       : undefined;
+    switch (object.source?.$case) {
+      case "patternSummary": {
+        if (object.source?.value !== undefined && object.source?.value !== null) {
+          message.source = {
+            $case: "patternSummary",
+            value: PatternSummaryExportSource.fromPartial(object.source.value),
+          };
+        }
+        break;
+      }
+      case "patternMembers": {
+        if (object.source?.value !== undefined && object.source?.value !== null) {
+          message.source = {
+            $case: "patternMembers",
+            value: PatternMemberExportSource.fromPartial(object.source.value),
+          };
+        }
+        break;
+      }
+    }
     switch (object.formatOptions?.$case) {
       case "csv": {
         if (object.formatOptions?.value !== undefined && object.formatOptions?.value !== null) {

@@ -100,6 +100,34 @@ func TestValidateResultAcceptsCanonicalResultAndExactBounds(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "dynamic output has unlimited bound",
+			mutate: func(result *Result) {
+				result.Plan.Stages = append(result.Plan.Stages, PlanStage{
+					Index:    1,
+					Operator: "Timechart",
+					SourceRange: &SourceRange{
+						Start: SourcePosition{Line: 1, Column: 1},
+						End: SourcePosition{
+							ByteOffset: 1, Line: 1, Column: 2,
+						},
+					},
+				})
+				result.Plan.Output = OutputShape{
+					Kind: OutputKindDynamic, Fields: []string{"_time"},
+				}
+			},
+		},
+		{
+			name: "dynamic output exceeds historical bound",
+			mutate: func(result *Result) {
+				result.Plan.Output = OutputShape{
+					Kind:             OutputKindDynamic,
+					Fields:           []string{"_time"},
+					MaxDynamicFields: maximumDynamicFields + 1,
+				}
+			},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -114,6 +142,52 @@ func TestValidateResultAcceptsCanonicalResultAndExactBounds(t *testing.T) {
 			if after := fmt.Sprintf("%#v", result); after != before {
 				t.Fatal("ValidateResult() mutated its input")
 			}
+		})
+	}
+}
+
+func TestValidateResultAcceptsNormalizedIDIndexEvidence(t *testing.T) {
+	t.Parallel()
+
+	for _, field := range []string{"event_id", "trace_id", "span_id"} {
+		t.Run(field, func(t *testing.T) {
+			t.Parallel()
+
+			const private = "private-index-metadata-7f2c"
+			name := "idx_" + field + "_ci"
+			key := "lowerUTF8(ifNull(" + field + ", ''))"
+			result := validResultForValidation(t)
+			result.ExplainText = fmt.Sprintf(
+				`[{"Plan":{"Node Type":"ReadFromMergeTree",`+
+					`"Header":[{"Name":"event_id","Type":"String"}],`+
+					`"Indexes":[{"Type":"Skip","Name":%q,"Keys":[%q,%q],`+
+					`"Initial Parts":2,"Selected Parts":1,`+
+					`"Initial Granules":4,"Selected Granules":1}]}}]`,
+				name,
+				key,
+				private,
+			)
+			var err error
+			result.PhysicalPlan, err = queryexec.ParseExplainPlan(queryexec.ExplainResult{
+				Text:    result.ExplainText,
+				QueryID: result.DiagnosticQueryID,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			index := &result.PhysicalPlan.Reads[0].Indexes[0]
+			if index.Name != name || !reflect.DeepEqual(index.Keys, []string{key}) {
+				t.Fatalf("normalized index projection = %#v", index)
+			}
+			if err := ValidateResult(result); err != nil {
+				t.Fatalf("ValidateResult(normalized ID index) error = %v", err)
+			}
+
+			index.Keys = append(index.Keys, private)
+			assertInvalidInspectionResult(t, result, private)
+			index.Keys = []string{key}
+			index.Name = private
+			assertInvalidInspectionResult(t, result, private)
 		})
 	}
 }
@@ -398,20 +472,10 @@ func TestValidateResultRejectsMalformedLogicalProjection(t *testing.T) {
 			},
 		},
 		{
-			name: "dynamic output has zero bound",
+			name: "dynamic output has zero bound without timechart",
 			mutate: func(result *Result) {
 				result.Plan.Output = OutputShape{
 					Kind: OutputKindDynamic, Fields: []string{"_time"},
-				}
-			},
-		},
-		{
-			name: "dynamic output bound is too large",
-			mutate: func(result *Result) {
-				result.Plan.Output = OutputShape{
-					Kind:             OutputKindDynamic,
-					Fields:           []string{"_time"},
-					MaxDynamicFields: maximumDynamicFields + 1,
 				}
 			},
 		},

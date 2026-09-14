@@ -1,0 +1,669 @@
+
+/tmp/collector-perf-20260908/after-final.test:	file format mach-o arm64
+
+Disassembly of section __TEXT,__text:
+
+0000000100787c10 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt>:
+100787c10: f9400b90    	ldr	x16, [x28, #0x10]
+100787c14: d10643f1    	sub	x17, sp, #0x190
+100787c18: eb10023f    	cmp	x17, x16
+100787c1c: 54005149    	b.ls	0x100788644 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0xa34>
+100787c20: d10843f4    	sub	x20, sp, #0x210
+100787c24: a93ffa9d    	stp	x29, x30, [x20, #-0x8]
+100787c28: 9100029f    	mov	sp, x20
+100787c2c: d10023fd    	sub	x29, sp, #0x8
+100787c30: f9010fe0    	str	x0, [sp, #0x218]
+100787c34: f90113e1    	str	x1, [sp, #0x220]
+100787c38: f9011fe4    	str	x4, [sp, #0x238]
+100787c3c: f9011be3    	str	x3, [sp, #0x230]
+100787c40: f90117e2    	str	x2, [sp, #0x228]
+100787c44: aa0203e0    	mov	x0, x2
+100787c48: aa0303e1    	mov	x1, x3
+100787c4c: aa0403e2    	mov	x2, x4
+100787c50: 97e4cd3c    	bl	0x1000bb140 <_unicode/utf8.Valid>
+100787c54: 360003a0    	tbz	w0, #0x0, 0x100787cc8 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0xb8>
+100787c58: 9106e3e0    	add	x0, sp, #0x1b8
+100787c5c: a9007c1f    	stp	xzr, xzr, [x0]
+100787c60: a9017c1f    	stp	xzr, xzr, [x0, #0x10]
+100787c64: a9027c1f    	stp	xzr, xzr, [x0, #0x20]
+100787c68: 9103c3e0    	add	x0, sp, #0xf0
+100787c6c: b24007e1    	orr	x1, xzr, #0x3
+100787c70: a8817c1f    	stp	xzr, xzr, [x0], #0x10
+100787c74: a8817c1f    	stp	xzr, xzr, [x0], #0x10
+100787c78: a8817c1f    	stp	xzr, xzr, [x0], #0x10
+100787c7c: a8817c1f    	stp	xzr, xzr, [x0], #0x10
+100787c80: d1000421    	sub	x1, x1, #0x1
+100787c84: b5ffff61    	cbnz	x1, 0x100787c70 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x60>
+100787c88: f900001f    	str	xzr, [x0]
+100787c8c: b201c3e0    	mov	x0, #-0x7f7f7f7f7f7f7f80 ; =-9187201950435737472
+100787c90: f9007be0    	str	x0, [sp, #0xf0]
+100787c94: 9103c3e0    	add	x0, sp, #0xf0
+100787c98: f900e7e0    	str	x0, [sp, #0x1c8]
+100787c9c: 97e40495    	bl	0x100088ef0 <_runtime.rand>
+100787ca0: f900e3e0    	str	x0, [sp, #0x1c0]
+100787ca4: b0004ee0    	adrp	x0, 0x101164000 <_type:*+0x404b8>
+100787ca8: 9117e000    	add	x0, x0, #0x5f8
+100787cac: aa1f03e1    	mov	x1, xzr
+100787cb0: b27d03e2    	orr	x2, xzr, #0x8
+100787cb4: 97e40bb3    	bl	0x10008ab80 <_runtime.makeslice>
+100787cb8: aa1f03e1    	mov	x1, xzr
+100787cbc: b27d03e2    	orr	x2, xzr, #0x8
+100787cc0: aa1f03e3    	mov	x3, xzr
+100787cc4: 14000013    	b	0x100787d10 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x100>
+100787cc8: b27c03e0    	orr	x0, xzr, #0x10
+100787ccc: d00055e1    	adrp	x1, 0x101245000 <_type:*+0x1214b8>
+100787cd0: 91206021    	add	x1, x1, #0x818
+100787cd4: b24003e2    	orr	x2, xzr, #0x1
+100787cd8: 97e26382    	bl	0x100020ae0 <_runtime.mallocgcSmallScanNoHeaderSC2>
+100787cdc: 90000bc3    	adrp	x3, 0x1008ff000 <_runtime.rodata+0xe1c0>
+100787ce0: 91213063    	add	x3, x3, #0x84c
+100787ce4: d28002a4    	mov	x4, #0x15               ; =21
+100787ce8: a9001003    	stp	x3, x4, [x0]
+100787cec: aa0003e1    	mov	x1, x0
+100787cf0: 90005b40    	adrp	x0, 0x1012ef000 <_type:*+0x1cb4b8>
+100787cf4: 910de000    	add	x0, x0, #0x378
+100787cf8: a97ffbfd    	ldp	x29, x30, [sp, #-0x8]
+100787cfc: 910843ff    	add	sp, sp, #0x210
+100787d00: d65f03c0    	ret
+100787d04: aa0303e0    	mov	x0, x3
+100787d08: aa0103e3    	mov	x3, x1
+100787d0c: f94053e1    	ldr	x1, [sp, #0xa0]
+100787d10: f9411be4    	ldr	x4, [sp, #0x230]
+100787d14: eb01009f    	cmp	x4, x1
+100787d18: 5400216d    	b.le	0x100788144 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x534>
+100787d1c: f94117e5    	ldr	x5, [sp, #0x228]
+100787d20: 14000002    	b	0x100787d28 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x118>
+100787d24: 91000421    	add	x1, x1, #0x1
+100787d28: eb01009f    	cmp	x4, x1
+100787d2c: 5400010d    	b.le	0x100787d4c <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x13c>
+100787d30: 54004869    	b.ls	0x10078863c <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0xa2c>
+100787d34: 386168a6    	ldrb	w6, [x5, x1]
+100787d38: 710080df    	cmp	w6, #0x20
+100787d3c: 54ffff40    	b.eq	0x100787d24 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x114>
+100787d40: 710024df    	cmp	w6, #0x9
+100787d44: 54ffff00    	b.eq	0x100787d24 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x114>
+100787d48: eb01009f    	cmp	x4, x1
+100787d4c: 54001fc0    	b.eq	0x100788144 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x534>
+100787d50: aa0103e6    	mov	x6, x1
+100787d54: 14000002    	b	0x100787d5c <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x14c>
+100787d58: 91000421    	add	x1, x1, #0x1
+100787d5c: eb01009f    	cmp	x4, x1
+100787d60: 540001cd    	b.le	0x100787d98 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x188>
+100787d64: 540046a9    	b.ls	0x100788638 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0xa28>
+100787d68: 386168a7    	ldrb	w7, [x5, x1]
+100787d6c: 7100f4ff    	cmp	w7, #0x3d
+100787d70: 54000120    	b.eq	0x100787d94 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x184>
+100787d74: 710080ff    	cmp	w7, #0x20
+100787d78: 540000a0    	b.eq	0x100787d8c <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x17c>
+100787d7c: 710024ff    	cmp	w7, #0x9
+100787d80: 54fffec1    	b.ne	0x100787d58 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x148>
+100787d84: eb01009f    	cmp	x4, x1
+100787d88: 14000004    	b	0x100787d98 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x188>
+100787d8c: eb01009f    	cmp	x4, x1
+100787d90: 14000002    	b	0x100787d98 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x188>
+100787d94: eb01009f    	cmp	x4, x1
+100787d98: 54002700    	b.eq	0x100788278 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x668>
+100787d9c: 540044c9    	b.ls	0x100788634 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0xa24>
+100787da0: 386168a7    	ldrb	w7, [x5, x1]
+100787da4: 7100f4ff    	cmp	w7, #0x3d
+100787da8: 54002681    	b.ne	0x100788278 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x668>
+100787dac: eb06003f    	cmp	x1, x6
+100787db0: 54004403    	b.lo	0x100788630 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0xa20>
+100787db4: f90053e1    	str	x1, [sp, #0xa0]
+100787db8: f90047e2    	str	x2, [sp, #0x88]
+100787dbc: f90043e3    	str	x3, [sp, #0x80]
+100787dc0: f9006fe0    	str	x0, [sp, #0xd8]
+100787dc4: cb060022    	sub	x2, x1, x6
+100787dc8: 8b0600a1    	add	x1, x5, x6
+100787dcc: aa1f03e0    	mov	x0, xzr
+100787dd0: 97e38c44    	bl	0x10006aee0 <_runtime.slicebytetostring>
+100787dd4: f9006be0    	str	x0, [sp, #0xd0]
+100787dd8: f9003fe1    	str	x1, [sp, #0x78]
+100787ddc: 97ffff3d    	bl	0x100787ad0 <_github.com/Suhaibinator/open-splunk/internal/collector.nativeValidName>
+100787de0: 360022e0    	tbz	w0, #0x0, 0x10078823c <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x62c>
+100787de4: f9406be0    	ldr	x0, [sp, #0xd0]
+100787de8: f9403fe1    	ldr	x1, [sp, #0x78]
+100787dec: b0000b42    	adrp	x2, 0x1008f0000 <_parentWrite+0x4c>
+100787df0: 91397842    	add	x2, x2, #0xe5e
+100787df4: b27f03e3    	orr	x3, xzr, #0x2
+100787df8: 97e63f0e    	bl	0x100117a30 <_strings.IndexAny>
+100787dfc: b6f82200    	tbz	x0, #0x3f, 0x10078823c <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x62c>
+100787e00: b00051e0    	adrp	x0, 0x1011c4000 <_type:*+0xa04b8>
+100787e04: 911cc000    	add	x0, x0, #0x730
+100787e08: 9106e3e1    	add	x1, sp, #0x1b8
+100787e0c: f9406be2    	ldr	x2, [sp, #0xd0]
+100787e10: f9403fe3    	ldr	x3, [sp, #0x78]
+100787e14: 97e2136f    	bl	0x10000cbd0 <_runtime.mapaccess2_faststr>
+100787e18: 37001f41    	tbnz	w1, #0x0, 0x100788200 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x5f0>
+100787e1c: b00051e0    	adrp	x0, 0x1011c4000 <_type:*+0xa04b8>
+100787e20: 911cc000    	add	x0, x0, #0x730
+100787e24: 9106e3e1    	add	x1, sp, #0x1b8
+100787e28: f9406be2    	ldr	x2, [sp, #0xd0]
+100787e2c: f9403fe3    	ldr	x3, [sp, #0x78]
+100787e30: 97e21410    	bl	0x10000ce70 <_runtime.mapassign_faststr>
+100787e34: 3980001b    	ldrsb	x27, [x0]
+100787e38: f940dfe4    	ldr	x4, [sp, #0x1b8]
+100787e3c: f9410fe5    	ldr	x5, [sp, #0x218]
+100787e40: f94044a6    	ldr	x6, [x5, #0x88]
+100787e44: eb0400df    	cmp	x6, x4
+100787e48: 54001beb    	b.lt	0x1007881c4 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x5b4>
+100787e4c: f94053e3    	ldr	x3, [sp, #0xa0]
+100787e50: 91000464    	add	x4, x3, #0x1
+100787e54: f9411be6    	ldr	x6, [sp, #0x230]
+100787e58: eb0400df    	cmp	x6, x4
+100787e5c: 5400012d    	b.le	0x100787e80 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x270>
+100787e60: f94117e7    	ldr	x7, [sp, #0x228]
+100787e64: 386468e8    	ldrb	w8, [x7, x4]
+100787e68: 7100891f    	cmp	w8, #0x22
+100787e6c: 540000c1    	b.ne	0x100787e84 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x274>
+100787e70: 91000868    	add	x8, x3, #0x2
+100787e74: aa1f03e9    	mov	x9, xzr
+100787e78: aa0803e0    	mov	x0, x8
+100787e7c: 14000132    	b	0x100788344 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x734>
+100787e80: f94117e7    	ldr	x7, [sp, #0x228]
+100787e84: aa0403e0    	mov	x0, x4
+100787e88: 14000002    	b	0x100787e90 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x280>
+100787e8c: 91000484    	add	x4, x4, #0x1
+100787e90: eb0400df    	cmp	x6, x4
+100787e94: 540001ad    	b.le	0x100787ec8 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x2b8>
+100787e98: 386468e8    	ldrb	w8, [x7, x4]
+100787e9c: 7100811f    	cmp	w8, #0x20
+100787ea0: 54000140    	b.eq	0x100787ec8 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x2b8>
+100787ea4: 7100251f    	cmp	w8, #0x9
+100787ea8: 54000100    	b.eq	0x100787ec8 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x2b8>
+100787eac: 7100811f    	cmp	w8, #0x20
+100787eb0: 54002023    	b.lo	0x1007882b4 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x6a4>
+100787eb4: 7101fd1f    	cmp	w8, #0x7f
+100787eb8: 54001fe0    	b.eq	0x1007882b4 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x6a4>
+100787ebc: 7100891f    	cmp	w8, #0x22
+100787ec0: 54fffe61    	b.ne	0x100787e8c <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x27c>
+100787ec4: 140000fc    	b	0x1007882b4 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x6a4>
+100787ec8: f9411fe8    	ldr	x8, [sp, #0x238]
+100787ecc: eb04011f    	cmp	x8, x4
+100787ed0: 54002363    	b.lo	0x10078833c <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x72c>
+100787ed4: eb00009f    	cmp	x4, x0
+100787ed8: 54002303    	b.lo	0x100788338 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x728>
+100787edc: f90053e4    	str	x4, [sp, #0xa0]
+100787ee0: cb030105    	sub	x5, x8, x3
+100787ee4: cb030083    	sub	x3, x4, x3
+100787ee8: d1000462    	sub	x2, x3, #0x1
+100787eec: f90037e2    	str	x2, [sp, #0x68]
+100787ef0: d10004a3    	sub	x3, x5, #0x1
+100787ef4: cb0303e3    	neg	x3, x3
+100787ef8: 8a83fc03    	and	x3, x0, x3, asr #63
+100787efc: f9005fe3    	str	x3, [sp, #0xb8]
+100787f00: 8b0300e1    	add	x1, x7, x3
+100787f04: aa1f03e0    	mov	x0, xzr
+100787f08: 97e38bf6    	bl	0x10006aee0 <_runtime.slicebytetostring>
+100787f0c: f100103f    	cmp	x1, #0x4
+100787f10: 54000161    	b.ne	0x100787f3c <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x32c>
+100787f14: b9400004    	ldr	w4, [x0]
+100787f18: d28e4e85    	mov	x5, #0x7274             ; =29300
+100787f1c: f2acaea5    	movk	x5, #0x6575, lsl #16
+100787f20: 6b05009f    	cmp	w4, w5
+100787f24: 540000c1    	b.ne	0x100787f3c <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x32c>
+100787f28: b0005480    	adrp	x0, 0x101218000 <_type:*+0xf44b8>
+100787f2c: 91270000    	add	x0, x0, #0x9c0
+100787f30: f00011e1    	adrp	x1, 0x1009c6000 <_html..stmp_4+0x250>
+100787f34: 9102a021    	add	x1, x1, #0xa8
+100787f38: 14000033    	b	0x100788004 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x3f4>
+100787f3c: f100143f    	cmp	x1, #0x5
+100787f40: 540001c1    	b.ne	0x100787f78 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x368>
+100787f44: b9400004    	ldr	w4, [x0]
+100787f48: d28c2cc5    	mov	x5, #0x6166             ; =24934
+100787f4c: f2ae6d85    	movk	x5, #0x736c, lsl #16
+100787f50: 6b05009f    	cmp	w4, w5
+100787f54: 54000121    	b.ne	0x100787f78 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x368>
+100787f58: 39401004    	ldrb	w4, [x0, #0x4]
+100787f5c: 7101949f    	cmp	w4, #0x65
+100787f60: 540000c1    	b.ne	0x100787f78 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x368>
+100787f64: b0005480    	adrp	x0, 0x101218000 <_type:*+0xf44b8>
+100787f68: 91270000    	add	x0, x0, #0x9c0
+100787f6c: f00011e1    	adrp	x1, 0x1009c6000 <_html..stmp_4+0x250>
+100787f70: 91028021    	add	x1, x1, #0xa0
+100787f74: 14000024    	b	0x100788004 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x3f4>
+100787f78: f94037e2    	ldr	x2, [sp, #0x68]
+100787f7c: b40002c2    	cbz	x2, 0x100787fd4 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x3c4>
+100787f80: f9405fe2    	ldr	x2, [sp, #0xb8]
+100787f84: f94117e3    	ldr	x3, [sp, #0x228]
+100787f88: 38626862    	ldrb	w2, [x3, x2]
+100787f8c: 7100b45f    	cmp	w2, #0x2d
+100787f90: 540000a0    	b.eq	0x100787fa4 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x394>
+100787f94: 7100c05f    	cmp	w2, #0x30
+100787f98: 540001a3    	b.lo	0x100787fcc <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x3bc>
+100787f9c: 7100e45f    	cmp	w2, #0x39
+100787fa0: 54000128    	b.hi	0x100787fc4 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x3b4>
+100787fa4: f9003be1    	str	x1, [sp, #0x70]
+100787fa8: f90067e0    	str	x0, [sp, #0xc8]
+100787fac: 97ffd985    	bl	0x10077e5c0 <_github.com/Suhaibinator/open-splunk/internal/jsonnumber.Valid>
+100787fb0: f9403be1    	ldr	x1, [sp, #0x70]
+100787fb4: f94117e3    	ldr	x3, [sp, #0x228]
+100787fb8: aa0003e2    	mov	x2, x0
+100787fbc: f94067e0    	ldr	x0, [sp, #0xc8]
+100787fc0: 14000007    	b	0x100787fdc <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x3cc>
+100787fc4: aa1f03e2    	mov	x2, xzr
+100787fc8: 14000005    	b	0x100787fdc <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x3cc>
+100787fcc: aa1f03e2    	mov	x2, xzr
+100787fd0: 14000003    	b	0x100787fdc <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x3cc>
+100787fd4: f94117e3    	ldr	x3, [sp, #0x228]
+100787fd8: aa1f03e2    	mov	x2, xzr
+100787fdc: 360000c2    	tbz	w2, #0x0, 0x100787ff4 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x3e4>
+100787fe0: 97e3f608    	bl	0x100085800 <_runtime.convTstring>
+100787fe4: aa0003e1    	mov	x1, x0
+100787fe8: d0005640    	adrp	x0, 0x101251000 <_type:*+0x12d4b8>
+100787fec: 912fc000    	add	x0, x0, #0xbf0
+100787ff0: 14000005    	b	0x100788004 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x3f4>
+100787ff4: 97e3f603    	bl	0x100085800 <_runtime.convTstring>
+100787ff8: aa0003e1    	mov	x1, x0
+100787ffc: b0005480    	adrp	x0, 0x101218000 <_type:*+0xf44b8>
+100788000: 91170000    	add	x0, x0, #0x5c0
+100788004: f94053e2    	ldr	x2, [sp, #0xa0]
+100788008: f90033e0    	str	x0, [sp, #0x60]
+10078800c: f90063e1    	str	x1, [sp, #0xc0]
+100788010: f90053e2    	str	x2, [sp, #0xa0]
+100788014: f9410fe4    	ldr	x4, [sp, #0x218]
+100788018: f9405c84    	ldr	x4, [x4, #0xb8]
+10078801c: f9400481    	ldr	x1, [x4, #0x8]
+100788020: 900051e0    	adrp	x0, 0x1011c4000 <_type:*+0xa04b8>
+100788024: 911aa000    	add	x0, x0, #0x6a8
+100788028: f9406be2    	ldr	x2, [sp, #0xd0]
+10078802c: f9403fe3    	ldr	x3, [sp, #0x78]
+100788030: 97e212d4    	bl	0x10000cb80 <_runtime.mapaccess1_faststr>
+100788034: a9400c02    	ldp	x2, x3, [x0]
+100788038: b5000723    	cbnz	x3, 0x10078811c <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x50c>
+10078803c: f9406be0    	ldr	x0, [sp, #0xd0]
+100788040: f9403fe1    	ldr	x1, [sp, #0x78]
+100788044: 97f55e63    	bl	0x1004df9d0 <_github.com/Suhaibinator/open-splunk/internal/eventfields.IsCollectorReservedRoot>
+100788048: 360000a0    	tbz	w0, #0x0, 0x10078805c <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x44c>
+10078804c: f94047e2    	ldr	x2, [sp, #0x88]
+100788050: f94043e1    	ldr	x1, [sp, #0x80]
+100788054: f9406fe3    	ldr	x3, [sp, #0xd8]
+100788058: 17ffff2b    	b	0x100787d04 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0xf4>
+10078805c: f94033e0    	ldr	x0, [sp, #0x60]
+100788060: f94063e1    	ldr	x1, [sp, #0xc0]
+100788064: 97ffe61f    	bl	0x1007818e0 <_github.com/Suhaibinator/open-splunk/internal/collector.typedJSONValue>
+100788068: b5001441    	cbnz	x1, 0x1007882f0 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x6e0>
+10078806c: f90077e0    	str	x0, [sp, #0xe8]
+100788070: b27a03e0    	orr	x0, xzr, #0x40
+100788074: d0005901    	adrp	x1, 0x1012aa000 <_type:*+0x1864b8>
+100788078: 912ce021    	add	x1, x1, #0xb38
+10078807c: b24003e2    	orr	x2, xzr, #0x1
+100788080: 97e26630    	bl	0x100021940 <_runtime.mallocgcSmallScanNoHeaderSC6>
+100788084: f9403fe3    	ldr	x3, [sp, #0x78]
+100788088: f9000803    	str	x3, [x0, #0x10]
+10078808c: b00062db    	adrp	x27, 0x1013e1000 <_modernc.org/sqlite/lib._posixIoFinder>
+100788090: b9481363    	ldr	w3, [x27, #0x810]
+100788094: 35000083    	cbnz	w3, 0x1007880a4 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x494>
+100788098: f9406be5    	ldr	x5, [sp, #0xd0]
+10078809c: f94077e6    	ldr	x6, [sp, #0xe8]
+1007880a0: 14000005    	b	0x1007880b4 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x4a4>
+1007880a4: 97e41f4f    	bl	0x10008fde0 <_runtime.gcWriteBarrier2>
+1007880a8: f9406be5    	ldr	x5, [sp, #0xd0]
+1007880ac: f94077e6    	ldr	x6, [sp, #0xe8]
+1007880b0: a9001b25    	stp	x5, x6, [x25]
+1007880b4: f9000405    	str	x5, [x0, #0x8]
+1007880b8: f9000c06    	str	x6, [x0, #0x18]
+1007880bc: f94043e5    	ldr	x5, [sp, #0x80]
+1007880c0: 910004a1    	add	x1, x5, #0x1
+1007880c4: f94047e2    	ldr	x2, [sp, #0x88]
+1007880c8: eb01005f    	cmp	x2, x1
+1007880cc: 54000063    	b.lo	0x1007880d8 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x4c8>
+1007880d0: f9406fe3    	ldr	x3, [sp, #0xd8]
+1007880d4: 14000009    	b	0x1007880f8 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x4e8>
+1007880d8: f900ffe0    	str	x0, [sp, #0x1f8]
+1007880dc: f9406fe0    	ldr	x0, [sp, #0xd8]
+1007880e0: b24003e3    	orr	x3, xzr, #0x1
+1007880e4: 90004ee4    	adrp	x4, 0x101164000 <_type:*+0x404b8>
+1007880e8: 9117e084    	add	x4, x4, #0x5f8
+1007880ec: 97e40ad9    	bl	0x10008ac50 <_runtime.growslice>
+1007880f0: aa0003e3    	mov	x3, x0
+1007880f4: f940ffe0    	ldr	x0, [sp, #0x1f8]
+1007880f8: d1000424    	sub	x4, x1, #0x1
+1007880fc: b00062db    	adrp	x27, 0x1013e1000 <_modernc.org/sqlite/lib._posixIoFinder>
+100788100: b9481365    	ldr	w5, [x27, #0x810]
+100788104: 34000085    	cbz	w5, 0x100788114 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x504>
+100788108: f8647865    	ldr	x5, [x3, x4, lsl #3]
+10078810c: 97e41f35    	bl	0x10008fde0 <_runtime.gcWriteBarrier2>
+100788110: a9001720    	stp	x0, x5, [x25]
+100788114: f8247860    	str	x0, [x3, x4, lsl #3]
+100788118: 17fffefb    	b	0x100787d04 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0xf4>
+10078811c: f9410fe0    	ldr	x0, [sp, #0x218]
+100788120: f94113e1    	ldr	x1, [sp, #0x220]
+100788124: f94033e4    	ldr	x4, [sp, #0x60]
+100788128: f94063e5    	ldr	x5, [sp, #0xc0]
+10078812c: 94000261    	bl	0x100788ab0 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).nativeCanonical>
+100788130: b5000fe0    	cbnz	x0, 0x10078832c <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x71c>
+100788134: f94047e2    	ldr	x2, [sp, #0x88]
+100788138: f94043e1    	ldr	x1, [sp, #0x80]
+10078813c: f9406fe3    	ldr	x3, [sp, #0xd8]
+100788140: 17fffef1    	b	0x100787d04 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0xf4>
+100788144: f940dfe4    	ldr	x4, [sp, #0x1b8]
+100788148: b4000204    	cbz	x4, 0x100788188 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x578>
+10078814c: f94113e4    	ldr	x4, [sp, #0x220]
+100788150: f9406084    	ldr	x4, [x4, #0xc0]
+100788154: a9010883    	stp	x3, x2, [x4, #0x10]
+100788158: b00062db    	adrp	x27, 0x1013e1000 <_modernc.org/sqlite/lib._posixIoFinder>
+10078815c: b9481362    	ldr	w2, [x27, #0x810]
+100788160: 34000082    	cbz	w2, 0x100788170 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x560>
+100788164: f9400482    	ldr	x2, [x4, #0x8]
+100788168: 97e41f1e    	bl	0x10008fde0 <_runtime.gcWriteBarrier2>
+10078816c: a9000b20    	stp	x0, x2, [x25]
+100788170: f9000480    	str	x0, [x4, #0x8]
+100788174: aa1f03e0    	mov	x0, xzr
+100788178: aa1f03e1    	mov	x1, xzr
+10078817c: a97ffbfd    	ldp	x29, x30, [sp, #-0x8]
+100788180: 910843ff    	add	sp, sp, #0x210
+100788184: d65f03c0    	ret
+100788188: b27c03e0    	orr	x0, xzr, #0x10
+10078818c: b00055e1    	adrp	x1, 0x101245000 <_type:*+0x1214b8>
+100788190: 91206021    	add	x1, x1, #0x818
+100788194: b24003e2    	orr	x2, xzr, #0x1
+100788198: 97e26252    	bl	0x100020ae0 <_runtime.mallocgcSmallScanNoHeaderSC2>
+10078819c: b0000bc3    	adrp	x3, 0x100901000 <_runtime.rodata+0x101c0>
+1007881a0: 910db863    	add	x3, x3, #0x36e
+1007881a4: d28002e4    	mov	x4, #0x17               ; =23
+1007881a8: a9001003    	stp	x3, x4, [x0]
+1007881ac: aa0003e1    	mov	x1, x0
+1007881b0: f0005b20    	adrp	x0, 0x1012ef000 <_type:*+0x1cb4b8>
+1007881b4: 910de000    	add	x0, x0, #0x378
+1007881b8: a97ffbfd    	ldp	x29, x30, [sp, #-0x8]
+1007881bc: 910843ff    	add	sp, sp, #0x210
+1007881c0: d65f03c0    	ret
+1007881c4: b27c03e0    	orr	x0, xzr, #0x10
+1007881c8: b00055e1    	adrp	x1, 0x101245000 <_type:*+0x1214b8>
+1007881cc: 91206021    	add	x1, x1, #0x818
+1007881d0: b24003e2    	orr	x2, xzr, #0x1
+1007881d4: 97e26243    	bl	0x100020ae0 <_runtime.mallocgcSmallScanNoHeaderSC2>
+1007881d8: d0000c03    	adrp	x3, 0x10090a000 <_runtime.rodata+0x191c0>
+1007881dc: 9101e063    	add	x3, x3, #0x78
+1007881e0: b27b03e4    	orr	x4, xzr, #0x20
+1007881e4: a9001003    	stp	x3, x4, [x0]
+1007881e8: aa0003e1    	mov	x1, x0
+1007881ec: f0005b20    	adrp	x0, 0x1012ef000 <_type:*+0x1cb4b8>
+1007881f0: 910de000    	add	x0, x0, #0x378
+1007881f4: a97ffbfd    	ldp	x29, x30, [sp, #-0x8]
+1007881f8: 910843ff    	add	sp, sp, #0x210
+1007881fc: d65f03c0    	ret
+100788200: b27c03e0    	orr	x0, xzr, #0x10
+100788204: b00055e1    	adrp	x1, 0x101245000 <_type:*+0x1214b8>
+100788208: 91206021    	add	x1, x1, #0x818
+10078820c: b24003e2    	orr	x2, xzr, #0x1
+100788210: 97e26234    	bl	0x100020ae0 <_runtime.mallocgcSmallScanNoHeaderSC2>
+100788214: 90000bc3    	adrp	x3, 0x100900000 <_runtime.rodata+0xf1c0>
+100788218: 91127c63    	add	x3, x3, #0x49f
+10078821c: d28002c4    	mov	x4, #0x16               ; =22
+100788220: a9001003    	stp	x3, x4, [x0]
+100788224: aa0003e1    	mov	x1, x0
+100788228: f0005b20    	adrp	x0, 0x1012ef000 <_type:*+0x1cb4b8>
+10078822c: 910de000    	add	x0, x0, #0x378
+100788230: a97ffbfd    	ldp	x29, x30, [sp, #-0x8]
+100788234: 910843ff    	add	sp, sp, #0x210
+100788238: d65f03c0    	ret
+10078823c: b27c03e0    	orr	x0, xzr, #0x10
+100788240: b00055e1    	adrp	x1, 0x101245000 <_type:*+0x1214b8>
+100788244: 91206021    	add	x1, x1, #0x818
+100788248: b24003e2    	orr	x2, xzr, #0x1
+10078824c: 97e26225    	bl	0x100020ae0 <_runtime.mallocgcSmallScanNoHeaderSC2>
+100788250: d0000bc3    	adrp	x3, 0x100902000 <_runtime.rodata+0x111c0>
+100788254: 913d0063    	add	x3, x3, #0xf40
+100788258: d2800324    	mov	x4, #0x19               ; =25
+10078825c: a9001003    	stp	x3, x4, [x0]
+100788260: aa0003e1    	mov	x1, x0
+100788264: f0005b20    	adrp	x0, 0x1012ef000 <_type:*+0x1cb4b8>
+100788268: 910de000    	add	x0, x0, #0x378
+10078826c: a97ffbfd    	ldp	x29, x30, [sp, #-0x8]
+100788270: 910843ff    	add	sp, sp, #0x210
+100788274: d65f03c0    	ret
+100788278: b27c03e0    	orr	x0, xzr, #0x10
+10078827c: b00055e1    	adrp	x1, 0x101245000 <_type:*+0x1214b8>
+100788280: 91206021    	add	x1, x1, #0x818
+100788284: b24003e2    	orr	x2, xzr, #0x1
+100788288: 97e26216    	bl	0x100020ae0 <_runtime.mallocgcSmallScanNoHeaderSC2>
+10078828c: b0000be3    	adrp	x3, 0x100905000 <_runtime.rodata+0x141c0>
+100788290: 9138c463    	add	x3, x3, #0xe31
+100788294: b27e0be4    	orr	x4, xzr, #0x1c
+100788298: a9001003    	stp	x3, x4, [x0]
+10078829c: aa0003e1    	mov	x1, x0
+1007882a0: f0005b20    	adrp	x0, 0x1012ef000 <_type:*+0x1cb4b8>
+1007882a4: 910de000    	add	x0, x0, #0x378
+1007882a8: a97ffbfd    	ldp	x29, x30, [sp, #-0x8]
+1007882ac: 910843ff    	add	sp, sp, #0x210
+1007882b0: d65f03c0    	ret
+1007882b4: b27c03e0    	orr	x0, xzr, #0x10
+1007882b8: b00055e1    	adrp	x1, 0x101245000 <_type:*+0x1214b8>
+1007882bc: 91206021    	add	x1, x1, #0x818
+1007882c0: b24003e2    	orr	x2, xzr, #0x1
+1007882c4: 97e26207    	bl	0x100020ae0 <_runtime.mallocgcSmallScanNoHeaderSC2>
+1007882c8: d0000be3    	adrp	x3, 0x100906000 <_runtime.rodata+0x151c0>
+1007882cc: 913af863    	add	x3, x3, #0xebe
+1007882d0: d28003a4    	mov	x4, #0x1d               ; =29
+1007882d4: a9001003    	stp	x3, x4, [x0]
+1007882d8: aa0003e1    	mov	x1, x0
+1007882dc: f0005b20    	adrp	x0, 0x1012ef000 <_type:*+0x1cb4b8>
+1007882e0: 910de000    	add	x0, x0, #0x378
+1007882e4: a97ffbfd    	ldp	x29, x30, [sp, #-0x8]
+1007882e8: 910843ff    	add	sp, sp, #0x210
+1007882ec: d65f03c0    	ret
+1007882f0: b27c03e0    	orr	x0, xzr, #0x10
+1007882f4: b00055e1    	adrp	x1, 0x101245000 <_type:*+0x1214b8>
+1007882f8: 91206021    	add	x1, x1, #0x818
+1007882fc: b24003e2    	orr	x2, xzr, #0x1
+100788300: 97e261f8    	bl	0x100020ae0 <_runtime.mallocgcSmallScanNoHeaderSC2>
+100788304: f0000bc3    	adrp	x3, 0x100903000 <_runtime.rodata+0x121c0>
+100788308: 913dec63    	add	x3, x3, #0xf7b
+10078830c: d2800344    	mov	x4, #0x1a               ; =26
+100788310: a9001003    	stp	x3, x4, [x0]
+100788314: aa0003e1    	mov	x1, x0
+100788318: f0005b20    	adrp	x0, 0x1012ef000 <_type:*+0x1cb4b8>
+10078831c: 910de000    	add	x0, x0, #0x378
+100788320: a97ffbfd    	ldp	x29, x30, [sp, #-0x8]
+100788324: 910843ff    	add	sp, sp, #0x210
+100788328: d65f03c0    	ret
+10078832c: a97ffbfd    	ldp	x29, x30, [sp, #-0x8]
+100788330: 910843ff    	add	sp, sp, #0x210
+100788334: d65f03c0    	ret
+100788338: 97e41f5e    	bl	0x1000900b0 <_runtime.panicBounds>
+10078833c: 97e41f5d    	bl	0x1000900b0 <_runtime.panicBounds>
+100788340: aa0b03e8    	mov	x8, x11
+100788344: eb0800df    	cmp	x6, x8
+100788348: 540001ed    	b.le	0x100788384 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x774>
+10078834c: 54001709    	b.ls	0x10078862c <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0xa1c>
+100788350: 386868ea    	ldrb	w10, [x7, x8]
+100788354: 9100050b    	add	x11, x8, #0x1
+100788358: 7101715f    	cmp	w10, #0x5c
+10078835c: 540000c1    	b.ne	0x100788374 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x764>
+100788360: eb0b00df    	cmp	x6, x11
+100788364: 5400004d    	b.le	0x10078836c <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x75c>
+100788368: 9100090b    	add	x11, x8, #0x2
+10078836c: b24003e9    	orr	x9, xzr, #0x1
+100788370: 17fffff4    	b	0x100788340 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x730>
+100788374: 7100895f    	cmp	w10, #0x22
+100788378: 54fffe41    	b.ne	0x100788340 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x730>
+10078837c: eb0800df    	cmp	x6, x8
+100788380: 14000002    	b	0x100788388 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x778>
+100788384: aa0803eb    	mov	x11, x8
+100788388: 54000d8d    	b.le	0x100788538 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x928>
+10078838c: f9005be4    	str	x4, [sp, #0xb0]
+100788390: f9005fe0    	str	x0, [sp, #0xb8]
+100788394: f90057eb    	str	x11, [sp, #0xa8]
+100788398: 39017fe9    	strb	w9, [sp, #0x5f]
+10078839c: eb0b00df    	cmp	x6, x11
+1007883a0: 540000ed    	b.le	0x1007883bc <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x7ac>
+1007883a4: 54001429    	b.ls	0x100788628 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0xa18>
+1007883a8: 386b68e8    	ldrb	w8, [x7, x11]
+1007883ac: 7100811f    	cmp	w8, #0x20
+1007883b0: 54000060    	b.eq	0x1007883bc <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x7ac>
+1007883b4: 7100251f    	cmp	w8, #0x9
+1007883b8: 54000c01    	b.ne	0x100788538 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x928>
+1007883bc: b27c03e0    	orr	x0, xzr, #0x10
+1007883c0: 90005481    	adrp	x1, 0x101218000 <_type:*+0xf44b8>
+1007883c4: 91170021    	add	x1, x1, #0x5c0
+1007883c8: b24003e2    	orr	x2, xzr, #0x1
+1007883cc: 97e261c5    	bl	0x100020ae0 <_runtime.mallocgcSmallScanNoHeaderSC2>
+1007883d0: f90103e0    	str	x0, [sp, #0x200]
+1007883d4: 39417fe1    	ldrb	w1, [sp, #0x5f]
+1007883d8: 37000281    	tbnz	w1, #0x0, 0x100788428 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x818>
+1007883dc: f94057e3    	ldr	x3, [sp, #0xa8]
+1007883e0: d1000464    	sub	x4, x3, #0x1
+1007883e4: f9411fe5    	ldr	x5, [sp, #0x238]
+1007883e8: eb0400bf    	cmp	x5, x4
+1007883ec: 540011c3    	b.lo	0x100788624 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0xa14>
+1007883f0: f9405fe6    	ldr	x6, [sp, #0xb8]
+1007883f4: eb06009f    	cmp	x4, x6
+1007883f8: 54001143    	b.lo	0x100788620 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0xa10>
+1007883fc: f94053e4    	ldr	x4, [sp, #0xa0]
+100788400: cb040067    	sub	x7, x3, x4
+100788404: cb0400a4    	sub	x4, x5, x4
+100788408: d1000884    	sub	x4, x4, #0x2
+10078840c: cb0403e4    	neg	x4, x4
+100788410: 8a84fcc4    	and	x4, x6, x4, asr #63
+100788414: f94117e6    	ldr	x6, [sp, #0x228]
+100788418: 8b0400c1    	add	x1, x6, x4
+10078841c: d1000ce2    	sub	x2, x7, #0x3
+100788420: aa1f03e4    	mov	x4, xzr
+100788424: 1400005f    	b	0x1007885a0 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x990>
+100788428: f9411fe8    	ldr	x8, [sp, #0x238]
+10078842c: f94057e9    	ldr	x9, [sp, #0xa8]
+100788430: eb09011f    	cmp	x8, x9
+100788434: 54000b23    	b.lo	0x100788598 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x988>
+100788438: f9405bea    	ldr	x10, [sp, #0xb0]
+10078843c: eb0a013f    	cmp	x9, x10
+100788440: 54000aa3    	b.lo	0x100788594 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x984>
+100788444: f94053eb    	ldr	x11, [sp, #0xa0]
+100788448: cb0b0108    	sub	x8, x8, x11
+10078844c: cb0b0129    	sub	x9, x9, x11
+100788450: d1000502    	sub	x2, x8, #0x1
+100788454: f9004fe2    	str	x2, [sp, #0x98]
+100788458: d1000521    	sub	x1, x9, #0x1
+10078845c: f9004be1    	str	x1, [sp, #0x90]
+100788460: cb0203e8    	neg	x8, x2
+100788464: 8a88fd48    	and	x8, x10, x8, asr #63
+100788468: f94117e9    	ldr	x9, [sp, #0x228]
+10078846c: 8b080128    	add	x8, x9, x8
+100788470: f90073e8    	str	x8, [sp, #0xe0]
+100788474: f0005b29    	adrp	x9, 0x1012ef000 <_type:*+0x1cb4b8>
+100788478: 91186129    	add	x9, x9, #0x618
+10078847c: f000604a    	adrp	x10, 0x101393000 <_encoding/json/jsontext..stmp_18+0x18>
+100788480: 911d814a    	add	x10, x10, #0x760
+100788484: a91eabe9    	stp	x9, x10, [sp, #0x1e8]
+100788488: f0004f83    	adrp	x3, 0x10117b000 <_type:*+0x574b8>
+10078848c: 912fe063    	add	x3, x3, #0xbf8
+100788490: aa0003e4    	mov	x4, x0
+100788494: 9107a3e5    	add	x5, sp, #0x1e8
+100788498: b24003e6    	orr	x6, xzr, #0x1
+10078849c: aa0603e7    	mov	x7, x6
+1007884a0: aa0803e0    	mov	x0, x8
+1007884a4: 97e7fd97    	bl	0x100187b00 <_encoding/json/v2.Unmarshal>
+1007884a8: b50002a0    	cbnz	x0, 0x1007884fc <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x8ec>
+1007884ac: f94073e0    	ldr	x0, [sp, #0xe0]
+1007884b0: f9404be1    	ldr	x1, [sp, #0x90]
+1007884b4: f9404fe2    	ldr	x2, [sp, #0x98]
+1007884b8: 97ffefee    	bl	0x100784470 <_github.com/Suhaibinator/open-splunk/internal/collector.nativeJSONSurrogatesValid>
+1007884bc: 370005c0    	tbnz	w0, #0x0, 0x100788574 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x964>
+1007884c0: b27c03e0    	orr	x0, xzr, #0x10
+1007884c4: b00055e1    	adrp	x1, 0x101245000 <_type:*+0x1214b8>
+1007884c8: 91206021    	add	x1, x1, #0x818
+1007884cc: b24003e2    	orr	x2, xzr, #0x1
+1007884d0: 97e26184    	bl	0x100020ae0 <_runtime.mallocgcSmallScanNoHeaderSC2>
+1007884d4: d0000c83    	adrp	x3, 0x10091a000 <_runtime.rodata+0x291c0>
+1007884d8: 9110d063    	add	x3, x3, #0x434
+1007884dc: d2800684    	mov	x4, #0x34               ; =52
+1007884e0: a9001003    	stp	x3, x4, [x0]
+1007884e4: aa0003e1    	mov	x1, x0
+1007884e8: f0005b20    	adrp	x0, 0x1012ef000 <_type:*+0x1cb4b8>
+1007884ec: 910de000    	add	x0, x0, #0x378
+1007884f0: a97ffbfd    	ldp	x29, x30, [sp, #-0x8]
+1007884f4: 910843ff    	add	sp, sp, #0x210
+1007884f8: d65f03c0    	ret
+1007884fc: b27c03e0    	orr	x0, xzr, #0x10
+100788500: b00055e1    	adrp	x1, 0x101245000 <_type:*+0x1214b8>
+100788504: 91206021    	add	x1, x1, #0x818
+100788508: b24003e2    	orr	x2, xzr, #0x1
+10078850c: 97e26175    	bl	0x100020ae0 <_runtime.mallocgcSmallScanNoHeaderSC2>
+100788510: b0000be3    	adrp	x3, 0x100905000 <_runtime.rodata+0x141c0>
+100788514: 91393463    	add	x3, x3, #0xe4d
+100788518: b27e0be4    	orr	x4, xzr, #0x1c
+10078851c: a9001003    	stp	x3, x4, [x0]
+100788520: aa0003e1    	mov	x1, x0
+100788524: f0005b20    	adrp	x0, 0x1012ef000 <_type:*+0x1cb4b8>
+100788528: 910de000    	add	x0, x0, #0x378
+10078852c: a97ffbfd    	ldp	x29, x30, [sp, #-0x8]
+100788530: 910843ff    	add	sp, sp, #0x210
+100788534: d65f03c0    	ret
+100788538: b27c03e0    	orr	x0, xzr, #0x10
+10078853c: b00055e1    	adrp	x1, 0x101245000 <_type:*+0x1214b8>
+100788540: 91206021    	add	x1, x1, #0x818
+100788544: b24003e2    	orr	x2, xzr, #0x1
+100788548: 97e26166    	bl	0x100020ae0 <_runtime.mallocgcSmallScanNoHeaderSC2>
+10078854c: 90000be3    	adrp	x3, 0x100904000 <_runtime.rodata+0x131c0>
+100788550: 913a3463    	add	x3, x3, #0xe8d
+100788554: d2800364    	mov	x4, #0x1b               ; =27
+100788558: a9001003    	stp	x3, x4, [x0]
+10078855c: aa0003e1    	mov	x1, x0
+100788560: f0005b20    	adrp	x0, 0x1012ef000 <_type:*+0x1cb4b8>
+100788564: 910de000    	add	x0, x0, #0x378
+100788568: a97ffbfd    	ldp	x29, x30, [sp, #-0x8]
+10078856c: 910843ff    	add	sp, sp, #0x210
+100788570: d65f03c0    	ret
+100788574: f94103e2    	ldr	x2, [sp, #0x200]
+100788578: a9400440    	ldp	x0, x1, [x2]
+10078857c: 97e3f4a1    	bl	0x100085800 <_runtime.convTstring>
+100788580: f94057e2    	ldr	x2, [sp, #0xa8]
+100788584: aa0003e1    	mov	x1, x0
+100788588: 90005480    	adrp	x0, 0x101218000 <_type:*+0xf44b8>
+10078858c: 91170000    	add	x0, x0, #0x5c0
+100788590: 17fffe9e    	b	0x100788008 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x3f8>
+100788594: 97e41ec7    	bl	0x1000900b0 <_runtime.panicBounds>
+100788598: 97e41ec6    	bl	0x1000900b0 <_runtime.panicBounds>
+10078859c: 91000484    	add	x4, x4, #0x1
+1007885a0: eb02009f    	cmp	x4, x2
+1007885a4: 5400026a    	b.ge	0x1007885f0 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x9e0>
+1007885a8: 38646827    	ldrb	w7, [x1, x4]
+1007885ac: 710080ff    	cmp	w7, #0x20
+1007885b0: 54ffff62    	b.hs	0x10078859c <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x98c>
+1007885b4: b27c03e0    	orr	x0, xzr, #0x10
+1007885b8: b00055e1    	adrp	x1, 0x101245000 <_type:*+0x1214b8>
+1007885bc: 91206021    	add	x1, x1, #0x818
+1007885c0: b24003e2    	orr	x2, xzr, #0x1
+1007885c4: 97e26147    	bl	0x100020ae0 <_runtime.mallocgcSmallScanNoHeaderSC2>
+1007885c8: b0000be3    	adrp	x3, 0x100905000 <_runtime.rodata+0x141c0>
+1007885cc: 91393463    	add	x3, x3, #0xe4d
+1007885d0: b27e0be4    	orr	x4, xzr, #0x1c
+1007885d4: a9001003    	stp	x3, x4, [x0]
+1007885d8: aa0003e1    	mov	x1, x0
+1007885dc: f0005b20    	adrp	x0, 0x1012ef000 <_type:*+0x1cb4b8>
+1007885e0: 910de000    	add	x0, x0, #0x378
+1007885e4: a97ffbfd    	ldp	x29, x30, [sp, #-0x8]
+1007885e8: 910843ff    	add	sp, sp, #0x210
+1007885ec: d65f03c0    	ret
+1007885f0: aa1f03e0    	mov	x0, xzr
+1007885f4: 97e38a3b    	bl	0x10006aee0 <_runtime.slicebytetostring>
+1007885f8: f94103e3    	ldr	x3, [sp, #0x200]
+1007885fc: f9000461    	str	x1, [x3, #0x8]
+100788600: b00062db    	adrp	x27, 0x1013e1000 <_modernc.org/sqlite/lib._posixIoFinder>
+100788604: b9481364    	ldr	w4, [x27, #0x810]
+100788608: 34000084    	cbz	w4, 0x100788618 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0xa08>
+10078860c: f9400062    	ldr	x2, [x3]
+100788610: 97e41df4    	bl	0x10008fde0 <_runtime.gcWriteBarrier2>
+100788614: a9000b20    	stp	x0, x2, [x25]
+100788618: f9000060    	str	x0, [x3]
+10078861c: 17ffffd6    	b	0x100788574 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt+0x964>
+100788620: 97e41ea4    	bl	0x1000900b0 <_runtime.panicBounds>
+100788624: 97e41ea3    	bl	0x1000900b0 <_runtime.panicBounds>
+100788628: 97e41ea2    	bl	0x1000900b0 <_runtime.panicBounds>
+10078862c: 97e41ea1    	bl	0x1000900b0 <_runtime.panicBounds>
+100788630: 97e41ea0    	bl	0x1000900b0 <_runtime.panicBounds>
+100788634: 97e41e9f    	bl	0x1000900b0 <_runtime.panicBounds>
+100788638: 97e41e9e    	bl	0x1000900b0 <_runtime.panicBounds>
+10078863c: 97e41e9d    	bl	0x1000900b0 <_runtime.panicBounds>
+100788640: d503201f    	nop
+100788644: a90087e0    	stp	x0, x1, [sp, #0x8]
+100788648: a9018fe2    	stp	x2, x3, [sp, #0x18]
+10078864c: f90017e4    	str	x4, [sp, #0x28]
+100788650: aa1e03e3    	mov	x3, x30
+100788654: 97e415ff    	bl	0x10008de50 <_runtime.morestack_noctxt.abi0>
+100788658: a94087e0    	ldp	x0, x1, [sp, #0x8]
+10078865c: a9418fe2    	ldp	x2, x3, [sp, #0x18]
+100788660: f94017e4    	ldr	x4, [sp, #0x28]
+100788664: 17fffd6b    	b	0x100787c10 <_github.com/Suhaibinator/open-splunk/internal/collector.(*Decoder).decodeLogfmt>
+		...

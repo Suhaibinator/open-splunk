@@ -1,0 +1,127 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+                                                   │ /tmp/collector-perf-20260908/before-extended-initial.txt │ /tmp/collector-perf-20260908/after-initial.txt │
+                                                   │                          sec/op                          │        sec/op          vs base                 │
+NDJSONDecoder/canonical                                                                          1.791µ ± ∞ ¹            1.640µ ± ∞ ¹        ~ (p=0.100 n=3) ²
+NDJSONDecoder/nested                                                                             3.464µ ± ∞ ¹            3.299µ ± ∞ ¹        ~ (p=0.100 n=3) ²
+NDJSONDecoder/high_fields                                                                        280.7µ ± ∞ ¹            253.0µ ± ∞ ¹        ~ (p=0.100 n=3) ²
+NativeDecoder/docker-json-file                                                                   2.288µ ± ∞ ¹            2.088µ ± ∞ ¹        ~ (p=0.100 n=3) ²
+NativeDecoder/nginx-combined                                                                     2.190µ ± ∞ ¹            1.685µ ± ∞ ¹        ~ (p=0.100 n=3) ²
+NativeDecoder/apache-common                                                                      1.846µ ± ∞ ¹            1.542µ ± ∞ ¹        ~ (p=0.100 n=3) ²
+NativeDecoder/apache-combined                                                                    2.149µ ± ∞ ¹            1.695µ ± ∞ ¹        ~ (p=0.100 n=3) ²
+NativeDecoder/logfmt                                                                             2.679µ ± ∞ ¹            1.956µ ± ∞ ¹        ~ (p=0.100 n=3) ²
+NativeDecoder/log4j2-pattern                                                                     1.274µ ± ∞ ¹            1.047µ ± ∞ ¹        ~ (p=0.100 n=3) ²
+NativeDecoder/logback-pattern                                                                    1.267µ ± ∞ ¹            1.029µ ± ∞ ¹        ~ (p=0.100 n=3) ²
+NativeMixedInputs/ndjson-only                                                                    2.981µ ± ∞ ¹            2.679µ ± ∞ ¹        ~ (p=0.100 n=3) ²
+NativeMixedInputs/ndjson-and-java                                                                2.834µ ± ∞ ¹            2.472µ ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorAllocationCases/logfmt_plain_large                                                     131.33µ ± ∞ ¹            82.11µ ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorAllocationCases/logfmt_escaped_large                                                    230.7µ ± ∞ ¹            230.4µ ± ∞ ¹        ~ (p=1.000 n=3) ²
+CollectorAllocationCases/logfmt_numeric_lookalikes                                               3.356µ ± ∞ ¹            1.570µ ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorAllocationCases/ndjson_constants                                                        2.045µ ± ∞ ¹            1.965µ ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorAllocationCases/logfmt_constants                                                        1.660µ ± ∞ ¹            1.525µ ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorAllocationCases/raw_large                                                               43.97µ ± ∞ ¹            43.45µ ± ∞ ¹        ~ (p=1.000 n=3) ²
+CollectorAllocationCases/access_plain                                                            2.107µ ± ∞ ¹            1.633µ ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorAllocationCases/access_binary                                                           2.143µ ± ∞ ¹            1.734µ ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorPatternAllocations/fields_1/bytes_32                                                    610.1n ± ∞ ¹            453.4n ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorPatternAllocations/fields_5/bytes_32                                                   1133.0n ± ∞ ¹            891.8n ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorPatternAllocations/fields_32/bytes_32                                                   5.361µ ± ∞ ¹            4.336µ ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorPatternAllocations/fields_1024/bytes_32                                                 153.1µ ± ∞ ¹            127.3µ ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorPatternAllocations/fields_5/bytes_1048576                                               653.9µ ± ∞ ¹            649.9µ ± ∞ ¹        ~ (p=0.400 n=3) ²
+geomean                                                                                          6.030µ                  4.987µ        -17.29%
+¹ need >= 6 samples for confidence interval at level 0.95
+² need >= 4 samples to detect a difference at alpha level 0.05
+
+                                                   │ /tmp/collector-perf-20260908/before-extended-initial.txt │ /tmp/collector-perf-20260908/after-initial.txt │
+                                                   │                           B/s                            │          B/s           vs base                 │
+NDJSONDecoder/canonical                                                                         54.85Mi ± ∞ ¹           59.89Mi ± ∞ ¹        ~ (p=0.100 n=3) ²
+NDJSONDecoder/nested                                                                            34.41Mi ± ∞ ¹           36.13Mi ± ∞ ¹        ~ (p=0.100 n=3) ²
+NDJSONDecoder/high_fields                                                                       48.23Mi ± ∞ ¹           53.52Mi ± ∞ ¹        ~ (p=0.100 n=3) ²
+NativeDecoder/docker-json-file                                                                  46.69Mi ± ∞ ¹           51.15Mi ± ∞ ¹        ~ (p=0.100 n=3) ²
+NativeDecoder/nginx-combined                                                                    44.41Mi ± ∞ ¹           57.74Mi ± ∞ ¹        ~ (p=0.100 n=3) ²
+NativeDecoder/apache-common                                                                     43.91Mi ± ∞ ¹           52.59Mi ± ∞ ¹        ~ (p=0.100 n=3) ²
+NativeDecoder/apache-combined                                                                   43.50Mi ± ∞ ¹           55.14Mi ± ∞ ¹        ~ (p=0.100 n=3) ²
+NativeDecoder/logfmt                                                                            39.86Mi ± ∞ ¹           54.61Mi ± ∞ ¹        ~ (p=0.100 n=3) ²
+NativeDecoder/log4j2-pattern                                                                    77.09Mi ± ∞ ¹           93.83Mi ± ∞ ¹        ~ (p=0.100 n=3) ²
+NativeDecoder/logback-pattern                                                                   49.67Mi ± ∞ ¹           61.20Mi ± ∞ ¹        ~ (p=0.100 n=3) ²
+NativeMixedInputs/ndjson-only                                                                   37.11Mi ± ∞ ¹           41.29Mi ± ∞ ¹        ~ (p=0.100 n=3) ²
+NativeMixedInputs/ndjson-and-java                                                               54.17Mi ± ∞ ¹           62.10Mi ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorAllocationCases/logfmt_plain_large                                                     476.0Mi ± ∞ ¹           761.4Mi ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorAllocationCases/logfmt_escaped_large                                                   203.3Mi ± ∞ ¹           203.5Mi ± ∞ ¹        ~ (p=1.000 n=3) ²
+CollectorAllocationCases/logfmt_numeric_lookalikes                                              22.45Mi ± ∞ ¹           48.00Mi ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorAllocationCases/ndjson_constants                                                       24.24Mi ± ∞ ¹           25.24Mi ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorAllocationCases/logfmt_constants                                                       22.97Mi ± ∞ ¹           25.02Mi ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorAllocationCases/raw_large                                                              1.302Gi ± ∞ ¹           1.317Gi ± ∞ ¹        ~ (p=1.000 n=3) ²
+CollectorAllocationCases/access_plain                                                           42.55Mi ± ∞ ¹           54.88Mi ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorAllocationCases/access_binary                                                          42.72Mi ± ∞ ¹           52.80Mi ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorPatternAllocations/fields_1/bytes_32                                                   50.02Mi ± ∞ ¹           67.31Mi ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorPatternAllocations/fields_5/bytes_32                                                   26.93Mi ± ∞ ¹           34.22Mi ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorPatternAllocations/fields_32/bytes_32                                                  33.08Mi ± ∞ ¹           40.91Mi ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorPatternAllocations/fields_1024/bytes_32                                                38.22Mi ± ∞ ¹           46.00Mi ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorPatternAllocations/fields_5/bytes_1048576                                              1.494Gi ± ∞ ¹           1.503Gi ± ∞ ¹        ~ (p=0.400 n=3) ²
+geomean                                                                                         62.67Mi                 75.79Mi        +20.93%
+¹ need >= 6 samples for confidence interval at level 0.95
+² need >= 4 samples to detect a difference at alpha level 0.05
+
+                                                   │ /tmp/collector-perf-20260908/before-extended-initial.txt │ /tmp/collector-perf-20260908/after-initial.txt │
+                                                   │                           B/op                           │         B/op           vs base                 │
+NDJSONDecoder/canonical                                                                         2.406Ki ± ∞ ¹           2.133Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+NDJSONDecoder/nested                                                                            4.695Ki ± ∞ ¹           4.352Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+NDJSONDecoder/high_fields                                                                       429.4Ki ± ∞ ¹           367.7Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+NativeDecoder/docker-json-file                                                                  2.977Ki ± ∞ ¹           2.625Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+NativeDecoder/nginx-combined                                                                    3.242Ki ± ∞ ¹           2.336Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+NativeDecoder/apache-common                                                                     2.602Ki ± ∞ ¹           2.156Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+NativeDecoder/apache-combined                                                                   3.242Ki ± ∞ ¹           2.336Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+NativeDecoder/logfmt                                                                            2.586Ki ± ∞ ¹           1.953Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+NativeDecoder/log4j2-pattern                                                                    1.852Ki ± ∞ ¹           1.344Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+NativeDecoder/logback-pattern                                                                   1.789Ki ± ∞ ¹           1.281Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+NativeMixedInputs/ndjson-only                                                                   4.578Ki ± ∞ ¹           3.875Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+NativeMixedInputs/ndjson-and-java                                                               4.133Ki ± ∞ ¹           3.281Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorAllocationCases/logfmt_plain_large                                                     137.3Ki ± ∞ ¹           136.9Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorAllocationCases/logfmt_escaped_large                                                   145.3Ki ± ∞ ¹           144.9Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorAllocationCases/logfmt_numeric_lookalikes                                              3.406Ki ± ∞ ¹           1.688Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorAllocationCases/ndjson_constants                                                       2.711Ki ± ∞ ¹           2.375Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorAllocationCases/logfmt_constants                                                       1.781Ki ± ∞ ¹           1.516Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorAllocationCases/raw_large                                                              129.0Ki ± ∞ ¹           128.7Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorAllocationCases/access_plain                                                           3.203Ki ± ∞ ¹           2.297Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorAllocationCases/access_binary                                                          3.242Ki ± ∞ ¹           2.383Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorPatternAllocations/fields_1/bytes_32                                                    1144.0 ± ∞ ¹             764.0 ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorPatternAllocations/fields_5/bytes_32                                                   1.875Ki ± ∞ ¹           1.348Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorPatternAllocations/fields_32/bytes_32                                                  9.148Ki ± ∞ ¹           6.770Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorPatternAllocations/fields_1024/bytes_32                                                259.4Ki ± ∞ ¹           197.8Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorPatternAllocations/fields_5/bytes_1048576                                              2.002Mi ± ∞ ¹           2.001Mi ± ∞ ¹        ~ (p=0.100 n=3) ²
+geomean                                                                                         8.675Ki                 6.933Ki        -20.08%
+¹ need >= 6 samples for confidence interval at level 0.95
+² need >= 4 samples to detect a difference at alpha level 0.05
+
+                                                   │ /tmp/collector-perf-20260908/before-extended-initial.txt │ /tmp/collector-perf-20260908/after-initial.txt │
+                                                   │                        allocs/op                         │       allocs/op        vs base                 │
+NDJSONDecoder/canonical                                                                           55.00 ± ∞ ¹             46.00 ± ∞ ¹        ~ (p=0.100 n=3) ²
+NDJSONDecoder/nested                                                                              129.0 ± ∞ ¹             119.0 ± ∞ ¹        ~ (p=0.100 n=3) ²
+NDJSONDecoder/high_fields                                                                        6.369k ± ∞ ¹            6.354k ± ∞ ¹        ~ (p=0.100 n=3) ²
+NativeDecoder/docker-json-file                                                                    72.00 ± ∞ ¹             62.00 ± ∞ ¹        ~ (p=0.100 n=3) ²
+NativeDecoder/nginx-combined                                                                      64.00 ± ∞ ¹             47.00 ± ∞ ¹        ~ (p=0.100 n=3) ²
+NativeDecoder/apache-common                                                                       56.00 ± ∞ ¹             42.00 ± ∞ ¹        ~ (p=0.100 n=3) ²
+NativeDecoder/apache-combined                                                                     64.00 ± ∞ ¹             47.00 ± ∞ ¹        ~ (p=0.100 n=3) ²
+NativeDecoder/logfmt                                                                              79.00 ± ∞ ¹             61.00 ± ∞ ¹        ~ (p=0.100 n=3) ²
+NativeDecoder/log4j2-pattern                                                                      36.00 ± ∞ ¹             25.00 ± ∞ ¹        ~ (p=0.100 n=3) ²
+NativeDecoder/logback-pattern                                                                     36.00 ± ∞ ¹             25.00 ± ∞ ¹        ~ (p=0.100 n=3) ²
+NativeMixedInputs/ndjson-only                                                                    100.00 ± ∞ ¹             80.00 ± ∞ ¹        ~ (p=0.100 n=3) ²
+NativeMixedInputs/ndjson-and-java                                                                 86.00 ± ∞ ¹             65.00 ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorAllocationCases/logfmt_plain_large                                                       32.00 ± ∞ ¹             22.00 ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorAllocationCases/logfmt_escaped_large                                                     33.00 ± ∞ ¹             23.00 ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorAllocationCases/logfmt_numeric_lookalikes                                                96.00 ± ∞ ¹             45.00 ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorAllocationCases/ndjson_constants                                                         58.00 ± ∞ ¹             49.00 ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorAllocationCases/logfmt_constants                                                         43.00 ± ∞ ¹             35.00 ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorAllocationCases/raw_large                                                                21.00 ± ∞ ¹             13.00 ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorAllocationCases/access_plain                                                             63.00 ± ∞ ¹             46.00 ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorAllocationCases/access_binary                                                            63.00 ± ∞ ¹             50.00 ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorPatternAllocations/fields_1/bytes_32                                                     24.00 ± ∞ ¹             14.00 ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorPatternAllocations/fields_5/bytes_32                                                     37.00 ± ∞ ¹             26.00 ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorPatternAllocations/fields_32/bytes_32                                                    120.0 ± ∞ ¹             107.0 ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorPatternAllocations/fields_1024/bytes_32                                                 3.098k ± ∞ ¹            3.083k ± ∞ ¹        ~ (p=0.100 n=3) ²
+CollectorPatternAllocations/fields_5/bytes_1048576                                                37.00 ± ∞ ¹             26.00 ± ∞ ¹        ~ (p=0.100 n=3) ²
+geomean                                                                                           77.47                   58.40        -24.62%
+¹ need >= 6 samples for confidence interval at level 0.95
+² need >= 4 samples to detect a difference at alpha level 0.05

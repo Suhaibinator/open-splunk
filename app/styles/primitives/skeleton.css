@@ -1,0 +1,51 @@
+/* Loading skeleton: decorative provisional geometry shared by result views. */
+@keyframes skeleton-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+
+  to {
+    background-position: -100% 0;
+  }
+}
+
+.skeleton {
+  animation: skeleton-shimmer var(--dur-skeleton) linear infinite;
+  background: linear-gradient(
+    90deg,
+    var(--skeleton-base),
+    var(--skeleton-highlight),
+    var(--skeleton-base)
+  );
+  background-size: var(--space-skeleton-shimmer-size) 100%;
+  border-radius: var(--radius-sm);
+  display: block;
+}
+
+.skeleton--block {
+  min-height: var(--space-skeleton-block-height);
+  width: 100%;
+}
+
+.skeleton--line {
+  height: var(--space-skeleton-line-height);
+  width: 100%;
+}
+
+.skeleton--line-short {
+  width: var(--space-skeleton-line-short);
+}
+
+.skeleton--line-medium {
+  width: var(--space-skeleton-line-medium);
+}
+
+.skeleton--line-long {
+  width: var(--space-skeleton-line-long);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+  }
+}

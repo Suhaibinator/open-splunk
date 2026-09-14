@@ -68,6 +68,9 @@ type Options struct {
 	InstanceID  string
 	Hello       HelloInfo
 
+	// DialTimeout bounds one whole connection attempt: opening the Collect
+	// stream (including the lazy transport dial), sending Hello, and receiving
+	// Ready. Zero disables the bound.
 	DialTimeout time.Duration
 	Backoff     BackoffPolicy
 

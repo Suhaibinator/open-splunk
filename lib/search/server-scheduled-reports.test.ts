@@ -45,6 +45,7 @@ function scheduledReportsBootstrap(): SystemBootstrapModel {
     indexes: [],
     selectedAppId: null,
     serverTime: new Date("2026-08-29T12:00:00.000Z"),
+    palette: "classic",
   };
 }
 

@@ -144,6 +144,20 @@ test("events per page offers 100 and 500 below the server maximum", () => {
   assert.doesNotMatch(markup, /Above server limit/u);
 });
 
+test("event display menu offers List, Raw, and Table as radio choices", () => {
+  const markup = renderEventsFooter({
+    backendResultTotalRows: 95,
+    eventPage: 1,
+    eventPageSize: 10,
+    pageCount: 10,
+    menu: "event-display",
+  });
+
+  const displays = [...markup.matchAll(/role="menuitemradio"[^>]*>.*?<strong>(List|Raw|Table)<\/strong>/gu)]
+    .map((match) => match[1]);
+  assert.deepEqual(displays, ["List", "Raw", "Table"]);
+});
+
 test("events per page keeps sizes above a lower server maximum but disables them", () => {
   const markup = renderEventsFooter({
     backendResultTotalRows: 95,

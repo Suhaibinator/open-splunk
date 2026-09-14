@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+package open_splunk;
+
+import "open_splunk/common.proto";
+import "open_splunk/result.proto";
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk;opensplunk";
+
+// PatternSensitivity selects the deterministic v1 normalization policy.
+enum PatternSensitivity {
+  PATTERN_SENSITIVITY_UNSPECIFIED = 0;
+  PATTERN_SENSITIVITY_PRECISE = 1;
+  PATTERN_SENSITIVITY_BALANCED = 2;
+  PATTERN_SENSITIVITY_BROAD = 3;
+}
+
+message SearchPattern {
+  // pattern_id is stable for one immutable result generation, algorithm
+  // version, sensitivity, and typed normalized signature.
+  string pattern_id = 1;
+  string signature = 2;
+  uint64 event_count = 3;
+}
+
+// POST /api/search/jobs/patterns/list
+message ListSearchPatternsRequest {
+  string search_job_id = 1;
+  PatternSensitivity sensitivity = 2;
+  PageRequest page = 3;
+  // Required immutable retained-result identity obtained from a final result
+  // page. It prevents a continuation from silently switching generations.
+  string snapshot_ref = 4;
+}
+
+message ListSearchPatternsResponse {
+  repeated SearchPattern patterns = 1;
+  uint64 eligible_event_count = 2;
+  uint64 excluded_event_count = 3;
+  PageResponse page = 4;
+  string snapshot_ref = 5;
+  string algorithm_version = 6;
+  uint64 retained_event_count = 7;
+  bool retained_truncated = 8;
+  bool snapshot_complete = 9;
+}
+
+// POST /api/search/jobs/patterns/members
+message ListSearchPatternMembersRequest {
+  string search_job_id = 1;
+  string pattern_id = 2;
+  PatternSensitivity sensitivity = 3;
+  PageRequest page = 4;
+  // Required immutable retained-result identity obtained from a final result
+  // page. It must identify the generation that minted pattern_id.
+  string snapshot_ref = 5;
+  // Exact, case-sensitive source columns. Omission selects every column.
+  repeated string columns = 6;
+}
+
+message ListSearchPatternMembersResponse {
+  string pattern_id = 1;
+  // Rows preserve their original retained ordinals and source types.
+  ResultPage result_page = 2;
+}

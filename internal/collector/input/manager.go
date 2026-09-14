@@ -660,12 +660,16 @@ func (m *manager) updateState(discovered int, openErr string) {
 	m.stateMu.Lock()
 	defer m.stateMu.Unlock()
 	switch {
+	case readErr != "":
+		// A retained tailer can still be failing (for example, blocked framing
+		// recovery on a file rotated outside the include globs) after discovery
+		// matches nothing. That active error outranks MISSING, which would
+		// otherwise hide it until the source drained.
+		m.state = opensplunk.CollectorInputState_COLLECTOR_INPUT_STATE_ERROR
+		m.status = readErr
 	case discovered == 0:
 		m.state = opensplunk.CollectorInputState_COLLECTOR_INPUT_STATE_MISSING
 		m.status = fmt.Sprintf("no files match include globs %v", m.cfg.Include)
-	case readErr != "":
-		m.state = opensplunk.CollectorInputState_COLLECTOR_INPUT_STATE_ERROR
-		m.status = readErr
 	case openErr != "":
 		m.state = opensplunk.CollectorInputState_COLLECTOR_INPUT_STATE_UNREADABLE
 		m.status = openErr
@@ -1186,7 +1190,22 @@ func (t *tailer) run(ctx context.Context) {
 			}
 			continue
 		}
-		if !t.commitBatch(ctx, batch) {
+		guard, commitErr := t.prepareCommit(ctx, batch)
+		if commitErr != nil {
+			// The recovery artifact could not be persisted. Keep the descriptor
+			// and the health error, leave the cursor at the batch start, and retry
+			// the same source range after a poll interval. Exiting here would
+			// close a rotated or unlinked file whose unread bytes are reachable
+			// only through this descriptor.
+			batch = nil
+			t.m.releaseStagedTransaction()
+			t.retireStable = 0
+			if !pollTimer.wait(ctx) {
+				return
+			}
+			continue
+		}
+		if !t.publishBatch(ctx, batch, guard) {
 			t.m.releaseStagedTransaction()
 			return
 		}

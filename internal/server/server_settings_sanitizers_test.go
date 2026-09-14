@@ -30,6 +30,68 @@ func TestSanitizeGetServerSettingsRequest(t *testing.T) {
 	}
 }
 
+func TestSanitizeGetServerAppearanceRequest(t *testing.T) {
+	t.Parallel()
+
+	unknown := []byte{0xf8, 0x3f, 0x01}
+	request := &opensplunk.GetServerAppearanceRequest{}
+	request.ProtoReflect().SetUnknown(unknown)
+	sanitized, err := sanitizeGetServerAppearanceRequest(
+		context.Background(),
+		request,
+	)
+	if err != nil || sanitized != request {
+		t.Fatalf("sanitize response/error = %v/%v", sanitized, err)
+	}
+	if !bytes.Equal(sanitized.ProtoReflect().GetUnknown(), unknown) {
+		t.Fatal("sanitizer did not tolerate the unknown field")
+	}
+}
+
+func TestSanitizeUpdateServerAppearanceRequest(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		palette opensplunk.UiPalette
+		want    string
+	}{
+		{name: "classic is accepted", palette: opensplunk.UiPalette_UI_PALETTE_CLASSIC},
+		{name: "ocean is accepted", palette: opensplunk.UiPalette_UI_PALETTE_OCEAN},
+		{name: "ember is accepted", palette: opensplunk.UiPalette_UI_PALETTE_EMBER},
+		{name: "graphite is accepted", palette: opensplunk.UiPalette_UI_PALETTE_GRAPHITE},
+		{name: "glass is accepted", palette: opensplunk.UiPalette_UI_PALETTE_GLASS},
+		{name: "terminal is accepted", palette: opensplunk.UiPalette_UI_PALETTE_TERMINAL},
+		{name: "unspecified is rejected", palette: opensplunk.UiPalette_UI_PALETTE_UNSPECIFIED, want: "ui palette is invalid"},
+		{name: "unlisted number is rejected", palette: opensplunk.UiPalette(99), want: "ui palette is invalid"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			request := &opensplunk.UpdateServerAppearanceRequest{ExpectedVersion: 4, Palette: test.palette}
+			before := proto.Clone(request)
+			sanitized, err := sanitizeUpdateServerAppearanceRequest(
+				context.Background(),
+				request,
+			)
+			if sanitized != request {
+				t.Fatal("sanitizer returned a different request pointer")
+			}
+			if test.want != "" {
+				assertSanitizerRejection(t, err, test.want)
+				return
+			}
+			if err != nil {
+				t.Fatalf("sanitize error = %v", err)
+			}
+			if !proto.Equal(sanitized, before) {
+				t.Fatalf("sanitized request = %v, want %v", sanitized, before)
+			}
+		})
+	}
+}
+
 func supportedSearchLimits() *opensplunk.SearchLimits {
 	return searchLimitsToProto(searchlimits.Default())
 }

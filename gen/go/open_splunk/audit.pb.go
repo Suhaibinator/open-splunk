@@ -157,6 +157,7 @@ const (
 	AuditAction_AUDIT_ACTION_LOOKUP_ENABLE                 AuditAction = 28
 	AuditAction_AUDIT_ACTION_LOOKUP_DISABLE                AuditAction = 29
 	AuditAction_AUDIT_ACTION_LOOKUP_DELETE                 AuditAction = 30
+	AuditAction_AUDIT_ACTION_EXPORT_CREATE                 AuditAction = 31
 )
 
 // Enum value maps for AuditAction.
@@ -193,6 +194,7 @@ var (
 		28: "AUDIT_ACTION_LOOKUP_ENABLE",
 		29: "AUDIT_ACTION_LOOKUP_DISABLE",
 		30: "AUDIT_ACTION_LOOKUP_DELETE",
+		31: "AUDIT_ACTION_EXPORT_CREATE",
 	}
 	AuditAction_value = map[string]int32{
 		"AUDIT_ACTION_UNSPECIFIED":                   0,
@@ -226,6 +228,7 @@ var (
 		"AUDIT_ACTION_LOOKUP_ENABLE":                 28,
 		"AUDIT_ACTION_LOOKUP_DISABLE":                29,
 		"AUDIT_ACTION_LOOKUP_DELETE":                 30,
+		"AUDIT_ACTION_EXPORT_CREATE":                 31,
 	}
 )
 
@@ -267,6 +270,7 @@ const (
 	AuditTargetKind_AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT AuditTargetKind = 5
 	AuditTargetKind_AUDIT_TARGET_KIND_SERVER_SETTINGS  AuditTargetKind = 6
 	AuditTargetKind_AUDIT_TARGET_KIND_LOOKUP           AuditTargetKind = 7
+	AuditTargetKind_AUDIT_TARGET_KIND_EXPORT_JOB       AuditTargetKind = 8
 )
 
 // Enum value maps for AuditTargetKind.
@@ -280,6 +284,7 @@ var (
 		5: "AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT",
 		6: "AUDIT_TARGET_KIND_SERVER_SETTINGS",
 		7: "AUDIT_TARGET_KIND_LOOKUP",
+		8: "AUDIT_TARGET_KIND_EXPORT_JOB",
 	}
 	AuditTargetKind_value = map[string]int32{
 		"AUDIT_TARGET_KIND_UNSPECIFIED":      0,
@@ -290,6 +295,7 @@ var (
 		"AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT": 5,
 		"AUDIT_TARGET_KIND_SERVER_SETTINGS":  6,
 		"AUDIT_TARGET_KIND_LOOKUP":           7,
+		"AUDIT_TARGET_KIND_EXPORT_JOB":       8,
 	}
 )
 
@@ -493,7 +499,7 @@ const file_open_splunk_audit_proto_rawDesc = "" +
 	"\x1cAUDIT_ACTOR_ROLE_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17AUDIT_ACTOR_ROLE_SYSTEM\x10\x01\x12\x19\n" +
 	"\x15AUDIT_ACTOR_ROLE_USER\x10\x02\x12\"\n" +
-	"\x1eAUDIT_ACTOR_ROLE_ADMINISTRATOR\x10\x03*\xef\b\n" +
+	"\x1eAUDIT_ACTOR_ROLE_ADMINISTRATOR\x10\x03*\x8f\t\n" +
 	"\vAuditAction\x12\x1c\n" +
 	"\x18AUDIT_ACTION_UNSPECIFIED\x10\x00\x12'\n" +
 	"#AUDIT_ACTION_INGESTION_TOKEN_CREATE\x10\x01\x12'\n" +
@@ -526,7 +532,8 @@ const file_open_splunk_audit_proto_rawDesc = "" +
 	"\x1bAUDIT_ACTION_LOOKUP_REPLACE\x10\x1b\x12\x1e\n" +
 	"\x1aAUDIT_ACTION_LOOKUP_ENABLE\x10\x1c\x12\x1f\n" +
 	"\x1bAUDIT_ACTION_LOOKUP_DISABLE\x10\x1d\x12\x1e\n" +
-	"\x1aAUDIT_ACTION_LOOKUP_DELETE\x10\x1e*\xa4\x02\n" +
+	"\x1aAUDIT_ACTION_LOOKUP_DELETE\x10\x1e\x12\x1e\n" +
+	"\x1aAUDIT_ACTION_EXPORT_CREATE\x10\x1f*\xc6\x02\n" +
 	"\x0fAuditTargetKind\x12!\n" +
 	"\x1dAUDIT_TARGET_KIND_UNSPECIFIED\x10\x00\x12%\n" +
 	"!AUDIT_TARGET_KIND_INGESTION_TOKEN\x10\x01\x12\x1b\n" +
@@ -535,7 +542,8 @@ const file_open_splunk_audit_proto_rawDesc = "" +
 	"\x1eAUDIT_TARGET_KIND_SAVED_SEARCH\x10\x04\x12&\n" +
 	"\"AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT\x10\x05\x12%\n" +
 	"!AUDIT_TARGET_KIND_SERVER_SETTINGS\x10\x06\x12\x1c\n" +
-	"\x18AUDIT_TARGET_KIND_LOOKUP\x10\aBCZAgithub.com/Suhaibinator/open-splunk/gen/go/open_splunk;opensplunkb\x06proto3"
+	"\x18AUDIT_TARGET_KIND_LOOKUP\x10\a\x12 \n" +
+	"\x1cAUDIT_TARGET_KIND_EXPORT_JOB\x10\bBCZAgithub.com/Suhaibinator/open-splunk/gen/go/open_splunk;opensplunkb\x06proto3"
 
 var (
 	file_open_splunk_audit_proto_rawDescOnce sync.Once

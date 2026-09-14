@@ -7,6 +7,7 @@ import "google/protobuf/timestamp.proto";
 import "open_splunk/app.proto";
 import "open_splunk/common.proto";
 import "open_splunk/index.proto";
+import "open_splunk/server_settings_api.proto";
 
 option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk;opensplunk";
 
@@ -85,4 +86,7 @@ message GetSystemBootstrapResponse {
   optional string selected_app_id = 9;
   google.protobuf.Timestamp server_time = 10;
   BuildMetadata build = 11;
+  // The live instance palette. UNSPECIFIED when no settings service is
+  // configured; the client paints that as classic.
+  UiPalette ui_palette = 12;
 }

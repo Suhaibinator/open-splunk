@@ -277,14 +277,20 @@ func TestLoadShippedClickHouseMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadClickHouseMigrations(shipped) error = %v", err)
 	}
-	if len(loaded) != 1 {
-		t.Fatalf("shipped migration count = %d, want 1", len(loaded))
+	if len(loaded) != 2 {
+		t.Fatalf("shipped migration count = %d, want 2", len(loaded))
 	}
 	if loaded[0].version != 1 || loaded[0].name != "baseline" {
 		t.Fatalf("shipped migration = version %d name %q, want version 1 baseline", loaded[0].version, loaded[0].name)
 	}
 	if len(loaded[0].statements) != 6 {
 		t.Fatalf("shipped baseline statement count = %d, want 6", len(loaded[0].statements))
+	}
+	if loaded[1].version != 2 || loaded[1].name != "normalized_id_indexes" {
+		t.Fatalf("shipped forward migration = version %d name %q, want version 2 normalized_id_indexes", loaded[1].version, loaded[1].name)
+	}
+	if len(loaded[1].statements) != 4 {
+		t.Fatalf("shipped normalized ID index statement count = %d, want 4", len(loaded[1].statements))
 	}
 }
 
@@ -297,12 +303,60 @@ func TestApplyShippedClickHouseMigrationsThroughNativeInterface(t *testing.T) {
 	}
 	want := []clickHouseMigrationLedgerRow{
 		{Version: 1, Name: "baseline", RowCount: 1},
+		{Version: 2, Name: "normalized_id_indexes", RowCount: 1},
 	}
 	if got := connection.historySnapshot(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("shipped migration history = %#v, want %#v", got, want)
 	}
-	if got := len(connection.statementsSnapshot()); got != 6 {
-		t.Fatalf("shipped executed statement count = %d, want 6", got)
+	if got := len(connection.statementsSnapshot()); got != 10 {
+		t.Fatalf("shipped executed statement count = %d, want 10", got)
+	}
+}
+
+func TestApplyShippedClickHouseMigrationRetriesNormalizedIndexesFromBaseline(t *testing.T) {
+	t.Parallel()
+
+	baseline := []clickHouseMigrationLedgerRow{
+		{Version: 1, Name: "baseline", RowCount: 1},
+	}
+	connection := &fakeClickHouseMigrationConnection{
+		ledgerExists: true,
+		history:      baseline,
+		failExecAt:   2,
+	}
+	err := ApplyClickHouseMigrations(context.Background(), connection, shippedmigrations.ClickHouse())
+	if err == nil || !strings.Contains(err.Error(), "statement 2 of 4") {
+		t.Fatalf("partial index migration error = %v, want second DDL failure", err)
+	}
+	if got := connection.historySnapshot(); !reflect.DeepEqual(got, baseline) {
+		t.Fatalf("partial index migration ledger = %#v, want unchanged baseline", got)
+	}
+
+	connection.clearFailure()
+	if err := ApplyClickHouseMigrations(context.Background(), connection, shippedmigrations.ClickHouse()); err != nil {
+		t.Fatalf("retry normalized ID indexes: %v", err)
+	}
+	want := []clickHouseMigrationLedgerRow{
+		{Version: 1, Name: "baseline", RowCount: 1},
+		{Version: 2, Name: "normalized_id_indexes", RowCount: 1},
+	}
+	if got := connection.historySnapshot(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("retried index migration ledger = %#v, want %#v", got, want)
+	}
+	statements := connection.statementsSnapshot()
+	for _, statement := range statements {
+		if strings.Contains(statement, "CREATE TABLE") || strings.Contains(statement, "SELECT 1, 'baseline'") {
+			t.Fatalf("normalized index upgrade re-executed baseline: %q", statement)
+		}
+	}
+	if got := connection.countExecutedContaining("ADD INDEX IF NOT EXISTS idx_event_id_ci"); got != 2 {
+		t.Fatalf("first restart-safe index DDL executions = %d, want 2", got)
+	}
+	if err := ApplyClickHouseMigrations(context.Background(), connection, shippedmigrations.ClickHouse()); err != nil {
+		t.Fatalf("reapply normalized ID indexes: %v", err)
+	}
+	if got := connection.statementsSnapshot(); !reflect.DeepEqual(got, statements) {
+		t.Fatal("complete normalized ID index migration executed statements again")
 	}
 }
 

@@ -2,12 +2,117 @@ package server
 
 import (
 	"context"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 )
+
+func TestSPAFramePolicyCoversEveryResponsePath(t *testing.T) {
+	t.Parallel()
+
+	modified := time.Date(2025, time.January, 1, 0, 0, 0, 0, time.UTC)
+	handler, err := newSPAHandler(fstest.MapFS{
+		"index.html":       &fstest.MapFile{Data: []byte("<html>root</html>")},
+		"docs/index.html":  &fstest.MapFile{Data: []byte("<html>docs</html>"), ModTime: modified},
+		"standalone.html":  &fstest.MapFile{Data: []byte("<html>page</html>"), ModTime: modified},
+		"route.txt":        &fstest.MapFile{Data: []byte("route payload")},
+		"private/file.txt": &fstest.MapFile{Data: []byte("private")},
+		"_next/runtime.js": &fstest.MapFile{Data: []byte("runtime")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name       string
+		path       string
+		header     http.Header
+		wantStatus int
+	}{
+		{name: "root", path: "/", wantStatus: http.StatusOK},
+		{name: "fallback", path: "/search/jobs/job-1", wantStatus: http.StatusOK},
+		{name: "fallback query", path: "/search/?q=hello", wantStatus: http.StatusOK},
+		{name: "directory index", path: "/docs", wantStatus: http.StatusOK},
+		{name: "directory index slash", path: "/docs/", wantStatus: http.StatusOK},
+		{name: "standalone HTML", path: "/standalone.html", wantStatus: http.StatusOK},
+		{name: "encoded HTML path", path: "/standalone%2ehtml", wantStatus: http.StatusOK},
+		{name: "root index redirect", path: "/index.html", wantStatus: http.StatusMovedPermanently},
+		{name: "directory index redirect", path: "/docs/index.html", wantStatus: http.StatusMovedPermanently},
+		{name: "route payload", path: "/route.txt", wantStatus: http.StatusOK},
+		{name: "script asset", path: "/_next/runtime.js", wantStatus: http.StatusOK},
+		{name: "missing asset", path: "/missing.js", wantStatus: http.StatusNotFound},
+		{name: "directory listing denied", path: "/private/", wantStatus: http.StatusNotFound},
+		{
+			name: "conditional HTML", path: "/standalone.html", wantStatus: http.StatusNotModified,
+			header: http.Header{"If-Modified-Since": []string{modified.Format(http.TimeFormat)}},
+		},
+		{
+			name: "conditional directory index", path: "/docs/", wantStatus: http.StatusNotModified,
+			header: http.Header{"If-Modified-Since": []string{modified.Format(http.TimeFormat)}},
+		},
+	}
+	for _, test := range tests {
+		for _, method := range []string{http.MethodGet, http.MethodHead} {
+			t.Run(test.name+"/"+method, func(t *testing.T) {
+				t.Parallel()
+				request := httptest.NewRequestWithContext(context.Background(), method, test.path, nil)
+				maps.Copy(request.Header, test.header)
+				response := httptest.NewRecorder()
+				handler.ServeHTTP(response, request)
+				result := response.Result()
+				defer result.Body.Close()
+				if result.StatusCode != test.wantStatus {
+					t.Fatalf("status = %d, body = %q", result.StatusCode, response.Body.String())
+				}
+				assertSPAFramePolicy(t, result.Header)
+				if method == http.MethodHead && test.wantStatus < http.StatusBadRequest && response.Body.Len() != 0 {
+					t.Fatalf("HEAD body = %q", response.Body.String())
+				}
+			})
+		}
+	}
+
+	for _, route := range []string{"/", "/browser-route", "/docs/", "/standalone.html"} {
+		for _, test := range []struct {
+			rangeValue string
+			wantStatus int
+		}{
+			{rangeValue: "bytes=0-3", wantStatus: http.StatusPartialContent},
+			{rangeValue: "bytes=1000-", wantStatus: http.StatusRequestedRangeNotSatisfiable},
+		} {
+			t.Run(route+"/"+test.rangeValue, func(t *testing.T) {
+				t.Parallel()
+				request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, route, nil)
+				request.Header.Set("Range", test.rangeValue)
+				response := httptest.NewRecorder()
+				handler.ServeHTTP(response, request)
+				result := response.Result()
+				defer result.Body.Close()
+				if result.StatusCode != test.wantStatus {
+					t.Fatalf("status = %d, body = %q", result.StatusCode, response.Body.String())
+				}
+				assertSPAFramePolicy(t, result.Header)
+				if test.wantStatus == http.StatusPartialContent && response.Body.String() != "<htm" {
+					t.Fatalf("partial body = %q", response.Body.String())
+				}
+			})
+		}
+	}
+}
+
+func assertSPAFramePolicy(t *testing.T, header http.Header) {
+	t.Helper()
+	if policy := header.Get("Content-Security-Policy"); policy != "frame-ancestors 'none'" {
+		t.Fatalf("Content-Security-Policy = %q", policy)
+	}
+	if policy := header.Get("X-Frame-Options"); policy != "DENY" {
+		t.Fatalf("X-Frame-Options = %q", policy)
+	}
+}
 
 func TestSPAStaticServingIsCacheSafeAndNeverListsDirectories(t *testing.T) {
 	t.Parallel()
@@ -94,4 +199,5 @@ func TestSPAHeadAndMethodHandling(t *testing.T) {
 	if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != "GET, HEAD" {
 		t.Fatalf("POST response = %d Allow %q", response.Code, response.Header().Get("Allow"))
 	}
+	assertSPAFramePolicy(t, response.Header())
 }

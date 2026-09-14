@@ -132,7 +132,9 @@ func (store *ServerSearchSettingsStore) Update(
 			ctx,
 			tx,
 			store.tenantID,
-			ServerSettingsMutationAuditEvent{OccurredAt: now, Version: next},
+			ServerSettingsMutationAuditEvent{
+				OccurredAt: now, Target: ServerSettingsTargetSearchLimits, Version: next,
+			},
 		)
 	})
 	if err != nil {

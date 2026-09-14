@@ -1,0 +1,121 @@
+Issue #104 executed verification before review wave 1
+Source candidate: d874217530a8f8187919f5e65232f999c48900f6
+
+PASS npm run typecheck; npm run lint; npm run check:docs;
+     npm run test:frontend
+PASS npx --no-install playwright install chromium
+PASS npm run test:contracts (57 tests)
+PASS npm run build; npm run test:workspace (33 tests)
+PASS go build ./...; go vet ./...; go test ./...
+PASS go test -race ./internal/collector/... (full suite)
+PASS final Apache source-fidelity regression race checks
+PASS each new fuzz target for >=60 seconds:
+     native logfmt 96,130 executions; native Java 250,757;
+     native fixed formats 422,214; compiled literal scanner 6,380,346;
+     pattern compile/capture 900,348; timestamp 6,076,429.
+PASS OPEN_SPLUNK_BACKEND_INTEGRATION=1 OPEN_SPLUNK_BACKEND_LOAD=1
+     go test ./integration -run '^TestBackendNativeFormats$'
+       -count=1 -timeout=15m -v
+     Compiled daemon/server, ClickHouse, all seven formats;
+     60,000 mixed NDJSON/Java records scheduled over 30 seconds,
+     30.32 seconds including drain/verification; exact values/IDs/checkpoints.
+PASS existing backend vertical integration (90.853 seconds)
+PASS existing backend sustained collector load (65.55 seconds)
+PASS golangci-lint v2.13.1, GOOS=linux, GOMAXPROCS=2:
+     golangci-lint run --concurrency=2 --timeout=10m
+       --max-issues-per-linter=0 --max-same-issues=0
+     Result: 0 issues. Ran against a complete source snapshot matching the
+     CI checkout, without untracked installed node_modules (which otherwise
+     introduces unrelated third-party Go code into ./...). No lint exclusions
+     or suppressions added. Initial unconstrained local lint caused memory
+     pressure; final run bounded tool concurrency only.
+
+TDD: dedicated Docker/access, logfmt/Java, and durability/security agents
+owned tests before production parsers. Initial recognition failures and
+subsequent semantic/durable-pipeline failures were recorded. Later regressions
+covered explicit redaction of escaped/positional values, logfmt Unicode
+surrogates, and Apache's producer-specific empty authenticated user spelling.
+Expected fixture values were independently specified and source grounded.
+
+Benchmark commands, revisions, machine, all comparative samples and profiles
+are retained beside this file. Review outcomes and any renewed verification
+will be recorded after review; this file does not assert review completion.
+
+Renewed checks after configuration review fix and merge of main fb9cef37:
+PASS go build ./...; go vet ./...; go test ./...
+PASS go test -race ./internal/collector/...
+PASS npm run check:docs
+PASS compiled native format integration + 60,000 mixed records
+PASS backend vertical integration
+PASS sustained load twice on unchanged candidate (see load-investigation.txt
+     for the initial failed attempt and unmodified-main comparison).
+PASS Linux golangci-lint v2.13.1, uncapped issue counts: 0 issues, exit 0.
+     Initial rerun printed 0 issues but exceeded 10 minutes under competing
+     host workload (exit 4). Successful unchanged rerun used --timeout=20m,
+     --concurrency=2, GOMAXPROCS=2 and taskpolicy -a -l 0 -t 0.
+Frontend implementation is unchanged; the previously executed complete
+frontend gates remain applicable. No lint or test assertions were suppressed.
+
+After second-wave fixes and root alias audit (source e30af276):
+PASS go build ./...; go vet ./...; go test ./...
+PASS go test -race ./internal/collector/...
+PASS compiled native-format integration with 60,000 mixed records;
+     30.12 seconds including drain/verification.
+PASS FuzzOriginalOffsetSpelling for 60 seconds / 595,762 cases; retained the
+     discovered negative-one-second offset seed and explicit regressions.
+PASS pinned Linux golangci-lint v2.13.1, uncapped counts: 0 issues, exit 0.
+     Fixed its errors.AsType finding before the successful rerun. Isolated
+     snapshots use GOWORK=off to avoid an unrelated parent go.work.
+The mapping-only constructor change and typed error inspection were subsequently
+covered by the complete Go/race rerun. No runtime NDJSON or ingestion ordering
+changes were made after the existing vertical/load gates passed.
+
+After literal-aware timestamp precision correction (source 7dc11bfb):
+PASS full Go build/vet/tests and collector race; docs check.
+PASS FuzzPrecisionTokenBoundaries 60s / 3,769,788 cases.
+PASS renewed FuzzTimestampParsing 60s / 5,426,201 cases.
+PASS pinned Linux golangci-lint v2.13.1, uncapped: 0 issues, exit0.
+PASS compiled native backend + 60,000 mixed records (30.46s including drain).
+Independent pre-fix overlay evidence and expanded decoder/parser regressions
+are retained under tdd/.
+After immutable decoder dispatch: full Go build/vet/tests and collector race
+passed. A subsequent signed-short-year lexical correction passed all 20
+independent signed cases and full parserconfig race checks. Final source and
+performance validation follows; the earlier 1.31% timing regression is NOT
+counted as a passing performance gate.
+
+Final source 16b3c3a7 (literal precision, signed short year, integer dispatch):
+PASS go build ./...; go vet ./...; go test ./...
+PASS go test -race ./internal/collector/... (33.986s collector package).
+PASS pinned Linux golangci-lint v2.13.1, uncapped: 0 issues, exit 0.
+     Complete source archive, GOWORK=off, --concurrency=2 --timeout=20m.
+PASS combined compiled backend gates, package 150.084s:
+     TestBackendSustainedLoad 81.39s; 30,000 exact distinct stored events,
+     outage/WAL recovery and concurrent searches.
+     TestBackendNativeFormats 43.12s; 60,000 mixed events scheduled over 30s,
+     30.485s including drain and verification.
+     TestBackendVertical 22.54s; all six search subcases and crash recovery.
+     OPEN_SPLUNK_BACKEND_INTEGRATION=1 OPEN_SPLUNK_BACKEND_LOAD=1
+     go test ./integration -run
+       '^(TestBackendNativeFormats|TestBackendVertical|TestBackendSustainedLoad)$'
+       -count=1 -timeout=20m -v
+No production changes followed these checks before the final4 measurements.
+
+PASS final4 NDJSON performance gate on source 16b3c3a7, main fb9cef37:
+20 two-second paired samples/case; identical benchmark-only registration.
+Allocations and bytes unchanged in every sample, no significant slowdown:
+canonical 1.608us -> 1.605us p=.273; nested 3.110us -> 3.112us p=.324;
+high_fields 252.4us -> 250.9us (-.57%, p=.038). Confidence ranges 0-1%.
+Completed 20 native/mixed, Java compilation and timestamp samples each.
+New timestamp literal precision scan: zero allocations, linear observed scaling
+through 1024 literal runs. Full raw output, exclusions and methodology retained
+in final4/. No competing task-owned agents/builds ran; external observed build
+or test overlap excludes complete sample groups, independent of timing values.
+The earlier full-test-binary 1.31% difference is retained, and the controlled
+triple does not prove it came from the extra format comparison alone.
+
+Post-measurement final checks: npm run check:docs passed (24 files),
+git diff --check passed. Complete review wave 3 returned seven clean results
+with additional executed targeted/package tests, no source/test changes.
+All seven reviewers inspected fixed ec0f6341 vs fb9cef37; production source
+remains identical to 16b3c3a7 used by complete gates and final4 measurements.

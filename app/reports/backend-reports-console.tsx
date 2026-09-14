@@ -1,6 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { BrowserCreateAction } from "@/lib/api/client-request-id";
+
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
 import Link from "next/link";
 
 import { SharingScope, SortDirection } from "@/gen/ts/open_splunk/common";
@@ -16,10 +18,12 @@ import {
 import { supportsServerFeature } from "@/lib/api/system-bootstrap";
 import { createErrorMessage } from "@/lib/error-message";
 import { savedSearchLaunchHref } from "@/lib/search/launch-url";
+import { searchResultViewForDefinition } from "@/lib/search/result-view-navigation";
 import {
   nextDuplicateSavedSearchName,
   savedSearchNameValidationError,
 } from "@/lib/search/saved-search-names";
+import { savedSearchScopeLabel } from "@/lib/search/saved-search-scope";
 import {
   deleteServerSavedSearch,
   duplicateServerSavedSearch,
@@ -44,11 +48,13 @@ import {
   type ReportsView,
 } from "./reports-view-state";
 import { ScheduledReportActions, ScheduledReportStatus } from "./scheduled-report-controls";
+import { SavedSearchScopeEditor } from "./saved-search-scope-editor";
+import { Select, SelectOption } from "../_components/select";
 
 type SavedSearchScope = "all" | "private" | "app" | "global";
 type SortOrder = "updated" | "name";
 type LoadState = "loading" | "available" | "unavailable" | "error";
-type SavedSearchAction = "rename" | "duplicate" | "delete";
+type SavedSearchAction = "rename" | "duplicate" | "sharing" | "delete";
 
 interface SavedSearchModal {
   action: SavedSearchAction;
@@ -57,16 +63,11 @@ interface SavedSearchModal {
 
 interface BackendReportsConsoleProps {
   apiBaseUrl: string;
+  onViewChange: (view: ReportsView) => void;
+  view: ReportsView;
 }
 
 const errorMessage = createErrorMessage("The server did not return a usable saved-search response.");
-
-function scopeLabel(scope: SharingScope): string {
-  if (scope === SharingScope.SHARING_SCOPE_GLOBAL) return "Global";
-  if (scope === SharingScope.SHARING_SCOPE_APP) return "App";
-  if (scope === SharingScope.SHARING_SCOPE_PRIVATE) return "Private";
-  return "Unknown";
-}
 
 function sharingScopeFilters(scope: SavedSearchScope): SharingScope[] {
   if (scope === "global") return [SharingScope.SHARING_SCOPE_GLOBAL];
@@ -87,10 +88,27 @@ function formatDate(value: Date | null): string {
 }
 
 function launchHref(savedSearch: ServerSavedSearch): string {
-  return savedSearchLaunchHref(savedSearch.id);
+  return savedSearchLaunchHref(
+    savedSearch.id,
+    true,
+    searchResultViewForDefinition(savedSearch.search.spl, savedSearch.search.preferredResultTab),
+  );
 }
 
-export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps) {
+function subscribeToInitialReportLocation(): () => void {
+  return () => undefined;
+}
+
+function scheduledReportLocationSnapshot(): string {
+  try {
+    const target = scheduledReportConfigurationTarget(new URL(window.location.href).searchParams);
+    return target === null ? "" : `target:${target}`;
+  } catch (reason) {
+    return `error:${reason instanceof Error ? reason.message : "The report schedule link is invalid."}`;
+  }
+}
+
+export function BackendReportsConsole({ apiBaseUrl, onViewChange, view }: BackendReportsConsoleProps) {
   const client = useMemo(() => createOpenSplunkApiClient({ baseUrl: apiBaseUrl }), [apiBaseUrl]);
   const [state, setState] = useState<LoadState>("loading");
   const [savedSearches, setSavedSearches] = useState<ServerSavedSearch[]>([]);
@@ -103,6 +121,7 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
   const [totalSize, setTotalSize] = useState<bigint | null>(null);
   const [totalSizeExact, setTotalSizeExact] = useState(false);
   const [generation, setGeneration] = useState(0);
+  const [hasLoaded, setHasLoaded] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [query, setQuery] = useState("");
   const [effectiveQuery, setEffectiveQuery] = useState("");
@@ -115,14 +134,13 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [scheduleTargetId, setScheduleTargetId] = useState<string | null>(null);
-  const [view, setView] = useState<ReportsView>("saved-searches");
+  const [systemBootstrap, setSystemBootstrap] = useState<SystemBootstrapModel | null>(null);
   const alertsTabRef = useRef<HTMLButtonElement>(null);
   const savedSearchesTabRef = useRef<HTMLButtonElement>(null);
   const bootstrapRef = useRef<SystemBootstrapModel | null>(null);
   const loadMoreAbortRef = useRef<AbortController | null>(null);
   const actionAbortRef = useRef<AbortController | null>(null);
   const pageTokensSeenRef = useRef<Set<string>>(new Set());
-  const hasLoadedRef = useRef(false);
   const reload = useCallback(() => setGeneration((current) => current + 1), []);
   const clearScheduleTarget = useCallback(() => {
     setScheduleTargetId(null);
@@ -133,40 +151,71 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
 
   useEffect(() => () => actionAbortRef.current?.abort(), []);
 
-  useEffect(() => {
-    try {
-      setScheduleTargetId(scheduledReportConfigurationTarget(new URL(window.location.href).searchParams));
-    } catch (reason) {
-      setActionNotice(reason instanceof Error ? reason.message : "The report schedule link is invalid.");
-      clearScheduleTarget();
+  const reportLocation = useSyncExternalStore(
+    subscribeToInitialReportLocation,
+    scheduledReportLocationSnapshot,
+    () => "",
+  );
+  const [activeReportLocation, setActiveReportLocation] = useState("");
+  if (activeReportLocation !== reportLocation) {
+    setActiveReportLocation(reportLocation);
+    if (reportLocation.startsWith("target:")) {
+      setScheduleTargetId(reportLocation.slice("target:".length));
+    } else if (reportLocation.startsWith("error:")) {
+      setScheduleTargetId(null);
+      setActionNotice(reportLocation.slice("error:".length));
     }
-  }, [clearScheduleTarget]);
+  }
+  useEffect(() => {
+    if (!reportLocation.startsWith("error:")) return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete(SCHEDULE_REPORT_QUERY_PARAMETER);
+    window.history.replaceState(window.history.state, "", url);
+  }, [reportLocation]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setEffectiveQuery(query.trim()), 250);
     return () => window.clearTimeout(timer);
   }, [query]);
 
+  const loadInput = { appFilter, client, effectiveQuery, generation, scope, sort };
+  const [activeLoadInput, setActiveLoadInput] = useState({ ...loadInput, retainShell: false });
+  if (
+    activeLoadInput.appFilter !== loadInput.appFilter
+    || activeLoadInput.client !== loadInput.client
+    || activeLoadInput.effectiveQuery !== loadInput.effectiveQuery
+    || activeLoadInput.generation !== loadInput.generation
+    || activeLoadInput.scope !== loadInput.scope
+    || activeLoadInput.sort !== loadInput.sort
+  ) {
+    setActiveLoadInput({ ...loadInput, retainShell: hasLoaded });
+    if (!hasLoaded) {
+      setState("loading");
+      setNextPageToken(null);
+      setSystemBootstrap(null);
+    }
+    setRefreshing(hasLoaded);
+    setError(null);
+    setLoadMoreError(null);
+    setLoadingMore(false);
+  }
+
   useEffect(() => {
-    const retainShell = hasLoadedRef.current;
+    const retainShell = activeLoadInput.retainShell;
     loadMoreAbortRef.current?.abort();
     loadMoreAbortRef.current = null;
     const controller = new AbortController();
     let current = true;
-    if (!retainShell) setState("loading");
-    setRefreshing(retainShell);
-    setError(null);
-    setLoadMoreError(null);
-    setLoadingMore(false);
     if (!retainShell) {
-      setNextPageToken(null);
       bootstrapRef.current = null;
       pageTokensSeenRef.current.clear();
     }
     void (async () => {
       try {
         const bootstrap = await getSystemBootstrap(client, undefined, { signal: controller.signal });
+        if (!current) return;
         bootstrapRef.current = bootstrap;
+        setSystemBootstrap(bootstrap);
         setAppNames(Object.fromEntries(
           bootstrap.apps.map((app) => [app.appId, app.displayName || app.slug || app.appId]),
         ));
@@ -186,7 +235,7 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
         });
         if (!current) return;
         if (result.status === "unavailable") {
-          hasLoadedRef.current = false;
+          setHasLoaded(false);
           setSavedSearches([]);
           setRefreshing(false);
           setState("unavailable");
@@ -202,7 +251,7 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
         ));
         setTotalSize(result.value.totalSize);
         setTotalSizeExact(result.value.totalSizeExact);
-        hasLoadedRef.current = true;
+        setHasLoaded(true);
         setRefreshing(false);
         setState("available");
       } catch (reason) {
@@ -212,7 +261,7 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
         if (retainShell) {
           setState("available");
         } else {
-          hasLoadedRef.current = false;
+          setHasLoaded(false);
           setSavedSearches([]);
           setState("error");
         }
@@ -224,7 +273,7 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
       loadMoreAbortRef.current?.abort();
       loadMoreAbortRef.current = null;
     };
-  }, [appFilter, client, effectiveQuery, generation, scope, sort]);
+  }, [activeLoadInput, appFilter, client, effectiveQuery, scope, sort]);
 
   useEffect(() => {
     const bootstrap = bootstrapRef.current;
@@ -325,12 +374,13 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
   const refreshPending = state === "loading" || refreshing;
   const controlsPending = refreshPending || actionPending !== null;
   const actionNameError = savedSearchNameValidationError(actionName);
-  const currentBootstrap = bootstrapRef.current;
+  const currentBootstrap = systemBootstrap;
   const schedulingAvailable = currentBootstrap !== null
     && supportsServerFeature(currentBootstrap, ServerFeature.SERVER_FEATURE_SCHEDULED_SEARCHES);
 
   function openAction(nextAction: SavedSearchAction, target: ServerSavedSearch) {
     if (actionPending !== null) return;
+    duplicateAction.current.complete();
     setActionError(null);
     setActionName(nextAction === "duplicate"
       ? nextDuplicateSavedSearchName(target.name, savedSearches.map((candidate) => candidate.name))
@@ -342,7 +392,7 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
     const nextView = reportsViewForKey(view, event.key);
     if (nextView === null) return;
     event.preventDefault();
-    setView(nextView);
+    onViewChange(nextView);
     window.requestAnimationFrame(() => {
       (nextView === "saved-searches" ? savedSearchesTabRef : alertsTabRef).current?.focus();
     });
@@ -396,6 +446,8 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
     }
   }
 
+  const duplicateAction = useRef(new BrowserCreateAction());
+
   async function duplicateSavedSearch() {
     const currentModal = modal;
     const bootstrap = bootstrapRef.current;
@@ -418,11 +470,12 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
         currentModal.target.id,
         name,
         currentModal.target.search.appId,
-        { signal: controller.signal },
+        { signal: controller.signal, clientRequestId: duplicateAction.current.requestId({ id: currentModal.target.id, name, appId: currentModal.target.search.appId }) },
       );
       if (controller.signal.aborted) return;
       if (result.status === "unavailable") throw new Error("The saved-search duplicate route is no longer available.");
       if (result.value.id === currentModal.target.id) throw new Error("The server did not return a distinct saved-search copy.");
+      duplicateAction.current.complete();
       setSavedSearches((current) => [result.value, ...current]);
       setTotalSize((current) => current === null ? null : current + 1n);
       invalidatePagingAfterMutation();
@@ -479,12 +532,12 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
         description={view === "saved-searches"
           ? "Open reusable search definitions persisted by the connected server."
           : "Manage scheduled result conditions and signed webhook delivery."}
-        actions={<><Link className="button" href="/search/">Open Search</Link>{view === "saved-searches" ? <button className="button button--primary" type="button" aria-busy={refreshPending} aria-disabled={controlsPending} onClick={() => { if (!controlsPending) reload(); }}>{refreshing ? "Refreshing…" : state === "loading" ? "Loading…" : "Refresh"}</button> : null}</>}
+        actions={<><Link className="button" href="/search/events/">Open Search</Link>{view === "saved-searches" ? <button className="button button--primary" type="button" aria-busy={refreshPending} aria-disabled={controlsPending} onClick={() => { if (!controlsPending) reload(); }}>{refreshing ? "Refreshing…" : state === "loading" ? "Loading…" : "Refresh"}</button> : null}</>}
       />
 
       <div className="reports-view-tabs" role="tablist" aria-label="Search reporting views">
-        <button ref={savedSearchesTabRef} className={`button ${view === "saved-searches" ? "button--primary" : "button--secondary"}`} id="reports-saved-searches-tab" role="tab" aria-controls="reports-saved-searches-panel" aria-selected={view === "saved-searches"} tabIndex={view === "saved-searches" ? 0 : -1} type="button" onClick={() => setView("saved-searches")} onKeyDown={moveReportsView}>Saved Searches</button>
-        <button ref={alertsTabRef} className={`button ${view === "alerts" ? "button--primary" : "button--secondary"}`} id="reports-alerts-tab" role="tab" aria-controls="reports-alerts-panel" aria-selected={view === "alerts"} tabIndex={view === "alerts" ? 0 : -1} type="button" onClick={() => setView("alerts")} onKeyDown={moveReportsView}>Alerts</button>
+        <button ref={savedSearchesTabRef} className={`button ${view === "saved-searches" ? "button--primary" : "button--secondary"}`} id="reports-saved-searches-tab" role="tab" aria-controls="reports-saved-searches-panel" aria-selected={view === "saved-searches"} tabIndex={view === "saved-searches" ? 0 : -1} type="button" onClick={() => onViewChange("saved-searches")} onKeyDown={moveReportsView}>Saved Searches</button>
+        <button ref={alertsTabRef} className={`button ${view === "alerts" ? "button--primary" : "button--secondary"}`} id="reports-alerts-tab" role="tab" aria-controls="reports-alerts-panel" aria-selected={view === "alerts"} tabIndex={view === "alerts" ? 0 : -1} type="button" onClick={() => onViewChange("alerts")} onKeyDown={moveReportsView}>Alerts</button>
       </div>
 
       <div id="reports-saved-searches-panel" role="tabpanel" aria-labelledby="reports-saved-searches-tab" hidden={view !== "saved-searches"}>
@@ -497,7 +550,7 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
         <>
           {refreshing ? <output className="backend-list-notice">Refreshing saved searches. Existing definitions remain visible until the request completes.</output> : null}
           {error === null ? null : <div className="backend-inline-error" role="alert">The latest refresh failed; the previous saved-search snapshot remains visible. {error}</div>}
-          {actionNotice === null ? null : <output className="reports-action-notice"><span>{actionNotice}</span><button type="button" aria-label="Dismiss saved-search action message" onClick={() => setActionNotice(null)}><AppIcon name="close" size="md" /></button></output>}
+          {actionNotice === null ? null : <output className="reports-action-notice"><span>{actionNotice}</span><button className="button button--notice-dismiss" type="button" aria-label="Dismiss saved-search action message" onClick={() => setActionNotice(null)}><AppIcon name="close" size="md" /></button></output>}
           <section className="reports-summary" aria-label="Saved search summary">
             <article><span className="reports-metric-icon" aria-hidden="true">▤</span><div><strong>{displayedTotal}</strong><small>{totalSizeExact ? "Matching saved searches" : "Matching definitions loaded"}</small></div></article>
             <article><span className="reports-metric-icon" aria-hidden="true">♙</span><div><strong>{savedSearches.length.toLocaleString()}</strong><small>Definitions loaded</small></div></article>
@@ -536,21 +589,21 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
             <div className="reports-toolbar reports-toolbar--backend">
               <label className="reports-search-field">
                 <span className="sr-only">Filter saved searches</span><i aria-hidden="true"><AppIcon name="search" size="sm" /></i>
-                <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find by name, SPL, app, or owner" />
+                <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find by name" />
               </label>
-              <label className="reports-select-field">
+              <label htmlFor="backend-reports-console-choice-595" className="reports-select-field">
                 <span>App</span>
-                <select value={appFilter} onChange={(event) => setAppFilter(event.target.value)}>
-                  <option value="all">All apps</option>
-                  {Object.entries(appNames).toSorted((left, right) => left[1].localeCompare(right[1])).map(([appId, appName]) => <option value={appId} key={appId}>{appName}</option>)}
-                </select>
+                <Select id="backend-reports-console-choice-595" value={appFilter} onValueChange={(selectedValue) => setAppFilter(selectedValue)}>
+                  <SelectOption value="all">All apps</SelectOption>
+                  {Object.entries(appNames).toSorted((left, right) => left[1].localeCompare(right[1])).map(([appId, appName]) => <SelectOption value={appId} key={appId}>{appName}</SelectOption>)}
+                </Select>
               </label>
-              <label className="reports-select-field">
+              <label htmlFor="backend-reports-console-choice-602" className="reports-select-field">
                 <span>Sort</span>
-                <select value={sort} onChange={(event) => setSort(event.target.value as SortOrder)}>
-                  <option value="updated">Recently modified</option>
-                  <option value="name">Name</option>
-                </select>
+                <Select id="backend-reports-console-choice-602" value={sort} onValueChange={(selectedValue) => setSort(selectedValue as SortOrder)}>
+                  <SelectOption value="updated">Recently modified</SelectOption>
+                  <SelectOption value="name">Name</SelectOption>
+                </Select>
               </label>
             </div>
 
@@ -559,7 +612,7 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
                 <span aria-hidden="true"><AppIcon name="search" size="lg" /></span>
                 <strong>{savedSearches.length === 0 ? "No saved searches" : "No matching saved searches"}</strong>
                 <p>{savedSearches.length === 0 && effectiveQuery.length === 0 && scope === "all" ? "Save a search from the Search workspace to add its reusable definition here." : "Try another phrase or sharing scope."}</p>
-                {savedSearches.length > 0 ? <button type="button" onClick={() => { setQuery(""); setScope("all"); }}>Clear filters</button> : <Link href="/search/">Open Search</Link>}
+                {savedSearches.length > 0 ? <button type="button" onClick={() => { setQuery(""); setScope("all"); }}>Clear filters</button> : <Link href="/search/events/">Open Search</Link>}
               </div>
             ) : (
               <div className="table-wrap reports-table-wrap">
@@ -578,7 +631,7 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
                         <td data-label="App">{savedSearch.search.appId === undefined
                           ? "No app"
                           : appNames[savedSearch.search.appId] ?? savedSearch.search.appId}</td>
-                        <td data-label="Sharing"><StatusLabel tone="neutral">{scopeLabel(savedSearch.sharingScope)}</StatusLabel></td>
+                        <td data-label="Sharing"><StatusLabel tone="neutral">{savedSearchScopeLabel(savedSearch.sharingScope)}</StatusLabel></td>
                         <td data-label="Owner">{savedSearch.ownerId || "Current user"}</td>
                         <td data-label="Time range"><code>{savedSearch.search.timeRange?.earliest ?? "Server default"} → {savedSearch.search.timeRange?.latest ?? "Server default"}</code></td>
                         <td data-label="Schedule">{schedulingAvailable ? <ScheduledReportStatus savedSearch={savedSearch} /> : "Unavailable"}</td>
@@ -586,6 +639,7 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
                         <td className="reports-open-cell reports-action-cell">
                           <Link href={launchHref(savedSearch)} aria-label={`Open ${savedSearch.name} in Search`}>Open <AppIcon name="chevron-right" size="xs" /></Link>
                           <button type="button" disabled={controlsPending} onClick={() => openAction("rename", savedSearch)} aria-label={`Rename ${savedSearch.name}`}>Rename</button>
+                          <button type="button" disabled={controlsPending} onClick={() => openAction("sharing", savedSearch)} aria-label={`Edit sharing for ${savedSearch.name}`}>Sharing</button>
                           <button type="button" disabled={controlsPending} onClick={() => openAction("duplicate", savedSearch)} aria-label={`Duplicate ${savedSearch.name}`}>Duplicate</button>
                           {schedulingAvailable && currentBootstrap !== null ? (
                             <ScheduledReportActions
@@ -671,6 +725,22 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
             <p className="reports-action-hint">The copy keeps the current SPL, time range, result preferences, sharing scope, and app. Future edits do not affect the original.</p>
           </form>
         </Modal>
+      ) : null}
+
+      {modal?.action === "sharing" && currentBootstrap !== null ? (
+        <SavedSearchScopeEditor
+          key={`${apiBaseUrl}:${modal.target.id}`}
+          bootstrap={currentBootstrap}
+          client={client}
+          savedSearch={modal.target}
+          onClose={closeAction}
+          onNotice={setActionNotice}
+          onUpdated={(updated) => {
+            setSavedSearches((current) => current.map((item) => item.id === updated.id ? updated : item));
+            invalidatePagingAfterMutation();
+            reload();
+          }}
+        />
       ) : null}
 
       {modal?.action === "delete" ? (

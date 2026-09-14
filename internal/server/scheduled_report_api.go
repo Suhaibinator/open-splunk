@@ -7,8 +7,6 @@ import (
 	"time"
 
 	"fortio.org/safecast"
-	"github.com/Suhaibinator/SRouter/pkg/codec"
-	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -24,27 +22,12 @@ type searchArtifactMetadataBatchInspector interface {
 	InspectMany(context.Context, searchjobs.AccessScope, []string) (map[string]searchartifacts.Record, error)
 }
 
-func (handler *apiHandler) scheduledReportRoutes(noAuth router.AuthLevel, smallRequestBytes int64) []router.RouteDefinition {
-	return []router.RouteDefinition{
-		router.RouteConfig[*opensplunk.SetSavedSearchScheduleRequest, *opensplunk.SetSavedSearchScheduleResponse]{
-			Path: "/saved-searches/schedule/set", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.SetSavedSearchScheduleRequest, *opensplunk.SetSavedSearchScheduleResponse](), Handler: handler.setSavedSearchSchedule,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeSetSavedSearchScheduleRequest,
-		},
-		router.RouteConfig[*opensplunk.RunSavedSearchRequest, *opensplunk.RunSavedSearchResponse]{
-			Path: "/saved-searches/run", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.RunSavedSearchRequest, *opensplunk.RunSavedSearchResponse](), Handler: handler.runSavedSearch,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: sanitizeRunSavedSearchRequest,
-		},
-		router.RouteConfig[*opensplunk.ListScheduledSearchRunsRequest, *opensplunk.ListScheduledSearchRunsResponse]{
-			Path: "/saved-searches/runs/list", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunk.ListScheduledSearchRunsRequest, *opensplunk.ListScheduledSearchRunsResponse](), Handler: handler.listScheduledSearchRuns,
-			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer: handler.sanitizeListScheduledSearchRunsRequest,
-		},
-	}
+func (handler *apiHandler) registerScheduledReportRoutes(group *apiRouteGroup, smallRequestBytes int64) {
+	group.Route(
+		sizedProtoPostRoute("/saved-searches/schedule/set", smallRequestBytes, handler.setSavedSearchSchedule, sanitizeSetSavedSearchScheduleRequest),
+		sizedProtoPostRoute("/saved-searches/run", smallRequestBytes, handler.runSavedSearch, sanitizeRunSavedSearchRequest),
+		sizedProtoPostRoute("/saved-searches/runs/list", smallRequestBytes, handler.listScheduledSearchRuns, handler.sanitizeListScheduledSearchRunsRequest),
+	)
 }
 
 func (handler *apiHandler) setSavedSearchSchedule(request *http.Request, input *opensplunk.SetSavedSearchScheduleRequest) (*opensplunk.SetSavedSearchScheduleResponse, error) {
@@ -61,7 +44,7 @@ func (handler *apiHandler) setSavedSearchSchedule(request *http.Request, input *
 		Cron: schedule.GetCron(), Timezone: schedule.GetTimezone(), DispatchTTL: schedule.GetDispatchTtl(), Enabled: schedule.GetEnabled(),
 	})
 	if err != nil {
-		return nil, mapScheduledReportError(err)
+		return nil, mapScheduledReportCallError(request.Context(), err)
 	}
 	projected, err := handler.cloneSavedSearch(record)
 	if err != nil {
@@ -77,7 +60,7 @@ func (handler *apiHandler) runSavedSearch(request *http.Request, input *opensplu
 		scheduledreports.DefaultOneOffSchedulePeriod,
 	)
 	if err != nil {
-		return nil, mapScheduledReportError(err)
+		return nil, mapScheduledReportCallError(request.Context(), err)
 	}
 	return &opensplunk.RunSavedSearchResponse{ScheduledSearchRunId: run.RunID, SearchJobId: run.SearchJobID}, nil
 }
@@ -90,7 +73,7 @@ func (handler *apiHandler) listScheduledSearchRuns(request *http.Request, input 
 		Limit: int(pageSize), PageToken: pageToken, IncludeTotal: includeTotal,
 	})
 	if err != nil {
-		return nil, mapScheduledReportError(err)
+		return nil, mapScheduledReportCallError(request.Context(), err)
 	}
 	retainedByJobID := make(map[string]searchartifacts.Record)
 	if inspector, ok := handler.searchArtifacts.(searchArtifactMetadataBatchInspector); ok {
@@ -323,7 +306,13 @@ func scheduledReportOutcomeToProto(outcome scheduledreports.RunOutcome) opensplu
 	}
 }
 
-func mapScheduledReportError(err error) error {
+func mapScheduledReportCallError(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if requestContextFailure(ctx, err) != nil {
+		return router.NewHTTPError(http.StatusRequestTimeout, "scheduled report request was canceled")
+	}
 	switch {
 	case errors.Is(err, scheduledreports.ErrInvalidArgument):
 		return badRequestError("scheduled report configuration is invalid")

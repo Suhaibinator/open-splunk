@@ -15,7 +15,7 @@ import (
 // by ingestion and physical index deletion. The runtime owns its final close.
 type indexDataDeletionRuntimeStore interface {
 	indexes.DeletionStore
-	Close() error
+	CloseContext(context.Context) error
 }
 
 // indexDataDeletionRuntime owns exactly one physical-deletion coordinator and
@@ -93,7 +93,7 @@ func (runtime *indexDataDeletionRuntime) Close(ctx context.Context) error {
 		runtime.lifecycleMu.Lock()
 		runtime.closing = true
 		runtime.lifecycleMu.Unlock()
-		go runtime.close()
+		go runtime.close(ctx)
 	})
 	select {
 	case <-runtime.closeDone:
@@ -116,16 +116,16 @@ func (runtime *indexDataDeletionRuntime) Close(ctx context.Context) error {
 	}
 }
 
-func (runtime *indexDataDeletionRuntime) close() {
+func (runtime *indexDataDeletionRuntime) close(ctx context.Context) {
 	defer close(runtime.closeDone)
-	if err := runtime.coordinator.Close(context.Background()); err != nil {
+	if err := runtime.coordinator.Close(ctx); err != nil {
 		runtime.closeErr = fmt.Errorf(
 			"close index data deletion coordinator: %w",
 			err,
 		)
 		return
 	}
-	if err := runtime.store.Close(); err != nil {
+	if err := runtime.store.CloseContext(ctx); err != nil {
 		runtime.closeErr = fmt.Errorf(
 			"close index data deletion ClickHouse store: %w",
 			err,
@@ -133,24 +133,14 @@ func (runtime *indexDataDeletionRuntime) close() {
 	}
 }
 
-// finalizeIndexDataDeletionRuntime gives graceful shutdown a bounded attempt,
-// then retains all borrowed dependencies behind an unbounded retry when that
-// budget expires. The process restores default signal handling before deferred
-// finalizers run, so an operator can still force termination with a second
-// signal if a dependency ignores cancellation forever.
+// finalizeIndexDataDeletionRuntime gives the whole graceful shutdown chain one
+// shared bounded budget. Durable write-group state remains recoverable when a
+// dependency does not finish before the deadline.
 func finalizeIndexDataDeletionRuntime(
 	runtime *indexDataDeletionRuntime,
 	timeout time.Duration,
 ) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	closeErr := runtime.Close(ctx)
-	retry := closeErr != nil && ctx.Err() != nil
-	cancel()
-	if !retry {
-		return closeErr
-	}
-	return errors.Join(
-		closeErr,
-		runtime.Close(context.Background()),
-	)
+	defer cancel()
+	return runtime.Close(ctx)
 }

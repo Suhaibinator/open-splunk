@@ -389,9 +389,14 @@ func TestSpathAgainstClickHouse(t *testing.T) {
 
 	t.Run("input byte ceiling is exact and dead destinations may be pruned", func(t *testing.T) {
 		replacement := strings.Repeat("a", 1024)
+		input := strings.Repeat("x", 1024)
 		sourceFor := func(eventID, suffix string) string {
+			// Keep the same 1024/1025-byte inputs, selected at runtime, while
+			// exposing their literal bounds to replacement admission. The full
+			// durable-source bound would exceed the replacement output ceiling.
 			return `index=spath-limit event_id=` + eventID + `
-| eval amplified=replace(_raw,"x","` + replacement + `")
+| eval bounded=if(event_id="s-limit-exact","` + input + `","` + input + `y")
+| eval amplified=replace(bounded,"x","` + replacement + `")
 | spath input=amplified output=selected path=value
 | ` + suffix
 		}

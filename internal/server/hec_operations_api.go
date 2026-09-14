@@ -4,8 +4,6 @@ import (
 	"net/http"
 
 	"fortio.org/safecast"
-	"github.com/Suhaibinator/SRouter/pkg/codec"
-	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -75,12 +73,46 @@ func hecOperationalSnapshotToProto(
 			OldestPendingOutboxAge:    oldestPendingAge,
 			RequestCapacityAvailable:  snapshot.RequestCapacityAvailable,
 			RetainedRequests:          snapshot.RetainedRequests,
+			PendingMetadataBytes:      snapshot.PendingMetadataBytes,
+			PendingUngrouped:          snapshot.PendingUngrouped,
+			ReadyWriteGroups:          snapshot.ReadyWriteGroups,
+			AmbiguousWriteGroups:      snapshot.AmbiguousWriteGroups,
+			LiveWriteGroupLeases:      snapshot.LiveWriteGroupLeases,
 		},
 		Reconciliation: &opensplunk.HECReconciliationOperationalMetrics{
-			Available:   snapshot.ReconciliationAvailable,
-			Successes:   snapshot.ReconciliationSuccesses,
-			Retries:     snapshot.ReconciliationRetries,
-			Ambiguities: snapshot.ReconciliationAmbiguities,
+			Available:                      snapshot.ReconciliationAvailable,
+			Successes:                      snapshot.ReconciliationSuccesses,
+			Retries:                        snapshot.ReconciliationRetries,
+			Ambiguities:                    snapshot.ReconciliationAmbiguities,
+			StagedLogicalBatches:           snapshot.StagedLogicalBatches,
+			StagedLogicalRows:              snapshot.StagedLogicalRows,
+			FormedWriteGroups:              snapshot.FormedWriteGroups,
+			PhysicalInsertSends:            snapshot.PhysicalInsertSends,
+			SuccessfulWriteGroups:          snapshot.SuccessfulWriteGroups,
+			WriteGroupMemberBatches:        snapshot.WriteGroupMemberBatches,
+			WriteGroupRows:                 snapshot.WriteGroupRows,
+			WriteGroupDecodedBytes:         snapshot.WriteGroupDecodedBytes,
+			WriteGroupMonthlyPartitions:    snapshot.WriteGroupMonthlyParts,
+			FillRowTarget:                  snapshot.FillRowTarget,
+			FillByteTarget:                 snapshot.FillByteTarget,
+			FillHardBoundary:               snapshot.FillHardBoundary,
+			FillLinger:                     snapshot.FillLinger,
+			FillDrain:                      snapshot.FillDrain,
+			FillRecovery:                   snapshot.FillRecovery,
+			NativeWaiters:                  snapshot.NativeWaiters,
+			PeakNativeWaiters:              snapshot.PeakNativeWaiters,
+			NativeWaiterWakeups:            snapshot.NativeWaiterWakeups,
+			NativeWaiterCancellations:      snapshot.NativeWaiterCancellations,
+			NativeTerminalLookups:          snapshot.NativeTerminalLookups,
+			SealLatencyBuckets:             snapshot.SealLatencyBuckets[:],
+			SendLatencyBuckets:             snapshot.SendLatencyBuckets[:],
+			CommitLatencyBuckets:           snapshot.CommitLatencyBuckets[:],
+			LatencyUpperBoundsMicroseconds: snapshot.LatencyUpperBoundsMicros[:],
+			MemberBatchesPerGroup:          hecFixedHistogramToProto(snapshot.MemberBatchesPerGroup),
+			RowsPerGroup:                   hecFixedHistogramToProto(snapshot.RowsPerGroup),
+			DecodedBytesPerGroup:           hecFixedHistogramToProto(snapshot.DecodedBytesPerGroup),
+			MonthlyPartitionsPerGroup:      hecFixedHistogramToProto(snapshot.MonthlyPartitionsPerGroup),
+			RowsPerPhysicalInsert:          hecFixedHistogramToProto(snapshot.RowsPerPhysicalInsert),
 		},
 		Acknowledgments: &opensplunk.HECAcknowledgmentOperationalMetrics{
 			Available:              snapshot.AcknowledgmentAvailable,
@@ -98,23 +130,24 @@ func hecOperationalSnapshotToProto(
 	}, nil
 }
 
-func (handler *apiHandler) hecOperationalRoutes(
-	noAuth router.AuthLevel,
-	smallRequestBytes int64,
-) []router.RouteDefinition {
-	return []router.RouteDefinition{
-		router.RouteConfig[
-			*opensplunk.GetHECOperationalSnapshotRequest,
-			*opensplunk.GetHECOperationalSnapshotResponse,
-		]{
-			Path:       hecOperationsRoute,
-			Methods:    []router.HttpMethod{router.MethodPost},
-			AuthLevel:  &noAuth,
-			Codec:      codec.NewProtoCodec[*opensplunk.GetHECOperationalSnapshotRequest, *opensplunk.GetHECOperationalSnapshotResponse](),
-			Handler:    handler.getHECOperationalSnapshot,
-			SourceType: router.Body,
-			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
-			Sanitizer:  sanitizeGetHECOperationalSnapshotRequest,
-		},
+func hecFixedHistogramToProto(snapshot HECFixedHistogramSnapshot) *opensplunk.HECFixedHistogram {
+	return &opensplunk.HECFixedHistogram{
+		UpperBounds:  snapshot.UpperBounds[:],
+		BucketCounts: snapshot.BucketCounts[:],
+		Count:        snapshot.Count,
+		Sum:          snapshot.Sum,
+		Max:          snapshot.Max,
 	}
+}
+
+func (handler *apiHandler) registerHECOperationalRoutes(
+	group *apiRouteGroup,
+	smallRequestBytes int64,
+) {
+	group.Route(sizedProtoPostRoute(
+		hecOperationsRoute,
+		smallRequestBytes,
+		handler.getHECOperationalSnapshot,
+		sanitizeGetHECOperationalSnapshotRequest,
+	))
 }

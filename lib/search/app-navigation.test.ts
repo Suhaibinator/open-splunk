@@ -56,7 +56,7 @@ function installFakeWindow(initialHref: string) {
 
 test("backend app links encode an exact bootstrap preference", () => {
   const href = backendAppSearchHref(" app/operations east ");
-  assert.equal(href, "/search/?appId=app%2Foperations+east");
+  assert.equal(href, "/search/events/?appId=app%2Foperations+east");
   assert.equal(preferredBackendAppId(new URL(href, "https://example.test").search), "app/operations east");
 });
 

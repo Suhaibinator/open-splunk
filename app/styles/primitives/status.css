@@ -75,7 +75,7 @@
 
 .badge--outline { border-color: var(--border); }
 .badge--success { background: var(--accent-soft); color: var(--accent-hover); }
-.badge--info { background: var(--status-info-soft); color: var(--status-info); }
+.badge--info { background: var(--status-info-soft); color: var(--status-info-strong); }
 .badge--warning { background: var(--status-warning-soft); color: var(--status-warning-strong); }
-.badge--error { background: var(--status-error-soft); color: var(--status-error); }
+.badge--error { background: var(--status-error-soft); color: var(--status-error-strong); }
 .badge--neutral { background: var(--bg-subtle); color: var(--fg-muted); }

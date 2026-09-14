@@ -241,6 +241,7 @@ func InjectKnowledgePrelude(query *Query, program knowledgeprogram.Program) (*Qu
 	}
 
 	result := cloneQueryHeader(query)
+	result.timechartContinuations = shiftedTimechartContinuations(query.timechartContinuations, 1, len(generated))
 	result.Operators = make([]Operator, 0, len(query.Operators)+len(generated))
 	clonedScan := *scan
 	clonedScan.Indexes = slices.Clone(scan.Indexes)

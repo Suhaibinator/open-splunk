@@ -224,7 +224,11 @@ export function KnowledgePreviewComparison({
   readonly receipt: KnowledgePreviewReceipt;
 }) {
   const [requestedPage, setRequestedPage] = useState(0);
-  useEffect(() => setRequestedPage(0), [receipt]);
+  const [activeReceipt, setActiveReceipt] = useState(receipt);
+  if (activeReceipt !== receipt) {
+    setActiveReceipt(receipt);
+    setRequestedPage(0);
+  }
   if (receipt.before === null || receipt.after === null) return null;
   const rowWindow = knowledgePreviewRowWindow(
     receipt.before.schema.columns.length,

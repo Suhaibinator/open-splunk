@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/Suhaibinator/SRouter/pkg/codec"
-	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
@@ -22,27 +21,17 @@ const (
 	maximumAuditActorIDBytes      = 255
 )
 
-func (handler *apiHandler) auditEventRoutes(
-	noAuth router.AuthLevel,
+func (handler *apiHandler) registerAuditEventRoutes(
+	group *apiRouteGroup,
 	smallRequestBytes int64,
-) []router.RouteDefinition {
-	return []router.RouteDefinition{
-		router.RouteConfig[
-			*opensplunk.ListAuditEventsRequest,
-			*serializedAuditEventListResponse,
-		]{
-			Path:       auditEventsListRoute,
-			Methods:    []router.HttpMethod{router.MethodPost},
-			AuthLevel:  &noAuth,
-			Codec:      newSerializedAuditEventListCodec(),
-			Handler:    handler.listAuditEvents,
-			SourceType: router.Body,
-			Overrides: sroutercommon.RouteOverrides{
-				MaxBodySize: smallRequestBytes,
-			},
-			Sanitizer: handler.sanitizeListAuditEventsRequest,
-		},
-	}
+) {
+	group.Route(sizedPostRoute(
+		auditEventsListRoute,
+		smallRequestBytes,
+		newSerializedAuditEventListCodec(),
+		handler.listAuditEvents,
+		handler.sanitizeListAuditEventsRequest,
+	))
 }
 
 func (handler *apiHandler) listAuditEvents(
@@ -324,6 +313,8 @@ func auditActorKindToProto(
 
 func auditActionFromProto(value opensplunk.AuditAction) (audit.Action, bool) {
 	switch value {
+	case opensplunk.AuditAction_AUDIT_ACTION_EXPORT_CREATE:
+		return audit.ActionExportCreate, true
 	case opensplunk.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_CREATE:
 		return audit.ActionIngestionTokenCreate, true
 	case opensplunk.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_UPDATE:
@@ -391,6 +382,8 @@ func auditActionFromProto(value opensplunk.AuditAction) (audit.Action, bool) {
 
 func auditActionToProto(value audit.Action) (opensplunk.AuditAction, bool) {
 	switch value {
+	case audit.ActionExportCreate:
+		return opensplunk.AuditAction_AUDIT_ACTION_EXPORT_CREATE, true
 	case audit.ActionIngestionTokenCreate:
 		return opensplunk.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_CREATE, true
 	case audit.ActionIngestionTokenUpdate:
@@ -460,6 +453,8 @@ func auditTargetKindFromProto(
 	value opensplunk.AuditTargetKind,
 ) (audit.TargetKind, bool) {
 	switch value {
+	case opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_EXPORT_JOB:
+		return audit.TargetKindExportJob, true
 	case opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_INGESTION_TOKEN:
 		return audit.TargetKindIngestionToken, true
 	case opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_INDEX:
@@ -483,6 +478,8 @@ func auditTargetKindToProto(
 	value audit.TargetKind,
 ) (opensplunk.AuditTargetKind, bool) {
 	switch value {
+	case audit.TargetKindExportJob:
+		return opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_EXPORT_JOB, true
 	case audit.TargetKindIngestionToken:
 		return opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_INGESTION_TOKEN, true
 	case audit.TargetKindIndex:

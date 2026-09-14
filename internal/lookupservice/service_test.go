@@ -13,6 +13,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/lookupasset"
 	"github.com/Suhaibinator/open-splunk/internal/lookupcatalog"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -122,6 +123,112 @@ func TestServiceLifecycleBindsImmutableAssetsAndDetaches(t *testing.T) {
 		LookupId: lookupID, ExpectedVersion: 5, Definition: metadata,
 	}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("deleted replacement = %v", err)
+	}
+}
+
+func TestCreateIdempotentReplaysAndRejectsChangedIntent(t *testing.T) {
+	service := newTestService(t)
+	scope := Scope{TenantID: testTenant, OwnerID: testOwner}
+	requestID := "lookup request 01"
+	input := &opensplunk.CreateLookupRequest{
+		ClientRequestId: &requestID,
+		Definition:      testDefinition("idempotent-services"),
+		CsvData:         []byte("service_id,owner\napi,alice\n"),
+	}
+	canonical := proto.Clone(input).(*opensplunk.CreateLookupRequest)
+	canonical.ClientRequestId = nil
+	intent, err := requestidempotency.NewIntent(
+		testTenant, "browser", testOwner, requestidempotency.RouteCreateLookup,
+		requestID, canonical,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := service.CreateIdempotent(t.Context(), scope, input, intent)
+	if err != nil || created.GetReplayed() {
+		t.Fatalf("first create = (%+v, %v)", created, err)
+	}
+	replayed, err := service.CreateIdempotent(t.Context(), scope, input, intent)
+	if err != nil || !replayed.GetReplayed() ||
+		replayed.GetLookup().GetLookupId() != created.GetLookup().GetLookupId() {
+		t.Fatalf("replay = (%+v, %v)", replayed, err)
+	}
+	changed := proto.Clone(canonical).(*opensplunk.CreateLookupRequest)
+	changed.Definition.Name = "changed-intent"
+	conflict, err := requestidempotency.NewIntent(
+		testTenant, "browser", testOwner, requestidempotency.RouteCreateLookup,
+		requestID, changed,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateIdempotent(t.Context(), scope, input, conflict); !errors.Is(err, requestidempotency.ErrConflict) {
+		t.Fatalf("changed replay error = %v", err)
+	}
+}
+
+func TestParallelIdempotentLookupCreatesConverge(t *testing.T) {
+	service, database := newTestServiceWithDatabase(t)
+	scope := Scope{TenantID: testTenant, OwnerID: testOwner}
+	requestID := "parallel lookup request 01"
+	input := &opensplunk.CreateLookupRequest{
+		ClientRequestId: &requestID,
+		Definition:      testDefinition("parallel-idempotent-services"),
+		CsvData:         []byte("service_id,owner\napi,alice\n"),
+	}
+	canonical := proto.Clone(input).(*opensplunk.CreateLookupRequest)
+	canonical.ClientRequestId = nil
+	intent, err := requestidempotency.NewIntent(
+		testTenant, "browser", testOwner, requestidempotency.RouteCreateLookup,
+		requestID, canonical,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type outcome struct {
+		response *opensplunk.CreateLookupResponse
+		err      error
+	}
+	start := make(chan struct{})
+	results := make(chan outcome, 8)
+	for range 8 {
+		go func() {
+			<-start
+			response, createErr := service.CreateIdempotent(
+				context.Background(), scope, input, intent,
+			)
+			results <- outcome{response: response, err: createErr}
+		}()
+	}
+	close(start)
+	var targetID string
+	fresh := 0
+	for range 8 {
+		result := <-results
+		if result.err != nil {
+			t.Fatalf("parallel create error = %v", result.err)
+		}
+		if targetID == "" {
+			targetID = result.response.GetLookup().GetLookupId()
+		}
+		if result.response.GetLookup().GetLookupId() != targetID {
+			t.Fatalf("parallel target = %q, want %q", result.response.GetLookup().GetLookupId(), targetID)
+		}
+		if !result.response.GetReplayed() {
+			fresh++
+		}
+	}
+	var lookupCount int64
+	if err := database.GORMDB().Table("knowledge_lookup_definitions").
+		Where("tenant_id = ? AND lookup_id = ?", testTenant, targetID).
+		Count(&lookupCount).Error; err != nil || fresh != 1 || lookupCount != 1 {
+		t.Fatalf("parallel outcomes = %d fresh, %d lookup rows, error %v", fresh, lookupCount, err)
+	}
+	var receiptCount int64
+	if err := database.GORMDB().Table("api_mutation_receipts").
+		Where("tenant_id = ? AND target_id = ?", testTenant, targetID).
+		Count(&receiptCount).Error; err != nil || receiptCount != 1 {
+		t.Fatalf("parallel receipt rows = %d, error %v", receiptCount, err)
 	}
 }
 
@@ -427,7 +534,10 @@ func newTestServiceWithDatabase(t *testing.T) (*Service, *control.DB) {
 	if err != nil {
 		t.Fatalf("lookupcatalog.New(): %v", err)
 	}
-	service, err := New(Config{Assets: assets, Catalog: catalog, CursorKey: make([]byte, 32)})
+	service, err := New(Config{
+		Assets: assets, Catalog: catalog, CursorKey: make([]byte, 32),
+		ReceiptDB: database.GORMDB(),
+	})
 	if err != nil {
 		t.Fatalf("New(): %v", err)
 	}

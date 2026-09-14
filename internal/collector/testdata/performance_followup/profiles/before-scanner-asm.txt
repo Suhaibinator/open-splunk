@@ -1,0 +1,244 @@
+
+/tmp/collector-perf-20260908/before-extended.test:	file format mach-o arm64
+
+Disassembly of section __TEXT,__text:
+
+00000001007866f0 <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value>:
+1007866f0: f9400b90    	ldr	x16, [x28, #0x10]
+1007866f4: d10043f1    	sub	x17, sp, #0x10
+1007866f8: eb10023f    	cmp	x17, x16
+1007866fc: 54001c69    	b.ls	0x100786a88 <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0x398>
+100786700: f8170ffe    	str	x30, [sp, #-0x90]!
+100786704: f81f83fd    	stur	x29, [sp, #-0x8]
+100786708: d10023fd    	sub	x29, sp, #0x8
+10078670c: 36000261    	tbz	w1, #0x0, 0x100786758 <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0x68>
+100786710: f9400c05    	ldr	x5, [x0, #0x18]
+100786714: a9401c06    	ldp	x6, x7, [x0]
+100786718: eb0500ff    	cmp	x7, x5
+10078671c: 5400010d    	b.le	0x10078673c <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0x4c>
+100786720: 54001b09    	b.ls	0x100786a80 <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0x390>
+100786724: 386568c6    	ldrb	w6, [x6, x5]
+100786728: 710088df    	cmp	w6, #0x22
+10078672c: 54000081    	b.ne	0x10078673c <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0x4c>
+100786730: 910004a5    	add	x5, x5, #0x1
+100786734: f9000c05    	str	x5, [x0, #0x18]
+100786738: 14000008    	b	0x100786758 <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0x68>
+10078673c: aa1f03e0    	mov	x0, xzr
+100786740: aa1f03e1    	mov	x1, xzr
+100786744: aa1f03e2    	mov	x2, xzr
+100786748: aa1f03e3    	mov	x3, xzr
+10078674c: f85f83fd    	ldur	x29, [sp, #-0x8]
+100786750: f84907fe    	ldr	x30, [sp], #0x90
+100786754: d65f03c0    	ret
+100786758: f9004fe0    	str	x0, [sp, #0x98]
+10078675c: 390283e1    	strb	w1, [sp, #0xa0]
+100786760: f9400c05    	ldr	x5, [x0, #0x18]
+100786764: f9002fe5    	str	x5, [sp, #0x58]
+100786768: aa1f03e2    	mov	x2, xzr
+10078676c: aa1f03e6    	mov	x6, xzr
+100786770: aa1f03e3    	mov	x3, xzr
+100786774: 14000002    	b	0x10078677c <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0x8c>
+100786778: aa0703e3    	mov	x3, x7
+10078677c: a9402007    	ldp	x7, x8, [x0]
+100786780: a9412809    	ldp	x9, x10, [x0, #0x10]
+100786784: eb0a011f    	cmp	x8, x10
+100786788: 5400138d    	b.le	0x1007869f8 <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0x308>
+10078678c: 54001789    	b.ls	0x100786a7c <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0x38c>
+100786790: 386a68e8    	ldrb	w8, [x7, x10]
+100786794: 360000a1    	tbz	w1, #0x0, 0x1007867a8 <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0xb8>
+100786798: aa0803eb    	mov	x11, x8
+10078679c: 7100897f    	cmp	w11, #0x22
+1007867a0: 54000fe0    	b.eq	0x10078699c <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0x2ac>
+1007867a4: 370000c1    	tbnz	w1, #0x0, 0x1007867bc <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0xcc>
+1007867a8: aa0803eb    	mov	x11, x8
+1007867ac: 7100817f    	cmp	w11, #0x20
+1007867b0: 54000f60    	b.eq	0x10078699c <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0x2ac>
+1007867b4: 7100257f    	cmp	w11, #0x9
+1007867b8: 54000f20    	b.eq	0x10078699c <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0x2ac>
+1007867bc: aa0803e7    	mov	x7, x8
+1007867c0: 710080ff    	cmp	w7, #0x20
+1007867c4: 54000de3    	b.lo	0x100786980 <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0x290>
+1007867c8: 7101fcff    	cmp	w7, #0x7f
+1007867cc: 54000da0    	b.eq	0x100786980 <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0x290>
+1007867d0: 37000061    	tbnz	w1, #0x0, 0x1007867dc <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0xec>
+1007867d4: 710088ff    	cmp	w7, #0x22
+1007867d8: 54000d40    	b.eq	0x100786980 <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0x290>
+1007867dc: 710170ff    	cmp	w7, #0x5c
+1007867e0: 54000340    	b.eq	0x100786848 <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0x158>
+1007867e4: b4000286    	cbz	x6, 0x100786834 <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0x144>
+1007867e8: 91000467    	add	x7, x3, #0x1
+1007867ec: eb07005f    	cmp	x2, x7
+1007867f0: 540001c2    	b.hs	0x100786828 <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0x138>
+1007867f4: 39015fe8    	strb	w8, [sp, #0x57]
+1007867f8: aa0603e0    	mov	x0, x6
+1007867fc: aa0703e1    	mov	x1, x7
+100786800: b24003e3    	orr	x3, xzr, #0x1
+100786804: d0005484    	adrp	x4, 0x101218000 <_type:*+0xf44b8>
+100786808: 9119a084    	add	x4, x4, #0x668
+10078680c: 97e41111    	bl	0x10008ac50 <_runtime.growslice>
+100786810: f9402fe5    	ldr	x5, [sp, #0x58]
+100786814: 39415fe8    	ldrb	w8, [sp, #0x57]
+100786818: aa0103e7    	mov	x7, x1
+10078681c: aa0003e6    	mov	x6, x0
+100786820: f9404fe0    	ldr	x0, [sp, #0x98]
+100786824: 394283e1    	ldrb	w1, [sp, #0xa0]
+100786828: d10004e9    	sub	x9, x7, #0x1
+10078682c: 382968c8    	strb	w8, [x6, x9]
+100786830: 14000002    	b	0x100786838 <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0x148>
+100786834: aa0303e7    	mov	x7, x3
+100786838: f9400c08    	ldr	x8, [x0, #0x18]
+10078683c: 91000508    	add	x8, x8, #0x1
+100786840: f9000c08    	str	x8, [x0, #0x18]
+100786844: 17ffffcd    	b	0x100786778 <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0x88>
+100786848: b5000566    	cbnz	x6, 0x1007868f4 <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0x204>
+10078684c: cb050143    	sub	x3, x10, x5
+100786850: 91004062    	add	x2, x3, #0x10
+100786854: f90037e2    	str	x2, [sp, #0x68]
+100786858: d0005480    	adrp	x0, 0x101218000 <_type:*+0xf44b8>
+10078685c: 9119a000    	add	x0, x0, #0x668
+100786860: aa1f03e1    	mov	x1, xzr
+100786864: 97e410c7    	bl	0x10008ab80 <_runtime.makeslice>
+100786868: f9404fe3    	ldr	x3, [sp, #0x98]
+10078686c: a9411464    	ldp	x4, x5, [x3, #0x10]
+100786870: eb05009f    	cmp	x4, x5
+100786874: 54001023    	b.lo	0x100786a78 <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0x388>
+100786878: f9402fe6    	ldr	x6, [sp, #0x58]
+10078687c: eb0600bf    	cmp	x5, x6
+100786880: 54000fa3    	b.lo	0x100786a74 <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0x384>
+100786884: f9400067    	ldr	x7, [x3]
+100786888: cb0600a1    	sub	x1, x5, x6
+10078688c: cb0400c5    	sub	x5, x6, x4
+100786890: 8a85fcc5    	and	x5, x6, x5, asr #63
+100786894: 8b0500e5    	add	x5, x7, x5
+100786898: f94037e2    	ldr	x2, [sp, #0x68]
+10078689c: eb02003f    	cmp	x1, x2
+1007868a0: 54000068    	b.hi	0x1007868ac <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0x1bc>
+1007868a4: aa0103e4    	mov	x4, x1
+1007868a8: 14000009    	b	0x1007868cc <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0x1dc>
+1007868ac: f9003be1    	str	x1, [sp, #0x70]
+1007868b0: f90043e5    	str	x5, [sp, #0x80]
+1007868b4: aa0103e3    	mov	x3, x1
+1007868b8: d0005484    	adrp	x4, 0x101218000 <_type:*+0xf44b8>
+1007868bc: 9119a084    	add	x4, x4, #0x668
+1007868c0: 97e410e4    	bl	0x10008ac50 <_runtime.growslice>
+1007868c4: f9403be4    	ldr	x4, [sp, #0x70]
+1007868c8: f94043e5    	ldr	x5, [sp, #0x80]
+1007868cc: f90033e1    	str	x1, [sp, #0x60]
+1007868d0: f9003fe0    	str	x0, [sp, #0x78]
+1007868d4: f90037e2    	str	x2, [sp, #0x68]
+1007868d8: aa0503e1    	mov	x1, x5
+1007868dc: aa0403e2    	mov	x2, x4
+1007868e0: 97e42678    	bl	0x1000902c0 <_runtime.memmove>
+1007868e4: f9404fe0    	ldr	x0, [sp, #0x98]
+1007868e8: f94037e2    	ldr	x2, [sp, #0x68]
+1007868ec: f9403fe6    	ldr	x6, [sp, #0x78]
+1007868f0: f94033e3    	ldr	x3, [sp, #0x60]
+1007868f4: f90033e3    	str	x3, [sp, #0x60]
+1007868f8: f9003fe6    	str	x6, [sp, #0x78]
+1007868fc: f90037e2    	str	x2, [sp, #0x68]
+100786900: 9400006c    	bl	0x100786ab0 <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).escape>
+100786904: 36000301    	tbz	w1, #0x0, 0x100786964 <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0x274>
+100786908: f94033e5    	ldr	x5, [sp, #0x60]
+10078690c: 910004a1    	add	x1, x5, #0x1
+100786910: f94037e2    	ldr	x2, [sp, #0x68]
+100786914: eb01005f    	cmp	x2, x1
+100786918: 54000063    	b.lo	0x100786924 <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0x234>
+10078691c: f9403fe3    	ldr	x3, [sp, #0x78]
+100786920: 14000009    	b	0x100786944 <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0x254>
+100786924: 39015be0    	strb	w0, [sp, #0x56]
+100786928: f9403fe0    	ldr	x0, [sp, #0x78]
+10078692c: b24003e3    	orr	x3, xzr, #0x1
+100786930: d0005484    	adrp	x4, 0x101218000 <_type:*+0xf44b8>
+100786934: 9119a084    	add	x4, x4, #0x668
+100786938: 97e410c6    	bl	0x10008ac50 <_runtime.growslice>
+10078693c: aa0003e3    	mov	x3, x0
+100786940: 39415be0    	ldrb	w0, [sp, #0x56]
+100786944: d1000425    	sub	x5, x1, #0x1
+100786948: 38256860    	strb	w0, [x3, x5]
+10078694c: f9404fe0    	ldr	x0, [sp, #0x98]
+100786950: f9402fe5    	ldr	x5, [sp, #0x58]
+100786954: aa0103e7    	mov	x7, x1
+100786958: aa0303e6    	mov	x6, x3
+10078695c: 394283e1    	ldrb	w1, [sp, #0xa0]
+100786960: 17ffff86    	b	0x100786778 <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0x88>
+100786964: aa1f03e0    	mov	x0, xzr
+100786968: aa1f03e1    	mov	x1, xzr
+10078696c: aa1f03e2    	mov	x2, xzr
+100786970: aa1f03e3    	mov	x3, xzr
+100786974: f85f83fd    	ldur	x29, [sp, #-0x8]
+100786978: f84907fe    	ldr	x30, [sp], #0x90
+10078697c: d65f03c0    	ret
+100786980: aa1f03e0    	mov	x0, xzr
+100786984: aa1f03e1    	mov	x1, xzr
+100786988: aa1f03e2    	mov	x2, xzr
+10078698c: aa1f03e3    	mov	x3, xzr
+100786990: f85f83fd    	ldur	x29, [sp, #-0x8]
+100786994: f84907fe    	ldr	x30, [sp], #0x90
+100786998: d65f03c0    	ret
+10078699c: eb05015f    	cmp	x10, x5
+1007869a0: 54000683    	b.lo	0x100786a70 <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0x380>
+1007869a4: cb050144    	sub	x4, x10, x5
+1007869a8: cb050128    	sub	x8, x9, x5
+1007869ac: 8b0500e7    	add	x7, x7, x5
+1007869b0: f10000df    	cmp	x6, #0x0
+1007869b4: 9a881042    	csel	x2, x2, x8, ne
+1007869b8: 9a841064    	csel	x4, x3, x4, ne
+1007869bc: 9a8710c6    	csel	x6, x6, x7, ne
+1007869c0: 36000061    	tbz	w1, #0x0, 0x1007869cc <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0x2dc>
+1007869c4: 91000547    	add	x7, x10, #0x1
+1007869c8: f9000c07    	str	x7, [x0, #0x18]
+1007869cc: 36000061    	tbz	w1, #0x0, 0x1007869d8 <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0x2e8>
+1007869d0: b24003e3    	orr	x3, xzr, #0x1
+1007869d4: 14000004    	b	0x1007869e4 <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0x2f4>
+1007869d8: f9400c07    	ldr	x7, [x0, #0x18]
+1007869dc: eb0500ff    	cmp	x7, x5
+1007869e0: 9a9fd7e3    	cset	x3, gt
+1007869e4: aa0603e0    	mov	x0, x6
+1007869e8: aa0403e1    	mov	x1, x4
+1007869ec: f85f83fd    	ldur	x29, [sp, #-0x8]
+1007869f0: f84907fe    	ldr	x30, [sp], #0x90
+1007869f4: d65f03c0    	ret
+1007869f8: 37000061    	tbnz	w1, #0x0, 0x100786a04 <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0x314>
+1007869fc: eb05015f    	cmp	x10, x5
+100786a00: 54000101    	b.ne	0x100786a20 <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0x330>
+100786a04: aa1f03e0    	mov	x0, xzr
+100786a08: aa1f03e1    	mov	x1, xzr
+100786a0c: aa1f03e2    	mov	x2, xzr
+100786a10: aa1f03e3    	mov	x3, xzr
+100786a14: f85f83fd    	ldur	x29, [sp, #-0x8]
+100786a18: f84907fe    	ldr	x30, [sp], #0x90
+100786a1c: d65f03c0    	ret
+100786a20: b5000186    	cbnz	x6, 0x100786a50 <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0x360>
+100786a24: eb0a013f    	cmp	x9, x10
+100786a28: 54000223    	b.lo	0x100786a6c <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0x37c>
+100786a2c: eb05015f    	cmp	x10, x5
+100786a30: 540001c3    	b.lo	0x100786a68 <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value+0x378>
+100786a34: cb050141    	sub	x1, x10, x5
+100786a38: cb050122    	sub	x2, x9, x5
+100786a3c: 8b0500e0    	add	x0, x7, x5
+100786a40: b24003e3    	orr	x3, xzr, #0x1
+100786a44: f85f83fd    	ldur	x29, [sp, #-0x8]
+100786a48: f84907fe    	ldr	x30, [sp], #0x90
+100786a4c: d65f03c0    	ret
+100786a50: aa0603e0    	mov	x0, x6
+100786a54: aa0303e1    	mov	x1, x3
+100786a58: b24003e3    	orr	x3, xzr, #0x1
+100786a5c: f85f83fd    	ldur	x29, [sp, #-0x8]
+100786a60: f84907fe    	ldr	x30, [sp], #0x90
+100786a64: d65f03c0    	ret
+100786a68: 97e42592    	bl	0x1000900b0 <_runtime.panicBounds>
+100786a6c: 97e42591    	bl	0x1000900b0 <_runtime.panicBounds>
+100786a70: 97e42590    	bl	0x1000900b0 <_runtime.panicBounds>
+100786a74: 97e4258f    	bl	0x1000900b0 <_runtime.panicBounds>
+100786a78: 97e4258e    	bl	0x1000900b0 <_runtime.panicBounds>
+100786a7c: 97e4258d    	bl	0x1000900b0 <_runtime.panicBounds>
+100786a80: 97e4258c    	bl	0x1000900b0 <_runtime.panicBounds>
+100786a84: d503201f    	nop
+100786a88: f90007e0    	str	x0, [sp, #0x8]
+100786a8c: 390043e1    	strb	w1, [sp, #0x10]
+100786a90: aa1e03e3    	mov	x3, x30
+100786a94: 97e41cef    	bl	0x10008de50 <_runtime.morestack_noctxt.abi0>
+100786a98: f94007e0    	ldr	x0, [sp, #0x8]
+100786a9c: 394043e1    	ldrb	w1, [sp, #0x10]
+100786aa0: 17ffff14    	b	0x1007866f0 <_github.com/Suhaibinator/open-splunk/internal/collector.(*nativeFixedScanner).value>
+		...

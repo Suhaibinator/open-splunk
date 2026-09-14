@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 )
 
 // This file holds one sanitizer per app administration route, in
@@ -19,14 +20,16 @@ import (
 // because the handler needs the converted value and the conversion is the
 // check; so does any rule that depends on the stored app.
 
-// sanitizeCreateAppRequest rejects idempotency keys this server does not
-// implement, then bounds and canonicalizes the definition it will persist.
+// sanitizeCreateAppRequest bounds the optional idempotency key, then
+// canonicalizes the definition it will persist.
 func sanitizeCreateAppRequest(
 	_ context.Context,
 	request *opensplunk.CreateAppRequest,
 ) (*opensplunk.CreateAppRequest, error) {
 	if request.ClientRequestId != nil {
-		return request, badRequestError("client request idempotency is not supported")
+		if err := requestidempotency.ValidateClientRequestID(request.GetClientRequestId()); err != nil {
+			return request, badRequestError(err.Error())
+		}
 	}
 	definition, err := appAdministrationDefinition(request.GetDefinition())
 	if err != nil {

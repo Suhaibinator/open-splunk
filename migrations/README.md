@@ -27,6 +27,20 @@ history is safe. Tests pin every shipped migration's SHA-256 digest: an applied
 script is never edited or replaced; a schema change requires a newly appended
 migration.
 
+One released SQLite baseline folded the ingest write-group schema into version
+`0001` after the original baseline had shipped. The runner narrowly recognizes
+that exact alternate checksum, adopts the corresponding accounting migration,
+and then rejoins the canonical history. No other alternate checksum or
+rewritten migration is accepted. Pre-accounting pending reservations retain
+their original outbox and are replayed individually before new write groups are
+formed.
+
+The principal-backlog migration preserves every accepted reservation and adds
+an immutable server-derived source identity for new admission. Older rows keep
+an empty identity; their pending rows and bytes count conservatively against
+every principal until replay makes them terminal. Token retirement never
+deletes backlog accounting, and recovery does not reassign accepted work.
+
 An unrecognized ledger or unledgered legacy schema is not silently adopted,
 rewritten, or deleted. Provision a fresh database or volume and retain old state
 separately if forensic access is required.
@@ -75,6 +89,23 @@ Canonical SPL aliases hide physical names: `index` maps to `index_name`,
 `message` to `body`. Raw bytes use the native byte-safe insertion path; they
 must not be UTF-8-repaired or base64-replaced.
 
+Case-insensitive exact searches on `event_id`, `trace_id`, and `span_id` use
+normalized bloom indexes that match the compiler's search expressions. The
+forward migration adds index metadata without rewriting existing event parts
+or changing their results. New parts build the indexes automatically. To
+accelerate older parts immediately, a ClickHouse administrator can schedule
+the following maintenance separately from server startup:
+
+```sql
+ALTER TABLE open_splunk.events MATERIALIZE INDEX idx_event_id_ci;
+ALTER TABLE open_splunk.events MATERIALIZE INDEX idx_trace_id_ci;
+ALTER TABLE open_splunk.events MATERIALIZE INDEX idx_span_id_ci;
+```
+
+Materialization reads existing parts and runs asynchronously; its cost depends
+on retained data volume. The application does not require materialization
+privileges, and searches remain correct before it finishes.
+
 ## Visibility, retries, and recovery
 
 SQLite reserves a stable positive visibility sequence, index time, and
@@ -99,6 +130,14 @@ SQLite and ClickHouse form one coordinated recovery generation. A recovery
 set binds their exact private schema/migration counters and digests. Restore
 never mixes a control plane from one generation with ClickHouse from another.
 Unknown state fails closed; recovery does not discard it as success.
+
+The SQLite half of that generation contains both logical ingestion
+reservations and immutable write-group membership. A snapshot must therefore
+never retain an ambiguous group without every referenced reservation outbox.
+Online backup, index deletion, and other physical maintenance use the shared
+write freeze and drain proof before copying or mutating either store. Terminal
+group membership is pruned before referenced logical identity rows in the same
+bounded maintenance transaction.
 
 ## Verification
 

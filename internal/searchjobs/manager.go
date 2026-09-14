@@ -24,6 +24,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"github.com/Suhaibinator/open-splunk/internal/searchlimits"
 	"github.com/Suhaibinator/open-splunk/internal/searchretention"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
@@ -152,6 +153,19 @@ var (
 type ResultSink interface {
 	SetSchema(Schema) error
 	AddRow([]Value) error
+}
+
+// TimeBucketResultSink is the optional result capability used by timechart
+// producers to attach an exact bucket interval without exposing it as an SPL
+// result column. Executors must continue to support sinks that implement only
+// ResultSink.
+type TimeBucketResultSink interface {
+	AddRowWithTimeBucket([]Value, TimeBucketBounds) error
+}
+
+// CompiledResultSink accepts an authenticated final descriptor before schema publication.
+type CompiledResultSink interface {
+	SetCompiledQuery(clickhouse.CompiledQuery) error
 }
 
 // ExecutionProgressDelta is one non-cumulative storage progress packet.
@@ -710,6 +724,65 @@ func (manager *Manager) LookupAdmissionEnabled() bool {
 // context is used only for admission; a successfully created job intentionally
 // outlives an HTTP request and is canceled through Cancel or Close.
 func (manager *Manager) Create(ctx context.Context, request CreateRequest) (Job, error) {
+	return manager.create(ctx, request, nil)
+}
+
+// CreateIdempotent replays an actor-scoped durable admission before any
+// dynamic visibility, time, authorization, or capacity resolution. Concurrent
+// first attempts converge through the receipt projection's database key.
+func (manager *Manager) CreateIdempotent(
+	ctx context.Context,
+	request CreateRequest,
+	intent requestidempotency.Intent,
+) (Job, bool, error) {
+	if ctx == nil || intent.Route != requestidempotency.RouteCreateSearchJob ||
+		intent.TenantID != request.TenantID || intent.CanonicalVersion != requestidempotency.CanonicalVersion {
+		return Job{}, false, requestidempotency.ErrInvalid
+	}
+	access := AccessScope{TenantID: request.TenantID, OwnerID: request.OwnerID}
+	if job, found, err := manager.ReplayIdempotent(ctx, access, intent); err != nil || found {
+		return job, found, err
+	}
+	job, err := manager.create(ctx, request, &intent)
+	if err == nil {
+		return job, false, nil
+	}
+	// Admission may have committed even when cancellation loses its acknowledgement.
+	reconcileCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), manager.journalTimeout)
+	defer cancel()
+	if replay, found, replayErr := manager.ReplayIdempotent(reconcileCtx, access, intent); replayErr != nil || found {
+		return replay, found, replayErr
+	}
+	return Job{}, false, err
+}
+
+// ReplayIdempotent resolves current durable metadata without applying any
+// caller-authored request defaults or consulting live mutation capacity.
+func (manager *Manager) ReplayIdempotent(
+	ctx context.Context,
+	access AccessScope,
+	intent requestidempotency.Intent,
+) (Job, bool, error) {
+	if ctx == nil || !validAccessScope(access) || intent.TenantID != access.TenantID ||
+		intent.Route != requestidempotency.RouteCreateSearchJob ||
+		intent.CanonicalVersion != requestidempotency.CanonicalVersion {
+		return Job{}, false, requestidempotency.ErrInvalid
+	}
+	if err := ctx.Err(); err != nil {
+		return Job{}, false, err
+	}
+	journal, ok := manager.journal.(IdempotentJobJournal)
+	if !ok {
+		return Job{}, false, requestidempotency.ErrUnavailable
+	}
+	return journal.LookupIdempotent(ctx, access, intent)
+}
+
+func (manager *Manager) create(
+	ctx context.Context,
+	request CreateRequest,
+	intent *requestidempotency.Intent,
+) (Job, error) {
 	if ctx == nil {
 		return Job{}, errors.New("create search job: context is nil")
 	}
@@ -869,7 +942,7 @@ func (manager *Manager) Create(ctx context.Context, request CreateRequest) (Job,
 	created := cloneJob(entry.job)
 	journalAdmitted := false
 	if manager.journal != nil {
-		if err := manager.admitJournal(ctx, created); err != nil {
+		if err := manager.admitJournal(ctx, created, intent); err != nil {
 			cancel()
 			return Job{}, err
 		}
@@ -1075,7 +1148,11 @@ func (manager *Manager) releaseJobID(id string) {
 	manager.mu.Unlock()
 }
 
-func (manager *Manager) admitJournal(ctx context.Context, job Job) error {
+func (manager *Manager) admitJournal(
+	ctx context.Context,
+	job Job,
+	intent *requestidempotency.Intent,
+) error {
 	journalParent, cancelForManager := context.WithCancel(ctx)
 	stopManagerCancellation := context.AfterFunc(manager.ctx, cancelForManager)
 	journalContext, cancelTimeout := context.WithTimeout(journalParent, manager.journalTimeout)
@@ -1085,6 +1162,13 @@ func (manager *Manager) admitJournal(ctx context.Context, job Job) error {
 		cancelForManager()
 	}()
 	err := invokeJournal(func() error {
+		if intent != nil {
+			journal, ok := manager.journal.(IdempotentJobJournal)
+			if !ok {
+				return requestidempotency.ErrUnavailable
+			}
+			return journal.AdmitIdempotent(journalContext, cloneJob(job), *intent)
+		}
 		return manager.journal.Admit(journalContext, cloneJob(job))
 	})
 	if err == nil {
@@ -1097,6 +1181,13 @@ func (manager *Manager) admitJournal(ctx context.Context, job Job) error {
 		return ErrClosed
 	}
 	manager.reportJournalError(JournalOperationAdmit, job, err)
+	if errors.Is(err, requestidempotency.ErrInvalid) ||
+		errors.Is(err, requestidempotency.ErrConflict) ||
+		errors.Is(err, requestidempotency.ErrCapacity) ||
+		errors.Is(err, requestidempotency.ErrUnavailable) ||
+		errors.Is(err, requestidempotency.ErrCorrupt) {
+		return err
+	}
 	return fmt.Errorf("create search job: %w", ErrJournalUnavailable)
 }
 
@@ -1554,10 +1645,11 @@ func (manager *Manager) resultsEntry(id string, entry *jobEntry, limit int, curs
 		return ResultPage{}, ErrByteLimit
 	}
 	page := ResultPage{
-		Schema:    cloneSchema(*entry.resultSchema),
-		Rows:      cloneRows(entry.rows[start:end]),
-		TotalRows: total,
-		Complete:  end == len(entry.rows),
+		Schema:     cloneSchema(*entry.resultSchema),
+		Rows:       cloneRows(entry.rows[start:end]),
+		TotalRows:  total,
+		Complete:   end == len(entry.rows),
+		Generation: entry.resultGeneration,
 	}
 	if end < len(entry.rows) {
 
@@ -2023,12 +2115,18 @@ func (manager *Manager) executeCompiled(
 		cloned := *retained.Chart
 		chart = &cloned
 	}
+	var nearbyEvent *clickhouse.NearbyEventOutput
+	if output, available := retained.NearbyEventOutput(); available {
+		nearbyEvent = &output
+	}
 	sink := &resultSink{
 		manager:        manager,
 		entry:          entry,
+		sourceCompiled: &retained,
 		expectedFields: cloneStrings(retained.OutputFields),
 		timechart:      timechart,
 		chart:          chart,
+		nearbyEvent:    nearbyEvent,
 		atomicResult:   retained.RequiresAtomicResult(),
 		limits:         entry.limits,
 	}
@@ -2092,7 +2190,7 @@ func (manager *Manager) executeCompiled(
 		)
 		return
 	}
-	manager.finishCompleted(entry, manager.nowUTC(), resultsTruncated)
+	manager.finishCompleted(entry, manager.nowUTC(), resultsTruncated, sink.nearbyEventProvenance())
 }
 
 func (entry *jobEntry) hasPreparedExecution() bool {
@@ -2334,12 +2432,23 @@ func (manager *Manager) runFailureReporter(
 	}
 }
 
-func (manager *Manager) finishCompleted(entry *jobEntry, now time.Time, resultsTruncated bool) {
+func (manager *Manager) finishCompleted(
+	entry *jobEntry,
+	now time.Time,
+	resultsTruncated bool,
+	nearbyProvenance *NearbyEventProvenance,
+) {
 	entry.mu.Lock()
 	if entry.job.State == StateRunning {
 		if entry.ctx.Err() != nil {
 			manager.finishCanceledLocked(entry, now)
 		} else {
+			if nearbyProvenance != nil {
+				cloned := *nearbyProvenance
+				entry.job.NearbyEventProvenance = &cloned
+			} else {
+				entry.job.NearbyEventProvenance = nil
+			}
 			entry.job.State = StateCompleted
 			incrementJobVersion(&entry.job)
 			entry.job.FinishedAt = now
@@ -2612,9 +2721,13 @@ type resultSink struct {
 	manager           *Manager
 	entry             *jobEntry
 	ctx               context.Context
+	sourceCompiled    *clickhouse.CompiledQuery
+	resolvedCompiled  bool
 	expectedFields    []string
 	timechart         *clickhouse.TimechartOutput
 	chart             *clickhouse.ChartOutput
+	nearbyEvent       *clickhouse.NearbyEventOutput
+	nearbyProvenance  *NearbyEventProvenance
 	atomicResult      bool
 	atomicSchema      *Schema
 	atomicRows        []ResultRow
@@ -2625,6 +2738,40 @@ type resultSink struct {
 	firstErr          error
 	truncationErr     *retainedRowLimitError
 	limits            searchlimits.Policy
+}
+
+// SetCompiledQuery accepts the final descriptor of a compiler-authenticated
+// continuation before its public schema arrives. Keep only the small output
+// contract here; native intermediate rows belong to the executing query.
+func (sink *resultSink) SetCompiledQuery(compiled clickhouse.CompiledQuery) error {
+	sink.entry.mu.Lock()
+	defer sink.entry.mu.Unlock()
+	if err := sink.readyLocked(); err != nil {
+		return err
+	}
+	if sink.receivedSchema || sink.resolvedCompiled || sink.sourceCompiled == nil ||
+		!compiled.IsContinuationOf(*sink.sourceCompiled) {
+		return sink.rememberLocked(fmt.Errorf("%w: invalid continuation result authority", ErrInvalidResult))
+	}
+	sink.expectedFields = cloneStrings(compiled.OutputFields)
+	sink.timechart = nil
+	if compiled.Timechart != nil {
+		cloned := *compiled.Timechart
+		cloned.Boundaries = slices.Clone(compiled.Timechart.Boundaries)
+		sink.timechart = &cloned
+	}
+	sink.chart = nil
+	if compiled.Chart != nil {
+		cloned := *compiled.Chart
+		sink.chart = &cloned
+	}
+	sink.nearbyEvent = nil
+	if output, available := compiled.NearbyEventOutput(); available {
+		sink.nearbyEvent = &output
+	}
+	sink.atomicResult = sink.atomicResult || compiled.RequiresAtomicResult()
+	sink.resolvedCompiled = true
+	return nil
 }
 
 // retainedRowLimitError is allocated once for the first overflow row of one
@@ -2692,6 +2839,14 @@ func (sink *resultSink) SetSchema(schema Schema) error {
 	}
 	if schemaErr != nil {
 		return sink.rememberLocked(schemaErr)
+	}
+	sink.nearbyProvenance = nil
+	if sink.nearbyEvent != nil {
+		provenance, valid := nearbyEventProvenance(*sink.nearbyEvent, schema)
+		if !valid {
+			return sink.rememberLocked(fmt.Errorf("%w: nearby-event provenance does not match schema", ErrInvalidResult))
+		}
+		sink.nearbyProvenance = provenance
 	}
 	if sink.atomicResult {
 		return sink.stageAtomicSchemaLocked(schema)
@@ -2791,6 +2946,16 @@ func (sink *resultSink) planRowGrowthLocked(
 }
 
 func (sink *resultSink) AddRow(values []Value) error {
+	return sink.addRow(values, nil)
+}
+
+// AddRowWithTimeBucket validates and retains exact timechart bucket metadata
+// separately from the positional result cells.
+func (sink *resultSink) AddRowWithTimeBucket(values []Value, bounds TimeBucketBounds) error {
+	return sink.addRow(values, &bounds)
+}
+
+func (sink *resultSink) addRow(values []Value, bounds *TimeBucketBounds) error {
 	entry := sink.entry
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
@@ -2802,7 +2967,7 @@ func (sink *resultSink) AddRow(values []Value) error {
 		return sink.rememberLocked(fmt.Errorf("%w: row was emitted before schema", ErrInvalidResult))
 	}
 	if sink.atomicResult {
-		return sink.stageAtomicRowLocked(values)
+		return sink.stageAtomicRowLocked(values, bounds)
 	}
 	if len(values) != len(entry.job.Schema.Columns) {
 		return sink.rememberLocked(fmt.Errorf("%w: row has %d cells for %d columns", ErrInvalidResult, len(values), len(entry.job.Schema.Columns)))
@@ -2813,6 +2978,12 @@ func (sink *resultSink) AddRow(values []Value) error {
 	payloadBytes, retainedBytes, measureErr := sink.measureRowCellsLocked(entry.job.Schema.Columns, values)
 	if measureErr != nil {
 		return sink.rememberLocked(measureErr)
+	}
+	payloadBytes, retainedBytes, boundsErr := measureTimeBucketBounds(
+		entry.job.Schema.Columns, values, bounds, payloadBytes, retainedBytes,
+	)
+	if boundsErr != nil {
+		return sink.rememberLocked(boundsErr)
 	}
 	// Validate an overflow row before recording truncation. A malformed row is
 	// not evidence that another valid result existed and must remain a failed
@@ -2842,7 +3013,9 @@ func (sink *resultSink) AddRow(values []Value) error {
 	cloned := cloneValues(values)
 
 	ordinal := safecast.MustConv[uint64](len(entry.rows))
-	entry.rows = append(entry.rows, ResultRow{Ordinal: ordinal, Values: cloned, retainedBytes: rowPageBytes})
+	entry.rows = append(entry.rows, ResultRow{
+		Ordinal: ordinal, Values: cloned, TimeBucket: cloneTimeBucketBounds(bounds), retainedBytes: rowPageBytes,
+	})
 	entry.job.RowCount++
 	entry.job.ResultBytes = nextBytes
 	incrementJobVersion(&entry.job)
@@ -2876,7 +3049,7 @@ func (sink *resultSink) stageAtomicSchemaLocked(schema Schema) error {
 // public limits as AddRow, but retains it only in the private sink transaction.
 // Atomic queries treat the configured row ceiling as a hard failure, never as
 // successful truncation.
-func (sink *resultSink) stageAtomicRowLocked(values []Value) error {
+func (sink *resultSink) stageAtomicRowLocked(values []Value, bounds *TimeBucketBounds) error {
 	schema := sink.atomicSchema
 	if schema == nil || len(values) != len(schema.Columns) {
 		columns := 0
@@ -2893,6 +3066,12 @@ func (sink *resultSink) stageAtomicRowLocked(values []Value) error {
 	payloadBytes, retainedBytes, measureErr := sink.measureRowCellsLocked(schema.Columns, values)
 	if measureErr != nil {
 		return sink.rememberLocked(measureErr)
+	}
+	payloadBytes, retainedBytes, boundsErr := measureTimeBucketBounds(
+		schema.Columns, values, bounds, payloadBytes, retainedBytes,
+	)
+	if boundsErr != nil {
+		return sink.rememberLocked(boundsErr)
 	}
 	if uint64(len(sink.atomicRows)) >= sink.effectiveLimits().MaxResultRows {
 		return sink.rememberLocked(ErrRowLimit)
@@ -2917,7 +3096,7 @@ func (sink *resultSink) stageAtomicRowLocked(values []Value) error {
 	}
 	ordinal := uint64(len(sink.atomicRows))
 	sink.atomicRows = append(sink.atomicRows, ResultRow{
-		Ordinal: ordinal, Values: cloneValues(values), retainedBytes: rowPageBytes,
+		Ordinal: ordinal, Values: cloneValues(values), TimeBucket: cloneTimeBucketBounds(bounds), retainedBytes: rowPageBytes,
 	})
 	sink.atomicResultBytes = nextBytes
 	return nil
@@ -3020,6 +3199,16 @@ func (sink *resultSink) schemaReceived() bool {
 	return sink.receivedSchema
 }
 
+func (sink *resultSink) nearbyEventProvenance() *NearbyEventProvenance {
+	sink.entry.mu.RLock()
+	defer sink.entry.mu.RUnlock()
+	if sink.nearbyProvenance == nil {
+		return nil
+	}
+	cloned := *sink.nearbyProvenance
+	return &cloned
+}
+
 // errorWrapsOnly accepts ordinary single-error wrapping and rejects joined
 // errors with any leaf other than target. This prevents an executor from
 // hiding a storage or execution failure alongside the sink's stop sentinel.
@@ -3110,6 +3299,7 @@ func ValidateTimechartSchema(schema Schema, expected []string, output clickhouse
 	if output.Mode == clickhouse.TimechartModeFixedCount {
 		if output.MaxSeries != 1 ||
 			output.MaxLabelBytes != 0 ||
+			output.SeriesLimit != 0 || output.IncludeNull || output.IncludeOther ||
 			output.ValueField != "" ||
 			output.ValueKind != clickhouse.TimechartValueKindInvalid ||
 			!slices.Equal(expected, []string{"_time", "count"}) ||
@@ -3135,6 +3325,7 @@ func ValidateTimechartSchema(schema Schema, expected []string, output clickhouse
 		if resolveErr != nil || resolved.Name != output.ValueField ||
 			output.ValueField == "" || output.ValueField == "_time" ||
 			output.MaxSeries != 1 || output.MaxLabelBytes != 0 ||
+			output.SeriesLimit != 0 || output.IncludeNull || output.IncludeOther ||
 			output.ValueKind != clickhouse.TimechartValueKindInvalid ||
 			!slices.Equal(expected, []string{"_time", output.ValueField}) ||
 			len(schema.Columns) != 2 {
@@ -3157,6 +3348,7 @@ func ValidateTimechartSchema(schema Schema, expected []string, output clickhouse
 			spl.Range{},
 		)
 		if output.MaxSeries != 1 || output.MaxLabelBytes != 0 ||
+			output.SeriesLimit != 0 || output.IncludeNull || output.IncludeOther ||
 			output.ValueField == "" || output.ValueField == "_time" ||
 			valueFieldErr != nil || resolvedValueField.Name != output.ValueField ||
 			!output.ValueKind.Valid() ||
@@ -3197,7 +3389,8 @@ func ValidateTimechartSchema(schema Schema, expected []string, output clickhouse
 	}
 	if !output.RuntimeWideBoundsValid() || output.ValueField != "" ||
 		!slices.Equal(expected, []string{"_time"}) ||
-		len(schema.Columns) == 0 || len(schema.Columns)-1 > int(output.MaxSeries) {
+		len(schema.Columns) == 0 ||
+		(output.MaxSeries != 0 && safecast.MustConv[uint64](len(schema.Columns)-1) > output.MaxSeries) {
 		return fmt.Errorf("%w: timechart schema exceeds the compiled output", ErrInvalidResult)
 	}
 	seen := make(map[string]struct{}, len(schema.Columns))

@@ -28,6 +28,7 @@ const uiBuildID = `r${identityDigest.replace(
   /[a-f]/g,
   (character) => revisionBuildIDCharacters[character],
 )}`;
+const distDir = process.env.OPEN_SPLUNK_NEXT_DIST_DIR?.trim() || ".next";
 
 const nextConfig: NextConfig = {
   allowedDevOrigins: ["127.0.0.1"],
@@ -37,6 +38,7 @@ const nextConfig: NextConfig = {
     useTypeScriptCli: true,
   },
   output: "export",
+  distDir,
   reactStrictMode: true,
   trailingSlash: true,
   generateBuildId: async () => uiBuildID,

@@ -1,0 +1,111 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+                                        │ /tmp/collector-perf-20260908/paired-malformed/before.txt │ /tmp/collector-perf-20260908/paired-malformed/after.txt │
+                                        │                          sec/op                          │             sec/op               vs base                │
+NativeJavaCompile/log4j2-pattern                                                      2.593µ ±  1%                      2.600µ ±  2%        ~ (p=0.635 n=20)
+NativeJavaCompile/logback-pattern                                                     2.574µ ±  0%                      2.562µ ±  0%        ~ (p=0.119 n=20)
+NativeMalformed/docker-json-file/1024                                                 3.097µ ±  1%                      2.996µ ±  1%   -3.26% (p=0.000 n=20)
+NativeMalformed/nginx-combined/1024                                                   2.321µ ±  0%                      2.209µ ±  1%   -4.83% (p=0.000 n=20)
+NativeMalformed/apache-common/1024                                                    2.208µ ±  0%                      2.087µ ±  1%   -5.50% (p=0.000 n=20)
+NativeMalformed/apache-combined/1024                                                  2.336µ ±  0%                      2.221µ ±  1%   -4.92% (p=0.000 n=20)
+NativeMalformed/logfmt/1024                                                           1.474µ ±  3%                      1.375µ ±  6%   -6.75% (p=0.000 n=20)
+NativeMalformed/log4j2-pattern/1024                                                   1.482µ ±  1%                      1.388µ ±  3%   -6.34% (p=0.000 n=20)
+NativeMalformed/logback-pattern/1024                                                  1.482µ ±  1%                      1.359µ ±  1%   -8.30% (p=0.000 n=20)
+NativeMalformed/docker-json-file/16384                                                26.52µ ±  1%                      26.34µ ±  1%        ~ (p=0.214 n=20)
+NativeMalformed/nginx-combined/16384                                                  24.82µ ±  0%                      24.72µ ±  1%        ~ (p=0.174 n=20)
+NativeMalformed/apache-common/16384                                                   24.62µ ±  1%                      24.45µ ±  1%        ~ (p=0.221 n=20)
+NativeMalformed/apache-combined/16384                                                 24.71µ ±  0%                      24.57µ ±  1%        ~ (p=0.052 n=20)
+NativeMalformed/logfmt/16384                                                          14.15µ ±  9%                      14.91µ ±  8%        ~ (p=0.862 n=20)
+NativeMalformed/log4j2-pattern/16384                                                  15.63µ ±  3%                      15.04µ ± 10%        ~ (p=0.298 n=20)
+NativeMalformed/logback-pattern/16384                                                 15.15µ ±  2%                      15.04µ ±  5%        ~ (p=0.165 n=20)
+NativeMalformed/docker-json-file/262144                                               309.0µ ±  1%                      310.7µ ±  2%        ~ (p=0.947 n=20)
+NativeMalformed/nginx-combined/262144                                                 367.9µ ±  1%                      370.6µ ±  2%   +0.74% (p=0.009 n=20)
+NativeMalformed/apache-common/262144                                                  368.1µ ±  1%                      367.2µ ±  1%        ~ (p=0.718 n=20)
+NativeMalformed/apache-combined/262144                                                366.3µ ±  0%                      366.3µ ±  1%        ~ (p=0.512 n=20)
+NativeMalformed/logfmt/262144                                                         195.5µ ± 11%                      225.6µ ± 11%  +15.40% (p=0.023 n=20)
+NativeMalformed/log4j2-pattern/262144                                                 211.9µ ±  2%                      215.5µ ±  6%        ~ (p=0.569 n=20)
+NativeMalformed/logback-pattern/262144                                                208.7µ ±  1%                      208.9µ ±  1%        ~ (p=0.640 n=20)
+geomean                                                                               18.52µ                            18.31µ         -1.12%
+
+                                        │ /tmp/collector-perf-20260908/paired-malformed/before.txt │ /tmp/collector-perf-20260908/paired-malformed/after.txt │
+                                        │                           B/op                           │             B/op               vs base                  │
+NativeJavaCompile/log4j2-pattern                                                      1.531Ki ± 0%                    1.531Ki ± 0%        ~ (p=1.000 n=20) ¹
+NativeJavaCompile/logback-pattern                                                     1.531Ki ± 0%                    1.531Ki ± 0%        ~ (p=1.000 n=20) ¹
+NativeMalformed/docker-json-file/1024                                                 6.898Ki ± 0%                    6.617Ki ± 0%   -4.08% (p=0.000 n=20)
+NativeMalformed/nginx-combined/1024                                                   2.289Ki ± 0%                    1.992Ki ± 0%  -12.97% (p=0.000 n=20)
+NativeMalformed/apache-common/1024                                                    2.148Ki ± 0%                    1.848Ki ± 0%  -14.00% (p=0.000 n=20)
+NativeMalformed/apache-combined/1024                                                  2.289Ki ± 0%                    1.992Ki ± 0%  -12.97% (p=0.000 n=20)
+NativeMalformed/logfmt/1024                                                           2.133Ki ± 0%                    1.859Ki ± 0%  -12.82% (p=0.000 n=20)
+NativeMalformed/log4j2-pattern/1024                                                   3.000Ki ± 0%                    2.660Ki ± 0%  -11.33% (p=0.000 n=20)
+NativeMalformed/logback-pattern/1024                                                  3.000Ki ± 0%                    2.660Ki ± 0%  -11.33% (p=0.000 n=20)
+NativeMalformed/docker-json-file/16384                                                83.78Ki ± 0%                    83.49Ki ± 0%   -0.34% (p=0.000 n=20)
+NativeMalformed/nginx-combined/16384                                                  19.16Ki ± 0%                    18.87Ki ± 0%   -1.55% (p=0.000 n=20)
+NativeMalformed/apache-common/16384                                                   19.02Ki ± 0%                    18.72Ki ± 0%   -1.58% (p=0.000 n=20)
+NativeMalformed/apache-combined/16384                                                 19.16Ki ± 0%                    18.87Ki ± 0%   -1.55% (p=0.000 n=20)
+NativeMalformed/logfmt/16384                                                          19.01Ki ± 0%                    18.73Ki ± 0%   -1.44% (p=0.000 n=20)
+NativeMalformed/log4j2-pattern/16384                                                  33.00Ki ± 0%                    32.66Ki ± 0%   -1.03% (p=0.000 n=20)
+NativeMalformed/logback-pattern/16384                                                 33.00Ki ± 0%                    32.66Ki ± 0%   -1.03% (p=0.000 n=20)
+NativeMalformed/docker-json-file/262144                                               1.260Mi ± 0%                    1.259Mi ± 0%   -0.02% (p=0.000 n=20)
+NativeMalformed/nginx-combined/262144                                                 265.2Ki ± 0%                    264.9Ki ± 0%   -0.11% (p=0.000 n=20)
+NativeMalformed/apache-common/262144                                                  265.0Ki ± 0%                    264.7Ki ± 0%   -0.11% (p=0.000 n=20)
+NativeMalformed/apache-combined/262144                                                265.2Ki ± 0%                    264.9Ki ± 0%   -0.11% (p=0.000 n=20)
+NativeMalformed/logfmt/262144                                                         265.0Ki ± 0%                    264.7Ki ± 0%   -0.10% (p=0.000 n=20)
+NativeMalformed/log4j2-pattern/262144                                                 513.0Ki ± 0%                    512.7Ki ± 0%   -0.07% (p=0.000 n=20)
+NativeMalformed/logback-pattern/262144                                                513.0Ki ± 0%                    512.7Ki ± 0%   -0.07% (p=0.000 n=20)
+geomean                                                                               24.26Ki                         23.29Ki        -4.00%
+¹ all samples are equal
+
+                                        │ /tmp/collector-perf-20260908/paired-malformed/before.txt │ /tmp/collector-perf-20260908/paired-malformed/after.txt │
+                                        │                        allocs/op                         │           allocs/op            vs base                  │
+NativeJavaCompile/log4j2-pattern                                                        17.00 ± 0%                      17.00 ± 0%        ~ (p=1.000 n=20) ¹
+NativeJavaCompile/logback-pattern                                                       17.00 ± 0%                      17.00 ± 0%        ~ (p=1.000 n=20) ¹
+NativeMalformed/docker-json-file/1024                                                   50.00 ± 0%                      42.00 ± 0%  -16.00% (p=0.000 n=20)
+NativeMalformed/nginx-combined/1024                                                     25.00 ± 0%                      16.00 ± 0%  -36.00% (p=0.000 n=20)
+NativeMalformed/apache-common/1024                                                      21.00 ± 0%                      12.00 ± 0%  -42.86% (p=0.000 n=20)
+NativeMalformed/apache-combined/1024                                                    25.00 ± 0%                      16.00 ± 0%  -36.00% (p=0.000 n=20)
+NativeMalformed/logfmt/1024                                                             21.00 ± 0%                      13.00 ± 0%  -38.10% (p=0.000 n=20)
+NativeMalformed/log4j2-pattern/1024                                                     21.00 ± 0%                      12.00 ± 0%  -42.86% (p=0.000 n=20)
+NativeMalformed/logback-pattern/1024                                                    21.00 ± 0%                      12.00 ± 0%  -42.86% (p=0.000 n=20)
+NativeMalformed/docker-json-file/16384                                                  54.00 ± 0%                      46.00 ± 0%  -14.81% (p=0.000 n=20)
+NativeMalformed/nginx-combined/16384                                                    25.00 ± 0%                      16.00 ± 0%  -36.00% (p=0.000 n=20)
+NativeMalformed/apache-common/16384                                                     21.00 ± 0%                      12.00 ± 0%  -42.86% (p=0.000 n=20)
+NativeMalformed/apache-combined/16384                                                   25.00 ± 0%                      16.00 ± 0%  -36.00% (p=0.000 n=20)
+NativeMalformed/logfmt/16384                                                            21.00 ± 0%                      13.00 ± 0%  -38.10% (p=0.000 n=20)
+NativeMalformed/log4j2-pattern/16384                                                    21.00 ± 0%                      12.00 ± 0%  -42.86% (p=0.000 n=20)
+NativeMalformed/logback-pattern/16384                                                   21.00 ± 0%                      12.00 ± 0%  -42.86% (p=0.000 n=20)
+NativeMalformed/docker-json-file/262144                                                 58.00 ± 0%                      50.00 ± 0%  -13.79% (p=0.000 n=20)
+NativeMalformed/nginx-combined/262144                                                   25.00 ± 0%                      16.00 ± 0%  -36.00% (p=0.000 n=20)
+NativeMalformed/apache-common/262144                                                    21.00 ± 0%                      12.00 ± 0%  -42.86% (p=0.000 n=20)
+NativeMalformed/apache-combined/262144                                                  25.00 ± 0%                      16.00 ± 0%  -36.00% (p=0.000 n=20)
+NativeMalformed/logfmt/262144                                                           21.00 ± 0%                      13.00 ± 0%  -38.10% (p=0.000 n=20)
+NativeMalformed/log4j2-pattern/262144                                                   21.00 ± 0%                      12.00 ± 0%  -42.86% (p=0.000 n=20)
+NativeMalformed/logback-pattern/262144                                                  21.00 ± 0%                      12.00 ± 0%  -42.86% (p=0.000 n=20)
+geomean                                                                                 24.40                           16.05       -34.23%
+¹ all samples are equal
+
+                                        │ /tmp/collector-perf-20260908/paired-malformed/before.txt │ /tmp/collector-perf-20260908/paired-malformed/after.txt │
+                                        │                           B/s                            │               B/s                vs base                │
+NativeMalformed/docker-json-file/1024                                                332.6Mi ±  1%                     343.8Mi ±  1%   +3.38% (p=0.000 n=20)
+NativeMalformed/nginx-combined/1024                                                  450.0Mi ±  1%                     472.9Mi ±  1%   +5.08% (p=0.000 n=20)
+NativeMalformed/apache-common/1024                                                   461.4Mi ±  0%                     488.1Mi ±  1%   +5.80% (p=0.000 n=20)
+NativeMalformed/apache-combined/1024                                                 447.1Mi ±  0%                     470.3Mi ±  1%   +5.20% (p=0.000 n=20)
+NativeMalformed/logfmt/1024                                                          668.4Mi ±  3%                     716.7Mi ±  6%   +7.23% (p=0.000 n=20)
+NativeMalformed/log4j2-pattern/1024                                                  658.9Mi ±  1%                     703.8Mi ±  3%   +6.81% (p=0.000 n=20)
+NativeMalformed/logback-pattern/1024                                                 658.9Mi ±  1%                     718.7Mi ±  1%   +9.07% (p=0.000 n=20)
+NativeMalformed/docker-json-file/16384                                               591.1Mi ±  1%                     595.2Mi ±  1%        ~ (p=0.221 n=20)
+NativeMalformed/nginx-combined/16384                                                 632.3Mi ±  0%                     634.8Mi ±  1%        ~ (p=0.174 n=20)
+NativeMalformed/apache-common/16384                                                  636.2Mi ±  1%                     640.7Mi ±  1%        ~ (p=0.221 n=20)
+NativeMalformed/apache-combined/16384                                                635.0Mi ±  0%                     638.8Mi ±  1%        ~ (p=0.052 n=20)
+NativeMalformed/logfmt/16384                                                         1.079Gi ±  8%                     1.024Gi ±  9%        ~ (p=0.862 n=20)
+NativeMalformed/log4j2-pattern/16384                                                 999.5Mi ±  3%                    1038.7Mi ±  9%        ~ (p=0.301 n=20)
+NativeMalformed/logback-pattern/16384                                                1.007Gi ±  2%                     1.015Gi ±  4%        ~ (p=0.165 n=20)
+NativeMalformed/docker-json-file/262144                                              809.3Mi ±  1%                     804.7Mi ±  2%        ~ (p=0.947 n=20)
+NativeMalformed/nginx-combined/262144                                                679.7Mi ±  1%                     674.7Mi ±  2%   -0.74% (p=0.009 n=20)
+NativeMalformed/apache-common/262144                                                 679.3Mi ±  1%                     680.9Mi ±  1%        ~ (p=0.718 n=20)
+NativeMalformed/apache-combined/262144                                               682.7Mi ±  0%                     682.6Mi ±  1%        ~ (p=0.507 n=20)
+NativeMalformed/logfmt/262144                                                        1.249Gi ± 10%                     1.082Gi ± 13%  -13.35% (p=0.023 n=20)
+NativeMalformed/log4j2-pattern/262144                                                1.152Gi ±  2%                     1.133Gi ±  5%        ~ (p=0.569 n=20)
+NativeMalformed/logback-pattern/262144                                               1.170Gi ±  1%                     1.168Gi ±  1%        ~ (p=0.640 n=20)
+geomean                                                                              708.1Mi                           716.8Mi         +1.24%

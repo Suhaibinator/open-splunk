@@ -6,6 +6,7 @@ import {
   historyNavigationDecision,
   launchTransition,
   readSearchLaunchState,
+  sameSearchLaunchState,
   searchLaunchLocation,
   searchLaunchUrl,
   stampSearchLaunchState,
@@ -122,6 +123,15 @@ test("history state is only trusted when the whole draft is present", () => {
     timezone: "UTC",
   });
   assert.equal(readSearchLaunchState({ q: "index=main", ...LAST_DAY, searchJobId: "job-1" })?.searchJobId, "job-1");
+  assert.equal(readSearchLaunchState({ q: "index=main", ...LAST_DAY, resultView: "statistics" })?.resultView, "statistics");
+  assert.equal(readSearchLaunchState({ q: "index=main", ...LAST_DAY, resultView: "unknown" })?.resultView, undefined);
+});
+
+test("tab-only history entries retain the same launch identity", () => {
+  const events = { q: "index=main", ...LAST_DAY, resultView: "events" as const };
+  const statistics = { ...events, resultView: "statistics" as const };
+  assert.equal(sameSearchLaunchState(events, statistics), true);
+  assert.equal(sameSearchLaunchState(events, { ...statistics, q: "index=other" }), false);
 });
 
 test("the popstate decision table", () => {

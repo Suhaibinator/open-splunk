@@ -377,6 +377,65 @@ func TestParseExplainPlanProjectsOnlyKnownIndexMetadata(t *testing.T) {
 	}
 }
 
+func TestParseExplainPlanProjectsIDIndexNamesAndExactKeys(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		key  string
+	}{
+		{"idx_event_id", "event_id"},
+		{"idx_event_id_ci", "lowerUTF8(ifNull(event_id, ''))"},
+		{"idx_trace_id", "ifNull(trace_id, '')"},
+		{"idx_trace_id_ci", "lowerUTF8(ifNull(trace_id, ''))"},
+		{"idx_span_id", "ifNull(span_id, '')"},
+		{"idx_span_id_ci", "lowerUTF8(ifNull(span_id, ''))"},
+		{"private_index_7f2c", ""},
+	}
+	const keys = `["event_id","lowerUTF8(ifNull(event_id, ''))",` +
+		`"ifNull(trace_id, '')","lowerUTF8(ifNull(trace_id, ''))",` +
+		`"ifNull(span_id, '')","lowerUTF8(ifNull(span_id, ''))",` +
+		`"lowerUTF8(ifNull(trace_id, 'private-key-7f2c'))"]`
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := ParseExplainPlan(ExplainResult{
+				Text: fmt.Sprintf(
+					`[{"Plan":{"Node Type":"ReadFromMergeTree",`+
+						`"Header":[{"Name":"event_id","Type":"String"}],`+
+						`"Indexes":[{"Type":"Skip","Name":%q,"Keys":%s,`+
+						`"Initial Parts":2,"Selected Parts":1,`+
+						`"Initial Granules":4,"Selected Granules":1}]}}]`,
+					test.name,
+					keys,
+				),
+				QueryID: "open-splunk-explain-id-index",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := ExplainIndex{
+				Type:             "Skip",
+				Name:             test.name,
+				Keys:             []string{test.key},
+				InitialParts:     2,
+				SelectedParts:    1,
+				InitialGranules:  4,
+				SelectedGranules: 1,
+			}
+			if test.key == "" {
+				want.Name = ""
+				want.Keys = []string{}
+			}
+			if len(got.Reads) != 1 || len(got.Reads[0].Indexes) != 1 ||
+				!reflect.DeepEqual(got.Reads[0].Indexes[0], want) {
+				t.Fatalf("ParseExplainPlan() = %#v, want index %#v", got, want)
+			}
+		})
+	}
+}
+
 func TestParseExplainPlanAcceptsPlansWithoutPhysicalIndexEvidence(
 	t *testing.T,
 ) {

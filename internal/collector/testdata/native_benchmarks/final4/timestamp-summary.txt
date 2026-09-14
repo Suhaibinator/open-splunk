@@ -1,0 +1,53 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector/parserconfig
+cpu: Apple M4 Max
+                                             │ timestamp.txt │
+                                             │    sec/op     │
+TimestampOffsetPosition/terminal_z               48.41n ± 1%
+TimestampOffsetPosition/terminal_numeric         97.21n ± 1%
+TimestampOffsetPosition/nonterminal_z            175.9n ± 1%
+TimestampOffsetPosition/nonterminal_numeric      229.4n ± 1%
+TimestampPrecisionSpelling/literal_runs_0        53.28n ± 1%
+TimestampPrecisionSpelling/literal_runs_1        162.4n ± 2%
+TimestampPrecisionSpelling/literal_runs_64       1.733µ ± 1%
+TimestampPrecisionSpelling/literal_runs_1024     25.53µ ± 1%
+geomean                                          303.9n
+
+                                             │ timestamp.txt │
+                                             │      B/s      │
+TimestampOffsetPosition/terminal_z              472.8Mi ± 1%
+TimestampOffsetPosition/terminal_numeric        284.5Mi ± 1%
+TimestampOffsetPosition/nonterminal_z           135.6Mi ± 1%
+TimestampOffsetPosition/nonterminal_numeric     124.7Mi ± 1%
+TimestampPrecisionSpelling/literal_runs_0       537.0Mi ± 1%
+TimestampPrecisionSpelling/literal_runs_1       246.5Mi ± 2%
+TimestampPrecisionSpelling/literal_runs_64      439.1Mi ± 1%
+TimestampPrecisionSpelling/literal_runs_1024    460.1Mi ± 1%
+geomean                                         297.2Mi
+
+                                             │ timestamp.txt │
+                                             │     B/op      │
+TimestampOffsetPosition/terminal_z              0.000 ± 0%
+TimestampOffsetPosition/terminal_numeric        160.0 ± 0%
+TimestampOffsetPosition/nonterminal_z           128.0 ± 0%
+TimestampOffsetPosition/nonterminal_numeric     296.0 ± 0%
+TimestampPrecisionSpelling/literal_runs_0       0.000 ± 0%
+TimestampPrecisionSpelling/literal_runs_1       0.000 ± 0%
+TimestampPrecisionSpelling/literal_runs_64      0.000 ± 0%
+TimestampPrecisionSpelling/literal_runs_1024    0.000 ± 0%
+geomean                                                    ¹
+¹ summaries must be >0 to compute geomean
+
+                                             │ timestamp.txt │
+                                             │   allocs/op   │
+TimestampOffsetPosition/terminal_z              0.000 ± 0%
+TimestampOffsetPosition/terminal_numeric        3.000 ± 0%
+TimestampOffsetPosition/nonterminal_z           3.000 ± 0%
+TimestampOffsetPosition/nonterminal_numeric     6.000 ± 0%
+TimestampPrecisionSpelling/literal_runs_0       0.000 ± 0%
+TimestampPrecisionSpelling/literal_runs_1       0.000 ± 0%
+TimestampPrecisionSpelling/literal_runs_64      0.000 ± 0%
+TimestampPrecisionSpelling/literal_runs_1024    0.000 ± 0%
+geomean                                                    ¹
+¹ summaries must be >0 to compute geomean

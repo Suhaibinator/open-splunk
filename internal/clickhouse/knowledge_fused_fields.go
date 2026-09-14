@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	compiledKnowledgeFieldInputStateDomain = "open-splunk/clickhouse/knowledge-field-input-state/v1"
+	compiledKnowledgeFieldInputStateDomain = "open-splunk/clickhouse/knowledge-field-input-state/v2"
 
 	// A field candidate keeps the canonical six-element source tuple separate
 	// from its selector charges. The nested source tuple distinguishes missing
@@ -100,6 +100,7 @@ func writeKnowledgeFieldStateAuthority(writer hash.Hash, field fieldState) bool 
 	writeUint64(writer, field.maxStringBytes)
 	writeTokenPart(writer, field.textEligibleSQL)
 	writeBool(writer, field.rawTextIndexEligible)
+	writeBool(writer, field.normalizedIDIndexEligible)
 	writeUint64(writer, uint64(field.dynamicDomain))
 	writeBool(writer, field.numericIntegral)
 	writeBool(writer, field.mvCountOneOrNull)
@@ -127,6 +128,7 @@ func writeKnowledgeFieldStateAuthority(writer hash.Hash, field fieldState) bool 
 	writeBool(writer, field.canonicalTime)
 	writeBool(writer, field.alwaysNull)
 	writeBool(writer, field.materializeForPredicate)
+	writeUint64(writer, uint64(field.originalEventField))
 	return true
 }
 

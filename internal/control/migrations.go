@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -16,8 +17,11 @@ import (
 )
 
 const (
-	migrationLockRetryWindow = 30 * time.Second
-	firstMigrationVersion    = uint32(1)
+	migrationLockRetryWindow                    = 30 * time.Second
+	firstMigrationVersion                       = uint32(1)
+	foldedIngestReservationAccountingVersion    = uint32(9)
+	originalSQLiteBaselineSHA256                = "3ceec9b0c2f2a44edccff0b3e8b5cd0622fe72c462dc8c36616d9d7683bb2b75"
+	foldedIngestWriteGroupsSQLiteBaselineSHA256 = "23e85b8b288addf86eda7f848e2b087a40194f8c5281459a9f0f8c1d215e1d64"
 )
 
 var migrationFilename = regexp.MustCompile(`^([0-9]{4})_([a-z0-9][a-z0-9_]*)\.sql$`)
@@ -29,6 +33,11 @@ type migration struct {
 	checksum [sha256.Size]byte
 }
 
+type verifiedMigrationHistory struct {
+	appliedCount                      uint32
+	foldedIngestReservationAccounting bool
+}
+
 // MigrationIdentity identifies one exact, ordered set of SQLite migrations.
 // It can be persisted alongside a backup manifest and compared without
 // depending on the migrations' application timestamps.
@@ -37,9 +46,10 @@ type MigrationIdentity struct {
 	SHA256        [sha256.Size]byte
 }
 
-// VerifyCurrentMigrations verifies that the database migration ledger exactly
-// matches migrationFS. Unlike ApplyMigrations, it never creates the ledger or
-// applies missing migrations, making it safe for read-only backup tooling.
+// VerifyCurrentMigrations verifies that the database migration ledger matches
+// migrationFS or a narrowly recognized compatible release history. Unlike
+// ApplyMigrations, it never creates the ledger or applies missing migrations,
+// making it safe for read-only backup tooling.
 func (db *DB) VerifyCurrentMigrations(
 	ctx context.Context,
 	migrationFS fs.FS,
@@ -64,14 +74,14 @@ func (db *DB) VerifyCurrentMigrations(
 	if ledgerCount != 1 {
 		return MigrationIdentity{}, fmt.Errorf("%w: migration ledger is missing", ErrDatabaseNotCurrent)
 	}
-	appliedCount, err := verifyMigrationHistory(ctx, db.sql, loaded)
+	history, err := verifyMigrationHistory(ctx, db.sql, loaded)
 	if err != nil {
 		return MigrationIdentity{}, err
 	}
-	if uint64(appliedCount) != uint64(len(loaded)) {
+	if uint64(history.appliedCount) != uint64(len(loaded)) {
 		appliedVersion := uint32(0)
-		if appliedCount > 0 {
-			appliedVersion = loaded[appliedCount-1].version
+		if history.appliedCount > 0 {
+			appliedVersion = loaded[history.appliedCount-1].version
 		}
 		return MigrationIdentity{}, fmt.Errorf(
 			"%w: database version %d, required version %d",
@@ -106,7 +116,8 @@ func migrationSetIdentity(loaded []migration) MigrationIdentity {
 // ApplyMigrations applies a contiguous, ordered set of SQL migrations. History
 // verification and all pending migrations run under one BEGIN IMMEDIATE lock,
 // preventing old and new binaries from racing schema versions at startup.
-// Reapplying an unchanged set is safe; changing an applied file is rejected.
+// Reapplying an unchanged set is safe; changing an applied file is rejected
+// unless it is the one explicitly recognized folded release baseline.
 func ApplyMigrations(ctx context.Context, db *sql.DB, migrations fs.FS) (err error) {
 	if ctx == nil || db == nil || migrations == nil {
 		return fmt.Errorf("%w: migration context, database, and filesystem are required", ErrInvalidArgument)
@@ -171,12 +182,20 @@ func ApplyMigrations(ctx context.Context, db *sql.DB, migrations fs.FS) (err err
 		return fmt.Errorf("create SQLite migration ledger: %w", err)
 	}
 
-	appliedCount, err := verifyMigrationHistory(ctx, conn, loaded)
+	history, err := verifyMigrationHistory(ctx, conn, loaded)
 	if err != nil {
 		return err
 	}
 
-	for _, next := range loaded[int(appliedCount):] {
+	for _, next := range loaded[int(history.appliedCount):] {
+		if history.foldedIngestReservationAccounting &&
+			next.version == foldedIngestReservationAccountingVersion &&
+			next.name == "0009_ingest_reservation_accounting.sql" {
+			if err := recordAppliedMigration(ctx, conn, next); err != nil {
+				return fmt.Errorf("adopt folded SQLite migration %s: %w", next.name, err)
+			}
+			continue
+		}
 		if err := applyPendingMigration(ctx, conn, next); err != nil {
 			return err
 		}
@@ -196,37 +215,52 @@ func verifyMigrationHistory(
 	ctx context.Context,
 	db migrationQuerier,
 	loaded []migration,
-) (uint32, error) {
+) (verifiedMigrationHistory, error) {
 	rows, err := db.QueryContext(ctx, `SELECT version, name, checksum FROM schema_migrations ORDER BY version`)
 	if err != nil {
-		return 0, fmt.Errorf("read SQLite migration history: %w", err)
+		return verifiedMigrationHistory{}, fmt.Errorf("read SQLite migration history: %w", err)
 	}
 	defer rows.Close()
 
+	var history verifiedMigrationHistory
 	expectedVersion := firstMigrationVersion
 	for rows.Next() {
 		var version uint32
 		var name string
 		var checksum []byte
 		if err := rows.Scan(&version, &name, &checksum); err != nil {
-			return 0, fmt.Errorf("scan SQLite migration history: %w", err)
+			return verifiedMigrationHistory{}, fmt.Errorf("scan SQLite migration history: %w", err)
 		}
 		if version > loaded[len(loaded)-1].version {
-			return 0, fmt.Errorf("%w: database version %d, latest embedded version %d", ErrDatabaseTooNew, version, loaded[len(loaded)-1].version)
+			return verifiedMigrationHistory{}, fmt.Errorf("%w: database version %d, latest embedded version %d", ErrDatabaseTooNew, version, loaded[len(loaded)-1].version)
 		}
 		if version != expectedVersion {
-			return 0, fmt.Errorf("%w: migration history skips version %04d", ErrMigrationDrift, expectedVersion)
+			return verifiedMigrationHistory{}, fmt.Errorf("%w: migration history skips version %04d", ErrMigrationDrift, expectedVersion)
 		}
 		embedded := loaded[version-firstMigrationVersion]
-		if name != embedded.name || !bytes.Equal(checksum, embedded.checksum[:]) {
-			return 0, fmt.Errorf("%w: version %04d", ErrMigrationDrift, version)
+		if name != embedded.name {
+			return verifiedMigrationHistory{}, fmt.Errorf("%w: version %04d", ErrMigrationDrift, version)
+		}
+		if !bytes.Equal(checksum, embedded.checksum[:]) {
+			if !isFoldedIngestWriteGroupsBaseline(embedded, checksum) {
+				return verifiedMigrationHistory{}, fmt.Errorf("%w: version %04d", ErrMigrationDrift, version)
+			}
+			history.foldedIngestReservationAccounting = true
 		}
 		expectedVersion++
 	}
 	if err := rows.Err(); err != nil {
-		return 0, fmt.Errorf("iterate SQLite migration history: %w", err)
+		return verifiedMigrationHistory{}, fmt.Errorf("iterate SQLite migration history: %w", err)
 	}
-	return expectedVersion - firstMigrationVersion, nil
+	history.appliedCount = expectedVersion - firstMigrationVersion
+	return history, nil
+}
+
+func isFoldedIngestWriteGroupsBaseline(embedded migration, appliedChecksum []byte) bool {
+	return embedded.version == firstMigrationVersion &&
+		embedded.name == "0001_baseline.sql" &&
+		hex.EncodeToString(embedded.checksum[:]) == originalSQLiteBaselineSHA256 &&
+		hex.EncodeToString(appliedChecksum) == foldedIngestWriteGroupsSQLiteBaselineSHA256
 }
 
 func applyPendingMigration(
@@ -237,6 +271,14 @@ func applyPendingMigration(
 	if _, err := conn.ExecContext(ctx, string(next.contents)); err != nil {
 		return fmt.Errorf("apply SQLite migration %s: %w", next.name, err)
 	}
+	if err := recordAppliedMigration(ctx, conn, next); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func recordAppliedMigration(ctx context.Context, conn *sql.Conn, next migration) error {
 	if _, err := conn.ExecContext(ctx, `
 		INSERT INTO schema_migrations (version, name, checksum, applied_at_unix_micro)
 		VALUES (?, ?, ?, CAST(unixepoch('subsec') * 1000000 AS INTEGER))`,

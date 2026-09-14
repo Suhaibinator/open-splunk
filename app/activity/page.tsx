@@ -1,17 +1,9 @@
 import type { Metadata } from "next";
 
-import { getFrontendRuntimeConfig } from "@/lib/frontend-runtime-config";
-
-import { ProductShell } from "../_components/product-shell";
-import { ActivityConsole } from "./activity-console";
+import { ActivityPageContent } from "./activity-page";
 
 export const metadata: Metadata = { title: "Activity" };
 
 export default function ActivityPage() {
-  const { apiBaseUrl, dataMode } = getFrontendRuntimeConfig();
-  return (
-    <ProductShell activeSection="activity" apiBaseUrl={apiBaseUrl} appName="Activity" dataMode={dataMode}>
-      <ActivityConsole dataMode={dataMode} apiBaseUrl={apiBaseUrl} />
-    </ProductShell>
-  );
+  return <ActivityPageContent canonicalizeParent initialView="jobs" />;
 }

@@ -1,5 +1,7 @@
 "use client";
 
+import { BrowserCreateAction } from "@/lib/api/client-request-id";
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 
@@ -39,6 +41,7 @@ import {
   searchJobStateLabel,
 } from "./backend-activity-shared";
 import { summarizeByteQuantity } from "@/lib/byte-quantity";
+import { Select, SelectOption } from "../_components/select";
 
 type LiveJobFilter = "all" | "active" | "completed" | "failed" | "canceled";
 type LoadState = "loading" | "available" | "unavailable" | "error";
@@ -143,6 +146,7 @@ export function BackendLiveJobs({ apiBaseUrl }: BackendLiveJobsProps) {
   const [error, setError] = useState<string | null>(null);
   const [refreshedAt, setRefreshedAt] = useState<Date | null>(null);
   const [generation, setGeneration] = useState(0);
+  const activeLoadGenerationRef = useRef(0);
   const [jobAction, setJobAction] = useState<{ id: string; kind: "cancel" | "rerun" } | null>(null);
   const [actionNotice, setActionNotice] = useState<{ kind: "success" | "error"; message: string } | null>(null);
   const bootstrapRef = useRef<SystemBootstrapModel | null>(null);
@@ -163,6 +167,7 @@ export function BackendLiveJobs({ apiBaseUrl }: BackendLiveJobsProps) {
   }, [query]);
 
   useEffect(() => {
+    activeLoadGenerationRef.current = generation;
     const retainShell = hasLoadedRef.current;
     loadMoreAbortRef.current?.abort();
     loadMoreAbortRef.current = null;
@@ -187,7 +192,7 @@ export function BackendLiveJobs({ apiBaseUrl }: BackendLiveJobsProps) {
     void (async () => {
       try {
         const bootstrap = await getSystemBootstrap(client, undefined, { signal: controller.signal });
-        if (!current) return;
+        if (!current || activeLoadGenerationRef.current !== generation) return;
         bootstrapRef.current = bootstrap;
         setApps(bootstrap.apps
           .filter((app) => app.appId.trim().length > 0)
@@ -378,17 +383,22 @@ export function BackendLiveJobs({ apiBaseUrl }: BackendLiveJobsProps) {
     }
   }, [client, focusRefreshControl, jobAction, reload]);
 
+  const rerunAction = useRef(new BrowserCreateAction());
+
   const rerunJob = useCallback(async (job: ServerSearchJob) => {
     const bootstrap = bootstrapRef.current;
     if (bootstrap === null || jobAction !== null) return;
     setJobAction({ id: job.id, kind: "rerun" });
     setActionNotice(null);
     try {
-      const result = await rerunServerSearchJob(client, bootstrap, job);
+      const result = await rerunServerSearchJob(client, bootstrap, job, {
+        clientRequestId: rerunAction.current.requestId({ id: job.id, definition: job.definition }),
+      });
       if (result.status === "unavailable") {
         setActionNotice({ kind: "error", message: "Rerunning searches is unavailable on this backend." });
         return;
       }
+      rerunAction.current.complete();
       setActionNotice({ kind: "success", message: `Started a new ad hoc job ${result.value.id} from ${job.id}.` });
       reload();
       focusRefreshControl();
@@ -476,12 +486,12 @@ export function BackendLiveJobs({ apiBaseUrl }: BackendLiveJobsProps) {
                     placeholder="Filter source SPL"
                   />
                 </label>
-                <label className="live-jobs-app-filter">
+                <label htmlFor="backend-live-jobs-choice-484" className="live-jobs-app-filter">
                   <span className="sr-only">Filter live jobs by app</span>
-                  <select value={appId} onChange={(event) => setAppId(event.target.value)}>
-                    <option value="">All apps</option>
-                    {apps.map((app) => <option value={app.id} key={app.id}>{app.label}</option>)}
-                  </select>
+                  <Select id="backend-live-jobs-choice-484" value={appId} onValueChange={(selectedValue) => setAppId(selectedValue)}>
+                    <SelectOption value="">All apps</SelectOption>
+                    {apps.map((app) => <SelectOption value={app.id} key={app.id}>{app.label}</SelectOption>)}
+                  </Select>
                 </label>
               </div>
             </header>

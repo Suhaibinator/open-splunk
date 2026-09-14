@@ -159,7 +159,7 @@ func (d *Daemon) readInput(
 		}
 		// Sanitize direct policies and the exact origins of rename values that
 		// actually reach sensitive names before any local durability boundary.
-		event = d.redactor.beforePipeline(event, ir.decoder.constantNames)
+		event = d.redactor.beforeNativePipeline(event, ir.decoder)
 		out, err := ir.pipeline.Process(event)
 		if err != nil {
 			// A pipeline error is a configuration/logic fault, not a per-event

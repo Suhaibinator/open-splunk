@@ -1,0 +1,24 @@
+--- FAIL: TestTimestampLiteralKeepsSignedShortYearSemantics (0.00s)
+    literal_precision_regression_test.go:95: short year "-0": got 0001-01-01 00:00:00 +0000 UTC, timestamp exceeds nanosecond precision; want 2000-09-08 12:34:56 +0000 UTC
+    literal_precision_regression_test.go:95: short year "-1": got 0001-01-01 00:00:00 +0000 UTC, timestamp exceeds nanosecond precision; want 1999-09-08 12:34:56 +0000 UTC
+    literal_precision_regression_test.go:95: short year "-2": got 0001-01-01 00:00:00 +0000 UTC, timestamp exceeds nanosecond precision; want 1998-09-08 12:34:56 +0000 UTC
+    literal_precision_regression_test.go:95: short year "-3": got 0001-01-01 00:00:00 +0000 UTC, timestamp exceeds nanosecond precision; want 1997-09-08 12:34:56 +0000 UTC
+    literal_precision_regression_test.go:95: short year "-4": got 0001-01-01 00:00:00 +0000 UTC, timestamp exceeds nanosecond precision; want 1996-09-08 12:34:56 +0000 UTC
+    literal_precision_regression_test.go:95: short year "-5": got 0001-01-01 00:00:00 +0000 UTC, timestamp exceeds nanosecond precision; want 1995-09-08 12:34:56 +0000 UTC
+    literal_precision_regression_test.go:95: short year "-6": got 0001-01-01 00:00:00 +0000 UTC, timestamp exceeds nanosecond precision; want 1994-09-08 12:34:56 +0000 UTC
+    literal_precision_regression_test.go:95: short year "-7": got 0001-01-01 00:00:00 +0000 UTC, timestamp exceeds nanosecond precision; want 1993-09-08 12:34:56 +0000 UTC
+    literal_precision_regression_test.go:95: short year "-8": got 0001-01-01 00:00:00 +0000 UTC, timestamp exceeds nanosecond precision; want 1992-09-08 12:34:56 +0000 UTC
+    literal_precision_regression_test.go:95: short year "-9": got 0001-01-01 00:00:00 +0000 UTC, timestamp exceeds nanosecond precision; want 1991-09-08 12:34:56 +0000 UTC
+    literal_precision_regression_test.go:95: short year "+0": got 0001-01-01 00:00:00 +0000 UTC, timestamp exceeds nanosecond precision; want 2000-09-08 12:34:56 +0000 UTC
+    literal_precision_regression_test.go:95: short year "+1": got 0001-01-01 00:00:00 +0000 UTC, timestamp exceeds nanosecond precision; want 2001-09-08 12:34:56 +0000 UTC
+    literal_precision_regression_test.go:95: short year "+2": got 0001-01-01 00:00:00 +0000 UTC, timestamp exceeds nanosecond precision; want 2002-09-08 12:34:56 +0000 UTC
+    literal_precision_regression_test.go:95: short year "+3": got 0001-01-01 00:00:00 +0000 UTC, timestamp exceeds nanosecond precision; want 2003-09-08 12:34:56 +0000 UTC
+    literal_precision_regression_test.go:95: short year "+4": got 0001-01-01 00:00:00 +0000 UTC, timestamp exceeds nanosecond precision; want 2004-09-08 12:34:56 +0000 UTC
+    literal_precision_regression_test.go:95: short year "+5": got 0001-01-01 00:00:00 +0000 UTC, timestamp exceeds nanosecond precision; want 2005-09-08 12:34:56 +0000 UTC
+    literal_precision_regression_test.go:95: short year "+6": got 0001-01-01 00:00:00 +0000 UTC, timestamp exceeds nanosecond precision; want 2006-09-08 12:34:56 +0000 UTC
+    literal_precision_regression_test.go:95: short year "+7": got 0001-01-01 00:00:00 +0000 UTC, timestamp exceeds nanosecond precision; want 2007-09-08 12:34:56 +0000 UTC
+    literal_precision_regression_test.go:95: short year "+8": got 0001-01-01 00:00:00 +0000 UTC, timestamp exceeds nanosecond precision; want 2008-09-08 12:34:56 +0000 UTC
+    literal_precision_regression_test.go:95: short year "+9": got 0001-01-01 00:00:00 +0000 UTC, timestamp exceeds nanosecond precision; want 2009-09-08 12:34:56 +0000 UTC
+FAIL
+FAIL	github.com/Suhaibinator/open-splunk/internal/collector/parserconfig	0.427s
+FAIL

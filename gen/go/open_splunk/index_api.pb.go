@@ -183,8 +183,10 @@ func (x *CreateIndexRequest) GetClientRequestId() string {
 }
 
 type CreateIndexResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Index         *Index                 `protobuf:"bytes,1,opt,name=index,proto3" json:"index,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Index *Index                 `protobuf:"bytes,1,opt,name=index,proto3" json:"index,omitempty"`
+	// True when this request resolves an earlier accepted logical action.
+	Replayed      bool `protobuf:"varint,2,opt,name=replayed,proto3" json:"replayed,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -224,6 +226,13 @@ func (x *CreateIndexResponse) GetIndex() *Index {
 		return x.Index
 	}
 	return nil
+}
+
+func (x *CreateIndexResponse) GetReplayed() bool {
+	if x != nil {
+		return x.Replayed
+	}
+	return false
 }
 
 // POST /api/indexes/get
@@ -1087,9 +1096,10 @@ const file_open_splunk_index_api_proto_rawDesc = "" +
 	"definition\x18\x01 \x01(\v2\x1c.open_splunk.IndexDefinitionR\n" +
 	"definition\x12/\n" +
 	"\x11client_request_id\x18\x02 \x01(\tH\x00R\x0fclientRequestId\x88\x01\x01B\x14\n" +
-	"\x12_client_request_id\"?\n" +
+	"\x12_client_request_id\"[\n" +
 	"\x13CreateIndexResponse\x12(\n" +
-	"\x05index\x18\x01 \x01(\v2\x12.open_splunk.IndexR\x05index\"I\n" +
+	"\x05index\x18\x01 \x01(\v2\x12.open_splunk.IndexR\x05index\x12\x1a\n" +
+	"\breplayed\x18\x02 \x01(\bR\breplayed\"I\n" +
 	"\x0fGetIndexRequest\x126\n" +
 	"\bselector\x18\x01 \x01(\v2\x1a.open_splunk.IndexSelectorR\bselector\"<\n" +
 	"\x10GetIndexResponse\x12(\n" +

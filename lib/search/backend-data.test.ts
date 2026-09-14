@@ -9,12 +9,14 @@ import {
   type ResultSchema,
 } from "../../gen/ts/open_splunk/result";
 import {
+  MissingValue,
   NullValue,
   ValueType,
   type TypedValue,
 } from "../../gen/ts/open_splunk/value";
 import {
   adaptSearchResults,
+  timeBucketBoundaryNanoseconds,
   timechartValueFields,
   timechartRowsForExport,
 } from "./backend-data";
@@ -48,8 +50,20 @@ function doubleValue(value: number): TypedValue {
   return { kind: { $case: "doubleValue", value } };
 }
 
+function nullValue(): TypedValue {
+  return { kind: { $case: "nullValue", value: NullValue.NULL_VALUE_NULL } };
+}
+
+function missingValue(): TypedValue {
+  return { kind: { $case: "missingValue", value: MissingValue.MISSING_VALUE_MISSING } };
+}
+
 function timestampValue(value: string): TypedValue {
   return { kind: { $case: "timestampValue", value: new Date(value) } };
+}
+
+function canonicalBoundary(milliseconds: number): string {
+  return new Date(milliseconds).toISOString().replace(".000Z", "Z");
 }
 
 function countedTimestampValue(
@@ -67,8 +81,13 @@ function countedTimestampValue(
   return { kind: { $case: "timestampValue", value: date } };
 }
 
-function row(rowId: string, ordinal: bigint, cells: TypedValue[]): ResultRow {
-  return { rowId, ordinal, cells };
+function row(
+  rowId: string,
+  ordinal: bigint,
+  cells: TypedValue[],
+  timeBucket?: { earliest: string; latest: string },
+): ResultRow {
+  return { rowId, ordinal, cells, timeBucket };
 }
 
 function trackDateTimeFormatConstructions<T>(
@@ -98,7 +117,7 @@ function trackDateTimeFormatConstructions<T>(
   }
 }
 
-test("result adaptation rejects schemas wider than the browser contract", () => {
+test("result adaptation preserves schemas wider than 64 columns", () => {
   const schema: ResultSchema = {
     schemaId: "too-wide-v1",
     revision: 1n,
@@ -108,10 +127,7 @@ test("result adaptation rejects schemas wider than the browser contract", () => 
       (_, index) => column(`field_${index}`, ValueType.VALUE_TYPE_UINT64),
     ),
   };
-  assert.throws(
-    () => adaptSearchResults(schema, []),
-    /65 columns.*supports 1–64/,
-  );
+  assert.equal(adaptSearchResults(schema, []).statisticsTable?.columns.length, 65);
 });
 
 test("result adaptation rejects unsupported result kinds", () => {
@@ -1025,7 +1041,7 @@ test("formatter reuse refreshes the local timezone for each adaptation", (contex
       () => adaptSearchResults(schema, rows),
     );
     const utcTimeSeries = trackDateTimeFormatConstructions(
-      () => adaptSearchResults(timeSeriesSchema, timeSeriesRows, 60_000),
+      () => adaptSearchResults(timeSeriesSchema, timeSeriesRows),
     );
 
     process.env.TZ = "America/Los_Angeles";
@@ -1048,7 +1064,7 @@ test("formatter reuse refreshes the local timezone for each adaptation", (contex
       () => adaptSearchResults(schema, rows),
     );
     const pacificTimeSeries = trackDateTimeFormatConstructions(
-      () => adaptSearchResults(timeSeriesSchema, timeSeriesRows, 60_000),
+      () => adaptSearchResults(timeSeriesSchema, timeSeriesRows),
     );
 
     assert.equal(utcEvents.constructions, 1);
@@ -1104,8 +1120,8 @@ test("timechart keeps siblings when a runtime series is named count", () => {
   }).format(new Date("2026-07-21T22:00:00.000Z"));
 
   const measured = trackDateTimeFormatConstructions(() => [
-    adaptSearchResults(schema, rows, 300_000),
-    adaptSearchResults(schema, rows.slice(0, 1), 300_000),
+    adaptSearchResults(schema, rows),
+    adaptSearchResults(schema, rows.slice(0, 1)),
   ]);
   const adapted = measured.value[0];
 
@@ -1131,6 +1147,218 @@ test("timechart keeps siblings when a runtime series is named count", () => {
   }]);
 });
 
+test("timechart prefers a typed canonical _time over an earlier numeric time metric", () => {
+  const schema: ResultSchema = {
+    schemaId: "timechart-canonical-time-v1",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_TIME_SERIES,
+    columns: [
+      column("time", ValueType.VALUE_TYPE_UINT64, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_METRIC),
+      column("_time", ValueType.VALUE_TYPE_TIMESTAMP, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_EVENT_TIME),
+    ],
+  };
+  const adapted = adaptSearchResults(schema, [row("canonical", 0n, [
+    uint64Value(7n),
+    timestampValue("2026-09-01T00:00:00Z"),
+  ], {
+    earliest: "2026-09-01T00:00:00.000000001Z",
+    latest: "2026-09-01T00:00:00.000000002Z",
+  })]);
+
+  assert.equal(adapted.timeline.length, 1);
+  assert.deepEqual(adapted.timeline[0]?.series, { time: 7 });
+  assert.equal(adapted.timeline[0]?.timeCoordinateNanoseconds, 1_788_220_800_000_000_001n);
+  assert.deepEqual(timechartValueFields(adapted.timeline, schema), ["time"]);
+});
+
+test("timechart legacy time-name fallback requires a timestamp column", () => {
+  const legacySchema: ResultSchema = {
+    schemaId: "timechart-legacy-time-v1",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_TIME_SERIES,
+    columns: [
+      column("Time", ValueType.VALUE_TYPE_TIMESTAMP),
+      column("count", ValueType.VALUE_TYPE_UINT64),
+    ],
+  };
+  const legacy = adaptSearchResults(legacySchema, [row("legacy", 0n, [
+    timestampValue("2026-09-01T00:00:00Z"),
+    uint64Value(2n),
+  ])]);
+  assert.equal(legacy.timeline.length, 1);
+  assert.deepEqual(timechartValueFields(legacy.timeline, legacySchema), ["count"]);
+
+  const numericTimeSchema: ResultSchema = {
+    ...legacySchema,
+    schemaId: "timechart-numeric-time-v1",
+    columns: [
+      column("time", ValueType.VALUE_TYPE_UINT64),
+      column("count", ValueType.VALUE_TYPE_UINT64),
+    ],
+  };
+  assert.deepEqual(adaptSearchResults(numericTimeSchema, [row("numeric", 0n, [
+    uint64Value(1n),
+    uint64Value(2n),
+  ])]).timeline, []);
+  assert.deepEqual(timechartValueFields([], numericTimeSchema), []);
+
+  const wrongCanonicalSchema: ResultSchema = {
+    ...legacySchema,
+    schemaId: "timechart-wrong-canonical-time-v1",
+    columns: [
+      column("time", ValueType.VALUE_TYPE_TIMESTAMP),
+      column("_time", ValueType.VALUE_TYPE_UINT64),
+      column("count", ValueType.VALUE_TYPE_UINT64),
+    ],
+  };
+  assert.deepEqual(adaptSearchResults(wrongCanonicalSchema, [row("wrong-canonical", 0n, [
+    timestampValue("2026-09-01T00:00:00Z"),
+    uint64Value(1n),
+    uint64Value(2n),
+  ])]).timeline, []);
+  assert.deepEqual(timechartValueFields([], wrongCanonicalSchema), []);
+});
+
+test("timechart preserves nanosecond bounds as metadata and leaves legacy rows without drilldown bounds", () => {
+  const schema: ResultSchema = {
+    schemaId: "exact-timechart-v1",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_TIME_SERIES,
+    columns: [
+      column("_time", ValueType.VALUE_TYPE_TIMESTAMP, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_EVENT_TIME),
+      column("count", ValueType.VALUE_TYPE_UINT64, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_METRIC),
+    ],
+  };
+  const earliest = "2026-09-10T08:09:10.123456789Z";
+  const latest = "2026-09-10T08:09:10.12345679Z";
+  const exact = adaptSearchResults(schema, [row("exact", 0n, [
+    timestampValue("2026-09-10T08:09:10.123Z"),
+    uint64Value(1n),
+  ], { earliest, latest })]).timeline[0];
+  assert.equal(exact?.earliest, earliest);
+  assert.equal(exact?.latest, latest);
+  assert.equal(exact?.timeCoordinateNanoseconds, 1_789_027_750_123_456_789n);
+  assert.equal(exact?.timeLatestCoordinateNanoseconds, 1_789_027_750_123_456_790n);
+
+  const legacy = adaptSearchResults(schema, [row("legacy", 0n, [
+    timestampValue("2026-09-10T08:09:10.123Z"),
+    uint64Value(1n),
+  ])]).timeline[0];
+  assert.equal(legacy?.earliest, undefined);
+  assert.equal(legacy?.latest, undefined);
+  assert.equal(legacy?.timeValue, "2026-09-10T08:09:10.123Z");
+  assert.deepEqual(timechartRowsForExport([legacy!]), [{ _time: "2026-09-10T08:09:10.123Z", count: 1 }]);
+});
+
+test("timechart retains timestamped null measures as exact chart gaps", () => {
+  const schema: ResultSchema = {
+    schemaId: "nullable-timechart-v1",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_TIME_SERIES,
+    columns: [
+      column("_time", ValueType.VALUE_TYPE_TIMESTAMP, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_EVENT_TIME),
+      { ...column("avg(metric)", ValueType.VALUE_TYPE_DOUBLE, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_METRIC), nullable: true },
+    ],
+  };
+  const timestamps = ["2026-09-10T00:00:00Z", "2026-09-10T01:00:00Z", "2026-09-10T02:00:00Z"];
+  const values = [doubleValue(1), nullValue(), doubleValue(2)];
+  const rows = timestamps.map((timestamp, index) => row(
+    `bucket-${index}`,
+    BigInt(index),
+    [timestampValue(timestamp), values[index]],
+    { earliest: timestamp, latest: `2026-09-10T0${index + 1}:00:00Z` },
+  ));
+
+  const timeline = adaptSearchResults(schema, rows).timeline;
+  assert.equal(timeline.length, 3);
+  assert.deepEqual(timeline.map((point) => point.id), ["bucket-0", "bucket-1", "bucket-2"]);
+  assert.deepEqual(timeline.map((point) => point.series), [
+    { "avg(metric)": 1 },
+    { "avg(metric)": null },
+    { "avg(metric)": 2 },
+  ]);
+  assert.equal(timeline[1].earliest, "2026-09-10T01:00:00Z");
+  assert.equal(timeline[1].latest, "2026-09-10T02:00:00Z");
+  assert.equal(timeline[1].timeCoordinateNanoseconds, 1_789_002_000_000_000_000n);
+  assert.deepEqual(timechartRowsForExport(timeline), [
+    { _time: "2026-09-10T00:00:00Z", "avg(metric)": 1 },
+    { _time: "2026-09-10T01:00:00Z", "avg(metric)": null },
+    { _time: "2026-09-10T02:00:00Z", "avg(metric)": 2 },
+  ]);
+});
+
+test("all-null and missing timechart measures retain their schema series", () => {
+  const schema: ResultSchema = {
+    schemaId: "empty-measures-timechart-v1",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_TIME_SERIES,
+    columns: [
+      column("_time", ValueType.VALUE_TYPE_TIMESTAMP, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_EVENT_TIME),
+      { ...column("Events", ValueType.VALUE_TYPE_DOUBLE, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_METRIC), nullable: true },
+    ],
+  };
+  const timeline = adaptSearchResults(schema, [
+    row("null", 0n, [timestampValue("2026-09-10T00:00:00Z"), nullValue()]),
+    row("missing", 1n, [timestampValue("2026-09-10T01:00:00Z"), missingValue()]),
+  ]).timeline;
+
+  assert.equal(timeline.length, 2);
+  assert.deepEqual(timeline.map((point) => point.series), [{ Events: null }, { Events: null }]);
+  assert.deepEqual(timechartValueFields(timeline), ["Events"]);
+  assert.deepEqual(timechartRowsForExport(timeline), [
+    { _time: "2026-09-10T00:00:00.000Z", Events: null },
+    { _time: "2026-09-10T01:00:00.000Z", Events: null },
+  ]);
+});
+
+test("timechart retains finite series when their compatibility total overflows", () => {
+  const schema: ResultSchema = {
+    schemaId: "extreme-timechart-v1",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_TIME_SERIES,
+    columns: [
+      column("_time", ValueType.VALUE_TYPE_TIMESTAMP, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_EVENT_TIME),
+      column("first", ValueType.VALUE_TYPE_DOUBLE, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_METRIC),
+      column("second", ValueType.VALUE_TYPE_DOUBLE, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_METRIC),
+    ],
+  };
+  const maximum = Number.MAX_VALUE;
+  const [point] = adaptSearchResults(schema, [
+    row("extreme", 0n, [
+      timestampValue("2026-09-10T00:00:00Z"),
+      doubleValue(maximum),
+      doubleValue(maximum),
+    ], {
+      earliest: "2026-09-10T00:00:00Z",
+      latest: "2026-09-10T01:00:00Z",
+    }),
+  ]).timeline;
+
+  assert.ok(point);
+  assert.equal(point.count, maximum);
+  assert.equal(point.coordinateApproximate, true);
+  assert.deepEqual(point.series, { first: maximum, second: maximum });
+  assert.deepEqual(timechartRowsForExport([point]), [{
+    _time: "2026-09-10T00:00:00Z",
+    first: maximum,
+    second: maximum,
+  }]);
+});
+
+test("exact time bucket parser accepts canonical nanoseconds without Date rounding", () => {
+  assert.equal(
+    timeBucketBoundaryNanoseconds("1970-01-01T00:00:00.000000001Z"),
+    1n,
+  );
+  assert.equal(
+    timeBucketBoundaryNanoseconds("1969-12-31T23:59:59.999999999Z"),
+    -1n,
+  );
+  assert.equal(timeBucketBoundaryNanoseconds("2026-09-10T08:09:10.120Z"), null);
+  assert.equal(timeBucketBoundaryNanoseconds("2026-02-29T00:00:00Z"), null);
+  assert.equal(timeBucketBoundaryNanoseconds("2026-09-10T08:09:10+00:00"), null);
+});
+
 test("time-series rows concatenated across server pages adapt as one contiguous bucket series", () => {
   const schema: ResultSchema = {
     schemaId: "paged-timechart-v1",
@@ -1151,24 +1379,27 @@ test("time-series rows concatenated across server pages adapt as one contiguous 
     timestampValue(new Date(start + index * spanMs).toISOString()),
     uint64Value(index === 1_500 ? 5n : 0n),
     uint64Value(index === 2_016 ? 1n : 0n),
-  ]);
+  ], {
+    earliest: canonicalBoundary(start + index * spanMs),
+    latest: canonicalBoundary(start + (index + 1) * spanMs),
+  });
   const pages = [0, 1, 2].map((page) => Array.from(
     { length: Math.min(pageSize, totalBuckets - page * pageSize) },
     (_, offset) => bucketRow(page * pageSize + offset),
   ));
 
-  const firstPageOnly = adaptSearchResults(schema, pages[0], spanMs).timeline;
+  const firstPageOnly = adaptSearchResults(schema, pages[0]).timeline;
   assert.equal(firstPageOnly.length, pageSize);
   assert.equal(firstPageOnly.reduce((sum, point) => sum + point.count, 0), 0);
 
-  const complete = adaptSearchResults(schema, pages.flat(), spanMs).timeline;
+  const complete = adaptSearchResults(schema, pages.flat()).timeline;
   assert.equal(complete.length, totalBuckets);
   assert.equal(complete.reduce((sum, point) => sum + point.count, 0), 6);
   assert.deepEqual(complete[1_500].series, { "Failed to login user": 5, "worker lane drain failed": 0 });
   assert.deepEqual(complete[2_016].series, { "Failed to login user": 0, "worker lane drain failed": 1 });
   // Bucket edges chain across the page boundary instead of restarting at each page.
   assert.equal(complete[pageSize - 1].latest, complete[pageSize].earliest);
-  assert.equal(complete[pageSize].earliest, new Date(start + pageSize * spanMs).toISOString());
-  assert.equal(complete.at(-1)?.latest, new Date(start + totalBuckets * spanMs).toISOString());
+  assert.equal(complete[pageSize].earliest, canonicalBoundary(start + pageSize * spanMs));
+  assert.equal(complete.at(-1)?.latest, canonicalBoundary(start + totalBuckets * spanMs));
   assert.deepEqual(timechartValueFields(complete, schema), ["Failed to login user", "worker lane drain failed"]);
 });

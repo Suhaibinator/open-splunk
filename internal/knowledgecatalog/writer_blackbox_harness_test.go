@@ -46,7 +46,7 @@ type writerBlackboxHarness struct {
 	lastClockUS atomic.Int64
 }
 
-func newWriterBlackboxHarness(t *testing.T) *writerBlackboxHarness {
+func newWriterBlackboxHarness(t *testing.T, initialize ...func(*control.DB)) *writerBlackboxHarness {
 	t.Helper()
 
 	database, err := control.Open(t.Context(), filepath.Join(t.TempDir(), "control.sqlite"))
@@ -58,6 +58,10 @@ func newWriterBlackboxHarness(t *testing.T) *writerBlackboxHarness {
 			t.Errorf("close control database: %v", err)
 		}
 	})
+
+	for _, initializeDatabase := range initialize {
+		initializeDatabase(database)
+	}
 
 	var appClock atomic.Int64
 	var appID atomic.Int64

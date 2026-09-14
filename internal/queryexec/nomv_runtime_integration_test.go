@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -134,6 +135,10 @@ func TestNoMVPresentationThroughManagerAgainstClickHouse(t *testing.T) {
 
 	var nextID atomic.Uint64
 	executionErrors := make(chan error, 1)
+	// Terminal state is observable before the asynchronous diagnostic callback.
+	// Hold delivery until the scalar case has checked its atomic terminal state.
+	reportGate := make(chan struct{})
+	releaseReport := sync.OnceFunc(func() { close(reportGate) })
 	manager, err := searchjobs.New(searchjobs.Config{
 		Executor:        executor,
 		Snapshotter:     queryIntegrationSnapshotter(cutoff),
@@ -149,6 +154,11 @@ func TestNoMVPresentationThroughManagerAgainstClickHouse(t *testing.T) {
 		CursorScope: "nomv-runtime",
 		OnFailure: func(notification searchjobs.FailureNotification) {
 			select {
+			case <-reportGate:
+			case <-ctx.Done():
+				return
+			}
+			select {
 			case executionErrors <- notification.Cause:
 			default:
 			}
@@ -158,6 +168,7 @@ func TestNoMVPresentationThroughManagerAgainstClickHouse(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer manager.Close()
+	defer releaseReport()
 
 	create := func(source string) searchjobs.Job {
 		t.Helper()
@@ -293,13 +304,16 @@ func TestNoMVPresentationThroughManagerAgainstClickHouse(t *testing.T) {
 		if _, resultErr := manager.Results(terminal.ID, searchjobs.PageRequest{Limit: 10}); !errors.Is(resultErr, searchjobs.ErrResultsUnavailable) {
 			t.Fatalf("failed result access = %v, want ErrResultsUnavailable", resultErr)
 		}
+		releaseReport()
+		reportCtx, cancelReport := context.WithTimeout(ctx, 5*time.Second)
+		defer cancelReport()
 		select {
 		case cause := <-executionErrors:
 			if !errors.Is(cause, searchjobs.ErrUnsupportedValue) {
 				t.Fatalf("execution cause = %v, want ErrUnsupportedValue", cause)
 			}
-		default:
-			t.Fatal("manager did not report the unsupported nomv value cause")
+		case <-reportCtx.Done():
+			t.Fatalf("manager did not report the unsupported nomv value cause: %v", reportCtx.Err())
 		}
 	})
 }

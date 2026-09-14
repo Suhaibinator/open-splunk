@@ -3,7 +3,10 @@ package export
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"math"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -281,6 +284,81 @@ func TestColumnSelectionOrderAndValidation(t *testing.T) {
 		if _, err := selectColumns(schema, requested); !errorsIs(err, ErrInvalidColumns) {
 			t.Fatalf("selectColumns(%v) error = %v, want ErrInvalidColumns", requested, err)
 		}
+	}
+}
+
+func TestWideSourceColumnSelectionIndexesOnlyRequestedSubset(t *testing.T) {
+	t.Parallel()
+
+	columns := make([]searchjobs.Column, maximumColumns+1)
+	for index := range columns {
+		columns[index] = searchjobs.Column{
+			Name: fmt.Sprintf("series_%04d", index),
+			Kind: searchjobs.ValueKindUnsigned,
+		}
+	}
+	schema := searchjobs.Schema{Columns: columns}
+	selection, err := selectColumns(
+		schema,
+		[]string{columns[len(columns)-1].Name, columns[0].Name},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(selection.indexes, []int{len(columns) - 1, 0}) ||
+		selection.columns[0] != columns[len(columns)-1] ||
+		selection.columns[1] != columns[0] {
+		t.Fatalf("wide selection = %#v", selection)
+	}
+	if _, err := selectColumns(schema, nil); !errorsIs(err, ErrInvalidColumns) {
+		t.Fatalf("default wide selection = %v, want ErrInvalidColumns", err)
+	}
+	tooMany := make([]string, maximumColumns+1)
+	for index := range tooMany {
+		tooMany[index] = columns[index].Name
+	}
+	if _, err := selectColumns(schema, tooMany); !errorsIs(err, ErrInvalidColumns) {
+		t.Fatalf("oversized explicit selection = %v, want ErrInvalidColumns", err)
+	}
+}
+
+func TestWideSourceColumnSelectionRejectsMalformedSchema(t *testing.T) {
+	t.Parallel()
+
+	valid := make([]searchjobs.Column, maximumColumns+1)
+	for index := range valid {
+		valid[index] = searchjobs.Column{
+			Name: fmt.Sprintf("series_%04d", index),
+			Kind: searchjobs.ValueKindUnsigned,
+		}
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func([]searchjobs.Column)
+	}{
+		{
+			name: "invalid unselected name",
+			mutate: func(columns []searchjobs.Column) {
+				columns[1].Name = string([]byte{0xff})
+			},
+		},
+		{
+			name: "duplicate selected name",
+			mutate: func(columns []searchjobs.Column) {
+				columns[len(columns)-1].Name = columns[0].Name
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			columns := slices.Clone(valid)
+			test.mutate(columns)
+			if _, err := selectColumns(
+				searchjobs.Schema{Columns: columns},
+				[]string{columns[0].Name},
+			); !errorsIs(err, ErrSourceUnavailable) {
+				t.Fatalf("select malformed wide source = %v, want ErrSourceUnavailable", err)
+			}
+		})
 	}
 }
 

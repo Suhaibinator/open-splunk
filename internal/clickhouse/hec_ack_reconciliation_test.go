@@ -30,6 +30,7 @@ func TestHECAcknowledgmentStaysPendingAcrossAmbiguousSendUntilReconciliation(t *
 
 	connection := &fakeStoreConnection{}
 	store := mustTestStoreWithVisibility(t, connection, fixedRetention(time.Hour), sequencer)
+	store.coalescing = true
 	t.Cleanup(func() { _ = store.Close() })
 	committedAt := time.Date(2026, time.July, 21, 1, 3, 0, 0, time.UTC)
 	store.clock = func() time.Time { return committedAt }
@@ -61,6 +62,13 @@ func TestHECAcknowledgmentStaysPendingAcrossAmbiguousSendUntilReconciliation(t *
 	if staged.State != ingest.StoredBatchPending || staged.VisibilitySequence == 0 ||
 		staged.HECRequestSequence == 0 || staged.HECAcknowledgmentID == 0 {
 		t.Fatalf("staged HEC request = %+v, want durable pending request and acknowledgment", staged)
+	}
+	pendingReplay, err := store.Stage(ctx, batch)
+	if err != nil || pendingReplay.State != ingest.StoredBatchPending ||
+		pendingReplay.VisibilitySequence != staged.VisibilitySequence ||
+		pendingReplay.HECRequestSequence != staged.HECRequestSequence ||
+		pendingReplay.HECAcknowledgmentID != staged.HECAcknowledgmentID {
+		t.Fatalf("pending exact Stage replay = %+v error=%v, want stable identifiers from %+v", pendingReplay, err, staged)
 	}
 	assertDurableHECAcknowledgment(t, ctx, sequencer, staged.HECAcknowledgmentID, false)
 
@@ -109,6 +117,13 @@ func TestHECAcknowledgmentStaysPendingAcrossAmbiguousSendUntilReconciliation(t *
 		"final",
 		false,
 	)
+	terminalReplay, err := store.Stage(ctx, batch)
+	if err != nil || terminalReplay.State != ingest.StoredBatchCommitted ||
+		terminalReplay.VisibilitySequence != staged.VisibilitySequence ||
+		terminalReplay.HECRequestSequence != staged.HECRequestSequence ||
+		terminalReplay.HECAcknowledgmentID != staged.HECAcknowledgmentID {
+		t.Fatalf("terminal exact Stage replay = %+v error=%v, want stable identifiers from %+v", terminalReplay, err, staged)
+	}
 	telemetry := store.HECReconciliationTelemetry()
 	if !telemetry.Available || telemetry.Successes != 1 || telemetry.Ambiguities != 1 {
 		t.Fatalf("HEC reconciliation telemetry = %+v, want one ambiguous replay success", telemetry)

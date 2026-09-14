@@ -1,9 +1,12 @@
 import type { PointerEvent, ReactNode } from "react";
 
 import { SearchJobState } from "@/gen/ts/open_splunk/search";
-import { DEMO_EVENTS, type DemoEvent, type DemoHistoryEntry, type DemoScalar } from "@/lib/demo/search-data";
+import { DEMO_EVENTS, type DemoEvent, type DemoHistoryEntry, type DemoScalar, type TimelinePoint } from "@/lib/demo/search-data";
+import { timeBucketBoundaryNanoseconds } from "@/lib/search/backend-data";
 import type { DiagnosticMarker } from "@/lib/search/spl-diagnostic-markers";
+import { searchResultViewForQuery } from "@/lib/search/result-view-navigation";
 import {
+  formatSplValue,
   isSplOffsetInQuotedValue,
   isSupportedSplPipelineCommand,
   scanSplStructure,
@@ -56,6 +59,19 @@ export function hasPipelineCommand(query: string, commands: string | readonly st
     const command = /^\s*([A-Za-z][A-Za-z0-9_-]*)\b/.exec(stage)?.[1]?.toLowerCase();
     return command !== undefined && allowed.has(command);
   });
+}
+
+/** A deliberately small demo-only projection of `timechart ... by <field>`. */
+export function demoTimechartSplitField(query: string): string | null {
+  for (const stage of splitSplPipeline(query).slice(1)) {
+    if (!/^\s*timechart\b/i.test(stage)) continue;
+    const candidates = [...stage.matchAll(/\bby\s+([A-Za-z_][A-Za-z0-9_.-]*)\b/giu)];
+    const match = candidates.toReversed().find((candidate) =>
+      !isSplOffsetInQuotedValue(stage, candidate.index),
+    );
+    if (match?.[1] !== undefined) return match[1];
+  }
+  return null;
 }
 
 function demoHeadLimit(query: string): number | null {
@@ -293,9 +309,7 @@ export function filteredDemoEvents(query: string): DemoEvent[] {
 }
 
 export function resultTabForQuery(query: string): ResultTab {
-  if (hasPipelineCommand(query, "timechart")) return "visualization";
-  if (hasPipelineCommand(query, ["table", "stats", "top", "rare"])) return "statistics";
-  return "events";
+  return searchResultViewForQuery(query);
 }
 
 export function highlightedRaw(raw: string, query: string): ReactNode[] {
@@ -314,10 +328,10 @@ export function highlightedRaw(raw: string, query: string): ReactNode[] {
 }
 
 export function queryForPattern(baseQuery: string, signature: string): string {
-  const normalized = signature.replace(/\*+/g, "*").replaceAll('"', '\\"');
+  const normalized = signature.replace(/\*+/g, "*");
   const boundedPattern = normalized.replace(/^\*+|\*+$/g, "");
   const sourceClause = splitSplPipeline(baseQuery)[0]?.trim() || "index=gradethis";
-  return `${sourceClause}\n| search _raw="*${boundedPattern}*"`;
+  return `${sourceClause}\n| search _raw=${formatSplValue(`*${boundedPattern}*`)}`;
 }
 
 export function formatFieldValue(value: DemoScalar): string {
@@ -406,7 +420,38 @@ export function timelineIndexFromPointer(event: PointerEvent<HTMLElement>, bucke
   return Math.min(bucketCount - 1, Math.floor(ratio * bucketCount));
 }
 
-export function timelineBoundaryLabel(bucketIndex: number): string {
-  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
-    .format(new Date(Date.UTC(2026, 6, 21, 0, bucketIndex * 20)));
+export interface AuthoritativeTimelineRange {
+  earliest: string;
+  latest: string;
+}
+
+/** Return the exact union of selected server buckets, independent of row order. */
+export function authoritativeTimelineRange(
+  points: readonly TimelinePoint[],
+  selection: readonly [number, number] | null,
+): AuthoritativeTimelineRange | null {
+  if (selection === null) return null;
+  const start = Math.min(selection[0], selection[1]);
+  const end = Math.max(selection[0], selection[1]);
+  if (start < 0 || end >= points.length) return null;
+  let earliest: AuthoritativeTimelineRange["earliest"] | null = null;
+  let earliestNanoseconds: bigint | null = null;
+  let latest: AuthoritativeTimelineRange["latest"] | null = null;
+  let latestNanoseconds: bigint | null = null;
+  for (let index = start; index <= end; index += 1) {
+    const point = points[index];
+    if (point?.earliest === undefined || point.latest === undefined) return null;
+    const pointEarliest = timeBucketBoundaryNanoseconds(point.earliest);
+    const pointLatest = timeBucketBoundaryNanoseconds(point.latest);
+    if (pointEarliest === null || pointLatest === null || pointEarliest >= pointLatest) return null;
+    if (earliestNanoseconds === null || pointEarliest < earliestNanoseconds) {
+      earliest = point.earliest;
+      earliestNanoseconds = pointEarliest;
+    }
+    if (latestNanoseconds === null || pointLatest > latestNanoseconds) {
+      latest = point.latest;
+      latestNanoseconds = pointLatest;
+    }
+  }
+  return earliest === null || latest === null ? null : { earliest, latest };
 }

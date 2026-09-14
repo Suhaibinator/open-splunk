@@ -2,11 +2,13 @@ package control
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
+	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"gorm.io/gorm"
 )
 
@@ -129,6 +131,75 @@ func (administration *AuditedIndexAdministration) CreateIndex(
 		administration.publish,
 		administration.validator,
 	)
+}
+
+// CreateIndexIdempotent creates and audits one index together with its
+// actor-scoped receipt. Replay resolves the current index projection by its
+// stable ID and does not republish the successful audit event.
+func (administration *AuditedIndexAdministration) CreateIndexIdempotent(
+	ctx context.Context,
+	definition IndexDefinition,
+	intent requestidempotency.Intent,
+) (Index, bool, error) {
+	if intent.TenantID != administration.tenantID ||
+		intent.Route != requestidempotency.RouteCreateIndex {
+		return Index{}, false, requestidempotency.ErrInvalid
+	}
+	replay := func(ctx context.Context) (Index, bool, error) {
+		receipt, found, err := requestidempotency.Read(ctx, administration.db.orm, intent)
+		if err != nil || !found {
+			return Index{}, found, err
+		}
+		if receipt.Target.Kind != requestidempotency.TargetIndex {
+			return Index{}, true, requestidempotency.ErrCorrupt
+		}
+		current, err := administration.db.GetIndex(ctx, receipt.Target.ID)
+		if errors.Is(err, ErrNotFound) {
+			return Index{}, true, requestidempotency.ErrUnavailable
+		}
+		return current, true, err
+	}
+	if current, found, err := replay(ctx); err != nil || found {
+		return current, found, err
+	}
+	publish := func(
+		ctx context.Context,
+		tx *gorm.DB,
+		event IndexMutationAuditEvent,
+	) error {
+		if err := administration.publish(ctx, tx, event); err != nil {
+			return err
+		}
+		_, err := requestidempotency.AppendInTransaction(
+			ctx,
+			tx,
+			intent,
+			requestidempotency.Target{
+				Kind: requestidempotency.TargetIndex, ID: event.IndexID,
+				Version: event.IndexVersion,
+			},
+			nil,
+			event.OccurredAt,
+		)
+		return err
+	}
+	created, err := administration.db.createIndex(
+		ctx,
+		definition,
+		publish,
+		administration.validator,
+	)
+	if err == nil {
+		return created, false, nil
+	}
+	// A commit can succeed before its acknowledgement or request cancellation.
+	// Reconcile the receipt with the same authority and a bounded independent read.
+	reconcileCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if current, found, replayErr := replay(reconcileCtx); replayErr != nil || found {
+		return current, found, replayErr
+	}
+	return Index{}, false, err
 }
 
 // GetIndex delegates one stable-ID lookup to the underlying catalog.

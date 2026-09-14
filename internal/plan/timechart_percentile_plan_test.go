@@ -322,7 +322,7 @@ func TestAnalyzeAcceptsValidAndRejectsForgedTimechartPercentileMeasures(t *testi
 		}
 	}
 	if _, err := Analyze(&Query{Operators: []Operator{&Timechart{
-		Time: valid, Measure: validPercentile, Split: validSplit(splitField),
+		Time: valid, Measure: validPercentile, Split: validSplit(splitField), Span: time.Minute,
 	}}}); err != nil {
 		t.Fatalf("Analyze(valid split percentile): %v", err)
 	}
@@ -363,6 +363,7 @@ func TestAnalyzeAcceptsValidAndRejectsForgedTimechartPercentileMeasures(t *testi
 				Time:    valid,
 				Measure: test.measure,
 				Split:   test.split,
+				Span:    time.Minute,
 			}}})
 			if err == nil {
 				t.Fatal("Analyze succeeded, want forged timechart rejection")

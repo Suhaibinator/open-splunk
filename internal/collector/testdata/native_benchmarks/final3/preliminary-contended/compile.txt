@@ -1,0 +1,45 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/collector
+cpu: Apple M4 Max
+BenchmarkNativeJavaCompile/log4j2-pattern         	  114535	      2069 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/log4j2-pattern         	  113372	      2066 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/log4j2-pattern         	  110918	      2092 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/log4j2-pattern         	  110056	      2075 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/log4j2-pattern         	  116785	      2129 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/log4j2-pattern         	  117162	      2156 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/log4j2-pattern         	  118414	      2108 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/log4j2-pattern         	  116000	      2077 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/log4j2-pattern         	  116700	      2090 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/log4j2-pattern         	  116707	      2065 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/log4j2-pattern         	  114554	      2078 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/log4j2-pattern         	  117423	      2170 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/log4j2-pattern         	  111862	      2238 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/log4j2-pattern         	  110872	      2148 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/log4j2-pattern         	  111146	      2161 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/log4j2-pattern         	  117242	      2201 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/log4j2-pattern         	  109909	      2326 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/log4j2-pattern         	   99681	      2367 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/log4j2-pattern         	  100747	      2364 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/log4j2-pattern         	  109066	      2160 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	  112904	      2225 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	  109786	      2126 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	  104223	      2329 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	  106696	      2232 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	  117610	      2204 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   97477	      2270 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	  109976	      2135 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	  113727	      2104 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	  112992	      2098 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	  113546	      2126 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	  119514	      2096 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	  110379	      2371 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   96319	      2528 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   98748	      2470 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   92448	      2564 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   99385	      2467 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	  102151	      2568 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	   95589	      2279 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	  113624	      2079 ns/op	    1552 B/op	      17 allocs/op
+BenchmarkNativeJavaCompile/logback-pattern        	  115820	      2084 ns/op	    1552 B/op	      17 allocs/op
+PASS

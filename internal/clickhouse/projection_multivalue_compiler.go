@@ -1375,6 +1375,9 @@ func compileExpandMultivalue(
 	if next.mvExpandQueryRowsSQL != "" {
 		previousQueryRows = "max(" + next.mvExpandQueryRowsSQL + ") OVER ()"
 	}
+	if state.context.mvExpandWorkSQL != "" {
+		previousQueryRows = state.context.mvExpandWorkSQL
+	}
 	windowAlias := quoteIdentifier(fmt.Sprintf("_stage_%d_mvexpand_window", stage))
 	windowSQL := "SELECT *, max(" + invalidAlias + ") OVER () AS " + anyInvalidAlias +
 		", sum(toUInt64(length(" + selectedAlias + "))) OVER () AS " + stageRowsAlias +

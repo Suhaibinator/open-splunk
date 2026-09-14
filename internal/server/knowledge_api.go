@@ -10,7 +10,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
@@ -167,106 +166,27 @@ func replaysUnavailableActiveMutations(writer KnowledgeWriter) bool {
 	return ok && concrete.ReadyForManagement()
 }
 
-func (handler *apiHandler) knowledgeManagementRoutes(
-	noAuth router.AuthLevel,
-) []router.RouteDefinition {
-	routes := []router.RouteDefinition{
-		router.RouteConfig[*opensplunk.CreateKnowledgeObjectRequest, *serializedCreateKnowledgeObjectResponse]{
-			Path: knowledgeObjectsCreateRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newSerializedCreateKnowledgeObjectCodec(), Handler: handler.createKnowledgeObject,
-			SourceType: router.Body,
-			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeMutationRequestBytes},
-			Sanitizer:  sanitizeCreateKnowledgeObjectRequest,
-		},
-		router.RouteConfig[*opensplunk.GetKnowledgeObjectRequest, *serializedGetKnowledgeObjectResponse]{
-			Path: knowledgeObjectsGetRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newSerializedGetKnowledgeObjectCodec(), Handler: handler.getKnowledgeObject,
-			SourceType: router.Body,
-			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
-			Sanitizer:  sanitizeGetKnowledgeObjectRequest,
-		},
-		router.RouteConfig[*opensplunk.ListKnowledgeObjectsRequest, *serializedListKnowledgeObjectsResponse]{
-			Path: knowledgeObjectsListRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newSerializedListKnowledgeObjectsCodec(), Handler: handler.listKnowledgeObjects,
-			SourceType: router.Body,
-			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
-			Sanitizer:  sanitizeListKnowledgeObjectsRequest,
-		},
-		router.RouteConfig[*opensplunk.ListKnowledgeObjectDependenciesRequest, *serializedListKnowledgeObjectDependenciesResponse]{
-			Path: knowledgeObjectsDependenciesRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newSerializedListKnowledgeObjectDependenciesCodec(), Handler: handler.listKnowledgeObjectDependencies,
-			SourceType: router.Body,
-			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
-			Sanitizer:  sanitizeListKnowledgeObjectDependenciesRequest,
-		},
-		router.RouteConfig[*opensplunk.ListKnowledgeObjectDependentsRequest, *serializedListKnowledgeObjectDependentsResponse]{
-			Path: knowledgeObjectsDependentsRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newSerializedListKnowledgeObjectDependentsCodec(), Handler: handler.listKnowledgeObjectDependents,
-			SourceType: router.Body,
-			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
-			Sanitizer:  sanitizeListKnowledgeObjectDependentsRequest,
-		},
-		router.RouteConfig[*opensplunk.ValidateKnowledgeObjectRequest, *serializedValidateKnowledgeObjectResponse]{
-			Path: knowledgeObjectsValidateRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newValidateKnowledgeObjectCodec(), Handler: handler.validateKnowledgeObject,
-			SourceType: router.Body,
-			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeMutationRequestBytes},
-			Sanitizer:  sanitizeValidateKnowledgeObjectRequest,
-		},
-		router.RouteConfig[*opensplunk.UpdateKnowledgeObjectRequest, *serializedUpdateKnowledgeObjectResponse]{
-			Path: knowledgeObjectsUpdateRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newSerializedUpdateKnowledgeObjectCodec(), Handler: handler.updateKnowledgeObject,
-			SourceType: router.Body,
-			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeMutationRequestBytes},
-			Sanitizer:  sanitizeUpdateKnowledgeObjectRequest,
-		},
-		router.RouteConfig[*opensplunk.SetKnowledgeObjectStateRequest, *serializedSetKnowledgeObjectStateResponse]{
-			Path: knowledgeObjectsSetStateRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newSerializedSetKnowledgeObjectStateCodec(), Handler: handler.setKnowledgeObjectState,
-			SourceType: router.Body,
-			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
-			Sanitizer:  sanitizeSetKnowledgeObjectStateRequest,
-		},
-		router.RouteConfig[*opensplunk.DeleteKnowledgeObjectRequest, *serializedDeleteKnowledgeObjectResponse]{
-			Path: knowledgeObjectsDeleteRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newSerializedDeleteKnowledgeObjectCodec(), Handler: handler.deleteKnowledgeObject,
-			SourceType: router.Body,
-			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
-			Sanitizer:  sanitizeDeleteKnowledgeObjectRequest,
-		},
-	}
+func (handler *apiHandler) registerKnowledgeManagementRoutes(group *apiRouteGroup) {
+	group.Route(
+		sizedPostRoute(knowledgeObjectsCreateRoute, maximumKnowledgeMutationRequestBytes, newSerializedCreateKnowledgeObjectCodec(), handler.createKnowledgeObject, sanitizeCreateKnowledgeObjectRequest),
+		sizedPostRoute(knowledgeObjectsGetRoute, maximumKnowledgeSmallRequestBytes, newSerializedGetKnowledgeObjectCodec(), handler.getKnowledgeObject, sanitizeGetKnowledgeObjectRequest),
+		sizedPostRoute(knowledgeObjectsListRoute, maximumKnowledgeSmallRequestBytes, newSerializedListKnowledgeObjectsCodec(), handler.listKnowledgeObjects, sanitizeListKnowledgeObjectsRequest),
+		sizedPostRoute(knowledgeObjectsDependenciesRoute, maximumKnowledgeSmallRequestBytes, newSerializedListKnowledgeObjectDependenciesCodec(), handler.listKnowledgeObjectDependencies, sanitizeListKnowledgeObjectDependenciesRequest),
+		sizedPostRoute(knowledgeObjectsDependentsRoute, maximumKnowledgeSmallRequestBytes, newSerializedListKnowledgeObjectDependentsCodec(), handler.listKnowledgeObjectDependents, sanitizeListKnowledgeObjectDependentsRequest),
+		sizedPostRoute(knowledgeObjectsValidateRoute, maximumKnowledgeMutationRequestBytes, newValidateKnowledgeObjectCodec(), handler.validateKnowledgeObject, sanitizeValidateKnowledgeObjectRequest),
+		sizedPostRoute(knowledgeObjectsUpdateRoute, maximumKnowledgeMutationRequestBytes, newSerializedUpdateKnowledgeObjectCodec(), handler.updateKnowledgeObject, sanitizeUpdateKnowledgeObjectRequest),
+		sizedPostRoute(knowledgeObjectsSetStateRoute, maximumKnowledgeSmallRequestBytes, newSerializedSetKnowledgeObjectStateCodec(), handler.setKnowledgeObjectState, sanitizeSetKnowledgeObjectStateRequest),
+		sizedPostRoute(knowledgeObjectsDeleteRoute, maximumKnowledgeSmallRequestBytes, newSerializedDeleteKnowledgeObjectCodec(), handler.deleteKnowledgeObject, sanitizeDeleteKnowledgeObjectRequest),
+	)
 	if handler.knowledgePreviewConfigured() {
-		routes = append(
-			routes,
-			router.RouteConfig[*opensplunk.PreviewKnowledgeObjectRequest, *serializedPreviewKnowledgeObjectResponse]{
-				Path: knowledgeObjectsPreviewRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-				Codec: newPreviewKnowledgeObjectRequestCodec(), Handler: handler.previewKnowledgeObject,
-				SourceType: router.Body,
-				Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeMutationRequestBytes},
-				Sanitizer:  sanitizePreviewKnowledgeObjectRequest,
-			},
-		)
+		group.Route(sizedPostRoute(knowledgeObjectsPreviewRoute, maximumKnowledgeMutationRequestBytes, newPreviewKnowledgeObjectRequestCodec(), handler.previewKnowledgeObject, sanitizePreviewKnowledgeObjectRequest))
 	}
 	if _, ready := readyKnowledgeQuarantine(handler.knowledgeWriter); ready {
-		routes = append(
-			routes,
-			router.RouteConfig[*opensplunk.PrepareKnowledgeObjectQuarantineRequest, *serializedPrepareKnowledgeObjectQuarantineResponse]{
-				Path: knowledgeObjectsQuarantinePrepareRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-				Codec: newSerializedPrepareKnowledgeObjectQuarantineCodec(), Handler: handler.prepareKnowledgeObjectQuarantine,
-				SourceType: router.Body,
-				Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
-				Sanitizer:  sanitizePrepareKnowledgeObjectQuarantineRequest,
-			},
-			router.RouteConfig[*opensplunk.QuarantineKnowledgeObjectRequest, *serializedQuarantineKnowledgeObjectResponse]{
-				Path: knowledgeObjectsQuarantineRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-				Codec: newSerializedQuarantineKnowledgeObjectCodec(), Handler: handler.quarantineKnowledgeObject,
-				SourceType: router.Body,
-				Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
-				Sanitizer:  sanitizeQuarantineKnowledgeObjectRequest,
-			},
+		group.Route(
+			sizedPostRoute(knowledgeObjectsQuarantinePrepareRoute, maximumKnowledgeSmallRequestBytes, newSerializedPrepareKnowledgeObjectQuarantineCodec(), handler.prepareKnowledgeObjectQuarantine, sanitizePrepareKnowledgeObjectQuarantineRequest),
+			sizedPostRoute(knowledgeObjectsQuarantineRoute, maximumKnowledgeSmallRequestBytes, newSerializedQuarantineKnowledgeObjectCodec(), handler.quarantineKnowledgeObject, sanitizeQuarantineKnowledgeObjectRequest),
 		)
 	}
-	return routes
 }
 
 // KnowledgeAppCatalogResult is one complete, bounded snapshot of every app in

@@ -5,7 +5,7 @@
 -- sparse_fields: false subset=false
 -- chart: clickhouse.ChartOutput{RowField:"host", RowKind:0x1, RowDatabaseType:"String", RowLimit:0x2710, MaxSeries:0xc, MaxLabelBytes:0x100, ValueKind:0x1, RowSemanticBytes:false}
 -- atomic_result: false
--- execution_authority_digest: e96e528879041887ea871c08e864ae8e8b39a0d47dc33445a22736eccbc6fd94
+-- execution_authority_digest: 833be2a9a3a788cda37047f6379c1e539e602bd6192788b25236b73d51e05e99
 -- args[0]: "tenant-1"
 -- args[1]: "main"
 -- args[2]: "2026-07-21 00:00:00.000000000"

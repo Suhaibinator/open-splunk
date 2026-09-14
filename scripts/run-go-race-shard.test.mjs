@@ -341,7 +341,7 @@ test("race shard propagates the selected Go test command failure", async (t) => 
   assert.equal(catalog.code, 9);
 });
 
-test("CI declares every core and catalog shard exactly once", async () => {
+test("CI declares every core and catalog shard exactly once", async (t) => {
   const workflow = await readFile(path.join(workspace, ".github", "workflows", "ci.yml"), "utf8");
   const goTestStart = workflow.indexOf("  go-test:\n");
   const goTestEnd = workflow.indexOf("\n  knowledge-object-fuzz:\n", goTestStart);
@@ -358,17 +358,36 @@ test("CI declares every core and catalog shard exactly once", async () => {
   }
 
   const core = rows.filter((row) => row.mode === "race-core");
-  assert.equal(core.length, 4);
-  assert.deepEqual(core.map((row) => Number(row.shard_index)).toSorted(), [0, 1, 2, 3]);
-  assert.ok(core.every((row) => row.shard_count === "4"));
-  assert.ok(core.every((row) => row.job_timeout_minutes === "45"));
+  assert.equal(core.length, 8);
+  assert.deepEqual(core.map((row) => Number(row.shard_index)).toSorted(), [0, 1, 2, 3, 4, 5, 6, 7]);
+  assert.ok(core.every((row) => row.shard_count === "8"));
+  assert.ok(core.every((row) => row.job_timeout_minutes === "60"));
+  // Exercise the actual workflow coordinates, preserving whole-package race
+  // coverage and proving the expanded matrix neither skips nor repeats work.
+  const packages = Array.from({ length: 33 }, (_, index) =>
+    `example.com/open-splunk/internal/package${String(index).padStart(2, "0")}`);
+  const harness = await fakeGoHarness(t, {
+    FAKE_PACKAGES: [catalogPackage, ...packages.toReversed()].join("\n") + "\n",
+  });
+  const results = await Promise.all(core.map((row) =>
+    run(shardScript, ["core", row.shard_index, row.shard_count], harness.environment)));
+  for (const result of results) assert.equal(result.code, 0, result.stderr);
+  const commands = await readFinalCommands(harness.log);
+  assert.equal(commands.length, core.length);
+  const selected = commands.flatMap((command) => {
+    assert.deepEqual(command.slice(0, coreCommandPrefix.length), coreCommandPrefix);
+    return command.slice(coreCommandPrefix.length);
+  });
+  assert.deepEqual(selected.toSorted(), packages);
+  assert.equal(new Set(selected).size, packages.length);
+
   const catalog = rows.filter((row) => row.mode === "race-catalog");
   assert.equal(catalog.length, 4);
   assert.deepEqual(catalog.map((row) => Number(row.shard_index)).toSorted(), [0, 1, 2, 3]);
   assert.ok(catalog.every((row) => row.shard_count === "4"));
   assert.ok(catalog.every((row) => row.job_timeout_minutes === "45"));
   assert.equal(rows.filter((row) => row.mode === "coverage").length, 1);
-  assert.equal(rows.length, 9);
+  assert.equal(rows.length, 13);
   assert.match(goTestWorkflow, /strategy:\n {6}fail-fast: false/);
   assert.match(goTestWorkflow, /strategy:\n {6}fail-fast: false\n {6}max-parallel: 5/);
   assert.match(goTestWorkflow, /scripts\/run-go-race-shard\.sh core\n {10}\$\{\{ matrix\.shard_index \}\}\n {10}\$\{\{ matrix\.shard_count \}\}/);
