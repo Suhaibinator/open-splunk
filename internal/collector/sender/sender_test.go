@@ -691,8 +691,12 @@ func runSender(t *testing.T, s *Sender) (context.CancelFunc, <-chan error) {
 }
 
 func waitFor(t *testing.T, msg string, cond func() bool) {
+	waitForWithin(t, 5*time.Second, msg, cond)
+}
+
+func waitForWithin(t *testing.T, timeout time.Duration, msg string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		if cond() {
 			return
