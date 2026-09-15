@@ -3,6 +3,7 @@ package clickhouse
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net/netip"
 	"regexp"
 	"slices"
@@ -1661,7 +1662,7 @@ func compileCoalesceScalar(
 	}
 
 	textEligibleSQL, ok := coalesceTextEligibility(values)
-	if !ok {
+	if !ok && !conditionalValuesContainDynamic(values) {
 		return compiledScalar{}, &plan.Diagnostic{
 			Code: "SPL_UNSUPPORTED_COALESCE_VALUE_TYPE",
 			Message: "coalesce values carry incompatible text provenance; use matching text sources " +
@@ -1796,14 +1797,38 @@ func normalizeCoalesceValues(
 	values []compiledScalar,
 	sourceRange spl.Range,
 ) ([]compiledScalar, fieldKind, string, error) {
-	return normalizeConditionalValues(values, sourceRange, unsupportedCoalesceValueTypes)
+	return normalizeConditionalValues(values, sourceRange, true, unsupportedCoalesceValueTypes)
 }
 
 func normalizeConditionalValues(
 	values []compiledScalar,
 	sourceRange spl.Range,
+	allowDynamic bool,
 	unsupportedValueTypes func(spl.Range, compiledScalar, compiledScalar) error,
 ) ([]compiledScalar, fieldKind, string, error) {
+	if allowDynamic && conditionalValuesContainDynamic(values) {
+		var dynamicValue compiledScalar
+		for _, value := range values {
+			if !compiledScalarIsAlwaysNull(value) && value.kind == fieldKindDynamic {
+				dynamicValue = value
+				break
+			}
+		}
+		for _, value := range values {
+			if compiledScalarIsAlwaysNull(value) || value.kind == fieldKindDynamic {
+				continue
+			}
+			if !supportedDynamicConditionalFixedValue(value) {
+				return nil, fieldKindInvalid, "",
+					unsupportedValueTypes(sourceRange, value, dynamicValue)
+			}
+		}
+		normalized := make([]compiledScalar, len(values))
+		for index, value := range values {
+			normalized[index] = normalizeDynamicConditionalValue(value)
+		}
+		return normalized, fieldKindDynamic, "", nil
+	}
 	target := compiledScalar{}
 	found := false
 	for _, value := range values {
@@ -1867,6 +1892,49 @@ func normalizeConditionalValues(
 		normalized[index] = typed
 	}
 	return normalized, target.kind, target.numberType, nil
+}
+
+func conditionalValuesContainDynamic(values []compiledScalar) bool {
+	for _, value := range values {
+		if !compiledScalarIsAlwaysNull(value) && value.kind == fieldKindDynamic {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeDynamicConditionalValue(value compiledScalar) compiledScalar {
+	valueSQL := value.valueSQL
+	valueArgs := append([]any(nil), value.valueArgs...)
+	if compiledScalarIsAlwaysNull(value) {
+		if len(valueArgs) == 0 {
+			valueSQL = "CAST(NULL AS Dynamic)"
+		} else {
+			valueSQL = "CAST(" + valueSQL + " AS Dynamic)"
+		}
+	} else if value.kind != fieldKindDynamic {
+		valueSQL = "CAST(" + valueSQL + " AS Dynamic)"
+	} else if value.existsSQL != "" && value.existsSQL != "1" {
+		valueSQL = "if(" + value.existsSQL + ", " + valueSQL + ", CAST(NULL AS Dynamic))"
+		valueArgs = append(append([]any(nil), value.existsArgs...), valueArgs...)
+	}
+	return compiledScalar{
+		valueSQL:                valueSQL,
+		valueArgs:               valueArgs,
+		maxStringBytes:          value.maxStringBytes,
+		existsSQL:               "1",
+		dynamicDomain:           dynamicScalarDomainAny,
+		dynamicTypeSQL:          "dynamicType(" + valueSQL + ")",
+		kind:                    fieldKindDynamic,
+		alwaysNull:              compiledScalarIsAlwaysNull(value),
+		ieeeComparison:          value.ieeeComparison,
+		materializeForPredicate: value.materializeForPredicate,
+	}
+}
+
+func supportedDynamicConditionalFixedValue(value compiledScalar) bool {
+	return supportedCoalesceFixedType(value) &&
+		value.textEligibleSQL == "" && !value.stringOrBytes
 }
 
 func coalesceFixedTypeSQL(value compiledScalar) string {
@@ -2076,7 +2144,7 @@ func normalizeCaseValues(
 	values []compiledScalar,
 	sourceRange spl.Range,
 ) ([]compiledScalar, fieldKind, string, error) {
-	return normalizeConditionalValues(values, sourceRange, unsupportedCaseValueTypes)
+	return normalizeConditionalValues(values, sourceRange, false, unsupportedCaseValueTypes)
 }
 
 func unsupportedCaseValueTypes(
@@ -2140,7 +2208,7 @@ func compileIfScalar(expression *plan.ScalarIfExpression, state compileState) (c
 	alwaysNull := compiledScalarIsAlwaysNull(trueValue) &&
 		compiledScalarIsAlwaysNull(falseValue)
 	textEligibleSQL, ok := ifBranchTextEligibility(trueValue, falseValue)
-	if !ok {
+	if !ok && trueValue.kind != fieldKindDynamic && falseValue.kind != fieldKindDynamic {
 		return compiledScalar{}, &plan.Diagnostic{
 			Code: "SPL_UNSUPPORTED_IF_BRANCH_TYPE",
 			Message: "if branches carry incompatible text provenance; use matching text sources " +
@@ -3101,6 +3169,26 @@ func normalizeIfBranches(
 	trueValue, falseValue compiledScalar,
 	sourceRange spl.Range,
 ) (compiledScalar, compiledScalar, fieldKind, string, error) {
+	if conditionalValuesContainDynamic([]compiledScalar{trueValue, falseValue}) {
+		dynamicValue := trueValue
+		if dynamicValue.kind != fieldKindDynamic {
+			dynamicValue = falseValue
+		}
+		for _, value := range []compiledScalar{trueValue, falseValue} {
+			if compiledScalarIsAlwaysNull(value) || value.kind == fieldKindDynamic {
+				continue
+			}
+			if !supportedDynamicConditionalFixedValue(value) {
+				return compiledScalar{}, compiledScalar{}, fieldKindInvalid, "",
+					unsupportedIfBranchTypes(sourceRange, value, dynamicValue)
+			}
+		}
+		return normalizeDynamicConditionalValue(trueValue),
+			normalizeDynamicConditionalValue(falseValue),
+			fieldKindDynamic,
+			"",
+			nil
+	}
 	trueNull := compiledScalarIsAlwaysNull(trueValue)
 	falseNull := compiledScalarIsAlwaysNull(falseValue)
 	if trueNull && falseNull {
@@ -5069,6 +5157,17 @@ func compileToNumberScalar(expression *plan.ScalarCallExpression, state compileS
 	if scalarExpressionMayReturnBooleanFunction(expression.Arguments[0]) {
 		return compiledScalar{}, booleanScalarConsumerError("tonumber")
 	}
+	if literal, ok := scalarStringLiteral(expression.Arguments[0]); ok {
+		parsed, parseErr := strconv.ParseFloat(literal, 64)
+		if !toNumberDecimalLiteralPattern.MatchString(literal) ||
+			parseErr != nil || math.IsInf(parsed, 0) || math.IsNaN(parsed) {
+			return compiledScalar{}, &plan.Diagnostic{
+				Code:    "SPL_INVALID_TONUMBER_LITERAL",
+				Message: "tonumber string literal is not a finite number",
+				Range:   expression.Range,
+			}
+		}
+	}
 	input, err := compileScalarValue(expression.Arguments[0], state)
 	if err != nil {
 		return compiledScalar{}, err
@@ -5086,6 +5185,10 @@ func compileToNumberScalar(expression *plan.ScalarCallExpression, state compileS
 		materializeForPredicate: input.materializeForPredicate,
 	}, nil
 }
+
+var toNumberDecimalLiteralPattern = regexp.MustCompile(
+	`^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$`,
+)
 
 func compiledStringScalar(value compiledScalar) (string, []any) {
 	if value.kind == fieldKindDynamic {

@@ -167,14 +167,6 @@ func TestCompileEvalCoalesceRejectsUnstableValueTypes(t *testing.T) {
 		source string
 	}{
 		{
-			name:   "Dynamic",
-			source: `index=gradethis | eval value=coalesce(first, second)`,
-		},
-		{
-			name:   "Dynamic and fixed String",
-			source: `index=gradethis | eval value=coalesce(first, "fallback")`,
-		},
-		{
 			name:   "fixed multivalue",
 			source: `index=gradethis | stats values(user) AS users | eval value=coalesce(users, users)`,
 		},
@@ -191,12 +183,20 @@ func TestCompileEvalCoalesceRejectsUnstableValueTypes(t *testing.T) {
 			source: `index=gradethis | eval value=coalesce(1, 18446744073709551615)`,
 		},
 		{
-			name:   "null plus Dynamic",
-			source: `index=gradethis | eval value=coalesce(null, first)`,
-		},
-		{
 			name:   "incompatible raw text provenance",
 			source: `index=gradethis | eval value=coalesce(_raw, "{}")`,
+		},
+		{
+			name:   "raw text provenance and Dynamic",
+			source: `index=gradethis | eval value=coalesce(absent, _raw)`,
+		},
+		{
+			name:   "time and Dynamic",
+			source: `index=gradethis | eval value=coalesce(absent, _time)`,
+		},
+		{
+			name:   "fixed multivalue and Dynamic",
+			source: `index=gradethis | eval values=split("a,b", ","), value=coalesce(absent, values)`,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -222,6 +222,26 @@ func TestCompileEvalCoalesceRejectsUnstableValueTypes(t *testing.T) {
 		})
 	}
 
+}
+
+func TestCompileEvalCoalesceSupportsOrdinaryDynamicFields(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`index=gradethis | eval ip=coalesce(clientip, ipaddress) | table ip`,
+		`index=gradethis | eval ip=coalesce(clientip, "fallback") | table ip`,
+		`index=gradethis | eval ip=coalesce(null, clientip) | table ip`,
+	} {
+		compiled := compileSPL(t, source)
+		for _, required := range []string{"coalesce(", " AS Dynamic)", `AS "ip"`} {
+			if !strings.Contains(compiled.SQL, required) {
+				t.Fatalf("%q SQL missing %q:\n%s", source, required, compiled.SQL)
+			}
+		}
+		if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+			t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
+		}
+	}
 }
 
 func TestCompileEvalCoalesceRetainsCalculatedFieldMaterialization(t *testing.T) {

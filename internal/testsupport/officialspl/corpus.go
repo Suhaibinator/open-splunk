@@ -39,18 +39,24 @@ type Case struct {
 }
 
 type Source struct {
-	URL        string `json:"url"`
-	Release    string `json:"release"`
-	Section    string `json:"section"`
-	Kind       string `json:"kind"`
-	Fragment   string `json:"fragment"`
-	VerifiedOn string `json:"verified_on"`
+	URL      string `json:"url"`
+	Release  string `json:"release"`
+	Section  string `json:"section"`
+	Kind     string `json:"kind"`
+	Fragment string `json:"fragment"`
+	// ReviewedEvidence records source text from the named documentation section.
+	// Fragment and Query separately record the derived conformance input.
+	ReviewedEvidence string `json:"reviewed_evidence"`
+	VerifiedOn       string `json:"verified_on"`
 }
 
 type Expectation struct {
-	Commands []string           `json:"commands"`
-	Sort     *SortExpectation   `json:"sort,omitempty"`
-	Fields   *FieldsExpectation `json:"fields,omitempty"`
+	Support        string             `json:"support"`
+	Reason         string             `json:"reason,omitempty"`
+	DiagnosticCode string             `json:"diagnostic_code,omitempty"`
+	Commands       []string           `json:"commands"`
+	Sort           *SortExpectation   `json:"sort,omitempty"`
+	Fields         *FieldsExpectation `json:"fields,omitempty"`
 	// Facets records the documented option surface of the final command as
 	// canonical text, keyed by the facet names AllowedFacets grants that
 	// command. A value of "" asserts that the optional facet is absent.
@@ -209,9 +215,13 @@ func validateSource(path, command string, source Source) error {
 		return fmt.Errorf("%s has invalid release %q", path, source.Release)
 	}
 	wantPath := "/spl-search-reference/" + source.Release + "/search-commands/" + command
-	if !strings.HasSuffix(strings.TrimSuffix(parsed.Path, "/"), wantPath) ||
+	conversionPath := "/spl-search-reference/" + source.Release + "/evaluation-functions/conversion-functions"
+	sourcePath := strings.TrimSuffix(parsed.Path, "/")
+	pathMatches := strings.HasSuffix(sourcePath, wantPath) ||
+		(command == "eval" && strings.HasSuffix(sourcePath, conversionPath))
+	if !pathMatches ||
 		parsed.RawQuery != "" || parsed.Fragment != "" {
-		return fmt.Errorf("%s.url path must end with %q and have no query or fragment", path, wantPath)
+		return fmt.Errorf("%s.url path must identify the pinned %s reference and have no query or fragment", path, command)
 	}
 	if strings.TrimSpace(source.Section) != source.Section || source.Section == "" {
 		return fmt.Errorf("%s has invalid section", path)
@@ -222,6 +232,12 @@ func validateSource(path, command string, source Source) error {
 	if strings.TrimSpace(source.Fragment) != source.Fragment || source.Fragment == "" {
 		return fmt.Errorf("%s has invalid fragment", path)
 	}
+	if strings.TrimSpace(source.ReviewedEvidence) != source.ReviewedEvidence || source.ReviewedEvidence == "" {
+		return fmt.Errorf("%s has invalid reviewed_evidence", path)
+	}
+	if source.Kind == "grammar-derived" && source.ReviewedEvidence == source.Fragment {
+		return fmt.Errorf("%s.reviewed_evidence copies the derived fragment instead of recording source text", path)
+	}
 	verified, err := time.Parse(time.DateOnly, source.VerifiedOn)
 	if err != nil || verified.After(time.Now().UTC().Add(24*time.Hour)) {
 		return fmt.Errorf("%s has invalid verified_on %q", path, source.VerifiedOn)
@@ -230,6 +246,21 @@ func validateSource(path, command string, source Source) error {
 }
 
 func validateDetailedExpectation(path string, testCase Case) error {
+	switch testCase.Expect.Support {
+	case "executable":
+		if testCase.Expect.Reason != "" || testCase.Expect.DiagnosticCode != "" {
+			return fmt.Errorf("%s reason and diagnostic_code are only valid for known-unsupported cases", path)
+		}
+	case "known-unsupported":
+		if strings.TrimSpace(testCase.Expect.Reason) == "" {
+			return fmt.Errorf("%s known-unsupported case requires a reason", path)
+		}
+		if !strings.HasPrefix(testCase.Expect.DiagnosticCode, "SPL_") {
+			return fmt.Errorf("%s known-unsupported case requires an SPL_ diagnostic_code", path)
+		}
+	default:
+		return fmt.Errorf("%s has invalid support %q", path, testCase.Expect.Support)
+	}
 	if testCase.Expect.Sort != nil {
 		if testCase.Command != "sort" {
 			return fmt.Errorf("%s.sort is only valid for sort cases", path)

@@ -25,6 +25,9 @@ func TestOfficialSPLCompatibilityCorpus(t *testing.T) {
 
 	corpus := loadOfficialSPLCorpus(t)
 	for _, testCase := range corpus.Cases {
+		if testCase.Expect.Support == "known-unsupported" {
+			continue
+		}
 		t.Run(testCase.ID, func(t *testing.T) {
 			t.Parallel()
 			query, err := spl.Parse(testCase.Query)
@@ -62,13 +65,18 @@ func TestDocumentedCommandSurfaceHasOfficialSPLCases(t *testing.T) {
 	}
 	documented := documentedCommands(t, contractPath)
 	coveredSet := make(map[string]struct{}, len(corpus.Cases))
-	facetedSet := make(map[string]struct{}, len(corpus.Cases))
+	coveredFacets := make(map[string]map[string]struct{}, len(corpus.Cases))
 	caseIDs := make(map[string]struct{}, len(corpus.Cases))
 	for _, testCase := range corpus.Cases {
-		coveredSet[testCase.Command] = struct{}{}
+		if testCase.Expect.Support == "executable" {
+			coveredSet[testCase.Command] = struct{}{}
+		}
 		caseIDs[testCase.ID] = struct{}{}
-		if len(testCase.Expect.Facets) != 0 {
-			facetedSet[testCase.Command] = struct{}{}
+		if coveredFacets[testCase.Command] == nil {
+			coveredFacets[testCase.Command] = make(map[string]struct{})
+		}
+		for facet := range testCase.Expect.Facets {
+			coveredFacets[testCase.Command][facet] = struct{}{}
 		}
 		if testCase.Command == "sort" && testCase.Expect.Sort == nil {
 			t.Errorf("official sort case %q lacks detailed AST expectations", testCase.ID)
@@ -86,23 +94,30 @@ func TestDocumentedCommandSurfaceHasOfficialSPLCases(t *testing.T) {
 		t.Fatalf("documented commands lack source-backed official SPL cases: %v", missing)
 	}
 	for _, command := range covered {
-		if _, faceted := facetedSet[command]; faceted || len(officialspl.AllowedFacets[command]) == 0 {
-			continue
+		for _, facet := range officialspl.AllowedFacets[command] {
+			if _, exists := coveredFacets[command][facet]; !exists {
+				t.Errorf("no official %s case pins documented facet %q", command, facet)
+			}
 		}
-		t.Errorf("no official %s case pins its documented facets %v", command, officialspl.AllowedFacets[command])
 	}
 	for _, required := range []string{
 		"bin.span-day",
+		"bin.span-minute-alias",
 		"fields.exclude-list",
 		"fields.explicit-wildcard-include",
 		"fields.internal-wildcard-exclude",
 		"fields.wildcard-include",
+		"search.base-membership",
+		"search.pipeline-membership",
+		"search.wildcard-membership",
+		"search.negated-membership",
 		"sort.bounded-spaced-ascending-time",
 		"sort.labeled-count",
 		"sort.spaced-ascending-time",
 		"sort.spaced-descending-field",
 		"sort.terminal-descending",
 		"sort.typed-multiple-fields",
+		"table.wildcard-known-unsupported",
 		"timechart.span-day",
 	} {
 		if _, exists := caseIDs[required]; !exists {

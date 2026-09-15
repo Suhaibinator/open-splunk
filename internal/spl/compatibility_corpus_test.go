@@ -334,7 +334,7 @@ func requireExpressionCorpusCoverage(t *testing.T, corpus compatibilityCorpus) {
 
 	requiredCases := map[string][]string{
 		"SPL-PROFILE-001":                {"authored arithmetic", "knowledge arithmetic remains closed", "production vertical", "downstream composition"},
-		"SPL-GRAMMAR-001":                {"eval", "where", "if", "case", "conditional count", "base search membership excluded"},
+		"SPL-GRAMMAR-001":                {"eval", "where", "if", "case", "conditional count", "base search membership"},
 		"SPL-PRECEDENCE-001":             {"multiplication before addition", "division associates left", "unary associates right", "arithmetic before concatenation prefix"},
 		"SPL-GROUPING-001":               {"scalar group", "Boolean group", "grouped scalar is not predicate", "grouped Boolean is not scalar"},
 		"SPL-LEXER-001":                  {"unspaced division", "signed exponent", "hyphenated base value preserved", "ambiguous legacy spelling is subtraction"},

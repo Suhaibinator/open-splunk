@@ -34,14 +34,32 @@ func testNullPredicatesAgainstClickHouse(
 		return event
 	}
 	events := []*ingest.StoredEvent{
-		newEvent("null-missing"),
-		newEvent("null-explicit", typedField("probe", typedNull())),
+		newEvent("null-missing", typedField("test", typedString("Passed"))),
+		newEvent(
+			"null-explicit",
+			typedField("probe", typedNull()),
+			typedField("clientip", typedNull()),
+			typedField("ipaddress", typedString("secondary")),
+			typedField("test", typedString("Passed")),
+			typedField("score", typedNull()),
+		),
 		newEvent(
 			"null-empty-text",
 			typedField("probe", typedString("")),
 			typedField("fixed_candidate", typedString("present")),
+			typedField("clientip", typedString("")),
+			typedField("ipaddress", typedString("secondary")),
+			typedField("test", typedString("Passed")),
+			typedField("score", typedSint(7)),
 		),
-		newEvent("null-zero", typedField("probe", typedSint(0))),
+		newEvent(
+			"null-zero",
+			typedField("probe", typedSint(0)),
+			typedField("clientip", typedString("primary")),
+			typedField("ipaddress", typedString("secondary")),
+			typedField("test", typedString("Failed")),
+			typedField("score", typedSint(8)),
+		),
 		newEvent("null-false", typedField("probe", typedBool(false))),
 		newEvent("null-empty-list", typedField("probe", typedList())),
 		newEvent("null-list-null", typedField("probe", typedList(typedNull()))),
@@ -153,7 +171,7 @@ func testNullPredicatesAgainstClickHouse(
 	)
 	assertEventIDs(
 		"nullable scalar result",
-		queryEventIDs(base+` | eval bad=tonumber("bad") | where isnull(bad)`),
+		queryEventIDs(base+` | eval bad=tonumber(absent) | where isnull(bad)`),
 		allIDs,
 	)
 

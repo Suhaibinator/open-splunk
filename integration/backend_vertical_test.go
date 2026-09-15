@@ -809,6 +809,7 @@ func assertBrowserVisibleResults(
 	t.Helper()
 	runBrowserVerticalSpec(t, ctx, repository, browserVerticalSpecConfig{
 		grepPattern: "collector event is visible through the compiled backend UI|" +
+			"real backend zero-result search renders the empty state|" +
 			"backend diagnostics remain authoritative and prevent browser dispatch|" +
 			"history Run again delegates persisted intent with source-only rerun provenance|" +
 			"failed search terminal rejects without waiting for results",
@@ -3622,6 +3623,37 @@ func assertBackendHistoryRerun(
 		t.Fatalf("history-rerun source result = %q", got)
 	}
 
+	// Official where semantics must reach the real API, including a successful
+	// empty relation (not merely a mocked validation response).
+	for _, check := range []struct {
+		name  string
+		value string
+		want  uint64
+	}{
+		{"matching predicate", baselineMarker, 1},
+		{"empty predicate result", baselineMarker + "-absent", 0},
+	} {
+		t.Run(check.name, func(t *testing.T) {
+			definition := proto.Clone(original.GetDefinition()).(*opensplunk.SearchDefinition)
+			definition.Spl += ` | where message=` + strconv.Quote(check.value)
+			var filtered opensplunk.CreateSearchJobResponse
+			postProto(t, ctx, client, baseURL+"/api/search/jobs/create",
+				&opensplunk.CreateSearchJobRequest{Definition: definition}, &filtered)
+			id := filtered.GetSearchJob().GetSearchJobId()
+			job := waitForCompletedSearch(t, ctx, client, baseURL, id, 30*time.Second)
+			if job.GetProgress().GetProducedRows() != check.want {
+				t.Fatalf("filtered produced rows = %d, want %d", job.GetProgress().GetProducedRows(), check.want)
+			}
+			results := fetchAllCompletedSearchResults(t, ctx, client, baseURL, id, check.want, 1)
+			if len(results.schema.GetColumns()) != 1 || results.schema.GetColumns()[0].GetFieldName() != "message" {
+				t.Fatalf("filtered schema = %+v", results.schema)
+			}
+			if check.want == 1 && resultStringCell(t, results, 0) != baselineMarker {
+				t.Fatalf("filtered row = %+v", results.rows)
+			}
+		})
+	}
+
 	originalLatest := original.GetResolvedTimeRange().GetLatest()
 	originalIndexTimeCutoff := original.GetIndexTimeCutoff()
 	if originalLatest == nil || originalIndexTimeCutoff == nil {
@@ -3892,10 +3924,10 @@ func fetchAllCompletedSearchResults(
 	pageSize uint32,
 ) *collectedVerticalSearchResults {
 	t.Helper()
-	if expectedRows == 0 || pageSize == 0 {
-		t.Fatalf("completed result paging requires positive rows/page size, got %d/%d", expectedRows, pageSize)
+	if pageSize == 0 {
+		t.Fatalf("completed result paging requires positive page size, got %d", pageSize)
 	}
-	expectedPages := (expectedRows + uint64(pageSize) - 1) / uint64(pageSize)
+	expectedPages := max(uint64(1), (expectedRows+uint64(pageSize)-1)/uint64(pageSize))
 	var (
 		schema     *opensplunk.ResultSchema
 		rows       []*opensplunk.ResultRow
@@ -3926,7 +3958,7 @@ func fetchAllCompletedSearchResults(
 		}
 		if !page.GetSnapshotComplete() ||
 			!page.GetPage().GetTotalSizeExact() || page.GetPage().GetTotalSize() != expectedRows ||
-			len(page.GetRows()) == 0 || len(page.GetRows()) > int(pageSize) {
+			(expectedRows > 0 && len(page.GetRows()) == 0) || len(page.GetRows()) > int(pageSize) {
 			t.Fatalf("search result page %d metadata = %+v", pageCount, page)
 		}
 		if schema == nil {

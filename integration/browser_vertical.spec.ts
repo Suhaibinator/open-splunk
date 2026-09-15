@@ -208,6 +208,26 @@ test.use({
   trace: "retain-on-failure",
 });
 
+test("real backend zero-result search renders the empty state", async ({ page }) => {
+  const runSearch = await openSearchWorkspace(page);
+  await page.getByTestId("search-input").fill(`${searchSPL} | where 1=0`);
+  const { createResponsePromise, resultsResponsePromise } = waitForSearchResponses(page);
+  await runSearch.click();
+  const createResponse = await createResponsePromise;
+  assertProtobufResponse(createResponse);
+  const jobID = decodeCreateSearchJobID(await createResponse.body());
+  const resultsResponse = await resultsResponsePromise;
+  assertProtobufResponse(resultsResponse);
+  const result = GetSearchResultsResponse.decode(await resultsResponse.body());
+  expect(result.searchJobId).toBe(jobID);
+  expect(result.resultPage?.snapshotComplete).toBe(true);
+  expect(result.resultPage?.rows).toEqual([]);
+  expect(result.resultPage?.schema?.columns.length).toBeGreaterThan(0);
+  await expect(page.getByTestId("job-strip")).toContainText("Completed", { timeout });
+  await expect(page.getByText("No events found", { exact: true })).toBeVisible({ timeout });
+  await expect(page.getByTestId("event-list").locator('[data-testid^="event-row-"]')).toHaveCount(0);
+});
+
 test("collector event is visible through the compiled backend UI", async ({ page }) => {
   test.setTimeout(60_000);
   await page.setViewportSize({ width: 1_280, height: 800 });

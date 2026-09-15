@@ -147,6 +147,52 @@ func testIfAgainstClickHouse(
 		t.Fatalf("synthetic missing numeric if event IDs = %#v, want %#v", got, nullIDs)
 	}
 
+	dynamic := compile(
+		base + ` event_id IN ("null-missing", "null-explicit", "null-empty-text", "null-zero")` +
+			` | eval selected=if(test="Passed", score, 0), rendered=tostring(selected), kind=typeof(selected), missing=if(isnull(selected), "true", "false")` +
+			` | table event_id, rendered, kind, missing`,
+	)
+	rows, queryErr := connection.Query(queryContext, dynamic.SQL, dynamic.Args...)
+	if queryErr != nil {
+		t.Fatalf("execute Dynamic if: %v\nSQL: %s\nargs: %#v", queryErr, dynamic.SQL, dynamic.Args)
+	}
+	type dynamicResult struct {
+		value   *string
+		kind    string
+		missing bool
+	}
+	gotDynamic := make(map[string]dynamicResult)
+	for rows.Next() {
+		var eventID, kind string
+		var value *string
+		var missingText string
+		if scanErr := rows.Scan(&eventID, &value, &kind, &missingText); scanErr != nil {
+			t.Fatalf("scan Dynamic if: %v", scanErr)
+		}
+		gotDynamic[eventID] = dynamicResult{value: value, kind: kind, missing: missingText == "true"}
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		_ = rows.Close()
+		t.Fatalf("iterate Dynamic if: %v", rowsErr)
+	}
+	if closeErr := rows.Close(); closeErr != nil {
+		t.Fatalf("close Dynamic if rows: %v", closeErr)
+	}
+	text := func(value string) *string { return &value }
+	wantDynamic := map[string]dynamicResult{
+		"null-missing":    {value: nil, kind: "Invalid", missing: true},
+		"null-explicit":   {value: nil, kind: "Invalid", missing: true},
+		"null-empty-text": {value: text("7"), kind: "Number", missing: false},
+		"null-zero":       {value: text("0"), kind: "Number", missing: false},
+	}
+	if !maps.EqualFunc(gotDynamic, wantDynamic, func(left, right dynamicResult) bool {
+		return left.kind == right.kind && left.missing == right.missing &&
+			((left.value == nil && right.value == nil) ||
+				(left.value != nil && right.value != nil && *left.value == *right.value))
+	}) {
+		t.Fatalf("Dynamic if = %#v, want %#v", gotDynamic, wantDynamic)
+	}
+
 	projected := queryLabels(base + ` | fields event_id | eval label=if(isnull(probe), "missing", "present")`)
 	for eventID, label := range projected {
 		if label != "missing" {

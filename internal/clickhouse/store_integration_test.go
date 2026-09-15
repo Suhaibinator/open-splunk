@@ -1582,8 +1582,8 @@ func testCompiledQueriesAgainstClickHouse(
 		`index=compiler | where dynamic_flag>other_flag`:                                0,
 		`index=compiler | where dynamic_flag=true`:                                      1,
 		`index=compiler | where dynamic_flag!=other_flag`:                               1,
-		`index=compiler event_id=n-one | eval x=tonumber("bad") | search x=null`:        1,
-		`index=compiler event_id=n-one | eval x=tonumber("bad") | search x=*`:           0,
+		`index=compiler event_id=n-one | eval x=tonumber(absent) | search x=null`:       1,
+		`index=compiler event_id=n-one | eval x=tonumber(absent) | search x=*`:          0,
 		`index=compiler | stats p95(absent) AS p | search p=null`:                       1,
 		`index=compiler | stats p95(absent) AS p | search p=*`:                          0,
 	} {
@@ -2644,7 +2644,7 @@ func testNumericBinAgainstClickHouse(
 		scalars := compileIntegrationSPL(
 			t,
 			`index=compiler event_id=n-one
-| eval signed=-11,unsigned=18446744073709551615,latency=-11.5,nullable=tonumber("bad")
+| eval signed=-11,unsigned=18446744073709551615,latency=-11.5,nullable=tonumber(absent)
 | bin signed span=10 AS signed_band
 | bin unsigned span=7 AS unsigned_band
 | bin latency span=4 AS latency_band

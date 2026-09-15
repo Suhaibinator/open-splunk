@@ -2,6 +2,90 @@
   "format_version": 1,
   "cases": [
     {
+      "id": "search.base-membership",
+      "command": "search",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/spl-search-reference/9.1/search-commands/search",
+        "release": "9.1",
+        "section": "Logical expression options and Boolean expressions",
+        "kind": "grammar-derived",
+        "fragment": "status IN (400, 402, 404, 500)",
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "Used with the IN operator to filter events by specifying two or more values."
+      },
+      "query": "index=main status IN (400, 402, 404, 500) | search *",
+      "expect": {
+        "support": "executable",
+        "commands": ["search"],
+        "facets": {
+          "filter": "*"
+        }
+      }
+    },
+    {
+      "id": "search.pipeline-membership",
+      "command": "search",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/spl-search-reference/9.1/search-commands/search",
+        "release": "9.1",
+        "section": "Logical expression options and Boolean expressions",
+        "kind": "grammar-derived",
+        "fragment": "status IN (400, 402, 404, 500)",
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "Used with the IN operator to filter events by specifying two or more values."
+      },
+      "query": "index=main | search status IN (400, 402, 404, 500)",
+      "expect": {
+        "support": "executable",
+        "commands": ["search"],
+        "facets": {
+          "filter": "status IN (400, 402, 404, 500)"
+        }
+      }
+    },
+    {
+      "id": "search.wildcard-membership",
+      "command": "search",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/spl-search-reference/9.1/search-commands/search",
+        "release": "9.1",
+        "section": "Logical expression options and Boolean expressions",
+        "kind": "grammar-derived",
+        "fragment": "status IN (40*)",
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "You can also use a wildcard character ( * ) to specify values that are similar."
+      },
+      "query": "index=main | search status IN (40*)",
+      "expect": {
+        "support": "executable",
+        "commands": ["search"],
+        "facets": {
+          "filter": "status IN (40*)"
+        }
+      }
+    },
+    {
+      "id": "search.negated-membership",
+      "command": "search",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/spl-search-reference/9.1/search-commands/search",
+        "release": "9.1",
+        "section": "Logical expression options and Boolean expressions",
+        "kind": "grammar-derived",
+        "fragment": "NOT status IN (400, 500)",
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "You can use the NOT operator with the IN operator."
+      },
+      "query": "index=main | search NOT status IN (400, 500)",
+      "expect": {
+        "support": "executable",
+        "commands": ["search"],
+        "facets": {
+          "filter": "NOT status IN (400, 500)"
+        }
+      }
+    },
+    {
       "id": "search.pipeline-filter",
       "command": "search",
       "source": {
@@ -10,10 +94,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "search status=200",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "search <logical-expression>"
       },
       "query": "index=main | search status=200",
       "expect": {
+        "support": "executable",
         "commands": ["search"],
         "facets": {
           "filter": "status=200"
@@ -29,10 +115,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "where status=200",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "where <eval-expression>"
       },
       "query": "index=main | where status=200",
       "expect": {
+        "support": "executable",
         "commands": ["where"],
         "facets": {
           "predicate": "status=200"
@@ -48,10 +136,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "eval total=price*quantity",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "eval <field>=<expression>[\",\" <field>=<expression>]..."
       },
       "query": "index=main | eval total=price*quantity",
       "expect": {
+        "support": "executable",
         "commands": ["eval"],
         "facets": {
           "expressions": "price*quantity",
@@ -68,10 +158,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "rex field=_raw \"(?<code>[0-9]+)\"",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "rex [field=<field>] ( <regex-expression> [max_match=<int>] [offset_field=<string>] )"
       },
       "query": "index=main | rex field=_raw \"(?<code>[0-9]+)\"",
       "expect": {
+        "support": "executable",
         "commands": ["rex"],
         "facets": {
           "field": "_raw",
@@ -89,10 +181,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "spath input=_raw output=user path=user.name",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "spath [input=<field>] [output=<field>] [path=<datapath> | <datapath>]"
       },
       "query": "index=main | spath input=_raw output=user path=user.name",
       "expect": {
+        "support": "executable",
         "commands": ["spath"],
         "facets": {
           "input": "_raw",
@@ -110,10 +204,12 @@
         "section": "Examples > Example 1",
         "kind": "official-example",
         "fragment": "fields - host, ip",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "Remove the host and ip fields from the results"
       },
       "query": "index=main | fields - host, ip",
       "expect": {
+        "support": "executable",
         "commands": ["fields"],
         "fields": {
           "exclude": true,
@@ -136,10 +232,12 @@
         "section": "Examples > Example 4",
         "kind": "official-example",
         "fragment": "fields source, sourcetype, host, error*",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "Keep only the fields source, sourcetype, host, and all fields beginning with error."
       },
       "query": "index=main | fields source, sourcetype, host, error*",
       "expect": {
+        "support": "executable",
         "commands": ["fields"],
         "fields": {
           "exclude": false,
@@ -162,10 +260,12 @@
         "section": "Usage > Internal fields and Splunk Web",
         "kind": "official-example",
         "fragment": "fields - _*",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "The leading underscore is reserved for names of internal fields such as _raw and _time."
       },
       "query": "index=main | fields - _*",
       "expect": {
+        "support": "executable",
         "commands": ["fields"],
         "fields": {
           "exclude": true,
@@ -188,10 +288,12 @@
         "section": "Syntax; Required arguments > wc-field-list",
         "kind": "grammar-derived",
         "fragment": "fields + event_id, status*",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "fields [+|-] <wc-field-list>"
       },
       "query": "index=main | fields + event_id, status*",
       "expect": {
+        "support": "executable",
         "commands": ["fields"],
         "fields": {
           "exclude": false,
@@ -214,10 +316,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "table host source sourcetype",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "table <wc-field-list>"
       },
       "query": "index=main | table host source sourcetype",
       "expect": {
+        "support": "executable",
         "commands": ["table"],
         "facets": {
           "fields": "host, source, sourcetype"
@@ -233,10 +337,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "rename host AS origin",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "rename <wc-field> AS <wc-field>..."
       },
       "query": "index=main | rename host AS origin",
       "expect": {
+        "support": "executable",
         "commands": ["rename"],
         "facets": {
           "assignments": "host AS origin"
@@ -252,10 +358,12 @@
         "section": "Required arguments > sort-by-clause",
         "kind": "grammar-derived",
         "fragment": "sort 0 + _time",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "sort-by-clause Syntax: [ - | + ] <sort-field>, ( - | + ) <sort-field> ..."
       },
       "query": "index=main | sort 0 + _time",
       "expect": {
+        "support": "executable",
         "commands": ["sort"],
         "sort": {
           "limit": 0,
@@ -286,10 +394,12 @@
         "section": "Basic examples > 4. Changing the time format of events for sorting",
         "kind": "official-example",
         "fragment": "sort - Time",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "Change the format of the event's time and sort the results in descending order by the Time field that is created with the eval command."
       },
       "query": "index=main | sort - Time",
       "expect": {
+        "support": "executable",
         "commands": ["sort"],
         "sort": {
           "limit": 0,
@@ -320,10 +430,12 @@
         "section": "Required arguments > sort-by-clause; Optional arguments > count",
         "kind": "grammar-derived",
         "fragment": "sort 10 + _time",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "count Syntax: <int> | limit=<int>; sort-by-clause Syntax: [ - | + ] <sort-field>, ( - | + ) <sort-field> ..."
       },
       "query": "index=main | sort 10 + _time",
       "expect": {
+        "support": "executable",
         "commands": ["sort"],
         "sort": {
           "limit": 10,
@@ -354,10 +466,12 @@
         "section": "Basic examples > 2. Specifying the number of results to sort",
         "kind": "official-example",
         "fragment": "sort 100 -num(size), +str(source)",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "Sort first 100 results in descending order of the size field and then by the source value in ascending order."
       },
       "query": "index=main | sort 100 -num(size), +str(source)",
       "expect": {
+        "support": "executable",
         "commands": ["sort"],
         "sort": {
           "limit": 100,
@@ -396,10 +510,12 @@
         "section": "Basic examples > 6. Use a label with the count",
         "kind": "official-example",
         "fragment": "sort limit=12 host",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "You can use a label to identify the number of results to return."
       },
       "query": "index=main | sort limit=12 host",
       "expect": {
+        "support": "executable",
         "commands": ["sort"],
         "sort": {
           "limit": 12,
@@ -430,10 +546,12 @@
         "section": "Optional arguments > desc",
         "kind": "grammar-derived",
         "fragment": "sort host, source desc",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "desc Syntax: d | desc"
       },
       "query": "index=main | sort host, source desc",
       "expect": {
+        "support": "executable",
         "commands": ["sort"],
         "sort": {
           "limit": 0,
@@ -472,10 +590,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "dedup source",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "dedup [<int>] <field-list> [keepevents=<bool>] [keepempty=<bool>] [consecutive=<bool>] [sortby <sort-by-clause>]"
       },
       "query": "index=main | dedup source",
       "expect": {
+        "support": "executable",
         "commands": ["dedup"],
         "facets": {
           "count": "1",
@@ -492,10 +612,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "dedup 3 source sortby -_size",
-        "verified_on": "2026-09-01"
+        "verified_on": "2026-09-01",
+        "reviewed_evidence": "dedup [<int>] <field-list> [keepevents=<bool>] [keepempty=<bool>] [consecutive=<bool>] [sortby <sort-by-clause>]"
       },
       "query": "index=main | dedup 3 source sortby -_size",
       "expect": {
+        "support": "executable",
         "commands": ["dedup"],
         "facets": {
           "consecutive": "false",
@@ -514,10 +636,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "dedup host consecutive=true",
-        "verified_on": "2026-09-01"
+        "verified_on": "2026-09-01",
+        "reviewed_evidence": "dedup [<int>] <field-list> [keepevents=<bool>] [keepempty=<bool>] [consecutive=<bool>] [sortby <sort-by-clause>]"
       },
       "query": "index=main | dedup host consecutive=true",
       "expect": {
+        "support": "executable",
         "commands": ["dedup"],
         "facets": {
           "consecutive": "true",
@@ -536,10 +660,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "head 20",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "head [<N> | (<eval-expression>)] [limit=<int>] [null=<bool>] [keeplast=<bool>]"
       },
       "query": "index=main | head 20",
       "expect": {
+        "support": "executable",
         "commands": ["head"],
         "facets": {
           "count": "20"
@@ -555,10 +681,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "head limit=20",
-        "verified_on": "2026-09-01"
+        "verified_on": "2026-09-01",
+        "reviewed_evidence": "head [<N> | (<eval-expression>)] [limit=<int>] [null=<bool>] [keeplast=<bool>]"
       },
       "query": "index=main | head limit=20",
       "expect": {
+        "support": "executable",
         "commands": ["head"],
         "facets": {
           "count": "20"
@@ -574,10 +702,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "tail 20",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "tail [<N>]"
       },
       "query": "index=main | tail 20",
       "expect": {
+        "support": "executable",
         "commands": ["tail"],
         "facets": {
           "count": "20"
@@ -593,10 +723,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "stats count BY host",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "| stats [partitions=<num>] [allnum=<bool>] [delim=<string>] ( <stats-agg-term>... | <sparkline-agg-term>... ) [<by-clause>]"
       },
       "query": "index=main | stats count BY host",
       "expect": {
+        "support": "executable",
         "commands": ["stats"],
         "facets": {
           "aggregates": "count",
@@ -613,10 +745,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "eventstats avg(duration) AS average BY host",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "eventstats [allnum=<bool>] <stats-agg-term> ... [<by-clause>]"
       },
       "query": "index=main | eventstats avg(duration) AS average BY host",
       "expect": {
+        "support": "executable",
         "commands": ["eventstats"],
         "facets": {
           "aggregate": "avg(duration) AS average",
@@ -633,10 +767,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "streamstats count AS current_count BY host",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "streamstats [current=<bool>] [window=<int>] [global=<bool>] <stats-agg-term>... [<by-clause>]"
       },
       "query": "index=main | streamstats count AS current_count BY host",
       "expect": {
+        "support": "executable",
         "commands": ["streamstats"],
         "facets": {
           "aggregate": "count AS current_count",
@@ -656,10 +792,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "top host",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "top [<N>] [<top-options>...] <field-list> [<by-clause>]"
       },
       "query": "index=main | top host",
       "expect": {
+        "support": "executable",
         "commands": ["top"],
         "facets": {
           "fields": "host",
@@ -676,10 +814,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "top limit=3 host BY source",
-        "verified_on": "2026-09-01"
+        "verified_on": "2026-09-01",
+        "reviewed_evidence": "top [<N>] [<top-options>...] <field-list> [<by-clause>]"
       },
       "query": "index=main | top limit=3 host BY source",
       "expect": {
+        "support": "executable",
         "commands": ["top"],
         "facets": {
           "by": "source",
@@ -701,10 +841,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "top countfield=total showperc=false host",
-        "verified_on": "2026-09-01"
+        "verified_on": "2026-09-01",
+        "reviewed_evidence": "top [<N>] [<top-options>...] <field-list> [<by-clause>]"
       },
       "query": "index=main | top countfield=total showperc=false host",
       "expect": {
+        "support": "executable",
         "commands": ["top"],
         "facets": {
           "by": "",
@@ -726,10 +868,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "rare host",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "rare [<rare-options>...] <field-list> [<by-clause>]"
       },
       "query": "index=main | rare host",
       "expect": {
+        "support": "executable",
         "commands": ["rare"],
         "facets": {
           "fields": "host",
@@ -746,10 +890,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "rare showcount=false percentfield=share status BY host",
-        "verified_on": "2026-09-01"
+        "verified_on": "2026-09-01",
+        "reviewed_evidence": "rare [<rare-options>...] <field-list> [<by-clause>]"
       },
       "query": "index=main | rare showcount=false percentfield=share status BY host",
       "expect": {
+        "support": "executable",
         "commands": ["rare"],
         "facets": {
           "by": "host",
@@ -771,10 +917,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "bin _time span=5m",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "bin [<bin-options>...] <field> [AS <newfield>]"
       },
       "query": "index=main | bin _time span=5m",
       "expect": {
+        "support": "executable",
         "commands": ["bin"],
         "facets": {
           "field": "_time",
@@ -792,10 +940,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "bin _time span=1d",
-        "verified_on": "2026-09-01"
+        "verified_on": "2026-09-01",
+        "reviewed_evidence": "bin [<bin-options>...] <field> [AS <newfield>]"
       },
       "query": "index=main | bin _time span=1d",
       "expect": {
+        "support": "executable",
         "commands": ["bin"],
         "facets": {
           "field": "_time",
@@ -813,10 +963,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "bucket _time span=5m",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "The bucket command is an alias for the bin command."
       },
       "query": "index=main | bucket _time span=5m",
       "expect": {
+        "support": "executable",
         "commands": ["bucket"],
         "facets": {
           "field": "_time",
@@ -834,10 +986,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "timechart count by message",
-        "verified_on": "2026-09-10"
+        "verified_on": "2026-09-10",
+        "reviewed_evidence": "timechart [limit=<chart-limit-opt>] [<bin-options>...] ( (<single-agg> [BY <split-by-clause>] ) | (<eval-expression>) BY <split-by-clause> )"
       },
       "query": "index=main | timechart count by message",
       "expect": {
+        "support": "executable",
         "commands": ["timechart"],
         "facets": {
           "aggregate": "count",
@@ -858,10 +1012,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "timechart span=1h count",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "timechart [limit=<chart-limit-opt>] [<bin-options>...] ( (<single-agg> [BY <split-by-clause>] ) | (<eval-expression>) BY <split-by-clause> )"
       },
       "query": "index=main | timechart span=1h count",
       "expect": {
+        "support": "executable",
         "commands": ["timechart"],
         "facets": {
           "aggregate": "count",
@@ -882,10 +1038,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "timechart span=1d count",
-        "verified_on": "2026-09-01"
+        "verified_on": "2026-09-01",
+        "reviewed_evidence": "timechart [limit=<chart-limit-opt>] [<bin-options>...] ( (<single-agg> [BY <split-by-clause>] ) | (<eval-expression>) BY <split-by-clause> )"
       },
       "query": "index=main | timechart span=1d count",
       "expect": {
+        "support": "executable",
         "commands": ["timechart"],
         "facets": {
           "aggregate": "count",
@@ -906,10 +1064,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "timechart span=1h limit=5 count BY host useother=false",
-        "verified_on": "2026-09-01"
+        "verified_on": "2026-09-01",
+        "reviewed_evidence": "timechart [limit=<chart-limit-opt>] [<bin-options>...] ( (<single-agg> [BY <split-by-clause>] ) | (<eval-expression>) BY <split-by-clause> )"
       },
       "query": "index=main | timechart span=1h limit=5 count BY host useother=false",
       "expect": {
+        "support": "executable",
         "commands": ["timechart"],
         "facets": {
           "aggregate": "count",
@@ -930,10 +1090,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "chart count OVER host BY sourcetype",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "chart [<chart-options>] [agg=<stats-agg-term>] ( <stats-agg-term> | <sparkline-agg-term> | \"(\"<eval-expression>\")\" )... [ BY <row-split> <column-split> ] | [ OVER <row-split> ] [BY <column-split>]"
       },
       "query": "index=main | chart count OVER host BY sourcetype",
       "expect": {
+        "support": "executable",
         "commands": ["chart"],
         "facets": {
           "aggregate": "count",
@@ -951,10 +1113,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "chart count BY host",
-        "verified_on": "2026-09-01"
+        "verified_on": "2026-09-01",
+        "reviewed_evidence": "chart [<chart-options>] [agg=<stats-agg-term>] ( <stats-agg-term> | <sparkline-agg-term> | \"(\"<eval-expression>\")\" )... [ BY <row-split> <column-split> ] | [ OVER <row-split> ] [BY <column-split>]"
       },
       "query": "index=main | chart count BY host",
       "expect": {
+        "support": "executable",
         "commands": ["chart"],
         "facets": {
           "aggregate": "count",
@@ -972,10 +1136,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "regex \"error\"",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "regex (<field>=<regex-expression> | <field>!=<regex-expression> | <regex-expression>)"
       },
       "query": "index=main | regex \"error\"",
       "expect": {
+        "support": "executable",
         "commands": ["regex"],
         "facets": {
           "field": "_raw",
@@ -993,10 +1159,14 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "reverse",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "Reverses the order of the results."
       },
       "query": "index=main | reverse",
-      "expect": { "commands": ["reverse"] }
+      "expect": {
+        "support": "executable",
+        "commands": ["reverse"]
+      }
     },
     {
       "id": "accum.single-field",
@@ -1007,10 +1177,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "accum count",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "accum <field> [AS <newfield>]"
       },
       "query": "index=main | accum count",
       "expect": {
+        "support": "executable",
         "commands": ["accum"],
         "facets": {
           "field": "count",
@@ -1027,10 +1199,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "strcat source \":\" sourcetype newfield",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "strcat [allrequired=<bool>] <source-fields> <dest-field>"
       },
       "query": "index=main | strcat source \":\" sourcetype newfield",
       "expect": {
+        "support": "executable",
         "commands": ["strcat"],
         "facets": {
           "all_required": "",
@@ -1048,10 +1222,14 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "addinfo",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "Adds fields to each event that contain global, common information about the search."
       },
       "query": "index=main | addinfo",
-      "expect": { "commands": ["addinfo"] }
+      "expect": {
+        "support": "executable",
+        "commands": ["addinfo"]
+      }
     },
     {
       "id": "fillnull.explicit-value",
@@ -1062,10 +1240,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "fillnull value=\"NULL\" host",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "fillnull [value=<string>] [<field-list>]"
       },
       "query": "index=main | fillnull value=\"NULL\" host",
       "expect": {
+        "support": "executable",
         "commands": ["fillnull"],
         "facets": {
           "fields": "host",
@@ -1082,10 +1262,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "fillnull value=NA",
-        "verified_on": "2026-09-01"
+        "verified_on": "2026-09-01",
+        "reviewed_evidence": "fillnull [value=<string>] [<field-list>]"
       },
       "query": "index=main | stats count BY host | fillnull value=NA",
       "expect": {
+        "support": "executable",
         "commands": ["stats", "fillnull"],
         "facets": {
           "fields": "",
@@ -1102,10 +1284,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "addtotals fieldname=Total price tax",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "addtotals [row=<bool>] [col=<bool>] [labelfield=<field>] [label=<string>] [fieldname=<field>] [<field-list>]"
       },
       "query": "index=main | addtotals fieldname=Total price tax",
       "expect": {
+        "support": "executable",
         "commands": ["addtotals"],
         "facets": {
           "fields": "price, tax",
@@ -1122,10 +1306,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "delta count AS change",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "delta <field> [AS <newfield>] [p=int]"
       },
       "query": "index=main | delta count AS change",
       "expect": {
+        "support": "executable",
         "commands": ["delta"],
         "facets": {
           "field": "count",
@@ -1143,10 +1329,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "makemv delim=\",\" recipients",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "makemv [delim=<string> | tokenizer=<string>] [allowempty=<bool>] [setsv=<bool>] <field>"
       },
       "query": "index=main | makemv delim=\",\" recipients",
       "expect": {
+        "support": "executable",
         "commands": ["makemv"],
         "facets": {
           "allow_empty": "false",
@@ -1164,10 +1352,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "mvexpand recipients",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "mvexpand <field> [limit=<int>]"
       },
       "query": "index=main | mvexpand recipients",
       "expect": {
+        "support": "executable",
         "commands": ["mvexpand"],
         "facets": {
           "field": "recipients",
@@ -1184,10 +1374,12 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "nomv recipients",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "Converts values of the specified multivalue field into one single value."
       },
       "query": "index=main | nomv recipients",
       "expect": {
+        "support": "executable",
         "commands": ["nomv"],
         "facets": {
           "field": "recipients"
@@ -1203,16 +1395,186 @@
         "section": "Syntax",
         "kind": "grammar-derived",
         "fragment": "lookup users user AS user OUTPUT department",
-        "verified_on": "2026-08-29"
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "lookup [local=<bool>] [update=<bool>] <lookup-table-name> ( <lookup-field> [AS <event-field>] )... [ OUTPUT | OUTPUTNEW (<lookup-destfield> [AS <event-destfield>] )... ]"
       },
       "query": "index=main | lookup users user AS user OUTPUT department",
       "expect": {
+        "support": "executable",
         "commands": ["lookup"],
         "facets": {
           "definition": "users",
           "keys": "user AS user",
           "output_mode": "overwrite",
           "outputs": "department AS department"
+        }
+      }
+    },
+    {
+      "id": "bin.span-minute-alias",
+      "command": "bin",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/spl-search-reference/9.1/search-commands/bin",
+        "release": "9.1",
+        "section": "Timescale",
+        "kind": "grammar-derived",
+        "fragment": "bin _time span=5min",
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "m | min | mins | minute | minutes"
+      },
+      "query": "index=main | bin _time span=5min",
+      "expect": {
+        "support": "executable",
+        "commands": ["bin"],
+        "facets": {
+          "field": "_time",
+          "output": "",
+          "span": "5m"
+        }
+      }
+    },
+    {
+      "id": "table.wildcard-known-unsupported",
+      "command": "table",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/9.4/search-commands/table",
+        "release": "9.4",
+        "section": "Syntax; Required arguments > wc-field-list",
+        "kind": "grammar-derived",
+        "fragment": "table event_*",
+        "verified_on": "2026-09-15",
+        "reviewed_evidence": "A list of valid field names. You can use the asterisk ( * ) as a wildcard to specify a list of fields with similar names."
+      },
+      "query": "index=main | table event_*",
+      "expect": {
+        "support": "known-unsupported",
+        "reason": "The bounded table projection contract accepts exact field names only; wildcard projection remains compatibility debt.",
+        "diagnostic_code": "SPL_UNSUPPORTED_FIELD_PATTERN",
+        "commands": ["table"],
+        "facets": {
+          "fields": "event_*"
+        }
+      }
+    },
+    {
+      "id": "chart.limit-known-unsupported",
+      "command": "chart",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/chart",
+        "release": "10.0",
+        "section": "Syntax; chart-options",
+        "kind": "grammar-derived",
+        "fragment": "chart limit=10 count OVER host BY sourcetype useother=false usenull=false nullstr=NULL otherstr=OTHER",
+        "reviewed_evidence": "chart-options Syntax: cont | format | limit | sep; tc-options Syntax: <bin-options> | usenull=<bool> | useother=<bool> | nullstr=<string> | otherstr=<string>",
+        "verified_on": "2026-09-15"
+      },
+      "query": "index=main | chart limit=10 count OVER host BY sourcetype useother=false usenull=false nullstr=NULL otherstr=OTHER",
+      "expect": {
+        "support": "known-unsupported",
+        "reason": "Chart series-selection options remain compatibility debt.",
+        "diagnostic_code": "SPL_UNSUPPORTED_CHART_OPTION",
+        "commands": ["chart"],
+        "facets": {
+          "aggregate": "count",
+          "over": "host",
+          "split_by": "sourcetype"
+        }
+      }
+    },
+    {
+      "id": "eventstats.multiple-measures-known-unsupported",
+      "command": "eventstats",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.4/search-commands/eventstats",
+        "release": "10.4",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "eventstats avg(duration) AS average max(duration) AS peak BY host",
+        "reviewed_evidence": "eventstats [allnum=<bool>] <stats-agg-term> ... [<by-clause>]",
+        "verified_on": "2026-09-15"
+      },
+      "query": "index=main | eventstats avg(duration) AS average max(duration) AS peak BY host",
+      "expect": {
+        "support": "known-unsupported",
+        "reason": "Eventstats currently accepts one aggregate measure only.",
+        "diagnostic_code": "SPL_UNSUPPORTED_EVENTSTATS_SYNTAX",
+        "commands": ["eventstats"],
+        "facets": {
+          "aggregate": "avg(duration) AS average; max(duration) AS peak",
+          "group_by": "host"
+        }
+      }
+    },
+    {
+      "id": "head.predicate-known-unsupported",
+      "command": "head",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/head",
+        "release": "10.0",
+        "section": "Syntax; eval-expression",
+        "kind": "grammar-derived",
+        "fragment": "head (status=200)",
+        "reviewed_evidence": "head [<N> | (<eval-expression>)] [limit=<int>] [null=<bool>] [keeplast=<bool>]",
+        "verified_on": "2026-09-15"
+      },
+      "query": "index=main | head (status=200)",
+      "expect": {
+        "support": "known-unsupported",
+        "reason": "Predicate-based stopping remains compatibility debt.",
+        "diagnostic_code": "SPL_INVALID_ARGUMENT",
+        "commands": ["head"],
+        "facets": {
+          "count": "predicate status=200"
+        }
+      }
+    },
+    {
+      "id": "dedup.keepempty-known-unsupported",
+      "command": "dedup",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/dedup",
+        "release": "10.0",
+        "section": "Syntax; keepempty",
+        "kind": "grammar-derived",
+        "fragment": "dedup host keepempty=true",
+        "reviewed_evidence": "keepempty Syntax: keepempty=<bool>",
+        "verified_on": "2026-09-15"
+      },
+      "query": "index=main | dedup host keepempty=true",
+      "expect": {
+        "support": "known-unsupported",
+        "reason": "The keepempty option remains compatibility debt.",
+        "diagnostic_code": "SPL_UNSUPPORTED_DEDUP_SYNTAX",
+        "commands": ["dedup"],
+        "facets": {
+          "consecutive": "false",
+          "count": "1",
+          "fields": "host",
+          "sortby": ""
+        }
+      }
+    },
+    {
+      "id": "eval.tonumber-base-known-unsupported",
+      "command": "eval",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/evaluation-functions/conversion-functions",
+        "release": "10.0",
+        "section": "tonumber(<value>,<base>)",
+        "kind": "grammar-derived",
+        "fragment": "eval number=tonumber(raw,16)",
+        "reviewed_evidence": "tonumber(<value>,<base>)",
+        "verified_on": "2026-09-15"
+      },
+      "query": "index=main | eval number=tonumber(raw,16)",
+      "expect": {
+        "support": "known-unsupported",
+        "reason": "The optional tonumber base argument remains compatibility debt.",
+        "diagnostic_code": "SPL_INVALID_EVAL_ARITY",
+        "commands": ["eval"],
+        "facets": {
+          "expressions": "number=tonumber(raw,16)",
+          "fields": "number"
         }
       }
     }

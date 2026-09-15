@@ -777,15 +777,35 @@ func (p *parser) parseSearchPrimary() (Expr, error) {
 	}
 
 	tok := p.current()
-	if tok.kind == tokenString {
-		p.advance()
-		return &TermExpr{Value: tok.text, Quoted: true, Range: tok.sourceRange}, nil
+	if err := p.unsupportedSearchDirective(); err != nil {
+		return nil, err
 	}
-	if (tok.kind != tokenWord && tok.kind != tokenConcat) ||
-		p.isKeyword("AND") || p.isKeyword("OR") {
+	if tok.kind == tokenString {
+		if !p.nextIsComparisonOperator() && !p.nextIsSearchMembership() {
+			p.advance()
+			return &TermExpr{Value: tok.text, Quoted: true, Range: tok.sourceRange}, nil
+		}
+	}
+	if tok.kind != tokenWord && tok.kind != tokenString && tok.kind != tokenConcat {
 		return nil, p.errorAtCurrent("SPL_EXPECTED_EXPRESSION", "expected a search term or field comparison")
 	}
-	p.advance()
+	if tok.kind == tokenWord && isUnsupportedSearchTimeModifier(tok.text) {
+		if p.nextIsComparisonOperator() {
+			return nil, &Diagnostic{
+				Code:        "SPL_UNSUPPORTED_SEARCH_TIME_MODIFIER",
+				Message:     fmt.Sprintf("inline search time modifier %s is not supported", tok.text),
+				Range:       tok.sourceRange,
+				Suggestions: []string{"set the search time range with the request time-range controls"},
+			}
+		}
+	}
+	if tok.kind == tokenString {
+		p.advance()
+	} else if p.isKeyword("AND") || p.isKeyword("OR") {
+		return nil, p.errorAtCurrent("SPL_EXPECTED_EXPRESSION", "expected a search term or field comparison")
+	} else {
+		p.advance()
+	}
 	if op, ok := comparisonOperator(p.current().kind); ok {
 		p.advance()
 		literal, err := p.parseLiteral()
@@ -799,23 +819,65 @@ func (p *parser) parseSearchPrimary() (Expr, error) {
 			Range: Range{Start: tok.sourceRange.Start, End: literal.Range.End},
 		}, nil
 	}
+	if p.isKeyword("IN") && p.nextIs(tokenLeftParen) {
+		return p.parseSearchMembership(tok)
+	}
 	if (strings.EqualFold(tok.text, "IN") && p.current().kind == tokenLeftParen) ||
-		(p.isKeyword("IN") && p.nextIs(tokenLeftParen)) ||
 		(p.isKeyword("NOT") && p.index+2 < len(p.tokens) &&
 			p.tokens[p.index+1].kind == tokenWord && strings.EqualFold(p.tokens[p.index+1].text, "IN") &&
 			p.tokens[p.index+2].kind == tokenLeftParen) {
 		return nil, &Diagnostic{
 			Code:        "SPL_UNSUPPORTED_EXPRESSION",
-			Message:     "membership is supported only in eval-language predicate positions, not base search",
+			Message:     "base search membership requires field IN (values); use NOT field IN (values) to negate",
 			Range:       Range{Start: tok.sourceRange.Start, End: p.current().sourceRange.End},
-			Suggestions: []string{"use a where command for exact eval-language membership"},
+			Suggestions: []string{"use field IN (value) or NOT field IN (value)"},
 		}
 	}
 	return &TermExpr{Value: tok.text, Range: tok.sourceRange}, nil
 }
 
+func (p *parser) nextIsSearchMembership() bool {
+	return p.index+2 < len(p.tokens) && p.tokens[p.index+1].kind == tokenWord &&
+		strings.EqualFold(p.tokens[p.index+1].text, "IN") && p.tokens[p.index+2].kind == tokenLeftParen
+}
+
+func (p *parser) unsupportedSearchDirective() error {
+	tok := p.current()
+	if tok.kind == tokenWord &&
+		(strings.EqualFold(tok.text, "CASE") || strings.EqualFold(tok.text, "TERM")) &&
+		p.nextIs(tokenLeftParen) {
+		return &Diagnostic{
+			Code:        "SPL_UNSUPPORTED_SEARCH_DIRECTIVE",
+			Message:     fmt.Sprintf("search directive %s() is not supported", strings.ToUpper(tok.text)),
+			Range:       tok.sourceRange,
+			Suggestions: []string{"remove the directive or express the match as a supported field comparison"},
+		}
+	}
+	return nil
+}
+
+func isUnsupportedSearchTimeModifier(value string) bool {
+	switch strings.ToLower(value) {
+	case "earliest", "latest", "starttime", "endtime", "timeformat", "_index_earliest", "_index_latest":
+		return true
+	default:
+		return false
+	}
+}
+
+func (p *parser) nextIsComparisonOperator() bool {
+	if p.index+1 >= len(p.tokens) {
+		return false
+	}
+	_, ok := comparisonOperator(p.tokens[p.index+1].kind)
+	return ok
+}
+
 func (p *parser) parseLiteral() (Literal, error) {
 	if err := p.prepareSearchToken(); err != nil {
+		return Literal{}, err
+	}
+	if err := p.unsupportedSearchDirective(); err != nil {
 		return Literal{}, err
 	}
 	tok := p.current()

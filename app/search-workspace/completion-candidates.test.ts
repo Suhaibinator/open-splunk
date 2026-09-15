@@ -101,3 +101,11 @@ test("typing opens the popup for a stage, a spelled term with candidates, or a f
   assert.equal(typeaheadOpens(completionContextAt("index=main nosuchfield=", 23), DEMO_FIELDS, { server: true }), true);
   assert.equal(typeaheadOpens(completionContextAt("index=main | stats count by ", 28), DEMO_FIELDS, { server: true }), false);
 });
+
+test("membership lists offer field-summary values after opening and comma", () => {
+  for (const source of ['index=main level IN (e', 'index=main level IN ("WARN", e']) {
+    const items = localCompletions(completionContextAt(source, source.length), DEMO_FIELDS, typing);
+    assert.deepEqual(labels(items), ['value:"ERROR"']);
+    assert.equal(items[0].insertion, '"ERROR"');
+  }
+});

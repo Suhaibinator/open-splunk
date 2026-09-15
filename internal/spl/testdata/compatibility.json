@@ -3717,10 +3717,10 @@
           }
         },
         {
-          "name": "base search membership excluded",
+          "name": "base search membership",
           "source": "index=main status IN (500,503)",
           "expect": {
-            "diagnostic": "SPL_UNSUPPORTED_EXPRESSION"
+            "parse": "accept"
           }
         }
       ]

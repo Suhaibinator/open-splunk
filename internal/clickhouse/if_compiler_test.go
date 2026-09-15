@@ -201,10 +201,6 @@ func TestCompileEvalIfRejectsUnstableBranchTypes(t *testing.T) {
 		source string
 	}{
 		{
-			name:   "Dynamic",
-			source: `index=gradethis | eval value=if(isnull(condition), first, second)`,
-		},
-		{
 			name:   "fixed multivalue",
 			source: `index=gradethis | stats values(user) AS users | eval value=if(isnull(users), users, users)`,
 		},
@@ -221,12 +217,20 @@ func TestCompileEvalIfRejectsUnstableBranchTypes(t *testing.T) {
 			source: `index=gradethis | eval value=if(isnull(condition), 1, 18446744073709551615)`,
 		},
 		{
-			name:   "null plus Dynamic",
-			source: `index=gradethis | eval value=if(isnull(condition), null, first)`,
-		},
-		{
 			name:   "incompatible raw text provenance",
 			source: `index=gradethis | eval value=if(isnull(condition), _raw, "{}")`,
+		},
+		{
+			name:   "raw text provenance and Dynamic",
+			source: `index=gradethis | eval value=if(1=1, _raw, absent)`,
+		},
+		{
+			name:   "time and Dynamic",
+			source: `index=gradethis | eval value=if(1=1, _time, absent)`,
+		},
+		{
+			name:   "fixed multivalue and Dynamic",
+			source: `index=gradethis | eval values=split("a,b", ","), value=if(1=1, values, absent)`,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -242,6 +246,26 @@ func TestCompileEvalIfRejectsUnstableBranchTypes(t *testing.T) {
 				t.Fatalf("Compile(%q) diagnostic range = %#v", test.source, diagnostic.Range)
 			}
 		})
+	}
+}
+
+func TestCompileEvalIfSupportsOrdinaryDynamicBranches(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`index=gradethis | eval score=if(test="Passed", score, 0) | table score`,
+		`index=gradethis | eval selected=if(flag=1, first, second) | table selected`,
+		`index=gradethis | eval selected=if(flag=1, null, first) | table selected`,
+	} {
+		compiled := compileSPL(t, source)
+		for _, required := range []string{"if(ifNull(", " AS Dynamic)", " AS "} {
+			if !strings.Contains(compiled.SQL, required) {
+				t.Fatalf("%q SQL missing %q:\n%s", source, required, compiled.SQL)
+			}
+		}
+		if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+			t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
+		}
 	}
 }
 
