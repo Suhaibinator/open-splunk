@@ -18,10 +18,11 @@ const validCorpus = `{
       "section": "Syntax",
       "kind": "grammar-derived",
       "fragment": "sort + host",
+      "reviewed_evidence": "sort-by-clause = field [sort-direction]",
       "verified_on": "2026-08-29"
     },
     "query": "index=main | sort + host",
-    "expect": {"commands": ["sort"]}
+    "expect": {"support": "executable", "commands": ["sort"]}
   }]
 }`
 
@@ -33,6 +34,28 @@ func TestDecodeAcceptsPinnedOfficialSource(t *testing.T) {
 	}
 	if len(corpus.Cases) != 1 || corpus.Cases[0].Source.Release != "10.0" {
 		t.Fatalf("corpus = %#v", corpus)
+	}
+}
+
+func TestDecodeRequiresReviewedEvidenceAndExplicitSupport(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name, encoded, want string
+	}{
+		{name: "missing reviewed evidence", encoded: strings.Replace(validCorpus, `      "reviewed_evidence": "sort-by-clause = field [sort-direction]",
+`, "", 1), want: "reviewed_evidence"},
+		{name: "missing support", encoded: strings.Replace(validCorpus, `"support": "executable", `, "", 1), want: "support"},
+		{name: "unsupported without reason", encoded: strings.Replace(validCorpus, `"support": "executable"`, `"support": "known-unsupported"`, 1), want: "reason"},
+		{name: "unsupported without diagnostic", encoded: strings.Replace(validCorpus, `"support": "executable"`, `"support": "known-unsupported", "reason": "bounded subset"`, 1), want: "diagnostic_code"},
+		{name: "executable with unsupported reason", encoded: strings.Replace(validCorpus, `"support": "executable"`, `"support": "executable", "reason": "wrong"`, 1), want: "only valid"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Decode([]byte(test.encoded))
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Decode error = %v, want substring %q", err, test.want)
+			}
+		})
 	}
 }
 
@@ -53,10 +76,11 @@ func TestDecodeRejectsUntraceableOrAmbiguousCases(t *testing.T) {
 		{name: "duplicate case id", encoded: duplicateCase, want: "duplicates id"},
 		{name: "non-official host", encoded: strings.Replace(validCorpus, "help.splunk.com", "example.com", 1), want: "HTTPS help.splunk.com"},
 		{name: "unpinned release", encoded: strings.Replace(validCorpus, `"release": "10.0"`, `"release": "latest"`, 1), want: "invalid release"},
-		{name: "URL release mismatch", encoded: strings.Replace(validCorpus, `/10.0/search-commands/`, `/9.4/search-commands/`, 1), want: "url path must end"},
-		{name: "URL command mismatch", encoded: strings.Replace(validCorpus, `/search-commands/sort`, `/search-commands/stats`, 1), want: "url path must end"},
+		{name: "URL release mismatch", encoded: strings.Replace(validCorpus, `/10.0/search-commands/`, `/9.4/search-commands/`, 1), want: "must identify the pinned sort reference"},
+		{name: "URL command mismatch", encoded: strings.Replace(validCorpus, `/search-commands/sort`, `/search-commands/stats`, 1), want: "must identify the pinned sort reference"},
 		{name: "missing section", encoded: strings.Replace(validCorpus, `"section": "Syntax"`, `"section": ""`, 1), want: "invalid section"},
 		{name: "unclassified source", encoded: strings.Replace(validCorpus, `"kind": "grammar-derived"`, `"kind": "guess"`, 1), want: "invalid kind"},
+		{name: "derived fragment used as evidence", encoded: strings.Replace(validCorpus, `"reviewed_evidence": "sort-by-clause = field [sort-direction]"`, `"reviewed_evidence": "sort + host"`, 1), want: "copies the derived fragment"},
 		{name: "fragment not exercised", encoded: strings.Replace(validCorpus, `"query": "index=main | sort + host"`, `"query": "index=main | sort other"`, 1), want: "does not contain"},
 		{name: "command not asserted", encoded: strings.Replace(validCorpus, `"commands": ["sort"]`, `"commands": ["stats"]`, 1), want: "final expected command"},
 		{name: "undocumented facet", encoded: strings.Replace(validCorpus, `"commands": ["sort"]`, `"commands": ["sort"], "facets": {"descending": "true"}`, 1), want: "not a documented sort facet"},

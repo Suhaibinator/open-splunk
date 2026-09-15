@@ -236,6 +236,17 @@ export function completionContextAt(spl: string, cursor: number): CompletionCont
       stage: "command",
     };
   }
+  const membership = membershipValueFragment(prefix, stageStart, structure.quotes);
+  if (membership !== null) {
+    return {
+      fragmentStart: safeCursor - membership.prefix.length,
+      fragmentEnd: safeCursor,
+      prefix: membership.prefix,
+      followsPipeline,
+      stage: "value",
+      fieldName: membership.fieldName,
+    };
+  }
   const value = VALUE_FRAGMENT.exec(stagePrefix);
   if (value !== null) {
     return {
@@ -256,6 +267,33 @@ export function completionContextAt(spl: string, cursor: number): CompletionCont
     followsPipeline,
     stage: "term",
   };
+}
+
+/** Find the current literal candidate without treating quoted commas or parentheses as syntax. */
+function membershipValueFragment(
+  prefix: string,
+  stageStart: number,
+  quotes: readonly { offset: number; endOffset: number }[],
+): { fieldName: string; prefix: string } | null {
+  const openings: Array<{ offset: number; candidateStart: number }> = [];
+  let quoteIndex = 0;
+  for (let offset = stageStart; offset < prefix.length; offset += 1) {
+    while (quoteIndex < quotes.length && quotes[quoteIndex]!.endOffset <= offset) quoteIndex += 1;
+    const quote = quotes[quoteIndex];
+    if (quote !== undefined && quote.offset <= offset && offset < quote.endOffset) {
+      offset = quote.endOffset - 1;
+      continue;
+    }
+    const character = prefix[offset];
+    if (character === "(") openings.push({ offset, candidateStart: offset + 1 });
+    else if (character === ")") openings.pop();
+    else if (character === "," && openings.length > 0) openings.at(-1)!.candidateStart = offset + 1;
+  }
+  const opening = openings.at(-1);
+  if (opening === undefined) return null;
+  const field = /(?:^|[\s(])([A-Za-z_][\w.]*)\s+(?:NOT\s+)?IN\s*$/iu.exec(prefix.slice(stageStart, opening.offset));
+  const candidate = /^\s*([\w.-]*)$/u.exec(prefix.slice(opening.candidateStart));
+  return field === null || candidate === null ? null : { fieldName: field[1]!, prefix: candidate[1]! };
 }
 
 export function isCursorInQuotedValue(spl: string, cursor: number): boolean {

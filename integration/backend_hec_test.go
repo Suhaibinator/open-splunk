@@ -309,6 +309,13 @@ func TestBackendHECVertical(t *testing.T) {
 	)
 	backendHECAssertStoredProjection(t, ctx, storage, tokenMetadata.GetIngestionTokenId(), eventTime)
 	backendHECAssertStoredCardinality(t, ctx, storage, 4, 2, 1)
+	var receivedEventTime time.Time
+	if err := storage.QueryRow(ctx,
+		`SELECT event_time FROM open_splunk.events WHERE tenant_id=? AND index_name=? AND source=?`,
+		backendHECTenantID, backendHECIndexName, backendHECDefaultSource,
+	).Scan(&receivedEventTime); err != nil {
+		t.Fatalf("read fixture fallback event time: %v", err)
+	}
 	backendHECAssertProductSearch(
 		t,
 		ctx,
@@ -316,6 +323,7 @@ func TestBackendHECVertical(t *testing.T) {
 		baseURL,
 		eventTime,
 		time.Now().UTC().Add(5*time.Second),
+		receivedEventTime,
 	)
 
 	if err := serverProcess.Kill(10 * time.Second); err != nil {
@@ -404,6 +412,7 @@ func backendHECAssertProductSearch(
 	baseURL string,
 	earliestEvent time.Time,
 	latestEvent time.Time,
+	receivedEventTime time.Time,
 ) {
 	t.Helper()
 	earliest := earliestEvent.Add(-time.Nanosecond)
@@ -499,24 +508,30 @@ func backendHECAssertProductSearch(
 			opensplunk.ValueType_VALUE_TYPE_TIMESTAMP,
 			opensplunk.ValueType_VALUE_TYPE_UINT64,
 		})
-		var total uint64
+		// Three events have the explicit request time; the JSON object uses the
+		// independently captured server receive time. Check every bucket, not
+		// just a sum that would also pass incorrect bucket assignments.
+		expected := make(map[time.Time]uint64)
+		for bucket := earliest.Truncate(time.Minute); bucket.Before(latestEvent); bucket = bucket.Add(time.Minute) {
+			expected[bucket] = 0
+		}
+		expected[earliestEvent.Truncate(time.Minute)] += 3
+		expected[receivedEventTime.Truncate(time.Minute)]++
+		if len(results.rows) != len(expected) || job.GetProgress().GetProducedRows() != uint64(len(expected)) {
+			t.Fatalf("HEC timechart rows = %d, want %d", len(results.rows), len(expected))
+		}
 		var previous time.Time
 		for _, row := range results.rows {
 			cells := row.GetCells()
 			bucket := backendHECSearchTime(t, cells[0])
-			if bucket.Nanosecond() != 0 || bucket.Second() != 0 ||
-				(!previous.IsZero() && !bucket.After(previous)) {
-				t.Fatalf("HEC timechart bucket %s after %s is not an ordered minute boundary", bucket, previous)
+			want, exists := expected[bucket]
+			if !exists || (!previous.IsZero() && !bucket.After(previous)) {
+				t.Fatalf("unexpected or unordered HEC timechart bucket %s after %s", bucket, previous)
+			}
+			if got := backendHECSearchUnsigned(t, cells[1]); got != want {
+				t.Fatalf("HEC timechart bucket %s count = %d, want %d", bucket, got, want)
 			}
 			previous = bucket
-			total += backendHECSearchUnsigned(t, cells[1])
-		}
-		if total != 4 || job.GetProgress().GetProducedRows() != uint64(len(results.rows)) {
-			t.Fatalf(
-				"HEC timechart rows/total = %d/%d, want nonempty rows totaling 4",
-				len(results.rows),
-				total,
-			)
 		}
 	})
 }

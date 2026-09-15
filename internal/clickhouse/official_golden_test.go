@@ -30,8 +30,9 @@ const (
 // and compares the complete executable contract (SQL, bind arguments, public
 // schema, transport descriptors, and execution seal digest) with
 // testdata/golden/<case-id>.sql. Any lowering change therefore surfaces as a
-// reviewable diff instead of a silent behavior change, and a case that starts
-// or stops compiling is a diff too because errors are snapshotted as well.
+// reviewable diff instead of a silent behavior change. Executable cases fail
+// immediately if they stop compiling; documented compatibility debt is checked
+// separately by TestOfficialKnownUnsupportedDiagnostics.
 //
 // Regenerate with OPEN_SPLUNK_UPDATE_GOLDEN=1 and review the git diff.
 func TestOfficialCorpusGoldenSQL(t *testing.T) {
@@ -40,6 +41,9 @@ func TestOfficialCorpusGoldenSQL(t *testing.T) {
 	update := officialGoldenUpdateRequested(t)
 	corpus := loadOfficialGoldenCorpus(t)
 	for _, testCase := range corpus.Cases {
+		if testCase.Expect.Support == "known-unsupported" {
+			continue
+		}
 		t.Run(testCase.ID, func(t *testing.T) {
 			t.Parallel()
 			got := renderOfficialGolden(t, testCase)
@@ -62,9 +66,39 @@ func TestOfficialCorpusGoldenSQL(t *testing.T) {
 	}
 }
 
-// TestOfficialGoldenFilesMatchCorpus keeps the golden directory and the
-// official corpus in exact correspondence: every case has a snapshot and no
-// snapshot outlives its case.
+// TestOfficialKnownUnsupportedDiagnostics keeps valid documented SPL that is
+// outside the bounded product profile visible as compatibility debt. Each case
+// must fail at planning or compilation with its declared stable diagnostic.
+func TestOfficialKnownUnsupportedDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	corpus := loadOfficialGoldenCorpus(t)
+	for _, testCase := range corpus.Cases {
+		if testCase.Expect.Support != "known-unsupported" {
+			continue
+		}
+		t.Run(testCase.ID, func(t *testing.T) {
+			t.Parallel()
+			_, err := compileOfficialGoldenCase(t, testCase)
+			if err == nil {
+				t.Fatalf("known-unsupported official case unexpectedly compiled; remove its compatibility-debt classification")
+			}
+			code := ""
+			if diagnostic, ok := errors.AsType[*spl.Diagnostic](err); ok {
+				code = diagnostic.Code
+			} else if diagnostic, ok := errors.AsType[*plan.Diagnostic](err); ok {
+				code = diagnostic.Code
+			}
+			if code != testCase.Expect.DiagnosticCode {
+				t.Fatalf("diagnostic = %v, want %s", err, testCase.Expect.DiagnosticCode)
+			}
+		})
+	}
+}
+
+// TestOfficialGoldenFilesMatchCorpus keeps the golden directory and executable
+// official cases in exact correspondence: every executable case has a snapshot
+// and no snapshot outlives an executable case.
 func TestOfficialGoldenFilesMatchCorpus(t *testing.T) {
 	t.Parallel()
 
@@ -72,6 +106,9 @@ func TestOfficialGoldenFilesMatchCorpus(t *testing.T) {
 	corpus := loadOfficialGoldenCorpus(t)
 	caseIDs := make([]string, 0, len(corpus.Cases))
 	for _, testCase := range corpus.Cases {
+		if testCase.Expect.Support == "known-unsupported" {
+			continue
+		}
 		caseIDs = append(caseIDs, testCase.ID)
 	}
 	slices.Sort(caseIDs)
@@ -152,12 +189,7 @@ func renderOfficialGolden(t *testing.T, testCase officialspl.Case) string {
 
 	compiled, err := compileOfficialGoldenCase(t, testCase)
 	if err != nil {
-		if diagnostic, ok := errors.AsType[*spl.Diagnostic](err); ok {
-			fmt.Fprintf(&builder, "-- error: %s: %s\n", diagnostic.Code, diagnostic.Message)
-		} else {
-			fmt.Fprintf(&builder, "-- error: %v\n", err)
-		}
-		return builder.String()
+		t.Fatalf("official executable case %q did not compile: %v", testCase.ID, err)
 	}
 
 	fmt.Fprintf(&builder, "-- output_fields: %s\n", strings.Join(compiled.OutputFields, ", "))

@@ -11,13 +11,23 @@ change together.
 Official SPL conformance is tested separately from that implementation-owned
 contract. `internal/spl/testdata/official_compatibility.json` pins each case to
 a versioned Splunk Help URL, named documentation section, exact command
-fragment, source classification, and verification date. Every command claimed
-in the command table below must have a source-backed parse case. Sort and
+fragment, source classification, reviewed source evidence, and verification date.
+Every registered command facet must have a source-backed parse case. Executable
+cases must also compile successfully; compiler errors cannot become passing SQL
+snapshots. Known unsupported cases instead name their limitation and expected
+diagnostic. Bounded ClickHouse fixtures check observable results separately from
+SQL snapshots. Sort and
 fields cases additionally assert detailed AST semantics and source ranges, and
 their spaced-direction and wildcard fragments are reused by the ClickHouse
 execution regressions. These offline fixtures prevent the implementation from
 defining its own compatibility oracle; they do not turn the supported subset
 into a claim of complete Splunk parity.
+
+When adding syntax, test both individual features and their combinations (for
+example, quoted field names inside membership). A local rejection expectation
+does not establish that SPL rejects the input. Check the documented grammar,
+record valid but unsupported syntax as compatibility debt, and use expected
+rows to verify matching behavior independently of generated SQL.
 
 Unsupported syntax fails with a source-located diagnostic before execution.
 The compiler never executes a valid prefix of an invalid search. Every search
@@ -179,6 +189,28 @@ case-insensitive; canonical index identity is case-sensitive. `field!=value`
 does not match a missing field, while `NOT field=value` does. `field=*`
 requires present non-null data.
 
+Double quotes allow search field names and exact rename names to contain spaces.
+Within quoted search text, `\|` represents a literal pipe. IPv4 and IPv6 CIDR
+values in equality and inequality comparisons match address containment, including
+in pipeline `search` and membership lists.
+
+Typed numeric search equality is an intentional difference from SPL's textual
+search equality: numeric text such as `1`, `1.0`, and `01` can compare equally to
+the number `1`. Quoted string equality remains a string comparison.
+
+`CASE()` and `TERM()` search directives fail with
+`SPL_UNSUPPORTED_SEARCH_DIRECTIVE`. Inline time modifiers fail with
+`SPL_UNSUPPORTED_SEARCH_TIME_MODIFIER`; use the request time-range controls.
+These diagnostics prevent supported-looking syntax from silently becoming
+ordinary event-field filters or raw terms.
+
+`field IN (value, ...)` accepts one or more literal candidates in base search
+and pipeline `search`, with the same matching rules as parenthesized
+`field=value OR field=...`, including wildcards. For example,
+`level IN ("WARN", "ERROR")` matches either level. Negate with
+`NOT level IN ("WARN", "ERROR")`. Lists are bounded to 32 candidates each
+and share the 256-candidate query budget with eval-language membership.
+
 Eligible positive ASCII bare terms may add a ClickHouse text-index candidate,
 but the exact parameterized regex remains authoritative. Negative terms,
 phrases, wildcard/Unicode/punctuation terms, and values without physical `_raw`
@@ -217,11 +249,16 @@ The scalar function pack follows these contracts:
   percent escapes, keeps a literal `+`, and returns the input unchanged when the
   decoded bytes are not valid UTF-8. The digest functions return lowercase
   hexadecimal text. All of them apply per member to String multivalues, like
-  `lower` and `upper`.
+  `lower` and `upper`. Multivalue trim and URL decoding are Open Splunk extensions;
+  the SPL reference only documents multivalue support for `lower` and `upper`
+  among those transforms.
+- `if` branches and `coalesce` arguments accept raw event fields, preserving
+  the selected runtime value and null for missing fields. Fixed incompatible
+  branch types retain their existing type restrictions.
+- `tonumber` rejects an unparseable quoted literal before execution; malformed
+  or missing field values return null.
 - `nullif(a, b)` is `if(a = b, null, a)`, so it follows the comparison and
-  branch rules of `if` and adds no rule of its own: the first operand must have
-  a fixed String, Bool, or numeric kind, so convert a raw event field with
-  `tostring` or `tonumber` first.
+  branch rules of `if`, including raw event-field values.
 - `typeof(x)` returns `Number`, `String`, `Boolean`, or `Invalid`. Fixed kinds
   resolve at compile time and canonical time counts as `Number`; a dynamic
   value is classified at runtime, where bounded numeric text is `Number`, a
@@ -309,7 +346,7 @@ The cumulative command surface is:
 | `eventstats` | bounded row-preserving aggregate attachment |
 | `streamstats` | bounded ordered running aggregates |
 | `top`, `rare` | bounded frequency summaries; `countfield=`/`percentfield=` rename and `showcount=false`/`showperc=false` hide the generated outputs; `BY g…` groups the tuples, scopes `percent` to each group, and keeps `limit` tuples per group (`SPL-FREQUENCY-BY-001`) |
-| `bin`/`bucket` | numeric discretization and `_time` discretization by fixed `s`/`m`/`h` spans or timezone-aware `1d`/`1w` calendar spans (`SPL-CALENDAR-SPAN-001`) |
+| `bin`/`bucket` | numeric discretization and `_time` discretization by fixed `s`/`m`/`h` spans (including documented second/minute/hour aliases) or timezone-aware `1d`/`1w` calendar spans (`SPL-CALENDAR-SPAN-001`) |
 | `timechart`, `chart` | bounded chart aggregation and split series; `timechart` supports exact subsecond, elapsed, and magnitude-aware calendar grids, sparse and partial controls, relative alignment, composable typed output, and exact bucket-bound metadata; split `limit=0` selects all ordinary series subject to independent atomic resource limits; see the [timechart contract](timechart.md); `chart <agg> BY <row>` (or `OVER <row>`) with one split field is the `stats <agg> BY <row>` table |
 | `regex` | bounded RE2 row filtering (`SPL-REGEX-001`) |
 | `reverse` | reverse the complete established relation order (`SPL-REVERSE-001`) |

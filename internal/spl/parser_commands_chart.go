@@ -663,7 +663,10 @@ func parseFixedTimeSpan(tok token, config fixedTimeSpanParserConfig) (TimeSpan, 
 	}
 	if config.commandName != "timechart" {
 		switch strings.ToLower(unitText) {
-		case "s", "m", "h", "d", "w", "mon", "month":
+		case "s", "sec", "secs", "second", "seconds",
+			"m", "min", "mins", "minute", "minutes",
+			"h", "hr", "hrs", "hour", "hours",
+			"d", "day", "days", "w", "mon", "month":
 		default:
 			return TimeSpan{}, unsupportedFixedTimeSpanUnit(tok, config)
 		}

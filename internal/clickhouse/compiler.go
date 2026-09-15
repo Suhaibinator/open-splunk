@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/netip"
 	"reflect"
 	"regexp"
 	"slices"
@@ -7023,6 +7024,12 @@ func compileComparison(expression *plan.ComparisonExpression, field fieldState) 
 	}
 
 	text := comparisonSourceText(expression.Value)
+	if expression.Value.Kind == plan.ValueKindString &&
+		(expression.Op == plan.ComparisonOpEqual || expression.Op == plan.ComparisonOpNotEqual) {
+		if prefix, prefixErr := netip.ParsePrefix(text); prefixErr == nil {
+			text = prefix.Masked().String()
+		}
+	}
 	if expression.Value.Kind == plan.ValueKindString && text == "*" &&
 		(expression.Op == plan.ComparisonOpEqual || expression.Op == plan.ComparisonOpNotEqual) {
 		if expression.Op == plan.ComparisonOpNotEqual {
@@ -7082,6 +7089,11 @@ func compileComparison(expression *plan.ComparisonExpression, field fieldState) 
 
 func equalityPredicate(expression *plan.ComparisonExpression, field fieldState, text string) (string, int) {
 	valueSQL := field.valueSQL
+	if expression.Value.Kind == plan.ValueKindString {
+		if _, err := netip.ParsePrefix(text); err == nil {
+			return cidrEqualityPredicate(field)
+		}
+	}
 	if field.kind == fieldKindStringArray {
 		if expression.Value.Kind == plan.ValueKindString && strings.Contains(text, "*") {
 			return "arrayExists(element -> isValidUTF8(element) AND match(element, ?), " + valueSQL + ")", 1
@@ -7143,6 +7155,27 @@ func equalityPredicate(expression *plan.ComparisonExpression, field fieldState, 
 			floating + ", " + exactCondition + ", " + exact + ", 0)", 1
 	}
 	return "(" + guard + " AND " + base + ")", 1
+}
+
+func cidrEqualityPredicate(field fieldState) (string, int) {
+	addressPredicate := func(address string) string {
+		valid := "(isIPv4String(" + address + ") OR isIPv6String(" + address + "))"
+		return valid + " AND isIPAddressInRange(if(" + valid + ", " + address + ", '0.0.0.0'), ?)"
+	}
+	switch field.kind {
+	case fieldKindStringArray:
+		return "arrayExists(element -> " + addressPredicate("element") + ", " + field.valueSQL + ")", 1
+	case fieldKindDynamicArray:
+		return "arrayExists(element -> " + addressPredicate(nativeMVCanonicalTextSQL("element")) + ", " + field.valueSQL + ")", 1
+	case fieldKindString:
+		return addressPredicate(field.valueSQL), 1
+	case fieldKindDynamic:
+		dynamic := compiledScalarFromField(field)
+		address := dynamicStringScalarSQL(dynamic)
+		return "(dynamicType(" + field.valueSQL + ") = 'String' AND " + addressPredicate(address) + ")", 1
+	default:
+		return "0", 0
+	}
 }
 
 func relationalPredicate(expression *plan.ComparisonExpression, field fieldState, operator string) (string, int, error) {

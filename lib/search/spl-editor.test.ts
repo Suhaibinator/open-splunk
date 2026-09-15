@@ -111,3 +111,32 @@ test("editor batch-converts backend UTF-8 byte ranges to safe UTF-16 offsets", (
     [6, 1, 0, 4, 2, 2, 1, 0, 5, source.length, 1],
   );
 });
+
+test("membership candidates complete values of their field", () => {
+  for (const [source, fieldName, prefix] of [
+    ["index=main level IN (", "level", ""],
+    ["index=main level IN (WA", "level", "WA"],
+    ['index=main level IN ("ERROR", WA', "level", "WA"],
+    ["index=main | where status NOT IN (200, 5", "status", "5"],
+    ['index=main message IN ("parenthesis(, pipe|", te', "message", "te"],
+  ] as const) {
+    assert.deepEqual(completionContextAt(source, source.length), {
+      fragmentStart: source.length - prefix.length,
+      fragmentEnd: source.length,
+      prefix,
+      followsPipeline: source.includes("| where"),
+      stage: "value",
+      fieldName,
+    });
+  }
+});
+
+test("closed and nested membership expressions do not reuse candidate context", () => {
+  for (const source of [
+    "index=main level IN (WARN) ",
+    'index=main | where status IN (round(value, ',
+    'index=main | where status IN (200) AND other(',
+  ]) {
+    assert.notEqual(completionContextAt(source, source.length)?.stage, "value");
+  }
+});

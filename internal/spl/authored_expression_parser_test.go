@@ -623,7 +623,7 @@ func TestParseAuthoredPreservesNonScalarTokenization(t *testing.T) {
 			t.Fatalf("Parse(%q): %v", source, err)
 		}
 	}
-	assertAuthoredDiagnosticCode(t, `status IN (500,503)`, "SPL_UNSUPPORTED_EXPRESSION")
+	assertAuthoredDiagnosticCode(t, `status NOT IN (500,503)`, "SPL_UNSUPPORTED_EXPRESSION")
 
 	for _, source := range []string{
 		`a+'plain'`,

@@ -57,6 +57,11 @@ func TestDynamicCrossFeatureMatrixAgainstClickHouse(t *testing.T) {
 		{id: "float", value: typedDouble(100.5), kind: "Number", equalLiteral: "100.5", unequalLiteral: "101.5", arithmeticPresent: true, arithmeticValue: 100.5, ordered: true},
 		{id: "decimal", value: typedDecimal("100.500"), kind: "Number", equalLiteral: "100.5", unequalLiteral: "101.5", arithmeticPresent: true, arithmeticValue: 100.5, ordered: true},
 		{id: "decimal-wide", value: typedDecimal("9007199254740993"), kind: "Number", equalLiteral: "9007199254740993", unequalLiteral: "9007199254740992", arithmeticPresent: true, arithmeticValue: 9_007_199_254_740_992, ordered: true},
+		// Intentional typed-equality extension: SPL search documents textual
+		// equality; Open Splunk also equates these numeric spellings in search.
+		{id: "text-one", value: typedString("1"), kind: "Number", equalLiteral: "1", unequalLiteral: "2", arithmeticPresent: true, arithmeticValue: 1, ordered: true},
+		{id: "text-one-decimal", value: typedString("1.0"), kind: "Number", equalLiteral: "1", unequalLiteral: "2", arithmeticPresent: true, arithmeticValue: 1, ordered: true},
+		{id: "text-one-zero", value: typedString("01"), kind: "Number", equalLiteral: "1", unequalLiteral: "2", arithmeticPresent: true, arithmeticValue: 1, ordered: true},
 		{id: "text-integer", value: typedString("100"), kind: "Number", equalLiteral: "100", unequalLiteral: "101", arithmeticPresent: true, arithmeticValue: 100, ordered: true},
 		{id: "text-leading-plus", value: typedString("+100"), kind: "Number", equalLiteral: "100", unequalLiteral: "101", arithmeticPresent: true, arithmeticValue: 100, ordered: true},
 		{id: "text-leading-zero", value: typedString("00100"), kind: "Number", equalLiteral: "100", unequalLiteral: "101", arithmeticPresent: true, arithmeticValue: 100, ordered: true},
@@ -67,6 +72,10 @@ func TestDynamicCrossFeatureMatrixAgainstClickHouse(t *testing.T) {
 		{id: "text-wide", value: typedString("9007199254740993"), kind: "Number", equalLiteral: "9007199254740993", unequalLiteral: "9007199254740992", arithmeticPresent: true, arithmeticValue: 9_007_199_254_740_992, ordered: true},
 		{id: "text", value: typedString("abc"), kind: "String", equalLiteral: `"abc"`, unequalLiteral: `"xyz"`, ordered: true},
 		{id: "text-empty", value: typedString(""), kind: "String", equalLiteral: `""`, unequalLiteral: `"xyz"`, ordered: true},
+		{id: "escaped-pipe", value: typedString("pipe|b"), kind: "String", equalLiteral: `"pipe\|b"`, unequalLiteral: `"pipe\\|b"`, ordered: true},
+		{id: "ipv4-inside", value: typedString("192.0.2.56"), kind: "String", equalLiteral: `"192.0.2.56"`, unequalLiteral: `"192.0.3.56"`, ordered: true},
+		{id: "ipv4-outside", value: typedString("192.0.3.56"), kind: "String", equalLiteral: `"192.0.3.56"`, unequalLiteral: `"192.0.2.56"`, ordered: true},
+		{id: "ipv6-inside", value: typedString("2001:db8::56"), kind: "String", equalLiteral: `"2001:db8::56"`, unequalLiteral: `"2001:db9::56"`, ordered: true},
 		{id: "bool", value: typedBool(true), kind: "Boolean", equalLiteral: "true", unequalLiteral: "false"},
 		{id: "null", value: typedNull(), kind: "Invalid"},
 		{id: "missing", kind: "Invalid"},
@@ -80,6 +89,9 @@ func TestDynamicCrossFeatureMatrixAgainstClickHouse(t *testing.T) {
 		}
 		events = append(events, event)
 	}
+	quotedFieldEvent := testStoredEvent("quoted-field", index, indexTime)
+	quotedFieldEvent.Event.Fields = typedObjectValue(typedField("my field", typedString("ten")))
+	events = append(events, quotedFieldEvent)
 	_, queryContext := storeScalarFunctionIntegrationFixtures(
 		ctx,
 		t,
@@ -239,6 +251,49 @@ func TestDynamicCrossFeatureMatrixAgainstClickHouse(t *testing.T) {
 					})
 				}
 			})
+		}
+	})
+
+	t.Run("search membership", func(t *testing.T) {
+		for _, check := range []struct {
+			predicate string
+			want      uint64
+		}{
+			{`value IN ("ABC")`, 1},
+			{`value IN ("a*", "xyz")`, 1},
+			{`event_id IN ("null", "missing")`, 2},
+			{`event_id IN ("null", "missing") NOT value IN ("abc")`, 2},
+			{`value IN (100.5, -100)`, 5},
+		} {
+			for _, prefix := range []string{`index=dynamic-cross-feature `, `index=dynamic-cross-feature | search `} {
+				source := prefix + check.predicate + ` | stats count`
+				if got := dynamicCrossFeatureCount(t, queryContext, connection, compile(t, source)); got != check.want {
+					t.Errorf("%s count = %d, want %d", source, got, check.want)
+				}
+			}
+		}
+	})
+
+	t.Run("search CIDR, escaped pipe, and quoted fields", func(t *testing.T) {
+		// Search equality treats CIDR notation as subnet membership and backslash-pipe
+		// as a literal pipe. Quoted field names and rename targets remain exact names:
+		// https://help.splunk.com/en/splunk-enterprise/spl-search-reference/9.1/search-commands/search
+		checks := []struct {
+			source string
+			want   uint64
+		}{
+			{`index=dynamic-cross-feature value="192.0.2.0/24" | stats count`, 1},
+			{`index=dynamic-cross-feature | search value="192.0.2.0/24" | stats count`, 1},
+			{`index=dynamic-cross-feature value="2001:db8::/32" | stats count`, 1},
+			{`index=dynamic-cross-feature value="192.0.4.0/24" | stats count`, 0},
+			{`index=dynamic-cross-feature value="pipe\|b" | stats count`, 1},
+			{`index=dynamic-cross-feature "my field"=ten | stats count`, 1},
+			{`index=dynamic-cross-feature | rename "my field" AS "renamed field" | search "renamed field"=ten | stats count`, 1},
+		}
+		for _, check := range checks {
+			if got := dynamicCrossFeatureCount(t, queryContext, connection, compile(t, check.source)); got != check.want {
+				t.Errorf("%s count = %d, want %d", check.source, got, check.want)
+			}
 		}
 	})
 

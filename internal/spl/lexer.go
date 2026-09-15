@@ -250,7 +250,7 @@ func (l *lexer) scanString(start Position) (token, error) {
 			}
 			l.advanceRune(escapedRune, width)
 			switch escapedRune {
-			case '"', '\\':
+			case '"', '\\', '|':
 				value.WriteRune(escapedRune)
 			case 'n':
 				value.WriteByte('\n')

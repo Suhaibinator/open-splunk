@@ -258,6 +258,65 @@ func TestCompileEvalTextTransformsMapMultivalueMembers(t *testing.T) {
 	)
 }
 
+// lower and upper accept multivalue input in SPL. Open Splunk deliberately
+// extends the same member-wise behavior to trim, ltrim, rtrim, and urldecode.
+// Keep the two contracts explicit so shared lowering does not imply accidental
+// conformance for every text function.
+func TestCompileEvalTextTransformMultivalueContractsAreFunctionSpecific(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name      string
+		function  string
+		operation string
+	}{
+		{name: "lower documented", function: "lower", operation: "lowerUTF8(element)"},
+		{name: "upper documented", function: "upper", operation: "upperUTF8(element)"},
+		{name: "trim extension", function: "trim", operation: "trimBoth(element, ' \\x09')"},
+		{name: "ltrim extension", function: "ltrim", operation: "trimLeft(element, ' \\x09')"},
+		{name: "rtrim extension", function: "rtrim", operation: "trimRight(element, ' \\x09')"},
+		{name: "urldecode extension", function: "urldecode", operation: "decodeURLComponent(__os_urldecode_value)"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			compiled := compileSPL(t, `index=gradethis | stats values(user) AS users | eval result=`+test.function+`(users) | table result`)
+			if !strings.Contains(compiled.SQL, test.operation) {
+				t.Fatalf("%s multivalue SQL missing %q:\n%s", test.function, test.operation, compiled.SQL)
+			}
+			if strings.Contains(strings.ToUpper(compiled.SQL), "ARRAY JOIN") {
+				t.Fatalf("%s multivalue transform expanded rows:\n%s", test.function, compiled.SQL)
+			}
+		})
+	}
+}
+
+func TestCompileToNumberRejectsInvalidLiteralButKeepsMalformedFieldNullable(t *testing.T) {
+	t.Parallel()
+
+	for _, literal := range []string{`abc`, `1_0`, `0x1p2`} {
+		logical := buildPlan(t, `index=gradethis | eval value=tonumber("`+literal+`")`)
+		_, err := (Compiler{}).Compile(logical)
+		var diagnostic *plan.Diagnostic
+		if !errors.As(err, &diagnostic) || diagnostic.Code != "SPL_INVALID_TONUMBER_LITERAL" {
+			t.Fatalf(
+				"tonumber(%q) error = %#v, want SPL_INVALID_TONUMBER_LITERAL",
+				literal,
+				err,
+			)
+		}
+	}
+
+	for _, literal := range []string{`1`, `-1.5`, `.5`, `1.`, `+1e3`, `1e+3`, `-2.5E-2`} {
+		compileSPL(t, `index=gradethis | eval value=tonumber("`+literal+`")`)
+	}
+
+	compiled := compileSPL(t, `index=gradethis | eval value=tonumber(candidate) | where isnull(value)`)
+	for _, required := range []string{"toFloat64OrNull", `isNotNull("value")`} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("malformed field tonumber SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+}
+
 func TestCompileEvalTextTransformsRejectNonStringInputs(t *testing.T) {
 	t.Parallel()
 
@@ -471,15 +530,7 @@ func TestCompileEvalNullIfDesugarsToAConditional(t *testing.T) {
 	if compiled.Args[0] != "-" {
 		t.Fatalf("args = %#v, want the comparison literal first", compiled.Args)
 	}
-	// The desugared if keeps its branch-kind rule: a Dynamic event field has no
-	// stable branch type, so the query is rejected before execution.
-	diagnostic := scalarPackDiagnostic(
-		t,
-		`index=gradethis | eval cleaned=nullif(status, "-")`,
-		"SPL_UNSUPPORTED_IF_BRANCH_TYPE",
-	)
-	if !strings.Contains(diagnostic.Message, "Null and Dynamic") {
-		t.Fatalf("nullif Dynamic diagnostic = %q", diagnostic.Message)
-	}
+	dynamic := compileSPL(t, `index=gradethis | eval cleaned=nullif(status, "-") | table cleaned`)
+	requireScalarPackSQL(t, dynamic, `CAST(NULL AS Dynamic)`, `AS "cleaned"`)
 	compileSPL(t, `index=gradethis | eval cleaned=nullif(tostring(status), "-") | table cleaned`)
 }

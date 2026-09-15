@@ -2655,7 +2655,7 @@ func TestCompileWhereNullPredicatesHonorProjectionNullableCallsAndFixedMultivalu
 		t.Fatalf("projected-away null predicate resurrected storage:\n%s", projected.SQL)
 	}
 
-	nullableCall := compileSPL(t, `index=gradethis | eval bad=tonumber("bad") | where isnull(bad)`)
+	nullableCall := compileSPL(t, `index=gradethis | eval bad=tonumber(candidate) | where isnull(bad)`)
 	if !strings.Contains(nullableCall.SQL, `isNotNull("bad")`) ||
 		!strings.Contains(nullableCall.SQL, `ifNotFinite(toFloat64OrNull(`) {
 		t.Fatalf("nullable scalar call lost its null result:\n%s", nullableCall.SQL)
@@ -2895,7 +2895,7 @@ func TestCompileMaterializedNullOutputsRemainPresent(t *testing.T) {
 	t.Parallel()
 
 	for _, source := range []string{
-		`index=gradethis | eval x=tonumber("bad") | search x=null`,
+		`index=gradethis | eval x=tonumber(candidate) | search x=null`,
 		`index=gradethis | stats p95(absent) AS p | search p=null`,
 	} {
 		compiled := compileSPL(t, source)

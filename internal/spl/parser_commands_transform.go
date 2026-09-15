@@ -655,7 +655,7 @@ func (p *parser) parseRenameCommand(name token) (Command, error) {
 	}
 	for {
 		source := p.current()
-		if source.kind != tokenWord {
+		if source.kind != tokenWord && source.kind != tokenString && source.kind != tokenQuotedField {
 			return nil, p.errorAtCurrent("SPL_EXPECTED_FIELD", "rename requires an exact source field")
 		}
 		if strings.Contains(source.text, "*") {
@@ -685,7 +685,7 @@ func (p *parser) parseRenameCommand(name token) (Command, error) {
 		p.advance()
 
 		destination := p.current()
-		if destination.kind != tokenWord {
+		if destination.kind != tokenWord && destination.kind != tokenString && destination.kind != tokenQuotedField {
 			return nil, p.errorAtCurrent("SPL_EXPECTED_FIELD", "rename AS requires an exact destination field")
 		}
 		if strings.Contains(destination.text, "*") {
