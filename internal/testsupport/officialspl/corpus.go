@@ -215,10 +215,11 @@ func validateSource(path, command string, source Source) error {
 		return fmt.Errorf("%s has invalid release %q", path, source.Release)
 	}
 	wantPath := "/spl-search-reference/" + source.Release + "/search-commands/" + command
+	textPath := "/spl-search-reference/" + source.Release + "/evaluation-functions/text-functions"
 	conversionPath := "/spl-search-reference/" + source.Release + "/evaluation-functions/conversion-functions"
 	sourcePath := strings.TrimSuffix(parsed.Path, "/")
 	pathMatches := strings.HasSuffix(sourcePath, wantPath) ||
-		(command == "eval" && strings.HasSuffix(sourcePath, conversionPath))
+		(command == "eval" && (strings.HasSuffix(sourcePath, conversionPath) || strings.HasSuffix(sourcePath, textPath)))
 	if !pathMatches ||
 		parsed.RawQuery != "" || parsed.Fragment != "" {
 		return fmt.Errorf("%s.url path must identify the pinned %s reference and have no query or fragment", path, command)

@@ -136,3 +136,20 @@ func TestAllowedFacetsRegistryIsCanonical(t *testing.T) {
 		}
 	}
 }
+
+func TestDecodeAcceptsEvalTextReference(t *testing.T) {
+	t.Parallel()
+	encoded := strings.ReplaceAll(validCorpus, "sort", "eval")
+	encoded = strings.ReplaceAll(encoded, "/search-commands/eval", "/evaluation-functions/text-functions")
+	if _, err := Decode([]byte(encoded)); err != nil {
+		t.Fatal(err)
+	}
+	for _, invalid := range []string{
+		strings.Replace(encoded, "/10.0/evaluation-functions/", "/9.4/evaluation-functions/", 1),
+		strings.ReplaceAll(encoded, `"command": "eval"`, `"command": "sort"`),
+	} {
+		if _, err := Decode([]byte(invalid)); err == nil {
+			t.Fatal("accepted mismatched text reference")
+		}
+	}
+}
