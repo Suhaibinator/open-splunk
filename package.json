@@ -7,7 +7,7 @@
     "npm": "11.19.0"
   },
   "allowScripts": {
-    "@bufbuild/buf@1.72.0": true,
+    "@bufbuild/buf@1.73.0": true,
     "fsevents@2.3.2": true
   },
   "scripts": {
@@ -24,23 +24,23 @@
     "lint:css": "stylelint \"app/**/*.css\""
   },
   "dependencies": {
-    "@bufbuild/protobuf": "^2.14.1",
-    "lucide-react": "^1.41.0",
-    "next": "^16.3.4",
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "@bufbuild/protobuf": "^2.15.0",
+    "lucide-react": "^1.45.0",
+    "next": "^16.3.5",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
   },
   "devDependencies": {
-    "@bufbuild/buf": "1.72.0",
+    "@bufbuild/buf": "1.73.0",
     "@playwright/test": "1.63.0",
-    "@types/node": "^26.4.1",
-    "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.2.7",
-    "marked": "18.0.12",
-    "oxlint": "^1.81.0",
+    "@types/node": "^26.5.1",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "marked": "18.0.13",
+    "oxlint": "^1.82.0",
     "stylelint": "^17.15.0",
     "stylelint-config-standard": "^40.0.0",
-    "ts-proto": "^2.12.1",
+    "ts-proto": "^2.12.3",
     "typescript": "^7.0.2"
   }
 }
