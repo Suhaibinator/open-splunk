@@ -1577,6 +1577,108 @@
           "fields": "number"
         }
       }
+    },
+    {
+      "id": "eval.replace-path-boundary",
+      "command": "eval",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.4/evaluation-functions/text-functions",
+        "release": "10.4",
+        "section": "replace(<str>,<regex>,<replacement>)",
+        "kind": "grammar-derived",
+        "fragment": "eval route=replace(path, \"/(\\d+|[0-9a-fA-F-]{36}|[0-9a-fA-F]{24,})(?=/|$)\", \"/:id\")",
+        "verified_on": "2026-09-19",
+        "reviewed_evidence": "This function substitutes the replacement string for every occurrence of the regular expression in the string."
+      },
+      "query": "index=main msg=\"Request summary statistics\" | eval route=replace(path, \"/(\\d+|[0-9a-fA-F-]{36}|[0-9a-fA-F]{24,})(?=/|$)\", \"/:id\")",
+      "expect": {
+        "support": "executable",
+        "commands": [
+          "eval"
+        ],
+        "facets": {
+          "expressions": "replace(path, \"/(\\d+|[0-9a-fA-F-]{36}|[0-9a-fA-F]{24,})(?=/|$)\", \"/:id\")",
+          "fields": "route"
+        }
+      }
+    },
+    {
+      "id": "eval.replace-positive-lookahead-known-unsupported",
+      "command": "eval",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.4/evaluation-functions/text-functions",
+        "release": "10.4",
+        "section": "replace(<str>,<regex>,<replacement>)",
+        "kind": "grammar-derived",
+        "fragment": "eval value=replace(path, \"a(?=b)\", \"x\")",
+        "verified_on": "2026-09-19",
+        "reviewed_evidence": "This function substitutes the replacement string for every occurrence of the regular expression in the string."
+      },
+      "query": "index=main | eval value=replace(path, \"a(?=b)\", \"x\")",
+      "expect": {
+        "support": "known-unsupported",
+        "reason": "PCRE constructs beyond the consuming RE2 and path-boundary subsets remain compatibility debt.",
+        "diagnostic_code": "SPL_UNSUPPORTED_PCRE",
+        "commands": [
+          "eval"
+        ],
+        "facets": {
+          "expressions": "replace(path, \"a(?=b)\", \"x\")",
+          "fields": "value"
+        }
+      }
+    },
+    {
+      "id": "eval.replace-lookbehind-known-unsupported",
+      "command": "eval",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.4/evaluation-functions/text-functions",
+        "release": "10.4",
+        "section": "replace(<str>,<regex>,<replacement>)",
+        "kind": "grammar-derived",
+        "fragment": "eval value=replace(path, \"(?<=a)b\", \"x\")",
+        "verified_on": "2026-09-19",
+        "reviewed_evidence": "This function substitutes the replacement string for every occurrence of the regular expression in the string."
+      },
+      "query": "index=main | eval value=replace(path, \"(?<=a)b\", \"x\")",
+      "expect": {
+        "support": "known-unsupported",
+        "reason": "PCRE constructs beyond the consuming RE2 and path-boundary subsets remain compatibility debt.",
+        "diagnostic_code": "SPL_UNSUPPORTED_PCRE",
+        "commands": [
+          "eval"
+        ],
+        "facets": {
+          "expressions": "replace(path, \"(?<=a)b\", \"x\")",
+          "fields": "value"
+        }
+      }
+    },
+    {
+      "id": "eval.replace-pattern-backreference-known-unsupported",
+      "command": "eval",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.4/evaluation-functions/text-functions",
+        "release": "10.4",
+        "section": "replace(<str>,<regex>,<replacement>)",
+        "kind": "grammar-derived",
+        "fragment": "eval value=replace(path, \"(.)\\1\", \"x\")",
+        "verified_on": "2026-09-19",
+        "reviewed_evidence": "This function substitutes the replacement string for every occurrence of the regular expression in the string."
+      },
+      "query": "index=main | eval value=replace(path, \"(.)\\1\", \"x\")",
+      "expect": {
+        "support": "known-unsupported",
+        "reason": "PCRE constructs beyond the consuming RE2 and path-boundary subsets remain compatibility debt.",
+        "diagnostic_code": "SPL_UNSUPPORTED_PCRE",
+        "commands": [
+          "eval"
+        ],
+        "facets": {
+          "expressions": "replace(path, \"(.)\\1\", \"x\")",
+          "fields": "value"
+        }
+      }
     }
   ]
 }

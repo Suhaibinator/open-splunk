@@ -4173,6 +4173,7 @@ type compileContext struct {
 	unixTimestampBudget                    compiledUnixTimestampBudget
 	concatenationBudget                    compiledConcatenationBudget
 	replaceOutputBytes                     uint64
+	replacePathBudget                      compiledReplacePathBudget
 	stringConversionBudget                 compiledStringConversionBudget
 	arithmeticOperators                    int
 	membershipCandidates                   int

@@ -3428,12 +3428,12 @@ func compileReplaceScalar(expression *plan.ScalarCallExpression, state compileSt
 	if !ok {
 		return compiledScalar{}, errors.New("compile ClickHouse replace: regular expression must be a string literal")
 	}
-	if pattern == "" {
-		return compiledScalar{}, errors.New("compile ClickHouse replace: empty regular expressions are not supported")
+	compiledPattern, err := splregex.CompileReplacePattern(pattern)
+	if err != nil {
+		code, message := splregex.ReplacePatternDiagnostic(err)
+		return compiledScalar{}, &plan.Diagnostic{Code: code, Message: message, Range: expression.Arguments[1].SourceRange()}
 	}
-	if err := splregex.ValidateReplacePattern(pattern); err != nil {
-		return compiledScalar{}, fmt.Errorf("compile ClickHouse replace: regular expression is outside the supported RE2 subset: %w", err)
-	}
+
 	replacement, ok := scalarStringLiteral(expression.Arguments[2])
 	if !ok {
 		return compiledScalar{}, errors.New("compile ClickHouse replace: replacement must be a string literal")
@@ -3447,9 +3447,17 @@ func compileReplaceScalar(expression *plan.ScalarCallExpression, state compileSt
 		return compiledScalar{}, err
 	}
 	inputSQL, inputArgs := compiledStringScalar(input)
+	valueSQL := "replaceRegexpAll(" + inputSQL + ", ?, ?)"
+	if compiledPattern.PathSegment {
+		valueSQL = compileReplacePathSQL(inputSQL)
+		if err := reserveReplacePath(state.context, compiledPattern, compiledScalarStringByteBound(input), len(valueSQL), expression.Range); err != nil {
+			state.context.replaceOutputBytes -= outputBytes
+			return compiledScalar{}, err
+		}
+	}
 	return compiledScalar{
-		valueSQL:                    "replaceRegexpAll(" + inputSQL + ", ?, ?)",
-		valueArgs:                   append(inputArgs, pattern, replacement),
+		valueSQL:                    valueSQL,
+		valueArgs:                   append(inputArgs, compiledPattern.Pattern, replacement),
 		maxStringBytes:              outputBytes,
 		existsSQL:                   "1",
 		textEligibleSQL:             input.textEligibleSQL,

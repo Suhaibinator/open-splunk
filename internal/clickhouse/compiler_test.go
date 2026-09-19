@@ -3197,7 +3197,7 @@ func TestCompileEvalRejectsRegexOutsideSafeRE2Subset(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, pattern := range []string{"(?=secret)", "a*"} {
+	for pattern, code := range map[string]string{"(?=secret)": "SPL_UNSUPPORTED_PCRE", "a*": "SPL_UNSUPPORTED_REGEX"} {
 		candidate := *logical
 		candidate.Operators = append(append([]plan.Operator(nil), logical.Operators...), &plan.Extend{Assignments: []plan.ExtendAssignment{{
 			Output: output,
@@ -3211,7 +3211,8 @@ func TestCompileEvalRejectsRegexOutsideSafeRE2Subset(t *testing.T) {
 			},
 		}}})
 		_, err = (Compiler{}).Compile(&candidate)
-		if err == nil || !strings.Contains(err.Error(), "regular expression") {
+		var diagnostic *plan.Diagnostic
+		if !errors.As(err, &diagnostic) || diagnostic.Code != code {
 			t.Fatalf("Compile pattern %q error = %v, want safe regex diagnostic", pattern, err)
 		}
 	}

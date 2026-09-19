@@ -1,0 +1,22 @@
+-- official SPL case: eval.replace-path-boundary
+-- source: https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.4/evaluation-functions/text-functions (replace(<str>,<regex>,<replacement>))
+-- query: index=main msg="Request summary statistics" | eval route=replace(path, "/(\d+|[0-9a-fA-F-]{36}|[0-9a-fA-F]{24,})(?=/|$)", "/:id")
+-- output_fields: _time, _raw, index, host, source, sourcetype, service, level, message, trace_id, span_id, event_id, _indextime, route
+-- string_or_bytes_outputs: []clickhouse.ResultStringOrBytesOutput{clickhouse.ResultStringOrBytesOutput{OutputIndex:0x1, Nullable:false}}
+-- sparse_fields: false subset=false
+-- atomic_result: false
+-- execution_authority_digest: 0c76580a63d8727e47f8a1515542e8dab6d2586285ecf55b2974f33e63edb552
+-- args[0]: "path"
+-- args[1]: "(?-s)\\A/([0-9]+|[\\-0-9A-Fa-f]{36}|[0-9A-Fa-f]{24,})\\z"
+-- args[2]: "/:id"
+-- args[3]: "tenant-1"
+-- args[4]: "main"
+-- args[5]: "2026-07-21 00:00:00.000000000"
+-- args[6]: "2026-07-22 00:00:00.000000000"
+-- args[7]: "2026-07-22 00:00:01.000"
+-- args[8]: "2026-07-22 00:00:01.000"
+-- args[9]: 0x49
+-- args[10]: "main"
+-- args[11]: "msg"
+-- args[12]: "Request summary statistics"
+SELECT "_time", "_raw", "index", "host", "source", "sourcetype", "service", "level", "message", "trace_id", "span_id", "event_id", "_indextime", "route", toUInt8(ifNull("__os_raw_encoding" = 2, 0)) AS "__os_result_semantic_bytes_1" FROM (SELECT *, arrayElement(arrayMap((__os_replace_path_value, __os_replace_path_pattern, __os_replace_path_replacement) -> if(isNull(__os_replace_path_value), CAST(NULL AS Nullable(String)), concat(arrayElement(arrayMap((__os_replace_path_core) -> arrayElement(arrayMap((__os_replace_path_parts) -> arrayStringConcat(arrayMap((__os_replace_path_part, __os_replace_path_index) -> if(__os_replace_path_index = 1, __os_replace_path_part, replaceRegexpAll(concat('/', __os_replace_path_part), __os_replace_path_pattern, __os_replace_path_replacement)), __os_replace_path_parts, arrayEnumerate(__os_replace_path_parts)), ''), [splitByChar('/', __os_replace_path_core)]), 1), [substring(assumeNotNull(__os_replace_path_value), 1, length(assumeNotNull(__os_replace_path_value)) - endsWith(assumeNotNull(__os_replace_path_value), char(10)))]), 1), if(endsWith(assumeNotNull(__os_replace_path_value), char(10)), char(10), ''))), [if(has("__os_field_names", ?), dynamicElement("__os_fields"."path", 'String'), CAST(NULL AS Nullable(String)))], [CAST(? AS String)], [CAST(? AS String)]), 1) AS "route" FROM (SELECT * FROM (SELECT "event_id" AS "event_id", "index_name" AS "index", "event_time" AS "_time", "index_time" AS "_indextime", "host" AS "host", "source" AS "source", "sourcetype" AS "sourcetype", "service" AS "service", "severity" AS "severity", "level" AS "level", "body" AS "message", "raw" AS "_raw", "raw_encoding" AS "__os_raw_encoding", "trace_id" AS "trace_id", "span_id" AS "span_id", "collector_id" AS "collector_id", "batch_id" AS "batch_id", "fields" AS "__os_fields", "field_names" AS "__os_field_names", "field_types" AS "__os_field_types", "field_metadata_version" AS "__os_field_metadata_version", "event_time" AS "__os_sort_time", "event_id" AS "__os_sort_event_id", "visibility_seq" AS "__os_sort_visibility_seq", tuple("index_name", "collector_id", "batch_sequence", "batch_id") AS "__os_sort_source_identity" FROM "open_splunk"."events" WHERE "tenant_id" = ? AND "index_name" IN (?) AND "event_time" >= parseDateTime64BestEffort(?, 9, 'UTC') AND "event_time" < parseDateTime64BestEffort(?, 9, 'UTC') AND "index_time" <= parseDateTime64BestEffort(?, 3, 'UTC') AND "expires_at" > parseDateTime64BestEffort(?, 3, 'UTC') AND "visibility_seq" <= ?) AS "_stage_1" WHERE ((1 AND ifNull("index" = ?, 0)) AND (has("__os_field_names", ?) AND ifNull((dynamicType("__os_fields"."msg") = 'String' AND lowerUTF8(toString("__os_fields"."msg")) = lowerUTF8(?)), 0)))) AS "_stage_2") AS "_stage_3" ORDER BY "__os_sort_time" DESC NULLS LAST, "__os_sort_event_id" DESC NULLS LAST, "__os_sort_visibility_seq" DESC NULLS LAST, "__os_sort_source_identity" DESC NULLS LAST

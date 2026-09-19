@@ -10,6 +10,7 @@ import (
 // continuationBudget carries cumulative compilation charges without retaining
 // prior AST caches, regex programs, lookup cells, or an execution context.
 type continuationBudget struct {
+	replacePath                                                                                compiledReplacePathBudget
 	extraction                                                                                 authoredKnowledgeCompilation
 	matchWork, likeWork, strftimeWork, strptimeWork, relativeWork, relativeOperations          int
 	arithmetic, membership, concatOperands                                                     int
@@ -19,8 +20,9 @@ type continuationBudget struct {
 
 func timechartContinuationBudget(source *compileContext) continuationBudget {
 	return continuationBudget{
-		extraction: source.extractionBudget,
-		matchWork:  source.patternBudgets.match.programWorkUnits, likeWork: source.patternBudgets.like.workUnits,
+		replacePath: source.replacePathBudget,
+		extraction:  source.extractionBudget,
+		matchWork:   source.patternBudgets.match.programWorkUnits, likeWork: source.patternBudgets.like.workUnits,
 		strftimeWork: source.strftimeBudget.workUnits, strptimeWork: source.strptimeBudget.workUnits,
 		relativeWork: source.relativeTimeBudget.workUnits, relativeOperations: source.relativeTimeBudget.operations,
 		arithmetic: source.arithmeticOperators, membership: source.membershipCandidates, concatOperands: source.concatenationBudget.operands,
@@ -30,6 +32,7 @@ func timechartContinuationBudget(source *compileContext) continuationBudget {
 	}
 }
 func (budget continuationBudget) apply(target *compileContext) {
+	target.replacePathBudget = budget.replacePath
 	target.extractionBudget = budget.extraction
 	target.patternBudgets.match.programWorkUnits = budget.matchWork
 	target.patternBudgets.like.workUnits = budget.likeWork
@@ -51,6 +54,8 @@ func (budget continuationBudget) apply(target *compileContext) {
 }
 func (budget continuationBudget) write(digest hash.Hash) {
 	budget.extraction.write(digest)
+	writeUint64(digest, budget.replacePath.inputBytes)
+	writeInt64(digest, int64(budget.replacePath.programWorkUnits))
 	for _, value := range []int{budget.matchWork, budget.likeWork, budget.strftimeWork, budget.strptimeWork, budget.relativeWork, budget.relativeOperations, budget.arithmetic, budget.membership, budget.concatOperands} {
 		writeInt64(digest, int64(value))
 	}

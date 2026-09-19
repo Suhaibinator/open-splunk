@@ -113,6 +113,7 @@ The semantic rule inventory is:
 | `SPL-ARITHMETIC-TYPE-001` | numeric operator eligibility and result types |
 | `SPL-ARITHMETIC-NULL-001` | missing, null, and conversion behavior |
 | `SPL-ARITHMETIC-EXCEPTION-001` | divide-by-zero, overflow, and non-finite behavior |
+| `SPL-REPLACE-PATH-001` | bounded path-boundary regex replacement |
 | `SPL-ARITHMETIC-EVALUATION-001` | bounded, deterministic evaluation |
 | `SPL-MEMBERSHIP-001` | `IN`/`NOT IN` syntax and equality |
 | `SPL-MEMBERSHIP-NULL-001` | three-valued membership results |
@@ -231,6 +232,21 @@ fields. Supported scalar functions include `isnull`, `isnotnull`, `replace`,
 
 The scalar function pack follows these contracts:
 
+- `SPL-REPLACE-PATH-001`: `replace` supports consuming RE2 patterns and
+  `/BODY(?=/|$)` path-boundary lookahead. `BODY` must always consume text,
+  cannot consume `/` or newline, and cannot contain assertions or inline flags.
+  Capturing/noncapturing groups, alternation inside groups, character classes,
+  and repetition are supported. For example,
+  `replace(path, "/(\d+|[0-9a-fA-F-]{36}|[0-9a-fA-F]{24,})(?=/|$)", "/:id")`
+  turns `/123/456` into `/:id/:id`. Captures retain their numbering; replacement
+  text is not searched again. A single final newline is retained and `$` may
+  match immediately before it. Other lookarounds and pattern backreferences
+  remain compatibility debt and return `SPL_UNSUPPORTED_PCRE`. Malformed regex
+  and potentially empty matches return distinct `SPL_UNSUPPORTED_REGEX` messages.
+  The path lowering limits authored and normalized patterns to 4 KiB, program
+  work to 4,096 units per call and 16,384 per query, input bounds to 4 MiB per
+  call and 16 MiB per query row, and generated scalar SQL to 64 KiB. These
+  limits return `SPL_QUERY_TOO_COMPLEX`; no path segments are truncated.
 - `replace` rejects a call whose conservative output bound exceeds 16 MiB,
   or a query whose replacement bounds total more than 64 MiB per row, with
   `SPL_QUERY_TOO_COMPLEX` before SQL execution. The bound includes capture
