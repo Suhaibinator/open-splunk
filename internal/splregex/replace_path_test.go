@@ -172,3 +172,17 @@ func TestReplacePossessiveDiagnostics(t *testing.T) {
 		t.Error("group prefix incorrectly recognized as possessive quantifier")
 	}
 }
+
+func TestReplaceMalformedTokenRuns(t *testing.T) {
+	t.Parallel()
+	for _, pattern := range []string{
+		"[" + strings.Repeat("[:", 10000),
+		strings.Repeat(`\x{`, 10000),
+	} {
+		_, err := CompileReplacePattern(pattern)
+		code, message := ReplacePatternDiagnostic(err)
+		if err == nil || code != "SPL_UNSUPPORTED_REGEX" || !strings.Contains(message, "invalid syntax") {
+			t.Fatalf("malformed token run: %s, %s, %v", code, message, err)
+		}
+	}
+}

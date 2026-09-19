@@ -192,6 +192,7 @@ func hasReplacePCRE(pattern string) bool {
 					i += end + 3
 					continue
 				}
+				return false
 			}
 			if next == 'Q' {
 				quoted = true
@@ -239,9 +240,13 @@ func replaceCharacterClassEnd(pattern string, start int) int {
 			i++
 		case '[':
 			if strings.HasPrefix(pattern[i:], "[:") {
-				if end := strings.Index(pattern[i+2:], ":]"); end >= 0 {
-					i += end + 3
+				end := strings.Index(pattern[i+2:], ":]")
+				if end < 0 {
+					// An unterminated POSIX class is invalid. Stop rather than scanning
+					// the same suffix again at every subsequent "[:" in malformed input.
+					return len(pattern) - 1
 				}
+				i += end + 3
 			}
 		case ']':
 			return i
