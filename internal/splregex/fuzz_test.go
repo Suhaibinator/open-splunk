@@ -244,6 +244,12 @@ func FuzzCompileMatchPattern(f *testing.F) {
 
 func FuzzValidateReplacePattern(f *testing.F) {
 	for _, seed := range []string{
+		`a++`,
+		`/\d+(?=/|$)`,
+		`/([a-z]+)-(\d+)(?=/|$)`,
+		`/[(?=/|$)`,
+		`/a*(?=/|$)`,
+		"/" + strings.Repeat("a", MaximumReplacePathPatternBytes) + "(?=/|$)",
 		`\d+`,
 		`[aeiou]`,
 		`a*`,
@@ -269,7 +275,10 @@ func FuzzValidateReplacePattern(f *testing.F) {
 		}
 		if firstErr != nil {
 			if !errors.Is(firstErr, ErrMayMatchEmpty) &&
-				!strings.HasPrefix(firstErr.Error(), "invalid RE2 regular expression: ") {
+				!errors.Is(firstErr, ErrUnsupportedReplacePCRE) &&
+				!errors.Is(firstErr, ErrReplacePathTooComplex) &&
+				!strings.HasPrefix(firstErr.Error(), "invalid RE2 regular expression: ") &&
+				!strings.HasPrefix(firstErr.Error(), "invalid replace path body: ") {
 				t.Fatalf("unclassified replace validation error: %v", firstErr)
 			}
 			return
@@ -279,7 +288,13 @@ func FuzzValidateReplacePattern(f *testing.F) {
 		}
 		// Acceptance is a promise that every match consumes input, which is
 		// what makes SPL's global replacement and ClickHouse's agree.
-		compiled, err := regexp.Compile(pattern)
+		program, err := CompileReplacePattern(pattern)
+		if err != nil {
+			t.Fatalf("validated pattern %q failed compilation: %v", pattern, err)
+		}
+		again, againErr := CompileReplacePattern(pattern)
+		regexFuzzCheckDeterministic(t, "CompileReplacePattern", program, err, again, againErr)
+		compiled, err := regexp.Compile(program.Pattern)
 		if err != nil {
 			t.Fatalf("accepted pattern %q is not a valid Go regexp: %v", pattern, err)
 		}
@@ -291,6 +306,35 @@ func FuzzValidateReplacePattern(f *testing.F) {
 				if match[1] <= match[0] {
 					t.Fatalf("accepted pattern %q matched the empty substring at %d of %q", pattern, match[0], probe)
 				}
+			}
+		}
+		if !program.PathSegment {
+			if program.Pattern != pattern {
+				t.Fatalf("ordinary RE2 pattern changed: got %q want %q", program.Pattern, pattern)
+			}
+			return
+		}
+		// Compare the lowered program against a whole-body RE2 oracle,
+		// including capture numbering and strict slash/newline boundaries.
+		if !strings.HasPrefix(pattern, "/") || !strings.HasSuffix(pattern, "(?=/|$)") {
+			t.Fatalf("accepted path pattern outside the supported shape: %q", pattern)
+		}
+		body := strings.TrimSuffix(pattern[1:], "(?=/|$)")
+		oracle, err := regexp.Compile(`\A(?:` + body + `)\z`)
+		if err != nil {
+			t.Fatalf("accepted path body %q is not RE2: %v", body, err)
+		}
+		for _, segment := range append([]string{"123", "abc-123", "/", "123/456", "123\n"}, regexFuzzProbes...) {
+			got := compiled.FindStringSubmatch("/" + segment)
+			want := oracle.FindStringSubmatch(segment)
+			if want != nil {
+				want[0] = "/" + want[0]
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("lowered %q disagrees with body %q on %q: got %q want %q", program.Pattern, body, segment, got, want)
+			}
+			if got != nil && (segment == "" || strings.ContainsAny(segment, "/\n")) {
+				t.Fatalf("accepted path pattern %q consumed an invalid segment %q", pattern, segment)
 			}
 		}
 	})
