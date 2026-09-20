@@ -30,22 +30,18 @@ func (p *parser) parseTextScalarCall(name token, functionName string, arguments 
 			}
 		}
 		pattern := arguments[1].(*ScalarLiteralExpr)
-		if pattern.Value.Text == "" {
-			return nil, &Diagnostic{
-				Code:        "SPL_UNSUPPORTED_REGEX",
-				Message:     "replace does not support an empty regular expression",
-				Range:       pattern.Range,
-				Suggestions: []string{"use a non-empty RE2-compatible regular expression"},
-			}
+		compiled, err := splregex.CompileReplacePattern(pattern.Value.Text)
+		if err != nil {
+			code, message := splregex.ReplacePatternDiagnostic(err)
+			return nil, &Diagnostic{Code: code, Message: message, Range: pattern.Range}
 		}
-		if err := splregex.ValidateReplacePattern(pattern.Value.Text); err != nil {
-			return nil, &Diagnostic{
-				Code:        "SPL_UNSUPPORTED_REGEX",
-				Message:     "replace regular expression is outside the supported always-consuming RE2-compatible subset",
-				Range:       pattern.Range,
-				Suggestions: []string{"use an RE2-compatible regular expression"},
+		if compiled.PathSegment {
+			if compiled.ProgramWorkUnits > splregex.MaximumReplacePathQueryProgramWorkUnits-p.replacePathProgramWorkUnits {
+				return nil, &Diagnostic{Code: "SPL_QUERY_TOO_COMPLEX", Message: "replace path programs exceed the query resource limit", Range: pattern.Range}
 			}
+			p.replacePathProgramWorkUnits += compiled.ProgramWorkUnits
 		}
+
 	case "lower", "upper":
 		if functionName == "lower" {
 			function = ScalarFunctionLower

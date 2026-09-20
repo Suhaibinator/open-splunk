@@ -102,6 +102,8 @@ func TestCompatibilityCorpusParserExpectations(t *testing.T) {
 	// execution diagnostics in the same corpus are asserted by their later
 	// pipeline stages instead of being accidentally pulled forward to parse.
 	parserDiagnostics := map[string]struct{}{
+		"SPL_UNSUPPORTED_PCRE":              {},
+		"SPL_UNSUPPORTED_REGEX":             {},
 		"SPL_EXPECTED_COMPARISON":           {},
 		"SPL_EXPECTED_FIELD":                {},
 		"SPL_INVALID_FIELD":                 {},

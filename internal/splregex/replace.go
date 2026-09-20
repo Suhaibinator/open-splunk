@@ -4,7 +4,6 @@ package splregex
 
 import (
 	"errors"
-	"fmt"
 	"regexp/syntax"
 	"slices"
 )
@@ -14,17 +13,10 @@ import (
 // SPL's global PCRE replacement semantics.
 var ErrMayMatchEmpty = errors.New("regular expression may match an empty substring")
 
-// ValidateReplacePattern accepts the RE2-compatible, always-consuming subset
-// that has consistent global replacement behavior in SPL and ClickHouse.
+// ValidateReplacePattern validates the shared bounded replacement contract.
 func ValidateReplacePattern(pattern string) error {
-	expression, err := syntax.Parse(pattern, syntax.Perl)
-	if err != nil {
-		return fmt.Errorf("invalid RE2 regular expression: %w", err)
-	}
-	if mayMatchEmptySubstring(expression) {
-		return ErrMayMatchEmpty
-	}
-	return nil
+	_, err := CompileReplacePattern(pattern)
+	return err
 }
 
 func mayMatchEmptySubstring(expression *syntax.Regexp) bool {

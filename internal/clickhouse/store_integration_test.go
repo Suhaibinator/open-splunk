@@ -315,6 +315,11 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 	})
 
 	setupCancel()
+	t.Run("path-boundary replacement", func(t *testing.T) {
+		replaceContext, replaceCancel := context.WithTimeout(lifecycleContext, 2*time.Minute)
+		defer replaceCancel()
+		testReplacePathAgainstClickHouse(replaceContext, t, store, queryConnection, indexTime)
+	})
 	if !t.Run("compiled SPL corpus", func(t *testing.T) {
 		compilerContext, compilerCancel := context.WithTimeout(
 			lifecycleContext,

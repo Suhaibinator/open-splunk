@@ -96,18 +96,19 @@ func sourcePositionAtOffset(source string, offset int) Position {
 }
 
 type parser struct {
-	source                string
-	tokens                []token
-	index                 int
-	profile               expressionProfile
-	scalarDepth           int
-	unaryDepth            int
-	evalPredicates        int
-	concatenationOperands int
-	arithmeticOperators   int
-	membershipCandidates  int
-	matchProgramWorkUnits int
-	preserveSignedLiteral int
+	source                      string
+	tokens                      []token
+	index                       int
+	profile                     expressionProfile
+	scalarDepth                 int
+	unaryDepth                  int
+	evalPredicates              int
+	concatenationOperands       int
+	arithmeticOperators         int
+	membershipCandidates        int
+	matchProgramWorkUnits       int
+	replacePathProgramWorkUnits int
+	preserveSignedLiteral       int
 }
 
 func (p *parser) parseQuery() (*Query, error) {

@@ -3496,6 +3496,44 @@
   },
   "rules": [
     {
+      "id": "SPL-REPLACE-PATH-001",
+      "summary": "Path-boundary replacement preserves adjacent matches, capture references, and bounded global replacement.",
+      "cases": [
+        {
+          "name": "reported path pattern",
+          "source": "index=main | eval route=replace(path, \"/(\\d+|[0-9a-fA-F-]{36}|[0-9a-fA-F]{24,})(?=/|$)\", \"/:id\")",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "adjacent path segments",
+          "source": "index=main | eval route=replace(\"/123/456\", \"/(\\d+)(?=/|$)\", \"/:id\")",
+          "evidence": "internal/clickhouse/replace_path_integration_test.go",
+          "expect": {
+            "parse": "accept",
+            "value": {
+              "string": "/:id/:id"
+            }
+          }
+        },
+        {
+          "name": "unsupported general lookahead",
+          "source": "index=main | eval route=replace(path, \"a(?=b)\", \"x\")",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_PCRE"
+          }
+        },
+        {
+          "name": "empty match",
+          "source": "index=main | eval route=replace(path, \"a*\", \"x\")",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_REGEX"
+          }
+        }
+      ]
+    },
+    {
       "id": "SPL-PROFILE-001",
       "summary": "All authored, retained, and knowledge search surfaces use the current cumulative contract.",
       "cases": [
