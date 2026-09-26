@@ -997,24 +997,101 @@ func (store *Store) Authenticate(
 	return authentication, nil
 }
 
+// hecLastUseRefreshInterval bounds how stale a HEC token's last-use
+// observation may become. HEC authenticates every request, so recording each
+// use would put a SQLite writer on the hot path and starve administrative
+// writes of the write lock under sustained ingest.
+const hecLastUseRefreshInterval = time.Minute
+
 // AuthenticateHEC validates one HEC credential, resolves its versioned
-// profile and complete current ingestion-policy snapshot, and records a
-// monotonic last-use observation in the same transaction. Unknown,
-// wrong-purpose, expired, revoked, and scope-less credentials return
-// ErrUnauthorized. A structurally valid, unexpired HEC credential in the
-// explicit disabled state returns ErrInactiveToken. The returned value
-// contains no credential material.
+// profile and complete current ingestion-policy snapshot, and keeps a
+// monotonic last-use observation at most hecLastUseRefreshInterval stale.
+// Authentication reads a snapshot without the SQLite write lock; only a stale
+// or missing observation re-authenticates and records use in a write
+// transaction. Unknown, wrong-purpose, expired, revoked, and scope-less
+// credentials return ErrUnauthorized. A structurally valid, unexpired HEC
+// credential in the explicit disabled state returns ErrInactiveToken. The
+// returned value contains no credential material.
 func (store *Store) AuthenticateHEC(
 	ctx context.Context,
 	plaintext string,
-) (
-	authentication Authentication,
-	returnedErr error,
-) {
+) (Authentication, error) {
 	if ctx == nil {
 		return Authentication{}, fmt.Errorf("%w: nil context", control.ErrInvalidArgument)
 	}
 	checkedAt := databaseTime(store.now())
+	authentication, useIsCurrent, err := store.authenticateHECSnapshot(ctx, plaintext, checkedAt)
+	if err != nil {
+		return Authentication{}, classifyHECAuthenticationError(err)
+	}
+	if useIsCurrent {
+		return authentication, nil
+	}
+	return store.authenticateHECAndRecordUse(ctx, plaintext, checkedAt)
+}
+
+// authenticateHECSnapshot authenticates in a read-only transaction, which the
+// SQLite driver begins as DEFERRED so it never waits for the write lock. It
+// reports whether the stored last-use observation is recent enough to skip
+// recording this use.
+func (store *Store) authenticateHECSnapshot(
+	ctx context.Context,
+	plaintext string,
+	checkedAt time.Time,
+) (
+	authentication Authentication,
+	useIsCurrent bool,
+	returnedErr error,
+) {
+	tx := store.orm.WithContext(ctx).Begin(&sql.TxOptions{ReadOnly: true})
+	if tx.Error != nil {
+		return Authentication{}, false, fmt.Errorf(
+			"begin HEC token authentication snapshot: %w",
+			tx.Error,
+		)
+	}
+	finished := false
+	defer finishTokenTransaction(tx, &finished, &returnedErr)
+
+	authentication, err := store.authenticateHEC(tx, plaintext, checkedAt)
+	if err != nil {
+		return Authentication{}, false, err
+	}
+	var lastUsedAtUnixMicro sql.NullInt64
+	if err := tx.
+		Model(&collectorTokenRecord{}).
+		Select("last_used_at_unix_micro").
+		Where("ingestion_token_id = ?", authentication.TokenID).
+		Scan(&lastUsedAtUnixMicro).Error; err != nil {
+		return Authentication{}, false, fmt.Errorf(
+			"read HEC token last use: %w",
+			err,
+		)
+	}
+	if err := tx.Commit().Error; err != nil {
+		return Authentication{}, false, fmt.Errorf(
+			"commit HEC token authentication snapshot: %w",
+			err,
+		)
+	}
+	finished = true
+	// A clock rollback leaves the observation ahead of checkedAt; the
+	// monotonic update would keep it unchanged, so it also counts as current.
+	useIsCurrent = lastUsedAtUnixMicro.Valid &&
+		lastUsedAtUnixMicro.Int64 > checkedAt.Add(-hecLastUseRefreshInterval).UnixMicro()
+	return authentication, useIsCurrent, nil
+}
+
+// authenticateHECAndRecordUse re-authenticates inside the write transaction
+// so the recorded use is serialized with administrative token mutations.
+func (store *Store) authenticateHECAndRecordUse(
+	ctx context.Context,
+	plaintext string,
+	checkedAt time.Time,
+) (
+	authentication Authentication,
+	returnedErr error,
+) {
 	tx := store.orm.WithContext(ctx).Begin()
 	if tx.Error != nil {
 		return Authentication{}, classifyHECAuthenticationError(fmt.Errorf(

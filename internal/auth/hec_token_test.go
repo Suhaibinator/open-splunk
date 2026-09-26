@@ -186,6 +186,191 @@ func TestAuthenticateHECClassifiesSQLiteWriterContentionAsTemporary(t *testing.T
 	}
 }
 
+func TestAuthenticateHECRefreshesLastUseAtBoundedInterval(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openControlDB(t)
+	if _, err := db.CreateIndex(ctx, activeIndex("main")); err != nil {
+		t.Fatalf("CreateIndex(main): %v", err)
+	}
+	store, err := NewStore(
+		db,
+		[]byte("0123456789abcdef0123456789abcdef"),
+	)
+	if err != nil {
+		t.Fatalf("NewStore(): %v", err)
+	}
+	firstUse := time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)
+	now := firstUse
+	store.now = func() time.Time { return now }
+	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
+		Name:              "HEC bounded last use",
+		Purpose:           IngestionTokenPurposeHEC,
+		AllowedIndexNames: []string{"main"},
+	})
+	if err != nil {
+		t.Fatalf("CreateCollectorToken(HEC): %v", err)
+	}
+
+	for _, step := range []struct {
+		name        string
+		at          time.Time
+		wantLastUse time.Time
+	}{
+		{name: "first use", at: firstUse, wantLastUse: firstUse},
+		{
+			name:        "within interval",
+			at:          firstUse.Add(hecLastUseRefreshInterval - time.Microsecond),
+			wantLastUse: firstUse,
+		},
+		{
+			name:        "clock rollback",
+			at:          firstUse.Add(-time.Hour),
+			wantLastUse: firstUse,
+		},
+		{
+			name:        "interval elapsed",
+			at:          firstUse.Add(hecLastUseRefreshInterval),
+			wantLastUse: firstUse.Add(hecLastUseRefreshInterval),
+		},
+	} {
+		now = step.at
+		if _, err := store.AuthenticateHEC(ctx, issued.Secret.Plaintext()); err != nil {
+			t.Fatalf("AuthenticateHEC(%s): %v", step.name, err)
+		}
+		persisted, err := store.GetCollectorToken(ctx, issued.Token.ID)
+		if err != nil {
+			t.Fatalf("GetCollectorToken(%s): %v", step.name, err)
+		}
+		if !persisted.LastUsedAt.Equal(step.wantLastUse) {
+			t.Fatalf(
+				"%s LastUsedAt = %v, want %v",
+				step.name,
+				persisted.LastUsedAt,
+				step.wantLastUse,
+			)
+		}
+	}
+}
+
+func TestAuthenticateHECWithCurrentUseDoesNotWaitForWriter(t *testing.T) {
+	ctx := context.Background()
+	db := openControlDB(t)
+	if _, err := db.CreateIndex(ctx, activeIndex("main")); err != nil {
+		t.Fatalf("CreateIndex(main): %v", err)
+	}
+	store, err := NewStore(
+		db,
+		[]byte("0123456789abcdef0123456789abcdef"),
+	)
+	if err != nil {
+		t.Fatalf("NewStore(): %v", err)
+	}
+	now := time.Date(2026, 9, 26, 13, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
+		Name:              "HEC uncontended authentication",
+		Purpose:           IngestionTokenPurposeHEC,
+		AllowedIndexNames: []string{"main"},
+	})
+	if err != nil {
+		t.Fatalf("CreateCollectorToken(HEC): %v", err)
+	}
+	if _, err := store.AuthenticateHEC(ctx, issued.Secret.Plaintext()); err != nil {
+		t.Fatalf("AuthenticateHEC(first use): %v", err)
+	}
+
+	database := db.SQLDB()
+	database.SetMaxOpenConns(2)
+	blocker, err := database.Conn(ctx)
+	if err != nil {
+		t.Fatalf("acquire HEC authentication blocker: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = blocker.ExecContext(context.Background(), `ROLLBACK`)
+		_ = blocker.Close()
+	})
+	if _, err := blocker.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		t.Fatalf("reserve HEC authentication writer: %v", err)
+	}
+	contender, err := database.Conn(ctx)
+	if err != nil {
+		t.Fatalf("acquire HEC authentication contender: %v", err)
+	}
+	if _, err := contender.ExecContext(ctx, `PRAGMA busy_timeout = 1`); err != nil {
+		_ = contender.Close()
+		t.Fatalf("shorten HEC authentication busy timeout: %v", err)
+	}
+	if err := contender.Close(); err != nil {
+		t.Fatalf("release configured HEC authentication contender: %v", err)
+	}
+
+	// A held writer used to fail every HEC authentication with SQLITE_BUSY.
+	// A current last-use observation must authenticate from the snapshot.
+	now = now.Add(hecLastUseRefreshInterval / 2)
+	authentication, err := store.AuthenticateHEC(ctx, issued.Secret.Plaintext())
+	if err != nil {
+		t.Fatalf("AuthenticateHEC(writer held): %v", err)
+	}
+	if authentication.TokenID != issued.Token.ID {
+		t.Fatalf("AuthenticateHEC(writer held) token = %q, want %q", authentication.TokenID, issued.Token.ID)
+	}
+
+	// A stale observation still needs the writer and reports contention.
+	now = now.Add(hecLastUseRefreshInterval)
+	if _, err := store.AuthenticateHEC(ctx, issued.Secret.Plaintext()); !errors.Is(err, ErrHECAuthenticationTemporarilyUnavailable) ||
+		!control.IsDatabaseContention(err) {
+		t.Fatalf(
+			"AuthenticateHEC(stale, writer held) error = %v, want temporary database contention",
+			err,
+		)
+	}
+}
+
+func TestAuthenticateHECWithCurrentUseRejectsDisabledToken(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openControlDB(t)
+	if _, err := db.CreateIndex(ctx, activeIndex("main")); err != nil {
+		t.Fatalf("CreateIndex(main): %v", err)
+	}
+	store, err := NewStore(
+		db,
+		[]byte("0123456789abcdef0123456789abcdef"),
+	)
+	if err != nil {
+		t.Fatalf("NewStore(): %v", err)
+	}
+	now := time.Date(2026, 9, 26, 14, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
+		Name:              "HEC disabled after use",
+		Purpose:           IngestionTokenPurposeHEC,
+		AllowedIndexNames: []string{"main"},
+	})
+	if err != nil {
+		t.Fatalf("CreateCollectorToken(HEC): %v", err)
+	}
+	if _, err := store.AuthenticateHEC(ctx, issued.Secret.Plaintext()); err != nil {
+		t.Fatalf("AuthenticateHEC(first use): %v", err)
+	}
+	if _, err := store.SetCollectorTokenEnabled(
+		ctx,
+		issued.Token.ID,
+		issued.Token.Version,
+		false,
+	); err != nil {
+		t.Fatalf("SetCollectorTokenEnabled(false): %v", err)
+	}
+
+	now = now.Add(time.Second)
+	if _, err := store.AuthenticateHEC(ctx, issued.Secret.Plaintext()); !errors.Is(err, ErrInactiveToken) {
+		t.Fatalf("AuthenticateHEC(disabled, current use) error = %v, want ErrInactiveToken", err)
+	}
+}
+
 func TestAuthenticateHECFailsClosedWithoutProfileAndDoesNotRecordUse(t *testing.T) {
 	t.Parallel()
 
