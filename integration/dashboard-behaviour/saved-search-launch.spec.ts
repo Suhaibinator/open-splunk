@@ -14,6 +14,7 @@ const spl = " \nindex=main | table _time _raw\t";
 const savedName = "Whitespace saved report";
 const headers = { "content-type": "application/x-protobuf" };
 const requestID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const fulfill = (route: Route, bytes: Uint8Array) => route.fulfill({ status: 200, headers, body: Buffer.from(bytes) });
 
 async function fixture(page: Page, delayed: boolean) {
   let release!: () => void;
@@ -26,7 +27,6 @@ async function fixture(page: Page, delayed: boolean) {
   });
   const history = SearchHistoryEntry.fromPartial({ searchJobId: "history-whitespace", definition: saved.definition?.search,
     finalState: SearchJobState.SEARCH_JOB_STATE_CANCELED, createdAt: new Date("2026-09-12T06:00:00Z"), effectiveIndexScope: ["main"] });
-  const fulfill = (route: Route, bytes: Uint8Array) => route.fulfill({ status: 200, headers, body: Buffer.from(bytes) });
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === "/api/system/bootstrap") return fulfill(route, GetSystemBootstrapResponse.encode(GetSystemBootstrapResponse.fromPartial({

@@ -38,6 +38,10 @@ function sectionDomId(section: SplReferenceSection): string {
   return `spl-reference-${section.id}`;
 }
 
+function scrollToSection(section: SplReferenceSection) {
+  document.getElementById(sectionDomId(section))?.scrollIntoView({ block: "start" });
+}
+
 function ReferenceEntry({ entry, onInsert }: { entry: SplReferenceEntry; onInsert: (entry: SplReferenceEntry) => void }) {
   const prose = entry.documentation ?? entry.detail;
   const usage = entry.syntax ?? entry.insertion;
@@ -70,10 +74,6 @@ export function SplReferenceDialog({
   const headingPrefix = useId();
   const visible = useMemo(() => filterSplReference(sections, filter), [filter, sections]);
   const entryCount = visible.reduce((total, section) => total + section.entries.length, 0);
-
-  function scrollToSection(section: SplReferenceSection) {
-    document.getElementById(sectionDomId(section))?.scrollIntoView({ block: "start" });
-  }
 
   return (
     <Modal
