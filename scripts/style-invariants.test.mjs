@@ -3147,20 +3147,21 @@ test("a scale-only block that declares color-scheme is refused, and one that doe
   ]);
 });
 
+const oceanAlphaKnobProblems = (light, dark = "") => alphaKnobProblems(indexTokenLayer(syntheticLayer({
+  [OCEAN]: paletteSource("ocean", light, dark),
+})));
+
 test("an alpha knob at 79% is refused, at 80% accepted, and a non-percentage refused", () => {
-  const at = (light, dark = "") => alphaKnobProblems(indexTokenLayer(syntheticLayer({
-    [OCEAN]: paletteSource("ocean", light, dark),
-  })));
-  assert.deepEqual(at("  --alpha-surface: 79%;"), ["ocean light: --alpha-surface: 79% is below 80%"]);
-  assert.deepEqual(at("  --alpha-surface: 79.99%;"), ["ocean light: --alpha-surface: 79.99% is below 80%"]);
-  assert.deepEqual(at("  --alpha-surface: 80%;"), []);
-  assert.deepEqual(at("  --alpha-chrome: 88%;", "  --alpha-surface: 80%;"), []);
-  assert.deepEqual(at("", "  --alpha-chrome: 60%;"), ["ocean dark: --alpha-chrome: 60% is below 80%"]);
-  assert.deepEqual(at("  --alpha-surface: 0.9;"), ["ocean light: --alpha-surface: 0.9 is not a percentage"]);
-  assert.deepEqual(at("  --alpha-surface: var(--alpha-chrome);"), ["ocean light: --alpha-surface: var(--alpha-chrome) is not a percentage"]);
-  assert.deepEqual(at("  --alpha-surface: calc(80%);"), ["ocean light: --alpha-surface: calc(80%) is not a percentage"]);
+  assert.deepEqual(oceanAlphaKnobProblems("  --alpha-surface: 79%;"), ["ocean light: --alpha-surface: 79% is below 80%"]);
+  assert.deepEqual(oceanAlphaKnobProblems("  --alpha-surface: 79.99%;"), ["ocean light: --alpha-surface: 79.99% is below 80%"]);
+  assert.deepEqual(oceanAlphaKnobProblems("  --alpha-surface: 80%;"), []);
+  assert.deepEqual(oceanAlphaKnobProblems("  --alpha-chrome: 88%;", "  --alpha-surface: 80%;"), []);
+  assert.deepEqual(oceanAlphaKnobProblems("", "  --alpha-chrome: 60%;"), ["ocean dark: --alpha-chrome: 60% is below 80%"]);
+  assert.deepEqual(oceanAlphaKnobProblems("  --alpha-surface: 0.9;"), ["ocean light: --alpha-surface: 0.9 is not a percentage"]);
+  assert.deepEqual(oceanAlphaKnobProblems("  --alpha-surface: var(--alpha-chrome);"), ["ocean light: --alpha-surface: var(--alpha-chrome) is not a percentage"]);
+  assert.deepEqual(oceanAlphaKnobProblems("  --alpha-surface: calc(80%);"), ["ocean light: --alpha-surface: calc(80%) is not a percentage"]);
   // The floor is on the knob family, not on the word: `--backdrop-*` is free.
-  assert.deepEqual(at("  --backdrop-surface: blur(14px) saturate(140%);"), []);
+  assert.deepEqual(oceanAlphaKnobProblems("  --backdrop-surface: blur(14px) saturate(140%);"), []);
 });
 
 test("a role-group collision that exists only in a palette dark scope is reported there alone", () => {

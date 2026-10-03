@@ -2928,6 +2928,9 @@ test("failed search terminal rejects without waiting for results", async () => {
   }
 });
 
+const fixedResultsRouteMatcher = (url: URL): boolean =>
+  url.origin === origin && url.pathname === "/api/search/jobs/results";
+
 test("renders a fixed 1,000-row statistics result with bounded browser work", async ({
   page,
 }, testInfo) => {
@@ -2954,8 +2957,6 @@ test("renders a fixed 1,000-row statistics result with bounded browser work", as
   const resultsRouteSettled = new Promise<void>((resolve) => {
     settleResultsRoute = resolve;
   });
-  const fixedResultsRouteMatcher = (url: URL): boolean =>
-    url.origin === origin && url.pathname === "/api/search/jobs/results";
   await page.route(
     fixedResultsRouteMatcher,
     async (route) => {
@@ -5182,6 +5183,29 @@ async function installBrowserWebSocketFrameRecorder(
         && socketURL.pathname === "/api/search/ws";
     };
     const NativeWebSocket = window.WebSocket;
+    const onMessage = (event: MessageEvent): void => {
+      if (event.data instanceof ArrayBuffer) {
+        if (!reserveFrame(event.data.byteLength)) return;
+        recordReservedFrame(new Uint8Array(event.data));
+      } else if (event.data instanceof Blob) {
+        if (!reserveFrame(event.data.size)) return;
+        pendingFrameConversions += 1;
+        void (async () => {
+          try {
+            const buffer = await event.data.arrayBuffer();
+            if (buffer.byteLength > maximumFrameBytes) {
+              frameOverflow += 1;
+              return;
+            }
+            recordReservedFrame(new Uint8Array(buffer));
+          } catch {
+            frameOverflow += 1;
+          } finally {
+            pendingFrameConversions -= 1;
+          }
+        })();
+      }
+    };
     class RecordingWebSocket extends NativeWebSocket {
       public constructor(url: string | URL, protocols?: string | string[]) {
         super(url, protocols);
@@ -5192,29 +5216,6 @@ async function installBrowserWebSocketFrameRecorder(
           return;
         }
         activeSockets.add(this);
-        const onMessage = (event: MessageEvent): void => {
-          if (event.data instanceof ArrayBuffer) {
-            if (!reserveFrame(event.data.byteLength)) return;
-            recordReservedFrame(new Uint8Array(event.data));
-          } else if (event.data instanceof Blob) {
-            if (!reserveFrame(event.data.size)) return;
-            pendingFrameConversions += 1;
-            void (async () => {
-              try {
-                const buffer = await event.data.arrayBuffer();
-                if (buffer.byteLength > maximumFrameBytes) {
-                  frameOverflow += 1;
-                  return;
-                }
-                recordReservedFrame(new Uint8Array(buffer));
-              } catch {
-                frameOverflow += 1;
-              } finally {
-                pendingFrameConversions -= 1;
-              }
-            })();
-          }
-        };
         const onClose = (): void => {
           this.removeEventListener("message", onMessage);
           activeSockets.delete(this);

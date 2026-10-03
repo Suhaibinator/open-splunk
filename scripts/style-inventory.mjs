@@ -68,26 +68,27 @@ const MINIMUM_INTERPOLATION_PREFIX_LENGTH = 3;
 const MASK_OPEN = "‹";
 const MASK_CLOSE = "›";
 
+async function walkRepositoryFiles(directory) {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const nested = await Promise.all(entries.map(async (entry) => {
+    if (IGNORED_DIRECTORY_NAMES.has(entry.name)) return [];
+    const full = path.join(directory, entry.name);
+    if (entry.isSymbolicLink()) {
+      // A linked dependency tree is not repository source; a linked file is.
+      const target = await stat(full).catch(() => undefined);
+      return target === undefined || target.isDirectory() ? [] : [full];
+    }
+    if (entry.isDirectory()) return walkRepositoryFiles(full);
+    return entry.isFile() ? [full] : [];
+  }));
+  return nested.flat();
+}
+
 /** Lists every file under `root`, skipping dependency and build directories. */
 export async function listRepositoryFiles(root) {
-  async function walk(directory) {
-    const entries = await readdir(directory, { withFileTypes: true });
-    const nested = await Promise.all(entries.map(async (entry) => {
-      if (IGNORED_DIRECTORY_NAMES.has(entry.name)) return [];
-      const full = path.join(directory, entry.name);
-      if (entry.isSymbolicLink()) {
-        // A linked dependency tree is not repository source; a linked file is.
-        const target = await stat(full).catch(() => undefined);
-        return target === undefined || target.isDirectory() ? [] : [full];
-      }
-      if (entry.isDirectory()) return walk(full);
-      return entry.isFile() ? [full] : [];
-    }));
-    return nested.flat();
-  }
   // Sorted once at the end: the walk runs in parallel, and every caller reports
   // paths back to a reader who needs the same order every run.
-  return (await walk(root)).toSorted((left, right) => left.localeCompare(right));
+  return (await walkRepositoryFiles(root)).toSorted((left, right) => left.localeCompare(right));
 }
 
 /** Repository-relative POSIX path, so failure messages read the same everywhere. */

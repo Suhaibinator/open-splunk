@@ -6,13 +6,13 @@ function isWhitespace(character) {
     character === "\r" || character === " ";
 }
 
+function isPrimitiveDelimiter(character) {
+  return isWhitespace(character) || character === "," ||
+    character === "]" || character === "}";
+}
+
 export function parseStrictJSON(text, label = "JSON") {
   let offset = 0;
-
-  function isPrimitiveDelimiter(character) {
-    return isWhitespace(character) || character === "," ||
-      character === "]" || character === "}";
-  }
 
   function syntax(message) {
     throw new SyntaxError(`${label}: ${message} at byte ${offset}`);
