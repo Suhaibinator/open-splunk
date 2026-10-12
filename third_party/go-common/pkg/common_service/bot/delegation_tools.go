@@ -53,10 +53,10 @@ var (
 	subagentStatusInputSchema = jsontext.Value(`{
   "type": "object",
   "properties": {
-    "child_session_id": {"type": "integer", "minimum": 1, "description": "Inspect one owned child, including a completed child. Use alone."},
-    "include_completed": {"type": "boolean", "description": "Include completed, idle and archived children in a history page. Defaults to false: only children with running, approval-waiting or retryable work."},
-    "after_child_session_id": {"type": "integer", "minimum": 1, "description": "Continue after the returned next_after_child_session_id. Keep include_completed unchanged between pages."},
-    "limit": {"type": "integer", "minimum": 1, "description": "Requested page size, bounded by the configured child page maximum."}
+    "child_session_id": {"type": "integer", "minimum": 1, "description": "One sub-agent, finished or not. Use alone."},
+    "include_completed": {"type": "boolean", "description": "Also list finished and archived sub-agents."},
+    "after_child_session_id": {"type": "integer", "minimum": 1, "description": "The previous page's next_after_child_session_id."},
+    "limit": {"type": "integer", "minimum": 1, "description": "Page size."}
   },
   "additionalProperties": false
 }`)
@@ -65,6 +65,7 @@ var (
   "type": "object",
   "properties": {
     "child_session_id": {"type": "integer", "minimum": 1, "description": "The child session returned by spawn_subagent."},
+    "keep_session": {"type": "boolean", "description": "Stop only the current run and keep the sub-agent, with its context, for send_subagent_message. Defaults to false: also archive it."},
     "reason": {"type": "string", "maxLength": 500, "description": "Optional short reason, for the record."}
   },
   "required": ["child_session_id"],
@@ -74,7 +75,7 @@ var (
 	reportToParentInputSchema = jsontext.Value(`{
   "type": "object",
   "properties": {
-    "content": {"type": "string", "minLength": 1, "description": "The progress report to post to the main conversation."}
+    "content": {"type": "string", "minLength": 1, "description": "The progress update."}
   },
   "required": ["content"],
   "additionalProperties": false
@@ -174,20 +175,21 @@ func scopeSchemaTypes(schema jsontext.Value) ([]string, error) {
 // spawnSubagentSchema is spawn_subagent's input schema with the given scope property. The title
 // maxLength is config.MaxChatAgentDelegationTitleRunes, the ceiling of the hot
 // chat_agent_delegation_title_max_runes key. The schema is registered once at startup, so it states
-// the ceiling; the service enforces the sampled (possibly lower) value at spawn.
+// the ceiling; the service enforces the sampled (possibly lower) value at spawn, and its refusal
+// tells the model the limit.
 func spawnSubagentSchema(scopeProperty string) jsontext.Value {
 	return jsontext.Value(fmt.Sprintf(`{
   "type": "object",
   "properties": {
-    "agent_type": {"type": "string", "minLength": 1, "maxLength": 128, "description": "One of the child agent types this agent may delegate to."},
-    "title": {"type": "string", "minLength": 1, "maxLength": %d, "description": "Short title for the new thread, shown on the main timeline. The enforced limit is the configured chat_agent_delegation_title_max_runes (default %d runes), which may be lower than maxLength; a longer title is rejected."},
-    "instructions": {"type": "string", "minLength": 1, "description": "The complete task for the sub-agent. It sees only these instructions and its own thread."},
-    "max_model_steps": {"type": "integer", "minimum": 1, "description": "Optional cap on the sub-agent's model steps for this task. It can only lower the sub-agent's own configured limit; a larger value is reduced to it."},
+    "agent_type": {"type": "string", "minLength": 1, "maxLength": 128, "description": "One of the agent types you may delegate to."},
+    "title": {"type": "string", "minLength": 1, "maxLength": %d, "description": "A few words naming the task; the thread's title."},
+    "instructions": {"type": "string", "minLength": 1, "description": "The complete, self-contained task: the goal, the facts and constraints it needs, what to return, and when to stop. The sub-agent sees nothing else of this conversation."},
+    "max_model_steps": {"type": "integer", "minimum": 1, "description": "Optional lower cap on the sub-agent's model steps."},
     "scope": %s
   },
   "required": ["agent_type", "title", "instructions"],
   "additionalProperties": false
-}`, config.MaxChatAgentDelegationTitleRunes, config.DefaultChatAgentDelegationTitleMaxRunes, scopeProperty))
+}`, config.MaxChatAgentDelegationTitleRunes, scopeProperty))
 }
 
 // SpawnSubagentInputSchema returns spawn_subagent's input schema as one parent publishes it.
@@ -247,25 +249,25 @@ func SpawnSubagentInputSchema(scopeSchemas map[string]jsontext.Value) (jsontext.
 //     unless the application asks for it.
 //   - subagent_status is read-only.
 //   - cancel_subagent is not marked side-effecting: its effect is idempotent by construction
-//     (cancelling a finished or archived child is a no-op), so it needs no approval gate.
+//     (cancelling a finished or archived child, or interrupting an idle one, is a no-op), so it
+//     needs no approval gate.
 //   - report_to_parent is exclusive so a report is never batched with work whose outcome it could
 //     misdescribe, and not side-effecting because the executor deduplicates per tool call.
 func NewDelegationToolDefinitions(executors DelegationToolExecutors) []ports.AgentToolDefinition {
 	return []ports.AgentToolDefinition{
 		{
 			Name: ports.DelegationToolRead,
-			Description: "Read visible messages from one of your sub-agents. Defaults to the latest page, returned chronologically. " +
-				"Use before_message_id for older messages or after_message_id for newer messages, never both. " +
-				"include_tools includes visible tool calls and results; hidden/internal records are never returned. Content may be truncated.",
+			Description: "Read one sub-agent's thread in chronological order, latest page by default. Its final answer and reports already " +
+				"reach you here; read the thread only for detail they leave out. Page with before_message_id or after_message_id, " +
+				"not both; include_tools adds its tool calls and results. Content may be truncated.",
 			Execute:         executors.Read,
 			InputSchemaJSON: readSubagentMessagesInputSchema,
 		},
 		{
 			Name: ports.DelegationToolSend,
-			Description: "Send instructions to one of your sub-agents. continue (default) steers its next model step or starts a run if idle; " +
-				"queue_only never wakes an idle child. Does not interrupt tools, bypass approval, or reset the current run budget. " +
-				"Mentions are forbidden. Messages appear only in the child's thread and do not notify human followers. " +
-				"The result's disposition is queued, started (a new run), or coalesced (the running sub-agent picks it up at its next model step, or in a follow-up run).",
+			Description: "Message one of your sub-agents. continue (default) reaches a running sub-agent at its next model step " +
+				"without interrupting it, or starts a new run if it is idle; queue_only posts without waking it. " +
+				"To redirect work in progress, cancel_subagent with keep_session first. Mentions are not allowed.",
 			Execute:                 executors.Send,
 			SideEffecting:           true,
 			DefaultRequiresApproval: true,
@@ -273,9 +275,10 @@ func NewDelegationToolDefinitions(executors DelegationToolExecutors) []ports.Age
 		},
 		{
 			Name: ports.DelegationToolSpawn,
-			Description: "Start a sub-agent on a task in a new thread of this conversation. The sub-agent works " +
-				"independently; its final answer and any progress reports appear in the main conversation and " +
-				"wake you when they arrive, so do not poll for them. Returns the child session id and thread root id.",
+			Description: "Start a sub-agent on a task in a new thread. It sees only your instructions, so brief it fully. " +
+				"Spawn independent tasks in the same step to run them in parallel; do small tasks yourself, and do not " +
+				"repeat work you delegated. Its reports and final answer arrive here and wake you, so do not poll. " +
+				"Check its results before relying on them.",
 			InputSchemaJSON:         spawnSubagentInputSchema,
 			Execute:                 executors.Spawn,
 			SideEffecting:           true,
@@ -283,29 +286,24 @@ func NewDelegationToolDefinitions(executors DelegationToolExecutors) []ports.Age
 		},
 		{
 			Name: ports.DelegationToolStatus,
-			Description: "List the sub-agents you started, or one of them, with each one's latest run status, " +
-				"last report excerpt, and run_count; the top-level max_runs_per_child is the lifetime run cap every run_count counts against. " +
-				"pending_message_id is the newest message you " +
-				"sent while it was running, picked up at its next model step or by a follow-up run; last_discarded_message {message_id, reason} " +
-				"is the newest message you sent that was dropped without being answered. Without a child_session_id " +
-				"it lists only children with active runs, bounded by the configured live-state limit. " +
-				"Set include_completed=true for paginated history. When has_more is true, pass next_after_child_session_id " +
-				"as after_child_session_id to continue, keeping include_completed unchanged. omitted is a lower bound.",
+			Description: "Details of your sub-agents. Your prompt's sub-agent block already shows their current state; call this " +
+				"for one sub-agent's details or for history. Lists sub-agents with active work unless include_completed. " +
+				"run_count counts against max_runs_per_child; pending_message_id is a message it has not picked up yet; " +
+				"last_discarded_message is one dropped unanswered, with the reason.",
 			InputSchemaJSON: subagentStatusInputSchema,
 			Execute:         executors.Status,
 		},
 		{
 			Name: ports.DelegationToolCancel,
-			Description: "Stop a sub-agent you started and archive its session. Use it when the task is no longer " +
-				"needed; you are not woken by the cancellation.",
+			Description: "Stop a sub-agent's work and archive it. With keep_session, stop only its current run so you can " +
+				"redirect it with send_subagent_message (a new run). A message it had not picked up is dropped. You are not woken.",
 			InputSchemaJSON: cancelSubagentInputSchema,
 			Execute:         executors.Cancel,
 		},
 		{
 			Name: ports.DelegationToolReport,
-			Description: "Post a progress report to the agent that delegated this task to you. Your final answer is " +
-				"delivered automatically; use this only for interim progress the delegating agent needs now. " +
-				"Call it on its own, not together with other tools.",
+			Description: "Send the agent that delegated to you a progress update it needs now. Your final answer reaches it " +
+				"automatically, so make that answer a complete, self-contained result. Call this tool alone.",
 			InputSchemaJSON: reportToParentInputSchema,
 			Execute:         executors.Report,
 			Exclusive:       true,

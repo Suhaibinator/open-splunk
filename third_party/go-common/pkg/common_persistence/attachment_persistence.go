@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/SRouter/pkg/logkeys"
+	"github.com/Suhaibinator/SRouter/pkg/scontext"
 	"github.com/Suhaibinator/go-common/pkg/common_persistence/common_persistence_models"
 	appLogger "github.com/Suhaibinator/go-common/pkg/logger"
 	"github.com/Suhaibinator/go-common/pkg/proto_models"
@@ -28,6 +29,9 @@ import (
 // mutation attempts to create or update a server-owned protocol blob. Internal
 // attachments must use the narrow privileged lifecycle methods instead.
 var ErrInternalAttachmentMutation = errors.New("internal attachment requires a privileged persistence operation")
+
+// ErrAttachmentUploadTransactionRequired reports a missing transaction for scoped renewal.
+var ErrAttachmentUploadTransactionRequired = errors.New("attachment upload renewal requires an ambient transaction")
 
 var errAttachmentPublicationStorage = errors.New("attachment publication storage operation failed")
 
@@ -288,6 +292,35 @@ func (h *CommonPersistenceHandler[U]) RenewPendingUploads(
 	return renewed, nil
 }
 
+// RenewPendingUploadsInScope atomically extends only live, non-internal pending
+// uploads matching the expected uploader, object type and entity ID. Empty
+// entityID matches standalone rows exactly; it is never a wildcard. Unmatched or
+// ineligible IDs are omitted. The UPDATE locks returned rows until the ambient
+// transaction ends, serializing renewal with reparenting, finalization and cleanup.
+// This checks attachment scope, not the actor's permission to modify the entity.
+// Callers must roll back on error and keep signed instructions private until commit.
+func (h *CommonPersistenceHandler[U]) RenewPendingUploadsInScope(
+	ctx context.Context, attachmentIDs []uint64, userID uint64, objectType, entityID string, expiresAt time.Time,
+) ([]*common_persistence_models.Attachment, error) {
+	tx, ok := scontext.GetTransaction(ctx)
+	if !ok || tx == nil || tx.GetDB() == nil {
+		return nil, ErrAttachmentUploadTransactionRequired
+	}
+	renewed := make([]*common_persistence_models.Attachment, 0, len(attachmentIDs))
+	if len(attachmentIDs) == 0 {
+		return renewed, nil
+	}
+	result := h.getDBFromContext(ctx).Model(&renewed).Clauses(clause.Returning{}).
+		Where("id IN ? AND user_id = ? AND object_type = ? AND entity_id = ? AND upload_status = ? AND internal_only = ? AND temporary_object_name <> ''",
+			attachmentIDs, userID, objectType, entityID, common_persistence_models.UploadStatusPendingUpload, false).
+		Update("upload_url_expires_at", gorm.Expr("GREATEST(upload_url_expires_at, ?)", expiresAt))
+	if result.Error != nil {
+		return nil, databaseErrorWithFields(result.Error,
+			zap.String(logkeys.Operation, "renew_pending_uploads_in_scope"), zap.Int(appLogger.KeyCount, len(attachmentIDs)))
+	}
+	return renewed, nil
+}
+
 // publicAttachmentUpdateColumns lists the columns a lifecycle write (UpdateAttachment,
 // UpdateAttachmentIfStatus) sets from the caller's snapshot of the row. Ownership (object_type,
 // entity_id) is not among them: a snapshot read before the row was re-parented, as delivery of a
@@ -328,26 +361,6 @@ func (h *CommonPersistenceHandler[U]) UpdateAttachmentObjectTypes(ctx context.Co
 			zap.String(logkeys.Fallback, "retain_partial_update"))
 	}
 
-	return nil
-}
-
-// DeleteAttachment executes its operation in the persistence flow between service handlers and the database layer.
-func (h *CommonPersistenceHandler[U]) DeleteAttachment(ctx context.Context, id uint64) error {
-	db := h.getDBFromContext(ctx)
-	result := db.Where("id = ? AND internal_only = ?", id, false).Delete(&common_persistence_models.Attachment{})
-	if result.Error != nil {
-		return databaseErrorWithFields(result.Error,
-			zap.String(logkeys.Operation, "delete_attachment"),
-			zap.Uint64(appLogger.KeyAttachmentID, id))
-	}
-	if result.RowsAffected == 0 {
-		if appLogger.DebugEnabled(h.logger) {
-			appLogger.For(ctx, h.logger, loggerName).Debug("No attachment found to delete",
-				zap.String(logkeys.Operation, "delete_attachment"),
-				zap.Uint64(appLogger.KeyAttachmentID, id))
-		}
-		return fmt.Errorf("attachment not found: %w", ErrDatabaseError)
-	}
 	return nil
 }
 
@@ -897,32 +910,6 @@ func (h *CommonPersistenceHandler[U]) PublishPublicAttachmentObject(
 	return nil
 }
 
-// UpdateAttachmentEntityID executes its operation in the persistence flow between service handlers and the database layer.
-func (h *CommonPersistenceHandler[U]) UpdateAttachmentEntityID(ctx context.Context, attachmentID uint64, entityID string) error {
-	db := h.getDBFromContext(ctx)
-
-	result := db.Model(&common_persistence_models.Attachment{}).
-		Where("id = ? AND internal_only = ?", attachmentID, false).
-		Update("entity_id", entityID)
-
-	if result.Error != nil {
-		return databaseErrorWithFields(result.Error,
-			zap.String(logkeys.Operation, "update_attachment_entity_id"),
-			zap.Uint64(appLogger.KeyAttachmentID, attachmentID))
-	}
-
-	if result.RowsAffected == 0 {
-		if appLogger.DebugEnabled(h.logger) {
-			appLogger.For(ctx, h.logger, loggerName).Debug("No attachment found to update entity ID",
-				zap.String(logkeys.Operation, "update_attachment_entity_id"),
-				zap.Uint64(appLogger.KeyAttachmentID, attachmentID))
-		}
-		return fmt.Errorf("attachment not found: %w", ErrDatabaseError)
-	}
-
-	return nil
-}
-
 // UpdateAttachmentEntityIDs executes its operation in the persistence flow between service handlers and the database layer.
 func (h *CommonPersistenceHandler[U]) UpdateAttachmentEntityIDs(ctx context.Context, attachmentIDs []uint64, entityID string) error {
 	if len(attachmentIDs) == 0 {
@@ -1018,5 +1005,21 @@ func (h *CommonPersistenceHandler[U]) LinkAttachmentToEntity(ctx context.Context
 // UnlinkAttachmentFromEntity clears an attachment's entity association while
 // preserving its object type and lifecycle metadata.
 func (h *CommonPersistenceHandler[U]) UnlinkAttachmentFromEntity(ctx context.Context, attachmentID uint64) error {
-	return h.UpdateAttachmentEntityID(ctx, attachmentID, "")
+	result := h.getDBFromContext(ctx).Model(&common_persistence_models.Attachment{}).
+		Where("id = ? AND internal_only = ?", attachmentID, false).
+		Update("entity_id", "")
+	if result.Error != nil {
+		return databaseErrorWithFields(result.Error,
+			zap.String(logkeys.Operation, "unlink_attachment_from_entity"),
+			zap.Uint64(appLogger.KeyAttachmentID, attachmentID))
+	}
+	if result.RowsAffected == 0 {
+		if appLogger.DebugEnabled(h.logger) {
+			appLogger.For(ctx, h.logger, loggerName).Debug("Attachment not found while unlinking from entity",
+				zap.String(logkeys.Operation, "unlink_attachment_from_entity"),
+				zap.Uint64(appLogger.KeyAttachmentID, attachmentID))
+		}
+		return fmt.Errorf("attachment not found: %w", ErrDatabaseError)
+	}
+	return nil
 }

@@ -283,7 +283,7 @@ func (h *CommonServiceHandler[U]) CreateProfilePictureUploadURL(
 	}
 
 	// Create upload URL with entity pre-populated
-	issued, err := h.attachmentLifecycleManager.CreateUploadURLWithEntityResult(
+	issued, err := h.attachmentLifecycleManager.CreateUploadURLWithEntity(
 		ctx,
 		userID,
 		filename,
@@ -337,36 +337,52 @@ func (h *CommonServiceHandler[U]) RemoveUserProfilePicture(ctx context.Context, 
 	return nil
 }
 
-// CreateUploadURLWithEntity executes part of the common_service service flow and coordinates work for the *CommonServiceHandler[U] receiver.
+// CreateUploadURLWithEntity creates an entity-linked pending attachment of a registered
+// object type and returns its presigned upload instructions with their exact expiry.
 //
 // SECURITY: entityID must be selected by the consuming service after it has authorized
 // the actor to modify attachments for that entity. This helper does not perform
 // entity-level authorization.
 func (h *CommonServiceHandler[U]) CreateUploadURLWithEntity(
-	ctx context.Context,
-	userID uint64,
-	objectType string,
-	fileName string,
-	contentType string,
-	entityID string,
-) (*common_persistence_models.Attachment, string, map[string]string, error) {
-	// Use the singleton lifecycle manager's entity-aware method
-	return h.attachmentLifecycleManager.CreateUploadURLWithEntity(
-		ctx, userID, fileName, contentType, objectType, entityID)
+	ctx context.Context, userID uint64, fileName, contentType, objectType, entityID string,
+) (*attachmentpkg.IssuedUploadURL, error) {
+	return h.attachmentLifecycleManager.CreateUploadURLWithEntity(ctx, userID, fileName, contentType, objectType, entityID)
 }
 
 // Attachment Lifecycle Management Methods
 // These methods provide access to common attachment lifecycle operations without exposing the lifecycle manager directly
 
-// CreateUploadURLWithConfig executes part of the common_service service flow and coordinates work for the *CommonServiceHandler[U] receiver.
+// CreateUploadURLWithConfig creates a pending attachment and returns its upload
+// instructions with the exact signing expiry, without a second hot-config sample. The application owns actor/entity authorization and
+// transaction management. Roll back on error; return instructions only after
+// commit. MaxSize constrains the POST, not independent processing validators.
+// AllowedMimeTypes is currently unused; configure MIME rules on the object type.
 func (h *CommonServiceHandler[U]) CreateUploadURLWithConfig(
-	ctx context.Context,
-	userID uint64,
-	originalFileName string,
-	contentType string,
-	config attachmentpkg.UploadURLConfig,
-) (*common_persistence_models.Attachment, string, map[string]string, error) {
-	return h.attachmentLifecycleManager.CreateUploadURLWithConfig(ctx, userID, originalFileName, contentType, config)
+	ctx context.Context, userID uint64, originalFileName, contentType string, cfg attachmentpkg.UploadURLConfig,
+) (*attachmentpkg.IssuedUploadURL, error) {
+	return h.attachmentLifecycleManager.CreateUploadURLWithConfig(ctx, userID, originalFileName, contentType, cfg)
+}
+
+// ReissueUploadURLsWithConfig renews pending uploads in the exact backend-selected
+// uploader/object-type/entity scope. An empty cfg.ObjectType means "attachment"
+// and an empty entityID matches standalone uploads. Out-of-scope or ineligible IDs
+// are omitted; results are deduplicated in requested ID order. Existing object
+// identity and visibility are preserved. Only ObjectType, MaxSize and DefaultExpiry
+// apply from cfg; MaxSize=0 uses the registered object-type limit, then the global default.
+//
+// SECURITY: authorize the actor to modify the entity before calling, select the
+// expected uploader and policy on the backend, and apply app-owned rate/quota
+// limits. Ownership is not entity authorization. Requires an ambient transaction;
+// roll back on any error and expose instructions only after commit. Row locks
+// serialize renewal with reparenting/finalization/cleanup until the transaction
+// ends. This method neither commits nor revokes older URLs. Policy is not stored;
+// stricter renewal cannot invalidate prior allowances. ExpiresAt describes this
+// URL, not necessarily the row's latest protected deadline. Processing validators
+// remain in force; see attachment_handling.md for integration and limitations.
+func (h *CommonServiceHandler[U]) ReissueUploadURLsWithConfig(
+	ctx context.Context, userID uint64, entityID string, attachmentIDs []uint64, cfg attachmentpkg.UploadURLConfig,
+) ([]*attachmentpkg.IssuedUploadURL, error) {
+	return h.attachmentLifecycleManager.ReissueUploadURLsWithConfig(ctx, userID, entityID, attachmentIDs, cfg)
 }
 
 // ProcessUploadedAttachment executes part of the common_service service flow and coordinates work for the *CommonServiceHandler[U] receiver.
@@ -418,11 +434,6 @@ func (h *CommonServiceHandler[U]) GetAttachmentURL(
 	return h.attachmentLifecycleManager.GetAttachmentURL(ctx, attachmentID, expiry)
 }
 
-// GetUploadURLExpiry executes part of the common_service service flow and coordinates work for the *CommonServiceHandler[U] receiver.
-func (h *CommonServiceHandler[U]) GetUploadURLExpiry() time.Duration {
-	return h.attachmentLifecycleManager.GetUploadURLExpiry()
-}
-
 // CreateEntityAttachments executes part of the common_service service flow and coordinates work for the *CommonServiceHandler[U] receiver.
 //
 // SECURITY: entityID must be selected by the consuming service after it has authorized
@@ -440,27 +451,9 @@ func (h *CommonServiceHandler[U]) CreateEntityAttachments(
 		return nil, err
 	}
 
-	// Prepare requests for bulk creation
-	requests := make([]struct {
-		Filename    string
-		ContentType string
-		ContentHash string
-	}, len(files))
-	for i, file := range files {
-		requests[i] = struct {
-			Filename    string
-			ContentType string
-			ContentHash string
-		}{
-			Filename:    file.Filename,
-			ContentType: file.ContentType,
-			ContentHash: file.ContentHash,
-		}
-	}
-
 	// Use bulk creation method to avoid N+1 queries
-	issued, err := h.attachmentLifecycleManager.CreateUploadURLsWithEntityResult(
-		ctx, userID, objectType, entityID, requests)
+	issued, err := h.attachmentLifecycleManager.CreateUploadURLsWithEntity(
+		ctx, userID, objectType, entityID, files)
 	if err != nil {
 		return nil, fmt.Errorf("failed to bulk create attachments: %w", err)
 	}
@@ -898,14 +891,6 @@ func (h *CommonServiceHandler[U]) CreateUploadedAttachments(ctx context.Context,
 		}
 	}
 	return uploadedAttachments, nil
-}
-
-// HydrateChatMessageAttachments executes part of the common_service service flow and coordinates work for the *CommonServiceHandler[U] receiver.
-func (h *CommonServiceHandler[U]) HydrateChatMessageAttachments(ctx context.Context, message *common_service_models.ChatMessage) error {
-	if message == nil {
-		return nil
-	}
-	return h.HydrateChatMessagesAttachments(ctx, []*common_service_models.ChatMessage{message})
 }
 
 // HydrateChatMessagesAttachments executes part of the common_service service flow and coordinates work for the *CommonServiceHandler[U] receiver.

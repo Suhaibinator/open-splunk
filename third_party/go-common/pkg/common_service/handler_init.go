@@ -1015,7 +1015,7 @@ func (h *CommonServiceHandler[U]) chatAttachmentsVetted(ctx context.Context, att
 				zap.String(logkeys.Fallback, "suppress attachments-ready event"))
 			return nil
 		}
-		if err := h.HydrateChatMessageAttachments(eventCtx, updatedMessage); err != nil {
+		if err := h.HydrateChatMessagesAttachments(eventCtx, []*common_service_models.ChatMessage{updatedMessage}); err != nil {
 			return fmt.Errorf("failed to hydrate chat message attachments: %w", err)
 		}
 		if h.chatEventPublisher != nil {

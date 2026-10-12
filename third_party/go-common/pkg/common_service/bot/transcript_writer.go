@@ -433,7 +433,7 @@ func (w *agentTranscriptWriter[U]) RecordProviderState(rec *ports.ProviderStateR
 		if !providerStateSizeAllowed(state.SizeBytes) {
 			return 0, false, ErrTranscriptInvalidRecord
 		}
-		data, ref, err := w.d.internalAttachmentStore.ResolveInternalBounded(w.ctx, state.AttachmentID, state.SizeBytes)
+		data, ref, err := w.d.internalAttachmentStore.ResolveInternal(w.ctx, state.AttachmentID, state.SizeBytes)
 		if err != nil {
 			return 0, false, fmt.Errorf("resolve provider state: %w", err)
 		}
@@ -543,7 +543,7 @@ func (w *agentTranscriptWriter[U]) ResolveProviderState(ctx context.Context, att
 	if w == nil || w.d == nil || w.d.internalAttachmentStore == nil || ownerUserID == 0 {
 		return nil, ErrTranscriptPersistenceNotConfigured
 	}
-	data, ref, err := w.d.internalAttachmentStore.ResolveInternalBounded(ctx, attachmentID, maxBytes)
+	data, ref, err := w.d.internalAttachmentStore.ResolveInternal(ctx, attachmentID, maxBytes)
 	if err != nil {
 		return nil, err
 	}

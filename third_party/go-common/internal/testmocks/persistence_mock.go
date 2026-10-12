@@ -679,6 +679,17 @@ func (m *MockPersistenceHandler) RenewPendingUploads(ctx context.Context, attach
 	return nil, nil
 }
 
+func (m *MockPersistenceHandler) RenewPendingUploadsInScope(ctx context.Context, attachmentIDs []uint64, userID uint64, objectType, entityID string, expiresAt time.Time) ([]*common_persistence_models.Attachment, error) {
+	if m.hasExpectation("RenewPendingUploadsInScope") {
+		args := m.Called(ctx, attachmentIDs, userID, objectType, entityID, expiresAt)
+		if args.Get(0) == nil {
+			return nil, args.Error(1)
+		}
+		return args.Get(0).([]*common_persistence_models.Attachment), args.Error(1)
+	}
+	return nil, nil
+}
+
 func (m *MockPersistenceHandler) UpdateExpiredPendingUpload(ctx context.Context, attachment *common_persistence_models.Attachment, cutoffTime time.Time) (bool, error) {
 	if m.hasExpectation("UpdateExpiredPendingUpload") {
 		args := m.Called(ctx, attachment, cutoffTime)
@@ -704,14 +715,6 @@ func (m *MockPersistenceHandler) GetAttachmentsByStatus(ctx context.Context, sta
 		return args.Get(0).([]*common_persistence_models.Attachment), args.Error(1)
 	}
 	return nil, nil
-}
-
-func (m *MockPersistenceHandler) DeleteAttachment(ctx context.Context, id uint64) error {
-	if m.hasExpectation("DeleteAttachment") {
-		args := m.Called(ctx, id)
-		return args.Error(0)
-	}
-	return nil
 }
 
 func (m *MockPersistenceHandler) DeleteAttachmentsByIDs(ctx context.Context, ids []uint64) error {
@@ -803,33 +806,26 @@ func (m *MockPersistenceHandler) GetAttachmentsByIDsAndUser(ctx context.Context,
 	return nil, nil
 }
 
-func (m *MockPersistenceHandler) IsAttachmentReferencedByChatMessages(ctx context.Context, attachmentID uint64) (bool, error) {
-	if m.hasExpectation("IsAttachmentReferencedByChatMessages") {
-		args := m.Called(ctx, attachmentID)
-		return args.Bool(0), args.Error(1)
-	}
-	return false, nil
+func (m *MockPersistenceHandler) GetChatMessageReferencedAttachmentIDs(ctx context.Context, ids []uint64) (map[uint64]bool, error) {
+	return m.referencedAttachmentIDs("GetChatMessageReferencedAttachmentIDs", ctx, ids)
 }
 
-func (m *MockPersistenceHandler) IsAttachmentReferencedByChatMessageHistory(ctx context.Context, attachmentID uint64) (bool, error) {
-	if m.hasExpectation("IsAttachmentReferencedByChatMessageHistory") {
-		args := m.Called(ctx, attachmentID)
-		return args.Bool(0), args.Error(1)
+func (m *MockPersistenceHandler) GetChatHistoryReferencedAttachmentIDs(ctx context.Context, ids []uint64) (map[uint64]bool, error) {
+	return m.referencedAttachmentIDs("GetChatHistoryReferencedAttachmentIDs", ctx, ids)
+}
+
+func (m *MockPersistenceHandler) referencedAttachmentIDs(method string, ctx context.Context, ids []uint64) (map[uint64]bool, error) {
+	if m.hasExpectation(method) {
+		args := m.MethodCalled(method, ctx, ids)
+		referenced, _ := args.Get(0).(map[uint64]bool)
+		return referenced, args.Error(1)
 	}
-	return false, nil
+	return map[uint64]bool{}, nil
 }
 
 func (m *MockPersistenceHandler) CreateAttachments(ctx context.Context, attachments []*common_persistence_models.Attachment) error {
 	if m.hasExpectation("CreateAttachments") {
 		args := m.Called(ctx, attachments)
-		return args.Error(0)
-	}
-	return nil
-}
-
-func (m *MockPersistenceHandler) UpdateAttachmentEntityID(ctx context.Context, attachmentID uint64, entityID string) error {
-	if m.hasExpectation("UpdateAttachmentEntityID") {
-		args := m.Called(ctx, attachmentID, entityID)
 		return args.Error(0)
 	}
 	return nil
@@ -895,17 +891,6 @@ func (m *MockPersistenceHandler) GeneratePresignedPostURL(ctx context.Context, o
 		return args.String(0), args.Get(1).(map[string]string), args.Error(2)
 	}
 	return "", nil, nil
-}
-
-func (m *MockPersistenceHandler) GetObjectBytes(ctx context.Context, objectName string) ([]byte, error) {
-	if m.hasExpectation("GetObjectBytes") {
-		args := m.Called(ctx, objectName)
-		if args.Get(0) == nil {
-			return nil, args.Error(1)
-		}
-		return args.Get(0).([]byte), args.Error(1)
-	}
-	return nil, nil
 }
 
 func (m *MockPersistenceHandler) GetObjectReader(ctx context.Context, objectName string, precondition common_persistence.ObjectPrecondition) (io.ReadCloser, error) {

@@ -48,6 +48,8 @@ const (
 )
 
 var (
+	// ErrInvalidUploadURLConfig reports invalid scope, IDs or effective POST policy.
+	ErrInvalidUploadURLConfig   = errors.New("invalid upload URL configuration")
 	ErrValidationFailed         = errors.New("attachment validation failed")
 	ErrAttachmentNotProcessable = errors.New("attachment is not in a processable state")
 	// ErrAttachmentContentChanged reports that the temporary object was
@@ -122,10 +124,12 @@ type UploadURLConfig struct {
 	// This is used to organize temporary uploads and can be used for type-specific validation
 	ObjectType string
 
-	// MaxSize is the maximum allowed file size in bytes (0 uses default)
+	// MaxSize limits the signed POST in bytes. 0 uses the registered object-type
+	// limit, then the hot global default. Negative values are invalid. Processing validators remain independent.
 	MaxSize int64
 
-	// DefaultExpiry is the default expiration duration for the upload URL
+	// DefaultExpiry is the signed URL lifetime (0 uses the hot default).
+	// Negative values are invalid.
 	DefaultExpiry time.Duration
 
 	// SanitizeFilename indicates whether to apply strict filename sanitization
@@ -134,7 +138,8 @@ type UploadURLConfig struct {
 	// DefaultFilename is used when sanitization results in an empty filename
 	DefaultFilename string
 
-	// AllowedMimeTypes is an optional list of allowed MIME types for this object type
+	// AllowedMimeTypes is currently unused by WithConfig issuance and renewal.
+	// Register object-type MIME rules to enforce content validation.
 	AllowedMimeTypes []string
 }
 
@@ -147,16 +152,6 @@ type IssuedUploadURL struct {
 	FormData   map[string]string
 	// ExpiresAt is the exact time the upload URL was signed to expire.
 	ExpiresAt time.Time
-}
-
-// GetUploadURLExpiry returns the current upload URL expiry duration. Upload
-// issuance methods capture this value together with the default maximum size so
-// related policy values always come from one immutable runtime view.
-//
-// Returns:
-//   - time.Duration: Upload URL expiration duration from manager configuration.
-func (m *AttachmentLifecycleManager) GetUploadURLExpiry() time.Duration {
-	return m.runtimeConfigProvider().AttachmentUploadURLExpiry()
 }
 
 // NewAttachmentLifecycleManager captures startup resources from one provider
@@ -217,25 +212,9 @@ func (m *AttachmentLifecycleManager) resolveObjectTypeVisibility(objectType stri
 	return config.Visibility
 }
 
-// CreateUploadURLWithConfig creates a new attachment record and generates a presigned upload URL
-// using the provided configuration. This is the unified method that replaces the duplicate
+// CreateUploadURLWithConfig creates a pending attachment record and a presigned
+// upload URL under config, returning the expiry captured for that exact issuance.
 func (m *AttachmentLifecycleManager) CreateUploadURLWithConfig(
-	ctx context.Context,
-	userID uint64,
-	originalFileName string,
-	contentType string,
-	config UploadURLConfig,
-) (*common_persistence_models.Attachment, string, map[string]string, error) {
-	result, err := m.CreateUploadURLWithConfigResult(ctx, userID, originalFileName, contentType, config)
-	if err != nil {
-		return nil, "", nil, err
-	}
-	return result.Attachment, result.UploadURL, result.FormData, nil
-}
-
-// CreateUploadURLWithConfigResult creates an upload URL and returns the expiry
-// captured for that exact issuance.
-func (m *AttachmentLifecycleManager) CreateUploadURLWithConfigResult(
 	ctx context.Context,
 	userID uint64,
 	originalFileName string,
@@ -253,6 +232,10 @@ func (m *AttachmentLifecycleManager) createUploadURLWithConfig(
 	config UploadURLConfig,
 	runtime RuntimeConfigView,
 ) (*IssuedUploadURL, error) {
+	objectType, maxSize, expiry, err := m.resolveUploadURLPolicy(config, runtime)
+	if err != nil {
+		return nil, err
+	}
 	// Apply filename sanitization if requested
 	fileName := originalFileName
 	if config.SanitizeFilename {
@@ -268,28 +251,15 @@ func (m *AttachmentLifecycleManager) createUploadURLWithConfig(
 	// Note: Content type validation is now handled by streaming validators
 
 	// Generate temporary object name with new format: temp/[object-type]/[uuid]:[filename]
-	objectType := config.ObjectType
-	if objectType == "" {
-		objectType = "attachment" // Default object type
-	}
-
 	// Generate UUID for this upload
 	uploadUUID := uuid.New().String()
 
 	// Create the temporary object name with the new format
 	tempObjectName := fmt.Sprintf("%s%s/%s:%s", TempPathPrefix, objectType, uploadUUID, fileName)
 
-	expiry := config.DefaultExpiry
-	if expiry == 0 {
-		expiry = runtime.AttachmentUploadURLExpiry()
-	}
 	now := time.Now().UTC()
-	expiresAt := now.Add(expiry)
-
-	maxSize := config.MaxSize
-	if maxSize <= 0 {
-		maxSize = runtime.AttachmentDefaultMaxSize()
-	}
+	// MinIO POST policies serialize expiration with millisecond precision.
+	expiresAt := now.Add(expiry).Truncate(time.Millisecond)
 
 	// Create the attachment record. Visibility is resolved from the registered
 	// object type, never from the caller, and defaults to private.
@@ -307,7 +277,7 @@ func (m *AttachmentLifecycleManager) createUploadURLWithConfig(
 	}
 
 	// Save the attachment record to the database
-	err := m.persistence.CreateAttachment(ctx, attachment)
+	err = m.persistence.CreateAttachment(ctx, attachment)
 	if err != nil {
 		return nil, contextualAttachmentError(
 			fmt.Errorf("failed to create attachment record (userID=%d, fileName=%s, objectType=%s): %w", userID, fileName, objectType, err),
@@ -364,26 +334,9 @@ func (m *AttachmentLifecycleManager) createUploadURLWithConfig(
 	}, nil
 }
 
-// CreateUploadURLWithEntity creates a new attachment record with entity linking and generates a presigned upload URL.
-// This method extends the existing upload functionality to support linking attachments to specific entities.
+// CreateUploadURLWithEntity creates an entity-linked pending attachment and a
+// presigned upload URL, returning the expiry captured for that exact issuance.
 func (m *AttachmentLifecycleManager) CreateUploadURLWithEntity(
-	ctx context.Context,
-	userID uint64,
-	originalFileName string,
-	contentType string,
-	objectType string,
-	entityID string,
-) (*common_persistence_models.Attachment, string, map[string]string, error) {
-	result, err := m.CreateUploadURLWithEntityResult(ctx, userID, originalFileName, contentType, objectType, entityID)
-	if err != nil {
-		return nil, "", nil, err
-	}
-	return result.Attachment, result.UploadURL, result.FormData, nil
-}
-
-// CreateUploadURLWithEntityResult creates an entity-linked upload URL and
-// returns the expiry captured for that exact issuance.
-func (m *AttachmentLifecycleManager) CreateUploadURLWithEntityResult(
 	ctx context.Context,
 	userID uint64,
 	originalFileName string,
@@ -416,7 +369,7 @@ func (m *AttachmentLifecycleManager) CreateUploadURLWithEntityResult(
 	// Create the attachment record with entity linking. Visibility comes from the
 	// resolved object type configuration and defaults to private.
 	now := time.Now().UTC()
-	expiresAt := now.Add(runtime.AttachmentUploadURLExpiry())
+	expiresAt := now.Add(runtime.AttachmentUploadURLExpiry()).Truncate(time.Millisecond)
 	attachment := &common_persistence_models.Attachment{
 		UserID:              userID,
 		OriginalFileName:    fileName,
@@ -498,60 +451,23 @@ func (m *AttachmentLifecycleManager) CreateUploadURLWithEntityResult(
 	}, nil
 }
 
-// CreateUploadURLsWithEntity creates multiple attachments linked to a specific entity in a single operation.
-// This method efficiently handles bulk attachment creation by:
-// 1. Creating all attachment records in a single database transaction
-// 2. Generating presigned URLs in parallel for better performance
+// UploadRequest describes one file of a CreateUploadURLsWithEntity batch.
+type UploadRequest struct {
+	Filename    string
+	ContentType string
+	// ContentHash is the client's unverified declared hash (DeclaredFileHash).
+	ContentHash string
+}
+
+// CreateUploadURLsWithEntity creates multiple entity-linked upload URLs and
+// returns each attachment together with the expiry captured for that exact
+// batch issuance. The runtime provider is sampled once for the whole batch.
 func (m *AttachmentLifecycleManager) CreateUploadURLsWithEntity(
 	ctx context.Context,
 	userID uint64,
 	objectType string,
 	entityID string,
-	requests []struct {
-		Filename    string
-		ContentType string
-		ContentHash string
-	},
-) ([]*common_persistence_models.Attachment, []struct {
-	UploadURL string
-	FormData  map[string]string
-}, error) {
-	issued, err := m.CreateUploadURLsWithEntityResult(ctx, userID, objectType, entityID, requests)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	attachments := make([]*common_persistence_models.Attachment, len(issued))
-	uploadResults := make([]struct {
-		UploadURL string
-		FormData  map[string]string
-	}, len(issued))
-	for i, result := range issued {
-		attachments[i] = result.Attachment
-		uploadResults[i] = struct {
-			UploadURL string
-			FormData  map[string]string
-		}{
-			UploadURL: result.UploadURL,
-			FormData:  result.FormData,
-		}
-	}
-	return attachments, uploadResults, nil
-}
-
-// CreateUploadURLsWithEntityResult creates multiple entity-linked upload URLs
-// and returns each attachment together with the expiry captured for that exact
-// batch issuance. The runtime provider is sampled once for the whole batch.
-func (m *AttachmentLifecycleManager) CreateUploadURLsWithEntityResult(
-	ctx context.Context,
-	userID uint64,
-	objectType string,
-	entityID string,
-	requests []struct {
-		Filename    string
-		ContentType string
-		ContentHash string
-	},
+	requests []UploadRequest,
 ) ([]*IssuedUploadURL, error) {
 	// Validate object type exists
 	objectTypeConfig := m.objectTypeRegistry.Get(objectType)
@@ -564,7 +480,7 @@ func (m *AttachmentLifecycleManager) CreateUploadURLsWithEntityResult(
 
 	// Create attachment records
 	now := time.Now().UTC()
-	expiresAt := now.Add(runtime.AttachmentUploadURLExpiry())
+	expiresAt := now.Add(runtime.AttachmentUploadURLExpiry()).Truncate(time.Millisecond)
 	attachments := make([]*common_persistence_models.Attachment, len(requests))
 	for i, req := range requests {
 		// Sanitize filename to prevent overflow and security issues
@@ -623,7 +539,7 @@ func (m *AttachmentLifecycleManager) CreateUploadURLsWithEntityResult(
 		go func(idx int, att *common_persistence_models.Attachment) {
 			defer wg.Done()
 
-			uploadURL, formData, err := m.presignEntityUpload(ctx, att, runtime, maxSize, expiresAt)
+			uploadURL, formData, err := m.presignUpload(ctx, att, runtime, 0, maxSize, expiresAt)
 
 			urlChan <- urlResult{
 				index:     idx,
@@ -672,22 +588,22 @@ func (m *AttachmentLifecycleManager) CreateUploadURLsWithEntityResult(
 	return uploadResults, nil
 }
 
-// presignEntityUpload issues the presigned POST, expiring at expiresAt, for an entity attachment's
+// presignUpload issues the presigned POST, expiring at expiresAt, for an attachment's
 // temporary object, rewritten onto the public base URL when one is configured (a failed rewrite
 // keeps the original). The row must already record a deadline (UploadURLExpiresAt) no earlier
 // than expiresAt.
-func (m *AttachmentLifecycleManager) presignEntityUpload(
+func (m *AttachmentLifecycleManager) presignUpload(
 	ctx context.Context,
 	att *common_persistence_models.Attachment,
 	runtime RuntimeConfigView,
-	maxSize int64,
+	minSize, maxSize int64,
 	expiresAt time.Time,
 ) (string, map[string]string, error) {
 	uploadURL, formData, err := m.persistence.GeneratePresignedPostURL(
 		ctx,
 		att.TemporaryObjectName,
 		expiresAt,
-		0,
+		minSize,
 		maxSize,
 		att.ContentType,
 	)
@@ -710,8 +626,9 @@ func (m *AttachmentLifecycleManager) presignEntityUpload(
 
 // ReissueUploadURLs issues fresh presigned upload URLs for entity attachments that still wait for
 // their upload, for an idempotent retry of the request that created them. Each URL targets the
-// attachment's existing temporary object under the same size limit the first issuance used, and
-// expires no later than the deadline its row records before signing (RenewPendingUploads), which
+// attachment's existing temporary object under the current object-type limit (or hot global
+// default), not a persisted issuance policy, and expires no later than the deadline its row
+// records before signing (RenewPendingUploads), which
 // pending-upload cleanup counts from, so cleanup cannot reject the row while the URL is valid.
 // Attachments in any other state, or finalized or rejected meanwhile, get none. The runtime
 // provider is sampled once for the batch.
@@ -745,7 +662,7 @@ func (m *AttachmentLifecycleManager) ReissueUploadURLs(ctx context.Context, atta
 		if config := m.objectTypeRegistry.Get(att.ObjectType); config != nil && config.MaxSize > 0 {
 			maxSize = config.MaxSize
 		}
-		uploadURL, formData, err := m.presignEntityUpload(ctx, att, runtime, maxSize, expiresAt)
+		uploadURL, formData, err := m.presignUpload(ctx, att, runtime, 0, maxSize, expiresAt)
 		if err != nil {
 			return nil, contextualAttachmentError(err,
 				zap.String(logkeys.Stage, "reissue_attachment_upload_url"),
@@ -757,6 +674,109 @@ func (m *AttachmentLifecycleManager) ReissueUploadURLs(ctx context.Context, atta
 			FormData:   formData,
 			ExpiresAt:  expiresAt,
 		})
+	}
+	return issued, nil
+}
+
+// resolveUploadURLPolicy is shared by WithConfig issuance and renewal, so one
+// config yields one POST policy on both paths. An empty ObjectType means
+// "attachment"; MaxSize=0 uses the registered object-type limit, then the hot
+// global default, as entity issuance does; DefaultExpiry=0 uses the hot default.
+func (m *AttachmentLifecycleManager) resolveUploadURLPolicy(cfg UploadURLConfig, runtime RuntimeConfigView) (string, int64, time.Duration, error) {
+	if cfg.MaxSize < 0 || cfg.DefaultExpiry < 0 {
+		return "", 0, 0, fmt.Errorf("%w: size and expiry overrides must be nonnegative", ErrInvalidUploadURLConfig)
+	}
+	objectType, maxSize, expiry := cfg.ObjectType, cfg.MaxSize, cfg.DefaultExpiry
+	if objectType == "" {
+		objectType = ObjectTypeAttachment
+	}
+	if maxSize == 0 && m.objectTypeRegistry != nil {
+		if registered := m.objectTypeRegistry.Get(objectType); registered != nil {
+			maxSize = registered.MaxSize
+		}
+	}
+	if maxSize == 0 {
+		maxSize = runtime.AttachmentDefaultMaxSize()
+	}
+	if expiry == 0 {
+		expiry = runtime.AttachmentUploadURLExpiry()
+	}
+	if maxSize <= 0 || expiry <= 0 {
+		return "", 0, 0, fmt.Errorf("%w: effective size and expiry must be positive", ErrInvalidUploadURLConfig)
+	}
+	return objectType, maxSize, expiry, nil
+}
+
+// ReissueUploadURLsWithConfig renews only the IDs matching userID, cfg.ObjectType
+// and entityID in authoritative database state. An empty ObjectType means
+// "attachment", as on creation; entityID="" matches standalone rows, never all entities. Missing, deleted,
+// internal, out-of-scope or no-longer-pending rows are omitted without revealing
+// why. Results are deduplicated and follow the requested ID order.
+//
+// SECURITY: the application must authorize the actor for the target entity and
+// select userID and cfg on the backend, including administrator allowances.
+// This is an attachment-scope check, not actor/entity authorization, rate limiting
+// or a quota check. An ambient transaction is required; roll it back on any error
+// and expose returned instructions only after successful commit. Renewal holds
+// row locks until that transaction ends. Signing itself does not commit it.
+//
+// Only cfg.ObjectType, MaxSize and DefaultExpiry apply, resolved exactly as on
+// creation (resolveUploadURLPolicy), so renewal never widens an issuance's
+// default limit. Filename fields
+// and AllowedMimeTypes do not apply. Existing object identity, metadata, linkage
+// and visibility are preserved; processing validators remain in force.
+//
+// One runtime view and signing expiry are captured for the batch. The row keeps
+// the latest outstanding deadline, so ExpiresAt can be earlier than its stored
+// deadline. A smaller/shorter new policy does not revoke older URLs, and the
+// original policy is not persisted or recovered. On failure no partial results
+// are returned, but the caller must still roll back database renewals.
+func (m *AttachmentLifecycleManager) ReissueUploadURLsWithConfig(
+	ctx context.Context, userID uint64, entityID string, attachmentIDs []uint64, cfg UploadURLConfig,
+) ([]*IssuedUploadURL, error) {
+	if userID == 0 {
+		return nil, fmt.Errorf("%w: uploader must be explicit", ErrInvalidUploadURLConfig)
+	}
+	runtime := m.runtimeConfigProvider()
+	objectType, maxSize, expiry, err := m.resolveUploadURLPolicy(cfg, runtime)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]uint64, 0, len(attachmentIDs))
+	seen := make(map[uint64]bool, len(attachmentIDs))
+	for _, id := range attachmentIDs {
+		if id == 0 {
+			return nil, fmt.Errorf("%w: attachment IDs must be nonzero", ErrInvalidUploadURLConfig)
+		}
+		if !seen[id] {
+			ids = append(ids, id)
+			seen[id] = true
+		}
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	expiresAt := time.Now().UTC().Add(expiry).Truncate(time.Millisecond)
+	renewed, err := m.persistence.RenewPendingUploadsInScope(ctx, ids, userID, objectType, entityID, expiresAt)
+	if err != nil {
+		return nil, contextualAttachmentError(err, zap.String(logkeys.Stage, "renew_attachment_upload_window"))
+	}
+	byID := make(map[uint64]*common_persistence_models.Attachment, len(renewed))
+	for _, att := range renewed {
+		byID[att.ID] = att
+	}
+	issued := make([]*IssuedUploadURL, 0, len(renewed))
+	for _, id := range ids {
+		att, ok := byID[id]
+		if !ok {
+			continue
+		}
+		// Sign database-returned paths and content types, never a caller's snapshot.
+		uploadURL, formData, err := m.presignUpload(ctx, att, runtime, 1, maxSize, expiresAt)
+		if err != nil {
+			return nil, contextualAttachmentError(err, zap.String(logkeys.Stage, "reissue_attachment_upload_url"), zap.Uint64(appLogger.KeyAttachmentID, id))
+		}
+		issued = append(issued, &IssuedUploadURL{Attachment: att, UploadURL: uploadURL, FormData: formData, ExpiresAt: expiresAt})
 	}
 	return issued, nil
 }

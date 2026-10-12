@@ -169,34 +169,6 @@ func (h *minioObjectStorage) GeneratePresignedPostURL(ctx context.Context, objec
 	return presignedURL.String(), formData, nil
 }
 
-// GetObjectBytes executes its operation in the persistence flow between service handlers and the database layer.
-func (h *minioObjectStorage) GetObjectBytes(ctx context.Context, objectName string) ([]byte, error) {
-
-	// Get the object
-	object, err := h.minioClient.GetObject(ctx, h.minioBucket, objectName, minio.GetObjectOptions{})
-	if err != nil {
-		return nil, appLogger.WithErrorFields(err,
-			zap.String(logkeys.Operation, "get_object_bytes"),
-			zap.String(logkeys.Stage, "open"),
-			zap.String(logkeys.Bucket, h.minioBucket),
-			zap.String(appLogger.KeyObjectName, objectName))
-	}
-	defer object.Close()
-
-	// Read the object into a byte slice
-	buf := new(bytes.Buffer)
-	_, err = io.Copy(buf, object)
-	if err != nil {
-		return nil, appLogger.WithErrorFields(err,
-			zap.String(logkeys.Operation, "get_object_bytes"),
-			zap.String(logkeys.Stage, "read"),
-			zap.String(logkeys.Bucket, h.minioBucket),
-			zap.String(appLogger.KeyObjectName, objectName))
-	}
-
-	return buf.Bytes(), nil
-}
-
 // GetObjectReader executes its operation in the persistence flow between service handlers and the database layer.
 // When precondition pins an ETag, the first request is issued eagerly so a
 // mismatch fails here rather than from the caller's first Read, and later

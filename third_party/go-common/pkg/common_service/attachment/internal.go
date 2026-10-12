@@ -44,18 +44,10 @@ type InternalAttachmentInput struct {
 // StoreInternalAttachment synchronously validates and stores trusted
 // server-produced bytes. It creates a non-readable processing row before the
 // object write, then publishes the row as vetted only after storage succeeds.
+// The bool reports whether a new attachment was created: a prior attachment bound
+// to the same server-defined entity key is reused only when all immutable metadata
+// and verified bytes match; a differing retry fails closed.
 func (m *AttachmentLifecycleManager) StoreInternalAttachment(
-	ctx context.Context,
-	in InternalAttachmentInput,
-) (*common_persistence_models.Attachment, error) {
-	attachment, _, err := m.StoreInternalAttachmentWithStatus(ctx, in)
-	return attachment, err
-}
-
-// StoreInternalAttachmentWithStatus is StoreInternalAttachment with an idempotency signal. A
-// prior attachment bound to the same server-defined entity key is reused only when all immutable
-// metadata and verified bytes match; a differing retry fails closed.
-func (m *AttachmentLifecycleManager) StoreInternalAttachmentWithStatus(
 	ctx context.Context,
 	in InternalAttachmentInput,
 ) (*common_persistence_models.Attachment, bool, error) {
@@ -189,7 +181,7 @@ func (m *AttachmentLifecycleManager) verifyReusableInternalAttachment(
 	attachment *common_persistence_models.Attachment,
 	expected []byte,
 ) (*common_persistence_models.Attachment, bool, error) {
-	stored, verified, err := m.ReadInternalAttachment(ctx, attachment.ID)
+	stored, verified, err := m.ReadInternalAttachment(ctx, attachment.ID, ^uint64(0))
 	if err != nil || verified == nil || !bytes.Equal(stored, expected) {
 		if err == nil {
 			err = ErrInternalAttachmentAccess
@@ -250,14 +242,8 @@ func (m *AttachmentLifecycleManager) ValidateInternalAttachment(ctx context.Cont
 
 // ReadInternalAttachment returns verified server-only bytes and validates the
 // persisted size and SHA-256 digest before handing them to a provider adapter.
+// An attachment larger than maxBytes is rejected before its object body is read.
 func (m *AttachmentLifecycleManager) ReadInternalAttachment(
-	ctx context.Context,
-	attachmentID uint64,
-) ([]byte, *common_persistence_models.Attachment, error) {
-	return m.readInternalAttachmentBounded(ctx, attachmentID, ^uint64(0))
-}
-
-func (m *AttachmentLifecycleManager) readInternalAttachmentBounded(
 	ctx context.Context,
 	attachmentID uint64,
 	maxBytes uint64,

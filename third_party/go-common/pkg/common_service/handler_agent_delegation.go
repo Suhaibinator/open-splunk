@@ -133,6 +133,7 @@ type reportToParentResult struct {
 
 type cancelSubagentArgs struct {
 	ChildSessionID uint64 `json:"child_session_id"`
+	KeepSession    bool   `json:"keep_session,omitzero"`
 	Reason         string `json:"reason,omitzero"`
 }
 
@@ -141,7 +142,7 @@ type cancelSubagentResult struct {
 	CancelledRunIDs []uint64 `json:"cancelled_run_ids"`
 	// Archived reports the child's state after the call, not whether this call archived it
 	// (DelegatedChildCancellation.Archived): a replayed or repeated cancel must read the same to the
-	// model, and a successful retire always leaves the child archived.
+	// model. A successful retire always leaves the child archived; keep_session never archives.
 	Archived bool `json:"archived"`
 }
 
@@ -596,7 +597,10 @@ func (h *CommonServiceHandler[U]) executeReportToParent(ctx context.Context, inv
 // executeCancelSubagent is cancel_subagent. Ownership is checked against the calling parent (its
 // direct child, in its channel) so one parent cannot stop another parent's child, then the child is
 // retired through retireDelegatedChild with the delegation_cancelled_by_parent code, the same path
-// CancelDelegatedChild takes after its application-side lookup. It is idempotent: a finished or
+// CancelDelegatedChild takes after its application-side lookup. With keep_session it only cancels
+// the child's active runs with that code, leaving the session live for send_subagent_message; a
+// run that starts after the listing is not interrupted, and nothing is durable intent, so recovery
+// does not finish an interrupted keep_session cancel. It is idempotent: a finished, idle or
 // archived child reports success with nothing cancelled.
 func (h *CommonServiceHandler[U]) executeCancelSubagent(ctx context.Context, invocation ports.AgentToolInvocation) (*ports.AgentToolResult, error) {
 	args, err := agentkit.DecodeToolArgs[cancelSubagentArgs](invocation.ArgumentsJSON)
@@ -630,6 +634,17 @@ func (h *CommonServiceHandler[U]) executeCancelSubagent(ctx context.Context, inv
 	}
 	ctx = common_context.WithChatAgentDelegationOrigin(ctx, rc.run.ID, owner)
 	ctx = common_persistence.WithoutRequestTransaction[U](ctx)
+	if args.KeepSession {
+		cancelled, err := h.cancelDelegatedChildRuns(ctx, child.ID, delegationCancelledByParent)
+		if err != nil {
+			return delegationToolFailure(invocation, err)
+		}
+		return agentkit.SuccessResult(cancelSubagentResult{
+			ChildSessionID:  child.ID,
+			CancelledRunIDs: cancelled,
+			Archived:        child.Status == common_persistence_models.ChatAgentSessionStatusArchived,
+		})
+	}
 	outcome, err := h.retireDelegatedChild(ctx, child, delegationCancelledByParent)
 	if err != nil {
 		return delegationToolFailure(invocation, err)
@@ -957,15 +972,20 @@ func (h *CommonServiceHandler[U]) retireDelegatedChild(ctx context.Context, chil
 	if err != nil {
 		return nil, err
 	}
-	active, err := h.commonPersistenceHandler.ListActiveChatAgentRunsBySession(ctx, child.ID)
-	if err != nil {
-		return nil, serviceErrors.ErrDatabaseError
-	}
-	cancelled, err := h.cancelDelegatedRuns(ctx, active, cancellation)
+	cancelled, err := h.cancelDelegatedChildRuns(ctx, child.ID, cancellation)
 	if err != nil {
 		return nil, err
 	}
 	return &DelegatedChildCancellation{Archived: archived, CancelledRunIDs: cancelled}, nil
+}
+
+// cancelDelegatedChildRuns cancels the child's runs that are active when it lists them.
+func (h *CommonServiceHandler[U]) cancelDelegatedChildRuns(ctx context.Context, childID uint64, cancellation ports.AgentRunCancellation) ([]uint64, error) {
+	active, err := h.commonPersistenceHandler.ListActiveChatAgentRunsBySession(ctx, childID)
+	if err != nil {
+		return nil, serviceErrors.ErrDatabaseError
+	}
+	return h.cancelDelegatedRuns(ctx, active, cancellation)
 }
 
 func (h *CommonServiceHandler[U]) archiveDelegatedChild(ctx context.Context, child *common_persistence_models.ChatAgentSession) (bool, error) {

@@ -537,6 +537,11 @@ type CommonPersistenceInterface interface {
 	// RenewPendingUploads extends upload_url_expires_at to at least expiresAt for the given non-internal
 	// attachments still waiting for their upload and returns exactly the renewed rows.
 	RenewPendingUploads(ctx context.Context, attachmentIDs []uint64, expiresAt time.Time) ([]*common_persistence_models.Attachment, error)
+	// RenewPendingUploadsInScope requires an ambient transaction and returns only live pending
+	// uploads matching uploader/object type/entity exactly, with a non-empty temporary object.
+	// The conditional UPDATE holds row locks through commit. It does not authorize the actor.
+	RenewPendingUploadsInScope(ctx context.Context, attachmentIDs []uint64, userID uint64, objectType, entityID string, expiresAt time.Time) ([]*common_persistence_models.Attachment, error)
+
 	// UpdateExpiredPendingUpload is UpdateAttachmentIfStatus from pending_upload for a row whose latest
 	// upload URL expired before cutoffTime, returning false when finalization or a renewal won.
 	UpdateExpiredPendingUpload(ctx context.Context, attachment *common_persistence_models.Attachment, cutoffTime time.Time) (bool, error)
@@ -555,12 +560,7 @@ type CommonPersistenceInterface interface {
 	// This is useful for batch processing of pending attachments.
 	GetAttachmentsByStatus(ctx context.Context, status common_persistence_models.UploadStatus, limit int) ([]*common_persistence_models.Attachment, error)
 
-	// DeleteAttachment removes an attachment record from the database.
-	// Note: This does not remove the associated object from MinIO storage.
-	DeleteAttachment(ctx context.Context, id uint64) error
-
-	// DeleteAttachmentsByIDs removes multiple attachment records from the database in a single operation.
-	// This is more efficient than calling DeleteAttachment multiple times.
+	// DeleteAttachmentsByIDs soft-deletes the non-internal attachment records among ids.
 	// Note: This does not remove the associated objects from MinIO storage.
 	DeleteAttachmentsByIDs(ctx context.Context, ids []uint64) error
 
@@ -582,22 +582,20 @@ type CommonPersistenceInterface interface {
 	// Used for bulk operations and ownership verification.
 	GetAttachmentsByIDsAndUser(ctx context.Context, attachmentIDs []uint64, userID uint64) ([]*common_persistence_models.Attachment, error)
 
-	// IsAttachmentReferencedByChatMessages reports whether an attachment ID appears in any chat message attachment_ids array.
-	IsAttachmentReferencedByChatMessages(ctx context.Context, attachmentID uint64) (bool, error)
+	// GetChatMessageReferencedAttachmentIDs returns the set of ids that appear in any chat
+	// message's attachment_ids array, soft-deleted messages included.
+	GetChatMessageReferencedAttachmentIDs(ctx context.Context, ids []uint64) (map[uint64]bool, error)
 
-	// IsAttachmentReferencedByChatMessageHistory reports whether an attachment ID appears in any chat message history attachment_ids array.
-	IsAttachmentReferencedByChatMessageHistory(ctx context.Context, attachmentID uint64) (bool, error)
+	// GetChatHistoryReferencedAttachmentIDs returns the set of ids that appear in any chat
+	// message edit-history attachment_ids array, through the ambient transaction.
+	GetChatHistoryReferencedAttachmentIDs(ctx context.Context, ids []uint64) (map[uint64]bool, error)
 
 	// CreateAttachments creates multiple attachment records in a single operation.
 	// This method is used to avoid N+1 queries when creating multiple attachments.
 	CreateAttachments(ctx context.Context, attachments []*common_persistence_models.Attachment) error
 
-	// UpdateAttachmentEntityID updates the entity ID for an existing attachment.
-	// Pass an empty string to clear the association.
-	UpdateAttachmentEntityID(ctx context.Context, attachmentID uint64, entityID string) error
-
-	// UpdateAttachmentEntityIDs updates the entity ID for multiple attachments in a single operation.
-	// This is more efficient than calling UpdateAttachmentEntityID multiple times.
+	// UpdateAttachmentEntityIDs updates the entity ID of the non-internal attachments among
+	// attachmentIDs. Pass an empty string to clear the association.
 	UpdateAttachmentEntityIDs(ctx context.Context, attachmentIDs []uint64, entityID string) error
 
 	// UpdateUserProfilePicture updates a user's profile picture attachment reference.
@@ -629,11 +627,6 @@ type CommonPersistenceInterface interface {
 	// content-length ranges and other conditions. The policy expires at expiresAt.
 	// Returns the URL and form data needed for the POST request.
 	GeneratePresignedPostURL(ctx context.Context, objectName string, expiresAt time.Time, minSize, maxSize int64, contentType string) (url string, formData map[string]string, err error)
-
-	// GetObjectBytes retrieves an object from MinIO and returns its content as a byte slice.
-	// This loads the entire object into memory, so it should only be used for
-	// reasonably sized files.
-	GetObjectBytes(ctx context.Context, objectName string) ([]byte, error)
 
 	// GetObjectReader returns a reader for streaming access to an object.
 	// This enables memory-efficient reading of large files without loading

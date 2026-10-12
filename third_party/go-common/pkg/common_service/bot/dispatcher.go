@@ -64,7 +64,7 @@ type AsyncDispatcher[U common_service_models.UserLike] struct {
 	typingEmitter            ports.AgentTypingEmitter
 	chatEventPublisher       ports.ChatEventPublisher
 	notificationSink         ports.ChatNotificationSink
-	internalAttachmentStore  ports.InternalAttachmentBoundedStore
+	internalAttachmentStore  ports.InternalAttachmentStore
 	logger                   *zap.Logger
 	streamPublishHandoffOnce sync.Once
 	streamPublishHandoffs    chan struct{}
@@ -162,7 +162,7 @@ func (d *AsyncDispatcher[U]) SetConverter(converter common_converter.ConverterIn
 }
 
 // SetInternalAttachmentStore wires the privileged server-only provider/tool blob store.
-func (d *AsyncDispatcher[U]) SetInternalAttachmentStore(store ports.InternalAttachmentBoundedStore) {
+func (d *AsyncDispatcher[U]) SetInternalAttachmentStore(store ports.InternalAttachmentStore) {
 	if d != nil {
 		d.internalAttachmentStore = store
 	}

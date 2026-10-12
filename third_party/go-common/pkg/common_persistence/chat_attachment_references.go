@@ -10,8 +10,8 @@ import (
 	"go.uber.org/zap"
 )
 
-// GetChatMessageReferencedAttachmentIDs includes soft-deleted messages, matching
-// IsAttachmentReferencedByChatMessages. The result is a membership set.
+// GetChatMessageReferencedAttachmentIDs includes soft-deleted messages. The result
+// is a membership set.
 func (h *CommonPersistenceHandler[U]) GetChatMessageReferencedAttachmentIDs(ctx context.Context, ids []uint64) (map[uint64]bool, error) {
 	return h.chatReferencedAttachmentIDs(ctx, ids, common_persistence_models.TableNameChatMessages, "check_chat_message_attachment_references")
 }

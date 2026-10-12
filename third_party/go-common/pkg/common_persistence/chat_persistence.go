@@ -2031,54 +2031,6 @@ func (h *CommonPersistenceHandler[U]) EditChatMessage(
 	return &edited, nil
 }
 
-// IsAttachmentReferencedByChatMessages executes its operation in the persistence flow between service handlers and the database layer.
-func (h *CommonPersistenceHandler[U]) IsAttachmentReferencedByChatMessages(ctx context.Context, attachmentID uint64) (bool, error) {
-	db := h.getDBFromContext(ctx)
-
-	// existsResult captures the boolean EXISTS projection returned while
-	// IsAttachmentReferencedByChatMessages checks whether any live message references an attachment.
-	type existsResult struct {
-		Exists bool `gorm:"column:exists"`
-	}
-
-	var result existsResult
-	err := db.Raw(
-		"SELECT EXISTS (SELECT 1 FROM "+common_persistence_models.TableNameChatMessages+" WHERE ? = ANY(attachment_ids)) AS exists",
-		int64(attachmentID),
-	).Scan(&result).Error
-	if err != nil {
-		return false, chatPersistenceDatabaseError(err,
-			zap.String(logkeys.Stage, "check_chat_message_attachment_references"),
-			zap.Uint64(appLogger.KeyAttachmentID, attachmentID))
-	}
-
-	return result.Exists, nil
-}
-
-// IsAttachmentReferencedByChatMessageHistory executes its operation in the persistence flow between service handlers and the database layer.
-func (h *CommonPersistenceHandler[U]) IsAttachmentReferencedByChatMessageHistory(ctx context.Context, attachmentID uint64) (bool, error) {
-	db := h.getDBFromContext(ctx)
-
-	// existsResult captures the boolean EXISTS projection returned while
-	// IsAttachmentReferencedByChatMessageHistory checks edit-history rows for attachment references.
-	type existsResult struct {
-		Exists bool `gorm:"column:exists"`
-	}
-
-	var result existsResult
-	err := db.Raw(
-		"SELECT EXISTS (SELECT 1 FROM "+common_persistence_models.TableNameChatMessageEditHistory+" WHERE ? = ANY(attachment_ids)) AS exists",
-		int64(attachmentID),
-	).Scan(&result).Error
-	if err != nil {
-		return false, chatPersistenceDatabaseError(err,
-			zap.String(logkeys.Stage, "check_chat_history_attachment_references"),
-			zap.Uint64(appLogger.KeyAttachmentID, attachmentID))
-	}
-
-	return result.Exists, nil
-}
-
 // DeleteChatMessage executes its operation in the persistence flow between service handlers and the database layer.
 func (h *CommonPersistenceHandler[U]) DeleteChatMessage(ctx context.Context, channelID uint64, messageID uint64) error {
 	return h.withChatLocationTransaction(ctx, func(txCtx context.Context, db *gorm.DB) error {

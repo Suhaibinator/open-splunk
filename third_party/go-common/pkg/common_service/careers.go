@@ -207,7 +207,7 @@ func (h *CommonServiceHandler[U]) CreateCareerApplication(ctx context.Context, u
 
 	referenceID := uuid.NewV7()
 
-	issued, err := h.attachmentLifecycleManager.CreateUploadURLWithEntityResult(
+	issued, err := h.attachmentLifecycleManager.CreateUploadURLWithEntity(
 		ctx,
 		userID,
 		req.GetResumeAttachment().GetFilename(),

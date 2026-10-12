@@ -35,7 +35,7 @@ func (a *InternalStoreAdapter) StoreInternal(ctx context.Context, in ports.Inter
 	if a == nil || a.manager == nil {
 		return nil, fmt.Errorf("internal attachment store is not configured")
 	}
-	attachment, created, err := a.manager.StoreInternalAttachmentWithStatus(ctx, InternalAttachmentInput{
+	attachment, created, err := a.manager.StoreInternalAttachment(ctx, InternalAttachmentInput{
 		UserID:      in.UserID,
 		ObjectType:  in.ObjectType,
 		EntityID:    in.EntityID,
@@ -55,22 +55,11 @@ func (a *InternalStoreAdapter) StoreInternal(ctx context.Context, in ports.Inter
 	return ref, nil
 }
 
-func (a *InternalStoreAdapter) ResolveInternal(ctx context.Context, attachmentID uint64) ([]byte, *ports.InternalAttachmentRef, error) {
+func (a *InternalStoreAdapter) ResolveInternal(ctx context.Context, attachmentID uint64, maxBytes uint64) ([]byte, *ports.InternalAttachmentRef, error) {
 	if a == nil || a.manager == nil {
 		return nil, nil, fmt.Errorf("internal attachment store is not configured")
 	}
-	data, attachment, err := a.manager.ReadInternalAttachment(ctx, attachmentID)
-	if err != nil {
-		return nil, nil, err
-	}
-	return data, internalAttachmentRef(attachment), nil
-}
-
-func (a *InternalStoreAdapter) ResolveInternalBounded(ctx context.Context, attachmentID uint64, maxBytes uint64) ([]byte, *ports.InternalAttachmentRef, error) {
-	if a == nil || a.manager == nil {
-		return nil, nil, fmt.Errorf("internal attachment store is not configured")
-	}
-	data, attachment, err := a.manager.readInternalAttachmentBounded(ctx, attachmentID, maxBytes)
+	data, attachment, err := a.manager.ReadInternalAttachment(ctx, attachmentID, maxBytes)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -110,7 +99,7 @@ func (a *InternalStoreAdapter) ResolveInternalURL(ctx context.Context, attachmen
 	// actual object body—not only mutable database metadata—before minting that
 	// capability. The bounded read rejects replacement/corruption and enforces
 	// maxBytes before the URL can escape.
-	_, attachment, err := a.manager.readInternalAttachmentBounded(ctx, attachmentID, maxBytes)
+	_, attachment, err := a.manager.ReadInternalAttachment(ctx, attachmentID, maxBytes)
 	if err != nil {
 		return "", nil, err
 	}
@@ -140,4 +129,4 @@ func internalAttachmentRef(attachment *common_persistence_models.Attachment) *po
 
 var _ ports.InternalAttachmentStore = (*InternalStoreAdapter)(nil)
 var _ ports.InternalAttachmentURLStore = (*InternalStoreAdapter)(nil)
-var _ ports.InternalAttachmentBoundedStore = (*InternalStoreAdapter)(nil)
+var _ ports.InternalAttachmentStore = (*InternalStoreAdapter)(nil)

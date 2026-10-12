@@ -145,10 +145,6 @@ func (h *CommonPersistenceHandler[U]) GeneratePresignedPostURL(ctx context.Conte
 	return h.objectStorage().GeneratePresignedPostURL(ctx, objectName, expiresAt, minSize, maxSize, contentType)
 }
 
-func (h *CommonPersistenceHandler[U]) GetObjectBytes(ctx context.Context, objectName string) ([]byte, error) {
-	return h.objectStorage().GetObjectBytes(ctx, objectName)
-}
-
 func (h *CommonPersistenceHandler[U]) GetObjectReader(ctx context.Context, objectName string, precondition ObjectPrecondition) (io.ReadCloser, error) {
 	return h.objectStorage().GetObjectReader(ctx, objectName, precondition)
 }

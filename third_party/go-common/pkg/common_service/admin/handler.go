@@ -1115,7 +1115,7 @@ func (h *AdminHandler[U]) CreateUserProfilePictureUploadURL(ctx context.Context,
 	}
 
 	entityID := fmt.Sprintf("%d", userID)
-	issued, err := h.attachmentLifecycleManager.CreateUploadURLWithEntityResult(
+	issued, err := h.attachmentLifecycleManager.CreateUploadURLWithEntity(
 		ctx,
 		userID,
 		filename,

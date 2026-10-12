@@ -119,7 +119,7 @@ func PreviewExternalizedToolResultMedia(in ToolMediaExternalizeInput) ([]*proto_
 // a private, synchronously-vetted attachment reference. Existing private references are verified.
 func ExternalizeToolResultMedia(
 	ctx context.Context,
-	store ports.InternalAttachmentBoundedStore,
+	store ports.InternalAttachmentStore,
 	in ToolMediaExternalizeInput,
 ) (result *ToolMediaExternalizeResult, resultErr error) {
 	if _, err := PreviewExternalizedToolResultMedia(in); err != nil {
@@ -328,7 +328,7 @@ func validateToolMediaRef(ref *ports.InternalAttachmentRef, ownerUserID uint64, 
 
 func resolveToolMediaBytes(
 	ctx context.Context,
-	store ports.InternalAttachmentBoundedStore,
+	store ports.InternalAttachmentStore,
 	attachmentID, ownerUserID uint64,
 	entityID, contentType, filename string,
 	maxBytes uint64,
@@ -336,7 +336,7 @@ func resolveToolMediaBytes(
 	if maxBytes == 0 {
 		return nil, nil, fmt.Errorf("%w: tool media attachment has no byte allowance", ErrInvalidInternalAttachment)
 	}
-	data, ref, err := store.ResolveInternalBounded(ctx, attachmentID, maxBytes)
+	data, ref, err := store.ResolveInternal(ctx, attachmentID, maxBytes)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -356,7 +356,7 @@ func resolveToolMediaBytes(
 // transcript retains private attachment references. Non-image media may use a verified URL.
 func ResolveToolMediaReference(
 	ctx context.Context,
-	store ports.InternalAttachmentBoundedStore,
+	store ports.InternalAttachmentStore,
 	attachmentID, ownerUserID, agentRunID uint64,
 	toolCallID string,
 	partIndex int,
@@ -382,7 +382,7 @@ func ResolveToolMediaReference(
 		// otherwise valid tool result. The byte path below independently revalidates
 		// ownership, binding, size, and digest before producing a data URI.
 	}
-	data, ref, err := store.ResolveInternalBounded(ctx, attachmentID, maxBytes)
+	data, ref, err := store.ResolveInternal(ctx, attachmentID, maxBytes)
 	if err == nil {
 		err = validateToolMediaRef(ref, ownerUserID, entityID, contentType, filename)
 	}

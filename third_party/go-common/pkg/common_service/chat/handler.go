@@ -198,7 +198,7 @@ type HandlerInterface[U common_service_models.UserLike] interface {
 	// scanner to run claimed TOOL_CALLs.
 	SetToolCallExecutor(executor ports.ToolCallExecutor)
 	// SetInternalAttachmentStore wires private storage for provider-facing tool media.
-	SetInternalAttachmentStore(store ports.InternalAttachmentBoundedStore)
+	SetInternalAttachmentStore(store ports.InternalAttachmentStore)
 
 	// Agentic tool-approval lane background tasks (Decision 6). The service handler starts these
 	// after wiring and stops them on shutdown; both are idempotent/no-op when nothing is configured.
@@ -207,7 +207,6 @@ type HandlerInterface[U common_service_models.UserLike] interface {
 }
 
 type AttachmentHydrator interface {
-	HydrateChatMessageAttachments(ctx context.Context, message *common_service_models.ChatMessage) error
 	HydrateChatMessagesAttachments(ctx context.Context, messages []*common_service_models.ChatMessage) error
 	HydrateChatAgentQueuedInputsAttachments(ctx context.Context, inputs []*common_service_models.ChatAgentQueuedInput) error
 }
@@ -260,7 +259,7 @@ type Handler[U common_service_models.UserLike] struct {
 	toolCallExecutor ports.ToolCallExecutor
 	// internalAttachmentStore externalizes binary approved-tool results before transcript limits
 	// are applied. It is never exposed through public attachment APIs.
-	internalAttachmentStore ports.InternalAttachmentBoundedStore
+	internalAttachmentStore ports.InternalAttachmentStore
 
 	// agentRunDriver drives a ChatAgentRun through the transcript-native Genkit continuation loop. It
 	// is the runtime lane (E4) entrypoint CommonServiceHandler.RunAgentTurn, injected via
@@ -446,7 +445,7 @@ func (h *Handler[U]) SetToolCallExecutor(executor ports.ToolCallExecutor) {
 }
 
 // SetInternalAttachmentStore wires the private attachment capability used by approved tool calls.
-func (h *Handler[U]) SetInternalAttachmentStore(store ports.InternalAttachmentBoundedStore) {
+func (h *Handler[U]) SetInternalAttachmentStore(store ports.InternalAttachmentStore) {
 	h.internalAttachmentStore = store
 }
 
@@ -508,7 +507,7 @@ func (h *Handler[U]) hydrateMessageAttachments(ctx context.Context, message *com
 		return nil
 	}
 	if len(message.AttachmentIDs) > 0 && h.attachmentHydrator != nil && operationalConfig.ChatSupportAttachments() {
-		if err := h.attachmentHydrator.HydrateChatMessageAttachments(ctx, message); err != nil {
+		if err := h.attachmentHydrator.HydrateChatMessagesAttachments(ctx, []*common_service_models.ChatMessage{message}); err != nil {
 			if errors.Is(err, persistence.ErrDatabaseError) {
 				return serviceErrors.ErrDatabaseError
 			}

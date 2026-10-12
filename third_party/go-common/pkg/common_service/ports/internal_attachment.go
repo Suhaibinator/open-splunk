@@ -53,15 +53,16 @@ type ResolvedToolMedia struct {
 }
 
 // InternalAttachmentStore stores opaque provider state and large tool media without
-// putting raw bytes in public message rows. Transcript and media readers require
-// InternalAttachmentBoundedStore.
+// putting raw bytes in public message rows.
 // ResolveInternal is privileged and must reject ordinary/user-visible attachments.
 type InternalAttachmentStore interface {
 	// ValidateInternal applies the same input policy as StoreInternal without writing an object
 	// or row. Multipart callers validate every inline part before their first store.
 	ValidateInternal(ctx context.Context, in InternalAttachmentInput) error
 	StoreInternal(ctx context.Context, in InternalAttachmentInput) (*InternalAttachmentRef, error)
-	ResolveInternal(ctx context.Context, attachmentID uint64) ([]byte, *InternalAttachmentRef, error)
+	// ResolveInternal rejects an attachment larger than maxBytes from trusted persisted
+	// metadata before loading its object body and enforces maxBytes while reading.
+	ResolveInternal(ctx context.Context, attachmentID uint64, maxBytes uint64) ([]byte, *InternalAttachmentRef, error)
 	DeleteInternal(ctx context.Context, attachmentID uint64) error
 }
 
@@ -71,11 +72,4 @@ type InternalAttachmentStore interface {
 type InternalAttachmentURLStore interface {
 	InternalAttachmentStore
 	ResolveInternalURL(ctx context.Context, attachmentID uint64, maxBytes uint64) (string, *InternalAttachmentRef, error)
-}
-
-// InternalAttachmentBoundedStore rejects an oversized attachment from trusted persisted metadata
-// before loading its object body and enforces maxBytes while reading.
-type InternalAttachmentBoundedStore interface {
-	InternalAttachmentStore
-	ResolveInternalBounded(ctx context.Context, attachmentID uint64, maxBytes uint64) ([]byte, *InternalAttachmentRef, error)
 }

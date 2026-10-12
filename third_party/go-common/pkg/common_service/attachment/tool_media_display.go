@@ -15,7 +15,7 @@ import (
 // fallback for stores without URL support.
 func ResolveToolMediaDisplayReference(
 	ctx context.Context,
-	store ports.InternalAttachmentBoundedStore,
+	store ports.InternalAttachmentStore,
 	attachmentID, ownerUserID, agentRunID uint64,
 	toolCallID string,
 	partIndex int,

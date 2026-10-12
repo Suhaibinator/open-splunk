@@ -62,7 +62,7 @@ type managedChatHandler[U common_service_models.UserLike] interface {
 // managedBotDispatcher requires storage wiring and shutdown for transcript writers.
 type managedBotDispatcher interface {
 	botpkg.Dispatcher
-	SetInternalAttachmentStore(ports.InternalAttachmentBoundedStore)
+	SetInternalAttachmentStore(ports.InternalAttachmentStore)
 	SetNotificationSink(ports.ChatNotificationSink)
 	StopPostCommitHooks()
 }
