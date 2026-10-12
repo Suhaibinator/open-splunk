@@ -104,7 +104,7 @@ func lockIdentity(ctx context.Context, tx *sql.Tx, actor Subject, targetUser uin
 			continue
 		}
 		var live int64
-		if err := tx.QueryRowContext(ctx, "SELECT id FROM gocommon_organizations WHERE id=$1 AND deleted_at IS NULL FOR SHARE", org).Scan(&live); err != nil {
+		if err := tx.QueryRowContext(ctx, "SELECT id FROM gocommon_organizations WHERE id=$1 AND deleted_at IS NULL AND personal_owner_user_id IS NULL FOR SHARE", org).Scan(&live); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return ErrForbidden
 			}

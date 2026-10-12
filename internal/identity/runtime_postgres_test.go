@@ -87,6 +87,12 @@ func runtimeSameGoogleSessionSeesManualPromotionDemotion(t *testing.T, runtime *
 	if err := pool.Create(&pm.OAuthLogin{UserID: user.ID, ProviderSlug: "google", Subject: new("google-subject"), Email: user.Email}).Error; err != nil {
 		t.Fatal(err)
 	}
+	// Exercise the same trusted workspace lifecycle used by Google registration.
+	if _, err := identityNativeTransaction(runtime, t.Context(), func(ctx context.Context) (*sm.Organization, error) {
+		return runtime.service.GetPersonalWorkspaceService().EnsureForUser(ctx, &sm.User{ID: user.ID, Username: user.Username, Email: user.Email, UserType: user.UserType})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	tokens, err := token.NewTokenService(runtime.Persistence(), token.TokenServiceConfig{SessionLifetime: func() time.Duration { return time.Hour }, SecurityLifetime: func() time.Duration { return time.Hour }, SessionTokenSecret: cfg.SessionTokenSecret.StringValue()}, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
@@ -140,8 +146,25 @@ func runtimeSameGoogleSessionSeesManualPromotionDemotion(t *testing.T, runtime *
 	if err := pool.Table(pm.TableNameOrganizations).Count(&organizations).Error; err != nil {
 		t.Fatal(err)
 	}
-	if organizations != 0 {
-		t.Fatal("identity-only account received personal organization")
+	if organizations != 1 {
+		t.Fatal("signup must provision exactly one managed workspace")
+	}
+	var teams, memberships int64
+	if err := pool.Table(pm.TableNameOrganizations).Where("organization_type = ?", TeamOrganizationType).Count(&teams).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.Table(pm.TableNameUserOrganizations).Count(&memberships).Error; err != nil {
+		t.Fatal(err)
+	}
+	var personal pm.Organization
+	if err := pool.Where("personal_owner_user_id=?", user.ID).First(&personal).Error; err != nil {
+		t.Fatal(err)
+	}
+	if role, member, err := runtime.EffectiveRole(t.Context(), user.ID, personal.ID); err != nil || member || role != 0 {
+		t.Fatal("managed workspace conferred team authority", role, member, err)
+	}
+	if teams != 0 || memberships != 1 {
+		t.Fatal("signup must grant only managed-workspace membership, no team access")
 	}
 	if err := runtime.Persistence().RevokeSessionToken(t.Context(), session); err != nil {
 		t.Fatal(err)

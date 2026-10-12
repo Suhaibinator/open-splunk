@@ -695,9 +695,6 @@ type Config struct {
 	// EnableOrganizations determines whether organization functionality is enabled
 	// Use pointer to distinguish between "not configured" (nil) and "explicitly disabled" (*false)
 	EnableOrganizations *bool `json:"enable_organizations" yaml:"enable_organizations,omitempty" toml:"enable_organizations,omitempty" kms:"group=organizations,reload=restart" kms_views:"organizations"`
-	// EnablePersonalWorkspaces provisions a managed personal organization on account creation.
-	// Organizations may remain enabled while automatic personal-workspace creation is disabled.
-	EnablePersonalWorkspaces *bool `json:"enable_personal_workspaces" yaml:"enable_personal_workspaces,omitempty" toml:"enable_personal_workspaces,omitempty" kms:"group=organizations,reload=restart" kms_views:"organizations"`
 	// EnableCareers determines whether careers functionality is enabled
 	// Use pointer to distinguish between "not configured" (nil) and "explicitly disabled" (*false)
 	EnableCareers *bool `json:"enable_careers" yaml:"enable_careers,omitempty" toml:"enable_careers,omitempty" kms:"group=careers,reload=hot" kms_views:"careers"`

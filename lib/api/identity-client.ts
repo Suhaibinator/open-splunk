@@ -1,4 +1,4 @@
-import { GoCommonClient, ApiError } from "@suhaibinator/go-common-core";
+import { GoCommonClient, ApiError, go_common } from "@suhaibinator/go-common-core";
 import { currentIdentity, currentOrganizationId, isSiteAdministrator, publishIdentity, clearIdentitySession, reportSessionUnauthorized, type IdentityOrganization } from "./identity-session";
 
 export function createIdentityClient(baseUrl = ""): GoCommonClient {
@@ -12,6 +12,8 @@ export function createIdentityClient(baseUrl = ""): GoCommonClient {
   });
 }
 
+const teamOrganizationType = go_common.v1.OrganizationType.ORGANIZATION_TYPE_BUSINESS_TIER_0;
+
 let refreshGeneration = 0;
 export async function refreshIdentity(client: GoCommonClient): Promise<void> {
   const generation = ++refreshGeneration;
@@ -23,8 +25,8 @@ export async function refreshIdentity(client: GoCommonClient): Promise<void> {
     const organizations: IdentityOrganization[] = [];
     async function readPage(page: number): Promise<void> {
       const result = isSiteAdministrator(user)
-        ? await client.admin.organizations.listAll({ page })
-        : await client.organizations.list({ page });
+        ? await client.admin.organizations.listAll({ page }, undefined, undefined, teamOrganizationType)
+        : await client.organizations.list({ page }, undefined, undefined, undefined, teamOrganizationType);
       for (const row of result.organizations) {
         // Admin listings contain organizations directly; member listings wrap
         // the organization and its effective membership role.

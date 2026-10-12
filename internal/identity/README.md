@@ -4,8 +4,11 @@ PostgreSQL/GORM pool and initializes GoCommon's schema; `Runtime.Close` never
 closes that pool. Native routes are served under `/api/identity`.
 
 Google sign-in may create any verified Google account, with regular user type
-and no organizations or memberships. Password registration/login/reset/addition,
-native TOTP, email-domain association and managed personal workspaces are disabled.
+and no team organizations or team memberships. GoCommon provisions a managed
+personal workspace of the Basic tier 0 type; OpenSplunk lists only its Business
+tier 0 team organizations and ignores the profile workspace root ID. Password registration/login/reset/addition,
+native TOTP and email-domain association are disabled. Managed workspace creation
+and deletion follow GoCommon’s normal coordinated lifecycle.
 There is no administrator token or bootstrap workflow.
 
 After the account exists, an operator can promote its exact user ID directly in

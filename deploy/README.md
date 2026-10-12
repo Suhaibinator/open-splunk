@@ -388,3 +388,10 @@ credential. The restore overlay selects fresh state and ClickHouse targets.
 Use the [integration guide](../integration/README.md) for executable recovery and
 storage tests. Legacy file-based recovery receipts are not a substitute for
 PostgreSQL and MinIO backups.
+
+The artifact bucket must be dedicated to OpenSplunk results/exports and have
+versioning enabled before server startup (for example, `mc version enable
+ALIAS/BUCKET`). Startup verifies this setting and does not enable versioning on a
+shared GoCommon attachment bucket. Do not point it at an existing attachment
+bucket: attachment cleanup uses ordinary key deletion rather than historical
+version reclamation.

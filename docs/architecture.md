@@ -127,7 +127,9 @@ The current surface is single-node with authenticated users, organizations and p
 GoCommon is composed into the server through the pinned `third_party/go-common`
 module snapshot. The browser uses its actual compiled core client from
 `third_party/go-common-core` while retaining OpenSplunk CSS and primitives.
-Google sign-in creates an ordinary user with no memberships. Siteadmin type 44
+Google sign-in creates an ordinary user with no team memberships. GoCommon always
+provisions its managed personal workspace; OpenSplunk filters organization lists
+to its team type and grants no index authority through that workspace. Siteadmin type 44
 is operator-assigned, with unconditional organization/index access. Ordinary
 users need active organization membership before role or individual index
 rules apply. Viewer, Admin and Owner roles are 1, 23 and 44. Deny wins over allow.

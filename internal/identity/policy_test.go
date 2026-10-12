@@ -18,8 +18,11 @@ func TestGoogleOnlyConfigurationDoesNotGrantOrganizationOrCredentials(t *testing
 	cfg.MinioBucket = "private-results"
 	Configure(cfg)
 	view := gcconfig.NewRootView(cfg)
-	if !view.EnableOAuth() || view.EnableEmailAuth() || view.SMSEnabled() || !view.EnableOrganizations() || view.EnablePersonalWorkspaces() {
+	if !view.EnableOAuth() || view.EnableEmailAuth() || view.SMSEnabled() || !view.EnableOrganizations() {
 		t.Fatal("unexpected identity feature policy")
+	}
+	if view.PersonalWorkspaceOrganizationType() != PersonalWorkspaceType || PersonalWorkspaceType >= view.OrgMinTypeCreateChildOrganizations() || PersonalWorkspaceType == TeamOrganizationType {
+		t.Fatal("managed workspace must have its own type without child creation")
 	}
 	if view.EnableOrganizationEmailAutoAssociation() || view.OrgAncestorMembershipAutoAdd() {
 		t.Fatal("signup/membership must not auto grant scope")

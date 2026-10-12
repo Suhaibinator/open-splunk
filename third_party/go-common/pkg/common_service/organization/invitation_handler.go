@@ -38,6 +38,9 @@ func (h *OrganizationHandler[U]) InviteUserToOrganization(
 	if err := h.requireInvitationNotificationTransaction(ctx); err != nil {
 		return 0, err
 	}
+	if err := h.validateApplicationRole(role); err != nil {
+		return 0, err
+	}
 	// Get actor from context
 	requestingUser, found := scontext.GetUser[common_service_models.UserIdType, U](ctx)
 	if !found {

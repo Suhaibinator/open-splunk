@@ -35,6 +35,15 @@ func runtimeUserDeletionPreservesNativeOwnership(t *testing.T, runtime *Runtime,
 			t.Fatal(err)
 		}
 	}
+	// User deletion must retain GoCommon's always-provisioned workspace cleanup,
+	// including rollback when the user remains the last Owner of a team.
+	for _, user := range users[2:] {
+		if _, err := identityNativeTransaction(runtime, t.Context(), func(ctx context.Context) (*sm.Organization, error) {
+			return runtime.service.GetPersonalWorkspaceService().EnsureForUser(ctx, &sm.User{ID: user.ID, Username: user.Username, Email: user.Email, UserType: user.UserType})
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	siteCtx := scontext.WithUser[sm.UserIdType](t.Context(), &sm.User{ID: users[0].ID, UserType: users[0].UserType})
 	siteCtx = scontext.WithUserID[sm.UserIdType, sm.User](siteCtx, users[0].ID)
 	handler := runtime.service.GetOrganizationHandler()
@@ -90,7 +99,7 @@ func runtimeUserDeletionPreservesNativeOwnership(t *testing.T, runtime *Runtime,
 		t.Fatalf("sole Owner deletion error=%v", err)
 	}
 	var memberships int64
-	if err := pool.Model(&pm.UserOrganization{}).Where("user_id=?", users[3].ID).Count(&memberships).Error; err != nil || memberships != 4 {
+	if err := pool.Model(&pm.UserOrganization{}).Where("user_id=?", users[3].ID).Count(&memberships).Error; err != nil || memberships != 5 {
 		t.Fatalf("failed delete did not roll back all roots: count%d %v", memberships, err)
 	}
 	if _, _, err := runtime.AuthenticateRequest(soleSession.Clone(t.Context())); err != nil {
@@ -103,8 +112,12 @@ func runtimeUserDeletionPreservesNativeOwnership(t *testing.T, runtime *Runtime,
 	if err := deleteUser(users[2].ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := pool.Model(&pm.UserOrganization{}).Where("user_id=?", users[2].ID).Count(&memberships).Error; err != nil || memberships != 0 {
+	if err := pool.Table(pm.TableNameUserOrganizations+" AS membership").Joins("JOIN "+pm.TableNameOrganizations+" AS organization ON organization.id=membership.organization_id").Where("membership.user_id=? AND organization.deleted_at IS NULL", users[2].ID).Count(&memberships).Error; err != nil || memberships != 0 {
 		t.Fatalf("successful delete left hierarchy memberships: count%d %v", memberships, err)
+	}
+	var personalRoots int64
+	if err := pool.Model(&pm.Organization{}).Where("personal_owner_user_id=?", users[2].ID).Count(&personalRoots).Error; err != nil || personalRoots != 0 {
+		t.Fatal("user deletion orphaned a managed personal workspace", personalRoots, err)
 	}
 	if _, _, err := runtime.AuthenticateRequest(memberSession.Clone(t.Context())); err == nil {
 		t.Fatal("deleted user retained its Google session")

@@ -43,6 +43,9 @@ func realStore(t *testing.T) (*objectstore.Store, *common_persistence.PrivateObj
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := client.SetBucketVersioning(t.Context(), bucket, minio.BucketVersioningConfiguration{Status: minio.Enabled}); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()

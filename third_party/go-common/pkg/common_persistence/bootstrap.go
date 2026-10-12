@@ -54,8 +54,8 @@ func WithApplicationSchemaSetup(name string, setup SchemaSetupFunc) Option {
 }
 
 // WithTransactionStartHook installs an application lock protocol immediately
-// after BeginTransaction, before service code can acquire resource row locks.
-// Initialization/migration transactions are independent from this request hook.
+// after every handler-owned transaction begins, including background workers,
+// before resource row locks. Initialization/migration transactions are independent.
 func WithTransactionStartHook(hook func(context.Context, *gorm.DB) error) Option {
 	return func(options *bootstrapOptions) error {
 		if hook == nil {
@@ -253,6 +253,9 @@ func initializeHandler[U common_service_models.UserLike](
 		return nil, handler.failInitialization(err)
 	}
 	if err := handler.runSQLMigrations(ctx); err != nil {
+		return nil, handler.failInitialization(err)
+	}
+	if err := handler.installTransactionStartHook(); err != nil {
 		return nil, handler.failInitialization(err)
 	}
 	if err := handler.initMinioClient(startup); err != nil {

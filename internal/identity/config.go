@@ -7,6 +7,11 @@ import (
 	pb "github.com/Suhaibinator/go-common/pkg/proto_models"
 )
 
+const (
+	TeamOrganizationType  = pb.OrganizationType_ORGANIZATION_TYPE_BUSINESS_TIER_0
+	PersonalWorkspaceType = pb.OrganizationType_ORGANIZATION_TYPE_BASIC_TIER_0
+)
+
 // Configure applies OpenSplunk's identity policy without changing deployment
 // resources (PostgreSQL, MinIO, cookie security, signing keys and origins).
 func Configure(c *gcconfig.Config) {
@@ -18,7 +23,9 @@ func Configure(c *gcconfig.Config) {
 	c.SMSEnabled = new(false)
 	c.EmailEnabled = new(false)
 	c.EnableOrganizations = new(true)
-	c.EnablePersonalWorkspaces = new(false)
+	// Keep GoCommon's managed workspace lifecycle; only team organizations
+	// appear in the OpenSplunk catalog. Basic workspaces cannot create children.
+	c.PersonalWorkspaceOrganizationType = new(PersonalWorkspaceType)
 	c.EnableAdminAPI = new(true)
 	c.EnableUserSettings = new(false)
 	c.EnableUserProfiles = new(false)

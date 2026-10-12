@@ -19,7 +19,7 @@ type PrivateObjects interface {
 	GetObjectReader(context.Context, string, common_persistence.ObjectPrecondition) (io.ReadCloser, error)
 	GetObjectInfo(context.Context, string) (*common_persistence.MinioObjectInfo, error)
 	RemoveObjectVersion(context.Context, string, string) error
-	EnsurePrivateObjectVersioning(context.Context) error
+	CheckPrivateObjectVersioning(context.Context) error
 	EnsurePrivateUploadLifecycle(context.Context, string) error
 	AbortPrivateObjectUpload(context.Context, string) error
 }
@@ -34,8 +34,8 @@ func NewContext(ctx context.Context, objects PrivateObjects) (*Store, error) {
 	if nilcheck.IsNil(objects) {
 		return nil, errors.New("private object storage is required")
 	}
-	if err := objects.EnsurePrivateObjectVersioning(ctx); err != nil {
-		return nil, fmt.Errorf("enable immutable object versioning: %w", err)
+	if err := objects.CheckPrivateObjectVersioning(ctx); err != nil {
+		return nil, fmt.Errorf("verify private artifact bucket versioning: %w", err)
 	}
 	lifecycleErr := objects.EnsurePrivateUploadLifecycle(ctx, "open-splunk/")
 	if lifecycleErr != nil && !errors.Is(lifecycleErr, common_persistence.ErrPrivateLifecycleUnsupported) {

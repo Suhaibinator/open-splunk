@@ -78,6 +78,13 @@ func realRecoveryBlobs(t *testing.T) *objectstore.Store {
 			t.Error(err)
 		}
 	})
+	client, err := minio.New(endpoint, &minio.Options{Creds: credentials.NewStaticV4(access, secret, ""), Secure: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.SetBucketVersioning(t.Context(), bucket, minio.BucketVersioningConfiguration{Status: minio.Enabled}); err != nil {
+		t.Fatal(err)
+	}
 	store, err := objectstore.NewContext(t.Context(), objects)
 	if err != nil {
 		t.Fatal(err)

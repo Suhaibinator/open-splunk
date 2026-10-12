@@ -64,7 +64,6 @@ type handlerOptions[U common_service_models.UserLike] struct {
 	inferenceControlPlaneRegistry    *controlplane.Registry
 	converter                        common_converter.ConverterInterface
 	oauthSource                      oauth.Source
-	sessionAuthMethodPolicy          auth.SessionAuthMethodPolicy
 }
 
 // HandlerOption customizes CommonServiceHandler construction.
@@ -132,11 +131,6 @@ func WithOAuthProviders[U common_service_models.UserLike](source oauth.Source) H
 
 // WithConverter replaces the converter the constructor would otherwise build
 // from its configuration provider. A nil converter is ignored.
-// WithSessionAuthMethodPolicy limits native session issuance, validation and refresh.
-func WithSessionAuthMethodPolicy[U common_service_models.UserLike](policy auth.SessionAuthMethodPolicy) HandlerOption[U] {
-	return func(options *handlerOptions[U]) { options.sessionAuthMethodPolicy = policy }
-}
-
 func WithConverter[U common_service_models.UserLike](converter common_converter.ConverterInterface) HandlerOption[U] {
 	return func(options *handlerOptions[U]) {
 		if converter != nil {
@@ -231,7 +225,7 @@ func NewCommonServiceHandler[U common_service_models.UserLike](
 	if err := handler.initializePersonalWorkspaceLifecycle(view); err != nil {
 		return nil, fmt.Errorf("failed to initialize personal workspace lifecycle: %w", err)
 	}
-	if err := handler.initializeAuthHandlers(cfg, view, logger, handler.GetEmailClient(), tokenService, settings.oauthSource, settings.sessionAuthMethodPolicy); err != nil {
+	if err := handler.initializeAuthHandlers(cfg, view, logger, handler.GetEmailClient(), tokenService, settings.oauthSource); err != nil {
 		return nil, fmt.Errorf("failed to initialize auth handlers: %w", err)
 	}
 	handler.configureCacheInvalidation()
@@ -510,7 +504,6 @@ func (h *CommonServiceHandler[U]) initializeAuthHandlers(
 	emailClient *email_client.EmailClient,
 	tokenService token.TokenService,
 	oauthSource oauth.Source,
-	policies ...auth.SessionAuthMethodPolicy,
 ) error {
 	// Compile and validate trusted frontend origins once per generation.
 	origins := config.NewStrictGenerationMemo(func(v config.ServiceView) (*origin.Allowlist, error) {
@@ -565,10 +558,6 @@ func (h *CommonServiceHandler[U]) initializeAuthHandlers(
 	h.phoneAuthHandler = phoneAuthHandler
 
 	// Initialize the AuthHandler
-	var sessionPolicy auth.SessionAuthMethodPolicy
-	if len(policies) > 0 {
-		sessionPolicy = policies[0]
-	}
 	authHandler, err := auth.NewAuthHandler(
 		context.Background(),
 		logger,
@@ -580,7 +569,6 @@ func (h *CommonServiceHandler[U]) initializeAuthHandlers(
 		h.converter,
 		auth.WithAccountLifecyclePreflight(h.accountLifecycleCoordinator.RequireTransaction),
 		auth.WithOAuthProviders(oauthSource),
-		auth.WithSessionAuthMethodPolicy(sessionPolicy),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create auth handler: %w", err)
@@ -663,13 +651,13 @@ func (h *CommonServiceHandler[U]) initializePersonalWorkspaceLifecycle(
 	if view == nil {
 		return fmt.Errorf("configuration view is required")
 	}
-	// Automatic personal workspaces are independently configurable. Failing
+	// Personal workspaces are always on whenever organizations are enabled;
+	// applications that do not want them simply do not render them. Failing
 	// fast here turns what would otherwise surface as an opaque
 	// ErrUserCreationFailed at first signup into a construction-time error
 	// that names the fix.
 	organizationsEnabled := view.EnableOrganizations()
-	personalEnabled := organizationsEnabled && view.EnablePersonalWorkspaces()
-	if personalEnabled && h.userCallbacks == nil {
+	if organizationsEnabled && h.userCallbacks == nil {
 		return fmt.Errorf("no ports.UserCallbackConfig provided; personal workspace provisioning requires user callbacks when organizations are enabled")
 	}
 	personalWorkspaceService, err := organization.NewPersonalWorkspaceService(
@@ -691,8 +679,8 @@ func (h *CommonServiceHandler[U]) initializePersonalWorkspaceLifecycle(
 		return err
 	}
 	h.personalWorkspaceService = personalWorkspaceService
-	h.personalWorkspacesEnabled = personalEnabled
-	h.accountLifecycleCoordinator = newAccountLifecycleCoordinator(h.userCallbacks, h.personalWorkspaceService, personalEnabled)
+	h.personalWorkspacesEnabled = organizationsEnabled
+	h.accountLifecycleCoordinator = newAccountLifecycleCoordinator(h.userCallbacks, h.personalWorkspaceService, organizationsEnabled)
 	// With organizations disabled an application may legitimately run without
 	// user callbacks; keep the nil pointer so downstream handlers apply their
 	// historical nil-callback behavior instead of a hollow coordinator clone

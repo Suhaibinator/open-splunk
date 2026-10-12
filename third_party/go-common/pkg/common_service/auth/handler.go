@@ -81,12 +81,13 @@ type AuthHandler[U common_service_models.UserLike] struct {
 	runtimeConfigProvider     RuntimeConfigProvider
 	cachePolicyMu             sync.Mutex
 	cachePolicyTTL            time.Duration
+	cacheLoginAvailability    sessionLoginAvailability
+	cacheLoginAvailabilitySet bool
 	cacheGeneration           uint64 // bumped by every invalidation; guarded by cachePolicyMu
 	realtimeSessions          ports.RealtimeSessionCloser
 	cacheTokenCapacity        uint64
 	cacheUserCapacity         uint64
 	accountLifecyclePreflight func(context.Context) error
-	sessionAuthMethodPolicy   SessionAuthMethodPolicy
 	persistenceHandler        persistence.CommonPersistenceInterface
 	authTokenToUserIDCache    *ttlcache.Cache[string, common_service_models.UserIdType]
 	userIDToUserCache         *ttlcache.Cache[common_service_models.UserIdType, U] // Store U directly (User values)
@@ -133,7 +134,6 @@ type AuthHandler[U common_service_models.UserLike] struct {
 
 type handlerOptions struct {
 	accountLifecyclePreflight func(context.Context) error
-	sessionAuthMethodPolicy   SessionAuthMethodPolicy
 	oauthSource               oauth.Source
 }
 
@@ -152,6 +152,9 @@ func WithAccountLifecyclePreflight(preflight func(context.Context) error) Handle
 // Values returned by one view must belong to one immutable configuration
 // generation.
 type RuntimeConfigView interface {
+	EnableEmailAuth() bool
+	EnableOAuth() bool
+	SMSEnabled() bool
 	AuthCacheTtl() time.Duration
 	AuthTokenCacheCapacity() uint64
 	AuthUserCacheCapacity() uint64
@@ -281,7 +284,6 @@ func NewAuthHandler[U common_service_models.UserLike](
 		logger:                    logger,
 		config:                    authHandlerConfig,
 		accountLifecyclePreflight: settings.accountLifecyclePreflight,
-		sessionAuthMethodPolicy:   settings.sessionAuthMethodPolicy,
 
 		persistenceHandler:     persistenceHandler,
 		authTokenToUserIDCache: authTokenToUserIDCache,
@@ -440,9 +442,6 @@ func (h *AuthHandler[U]) ValidateSessionToken(authCode string) (*token.SessionTo
 // GetUserFromAuthToken executes this step in the auth backend flow.
 func (h *AuthHandler[U]) GetUserFromAuthToken(ctx context.Context, authCode string) (*U, error) {
 	caches := h.authCaches()
-	if h.sessionAuthMethodPolicy != nil {
-		caches.tokens = nil
-	} // session methods are persisted authority
 	var tokenItem *ttlcache.Item[string, common_service_models.UserIdType]
 
 	if caches.tokens != nil {
@@ -527,10 +526,8 @@ func (h *AuthHandler[U]) GetUserFromAuthToken(ctx context.Context, authCode stri
 		return nil, errors.ErrInvalidToken
 	}
 
-	if h.sessionAuthMethodPolicy != nil {
-		if err := h.sessionAuthMethodPolicy(ctx, token.SessionAuthMethod{Provider: authToken.AuthMethod, OAuthProviderSlug: authToken.OAuthProviderSlug}); err != nil {
-			return nil, err
-		}
+	if err := h.validatePersistedSessionMethod(ctx, caches.view, token.SessionAuthMethod{Provider: authToken.AuthMethod, OAuthProviderSlug: authToken.OAuthProviderSlug}); err != nil {
+		return nil, err
 	}
 	// Get the user ID
 	userID := common_service_models.UserIdType(authToken.UserID)
@@ -581,10 +578,8 @@ func (h *AuthHandler[U]) CreateUserAuth(
 	}
 	// Use token service to generate appropriate token type
 	if tokenType == proto_models.TokenType_TOKEN_TYPE_AUTHENTICATION {
-		if h.sessionAuthMethodPolicy != nil {
-			if err := h.sessionAuthMethodPolicy(ctx, method); err != nil {
-				return "", err
-			}
+		if err := h.validateSessionMethod(h.runtimeConfigProvider(), method); err != nil {
+			return "", err
 		}
 		// Generate session token for authentication
 		return h.tokenService.GenerateSessionToken(ctx, uint64(userId), method)
@@ -697,6 +692,10 @@ func (h *AuthHandler[U]) GetUserIDFromAuthToken(ctx context.Context, authCode st
 	// Verify token type
 	if authToken.TokenType != proto_models.TokenType_TOKEN_TYPE_AUTHENTICATION {
 		return 0, errors.ErrInvalidToken
+	}
+
+	if err := h.validatePersistedSessionMethod(ctx, caches.view, token.SessionAuthMethod{Provider: authToken.AuthMethod, OAuthProviderSlug: authToken.OAuthProviderSlug}); err != nil {
+		return 0, err
 	}
 
 	// Get the user ID
@@ -1049,6 +1048,8 @@ func (h *AuthHandler[U]) ListActiveSessions(ctx context.Context, userID common_s
 // into a single mint, and a token already refreshed within the grace window
 // re-receives its existing replacement instead of minting again.
 func (h *AuthHandler[U]) RefreshSessionToken(ctx context.Context, oldToken string) (string, error) {
+	// A disabled login method must also invalidate refresh handoff entries.
+	caches := h.authCaches()
 	// Fast path: this token was already refreshed within the grace window
 	// (parallel tab, or a lost Set-Cookie being healed) — re-issue the same
 	// replacement token.
@@ -1094,10 +1095,8 @@ func (h *AuthHandler[U]) RefreshSessionToken(ctx context.Context, oldToken strin
 		if rec.TokenType != proto_models.TokenType_TOKEN_TYPE_AUTHENTICATION {
 			return nil, errors.ErrInvalidToken
 		}
-		if h.sessionAuthMethodPolicy != nil {
-			if err := h.sessionAuthMethodPolicy(ctx, token.SessionAuthMethod{Provider: rec.AuthMethod, OAuthProviderSlug: rec.OAuthProviderSlug}); err != nil {
-				return nil, err
-			}
+		if err := h.validatePersistedSessionMethod(ctx, caches.view, token.SessionAuthMethod{Provider: rec.AuthMethod, OAuthProviderSlug: rec.OAuthProviderSlug}); err != nil {
+			return nil, err
 		}
 
 		newToken, err := h.tokenService.GenerateSessionTokenWithAuthTime(

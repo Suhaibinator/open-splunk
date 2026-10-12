@@ -30,6 +30,10 @@ func (r *Runtime) removeDeletedUserMemberships(ctx context.Context, userID sm.Us
 		if membership == nil || membership.UserOrganization == nil || membership.UserOrganization.Organization.ID <= 0 {
 			return fmt.Errorf("identity: invalid organization membership during account deletion")
 		}
+		// GoCommon archives the managed workspace after this callback.
+		if membership.UserOrganization.Organization.PersonalOwnerUserID != nil {
+			continue
+		}
 		if membership.UserOrganization.Organization.ParentOrganizationID == nil {
 			roots = append(roots, membership.UserOrganization.OrganizationID)
 		}
@@ -48,8 +52,10 @@ func (r *Runtime) removeDeletedUserMemberships(ctx context.Context, userID sm.Us
 	if err != nil {
 		return err
 	}
-	if len(remaining) != 0 {
-		return fmt.Errorf("identity: organization membership remained after guarded account deletion")
+	for _, membership := range remaining {
+		if membership == nil || membership.UserOrganization == nil || membership.UserOrganization.Organization.PersonalOwnerUserID == nil {
+			return fmt.Errorf("identity: team organization membership remained after guarded account deletion")
+		}
 	}
 	return nil
 }

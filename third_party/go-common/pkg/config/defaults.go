@@ -606,7 +606,6 @@ func GetDefaults() *Config {
 	defaults.FaroMaxPayloadSize = new(int64(1024 * 1024)) // 1MB; Faro batches are typically a few KB
 	defaults.EnableAdminAPI = new(false)                  // disabled by default
 	defaults.EnableOrganizations = new(false)             // disabled by default
-	defaults.EnablePersonalWorkspaces = new(true)         // preserve managed workspaces when organizations are enabled
 	defaults.EnableCareers = new(false)                   // disabled by default
 
 	// User search defaults

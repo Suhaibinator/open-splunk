@@ -33,6 +33,9 @@ func runtimePatternPrivateBlobs(t *testing.T) searchartifacts.BlobStore {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := client.SetBucketVersioning(t.Context(), bucket, minio.BucketVersioningConfiguration{Status: minio.Enabled}); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()

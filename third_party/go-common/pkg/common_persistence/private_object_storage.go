@@ -2,12 +2,13 @@ package common_persistence
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"strings"
 
-	"github.com/Suhaibinator/go-common/pkg/common_service/common_service_models"
 	"github.com/Suhaibinator/go-common/pkg/config"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/lifecycle"
@@ -16,12 +17,14 @@ import (
 
 var ErrPrivateObjectNotFound = errors.New("private object not found")
 var ErrPrivateObjectAlreadyExists = errors.New("private object already exists")
+var ErrPrivateObjectVersioningRequired = errors.New("private artifact bucket must already have versioning enabled")
+
 var ErrPrivateLifecycleUnsupported = errors.New("object backend does not support incomplete upload lifecycle rules")
 
 // PrivateObjectStorage exposes low-level private objects without database,
 // identity, attachments, schema bootstrap, or background monitor ownership.
 type PrivateObjectStorage struct {
-	handler *CommonPersistenceHandler[common_service_models.User]
+	storage *minioObjectStorage
 	cancel  context.CancelFunc
 }
 
@@ -32,47 +35,51 @@ func NewPrivateObjectStorage(ctx context.Context, provider config.PersistencePro
 	if logger == nil {
 		logger = zap.NewNop()
 	}
+	startup := provider()
+	if startup == nil {
+		return nil, errors.New("private object storage requires a configuration view")
+	}
 	storageCtx, cancel := context.WithCancel(ctx)
-	handler := &CommonPersistenceHandler[common_service_models.User]{runtime: provider, logger: logger, ctx: storageCtx}
-	if err := handler.initMinioClient(provider()); err != nil {
+	handler := &minioObjectStorage{runtime: provider, logger: logger, ctx: storageCtx, objectHashSalt: startup.ObjectHashSalt()}
+	if err := handler.initMinioClient(startup); err != nil {
 		cancel()
 		return nil, err
 	}
-	return &PrivateObjectStorage{handler: handler, cancel: cancel}, nil
+	return &PrivateObjectStorage{storage: handler, cancel: cancel}, nil
 }
 func (store *PrivateObjectStorage) Close() error { store.cancel(); return nil }
 func (store *PrivateObjectStorage) PutObjectStream(ctx context.Context, key string, reader io.Reader, size int64, options PutObjectOptions) error {
-	return store.handler.PutObjectStream(ctx, key, reader, size, options)
+	return store.storage.PutObjectStream(ctx, key, reader, size, options)
 }
 func (store *PrivateObjectStorage) PutObjectStreamVersion(ctx context.Context, key string, reader io.Reader, size int64, options PutObjectOptions) (*MinioObjectInfo, error) {
-	return store.handler.PutObjectStreamVersion(ctx, key, reader, size, options)
+	return store.storage.PutObjectStreamVersion(ctx, key, reader, size, options)
 }
 func (store *PrivateObjectStorage) GetObjectReader(ctx context.Context, key string, precondition ObjectPrecondition) (io.ReadCloser, error) {
-	return store.handler.GetObjectReader(ctx, key, precondition)
+	return store.storage.GetObjectReader(ctx, key, precondition)
 }
 func (store *PrivateObjectStorage) GetObjectInfo(ctx context.Context, key string) (*MinioObjectInfo, error) {
-	return store.handler.GetObjectInfo(ctx, key)
+	return store.storage.GetObjectInfo(ctx, key)
 }
 func (store *PrivateObjectStorage) RemoveObject(ctx context.Context, key string) error {
-	return store.handler.RemoveObject(ctx, key)
+	return store.storage.RemoveObject(ctx, key)
 }
 func (store *PrivateObjectStorage) RemoveObjectVersion(ctx context.Context, key, version string) error {
-	return store.handler.RemoveObjectVersion(ctx, key, version)
+	return store.storage.RemoveObjectVersion(ctx, key, version)
 }
-func (store *PrivateObjectStorage) EnsurePrivateObjectVersioning(ctx context.Context) error {
-	return store.handler.EnsurePrivateObjectVersioning(ctx)
+func (store *PrivateObjectStorage) CheckPrivateObjectVersioning(ctx context.Context) error {
+	return store.storage.CheckPrivateObjectVersioning(ctx)
 }
 
 func (store *PrivateObjectStorage) EnsurePrivateUploadLifecycle(ctx context.Context, prefix string) error {
-	return store.handler.EnsurePrivateUploadLifecycle(ctx, prefix)
+	return store.storage.EnsurePrivateUploadLifecycle(ctx, prefix)
 }
 func (store *PrivateObjectStorage) AbortPrivateObjectUpload(ctx context.Context, key string) error {
-	return store.handler.AbortPrivateObjectUpload(ctx, key)
+	return store.storage.AbortPrivateObjectUpload(ctx, key)
 }
 
 // EnsurePrivateUploadLifecycle retains other owners' rules and bounds
 // crash-orphaned multipart uploads under one application-owned prefix.
-func (handler *CommonPersistenceHandler[U]) EnsurePrivateUploadLifecycle(ctx context.Context, prefix string) error {
+func (handler *minioObjectStorage) EnsurePrivateUploadLifecycle(ctx context.Context, prefix string) error {
 	if prefix == "" || strings.HasPrefix(prefix, "/") {
 		return errors.New("an owned object prefix is required")
 	}
@@ -83,7 +90,8 @@ func (handler *CommonPersistenceHandler[U]) EnsurePrivateUploadLifecycle(ctx con
 	if configuration == nil {
 		configuration = &lifecycle.Configuration{}
 	}
-	id := "private-incomplete-" + strings.TrimSuffix(strings.ReplaceAll(prefix, "/", "-"), "-")
+	digest := sha256.Sum256([]byte(prefix))
+	id := "private-incomplete-" + hex.EncodeToString(digest[:])
 	rule := lifecycle.Rule{ID: id, Status: "Enabled", RuleFilter: lifecycle.Filter{Prefix: prefix}, AbortIncompleteMultipartUpload: lifecycle.AbortIncompleteMultipartUpload{DaysAfterInitiation: 1}}
 	found := false
 	for index, existing := range configuration.Rules {
@@ -107,14 +115,14 @@ func (handler *CommonPersistenceHandler[U]) EnsurePrivateUploadLifecycle(ctx con
 
 // AbortPrivateObjectUpload is safe for a journaled pending key whose owning
 // writer has stopped. Consumers must not call it for a live shared writer.
-func (handler *CommonPersistenceHandler[U]) AbortPrivateObjectUpload(ctx context.Context, key string) error {
+func (handler *minioObjectStorage) AbortPrivateObjectUpload(ctx context.Context, key string) error {
 	return handler.minioClient.RemoveIncompleteUpload(ctx, handler.minioBucket, key)
 }
 
-// EnsurePrivateObjectVersioning enables immutable version pins for consumers
-// which need exact reclamation. Existing attachment lifecycle behavior is not
-// changed: version-aware consumers explicitly reclaim their own versions.
-func (handler *CommonPersistenceHandler[U]) EnsurePrivateObjectVersioning(ctx context.Context) error {
+// CheckPrivateObjectVersioning verifies an operator-provisioned artifact bucket.
+// It never changes bucket versioning: enabling it on a shared attachment bucket
+// would make ordinary attachment deletions leave historical payloads behind.
+func (handler *minioObjectStorage) CheckPrivateObjectVersioning(ctx context.Context) error {
 	configuration, err := handler.minioClient.GetBucketVersioning(ctx, handler.minioBucket)
 	if err != nil {
 		return err
@@ -122,12 +130,12 @@ func (handler *CommonPersistenceHandler[U]) EnsurePrivateObjectVersioning(ctx co
 	if configuration.Enabled() {
 		return nil
 	}
-	return handler.minioClient.SetBucketVersioning(ctx, handler.minioBucket, minio.BucketVersioningConfiguration{Status: minio.Enabled})
+	return ErrPrivateObjectVersioningRequired
 }
 
 // RemoveObjectVersion never deletes a replacement's current version or leaves
 // a delete marker in place of physical reclamation of the pinned bytes.
-func (handler *CommonPersistenceHandler[U]) RemoveObjectVersion(ctx context.Context, key, version string) error {
+func (handler *minioObjectStorage) RemoveObjectVersion(ctx context.Context, key, version string) error {
 	if version == "" || version == "null" {
 		return errors.New("an immutable object version is required")
 	}
@@ -137,7 +145,7 @@ func (handler *CommonPersistenceHandler[U]) RemoveObjectVersion(ctx context.Cont
 // PutObjectStreamVersion returns the identity of the PUT itself, avoiding a
 // post-upload HEAD race against a replacement. Unknown-length streams retain
 // the same bounded multipart and overflow checks as PutObjectStream.
-func (handler *CommonPersistenceHandler[U]) PutObjectStreamVersion(ctx context.Context, key string, reader io.Reader, size int64, options PutObjectOptions) (*MinioObjectInfo, error) {
+func (handler *minioObjectStorage) PutObjectStreamVersion(ctx context.Context, key string, reader io.Reader, size int64, options PutObjectOptions) (*MinioObjectInfo, error) {
 	if reserved := strings.TrimLeft(key, "/"); strings.HasPrefix(reserved, TempObjectPrefix) || strings.HasPrefix(reserved, VerifiedObjectPrefix) {
 		return nil, ErrReservedObjectName
 	}

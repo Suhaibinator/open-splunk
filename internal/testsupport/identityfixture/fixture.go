@@ -134,13 +134,18 @@ func New(t testing.TB, options Options) *Fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixture.Blobs, err = objectstore.NewContext(ctx, fixture.Runtime.Persistence())
-	if err != nil {
-		t.Fatal("initialize private versioned fixture objects:", err)
-	}
+	// The fixture operator provisions a dedicated versioned artifact bucket;
+	// application startup only checks its existing versioning policy.
 	client, err := minio.New(fixture.MinioEndpoint, &minio.Options{Creds: credentials.NewStaticV4(fixture.MinioAccessKey, fixture.MinioSecretKey, ""), Secure: false})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if err := client.SetBucketVersioning(ctx, fixture.MinioBucket, minio.BucketVersioningConfiguration{Status: minio.Enabled}); err != nil {
+		t.Fatal(err)
+	}
+	fixture.Blobs, err = objectstore.NewContext(ctx, fixture.Runtime.Persistence())
+	if err != nil {
+		t.Fatal("initialize private versioned fixture objects:", err)
 	}
 	t.Cleanup(func() {
 		cleanup, cancel := context.WithTimeout(context.Background(), 20*time.Second)

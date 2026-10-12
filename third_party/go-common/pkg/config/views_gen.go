@@ -346,7 +346,6 @@ type OrganizationsView interface {
 	DefaultOrgCreatorRole() []proto_models.OrganizationRole
 	DefaultOrganizationType() proto_models.OrganizationType
 	EnableOrganizations() bool
-	EnablePersonalWorkspaces() bool
 	OrgAncestorMembershipAutoAdd() bool
 	OrgAutoAddCreatorOnChildCreate() []bool
 	OrgHierarchyMaxDepth() int
@@ -1253,10 +1252,6 @@ func (v RootView) EnableOrganizationEmailDomains() bool {
 
 func (v RootView) EnableOrganizations() bool {
 	return common_util.Deref(v.g.config.EnableOrganizations)
-}
-
-func (v RootView) EnablePersonalWorkspaces() bool {
-	return common_util.Deref(v.g.config.EnablePersonalWorkspaces)
 }
 
 func (v RootView) EnablePublicChatRead() bool {

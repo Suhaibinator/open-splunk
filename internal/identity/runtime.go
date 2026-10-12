@@ -22,7 +22,6 @@ import (
 	gerrors "github.com/Suhaibinator/go-common/pkg/common_service/errors"
 	"github.com/Suhaibinator/go-common/pkg/common_service/organization"
 	"github.com/Suhaibinator/go-common/pkg/common_service/ports"
-	"github.com/Suhaibinator/go-common/pkg/common_service/token"
 	gcconfig "github.com/Suhaibinator/go-common/pkg/config"
 	gclogger "github.com/Suhaibinator/go-common/pkg/logger"
 	"github.com/Suhaibinator/go-common/pkg/oauth"
@@ -102,7 +101,6 @@ func New(ctx context.Context, pool *gorm.DB, options Options) (_ *Runtime, err e
 		},
 	})
 	r.service, err = common_service.NewCommonServiceHandler(source.Service(), r.persistence, callbacks, logger, nil, nil,
-		common_service.WithSessionAuthMethodPolicy[sm.User](googleSessionMethod),
 		common_service.WithOAuthProviders[sm.User](oauth.Static(oauth.Google(options.GoogleClientID, options.GoogleClientSecret, options.GoogleRedirectURLs...))),
 		common_service.WithOrganizationCallbacks(orgCallbacks),
 		common_service.WithOrganizationOptions[sm.User](organization.WithMembershipRolePolicy(rolePolicy{}), organization.WithInitialMembershipPolicy(r.initialMemberships)),
@@ -213,6 +211,16 @@ func (r *Runtime) LookupSubject(ctx context.Context, userID uint64) (authorizati
 }
 
 func (r *Runtime) EffectiveRole(ctx context.Context, userID uint64, organizationID int64) (int32, bool, error) {
+	organization, err := r.persistence.GetOrganizationByID(ctx, organizationID)
+	if errors.Is(err, gcpersistence.ErrOrganizationNotFound) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	if organization.PersonalOwnerUserID != nil || organization.OrganizationType != TeamOrganizationType {
+		return 0, false, nil
+	}
 	info, member, err := r.roles.GetUserRoleFresh(ctx, userID, organizationID)
 	if errors.Is(err, gerrors.ErrUserNotMember) || errors.Is(err, gcpersistence.ErrUserOrganizationNotFound) {
 		return 0, false, nil
@@ -279,11 +287,4 @@ func (r *Runtime) CurrentSubjectInTransaction(ctx context.Context, userID uint64
 		return authorization.Subject{}, err
 	}
 	return subjectForUser(sm.User{ID: user.ID, UserType: user.UserType, Banned: user.Banned, Bot: user.IsBot})
-}
-
-func googleSessionMethod(_ context.Context, method token.SessionAuthMethod) error {
-	if method.Provider != pb.AuthProvider_AUTH_PROVIDER_OAUTH || method.OAuthProviderSlug != "google" {
-		return gerrors.ErrInvalidCredentials
-	}
-	return nil
 }

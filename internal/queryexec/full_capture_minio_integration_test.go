@@ -213,6 +213,9 @@ func fullCaptureMinIO(t *testing.T, ctx context.Context) *objectstore.Store {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := client.SetBucketVersioning(t.Context(), bucket, minio.BucketVersioningConfiguration{Status: minio.Enabled}); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
 		cleanup, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()

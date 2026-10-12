@@ -24,6 +24,7 @@ type authCacheLookup[U common_service_models.UserLike] struct {
 	users      *ttlcache.Cache[common_service_models.UserIdType, U]
 	ttl        time.Duration
 	generation uint64
+	view       RuntimeConfigView
 }
 
 func (h *AuthHandler[U]) authCaches() authCacheLookup[U] {
@@ -32,17 +33,23 @@ func (h *AuthHandler[U]) authCaches() authCacheLookup[U] {
 	view := h.runtimeConfigProvider()
 	h.resizeAuthCachesLocked(view)
 	ttl := view.AuthCacheTtl()
-	if ttl != h.cachePolicyTTL {
+	availability := loginAvailability(view)
+	changed := h.cacheLoginAvailabilitySet && availability != h.cacheLoginAvailability
+	h.cacheLoginAvailability, h.cacheLoginAvailabilitySet = availability, true
+	if ttl != h.cachePolicyTTL || changed {
 		if h.authTokenToUserIDCache != nil {
 			h.authTokenToUserIDCache.DeleteAll()
 		}
 		if h.userIDToUserCache != nil {
 			h.userIDToUserCache.DeleteAll()
 		}
+		if changed && h.refreshedTokens != nil {
+			h.refreshedTokens.DeleteAll()
+		}
 		h.cachePolicyTTL = ttl
 		h.cacheGeneration++
 	}
-	lookup := authCacheLookup[U]{h: h, ttl: ttl, generation: h.cacheGeneration}
+	lookup := authCacheLookup[U]{h: h, ttl: ttl, generation: h.cacheGeneration, view: view}
 	if ttl > 0 && h.cacheTokenCapacity > 0 {
 		lookup.tokens = h.authTokenToUserIDCache
 	}
