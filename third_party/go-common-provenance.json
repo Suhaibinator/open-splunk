@@ -1,7 +1,7 @@
 {
   "module": "github.com/Suhaibinator/go-common",
   "source": "https://github.com/Suhaibinator/go-common",
-  "sourceRevision": "720ac563576c282e112ea9f98c95ae73cf2e285f",
+  "sourceRevision": "0cb5e242a6e2319f28259b97a5a671299177c938",
   "license": "Upstream Go module has no repository license file; upstream README documents the current scope.",
   "includesLocalIntegrationChanges": true,
   "files": {
@@ -479,7 +479,7 @@
     "pkg/common_service/organization/config.go": "e840b842d01092151a8805a0d62c3f2a338bff1d2326106e87cdad41cd46975c",
     "pkg/common_service/organization/deletion_impact.go": "f5d6afbea7c2f5e575811e8bd5d32c7bd188a7236888b1a443823799cf54b197",
     "pkg/common_service/organization/generation_cache.go": "187119a0ceb370b122fd707866c2f22f28e43829baee230aae250d7174aaaa57",
-    "pkg/common_service/organization/invitation_handler.go": "856f779db5d84742d6ad6c18731982e337b18b9b4c7b4ec9cbe04b1043314cef",
+    "pkg/common_service/organization/invitation_handler.go": "96cc064e17b170c67a45cd31a55203bacdb5ed0b09aec17c1b2983cb1562a92f",
     "pkg/common_service/organization/invitation_notifications.go": "bbca95e99fbab8bc89cbee918a7a012eebbce6fdde7e9983d5769402d3e12c1a",
     "pkg/common_service/organization/membership_admission.go": "126e01c03057a3f2afb268ac0da5acca55b21449075ba26f87331f3a55dac8bf",
     "pkg/common_service/organization/membership_handler.go": "7fe13b9391969a55b3b3f36fafb78e85cc12a0b585eeb5878093933c25c4a3b5",

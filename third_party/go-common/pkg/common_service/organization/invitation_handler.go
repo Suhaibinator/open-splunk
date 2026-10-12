@@ -402,6 +402,9 @@ func (h *OrganizationHandler[U]) addUserToOrganizationByIdentifierPrivilegedReso
 	targetEmail string,
 	role proto_models.OrganizationRole,
 ) (*AddUserResult, error) {
+	if err := h.validateApplicationRole(role); err != nil {
+		return nil, err
+	}
 	if resolvedOrg == nil || resolvedOrg.Organization == nil {
 		return nil, errors.ErrOrganizationNotFound
 	}
